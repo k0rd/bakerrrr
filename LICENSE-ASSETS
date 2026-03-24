@@ -1,0 +1,40 @@
+BAKERRRR Asset License (Alpha)
+
+Copyright (c) 2026 Adrianna Harouff
+
+This file governs project assets, including but not limited to:
+
+- artwork and visual assets under assets/
+- tiles and tile metadata under assets/tiles/
+- audio/music/sfx assets (if added)
+- narrative text and authored content assets where marked
+
+1) Allowed (Non-Commercial)
+
+You may use, modify, and share these assets for Non-Commercial Use only,
+provided attribution is retained and this license file is included.
+
+2) Not Allowed Without Written Permission
+
+- commercial use, sale, or paid redistribution of assets;
+- minting, resale, or relicensing as standalone asset packs;
+- using BAKERRRR branding or identity for endorsement.
+
+3) Source Tile Policy
+
+The maintainer may publish generated/runtime tile outputs while keeping source
+tile files private in future repository layouts.
+
+If a public release omits source tile files, absence of those files is
+intentional and does not grant permission to reconstruct, scrape, or repackage
+them for commercial use.
+
+4) Third-Party Asset Exceptions
+
+Any third-party asset included with an explicit different notice keeps its own
+license terms.
+
+5) Warranty and Liability
+
+Assets are provided "AS IS" without warranty of any kind. The copyright holder
+is not liable for damages arising from use of these assets.
