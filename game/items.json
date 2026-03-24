@@ -1,0 +1,783 @@
+{
+  "street_ration": {
+    "name": "Street Ration",
+    "glyph": "%",
+    "stack_max": 3,
+    "tags": ["consumable", "energy", "food", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "energy", "delta": 18},
+      {"type": "status", "status": "well_fed", "duration": 22, "modifiers": {"energy_tick_delta": 0.08}}
+    ]
+  },
+  "caff_shot": {
+    "name": "Caff Shot",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "energy", "stimulant", "restricted"],
+    "legal_status": "restricted",
+    "effects": [
+      {"type": "modify_need", "need": "energy", "delta": 24},
+      {"type": "status", "status": "wired", "duration": 16, "modifiers": {"energy_tick_delta": 0.1, "safety_tick_delta": -0.12}}
+    ]
+  },
+  "calm_patch": {
+    "name": "Calm Patch",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "safety", "medical", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "safety", "delta": 20},
+      {"type": "status", "status": "calm", "duration": 24, "modifiers": {"safety_tick_delta": 0.09}}
+    ]
+  },
+  "spark_brew": {
+    "name": "Spark Brew",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "social", "drink", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "social", "delta": 16},
+      {"type": "status", "status": "buzzed", "duration": 20, "modifiers": {"social_tick_delta": 0.08, "safety_tick_delta": -0.04}}
+    ]
+  },
+  "med_gel": {
+    "name": "Med Gel",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "medical", "safety", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "safety", "delta": 24},
+      {"type": "modify_need", "need": "energy", "delta": 6}
+    ]
+  },
+  "focus_inhaler": {
+    "name": "Focus Inhaler",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": ["consumable", "discipline", "restricted"],
+    "legal_status": "restricted",
+    "effects": [
+      {"type": "status", "status": "focused", "duration": 28, "modifiers": {"energy_tick_delta": 0.06, "social_tick_delta": -0.05}}
+    ]
+  },
+  "black_market_stim": {
+    "name": "Black Market Stim",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": ["consumable", "energy", "illegal", "stimulant"],
+    "legal_status": "illegal",
+    "effects": [
+      {"type": "modify_need", "need": "energy", "delta": 30},
+      {"type": "modify_need", "need": "safety", "delta": -10},
+      {"type": "status", "status": "agitated", "duration": 20, "modifiers": {"safety_tick_delta": -0.12, "energy_tick_delta": -0.06}}
+    ]
+  },
+  "protein_wrap": {
+    "name": "Protein Wrap",
+    "glyph": "%",
+    "stack_max": 3,
+    "tags": ["consumable", "energy", "food", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "energy", "delta": 14},
+      {"type": "modify_need", "need": "safety", "delta": 4}
+    ]
+  },
+  "noodle_cup": {
+    "name": "Noodle Cup",
+    "glyph": "%",
+    "stack_max": 3,
+    "tags": ["consumable", "energy", "food", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "energy", "delta": 16},
+      {"type": "status", "status": "warm_meal", "duration": 16, "modifiers": {"energy_tick_delta": 0.05}}
+    ]
+  },
+  "hydration_salts": {
+    "name": "Hydration Salts",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "medical", "safety", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "safety", "delta": 12},
+      {"type": "modify_need", "need": "energy", "delta": 8},
+      {"type": "status", "status": "hydrated", "duration": 20, "modifiers": {"safety_tick_delta": 0.05, "energy_tick_delta": 0.04}}
+    ]
+  },
+  "micro_medkit": {
+    "name": "Micro Medkit",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": ["consumable", "medical", "safety", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "safety", "delta": 18},
+      {"type": "modify_need", "need": "energy", "delta": 4}
+    ]
+  },
+  "trauma_foam": {
+    "name": "Trauma Foam",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": ["consumable", "medical", "safety", "restricted"],
+    "legal_status": "restricted",
+    "effects": [
+      {"type": "modify_need", "need": "safety", "delta": 24},
+      {"type": "status", "status": "patched_up", "duration": 18, "modifiers": {"safety_tick_delta": 0.08, "move_speed_mult": -0.08}}
+    ]
+  },
+  "synth_focus_tabs": {
+    "name": "Synth Focus Tabs",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "discipline", "restricted"],
+    "legal_status": "restricted",
+    "effects": [
+      {"type": "status", "status": "steady_hands", "duration": 22, "modifiers": {"energy_tick_delta": 0.05, "move_speed_mult": 0.07}}
+    ]
+  },
+  "light_ammo_box": {
+    "name": "Light Ammo Box",
+    "glyph": "=",
+    "stack_max": 3,
+    "tags": ["ammo", "legal", "handgun", "smg"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "add_ammo", "amount": 12, "weapon_tags": ["handgun", "smg", "burst"]}
+    ]
+  },
+  "shell_bandolier": {
+    "name": "Shell Bandolier",
+    "glyph": "=",
+    "stack_max": 2,
+    "tags": ["ammo", "restricted", "shotgun"],
+    "legal_status": "restricted",
+    "effects": [
+      {"type": "add_ammo", "amount": 6, "weapon_tags": ["shotgun"]}
+    ]
+  },
+  "rifle_mag_crate": {
+    "name": "Rifle Mag Crate",
+    "glyph": "=",
+    "stack_max": 2,
+    "tags": ["ammo", "restricted", "rifle"],
+    "legal_status": "restricted",
+    "effects": [
+      {"type": "add_ammo", "amount": 8, "weapon_tags": ["rifle", "carbine", "precision"]}
+    ]
+  },
+  "rocket_tube_pack": {
+    "name": "Rocket Tube Pack",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["ammo", "illegal", "launcher", "explosive"],
+    "legal_status": "illegal",
+    "effects": [
+      {"type": "add_ammo", "amount": 2, "weapon_tags": ["launcher", "explosive"]}
+    ]
+  },
+  "smoke_tab": {
+    "name": "Smoke Tab",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "social", "illegal"],
+    "legal_status": "illegal",
+    "effects": [
+      {"type": "modify_need", "need": "social", "delta": 10},
+      {"type": "modify_need", "need": "safety", "delta": -4},
+      {"type": "status", "status": "hazy", "duration": 18, "modifiers": {"social_tick_delta": 0.07, "safety_tick_delta": -0.08}}
+    ]
+  },
+  "credstick_chip": {
+    "name": "Credstick Chip",
+    "glyph": "=",
+    "stack_max": 4,
+    "tags": ["token", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "credits", "delta": 20}
+    ]
+  },
+  "transit_daypass": {
+    "name": "Transit Daypass",
+    "glyph": "=",
+    "stack_max": 3,
+    "tags": ["token", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "forged_badge": {
+    "name": "Forged Badge",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["token", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "tool_profiles": [
+      {
+        "contexts": ["badge_controller"],
+        "enable_contexts": ["badge_controller"],
+        "intrusion_bonus": 0.9,
+        "perception_bonus": 0.25,
+        "requirement_delta": -1.15
+      }
+    ]
+  },
+  "city_pass_token": {
+    "name": "City Pass Token",
+    "glyph": "=",
+    "stack_max": 5,
+    "tags": ["token", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "property_key": {
+    "name": "Property Key",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["key", "tool", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "access_badge": {
+    "name": "Access Badge",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["credential", "token", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "manager_badge": {
+    "name": "Manager Badge",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["credential", "token", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "lockpick_kit": {
+    "name": "Lockpick Kit",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["tool", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "tool_profiles": [
+      {
+        "contexts": ["mechanical_lock"],
+        "enable_contexts": ["mechanical_lock"],
+        "intrusion_bonus": 1.6,
+        "mechanics_bonus": 0.45,
+        "perception_bonus": 0.1,
+        "requirement_delta": -1.75
+      },
+      {
+        "contexts": ["vehicle_ignition"],
+        "enable_contexts": ["vehicle_ignition"],
+        "intrusion_bonus": 1.2,
+        "mechanics_bonus": 0.75,
+        "requirement_delta": -1.5
+      },
+      {
+        "contexts": ["side_entry"],
+        "enable_contexts": ["side_entry"],
+        "intrusion_bonus": 1.0,
+        "mechanics_bonus": 0.35,
+        "requirement_delta": -1.2
+      }
+    ]
+  },
+  "prybar": {
+    "name": "Prybar",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["tool", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "tool_profiles": [
+      {
+        "contexts": ["side_entry"],
+        "enable_contexts": ["side_entry"],
+        "intrusion_bonus": 0.45,
+        "mechanics_bonus": 0.2,
+        "requirement_delta": -0.9
+      }
+    ]
+  },
+  "signal_jammer": {
+    "name": "Signal Jammer",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["tool", "restricted"],
+    "legal_status": "restricted",
+    "effects": [],
+    "tool_profiles": [
+      {
+        "contexts": ["badge_controller"],
+        "intrusion_bonus": 0.85,
+        "mechanics_bonus": 0.4,
+        "perception_bonus": 0.25,
+        "requirement_delta": -1.1
+      },
+      {
+        "contexts": ["biometric_controller"],
+        "intrusion_bonus": 0.55,
+        "mechanics_bonus": 0.5,
+        "perception_bonus": 0.35,
+        "requirement_delta": -0.85
+      }
+    ]
+  },
+  "glass_cutter": {
+    "name": "Glass Cutter",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["tool", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "tool_profiles": [
+      {
+        "contexts": ["side_entry"],
+        "enable_contexts": ["side_entry"],
+        "intrusion_bonus": 0.95,
+        "mechanics_bonus": 0.25,
+        "perception_bonus": 0.15,
+        "requirement_delta": -1.35
+      }
+    ]
+  },
+  "hotwire_leads": {
+    "name": "Hotwire Leads",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["tool", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "tool_profiles": [
+      {
+        "contexts": ["vehicle_ignition"],
+        "enable_contexts": ["vehicle_ignition"],
+        "intrusion_bonus": 0.7,
+        "mechanics_bonus": 1.1,
+        "perception_bonus": 0.1,
+        "requirement_delta": -1.25
+      }
+    ]
+  },
+  "cloned_thumb": {
+    "name": "Cloned Thumb",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["tool", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "tool_profiles": [
+      {
+        "contexts": ["biometric_controller"],
+        "enable_contexts": ["biometric_controller"],
+        "intrusion_bonus": 1.0,
+        "mechanics_bonus": 0.35,
+        "perception_bonus": 0.45,
+        "requirement_delta": -1.25
+      }
+    ]
+  },
+  "energy_bar": {
+    "name": "Energy Bar",
+    "glyph": "%",
+    "stack_max": 4,
+    "tags": ["consumable", "energy", "food", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "energy", "delta": 10},
+      {"type": "modify_need", "need": "safety", "delta": 2}
+    ]
+  },
+  "bottled_water": {
+    "name": "Bottled Water",
+    "glyph": "!",
+    "stack_max": 3,
+    "tags": ["consumable", "drink", "safety", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "safety", "delta": 6},
+      {"type": "modify_need", "need": "energy", "delta": 3},
+      {"type": "status", "status": "refreshed", "duration": 12, "modifiers": {"safety_tick_delta": 0.03}}
+    ]
+  },
+  "instant_soup_pack": {
+    "name": "Instant Soup Pack",
+    "glyph": "%",
+    "stack_max": 3,
+    "tags": ["consumable", "energy", "food", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "energy", "delta": 12},
+      {"type": "modify_need", "need": "safety", "delta": 5}
+    ]
+  },
+  "canteen_coffee": {
+    "name": "Canteen Coffee",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "drink", "energy", "stimulant", "restricted"],
+    "legal_status": "restricted",
+    "effects": [
+      {"type": "modify_need", "need": "energy", "delta": 18},
+      {"type": "modify_need", "need": "social", "delta": 4},
+      {"type": "status", "status": "alert", "duration": 14, "modifiers": {"energy_tick_delta": 0.05, "safety_tick_delta": -0.03}}
+    ]
+  },
+  "mint_strip": {
+    "name": "Mint Strip",
+    "glyph": "!",
+    "stack_max": 3,
+    "tags": ["consumable", "social", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "social", "delta": 8}
+    ]
+  },
+  "bandage_roll": {
+    "name": "Bandage Roll",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "medical", "safety", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "safety", "delta": 10}
+    ]
+  },
+  "field_dressing": {
+    "name": "Field Dressing",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "medical", "safety", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "safety", "delta": 14},
+      {"type": "status", "status": "patched_up", "duration": 10, "modifiers": {"safety_tick_delta": 0.04}}
+    ]
+  },
+  "pain_blocker": {
+    "name": "Pain Blocker",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "medical", "safety", "restricted"],
+    "legal_status": "restricted",
+    "effects": [
+      {"type": "modify_need", "need": "safety", "delta": 16},
+      {"type": "status", "status": "numbed", "duration": 16, "modifiers": {"safety_tick_delta": 0.04, "move_speed_mult": -0.04}}
+    ]
+  },
+  "meal_voucher": {
+    "name": "Meal Voucher",
+    "glyph": "=",
+    "stack_max": 3,
+    "tags": ["token", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "parking_stub": {
+    "name": "Parking Stub",
+    "glyph": "=",
+    "stack_max": 5,
+    "tags": ["token", "junk", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "metro_flyer": {
+    "name": "Metro Flyer",
+    "glyph": "=",
+    "stack_max": 5,
+    "tags": ["token", "junk", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "scratch_ticket": {
+    "name": "Scratch Ticket",
+    "glyph": "=",
+    "stack_max": 3,
+    "tags": ["token", "junk", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "credits", "delta": 8}
+    ]
+  },
+  "pocket_notebook": {
+    "name": "Pocket Notebook",
+    "glyph": "=",
+    "stack_max": 2,
+    "tags": ["token", "junk", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "deck_of_cards": {
+    "name": "Deck of Cards",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["token", "junk", "social", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "burner_phone": {
+    "name": "Burner Phone",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["token", "junk", "illegal"],
+    "legal_status": "illegal",
+    "effects": []
+  },
+  "scrap_circuit": {
+    "name": "Scrap Circuit",
+    "glyph": ")",
+    "stack_max": 3,
+    "tags": ["tool", "junk", "restricted"],
+    "legal_status": "restricted",
+    "effects": []
+  },
+  "battery_pack": {
+    "name": "Battery Pack",
+    "glyph": ")",
+    "stack_max": 2,
+    "tags": ["tool", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "cheap_whiskey": {
+    "name": "Cheap Whiskey",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": ["consumable", "social", "drink", "legal"],
+    "legal_status": "legal",
+    "effects": [
+      {"type": "modify_need", "need": "social", "delta": 12},
+      {"type": "modify_need", "need": "safety", "delta": -2},
+      {"type": "status", "status": "buzzed", "duration": 16, "modifiers": {"social_tick_delta": 0.08, "safety_tick_delta": -0.05}}
+    ]
+  },
+  "shiv_knife": {
+    "name": "Shiv Knife",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "melee", "knife", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "shiv_knife"
+  },
+  "crowbar_club": {
+    "name": "Crowbar Club",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "melee", "club", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "crowbar_club"
+  },
+  "telescopic_baton": {
+    "name": "Telescopic Baton",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "melee", "baton", "restricted"],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "telescopic_baton"
+  },
+  "holdout_pistol": {
+    "name": "Holdout Pistol",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "handgun", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "holdout_pistol"
+  },
+  "service_pistol": {
+    "name": "Service Pistol",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "handgun", "restricted"],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "service_pistol"
+  },
+  "rust_revolver": {
+    "name": "Rust Revolver",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "handgun", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "rust_revolver"
+  },
+  "alley_shotgun": {
+    "name": "Alley Shotgun",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "shotgun", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "alley_shotgun"
+  },
+  "compact_smg": {
+    "name": "Compact SMG",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "smg", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "compact_smg"
+  },
+  "machine_pistol": {
+    "name": "Machine Pistol",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "handgun", "smg", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "machine_pistol"
+  },
+  "patrol_carbine": {
+    "name": "Patrol Carbine",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "rifle", "restricted"],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "patrol_carbine"
+  },
+  "hunting_rifle": {
+    "name": "Hunting Rifle",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "rifle", "restricted"],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "hunting_rifle"
+  },
+  "improvised_launcher": {
+    "name": "Improvised Launcher",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "launcher", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "improvised_launcher"
+  },
+  "padded_jacket": {
+    "name": "Padded Jacket",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["armor", "wearable", "legal"],
+    "legal_status": "legal",
+    "effects": [],
+    "armor": {
+      "slot": "body",
+      "damage_reduction": 0.12
+    }
+  },
+  "courier_mesh": {
+    "name": "Courier Mesh",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["armor", "wearable", "legal"],
+    "legal_status": "legal",
+    "effects": [],
+    "armor": {
+      "slot": "body",
+      "damage_reduction": 0.08
+    }
+  },
+  "security_vest": {
+    "name": "Security Vest",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["armor", "wearable", "restricted"],
+    "legal_status": "restricted",
+    "effects": [],
+    "armor": {
+      "slot": "body",
+      "damage_reduction": 0.22
+    }
+  },
+  "riot_plates": {
+    "name": "Riot Plates",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["armor", "wearable", "restricted"],
+    "legal_status": "restricted",
+    "effects": [],
+    "armor": {
+      "slot": "body",
+      "damage_reduction": 0.28
+    }
+  },
+  "ceramic_plate_rig": {
+    "name": "Ceramic Plate Rig",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["armor", "wearable", "illegal"],
+    "legal_status": "illegal",
+    "effects": [],
+    "armor": {
+      "slot": "body",
+      "damage_reduction": 0.34
+    }
+  },
+  "pocket_multitool": {
+    "name": "Pocket Multitool",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["tool", "restricted"],
+    "legal_status": "restricted",
+    "effects": [],
+    "tool_profiles": [
+      {
+        "contexts": ["mechanical_lock"],
+        "intrusion_bonus": 0.45,
+        "mechanics_bonus": 0.55,
+        "requirement_delta": -0.5
+      },
+      {
+        "contexts": ["vehicle_ignition"],
+        "intrusion_bonus": 0.35,
+        "mechanics_bonus": 0.9,
+        "requirement_delta": -0.75
+      },
+      {
+        "contexts": ["badge_controller"],
+        "intrusion_bonus": 0.4,
+        "mechanics_bonus": 0.65,
+        "perception_bonus": 0.2,
+        "requirement_delta": -0.55
+      },
+      {
+        "contexts": ["biometric_controller"],
+        "intrusion_bonus": 0.25,
+        "mechanics_bonus": 0.75,
+        "perception_bonus": 0.25,
+        "requirement_delta": -0.45
+      },
+      {
+        "contexts": ["side_entry"],
+        "intrusion_bonus": 0.25,
+        "mechanics_bonus": 0.5,
+        "requirement_delta": -0.35
+      }
+    ]
+  },
+  "lucky_charm": {
+    "name": "Lucky Charm",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": ["token", "social", "legal"],
+    "legal_status": "legal",
+    "effects": []
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "action_base": {
+    "move": 2,
+    "floor_change": 3,
+    "wait": 0,
+    "interact": 14,
+    "pickup_item": 1,
+    "drop_item": 0,
+    "use_item": 6,
+    "quest_accept": 0,
+    "quest_turn_in": 0,
+    "purchase_property": 4,
+    "fire_weapon": 18,
+    "cycle_weapon": 0,
+    "banking": 0,
+    "insurance": 0,
+    "trade_buy": 0,
+    "trade_sell": 0
+  },
+  "context_bonus": {
+    "ordinary": 0,
+    "trespass": 18,
+    "tamper": 60,
+    "not_for_sale_attempt": 10,
+    "item_theft": 48,
+    "contraband_use": 32,
+    "armed_assault": 56,
+    "explosive_discharge": 68
+  },
+  "tiers": [
+    {
+      "label": "none",
+      "max": 0
+    },
+    {
+      "label": "low",
+      "max": 14
+    },
+    {
+      "label": "medium",
+      "max": 34
+    },
+    {
+      "label": "high",
+      "max": 59
+    },
+    {
+      "label": "severe",
+      "max": 100
+    }
+  ],
+  "notice_radius": {
+    "base": 2,
+    "min": 2,
+    "max": 12,
+    "step_divisor": 12
+  }
+}

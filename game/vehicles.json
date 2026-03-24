@@ -1,0 +1,190 @@
+{
+  "vehicle_symbol": "&",
+  "makes": [
+    "Alder",
+    "Bluewake",
+    "Brassline",
+    "Cinder",
+    "Coldharbor",
+    "Drift",
+    "Evertrail",
+    "Glassbird",
+    "Harbor",
+    "Ironway",
+    "Lowline",
+    "Morrow",
+    "Northgate",
+    "Palisade",
+    "Redline",
+    "Stonecut",
+    "Sunset",
+    "Tern",
+    "Transit",
+    "Voltline",
+    "Warden"
+  ],
+  "models": [
+    {
+      "name": "Moth",
+      "vehicle_class": "micro",
+      "power": [2, 4],
+      "durability": [3, 6],
+      "fuel_efficiency": [8, 10],
+      "fuel_capacity": [34, 48],
+      "base_price": 300
+    },
+    {
+      "name": "Sparrow",
+      "vehicle_class": "compact",
+      "power": [3, 5],
+      "durability": [4, 7],
+      "fuel_efficiency": [7, 10],
+      "fuel_capacity": [48, 62],
+      "base_price": 420
+    },
+    {
+      "name": "Runner",
+      "vehicle_class": "sedan",
+      "power": [4, 7],
+      "durability": [5, 8],
+      "fuel_efficiency": [6, 9],
+      "fuel_capacity": [56, 74],
+      "base_price": 560
+    },
+    {
+      "name": "Rook",
+      "vehicle_class": "hatchback",
+      "power": [4, 6],
+      "durability": [4, 7],
+      "fuel_efficiency": [6, 9],
+      "fuel_capacity": [52, 68],
+      "base_price": 500
+    },
+    {
+      "name": "Crosswind",
+      "vehicle_class": "coupe",
+      "power": [5, 7],
+      "durability": [4, 7],
+      "fuel_efficiency": [6, 8],
+      "fuel_capacity": [50, 64],
+      "base_price": 610
+    },
+    {
+      "name": "Hauler",
+      "vehicle_class": "wagon",
+      "power": [5, 8],
+      "durability": [6, 9],
+      "fuel_efficiency": [5, 8],
+      "fuel_capacity": [68, 92],
+      "base_price": 700
+    },
+    {
+      "name": "Ridgeback",
+      "vehicle_class": "utility",
+      "power": [6, 9],
+      "durability": [6, 10],
+      "fuel_efficiency": [4, 7],
+      "fuel_capacity": [72, 98],
+      "base_price": 820
+    },
+    {
+      "name": "Courier",
+      "vehicle_class": "van",
+      "power": [4, 7],
+      "durability": [5, 9],
+      "fuel_efficiency": [5, 8],
+      "fuel_capacity": [70, 96],
+      "base_price": 760
+    },
+    {
+      "name": "Towline",
+      "vehicle_class": "pickup",
+      "power": [6, 8],
+      "durability": [6, 9],
+      "fuel_efficiency": [4, 7],
+      "fuel_capacity": [74, 100],
+      "base_price": 840
+    },
+    {
+      "name": "Switchback",
+      "vehicle_class": "suv",
+      "power": [6, 9],
+      "durability": [6, 10],
+      "fuel_efficiency": [4, 7],
+      "fuel_capacity": [76, 104],
+      "base_price": 900
+    },
+    {
+      "name": "Longstep",
+      "vehicle_class": "van",
+      "power": [4, 6],
+      "durability": [6, 9],
+      "fuel_efficiency": [5, 7],
+      "fuel_capacity": [78, 108],
+      "base_price": 790
+    },
+    {
+      "name": "Breaker",
+      "vehicle_class": "utility",
+      "power": [7, 9],
+      "durability": [7, 10],
+      "fuel_efficiency": [3, 6],
+      "fuel_capacity": [88, 118],
+      "base_price": 980
+    }
+  ],
+  "quality_profiles": {
+    "used": {
+      "price_mult": [0.62, 0.86],
+      "durability_shift": [-2, 0],
+      "fuel_mult": [0.45, 0.78]
+    },
+    "new": {
+      "price_mult": [1.18, 1.34],
+      "durability_shift": [0, 1],
+      "fuel_mult": [0.88, 1.0]
+    }
+  },
+  "service_archetypes": {
+    "fuel": [
+      "auto_garage",
+      "motor_pool",
+      "freight_depot",
+      "relay_post",
+      "roadhouse",
+      "dock_shack",
+      "pump_house",
+      "survey_post",
+      "lookout_post",
+      "ferry_post",
+      "tide_station",
+      "beacon_house",
+      "truck_stop",
+      "drydock_yard"
+    ],
+    "new_sales": [
+      "auto_garage",
+      "motor_pool",
+      "freight_depot",
+      "metro_exchange"
+    ],
+    "used_sales": [
+      "auto_garage",
+      "breaker_yard",
+      "chop_shop",
+      "drydock_yard",
+      "junk_market",
+      "roadhouse",
+      "salvage_camp",
+      "truck_stop",
+      "work_shed",
+      "survey_post"
+    ],
+    "fetch": [
+      "truck_stop",
+      "auto_garage",
+      "roadhouse",
+      "breaker_yard"
+    ]
+  }
+}

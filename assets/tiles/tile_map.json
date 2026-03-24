@@ -1,0 +1,242 @@
+{
+  "_comment": "Maps glyph+color category pairs to tile_ids. Renderer uses this to look up sprites; missing entries fall back to glyph text render.",
+  "_color_aliases_comment": "Optional asset hue aliases for semantic mapping. Current aliases are provisional playtest mappings for the stylized ASCII tile set and can be revised if readability suffers.",
+  "_color_aliases": {
+    "aqua": [
+      "objective",
+      "transit",
+      "terrain_water",
+      "vehicle_player",
+      "avian"
+    ],
+    "darkgray": [
+      "building_edge",
+      "building_fill",
+      "terrain_block",
+      "terrain_rock",
+      "terrain_salt",
+      "terrain_trail",
+      "feature_door",
+      "feature_breach",
+      "property_building",
+      "property_fixture",
+      "property_asset",
+      "property_service",
+      "building_roof_residential",
+      "building_roof_civic",
+      "building_roof_industrial",
+      "building_roof_storefront",
+      "vehicle_parked",
+      "canine",
+      "insect"
+    ],
+    "pink": [
+      "human",
+      "item_medical",
+      "building_roof_entertainment",
+      "cat_calico",
+      "cat_white"
+    ],
+    "purple": [
+      "scout",
+      "feline",
+      "cat_purple",
+      "item_restricted",
+      "item_tool",
+      "property_service_zone"
+    ],
+    "red": [
+      "guard",
+      "item_illegal",
+      "building_roof_secure",
+      "vehicle_new",
+      "infra_hydrant"
+    ],
+    "green": [
+      "player",
+      "terrain_generic"
+    ]
+  },
+  "_asset_color_families": {
+    "current": ["aqua", "darkgray", "pink", "purple","red", "blue", "green", "brown", "amber", "orange"]
+  },
+  "_color_policy": {
+    "terrain": "Use direct semantic/readability colors so overworld and terrain are immediately legible to non-ASCII-native players.",
+    "humans": "Use color primarily for role or profession readability at a glance; style variation is secondary.",
+    "nonhuman_entities": "Use uppercase taxonomy glyph families first; color is secondary and optional for state or role.",
+    "items": "Keep item colors explicit and semantic so pickups remain distinguishable from world objects.",
+    "world_objects": "Use symbol families for fixtures and infrastructure; color can support readability but should not blur into item coding."
+  },
+  "_spec": {
+    "tile_size_px": 16,
+    "atlas_max_width_px": 1024,
+    "format": "PNG RGBA transparent background"
+  },
+
+  "terrain": {
+    ".": {
+      "floor_coarse":               "floor_coarse",
+      "floor_industrial":           "floor_industrial",
+      "floor_residential":          "floor_residential",
+      "floor_downtown":             "floor_downtown",
+      "floor_slums":                "floor_slums",
+      "floor_corporate":            "floor_corporate",
+      "floor_military":             "floor_military",
+      "floor_entertainment":        "floor_entertainment",
+      "floor_frontier":             "floor_frontier",
+      "floor_wilderness":           "floor_wilderness",
+      "floor_coastal":              "floor_coastal",
+      "default":                    "floor_generic"
+    },
+    "#": {
+      "building_edge":              "wall_building",
+      "terrain_block":              "terrain_block",
+      "default":                    "wall_generic"
+    },
+    "=": {
+      "terrain_road":               "terrain_road",
+      "building_fill":              "floor_building_fill",
+      "default":                    "terrain_road"
+    },
+    ",": { "terrain_brush":         "terrain_brush",   "default": "terrain_brush" },
+    "^": { "terrain_rock":          "terrain_rock",    "default": "terrain_rock" },
+    "~": { "terrain_water":         "terrain_water",   "default": "terrain_water" },
+    "_": { "terrain_salt":          "terrain_salt",    "default": "terrain_salt" },
+    ":": { "terrain_trail":         "terrain_trail",   "transit": "transit_stair_landing", "default": "terrain_trail" }
+  },
+
+  "features": {
+    "+": { "feature_door":          "feature_door",    "default": "feature_door" },
+    "\"": { "feature_window":       "feature_window",  "default": "feature_window" },
+    "/": { "feature_breach":        "feature_breach",  "default": "feature_breach" },
+    ">": { "transit":               "stair_up",        "default": "stair_up" },
+    "<": { "transit":               "stair_down",      "default": "stair_down" },
+    "E": { "transit":               "elevator",        "default": "elevator" },
+    "S": { "default":               "property_service_zone" }
+  },
+
+  "infrastructure": {
+    "l": { "default": "infra_lamp" },
+    "p": { "default": "infra_pole" },
+    "h": { "default": "infra_hydrant" },
+    "u": { "default": "infra_stop" },
+    "j": { "default": "infra_utility_a" },
+    "t": { "default": "infra_utility_b" },
+    "$": { "property_service": "infra_atm", "default": "infra_atm" },
+    "c": { "default": "infra_claim_terminal" },
+    "r": { "default": "infra_access_panel" }
+  },
+
+  "properties": {
+    "H": {
+      "building_roof_residential":  "prop_residential",
+      "default":                    "prop_residential"
+    },
+    "O": {
+      "building_roof_civic":        "prop_civic",
+      "default":                    "prop_civic"
+    },
+    "G": {
+      "building_roof_secure":       "prop_secure",
+      "default":                    "prop_secure"
+    },
+    "N": {
+      "building_roof_entertainment":"prop_entertainment",
+      "default":                    "prop_entertainment"
+    },
+    "R": {
+      "building_roof_storefront":   "prop_restaurant",
+      "default":                    "prop_restaurant"
+    },
+    "T": {
+      "building_roof_industrial":   "prop_industrial",
+      "default":                    "prop_industrial"
+    },
+    "V": {
+      "property_asset":             "prop_vehicle_service",
+      "default":                    "prop_vehicle_service"
+    },
+    "M": {
+      "item_medical":               "prop_medical",
+      "default":                    "prop_medical"
+    },
+    "$": {
+      "property_service":           "prop_finance",
+      "default":                    "prop_finance"
+    },
+    "B": { "property_building":     "prop_building_generic", "default": "prop_building_generic" },
+    "F": { "property_fixture":      "prop_fixture",          "default": "prop_fixture" },
+    "A": { "property_asset":        "prop_asset",            "default": "prop_asset" }
+  },
+
+  "vehicles": {
+    "&": {
+      "vehicle_parked":             "vehicle_parked",
+      "vehicle_new":                "vehicle_new",
+      "vehicle_player":             "vehicle_player",
+      "default":                    "vehicle_parked"
+    }
+  },
+
+  "items": {
+    "!": {
+      "item_ground":               "item_ground",
+      "item_medical":              "item_medical",
+      "default":                   "item_ground"
+    },
+    "i": { "item_token":            "item_token",       "default": "item_token" },
+    ")": { "item_tool":             "item_tool",        "default": "item_tool" },
+    "*": { "item_restricted":       "item_restricted",  "default": "item_restricted" },
+    "x": { "item_illegal":          "item_illegal",     "default": "item_illegal" },
+    "o": { "objective":             "item_objective",   "default": "item_objective" }
+  },
+
+  "projectiles": {
+    "*": { "projectile":            "projectile",       "default": "projectile" }
+  },
+
+  "entities": {
+    "@": {
+      "player":                     "entity_player",
+      "default":                    "entity_player"
+    },
+    "hominid": {
+      "human":                      "npc_civilian",
+      "guard":                      "npc_guard",
+      "scout":                      "npc_scout",
+      "default":                    "npc_civilian"
+    },
+    "feline": {
+      "cat_orange":                 "cat_orange",
+      "cat_black":                  "cat_black",
+      "cat_tabby":                  "cat_tabby",
+      "cat_calico":                 "cat_calico",
+      "cat_white":                  "cat_white",
+      "cat_gray":                   "cat_gray",
+      "cat_tuxedo":                 "cat_tuxedo",
+      "cat_purple":                 "cat_purple",
+      "feline":                     "cat_generic",
+      "default":                    "cat_generic"
+    },
+    "canine": {
+      "canine":                     "npc_canine",
+      "default":                    "npc_canine"
+    },
+    "avian": {
+      "avian":                      "npc_avian",
+      "default":                    "npc_avian"
+    },
+    "insect": {
+      "insect":                     "npc_insect",
+      "default":                    "npc_insect"
+    }
+  },
+
+  "ui_markers": {
+    "cursor":                       "ui_cursor",
+    "look_cursor":                  "ui_look_cursor",
+    "objective_marker":             "ui_objective_marker",
+    "overworld_marker":             "ui_overworld_marker",
+    "overworld_marker_nearest":     "ui_overworld_marker_nearest"
+  }
+}

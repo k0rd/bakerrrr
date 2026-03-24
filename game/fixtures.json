@@ -1,0 +1,256 @@
+{
+  "city": [
+    {
+      "id": "streetlamp",
+      "name": "Streetlamp",
+      "kind": "fixture",
+      "display": {"glyph": "l", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.32},
+      "placement": {"weight": 6, "priorities": ["path_side", "street_side", "entry_side", "edge", "open"]},
+      "public": true,
+      "services": [],
+      "light": {"enabled": true, "radius": 5, "intensity": 0.68, "phases": ["dawn", "dusk", "night"]}
+    },
+    {
+      "id": "utility_pole",
+      "name": "Utility Pole",
+      "kind": "fixture",
+      "display": {"glyph": "p", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.28},
+      "placement": {"weight": 4, "priorities": ["path_side", "edge", "street_side", "open"]},
+      "public": true,
+      "services": []
+    },
+    {
+      "id": "hydrant",
+      "name": "Hydrant",
+      "kind": "fixture",
+      "display": {"glyph": "h", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.36},
+      "placement": {"weight": 3, "priorities": ["entry_side", "street_side", "path_side", "open"]},
+      "public": true,
+      "services": []
+    },
+    {
+      "id": "bus_stop",
+      "name": "Bus Stop",
+      "kind": "fixture",
+      "display": {"glyph": "u", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.5},
+      "placement": {"weight": 2, "priorities": ["path_side", "path_tile", "street_side", "open"]},
+      "public": true,
+      "services": [],
+      "light": {"enabled": true, "radius": 2, "intensity": 0.18, "phases": ["dawn", "dusk", "night"]}
+    },
+    {
+      "id": "bench",
+      "name": "Bench",
+      "kind": "fixture",
+      "display": {"glyph": ";", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.26},
+      "placement": {"weight": 2, "priorities": ["path_side", "street_side", "open"]},
+      "public": true,
+      "services": []
+    },
+    {
+      "id": "mailbox",
+      "name": "Mailbox",
+      "kind": "fixture",
+      "display": {"glyph": "m", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.24},
+      "placement": {"weight": 2, "priorities": ["entry_side", "street_side", "open"]},
+      "public": true,
+      "services": []
+    },
+    {
+      "id": "junction_box",
+      "name": "Junction Box",
+      "kind": "asset",
+      "display": {"glyph": "j", "color": "property_asset"},
+      "cover": {"kind": "low", "value": 0.42},
+      "placement": {"weight": 2, "priorities": ["edge", "street_side", "entry_side", "open"]},
+      "public": false,
+      "services": []
+    },
+    {
+      "id": "transformer",
+      "name": "Transformer",
+      "kind": "asset",
+      "display": {"glyph": "t", "color": "property_asset"},
+      "cover": {"kind": "full", "value": 0.55},
+      "placement": {"weight": 1, "priorities": ["edge", "street_side", "open"]},
+      "public": false,
+      "services": []
+    },
+    {
+      "id": "atm_kiosk",
+      "name": "ATM Kiosk",
+      "kind": "asset",
+      "display": {"glyph": "$", "color": "property_service"},
+      "cover": {"kind": "low", "value": 0.38},
+      "placement": {"weight": 1, "priorities": ["path_side", "street_side", "open"]},
+      "public": true,
+      "services": ["banking"],
+      "light": {"enabled": true, "radius": 3, "intensity": 0.32, "phases": ["dawn", "dusk", "night"]}
+    },
+    {
+      "id": "claim_terminal",
+      "name": "Claim Terminal",
+      "kind": "asset",
+      "display": {"glyph": "c", "color": "property_service"},
+      "cover": {"kind": "low", "value": 0.36},
+      "placement": {"weight": 1, "priorities": ["path_side", "entry_side", "open"]},
+      "public": true,
+      "services": ["insurance"],
+      "light": {"enabled": true, "radius": 3, "intensity": 0.28, "phases": ["dawn", "dusk", "night"]}
+    },
+    {
+      "id": "vending_machine",
+      "name": "Vending Machine",
+      "kind": "asset",
+      "display": {"glyph": "v", "color": "property_service"},
+      "cover": {"kind": "low", "value": 0.34},
+      "placement": {"weight": 2, "priorities": ["path_side", "entry_side", "open"]},
+      "public": true,
+      "services": [],
+      "light": {"enabled": true, "radius": 2, "intensity": 0.18, "phases": ["dawn", "dusk", "night"]}
+    },
+    {
+      "id": "news_rack",
+      "name": "News Rack",
+      "kind": "fixture",
+      "display": {"glyph": "n", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.22},
+      "placement": {"weight": 2, "priorities": ["path_side", "street_side", "open"]},
+      "public": true,
+      "services": []
+    },
+    {
+      "id": "security_booth",
+      "name": "Security Booth",
+      "kind": "asset",
+      "display": {"glyph": "q", "color": "property_asset"},
+      "cover": {"kind": "full", "value": 0.62},
+      "placement": {"weight": 1, "priorities": ["entry_side", "edge", "street_side", "open"]},
+      "public": false,
+      "services": [],
+      "light": {"enabled": true, "radius": 2, "intensity": 0.22, "phases": ["dawn", "dusk", "night"]}
+    },
+    {
+      "id": "charging_pillar",
+      "name": "Charging Pillar",
+      "kind": "asset",
+      "display": {"glyph": "e", "color": "property_service"},
+      "cover": {"kind": "low", "value": 0.3},
+      "placement": {"weight": 1, "priorities": ["street_side", "path_side", "open"]},
+      "public": true,
+      "services": [],
+      "light": {"enabled": true, "radius": 3, "intensity": 0.26, "phases": ["dawn", "dusk", "night"]}
+    },
+    {
+      "id": "planter_box",
+      "name": "Planter Box",
+      "kind": "fixture",
+      "display": {"glyph": "o", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.29},
+      "placement": {"weight": 2, "priorities": ["street_side", "path_side", "open"]},
+      "public": true,
+      "services": []
+    }
+  ],
+  "non_city": [
+    {
+      "id": "way_marker",
+      "name": "Way Marker",
+      "kind": "fixture",
+      "display": {"glyph": "s", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.24},
+      "placement": {"weight": 4, "priorities": ["path_side", "path_tile", "open", "edge"]},
+      "public": true,
+      "services": []
+    },
+    {
+      "id": "trail_lamp",
+      "name": "Trail Lamp",
+      "kind": "fixture",
+      "display": {"glyph": "l", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.28},
+      "placement": {"weight": 3, "priorities": ["path_side", "open", "edge"]},
+      "public": true,
+      "services": [],
+      "light": {"enabled": true, "radius": 4, "intensity": 0.6, "phases": ["dawn", "dusk", "night"]}
+    },
+    {
+      "id": "relay_pole",
+      "name": "Relay Pole",
+      "kind": "asset",
+      "display": {"glyph": "p", "color": "property_asset"},
+      "cover": {"kind": "low", "value": 0.34},
+      "placement": {"weight": 2, "priorities": ["edge", "path_side", "open"]},
+      "public": false,
+      "services": []
+    },
+    {
+      "id": "field_cache_box",
+      "name": "Field Cache Box",
+      "kind": "asset",
+      "display": {"glyph": "j", "color": "property_asset"},
+      "cover": {"kind": "low", "value": 0.4},
+      "placement": {"weight": 1, "priorities": ["edge", "open", "path_side"]},
+      "public": false,
+      "services": []
+    },
+    {
+      "id": "water_tank",
+      "name": "Water Tank",
+      "kind": "asset",
+      "display": {"glyph": "w", "color": "property_asset"},
+      "cover": {"kind": "full", "value": 0.5},
+      "placement": {"weight": 1, "priorities": ["edge", "open", "path_side"]},
+      "public": false,
+      "services": []
+    },
+    {
+      "id": "campfire_ring",
+      "name": "Campfire Ring",
+      "kind": "fixture",
+      "display": {"glyph": "o", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.18},
+      "placement": {"weight": 1, "priorities": ["open", "path_side", "edge"]},
+      "public": true,
+      "services": [],
+      "light": {"enabled": true, "radius": 3, "intensity": 0.42, "phases": ["dusk", "night"]}
+    },
+    {
+      "id": "storm_siren",
+      "name": "Storm Siren",
+      "kind": "asset",
+      "display": {"glyph": "y", "color": "property_asset"},
+      "cover": {"kind": "low", "value": 0.28},
+      "placement": {"weight": 1, "priorities": ["edge", "open", "path_side"]},
+      "public": false,
+      "services": [],
+      "light": {"enabled": true, "radius": 2, "intensity": 0.16, "phases": ["dawn", "dusk", "night"]}
+    },
+    {
+      "id": "drift_fence",
+      "name": "Drift Fence",
+      "kind": "fixture",
+      "display": {"glyph": "f", "color": "property_fixture"},
+      "cover": {"kind": "low", "value": 0.33},
+      "placement": {"weight": 2, "priorities": ["edge", "path_side", "open"]},
+      "public": true,
+      "services": []
+    },
+    {
+      "id": "solar_rig",
+      "name": "Solar Rig",
+      "kind": "asset",
+      "display": {"glyph": "r", "color": "property_asset"},
+      "cover": {"kind": "low", "value": 0.31},
+      "placement": {"weight": 1, "priorities": ["open", "edge", "path_side"]},
+      "public": false,
+      "services": []
+    }
+  ]
+}
