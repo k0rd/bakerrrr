@@ -1,5 +1,5 @@
 # BAKERRRR
-[assets/art/bakerrrr.png]
+
 Terminal-native systemic sandbox roguelike prototype.
 
 Public alpha prep is in progress.
