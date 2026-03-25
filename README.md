@@ -44,6 +44,8 @@ To launch the pygame frontend, select the backend explicitly:
 - `BAKERRRR_UI=pygame python3 main.py`
 
 Supported pygame aliases are `pygame`, `tile`, and `tiles`.
+When you use pygame, unless you have a really big monitor - you will want to set the environment variable
+- `BAKERRRR_TILE_SIZE_PX=26`
 
 ## License
 
@@ -54,6 +56,7 @@ See `LICENSE`.
 Assets are licensed separately under `LICENSE-ASSETS`.
 
 Commercial use by third parties is not permitted without written permission.
+bakerrrr belongs to Adrianna Harouff use is by license only.
 
 ## Documentation
 
