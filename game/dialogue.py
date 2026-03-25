@@ -332,7 +332,7 @@ DISTRICT_STYLE_HINTS = {
         "address_terms": (
             "friend",
             "pal",
-            "my [redacted]",
+            "my nigga",
             "dude"
         ),
     },

@@ -3700,6 +3700,8 @@ def _known_location_coords_text(prop):
 
 def _known_location_summary_bits(prop, known):
     bits = []
+    if bool((known or {}).get("anchored")):
+        bits.append("confirmed")
     metadata = _property_metadata(prop)
     archetype = str(metadata.get("archetype", prop.get("kind", "location"))).strip().replace("_", " ")
     if archetype:
@@ -3815,9 +3817,16 @@ def _known_location_fact_lines(sim, player_eid, prop, known):
     return deduped[:4]
 
 
-def _build_known_locations_report(sim, player_eid, limit=64):
+def _build_known_locations_report(sim, player_eid, limit=None, include_hidden=False):
     knowledge = sim.ecs.get(PropertyKnowledge).get(player_eid)
     known_map = knowledge.known if knowledge and isinstance(knowledge.known, dict) else {}
+    hidden_ids = set()
+    if knowledge:
+        hidden_ids = {
+            str(property_id).strip()
+            for property_id in getattr(knowledge, "hidden_property_ids", ()) or ()
+            if str(property_id).strip()
+        }
     rows = []
 
     for property_id, known in known_map.items():
@@ -3826,10 +3835,13 @@ def _build_known_locations_report(sim, player_eid, limit=64):
             continue
         if _property_is_vehicle(prop):
             continue
-        known = known if isinstance(known, dict) else {}
-        confidence = max(0.0, min(1.0, float(known.get("confidence", 0.0) or 0.0)))
-        if confidence < 0.5:
+        property_id = str(prop.get("id", property_id)).strip() or str(property_id).strip()
+        hidden = property_id in hidden_ids
+        if include_hidden != hidden:
             continue
+        known = known if isinstance(known, dict) else {}
+        anchored = bool(known.get("anchored"))
+        confidence = max(0.0, min(1.0, float(known.get("confidence", 0.0) or 0.0)))
 
         name = str(prop.get("name", prop.get("id", "location"))).strip() or "location"
         summary_bits = _known_location_summary_bits(prop, known)
@@ -3840,6 +3852,9 @@ def _build_known_locations_report(sim, player_eid, limit=64):
             "coords": _known_location_coords_text(prop),
             "confidence": confidence,
             "tick": _int_or_default(known.get("tick"), 0),
+            "first_tick": _int_or_default(known.get("first_tick"), _int_or_default(known.get("tick"), 0)),
+            "anchored": anchored,
+            "hidden": hidden,
             "summary_bits": summary_bits,
             "fact_lines": fact_lines,
         })
@@ -3860,6 +3875,9 @@ def _build_known_locations_report(sim, player_eid, limit=64):
         for vehicle_id in candidate_ids:
             prop = sim.properties.get(vehicle_id)
             if not _property_is_vehicle(prop):
+                continue
+            hidden = vehicle_id in hidden_ids
+            if include_hidden != hidden:
                 continue
             owned = bool(
                 prop.get("owner_eid") == player_eid
@@ -3886,39 +3904,50 @@ def _build_known_locations_report(sim, player_eid, limit=64):
                 "coords": _known_location_coords_text(prop),
                 "confidence": 1.0,
                 "tick": int(getattr(vehicle_state, "last_changed_tick", 0) or 0),
-                "summary_bits": ["owned vehicle"],
+                "first_tick": int(getattr(vehicle_state, "last_changed_tick", 0) or 0),
+                "anchored": True,
+                "hidden": hidden,
+                "summary_bits": ["confirmed", "owned vehicle"],
                 "fact_lines": fact_lines,
             })
             break
 
     rows.sort(
         key=lambda row: (
-            -float(row.get("confidence", 0.0)),
             -int(row.get("tick", 0)),
+            -float(row.get("confidence", 0.0)),
             str(row.get("name", "")).lower(),
+            str(row.get("coords", "")).lower(),
             str(row.get("property_id", "")).lower(),
         )
     )
 
     total_count = len(rows)
-    rows = rows[: max(1, int(limit))]
+    if limit is not None:
+        rows = rows[: max(1, int(limit))]
 
+    title = "Hidden Locations" if include_hidden else "Known Locations"
     lines = [
         "Places you have some solid read on through talk, rumor, ownership, or access leads.",
         "",
     ]
 
     if not rows:
+        empty_label = "hidden locations" if include_hidden else "known locations"
         lines.extend([
-            "No known locations yet.",
-            "Talk to people, overhear chatter, or learn access details to start filling this notebook.",
+            f"No {empty_label} right now.",
+            "Talk to people, overhear chatter, or learn access details to start filling this notebook." if not include_hidden else "Press H in the notebook to go back to the active list.",
         ])
         return {
-            "title": "Known Locations",
+            "title": title,
             "lines": lines,
+            "rows": [],
         }
 
-    lines.append(f"{total_count} location{'s' if total_count != 1 else ''} tracked.")
+    if include_hidden:
+        lines.append(f"{total_count} location{'s' if total_count != 1 else ''} hidden.")
+    else:
+        lines.append(f"{total_count} location{'s' if total_count != 1 else ''} tracked.")
     lines.append("")
     for row in rows:
         lines.append(f"{row['name']} @ {row['coords']}")
@@ -3933,8 +3962,9 @@ def _build_known_locations_report(sim, player_eid, limit=64):
         lines.append(f"... and {total_count - len(rows)} more locations.")
 
     return {
-        "title": "Known Locations",
+        "title": title,
         "lines": lines,
+        "rows": rows,
     }
 
 
@@ -5547,10 +5577,18 @@ class InputSystem(System):
                 "title": "Operations Report",
                 "lines": [],
                 "scroll": 0,
+                "rows": [],
+                "selected_index": 0,
+                "selected_property_id": None,
+                "filter_mode": "visible",
             }
             self.sim.report_ui = state
         else:
             state.setdefault("kind", "progress")
+            state.setdefault("rows", [])
+            state.setdefault("selected_index", 0)
+            state.setdefault("selected_property_id", None)
+            state.setdefault("filter_mode", "visible")
         return state
 
     def _log_state(self):
@@ -5597,10 +5635,21 @@ class InputSystem(System):
     def _refresh_report_ui(self, reset_scroll=False, kind=None):
         state = self._report_state()
         previous_scroll = int(state.get("scroll", 0))
+        previous_index = int(state.get("selected_index", 0))
+        previous_property_id = str(state.get("selected_property_id", "") or "").strip()
         next_kind = str(kind or state.get("kind", "progress")).strip().lower() or "progress"
         kind_changed = next_kind != str(state.get("kind", "progress")).strip().lower()
         if next_kind == "known_locations":
-            report = _build_known_locations_report(self.sim, self.player_eid, limit=64)
+            filter_mode = str(state.get("filter_mode", "visible")).strip().lower() or "visible"
+            if filter_mode not in {"visible", "hidden"}:
+                filter_mode = "visible"
+            state["filter_mode"] = filter_mode
+            report = _build_known_locations_report(
+                self.sim,
+                self.player_eid,
+                limit=None,
+                include_hidden=(filter_mode == "hidden"),
+            )
         else:
             next_kind = "progress"
             report = _build_progress_report(self.sim, self.player_eid, opportunity_limit=8)
@@ -5608,11 +5657,29 @@ class InputSystem(System):
         state["kind"] = next_kind
         state["title"] = str(report.get("title", "Operations Report")).strip() or "Operations Report"
         state["lines"] = list(report.get("lines", ()) or ())
-        if reset_scroll or kind_changed:
-            state["scroll"] = 0
+        state["rows"] = list(report.get("rows", ()) or ())
+        if next_kind == "known_locations":
+            rows = state["rows"]
+            if reset_scroll or kind_changed:
+                selected_index = 0
+                state["scroll"] = 0
+            else:
+                selected_index = max(0, min(previous_index, len(rows) - 1)) if rows else 0
+                if previous_property_id:
+                    for idx, row in enumerate(rows):
+                        if str(row.get("property_id", "")).strip() == previous_property_id:
+                            selected_index = idx
+                            break
+            state["selected_index"] = selected_index
+            self._clamp_known_locations_selection()
         else:
-            state["scroll"] = previous_scroll
-        self._clamp_report_scroll()
+            state["selected_index"] = 0
+            state["selected_property_id"] = None
+            if reset_scroll or kind_changed:
+                state["scroll"] = 0
+            else:
+                state["scroll"] = previous_scroll
+            self._clamp_report_scroll()
         return True
 
     def _refresh_known_locations_ui(self, reset_scroll=False):
@@ -5622,6 +5689,72 @@ class InputSystem(System):
         state = self._report_state()
         state["open"] = False
         state["scroll"] = 0
+
+    def _known_locations_list_height(self):
+        _body_w, body_h = self._scroll_panel_body_dimensions()
+        return max(1, body_h - 5)
+
+    def _clamp_known_locations_selection(self):
+        state = self._report_state()
+        rows = list(state.get("rows", ()) or [])
+        if not rows:
+            state["selected_index"] = 0
+            state["selected_property_id"] = None
+            state["scroll"] = 0
+            return 0
+
+        selected_index = max(0, min(int(state.get("selected_index", 0)), len(rows) - 1))
+        list_h = max(1, min(self._known_locations_list_height(), len(rows)))
+        max_scroll = max(0, len(rows) - list_h)
+        scroll = max(0, min(int(state.get("scroll", 0)), max_scroll))
+        if selected_index < scroll:
+            scroll = selected_index
+        elif selected_index >= scroll + list_h:
+            scroll = selected_index - list_h + 1
+
+        state["selected_index"] = selected_index
+        state["selected_property_id"] = str(rows[selected_index].get("property_id", "")).strip() or None
+        state["scroll"] = scroll
+        return selected_index
+
+    def _selected_known_location_row(self):
+        state = self._report_state()
+        rows = list(state.get("rows", ()) or [])
+        if not rows:
+            return None
+        selected_index = self._clamp_known_locations_selection()
+        if 0 <= selected_index < len(rows):
+            return rows[selected_index]
+        return None
+
+    def _toggle_known_location_hidden_view(self):
+        state = self._report_state()
+        mode = str(state.get("filter_mode", "visible")).strip().lower() or "visible"
+        state["filter_mode"] = "hidden" if mode != "hidden" else "visible"
+        state["selected_index"] = 0
+        state["selected_property_id"] = None
+        return self._refresh_known_locations_ui(reset_scroll=True)
+
+    def _toggle_selected_known_location_hidden(self):
+        state = self._report_state()
+        row = self._selected_known_location_row()
+        if not row:
+            return False
+
+        knowledge = self.sim.ecs.get(PropertyKnowledge).get(self.player_eid)
+        if not knowledge:
+            return False
+
+        property_id = str(row.get("property_id", "")).strip()
+        if not property_id:
+            return False
+
+        state["selected_index"] = int(state.get("selected_index", 0))
+        if knowledge.is_hidden(property_id):
+            knowledge.unhide(property_id)
+        else:
+            knowledge.hide(property_id)
+        return self._refresh_known_locations_ui(reset_scroll=False)
 
     def _report_display_lines(self):
         state = self._report_state()
@@ -5957,6 +6090,52 @@ class InputSystem(System):
             self._close_report_ui()
             return True
 
+        key_home = getattr(curses, "KEY_HOME", None)
+        key_end = getattr(curses, "KEY_END", None)
+        key_page_up = getattr(curses, "KEY_PPAGE", None)
+        key_page_down = getattr(curses, "KEY_NPAGE", None)
+
+        if report_kind == "known_locations":
+            if key in (ord("h"), ord("H")):
+                self._toggle_known_location_hidden_view()
+                return True
+
+            if key in (ord("r"), ord("R")):
+                self._toggle_selected_known_location_hidden()
+                return True
+
+            if key in (KEY_UP, ord("k"), ord("K")):
+                state["selected_index"] = int(state.get("selected_index", 0)) - 1
+                self._clamp_known_locations_selection()
+                return True
+
+            if key in (KEY_DOWN, ord("j"), ord("J")):
+                state["selected_index"] = int(state.get("selected_index", 0)) + 1
+                self._clamp_known_locations_selection()
+                return True
+
+            if key_home is not None and key == key_home:
+                state["selected_index"] = 0
+                self._clamp_known_locations_selection()
+                return True
+
+            if key_end is not None and key == key_end:
+                state["selected_index"] = max(0, len(list(state.get("rows", ()) or ())) - 1)
+                self._clamp_known_locations_selection()
+                return True
+
+            step = max(1, self._known_locations_list_height() - 1)
+            if key_page_up is not None and key == key_page_up:
+                state["selected_index"] = int(state.get("selected_index", 0)) - step
+                self._clamp_known_locations_selection()
+                return True
+
+            if key_page_down is not None and key == key_page_down:
+                state["selected_index"] = int(state.get("selected_index", 0)) + step
+                self._clamp_known_locations_selection()
+                return True
+            return True
+
         if key in (KEY_UP, ord("k"), ord("K")):
             state["scroll"] = int(state.get("scroll", 0)) - 1
             self._clamp_report_scroll()
@@ -5967,23 +6146,19 @@ class InputSystem(System):
             self._clamp_report_scroll()
             return True
 
-        key_home = getattr(curses, "KEY_HOME", None)
         if key_home is not None and key == key_home:
             state["scroll"] = 0
             return True
 
-        key_end = getattr(curses, "KEY_END", None)
         if key_end is not None and key == key_end:
             state["scroll"] = max(0, len(self._report_display_lines()) - 1)
             return True
 
-        key_page_up = getattr(curses, "KEY_PPAGE", None)
         if key_page_up is not None and key == key_page_up:
             state["scroll"] = int(state.get("scroll", 0)) - 6
             self._clamp_report_scroll()
             return True
 
-        key_page_down = getattr(curses, "KEY_NPAGE", None)
         if key_page_down is not None and key == key_page_down:
             state["scroll"] = int(state.get("scroll", 0)) + 6
             self._clamp_report_scroll()
@@ -7672,6 +7847,8 @@ class PropertySystem(System):
                         owner_tag=owner_tag,
                         confidence=1.0,
                         tick=self.sim.tick,
+                        anchored=True,
+                        anchor_kind="owned",
                     )
 
             if assets and owner_eid == self.player_eid:
@@ -12858,6 +13035,11 @@ class PlayerActionSystem(System):
         )
 
         updated = knowledge.known.get(prop["id"]) if isinstance(knowledge.known, dict) else None
+        if isinstance(updated, dict):
+            updated["anchored"] = True
+            updated["anchor_kind"] = str(discovery_mode or "sight").strip().lower() or "sight"
+            if updated.get("first_tick") is None:
+                updated["first_tick"] = int(getattr(self.sim, "tick", 0))
         try:
             new_confidence = float((updated or {}).get("confidence", prior_confidence) or prior_confidence)
         except (TypeError, ValueError):
@@ -23681,12 +23863,25 @@ class PropertyAwarenessSystem(System):
                 elif eid == getattr(self.sim, "player_eid", None) and bool(access.inside_bounds):
                     confidence = max(confidence, 0.68)
 
+                anchored = bool(
+                    eid == getattr(self.sim, "player_eid", None)
+                    and (
+                        access.standing_reason == "owner"
+                        or bool(access.inside_bounds)
+                    )
+                )
                 knowledge.remember(
                     prop["id"],
                     owner_eid=prop.get("owner_eid"),
                     owner_tag=prop.get("owner_tag"),
                     confidence=confidence,
                     tick=self.sim.tick,
+                    anchored=anchored,
+                    anchor_kind=(
+                        "owned"
+                        if access.standing_reason == "owner"
+                        else "presence"
+                    ) if anchored else None,
                 )
                 updated = knowledge.known.get(prop["id"]) if isinstance(knowledge.known, dict) else None
                 try:
@@ -32333,7 +32528,11 @@ class RenderSystem(System):
         elif dialog_ui.get("open"):
             controls = "Dialog: Up/Down choose, E ask, PgUp/PgDn scroll, M trade, O ops, Y locations, L log, D debug, Esc close, ? help"
         elif report_ui.get("open"):
-            controls = "Notebook: Up/Down browse, PgUp/PgDn jump, O ops, Y locations, L log, D debug, Esc close, ? help"
+            report_kind = str(report_ui.get("kind", "progress")).strip().lower() or "progress"
+            if report_kind == "known_locations":
+                controls = "Notebook: Up/Down choose, PgUp/PgDn jump, R hide/restore, H hidden view, O ops, Y close, L log, D debug, ? help"
+            else:
+                controls = "Notebook: Up/Down browse, PgUp/PgDn jump, O ops, Y locations, L log, D debug, Esc close, ? help"
         elif log_ui.get("open"):
             controls = "Log: Up/Down browse, PgUp/PgDn jump, T filter, H set HUD filter, O ops, Y locations, D debug, L/Esc close, ? help"
         elif debug_ui.get("open"):
@@ -32761,32 +32960,98 @@ class RenderSystem(System):
 
             body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
             body_h = max(1, panel_h - 4)
-            display_lines = []
-            for raw in list(report_ui.get("lines", ()) or ()) or ["No report data."]:
-                wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
-                display_lines.extend(wrapped)
-            display_lines = display_lines or ["No report data."]
-            scroll = max(0, min(int(report_ui.get("scroll", 0)), len(display_lines) - 1))
-            report_ui["scroll"] = scroll
-            visible_lines = display_lines[scroll: scroll + body_h]
-
-            for idx, line in enumerate(visible_lines[:body_h]):
-                self.view.draw_text(panel_x + 2, panel_y + 2 + idx, _clip(line, body_w))
-
             report_kind = str(report_ui.get("kind", "progress")).strip().lower() or "progress"
-            footer_bits = []
-            if scroll > 0:
-                footer_bits.append("more above")
-            if scroll + body_h < len(display_lines):
-                footer_bits.append("more below")
-            footer = " | ".join(footer_bits) if footer_bits else ""
-            action_tail = "O close | Y locations | L log | D debug | ? help"
             if report_kind == "known_locations":
-                action_tail = "Y close | O ops | L log | D debug | ? help"
-            if footer:
-                footer = f"{footer} | {action_tail}"
+                rows = list(report_ui.get("rows", ()) or ())
+                filter_mode = str(report_ui.get("filter_mode", "visible")).strip().lower() or "visible"
+                selected_index = max(0, min(int(report_ui.get("selected_index", 0)), len(rows) - 1)) if rows else 0
+                report_ui["selected_index"] = selected_index
+                list_h = max(1, body_h - 5)
+                max_scroll = max(0, len(rows) - list_h)
+                scroll = max(0, min(int(report_ui.get("scroll", 0)), max_scroll))
+                if rows:
+                    if selected_index < scroll:
+                        scroll = selected_index
+                    elif selected_index >= scroll + list_h:
+                        scroll = selected_index - list_h + 1
+                else:
+                    scroll = 0
+                report_ui["scroll"] = scroll
+
+                mode_label = "hidden" if filter_mode == "hidden" else "active"
+                count_label = f"{len(rows)} {mode_label}"
+                recency_label = "sorted by last revised"
+                self.view.draw_text(panel_x + 2, panel_y + 2, _clip(f"{count_label} | {recency_label}", panel_w - 4))
+
+                list_y = panel_y + 3
+                visible_rows = rows[scroll: scroll + list_h]
+                for idx, row in enumerate(visible_rows):
+                    absolute = scroll + idx
+                    marker = ">" if absolute == selected_index else " "
+                    name = str(row.get("name", "location")).strip() or "location"
+                    coords = str(row.get("coords", "coords unknown")).strip() or "coords unknown"
+                    label = f"{marker}{absolute + 1:02d} {name} @ {coords}"
+                    self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2))
+
+                if not rows:
+                    empty_text = "(no hidden locations)" if filter_mode == "hidden" else "(no known locations)"
+                    self.view.draw_text(panel_x + 2, list_y, _clip(empty_text, panel_w - 4))
+
+                detail_y = list_y + list_h + 1
+                detail_h = max(1, (panel_y + panel_h - 2) - detail_y)
+                detail_lines = []
+                if rows:
+                    row = rows[selected_index]
+                    summary_bits = [f"{int(round(float(row.get('confidence', 0.0)) * 100.0))}% confident"]
+                    summary_bits.extend(str(bit).strip() for bit in row.get("summary_bits", ()) if str(bit).strip())
+                    detail_lines.append(f"{row.get('name', 'location')} @ {row.get('coords', 'coords unknown')}")
+                    detail_lines.append(" | ".join(summary_bits))
+                    for fact in row.get("fact_lines", ()):
+                        detail_lines.append(f"- {fact}")
+                else:
+                    detail_lines.append("Nothing selected.")
+                    detail_lines.append("Press H to switch between active and hidden notebook entries.")
+
+                visible_detail_lines = detail_lines[:detail_h]
+                for idx, line in enumerate(visible_detail_lines):
+                    self.view.draw_text(panel_x + 2, detail_y + idx, _clip(line, panel_w - 4))
+
+                footer_bits = []
+                if scroll > 0:
+                    footer_bits.append("more above")
+                if scroll + list_h < len(rows):
+                    footer_bits.append("more below")
+                footer = " | ".join(footer_bits) if footer_bits else ""
+                action_verb = "restore" if filter_mode == "hidden" else "hide"
+                action_tail = f"R {action_verb} | H toggle hidden | Y close | O ops | L log | D debug | ? help"
+                if footer:
+                    footer = f"{footer} | {action_tail}"
+                else:
+                    footer = action_tail
             else:
-                footer = f"{action_tail} | Up/Down scroll"
+                display_lines = []
+                for raw in list(report_ui.get("lines", ()) or ()) or ["No report data."]:
+                    wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
+                    display_lines.extend(wrapped)
+                display_lines = display_lines or ["No report data."]
+                scroll = max(0, min(int(report_ui.get("scroll", 0)), len(display_lines) - 1))
+                report_ui["scroll"] = scroll
+                visible_lines = display_lines[scroll: scroll + body_h]
+
+                for idx, line in enumerate(visible_lines[:body_h]):
+                    self.view.draw_text(panel_x + 2, panel_y + 2 + idx, _clip(line, body_w))
+
+                footer_bits = []
+                if scroll > 0:
+                    footer_bits.append("more above")
+                if scroll + body_h < len(display_lines):
+                    footer_bits.append("more below")
+                footer = " | ".join(footer_bits) if footer_bits else ""
+                action_tail = "O close | Y locations | L log | D debug | ? help"
+                if footer:
+                    footer = f"{footer} | {action_tail}"
+                else:
+                    footer = f"{action_tail} | Up/Down scroll"
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, panel_w - 4))
         elif log_ui.get("open"):
             panel_w = min(max(56, screen_w - 4), screen_w)

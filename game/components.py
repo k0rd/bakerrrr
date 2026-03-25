@@ -554,6 +554,7 @@ class PropertyPortfolio:
 class PropertyKnowledge:
     def __init__(self):
         self.known = {}
+        self.hidden_property_ids = set()
 
     def remember(
         self,
@@ -564,6 +565,9 @@ class PropertyKnowledge:
         tick=0,
         source_eid=None,
         lead_kind=None,
+        anchored=None,
+        anchor_kind=None,
+        first_tick=None,
     ):
         existing = self.known.get(property_id)
         if existing:
@@ -572,6 +576,17 @@ class PropertyKnowledge:
                 source_eid = existing.get("source_eid")
             if lead_kind is None:
                 lead_kind = existing.get("lead_kind")
+            if anchored is None:
+                anchored = existing.get("anchored")
+            if anchor_kind is None:
+                anchor_kind = existing.get("anchor_kind")
+            if first_tick is None:
+                first_tick = existing.get("first_tick")
+
+        if anchored is None:
+            anchored = False
+        if first_tick is None and anchored:
+            first_tick = tick
 
         self.known[property_id] = {
             "owner_eid": owner_eid,
@@ -580,7 +595,41 @@ class PropertyKnowledge:
             "tick": tick,
             "source_eid": source_eid,
             "lead_kind": lead_kind,
+            "anchored": bool(anchored),
+            "anchor_kind": str(anchor_kind or "").strip().lower() or None,
+            "first_tick": int(first_tick) if first_tick is not None else None,
         }
+
+    def hide(self, property_id):
+        property_id = str(property_id or "").strip()
+        if not property_id:
+            return False
+        hidden_ids = getattr(self, "hidden_property_ids", None)
+        if hidden_ids is None:
+            hidden_ids = set()
+            self.hidden_property_ids = hidden_ids
+        before = len(hidden_ids)
+        hidden_ids.add(property_id)
+        return len(hidden_ids) > before
+
+    def unhide(self, property_id):
+        property_id = str(property_id or "").strip()
+        hidden_ids = getattr(self, "hidden_property_ids", None)
+        if hidden_ids is None:
+            hidden_ids = set()
+            self.hidden_property_ids = hidden_ids
+        if not property_id or property_id not in hidden_ids:
+            return False
+        hidden_ids.discard(property_id)
+        return True
+
+    def is_hidden(self, property_id):
+        property_id = str(property_id or "").strip()
+        hidden_ids = getattr(self, "hidden_property_ids", None)
+        if hidden_ids is None:
+            hidden_ids = set()
+            self.hidden_property_ids = hidden_ids
+        return bool(property_id) and property_id in hidden_ids
 
 
 class ContactLedger:
