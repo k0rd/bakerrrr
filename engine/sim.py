@@ -176,11 +176,12 @@ class Simulation:
             bottom = int(footprint.get("bottom"))
             base_z = int(prop.get("z", 0))
             floors = max(1, int(metadata.get("floors", 1)))
+            basement_levels = max(0, int(metadata.get("basement_levels", 0)))
         except (TypeError, ValueError):
             return ()
 
         coords = []
-        for cell_z in range(base_z, base_z + floors):
+        for cell_z in range(base_z - basement_levels, base_z + floors):
             for cell_y in range(top, bottom + 1):
                 for cell_x in range(left, right + 1):
                     coords.append((cell_x, cell_y, cell_z))
@@ -286,16 +287,19 @@ class Simulation:
     def structure_at(self, x, y, z=0):
         return self.structure_cells.get((int(x), int(y), int(z)))
 
-    def _floor_room_sequence(self, rooms, floor, floors, max_rooms=3):
+    def _floor_room_sequence(self, rooms, floor, floors, basement_levels=0, max_rooms=3):
         labels = [str(room).strip().lower() for room in rooms or () if str(room).strip()]
         if not labels:
             labels = ["room"]
         window = max(1, min(int(max_rooms), len(labels)))
+        floor = int(floor)
         max_start = max(0, len(labels) - window)
+        if floor < 0:
+            return tuple(reversed(labels[-window:]))
         start = min(max_start, int(max(0, floor)))
         return tuple(labels[start:start + window])
 
-    def _room_plan_for_shell(self, rooms, left, right, top, bottom, floor=0, floors=1):
+    def _room_plan_for_shell(self, rooms, left, right, top, bottom, floor=0, floors=1, basement_levels=0):
         interior_left = int(left) + 1
         interior_right = int(right) - 1
         interior_top = int(top) + 1
@@ -309,7 +313,13 @@ class Simulation:
 
         width = interior_right - interior_left + 1
         height = interior_bottom - interior_top + 1
-        floor_rooms = self._floor_room_sequence(rooms, floor=floor, floors=floors, max_rooms=3)
+        floor_rooms = self._floor_room_sequence(
+            rooms,
+            floor=floor,
+            floors=floors,
+            basement_levels=basement_levels,
+            max_rooms=3,
+        )
 
         if len(floor_rooms) <= 1 or width < 2 or height < 2:
             return {
@@ -536,13 +546,14 @@ class Simulation:
                     cell_info.update(room_info)
                 self.structure_cells[(int(x), int(y), int(z))] = cell_info
 
-    def _add_vertical_link_stack(self, x, y, top_floor, kind):
+    def _add_vertical_link_stack(self, x, y, top_floor, kind, bottom_floor=0):
         top_floor = int(max(0, min(self.tilemap.max_floors - 1, top_floor)))
-        if top_floor <= 0:
+        bottom_floor = int(min(0, bottom_floor))
+        if top_floor <= bottom_floor:
             return 0
 
         glyph = "E" if str(kind).strip().lower() == "elevator" else "S"
-        for z in range(top_floor + 1):
+        for z in range(bottom_floor, top_floor + 1):
             self.tilemap.set_tile(
                 int(x),
                 int(y),
@@ -550,9 +561,9 @@ class Simulation:
                 z=z,
             )
 
-        for from_z in range(top_floor):
+        for from_z in range(bottom_floor, top_floor):
             self.tilemap.add_floor_link(int(x), int(y), from_z=from_z, to_z=from_z + 1, kind=kind)
-        return top_floor
+        return top_floor - bottom_floor
 
     def _core_area_clear(self, center_x, center_y, top_floor):
         left = int(center_x) - 1
@@ -834,6 +845,30 @@ class Simulation:
         ox, oy = self.chunk_origin(key[0], key[1])
         rng = random.Random(f"{self.seed}:chunk:{key[0]}:{key[1]}:terrain")
 
+        basement_depth = 0
+        if area_type == "city":
+            for block in chunk.get("blocks", ()):
+                for building in block.get("buildings", ()):
+                    try:
+                        basement_depth = max(basement_depth, int(max(0, building.get("basement_levels", 0))))
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+
+        for z in range(-int(basement_depth), 0):
+            for y in range(oy, oy + size):
+                for x in range(ox, ox + size):
+                    if self.tilemap.tile_at(x, y, z) is None:
+                        self.tilemap.set_tile(
+                            x,
+                            y,
+                            Tile(
+                                walkable=False,
+                                transparent=False,
+                                glyph=" ",
+                            ),
+                            z=z,
+                        )
+
         for z in range(self.tilemap.max_floors):
             for y in range(oy, oy + size):
                 for x in range(ox, ox + size):
@@ -893,11 +928,12 @@ class Simulation:
                     bottom = int(layout["bottom"])
                     entry = dict(layout.get("entry", {}))
                     floors = int(max(1, min(self.tilemap.max_floors, building.get("floors", 1))))
+                    basement_levels = int(max(0, building.get("basement_levels", 0)))
                     door_x = int(entry.get("x", layout["anchor_x"]))
                     door_y = int(entry.get("y", bottom))
                     shape_excluded = layout.get("excluded", frozenset())
-                    for z in range(floors):
-                        floor_excluded = shape_excluded if z == 0 else frozenset()
+                    for z in range(-basement_levels, floors):
+                        floor_excluded = shape_excluded
                         room_plan = self._room_plan_for_shell(
                             building.get("rooms", ()),
                             left=left,
@@ -906,6 +942,7 @@ class Simulation:
                             bottom=bottom,
                             floor=z,
                             floors=floors,
+                            basement_levels=basement_levels,
                         )
                         structure_info = {
                             "building_id": chunk_building_id,
@@ -915,6 +952,8 @@ class Simulation:
                             "is_storefront": bool(building.get("is_storefront")),
                             "floor": z,
                             "floors": floors,
+                            "basement_levels": basement_levels,
+                            "total_levels": floors + basement_levels,
                             "rooms": tuple(room.get("kind", "room") for room in room_plan.get("rooms", ())) or tuple(building.get("rooms", ())),
                             "entry": entry,
                             "apertures": tuple(dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)),
@@ -944,7 +983,7 @@ class Simulation:
                             excluded=floor_excluded,
                         )
 
-                    if floors > 1:
+                    if floors + basement_levels > 1:
                         archetype = str(building.get("archetype", "")).strip().lower()
                         connector_kind = "elevator" if archetype in elevator_archetypes else "stairs"
                         connector_x = right - 1 if connector_kind == "elevator" else left + 1
@@ -954,6 +993,7 @@ class Simulation:
                             connector_y,
                             top_floor=floors - 1,
                             kind=connector_kind,
+                            bottom_floor=-basement_levels,
                         )
 
             obstacle_count = 0

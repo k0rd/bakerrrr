@@ -9,6 +9,20 @@ BUILDING_LAYOUT_OFFSETS = (
     (3, 3),
 )
 
+WALL_SIDES = ("north", "south", "west", "east")
+OPPOSITE_WALL_SIDE = {
+    "north": "south",
+    "south": "north",
+    "west": "east",
+    "east": "west",
+}
+PERPENDICULAR_WALL_SIDES = {
+    "north": ("west", "east"),
+    "south": ("west", "east"),
+    "west": ("north", "south"),
+    "east": ("north", "south"),
+}
+
 SIGNAGE_ARCHETYPE_HINTS = {
     "arcade",
     "auto_garage",
@@ -229,23 +243,152 @@ BUILDING_SHELL_SPANS = {
     "entertainment": (7, 5),
 }
 
+BUILDING_SHELL_SPAN_OPTIONS = {
+    "building": ((5, 5), (7, 5), (5, 7)),
+    "residential": ((5, 5), (7, 5), (5, 7)),
+    "storefront": ((7, 5), (9, 5), (7, 7), (9, 7)),
+    "industrial": ((7, 7), (9, 7), (7, 9), (9, 9)),
+    "corporate": ((7, 7), (9, 7), (7, 9), (9, 9)),
+    "civic": ((7, 5), (9, 5), (7, 7), (9, 7)),
+    "secure": ((7, 7), (9, 7), (7, 9)),
+    "entertainment": ((7, 5), (9, 5), (7, 7), (9, 7)),
+}
+
 BUILDING_SHAPE_WEIGHTS = {
-    "building":      {"rect": 10},
-    "residential":   {"rect": 7, "notch": 3},
-    "storefront":    {"rect": 5, "notch": 3, "l_shape": 2},
-    "industrial":    {"rect": 4, "notch": 3, "l_shape": 2, "notch_pair": 1},
-    "corporate":     {"rect": 4, "notch": 2, "l_shape": 3, "notch_pair": 1},
-    "civic":         {"rect": 5, "notch": 3, "l_shape": 2},
-    "secure":        {"rect": 3, "notch": 3, "l_shape": 2, "notch_pair": 2},
-    "entertainment": {"rect": 5, "notch": 3, "l_shape": 2},
+    "building":      {"rect": 7, "notch": 2, "setback": 1},
+    "residential":   {"rect": 5, "notch": 3, "l_shape": 1, "setback": 1},
+    "storefront":    {"rect": 3, "notch": 3, "l_shape": 2, "setback": 2},
+    "industrial":    {"rect": 2, "notch": 3, "l_shape": 2, "notch_pair": 1, "setback": 2},
+    "corporate":     {"rect": 2, "notch": 2, "l_shape": 3, "notch_pair": 1, "setback": 3},
+    "civic":         {"rect": 3, "notch": 3, "l_shape": 2, "setback": 2},
+    "secure":        {"rect": 2, "notch": 3, "l_shape": 2, "notch_pair": 2, "setback": 1},
+    "entertainment": {"rect": 3, "notch": 3, "l_shape": 2, "setback": 2},
 }
 
 
-def building_shape_exclusions(rng, exterior_class, left, right, top, bottom, entry_x, entry_y):
+def _clamp(value, low, high):
+    return max(int(low), min(int(high), int(value)))
+
+
+def _wall_points(left, right, top, bottom, side):
+    left = int(left)
+    right = int(right)
+    top = int(top)
+    bottom = int(bottom)
+    side = str(side or "south").strip().lower() or "south"
+
+    if side == "north":
+        xs = list(range(left + 1, right))
+        if not xs:
+            xs = [(left + right) // 2]
+        return [(int(x), top, 0) for x in xs]
+    if side == "south":
+        xs = list(range(left + 1, right))
+        if not xs:
+            xs = [(left + right) // 2]
+        return [(int(x), bottom, 0) for x in xs]
+    if side == "west":
+        ys = list(range(top + 1, bottom))
+        if not ys:
+            ys = [(top + bottom) // 2]
+        return [(left, int(y), 0) for y in ys]
+
+    ys = list(range(top + 1, bottom))
+    if not ys:
+        ys = [(top + bottom) // 2]
+    return [(right, int(y), 0) for y in ys]
+
+
+def _wall_point_from_bias(left, right, top, bottom, side, bias):
+    points = _wall_points(left, right, top, bottom, side)
+    if not points:
+        return int(left), int(bottom)
+
+    side = str(side or "south").strip().lower() or "south"
+    if side in {"north", "south"}:
+        xs = [point[0] for point in points]
+        target_x = _clamp(int(bias), min(xs), max(xs))
+        for x, y, _ in points:
+            if int(x) == target_x:
+                return int(x), int(y)
+    else:
+        ys = [point[1] for point in points]
+        target_y = _clamp(int(bias), min(ys), max(ys))
+        for x, y, _ in points:
+            if int(y) == target_y:
+                return int(x), int(y)
+    x, y, _ = points[len(points) // 2]
+    return int(x), int(y)
+
+
+def _adjacent_sign_point(left, right, top, bottom, side, entry_x, entry_y):
+    side = str(side or "south").strip().lower() or "south"
+    entry_x = int(entry_x)
+    entry_y = int(entry_y)
+    if side in {"north", "south"}:
+        candidates = ((entry_x - 1, entry_y), (entry_x + 1, entry_y))
+    else:
+        candidates = ((entry_x, entry_y - 1), (entry_x, entry_y + 1))
+
+    for sx, sy in candidates:
+        if int(left) <= int(sx) <= int(right) and int(top) <= int(sy) <= int(bottom):
+            if (int(sx), int(sy)) != (entry_x, entry_y):
+                return int(sx), int(sy)
+    return None
+
+
+def _choose_block_front_side(left, right, top, bottom, block_left, block_right, block_top, block_bottom, rng):
+    gaps = {
+        "north": max(0, int(top) - int(block_top)),
+        "south": max(0, int(block_bottom) - int(bottom)),
+        "west": max(0, int(left) - int(block_left)),
+        "east": max(0, int(block_right) - int(right)),
+    }
+    min_gap = min(gaps.values())
+    candidates = sorted(side for side, gap in gaps.items() if int(gap) == int(min_gap))
+    return rng.choice(candidates) if candidates else "south"
+
+
+def _corner_cells(left, right, top, bottom, corner, width, height):
+    corner = str(corner or "tl").strip().lower() or "tl"
+    if "l" in corner:
+        xs = range(int(left), int(left) + int(width))
+    else:
+        xs = range(int(right) - int(width) + 1, int(right) + 1)
+
+    if corner.startswith("t"):
+        ys = range(int(top), int(top) + int(height))
+    else:
+        ys = range(int(bottom) - int(height) + 1, int(bottom) + 1)
+
+    return {(int(x), int(y)) for x in xs for y in ys}
+
+
+def _center_strip_cells(left, right, top, bottom, side, depth):
+    side = str(side or "north").strip().lower() or "north"
+    depth = max(1, int(depth))
+
+    if side == "north":
+        ys = range(int(top), min(int(bottom) + 1, int(top) + depth))
+        xs = range(int(left) + 1, int(right))
+    elif side == "south":
+        ys = range(max(int(top), int(bottom) - depth + 1), int(bottom) + 1)
+        xs = range(int(left) + 1, int(right))
+    elif side == "west":
+        xs = range(int(left), min(int(right) + 1, int(left) + depth))
+        ys = range(int(top) + 1, int(bottom))
+    else:
+        xs = range(max(int(left), int(right) - depth + 1), int(right) + 1)
+        ys = range(int(top) + 1, int(bottom))
+
+    return {(int(x), int(y)) for x in xs for y in ys}
+
+
+def building_shape_exclusions(rng, exterior_class, left, right, top, bottom, entry_x, entry_y, entry_side="south"):
     """Return a frozenset of (x, y) cells to exclude from the building footprint."""
     width = right - left + 1
     height = bottom - top + 1
-    if width < 7 or height < 5:
+    if width < 5 or height < 5:
         return frozenset()
 
     weights = BUILDING_SHAPE_WEIGHTS.get(
@@ -263,24 +406,22 @@ def building_shape_exclusions(rng, exterior_class, left, right, top, bottom, ent
         return frozenset()
 
     excluded = set()
-    # Only notch top corners (entry is always on the south/bottom wall).
-    corner = rng.choice(["tl", "tr"])
+    entry_side = str(entry_side or "south").strip().lower() or "south"
+    back_side = OPPOSITE_WALL_SIDE.get(entry_side, "north")
+    back_corners = {
+        "north": ("tl", "tr"),
+        "south": ("bl", "br"),
+        "west": ("tl", "bl"),
+        "east": ("tr", "br"),
+    }.get(back_side, ("tl", "tr"))
+    corner = rng.choice(back_corners)
 
     if shape == "notch":
-        if corner == "tl":
-            for dx in range(notch_w):
-                for dy in range(notch_h):
-                    excluded.add((left + dx, top + dy))
-        else:
-            for dx in range(notch_w):
-                for dy in range(notch_h):
-                    excluded.add((right - dx, top + dy))
+        excluded.update(_corner_cells(left, right, top, bottom, corner, notch_w, notch_h))
 
     elif shape == "notch_pair":
-        for dx in range(notch_w):
-            for dy in range(notch_h):
-                excluded.add((left + dx, top + dy))
-                excluded.add((right - dx, top + dy))
+        for pair_corner in back_corners:
+            excluded.update(_corner_cells(left, right, top, bottom, pair_corner, notch_w, notch_h))
 
     elif shape == "l_shape":
         if width >= 7 and height >= 7:
@@ -289,17 +430,20 @@ def building_shape_exclusions(rng, exterior_class, left, right, top, bottom, ent
             l_w, l_h = 3, 2
         else:
             l_w, l_h = 2, 2
-        if corner == "tl":
-            for dx in range(l_w):
-                for dy in range(l_h):
-                    excluded.add((left + dx, top + dy))
-        else:
-            for dx in range(l_w):
-                for dy in range(l_h):
-                    excluded.add((right - dx, top + dy))
+        excluded.update(_corner_cells(left, right, top, bottom, corner, l_w, l_h))
 
-    # Never exclude entry or signage row.
-    excluded = {(ex, ey) for ex, ey in excluded if ey != int(entry_y)}
+    elif shape == "setback":
+        if back_side in {"north", "south"}:
+            setback_depth = min(2, max(1, height - 4))
+        else:
+            setback_depth = min(2, max(1, width - 4))
+        excluded.update(_center_strip_cells(left, right, top, bottom, back_side, setback_depth))
+
+    # Never exclude the front facade that carries the entry/signage.
+    if entry_side in {"north", "south"}:
+        excluded = {(ex, ey) for ex, ey in excluded if ey != int(entry_y)}
+    else:
+        excluded = {(ex, ey) for ex, ey in excluded if ex != int(entry_x)}
     return frozenset(excluded)
 
 
@@ -312,14 +456,16 @@ def _layout_rng_seed(origin_x, origin_y, chunk_size, block_grid_x, block_grid_y,
     building_id = ""
     archetype = ""
     floors = ""
+    basement_levels = ""
     if isinstance(building, dict):
         building_id = str(building.get("building_id") or "").strip()
         archetype = str(building.get("archetype") or "").strip().lower()
         floors = str(building.get("floors") or "").strip()
+        basement_levels = str(building.get("basement_levels") or "").strip()
     return (
         f"layout:{int(origin_x)}:{int(origin_y)}:{int(chunk_size)}:"
         f"{int(block_grid_x)}:{int(block_grid_y)}:{int(building_index)}:"
-        f"{building_id}:{archetype}:{floors}"
+        f"{building_id}:{archetype}:{floors}:{basement_levels}"
     )
 
 
@@ -374,19 +520,28 @@ def building_exterior_profile(building):
     return profile
 
 
-def building_shell_span(building):
+def building_shell_span(building, rng=None):
     profile = building_exterior_profile(building)
-    width, height = BUILDING_SHELL_SPANS.get(
-        str(profile.get("class", "building")).strip().lower() or "building",
-        BUILDING_SHELL_SPANS["building"],
+    exterior_class = str(profile.get("class", "building")).strip().lower() or "building"
+    options = BUILDING_SHELL_SPAN_OPTIONS.get(
+        exterior_class,
+        (BUILDING_SHELL_SPANS.get(exterior_class, BUILDING_SHELL_SPANS["building"]),),
     )
+    if rng is not None and len(options) > 1:
+        width, height = rng.choice(tuple(options))
+    else:
+        width, height = options[0]
 
     try:
         floors = int((building or {}).get("floors", 1))
     except (TypeError, ValueError, AttributeError):
         floors = 1
+    try:
+        basement_levels = int((building or {}).get("basement_levels", 0))
+    except (TypeError, ValueError, AttributeError):
+        basement_levels = 0
 
-    if floors > 1:
+    if floors + basement_levels > 1:
         width = max(int(width), 7)
         height = max(int(height), 7)
     return int(width), int(height)
@@ -406,7 +561,7 @@ def building_signage_text(building):
     return ""
 
 
-def _service_aperture(building, left, right, top, bottom, anchor_y, entry_x, entry_y):
+def _service_aperture(building, left, right, top, bottom, anchor_x, anchor_y, entry_x, entry_y, entry_side):
     if not isinstance(building, dict):
         return None
 
@@ -425,22 +580,18 @@ def _service_aperture(building, left, right, top, bottom, anchor_y, entry_x, ent
     if exterior_class not in {"industrial", "corporate", "civic", "secure"}:
         return None
 
-    side = "east"
-    x = int(right)
-    if int(entry_x) == int(right):
-        side = "west"
-        x = int(left)
-
-    y = max(int(top) + 1, min(int(bottom) - 1, int(anchor_y)))
+    side = OPPOSITE_WALL_SIDE.get(str(entry_side or "south").strip().lower() or "south", "north")
+    bias = int(anchor_x) if side in {"north", "south"} else int(anchor_y)
+    x, y = _wall_point_from_bias(left, right, top, bottom, side, bias)
     if (x, y) == (int(entry_x), int(entry_y)):
-        alt_y = int(top) + 1 if int(entry_y) != int(top) + 1 else int(bottom) - 1
-        y = max(int(top) + 1, min(int(bottom) - 1, alt_y))
+        alt_bias = int(anchor_y) if side in {"north", "south"} else int(anchor_x)
+        x, y = _wall_point_from_bias(left, right, top, bottom, side, alt_bias)
     if (x, y) == (int(entry_x), int(entry_y)):
         return None
 
     return {
-        "x": x,
-        "y": y,
+        "x": int(x),
+        "y": int(y),
         "z": 0,
         "side": side,
         "kind": "service_door",
@@ -455,7 +606,7 @@ def _append_window_candidate(candidates, reserved, x, y, z=0):
     candidates.append(point)
 
 
-def _window_apertures(building, left, right, top, bottom, reserved=None):
+def _window_apertures(building, left, right, top, bottom, entry_side, reserved=None):
     if not isinstance(building, dict):
         return []
 
@@ -467,38 +618,52 @@ def _window_apertures(building, left, right, top, bottom, reserved=None):
     profile = building_exterior_profile(building)
     mode = str(profile.get("window_mode", "basic")).strip().lower()
     candidates = []
-
-    front_row = [
-        (int(x), int(bottom), 0)
-        for x in range(int(left) + 1, int(right))
-        if (int(x), int(bottom), 0) not in reserved
-    ]
-    side_mid = max(int(top) + 1, min(int(bottom) - 1, (int(top) + int(bottom)) // 2))
+    front_side = str(entry_side or "south").strip().lower() or "south"
+    front_row = [point for point in _wall_points(left, right, top, bottom, front_side) if tuple(point) not in reserved]
+    side_a, side_b = PERPENDICULAR_WALL_SIDES.get(front_side, ("west", "east"))
+    side_a_mid = _wall_point_from_bias(
+        left,
+        right,
+        top,
+        bottom,
+        side_a,
+        (int(top) + int(bottom)) // 2 if side_a in {"west", "east"} else (int(left) + int(right)) // 2,
+    )
+    side_b_mid = _wall_point_from_bias(
+        left,
+        right,
+        top,
+        bottom,
+        side_b,
+        (int(top) + int(bottom)) // 2 if side_b in {"west", "east"} else (int(left) + int(right)) // 2,
+    )
+    span = max(int(right) - int(left), int(bottom) - int(top))
 
     if mode == "storefront":
         for point in front_row:
             _append_window_candidate(candidates, reserved, *point)
     elif mode == "residential":
-        for x in (int(left) + 1, int(right) - 1):
-            _append_window_candidate(candidates, reserved, x, int(bottom), 0)
-        _append_window_candidate(candidates, reserved, int(left), side_mid, 0)
-        _append_window_candidate(candidates, reserved, int(right), side_mid, 0)
+        if front_row:
+            _append_window_candidate(candidates, reserved, *front_row[0])
+            _append_window_candidate(candidates, reserved, *front_row[-1])
+        _append_window_candidate(candidates, reserved, *side_a_mid, 0)
+        _append_window_candidate(candidates, reserved, *side_b_mid, 0)
     elif mode == "industrial":
-        _append_window_candidate(candidates, reserved, int(right), side_mid, 0)
-        if int(right) - int(left) >= 6:
-            _append_window_candidate(candidates, reserved, int(left), side_mid, 0)
+        _append_window_candidate(candidates, reserved, *side_b_mid, 0)
+        if span >= 6:
+            _append_window_candidate(candidates, reserved, *side_a_mid, 0)
     elif mode == "corporate":
         if front_row:
             _append_window_candidate(candidates, reserved, *front_row[0])
             _append_window_candidate(candidates, reserved, *front_row[-1])
             if len(front_row) >= 4:
                 _append_window_candidate(candidates, reserved, *front_row[len(front_row) // 2])
-        _append_window_candidate(candidates, reserved, int(right), side_mid, 0)
+        _append_window_candidate(candidates, reserved, *side_b_mid, 0)
     elif mode == "civic":
         if front_row:
             _append_window_candidate(candidates, reserved, *front_row[0])
             _append_window_candidate(candidates, reserved, *front_row[-1])
-        _append_window_candidate(candidates, reserved, int(left), side_mid, 0)
+        _append_window_candidate(candidates, reserved, *side_a_mid, 0)
     elif mode == "entertainment":
         if front_row:
             _append_window_candidate(candidates, reserved, *front_row[0])
@@ -508,8 +673,9 @@ def _window_apertures(building, left, right, top, bottom, reserved=None):
     elif mode == "secure":
         return []
     else:
-        for x in (int(left) + 1, int(right) - 1):
-            _append_window_candidate(candidates, reserved, x, int(bottom), 0)
+        if front_row:
+            _append_window_candidate(candidates, reserved, *front_row[0])
+            _append_window_candidate(candidates, reserved, *front_row[-1])
 
     apertures = []
     seen = set()
@@ -595,7 +761,7 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
     shell_cx = max(block_left + 2, min(block_right - 2, shell_cx))
     shell_cy = max(block_top + 2, min(block_bottom - 2, shell_cy))
 
-    span_w, span_h = building_shell_span(building)
+    span_w, span_h = building_shell_span(building, rng=layout_rng)
     if layout_mode == "pair_horizontal":
         span_w = min(span_w, 5)
     elif layout_mode == "pair_vertical":
@@ -619,20 +785,31 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
 
     anchor_x = max(left + 1, min(right - 1, shell_cx))
     anchor_y = max(top + 1, min(bottom - 1, shell_cy))
-
-    entry_x = max(left + 1, min(right - 1, shell_cx + layout_rng.randint(-1, 1)))
-    entry_y = bottom
+    front_side = _choose_block_front_side(
+        left=left,
+        right=right,
+        top=top,
+        bottom=bottom,
+        block_left=block_left,
+        block_right=block_right,
+        block_top=block_top,
+        block_bottom=block_bottom,
+        rng=layout_rng,
+    )
+    entry_bias = (shell_cx + layout_rng.randint(-1, 1)) if front_side in {"north", "south"} else (shell_cy + layout_rng.randint(-1, 1))
+    entry_x, entry_y = _wall_point_from_bias(left, right, top, bottom, front_side, entry_bias)
 
     sign_text = building_signage_text(building)
     signage = None
     if sign_text:
-        sign_x = entry_x - 1 if entry_x - 1 >= left else entry_x + 1
-        if left <= sign_x <= right and sign_x != entry_x:
+        sign_point = _adjacent_sign_point(left, right, top, bottom, front_side, entry_x, entry_y)
+        if sign_point is not None:
+            sign_x, sign_y = sign_point
             signage = {
                 "x": int(sign_x),
-                "y": int(entry_y),
+                "y": int(sign_y),
                 "z": 0,
-                "side": "south",
+                "side": front_side,
                 "kind": "wall_sign",
                 "text": sign_text,
             }
@@ -646,6 +823,7 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
         bottom=bottom,
         entry_x=entry_x,
         entry_y=entry_y,
+        entry_side=front_side,
     )
 
     apertures = [
@@ -653,7 +831,7 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
             "x": int(entry_x),
             "y": int(entry_y),
             "z": 0,
-            "side": "south",
+            "side": front_side,
             "kind": "door",
             "ordinary": True,
         }
@@ -665,9 +843,11 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
         right=right,
         top=top,
         bottom=bottom,
+        anchor_x=anchor_x,
         anchor_y=anchor_y,
         entry_x=entry_x,
         entry_y=entry_y,
+        entry_side=front_side,
     )
     if service_aperture:
         apertures.append(service_aperture)
@@ -686,6 +866,7 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
             right=right,
             top=top,
             bottom=bottom,
+            entry_side=front_side,
             reserved=reserved,
         )
     )
@@ -712,7 +893,7 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
             "x": int(entry_x),
             "y": int(entry_y),
             "z": 0,
-            "side": "south",
+            "side": front_side,
             "kind": "door",
         },
         "apertures": apertures,

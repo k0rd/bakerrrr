@@ -696,6 +696,7 @@ def _register_chunk_properties(sim, chunk):
                     "building_id": chunk_building_id,
                     "local_building_id": local_building_id or None,
                     "floors": int(building.get("floors", 1)),
+                    "basement_levels": int(building.get("basement_levels", 0)),
                     "rooms": list(building.get("rooms", ())),
                     "footprint": dict(layout.get("footprint", {})),
                     "entry": dict(layout.get("entry", {})),
@@ -725,6 +726,7 @@ def _register_chunk_properties(sim, chunk):
                 "z": z,
                 "archetype": archetype,
                 "building_id": chunk_building_id,
+                "basement_levels": int(building.get("basement_levels", 0)),
             })
 
     reserved_site_footprints = []

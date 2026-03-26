@@ -451,6 +451,18 @@ class PygameView:
             return ["features", "terrain"] + [name for name in default_order if name not in {"features", "terrain"}]
         return default_order
 
+    def _strict_categories_for_color(self, color_key):
+        key = str(color_key or "default").strip().lower()
+        if key.startswith("item_"):
+            return ("items",)
+        if key.startswith("vehicle_"):
+            return ("vehicles",)
+        return ()
+
+    def _preserve_background_for_color(self, color_key):
+        key = str(color_key or "default").strip().lower()
+        return key.startswith("item_") or key.startswith("vehicle_")
+
     def _tile_id_for(self, glyph, color):
         """Resolve a tile_id from glyph+color using tile_map; return None if unmapped."""
         if not self._tile_map or self._atlas is None:
@@ -458,6 +470,7 @@ class PygameView:
 
         glyph = str(glyph)[:1] if glyph else ""
         color_key = str(color) if color else "default"
+        strict_categories = set(self._strict_categories_for_color(color_key))
 
         tile_id = self._direct_tile_id_for(glyph, color_key)
         if tile_id:
@@ -467,6 +480,7 @@ class PygameView:
             self._tile_map.get(name)
             for name in self._category_order_for_color(color_key)
             if isinstance(self._tile_map.get(name), dict)
+            and (not strict_categories or name in strict_categories)
         ]
 
         # Pass 1: exact glyph+color match only.
@@ -532,7 +546,7 @@ class PygameView:
 
         return None
 
-    def _blit_tile(self, tile_id, x, y, attrs=0):
+    def _blit_tile(self, tile_id, x, y, attrs=0, preserve_background=False):
         """Blit a sprite tile to cell (x, y). Returns True if drawn, False if not found."""
         tile_id = self._semantic_aliases.get(str(tile_id), str(tile_id))
         rect = self._tile_rects.get(str(tile_id))
@@ -541,7 +555,8 @@ class PygameView:
 
         dest_x = x * self.cell_px
         dest_y = y * self.cell_px
-        self.surface.fill((0, 0, 0), (dest_x, dest_y, self.cell_px, self.cell_px))
+        if not preserve_background:
+            self.surface.fill((0, 0, 0), (dest_x, dest_y, self.cell_px, self.cell_px))
         tile_surf = self._atlas.subsurface(rect)
         if rect.w != self.cell_px or rect.h != self.cell_px:
             tile_surf = self.pygame.transform.scale(tile_surf, (self.cell_px, self.cell_px))
@@ -611,16 +626,17 @@ class PygameView:
         if region is None:
             return
         x, y, text = region
+        preserve_background = self._preserve_background_for_color(color)
 
         # Try sprite tile first; fall back to glyph text when no atlas loaded or
         # tile_id not yet available for this glyph+color pair.
         tile_id = self._tile_id_for(text, color)
-        if tile_id and self._blit_tile(tile_id, x, y, attrs=attrs):
+        if tile_id and self._blit_tile(tile_id, x, y, attrs=attrs, preserve_background=preserve_background):
             return
 
-        self._draw_font_char(x, y, text[0], color=color, attrs=attrs)
+        self._draw_font_char(x, y, text[0], color=color, attrs=attrs, preserve_background=preserve_background)
 
-    def _draw_font_char(self, x, y, ch, color=None, attrs=0):
+    def _draw_font_char(self, x, y, ch, color=None, attrs=0, preserve_background=False):
         fg = self._color_value(color)
         bg = (0, 0, 0)
         if self._has_attr(attrs, "A_REVERSE"):
@@ -638,7 +654,8 @@ class PygameView:
 
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
-        self.surface.fill(bg, (cell_x, cell_y, self.cell_px, self.cell_px))
+        if not preserve_background or bg != (0, 0, 0):
+            self.surface.fill(bg, (cell_x, cell_y, self.cell_px, self.cell_px))
         glyph = self.font.render(str(ch)[:1] or " ", True, fg)
         self.surface.blit(glyph, (cell_x, cell_y))
 
@@ -885,6 +902,71 @@ class PygameView:
         if not self.key_queue:
             return None
         return self.key_queue.popleft()
+
+    def drain_keys(self):
+        for event in self.pygame.event.get():
+            mapped = self._map_key(event)
+            if mapped is not None:
+                self.key_queue.append(mapped)
+
+        if not self.key_queue:
+            return []
+
+        drained = list(self.key_queue)
+        self.key_queue.clear()
+        return drained
+
+    def held_movement_delta(self):
+        self.pygame.event.pump()
+        pressed = self.pygame.key.get_pressed()
+
+        def _any_pressed(*keys):
+            for key in keys:
+                if key is None:
+                    continue
+                try:
+                    if pressed[key]:
+                        return True
+                except (IndexError, TypeError):
+                    continue
+            return False
+
+        left = _any_pressed(
+            self.pygame.K_LEFT,
+            self.pygame.K_a,
+            self.pygame.K_h,
+        )
+        right = _any_pressed(
+            self.pygame.K_RIGHT,
+            self.pygame.K_d,
+            self.pygame.K_l,
+        )
+        up = _any_pressed(
+            self.pygame.K_UP,
+            self.pygame.K_w,
+            self.pygame.K_k,
+        )
+        down = _any_pressed(
+            self.pygame.K_DOWN,
+            self.pygame.K_s,
+            self.pygame.K_j,
+        )
+
+        dx = (-1 if left and not right else 1 if right and not left else 0)
+        dy = (-1 if up and not down else 1 if down and not up else 0)
+        if dx or dy:
+            return (dx, dy)
+
+        keypad_diagonals = (
+            (getattr(self.pygame, "K_KP7", None), (-1, -1)),
+            (getattr(self.pygame, "K_KP9", None), (1, -1)),
+            (getattr(self.pygame, "K_KP1", None), (-1, 1)),
+            (getattr(self.pygame, "K_KP3", None), (1, 1)),
+        )
+        for key, delta in keypad_diagonals:
+            if _any_pressed(key):
+                return delta
+        return None
 
     def refresh(self):
         self.pygame.display.flip()

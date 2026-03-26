@@ -286,5 +286,14 @@ class CursesView:
             return 10
         return key
 
+    def drain_keys(self):
+        keys = []
+        while True:
+            key = self.get_key()
+            if key is None:
+                break
+            keys.append(key)
+        return keys
+
     def refresh(self):
         self.scr.refresh()

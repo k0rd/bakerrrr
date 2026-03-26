@@ -26,9 +26,7 @@
       "building_roof_civic",
       "building_roof_industrial",
       "building_roof_storefront",
-      "vehicle_parked",
-      "canine",
-      "insect"
+      "vehicle_parked"
     ],
     "pink": [
       "human",
@@ -43,7 +41,8 @@
       "cat_purple",
       "item_restricted",
       "item_tool",
-      "property_service_zone"
+      "property_service_zone",
+      "player"
     ],
     "red": [
       "guard",
@@ -53,8 +52,12 @@
       "infra_hydrant"
     ],
     "green": [
-      "player",
-      "terrain_generic"
+      "terrain_generic",
+      "lizard",
+      "insect"
+    ],
+    "blue": [
+       "canine"
     ]
   },
   "_asset_color_families": {

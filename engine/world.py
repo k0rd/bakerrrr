@@ -183,7 +183,6 @@ class World:
             "pump_house",
             "work_shed",
             "truck_stop",
-            "inspection_shed",
             "breaker_yard",
         ),
         "wilderness": (
@@ -192,9 +191,6 @@ class World:
             "ranger_hut",
             "ruin_shelter",
             "lookout_post",
-            "firewatch_tower",
-            "weather_station",
-            "herbalist_camp",
         ),
         "coastal": (
             "dock_shack",
@@ -429,21 +425,21 @@ class World:
     }
 
     ROOM_TEMPLATES = {
-        "warehouse": ("loading_bay", "storage", "office"),
-        "factory": ("assembly", "maintenance", "control"),
-        "machine_shop": ("shop_floor", "parts", "breakroom"),
+        "warehouse": ("loading_bay", "storage", "office", "secure_cage"),
+        "factory": ("assembly", "maintenance", "control", "parts_store"),
+        "machine_shop": ("shop_floor", "parts", "breakroom", "tool_crib"),
         "apartment": ("hallway", "bedroom", "kitchen", "bathroom"),
         "house": ("living_room", "bedroom", "kitchen"),
         "corner_store": ("entrance", "shop_floor", "storage"),
-        "office": ("lobby", "open_office", "conference"),
-        "bank": ("lobby", "vault", "security_room"),
+        "office": ("lobby", "open_office", "conference", "records"),
+        "bank": ("lobby", "teller_row", "security_room", "vault"),
         "restaurant": ("dining", "kitchen", "office"),
-        "tenement": ("hallway", "units", "boiler"),
+        "tenement": ("hallway", "units", "laundry", "boiler"),
         "pawn_shop": ("sales", "storage", "back_office"),
-        "backroom_clinic": ("waiting", "exam", "storage"),
-        "tower": ("reception", "workspace", "server_room"),
-        "lab": ("lab_floor", "chemical_storage", "office"),
-        "server_hub": ("security_room", "racks", "power_room"),
+        "backroom_clinic": ("waiting", "exam", "storage", "back_office"),
+        "tower": ("reception", "workspace", "server_room", "executive_suite"),
+        "lab": ("lab_floor", "chemical_storage", "office", "specimen_vault"),
+        "server_hub": ("security_room", "racks", "power_room", "cold_backup"),
         "barracks": ("bunks", "mess", "armory"),
         "armory": ("entry", "secure_storage", "office"),
         "checkpoint": ("gate", "inspection", "control"),
@@ -485,6 +481,108 @@ class World:
         "gaming_hall": ("main_floor", "cash_cage", "surveillance_room", "vip_lounge"),
         "karaoke_box": ("host_desk", "song_room", "bar_nook", "sound_closet"),
         "pool_hall": ("front_counter", "table_floor", "back_bar", "storage"),
+    }
+
+    MULTI_FLOOR_ARCHETYPES = {
+        "apartment",
+        "arcade",
+        "backroom_clinic",
+        "bank",
+        "bar",
+        "biotech_clinic",
+        "brokerage",
+        "co_working_hub",
+        "cold_storage",
+        "courthouse",
+        "courier_office",
+        "data_center",
+        "factory",
+        "field_hospital",
+        "flophouse",
+        "freight_depot",
+        "gaming_hall",
+        "hotel",
+        "lab",
+        "machine_shop",
+        "media_lab",
+        "metro_exchange",
+        "music_venue",
+        "nightclub",
+        "office",
+        "pawn_shop",
+        "server_hub",
+        "soup_kitchen",
+        "tenement",
+        "theater",
+        "tool_depot",
+        "tower",
+        "warehouse",
+    }
+
+    TALL_BUILDING_ARCHETYPES = {
+        "apartment",
+        "bank",
+        "brokerage",
+        "co_working_hub",
+        "courthouse",
+        "data_center",
+        "hotel",
+        "metro_exchange",
+        "office",
+        "server_hub",
+        "tenement",
+        "tower",
+    }
+
+    BASEMENT_ARCHETYPES = {
+        "apartment",
+        "backroom_clinic",
+        "bank",
+        "biotech_clinic",
+        "brokerage",
+        "cold_storage",
+        "courthouse",
+        "data_center",
+        "field_hospital",
+        "flophouse",
+        "hotel",
+        "lab",
+        "machine_shop",
+        "metro_exchange",
+        "office",
+        "pawn_shop",
+        "pharmacy",
+        "server_hub",
+        "soup_kitchen",
+        "supply_bunker",
+        "tenement",
+        "tool_depot",
+        "tower",
+        "warehouse",
+    }
+
+    LOW_RISE_ARCHETYPES = {
+        "armory",
+        "bait_shop",
+        "bar",
+        "bookshop",
+        "corner_store",
+        "daycare",
+        "dock_shack",
+        "hardware_store",
+        "house",
+        "inspection_shed",
+        "laundromat",
+        "lookout_post",
+        "pool_hall",
+        "pump_house",
+        "ranger_hut",
+        "relay_post",
+        "restaurant",
+        "roadhouse",
+        "street_kitchen",
+        "truck_stop",
+        "work_shed",
     }
 
     CAREERS_BY_ARCHETYPE = {
@@ -627,15 +725,7 @@ class World:
         "pool_hall",
     }
 
-    NAMED_NON_CITY_SITE_KINDS = {
-        "roadhouse",
-        "truck_stop",
-        "salvage_camp",
-        "breaker_yard",
-        "dock_shack",
-        "bait_shop",
-        "drydock_yard",
-    }
+    NAMED_NON_CITY_SITE_KINDS = set(NON_CITY_SITE_LABELS)
 
     BUSINESS_SUFFIX_BY_ARCHETYPE = {
         "warehouse": ("Logistics", "Warehousing", "Supply Co."),
@@ -681,11 +771,28 @@ class World:
         "pool_hall": ("Pool Hall", "Billiards", "Cue Room"),
         "roadhouse": ("Roadhouse", "Rest Stop", "Travel House"),
         "truck_stop": ("Truck Stop", "Fuel Stop", "Travel Plaza"),
+        "relay_post": ("Relay Post", "Signal Post", "Comms Relay"),
+        "inspection_shed": ("Inspection Shed", "Permit Post", "Checkpoint"),
         "salvage_camp": ("Salvage Camp", "Recovery Yard", "Scrap Camp"),
         "breaker_yard": ("Breaker Yard", "Parts Yard", "Wrecking"),
+        "pump_house": ("Pump House", "Waterworks", "Valve House"),
+        "work_shed": ("Work Shed", "Tool Shed", "Yard Shop"),
+        "field_camp": ("Field Camp", "Outcamp", "Trail Camp"),
+        "survey_post": ("Survey Post", "Range Post", "Survey Camp"),
+        "ranger_hut": ("Ranger Hut", "Trail Hut", "Range Hut"),
+        "ruin_shelter": ("Ruin Shelter", "Refuge", "Hideout"),
+        "lookout_post": ("Lookout Post", "Watch Post", "Vantage"),
+        "firewatch_tower": ("Firewatch Tower", "Watchtower", "Signal Tower"),
+        "weather_station": ("Weather Station", "Storm Station", "Sky Station"),
+        "herbalist_camp": ("Herbalist Camp", "Remedy Camp", "Green Camp"),
         "dock_shack": ("Dock Shack", "Pier Supply", "Harbor Shack"),
+        "ferry_post": ("Ferry Post", "Ferry Landing", "Crossing"),
+        "tide_station": ("Tide Station", "Harbor Station", "Sounding House"),
+        "net_house": ("Net House", "Fish House", "Harbor Net House"),
+        "beacon_house": ("Beacon House", "Signal House", "Lamp House"),
         "bait_shop": ("Bait Shop", "Tackle", "Harbor Supply"),
         "drydock_yard": ("Drydock", "Slipworks", "Shipyard"),
+        "coast_watch": ("Coast Watch", "Shore Watch", "Watch House"),
     }
 
     BUSINESS_NAME_TEMPLATES = (
@@ -700,6 +807,16 @@ class World:
         "{adj} {street} {suffix}",
         "{noun} on {street}",
         "{founder_last} & {noun}",
+    )
+
+    NON_CITY_SITE_NAME_TEMPLATES = (
+        "{adj} {suffix}",
+        "{adj} {noun} {suffix}",
+        "{adj} {street} {suffix}",
+        "The {adj} {suffix}",
+        "{adj} {founder_last} {suffix}",
+        "{adj} {suffix} on {street}",
+        "{adj} {noun} {suffix} at {street}",
     )
 
     DEFAULT_BUSINESS_NAME_DATA = {
@@ -1067,6 +1184,7 @@ class World:
 
     def _non_city_site_pool(self, descriptor):
         area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
+        district_type = str(descriptor.get("district_type", "unknown")).strip().lower() or "unknown"
         terrain = str(descriptor.get("terrain", "")).strip().lower()
         path = str(descriptor.get("path", "")).strip().lower()
         landmark = descriptor.get("landmark") or descriptor.get("nearest_landmark") or {}
@@ -1075,14 +1193,20 @@ class World:
         options = list(self.NON_CITY_SITE_POOLS.get(area_type, ()))
         if area_type == "frontier":
             if path in {"road", "freeway"}:
-                options.extend(("relay_post", "roadhouse", "truck_stop", "inspection_shed"))
+                options.extend(("relay_post", "roadhouse", "truck_stop"))
+            if path == "freeway" or (path == "road" and district_type in {"industrial", "military"}):
+                options.append("inspection_shed")
             if terrain in {"badlands", "dunes", "ruins"}:
                 options.extend(("salvage_camp", "work_shed", "breaker_yard"))
         elif area_type == "wilderness":
             if terrain in {"ruins"} or landmark_id == "shatter_ruins":
                 options.extend(("ruin_shelter", "survey_post", "weather_station"))
-            if terrain in {"forest", "marsh"} or landmark_id in {"ancient_grove", "glass_marsh"}:
-                options.extend(("field_camp", "ranger_hut", "herbalist_camp"))
+            if terrain in {"forest", "marsh"}:
+                options.extend(("field_camp", "ranger_hut"))
+            if terrain == "marsh":
+                options.append("herbalist_camp")
+            if landmark_id in {"ancient_grove", "glass_marsh"}:
+                options.extend(("field_camp", "ranger_hut", "herbalist_camp", "herbalist_camp"))
             if terrain in {"hills"} or landmark_id == "radio_spire":
                 options.extend(("firewatch_tower", "weather_station"))
         elif area_type == "coastal":
@@ -1093,6 +1217,86 @@ class World:
 
         return tuple(options or self.NON_CITY_SITE_POOLS["frontier"])
 
+    def _non_city_site_count(self, descriptor, rng):
+        area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
+        terrain = str(descriptor.get("terrain", "")).strip().lower()
+        path = str(descriptor.get("path", "")).strip().lower()
+        landmark = descriptor.get("landmark") or descriptor.get("nearest_landmark") or {}
+        landmark_id = str(landmark.get("id", "") or "").strip().lower()
+        try:
+            landmark_dist = int(landmark.get("distance", 99))
+        except (TypeError, ValueError):
+            landmark_dist = 99
+
+        count = 0
+        if area_type == "frontier":
+            if path in {"road", "freeway"}:
+                count += 1
+            elif path and rng.random() < 0.50:
+                count += 1
+            elif terrain in {"badlands", "ruins"} and rng.random() < 0.24:
+                count += 1
+            elif rng.random() < 0.10:
+                count += 1
+
+            if landmark_dist <= 1:
+                count += 1
+            elif landmark_dist <= 2 and rng.random() < 0.45:
+                count += 1
+
+            if path in {"road", "freeway"} and landmark_dist <= 2 and rng.random() < 0.35:
+                count += 1
+            return max(0, min(2, count))
+
+        if area_type == "wilderness":
+            if terrain in {"forest", "marsh"}:
+                if rng.random() < 0.18:
+                    count += 1
+            elif terrain in {"hills", "ruins"}:
+                if rng.random() < 0.26:
+                    count += 1
+            elif rng.random() < 0.08:
+                count += 1
+
+            if path in {"trail", "road"} and rng.random() < 0.38:
+                count += 1
+            elif path == "freeway" and rng.random() < 0.55:
+                count += 1
+
+            if landmark_id in {"radio_spire", "shatter_ruins", "ancient_grove", "glass_marsh"}:
+                count += 1
+            elif landmark_dist <= 1:
+                count += 1
+            elif landmark_dist <= 2 and rng.random() < 0.30:
+                count += 1
+
+            return max(0, min(2, count))
+
+        if area_type == "coastal":
+            if terrain in {"shore", "shoals", "lake"}:
+                if rng.random() < 0.34:
+                    count += 1
+            elif rng.random() < 0.16:
+                count += 1
+
+            if path in {"road", "freeway"} and rng.random() < 0.55:
+                count += 1
+            elif path and rng.random() < 0.35:
+                count += 1
+
+            if landmark_dist <= 1:
+                count += 1
+            elif landmark_dist <= 2 and rng.random() < 0.45:
+                count += 1
+
+            return max(0, min(2, count))
+
+        if path:
+            count += 1
+        if landmark_dist <= 2:
+            count += 1
+        return max(0, min(2, count))
+
     def generate_non_city_sites(self, descriptor, rng):
         area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
         if area_type == "city":
@@ -1102,16 +1306,9 @@ class World:
         if not pool:
             return []
 
-        path = str(descriptor.get("path", "")).strip().lower()
-        landmark = descriptor.get("landmark") or descriptor.get("nearest_landmark") or {}
-        landmark_dist = int(landmark.get("distance", 99)) if isinstance(landmark.get("distance"), int) else 99
-
-        count = 1
-        if path:
-            count += 1
-        if landmark_dist <= 2:
-            count += 1
-        count = max(1, min(3, count))
+        count = int(self._non_city_site_count(descriptor, rng))
+        if count <= 0:
+            return []
 
         sites = []
         used_kinds = set()
@@ -1131,7 +1328,7 @@ class World:
                 name_rng = random.Random(
                     f"{self.seed}:non_city_site_name:{descriptor.get('cx')}:{descriptor.get('cy')}:{idx}:{kind}"
                 )
-                site_name, business_founder = self._business_name_for(kind, name_rng, used_site_names)
+                site_name, business_founder = self._non_city_site_name_for(kind, name_rng, used_site_names)
 
             sites.append({
                 "site_id": f"site:{idx}",
@@ -1592,6 +1789,12 @@ class World:
             values = self.DEFAULT_BUSINESS_NAME_DATA[key]
         return rng.choice(values)
 
+    def _default_name_token(self, key, rng):
+        values = self.DEFAULT_BUSINESS_NAME_DATA.get(key, ())
+        if not values:
+            values = self.business_name_data.get(key, ())
+        return rng.choice(values)
+
     def _business_founder(self, rng):
         founder_first = self._name_token("founder_first_names", rng)
         founder_last = self._name_token("founder_last_names", rng)
@@ -1613,6 +1816,18 @@ class World:
             suffix=self._business_suffix(archetype, rng),
         ).split())
 
+    def _render_non_city_site_name(self, archetype, rng, founder=None):
+        founder = founder if isinstance(founder, dict) else self._business_founder(rng)
+        template = rng.choice(self.NON_CITY_SITE_NAME_TEMPLATES)
+        return " ".join(template.format(
+            adj=self._default_name_token("adjectives", rng),
+            noun=self._default_name_token("nouns", rng),
+            street=self._default_name_token("street_terms", rng),
+            founder_first=founder.get("first_name", self._default_name_token("founder_first_names", rng)),
+            founder_last=founder.get("last_name", self._default_name_token("founder_last_names", rng)),
+            suffix=self._business_suffix(archetype, rng),
+        ).split())
+
     def _business_name_for(self, archetype, rng, used_names):
         for _ in range(8):
             founder = self._business_founder(rng)
@@ -1625,6 +1840,21 @@ class World:
         fallback = f"{founder['last_name']} {self._business_suffix(archetype, rng)} {rng.randint(11, 99)}"
         used_names.add(fallback)
         return fallback, founder
+
+    def _non_city_site_name_for(self, archetype, rng, used_names):
+        for _ in range(8):
+            founder = self._business_founder(rng)
+            candidate = self._render_non_city_site_name(archetype, rng, founder=founder)
+            if candidate not in used_names:
+                used_names.add(candidate)
+                return candidate, founder
+
+        fallback = (
+            f"{self._default_name_token('adjectives', rng)} "
+            f"{self._business_suffix(archetype, rng)} {rng.randint(11, 99)}"
+        )
+        used_names.add(fallback)
+        return fallback, None
 
     def generate_district(self, cx, cy, rng):
         descriptor = self.overworld_descriptor(cx, cy)
@@ -1668,11 +1898,54 @@ class World:
         district_type = district["district_type"]
         options = self._buildings_for_district(district_type)
         archetype = rng.choice(options)
-        floors = 1 + (1 if district["wealth"] > 6 and rng.random() < 0.35 else 0)
-        if district_type == "residential" and rng.random() < 0.65:
-            floors = 1
-        if district_type in {"corporate", "downtown"} and rng.random() < 0.25:
+        wealth = int(district.get("wealth", 5))
+        density = int(district.get("population_density", 5))
+        floors = 1
+        vertical_chance = 0.12
+        if wealth >= 6:
+            vertical_chance += 0.10
+        if density >= 7:
+            vertical_chance += 0.08
+        if district_type in {"downtown", "corporate"}:
+            vertical_chance += 0.22
+        elif district_type in {"industrial", "entertainment", "slums"}:
+            vertical_chance += 0.12
+        if archetype in self.MULTI_FLOOR_ARCHETYPES:
+            vertical_chance += 0.18
+        if archetype in self.TALL_BUILDING_ARCHETYPES:
+            vertical_chance += 0.10
+        if archetype in self.LOW_RISE_ARCHETYPES:
+            vertical_chance -= 0.18
+        if district_type == "residential" and archetype not in {"apartment", "tenement", "hotel", "flophouse"}:
+            vertical_chance -= 0.14
+
+        if rng.random() < max(0.0, vertical_chance):
             floors += 1
+
+        extra_floor_chance = 0.0
+        if floors > 1:
+            if district_type in {"downtown", "corporate"}:
+                extra_floor_chance += 0.16
+            if wealth >= 8:
+                extra_floor_chance += 0.08
+            if archetype in self.TALL_BUILDING_ARCHETYPES:
+                extra_floor_chance += 0.14
+        if rng.random() < extra_floor_chance:
+            floors += 1
+        floors = max(1, min(3, floors))
+
+        basement_levels = 0
+        basement_chance = 0.0
+        if archetype in self.BASEMENT_ARCHETYPES:
+            basement_chance = 0.10
+            if floors > 1:
+                basement_chance += 0.12
+            if wealth >= 6:
+                basement_chance += 0.06
+            if district_type in {"downtown", "corporate", "industrial", "slums", "military"}:
+                basement_chance += 0.06
+        if rng.random() < basement_chance:
+            basement_levels = 1
 
         rooms = list(self.ROOM_TEMPLATES.get(archetype, ("entry", "room", "storage")))
 
@@ -1694,6 +1967,7 @@ class World:
             "building_id": f"{bx}:{by}:{i}",
             "archetype": archetype,
             "floors": floors,
+            "basement_levels": basement_levels,
             "rooms": rooms,
             "career_roles": list(self.careers_for_building(archetype)),
             "security_features": security_features,

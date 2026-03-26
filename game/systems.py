@@ -1,7 +1,9 @@
 import curses
 import json
 import random
+import re
 import textwrap
+import time
 from collections import deque
 from pathlib import Path
 
@@ -125,6 +127,8 @@ from game.property_keys import (
     property_lock_state,
 )
 from game.property_access import (
+    PropertyIngressResult,
+    _boundary_tile as _property_boundary_tile,
     property_access_controller as _property_access_controller,
     evaluate_property_access as _evaluate_property_access,
     sync_property_access_controller as _sync_property_access_controller,
@@ -4791,6 +4795,18 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
     return " ".join(bits)
 
 
+def _floor_label(z, *, long=False):
+    try:
+        z = int(z)
+    except (TypeError, ValueError):
+        return str(z)
+    if z < 0:
+        return f"Basement {abs(z)}" if long else f"B{abs(z)}"
+    if long:
+        return f"Floor {z + 1}"
+    return str(z + 1)
+
+
 def _structure_summary(info):
     if not isinstance(info, dict):
         return ""
@@ -4799,19 +4815,27 @@ def _structure_summary(info):
     archetype = str(info.get("archetype", "")).strip().lower()
     room_kind = str(info.get("room_kind", "")).strip().lower()
     try:
-        floor = int(info.get("floor", 0)) + 1
+        floor = int(info.get("floor", 0))
     except (TypeError, ValueError):
-        floor = 1
+        floor = 0
     try:
-        floors = int(info.get("floors", floor))
+        floors = int(info.get("floors", 1))
     except (TypeError, ValueError):
-        floors = floor
+        floors = 1
+    try:
+        basement_levels = int(info.get("basement_levels", 0))
+    except (TypeError, ValueError):
+        basement_levels = 0
+    try:
+        total_levels = int(info.get("total_levels", floors + basement_levels))
+    except (TypeError, ValueError):
+        total_levels = floors + basement_levels
 
     bits = [name]
     if archetype and archetype not in name.lower():
         bits.append(f"[{archetype}]")
-    if floors > 1:
-        bits.append(f"floor:{floor}/{floors}")
+    if total_levels > 1:
+        bits.append(f"floor:{_floor_label(floor)}/{total_levels}")
     if room_kind:
         bits.append("room:" + room_kind.replace("_", " "))
 
@@ -5238,10 +5262,11 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
     time_label = str(lighting_state.get("time_label", "--:--")).strip() or "--:--"
     area_label = _hud_status_label(area_type, fallback="Unknown")
     district_label = _hud_status_label(district_type, fallback="")
+    floor_text = _floor_label(active_z, long=True)
 
     status_chunks = [
         "In Vehicle" if zoom_mode == "overworld" else "On Foot",
-        "Overworld" if zoom_mode == "overworld" else f"Floor {int(active_z) + 1}",
+        "Overworld" if zoom_mode == "overworld" else floor_text,
         f"Chunk {chunk_text}",
         f"Area {area_label}",
     ]
@@ -5357,6 +5382,24 @@ def _quest_progress_label(quest):
     progress = quest.get("progress", 0)
     target = max(1, objective.get("target", 1))
     return f"{progress}/{target}"
+
+
+def _entity_status_move_speed_multiplier(sim, eid, *, base=1.0, minimum=0.2, maximum=3.0):
+    try:
+        speed = float(base)
+    except (TypeError, ValueError):
+        speed = 1.0
+
+    effects = sim.ecs.get(StatusEffects).get(eid) if sim is not None else None
+    if effects:
+        try:
+            speed += float(effects.modifiers_sum().get("move_speed_mult", 0.0))
+        except (TypeError, ValueError):
+            pass
+
+    return max(float(minimum), min(float(maximum), float(speed)))
+
+
 class InputSystem(System):
 
     def __init__(self, sim, view, player_eid):
@@ -5410,6 +5453,21 @@ class InputSystem(System):
             key_code = getattr(curses, wait_key_name, None)
             if key_code is not None:
                 self.wait_keys.add(key_code)
+        self._canonical_movement_key_for_delta = {
+            (-1, -1): ord("7"),
+            (0, -1): ord("w"),
+            (1, -1): ord("9"),
+            (-1, 0): ord("a"),
+            (1, 0): ord("d"),
+            (-1, 1): ord("1"),
+            (0, 1): ord("s"),
+            (1, 1): ord("3"),
+        }
+        self._aim_hold_repeat = {
+            "delta": None,
+            "pressed_at": 0.0,
+            "last_repeat_at": 0.0,
+        }
 
         if not hasattr(self.sim, "inventory_ui"):
             self.sim.inventory_ui = {
@@ -5474,6 +5532,31 @@ class InputSystem(System):
                 "lines": [],
                 "scroll": 0,
             }
+        if not hasattr(self.sim, "auto_walk_ui"):
+            self.sim.auto_walk_ui = {
+                "active": False,
+                "target_x": 0,
+                "target_y": 0,
+                "target_z": 0,
+                "target_name": "",
+                "property_id": None,
+                "last_step_at": 0.0,
+            }
+        if not hasattr(self.sim, "auto_drive_ui"):
+            self.sim.auto_drive_ui = {
+                "active": False,
+                "target_chunk_x": 0,
+                "target_chunk_y": 0,
+                "target_name": "",
+                "property_id": None,
+                "marker_id": None,
+                "last_step_at": 0.0,
+            }
+
+        self.sim.events.subscribe("move_blocked", self.on_move_blocked)
+        self.sim.events.subscribe("zoom_mode_changed", self.on_zoom_mode_changed)
+        self.sim.events.subscribe("combat_overlay_entered", self.on_combat_overlay_entered)
+        self.sim.events.subscribe("vehicle_action_blocked", self.on_vehicle_action_blocked)
 
     def _inventory_state(self):
         state = getattr(self.sim, "inventory_ui", None)
@@ -5620,6 +5703,484 @@ class InputSystem(System):
             self.sim.debug_ui = state
         return state
 
+    def _auto_walk_state(self):
+        state = getattr(self.sim, "auto_walk_ui", None)
+        if not isinstance(state, dict):
+            state = {
+                "active": False,
+                "target_x": 0,
+                "target_y": 0,
+                "target_z": 0,
+                "target_name": "",
+                "property_id": None,
+                "last_step_at": 0.0,
+            }
+            self.sim.auto_walk_ui = state
+        else:
+            state.setdefault("active", False)
+            state.setdefault("target_x", 0)
+            state.setdefault("target_y", 0)
+            state.setdefault("target_z", 0)
+            state.setdefault("target_name", "")
+            state.setdefault("property_id", None)
+            state.setdefault("last_step_at", 0.0)
+        return state
+
+    def _auto_drive_state(self):
+        state = getattr(self.sim, "auto_drive_ui", None)
+        if not isinstance(state, dict):
+            state = {
+                "active": False,
+                "target_chunk_x": 0,
+                "target_chunk_y": 0,
+                "target_name": "",
+                "property_id": None,
+                "marker_id": None,
+                "last_step_at": 0.0,
+            }
+            self.sim.auto_drive_ui = state
+        else:
+            state.setdefault("active", False)
+            state.setdefault("target_chunk_x", 0)
+            state.setdefault("target_chunk_y", 0)
+            state.setdefault("target_name", "")
+            state.setdefault("property_id", None)
+            state.setdefault("marker_id", None)
+            state.setdefault("last_step_at", 0.0)
+        return state
+
+    def _auto_walk_target_label(self):
+        state = self._auto_walk_state()
+        label = str(state.get("target_name", "") or "").strip()
+        if label:
+            return label
+        return f"{int(state.get('target_x', 0))},{int(state.get('target_y', 0))}"
+
+    def _auto_drive_target_label(self):
+        state = self._auto_drive_state()
+        label = str(state.get("target_name", "") or "").strip()
+        if label:
+            return label
+        return f"{int(state.get('target_chunk_x', 0))},{int(state.get('target_chunk_y', 0))}"
+
+    def _stop_auto_walk(self, *, reason="stopped", announce=False):
+        state = self._auto_walk_state()
+        if not state.get("active"):
+            return False
+
+        label = self._auto_walk_target_label()
+        state["active"] = False
+        state["last_step_at"] = 0.0
+
+        if announce:
+            message = f"Stopped walking to {label}."
+            if reason == "arrived":
+                message = f"Arrived near {label}."
+            elif reason == "blocked":
+                message = f"Could not keep walking to {label}."
+            elif reason == "combat":
+                message = f"Stopped walking to {label}; combat started."
+            _log_player_feedback(
+                self.sim,
+                message,
+                kind="movement",
+                dedupe_window=2,
+                dedupe_key=f"autowalk:{reason}:{str(state.get('property_id') or label)}",
+            )
+        return True
+
+    def _stop_auto_drive(self, *, reason="stopped", announce=False):
+        state = self._auto_drive_state()
+        if not state.get("active"):
+            return False
+
+        label = self._auto_drive_target_label()
+        state["active"] = False
+        state["last_step_at"] = 0.0
+
+        if announce:
+            message = f"Stopped driving to {label}."
+            if reason == "arrived":
+                message = f"Arrived at {label}."
+            elif reason == "blocked":
+                message = f"Could not keep driving to {label}."
+            elif reason == "combat":
+                message = f"Stopped driving to {label}; combat started."
+            _log_player_feedback(
+                self.sim,
+                message,
+                kind="movement",
+                dedupe_window=2,
+                dedupe_key=f"autodrive:{reason}:{str(state.get('property_id') or state.get('marker_id') or label)}",
+            )
+        return True
+
+    def _auto_walk_repeat_interval(self):
+        speed = self._player_move_speed_multiplier()
+        return float(max(0.05, min(0.20, 0.12 / max(0.25, float(speed)))))
+
+    def _auto_drive_repeat_interval(self):
+        return 0.18
+
+    def _player_overworld_markers(self):
+        markers_by_eid = getattr(self.sim, "overworld_markers_by_eid", {})
+        if not isinstance(markers_by_eid, dict):
+            return []
+        raw_markers = markers_by_eid.get(self.player_eid, [])
+        if not isinstance(raw_markers, list):
+            return []
+        return [marker for marker in raw_markers if isinstance(marker, dict)]
+
+    def _preferred_overworld_marker(self):
+        markers = self._player_overworld_markers()
+        if not markers:
+            return None
+        return max(
+            markers,
+            key=lambda marker: (
+                int(marker.get("updated_tick", marker.get("created_tick", 0))),
+                int(marker.get("id", 0)),
+            ),
+        )
+
+    def _find_overworld_marker(self, *, chunk=None, property_id=None):
+        target_chunk = None
+        if isinstance(chunk, (list, tuple)) and len(chunk) == 2:
+            try:
+                target_chunk = (int(chunk[0]), int(chunk[1]))
+            except (TypeError, ValueError):
+                target_chunk = None
+        property_id = str(property_id or "").strip() or None
+
+        for marker in self._player_overworld_markers():
+            if property_id and str(marker.get("property_id", "") or "").strip() == property_id:
+                return marker
+            if target_chunk is None:
+                continue
+            chunk_value = marker.get("chunk")
+            if not isinstance(chunk_value, (list, tuple)) or len(chunk_value) != 2:
+                continue
+            marker_chunk = (int(chunk_value[0]), int(chunk_value[1]))
+            if marker_chunk == target_chunk:
+                return marker
+        return None
+
+    def _start_overworld_drive_to_marker(self, marker):
+        if not isinstance(marker, dict):
+            return False
+
+        chunk = marker.get("chunk")
+        if not isinstance(chunk, (list, tuple)) or len(chunk) != 2:
+            return False
+
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(self.player_eid)
+        if not pos:
+            return False
+
+        current_zoom = str(getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
+        if current_zoom != "overworld":
+            _log_player_feedback(
+                self.sim,
+                "Enter the in-vehicle map to drive to a marker.",
+                kind="movement",
+                dedupe_window=2,
+                dedupe_key="autodrive:zoom_required",
+            )
+            return False
+
+        overlay = getattr(self.sim, "combat_overlay", {})
+        if bool(overlay.get("active")) or bool(getattr(self.sim, "turn_based", False)):
+            _log_player_feedback(
+                self.sim,
+                "Cannot start driving assistance during combat.",
+                kind="movement",
+                dedupe_window=2,
+                dedupe_key="autodrive:combat_blocked",
+            )
+            return False
+
+        target_chunk = (int(chunk[0]), int(chunk[1]))
+        current_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        label = str(marker.get("label", "") or "").strip() or f"M{int(marker.get('id', 0))}"
+
+        self._stop_auto_walk(reason="stopped", announce=False)
+
+        state = self._auto_drive_state()
+        state["active"] = True
+        state["target_chunk_x"] = target_chunk[0]
+        state["target_chunk_y"] = target_chunk[1]
+        state["target_name"] = label
+        state["property_id"] = str(marker.get("property_id", "") or "").strip() or None
+        state["marker_id"] = int(marker.get("id", 0)) if marker.get("id") is not None else None
+        state["last_step_at"] = 0.0
+
+        if current_chunk == target_chunk:
+            self._stop_auto_drive(reason="arrived", announce=True)
+            return True
+
+        _log_player_feedback(
+            self.sim,
+            f"Driving to {self._auto_drive_target_label()}. Any key interrupts.",
+            kind="movement",
+            dedupe_window=2,
+            dedupe_key=f"autodrive:start:{str(state.get('property_id') or state.get('marker_id') or label)}",
+        )
+        return True
+
+    def _nearest_walkable_destination(self, target_x, target_y, target_z, *, radius=6):
+        for r in range(0, max(0, int(radius)) + 1):
+            for dy in range(-r, r + 1):
+                for dx in range(-r, r + 1):
+                    if r and abs(dx) != r and abs(dy) != r:
+                        continue
+                    nx = int(target_x) + int(dx)
+                    ny = int(target_y) + int(dy)
+                    traversable, _reason = _is_traversable_for(
+                        self.sim,
+                        self.player_eid,
+                        nx,
+                        ny,
+                        int(target_z),
+                    )
+                    if traversable:
+                        return (nx, ny)
+        return None
+
+    def _start_selected_known_location_walk(self):
+        target = self._selected_known_location_target()
+        if not target:
+            return False
+
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(self.player_eid)
+        if not pos:
+            return False
+
+        current_zoom = str(getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
+        target_x, target_y, target_z = target.get("focus", (pos.x, pos.y, pos.z))
+        target_z = int(target_z)
+        detail = str(self.sim.detail_for_xy(int(target_x), int(target_y))).strip().lower() or "unloaded"
+
+        if current_zoom == "overworld":
+            marked = self._mark_selected_known_location()
+            if marked:
+                self._close_report_ui()
+                marker = self._find_overworld_marker(
+                    chunk=target.get("chunk"),
+                    property_id=target.get("property_id"),
+                )
+                self._start_overworld_drive_to_marker(marker)
+            return bool(marked)
+
+        if detail == "unloaded":
+            marked = self._mark_selected_known_location()
+            if marked:
+                self._close_report_ui()
+            return bool(marked)
+
+        overlay = getattr(self.sim, "combat_overlay", {})
+        if bool(overlay.get("active")) or bool(getattr(self.sim, "turn_based", False)):
+            _log_player_feedback(
+                self.sim,
+                "Cannot start notebook walking during combat.",
+                kind="movement",
+                dedupe_window=2,
+                dedupe_key="autowalk:combat_blocked",
+            )
+            return False
+
+        if int(pos.z) != target_z:
+            _log_player_feedback(
+                self.sim,
+                "Notebook walking only handles the current floor for now.",
+                kind="movement",
+                dedupe_window=2,
+                dedupe_key="autowalk:floor_blocked",
+            )
+            return False
+
+        self._stop_auto_drive(reason="stopped", announce=False)
+        state = self._auto_walk_state()
+        state["active"] = True
+        state["target_x"] = int(target_x)
+        state["target_y"] = int(target_y)
+        state["target_z"] = int(target_z)
+        state["target_name"] = str(target.get("name", "")).strip()
+        state["property_id"] = str(target.get("property_id", "")).strip() or None
+        state["last_step_at"] = 0.0
+
+        self._close_report_ui()
+        _log_player_feedback(
+            self.sim,
+            f"Walking to {self._auto_walk_target_label()}. Any key interrupts.",
+            kind="movement",
+            dedupe_window=2,
+            dedupe_key=f"autowalk:start:{str(state.get('property_id') or state.get('target_name') or 'coords')}",
+        )
+        return True
+
+    def _maybe_continue_auto_walk(
+        self,
+        *,
+        zoom_mode,
+        look_state=None,
+        help_state=None,
+        dialog_state=None,
+        report_state=None,
+        log_state=None,
+        debug_state=None,
+        inventory_state=None,
+        trade_state=None,
+    ):
+        state = self._auto_walk_state()
+        if not state.get("active"):
+            return False
+
+        if (
+            (help_state and help_state.get("open"))
+            or (dialog_state and dialog_state.get("open"))
+            or (report_state and report_state.get("open"))
+            or (log_state and log_state.get("open"))
+            or (debug_state and debug_state.get("open"))
+            or (inventory_state and inventory_state.get("open"))
+            or (trade_state and trade_state.get("open"))
+            or (look_state and look_state.get("active"))
+        ):
+            return False
+
+        if callable(getattr(self.sim, "is_time_paused", None)) and self.sim.is_time_paused():
+            return False
+
+        if str(zoom_mode).strip().lower() != "city":
+            self._stop_auto_walk(reason="stopped", announce=False)
+            return False
+
+        overlay = getattr(self.sim, "combat_overlay", {})
+        if bool(overlay.get("active")) or bool(getattr(self.sim, "turn_based", False)):
+            self._stop_auto_walk(reason="combat", announce=False)
+            return False
+
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(self.player_eid)
+        if not pos:
+            self._stop_auto_walk(reason="stopped", announce=False)
+            return False
+
+        target_z = int(state.get("target_z", pos.z))
+        if int(pos.z) != target_z:
+            self._stop_auto_walk(reason="blocked", announce=True)
+            return True
+
+        now = time.monotonic()
+        if (float(now) - float(state.get("last_step_at", 0.0))) < self._auto_walk_repeat_interval():
+            return False
+
+        raw_target = (int(state.get("target_x", pos.x)), int(state.get("target_y", pos.y)))
+        goal = raw_target
+        if _grid_distance(pos.x, pos.y, goal[0], goal[1]) <= 6:
+            nearby = self._nearest_walkable_destination(goal[0], goal[1], target_z, radius=6)
+            if nearby is not None:
+                goal = nearby
+
+        if (int(pos.x), int(pos.y)) == goal or (int(pos.x), int(pos.y)) == raw_target:
+            self._stop_auto_walk(reason="arrived", announce=True)
+            return True
+
+        step = _path_next_step(
+            self.sim,
+            self.player_eid,
+            sx=int(pos.x),
+            sy=int(pos.y),
+            tx=int(goal[0]),
+            ty=int(goal[1]),
+            z=int(pos.z),
+            max_nodes=4096,
+        )
+        if not step:
+            self._stop_auto_walk(reason="blocked", announce=True)
+            return True
+
+        dx = int(step[0]) - int(pos.x)
+        dy = int(step[1]) - int(pos.y)
+        if dx == 0 and dy == 0:
+            self._stop_auto_walk(reason="arrived", announce=True)
+            return True
+
+        state["last_step_at"] = float(now)
+        self._emit_turn_action("move", dx=dx, dy=dy)
+        return True
+
+    def _maybe_continue_auto_drive(
+        self,
+        *,
+        zoom_mode,
+        look_state=None,
+        help_state=None,
+        dialog_state=None,
+        report_state=None,
+        log_state=None,
+        debug_state=None,
+        inventory_state=None,
+        trade_state=None,
+    ):
+        state = self._auto_drive_state()
+        if not state.get("active"):
+            return False
+
+        if (
+            (help_state and help_state.get("open"))
+            or (dialog_state and dialog_state.get("open"))
+            or (report_state and report_state.get("open"))
+            or (log_state and log_state.get("open"))
+            or (debug_state and debug_state.get("open"))
+            or (inventory_state and inventory_state.get("open"))
+            or (trade_state and trade_state.get("open"))
+            or (look_state and look_state.get("active"))
+        ):
+            return False
+
+        if callable(getattr(self.sim, "is_time_paused", None)) and self.sim.is_time_paused():
+            return False
+
+        if str(zoom_mode).strip().lower() != "overworld":
+            self._stop_auto_drive(reason="stopped", announce=False)
+            return False
+
+        overlay = getattr(self.sim, "combat_overlay", {})
+        if bool(overlay.get("active")) or bool(getattr(self.sim, "turn_based", False)):
+            self._stop_auto_drive(reason="combat", announce=False)
+            return False
+
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(self.player_eid)
+        if not pos:
+            self._stop_auto_drive(reason="stopped", announce=False)
+            return False
+
+        current_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        target_chunk = (
+            int(state.get("target_chunk_x", current_chunk[0])),
+            int(state.get("target_chunk_y", current_chunk[1])),
+        )
+        if current_chunk == target_chunk:
+            self._stop_auto_drive(reason="arrived", announce=True)
+            return True
+
+        now = time.monotonic()
+        if (float(now) - float(state.get("last_step_at", 0.0))) < self._auto_drive_repeat_interval():
+            return False
+
+        dx = 1 if target_chunk[0] > current_chunk[0] else -1 if target_chunk[0] < current_chunk[0] else 0
+        dy = 1 if target_chunk[1] > current_chunk[1] else -1 if target_chunk[1] < current_chunk[1] else 0
+        if dx == 0 and dy == 0:
+            self._stop_auto_drive(reason="arrived", announce=True)
+            return True
+
+        state["last_step_at"] = float(now)
+        self._emit_turn_action("overworld_travel", dx=dx, dy=dy)
+        return True
+
     def _scroll_panel_body_dimensions(self):
         screen_w, screen_h = self.view.size()
         hud_lines = max(1, _int_or_default(getattr(self.sim, "hud_lines", 10), 10))
@@ -5755,6 +6316,94 @@ class InputSystem(System):
         else:
             knowledge.hide(property_id)
         return self._refresh_known_locations_ui(reset_scroll=False)
+
+    def _selected_known_location_target(self):
+        row = self._selected_known_location_row()
+        if not row:
+            return None
+
+        property_id = str(row.get("property_id", "")).strip()
+        if not property_id:
+            return None
+
+        prop = self.sim.properties.get(property_id)
+        if not isinstance(prop, dict):
+            return None
+
+        focus = _property_focus_position(prop) or _property_display_position(prop)
+        if focus is None:
+            try:
+                focus = (
+                    int(prop.get("x", 0)),
+                    int(prop.get("y", 0)),
+                    int(prop.get("z", 0)),
+                )
+            except (TypeError, ValueError):
+                return None
+
+        try:
+            x = int(focus[0])
+            y = int(focus[1])
+            z = int(focus[2]) if len(focus) > 2 else int(prop.get("z", 0))
+        except (TypeError, ValueError, IndexError):
+            return None
+
+        chunk = self.sim.chunk_coords(x, y)
+        return {
+            "row": row,
+            "property_id": property_id,
+            "prop": prop,
+            "name": str(row.get("name", prop.get("name", property_id))).strip() or property_id,
+            "focus": (x, y, z),
+            "chunk": (int(chunk[0]), int(chunk[1])),
+        }
+
+    def _inspect_selected_known_location(self):
+        target = self._selected_known_location_target()
+        if not target:
+            return False
+
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(self.player_eid)
+        if not pos:
+            return False
+
+        current_zoom = str(getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
+        target_chunk = tuple(target.get("chunk", self.sim.chunk_coords(pos.x, pos.y)))
+        focus_x, focus_y, focus_z = target.get("focus", (pos.x, pos.y, pos.z))
+
+        self._close_report_ui()
+        if current_zoom != "overworld":
+            return self._activate_look_mode_at(
+                "city",
+                x=focus_x,
+                y=focus_y,
+                z=focus_z,
+                purpose="inspect",
+            )
+
+        return self._activate_look_mode_at(
+            "overworld",
+            chunk_x=target_chunk[0],
+            chunk_y=target_chunk[1],
+            purpose="inspect",
+        )
+
+    def _mark_selected_known_location(self):
+        target = self._selected_known_location_target()
+        if not target:
+            return False
+
+        chunk_x, chunk_y = target.get("chunk", (0, 0))
+        self._emit_player_action(
+            "overworld_marker_set",
+            consume_turn=False,
+            target_chunk_x=int(chunk_x),
+            target_chunk_y=int(chunk_y),
+            marker_label=str(target.get("name", "")).strip(),
+            property_id=str(target.get("property_id", "")).strip(),
+        )
+        return True
 
     def _report_display_lines(self):
         state = self._report_state()
@@ -6096,6 +6745,18 @@ class InputSystem(System):
         key_page_down = getattr(curses, "KEY_NPAGE", None)
 
         if report_kind == "known_locations":
+            if key in ENTER_KEYS or key in (ord("e"), ord("E"), ord("x"), ord("X")):
+                self._inspect_selected_known_location()
+                return True
+
+            if key in (ord("g"), ord("G")):
+                self._start_selected_known_location_walk()
+                return True
+
+            if key in (ord("m"), ord("M")):
+                self._mark_selected_known_location()
+                return True
+
             if key in (ord("h"), ord("H")):
                 self._toggle_known_location_hidden_view()
                 return True
@@ -6432,11 +7093,24 @@ class InputSystem(System):
             payload["cursor_z"] = int(state.get("z", 0))
         self._emit_player_action("examine_cursor", consume_turn=False, **payload)
 
-    def _activate_look_mode(self, zoom_mode, purpose="inspect"):
-        if not self._sync_look_cursor_to_player(zoom_mode):
-            return False
-
+    def _activate_look_mode_at(self, mode, *, x=None, y=None, z=0, chunk_x=None, chunk_y=None, purpose="inspect"):
         state = self._look_state()
+        mode = str(mode or "city").lower()
+        self._reset_aim_hold_repeat()
+        state["mode"] = mode
+        if mode == "overworld":
+            if chunk_x is None or chunk_y is None:
+                return False
+            state["chunk_x"] = int(chunk_x)
+            state["chunk_y"] = int(chunk_y)
+            state["z"] = 0
+        else:
+            if x is None or y is None:
+                return False
+            state["x"] = int(x)
+            state["y"] = int(y)
+            state["z"] = int(z)
+
         state["active"] = True
         state["purpose"] = str(purpose or "inspect").lower()
         state["inspect_text"] = ""
@@ -6450,11 +7124,32 @@ class InputSystem(System):
         self._emit_cursor_examine(announce=True)
         return True
 
+    def _activate_look_mode(self, zoom_mode, purpose="inspect"):
+        if not self._sync_look_cursor_to_player(zoom_mode):
+            return False
+
+        state = self._look_state()
+        if str(state.get("mode", "city")).lower() == "overworld":
+            return self._activate_look_mode_at(
+                "overworld",
+                chunk_x=int(state.get("chunk_x", 0)),
+                chunk_y=int(state.get("chunk_y", 0)),
+                purpose=purpose,
+            )
+        return self._activate_look_mode_at(
+            "city",
+            x=int(state.get("x", 0)),
+            y=int(state.get("y", 0)),
+            z=int(state.get("z", 0)),
+            purpose=purpose,
+        )
+
     def _deactivate_look_mode(self):
         state = self._look_state()
         if not state.get("active"):
             return False
 
+        self._reset_aim_hold_repeat()
         state["active"] = False
         state["inspect_text"] = ""
         self.sim.emit(Event(
@@ -6513,6 +7208,8 @@ class InputSystem(System):
                     else:
                         state["x"] = nx
                         state["y"] = ny
+            if purpose == "aim":
+                self._mark_aim_hold_direction(key)
             self._emit_cursor_examine(announce=False)
             return True
 
@@ -6875,11 +7572,141 @@ class InputSystem(System):
 
         return False
 
-    def update(self):
+    def _player_move_speed_multiplier(self):
+        return _entity_status_move_speed_multiplier(self.sim, self.player_eid)
 
-        key = self.view.get_key()
-        if key is None:
+    def _aim_repeat_timings(self):
+        speed = self._player_move_speed_multiplier()
+        initial_delay = max(0.04, min(0.28, 0.18 / max(0.25, float(speed))))
+        repeat_interval = max(0.025, min(0.14, 0.075 / max(0.25, float(speed))))
+        return float(initial_delay), float(repeat_interval)
+
+    def _reset_aim_hold_repeat(self):
+        self._aim_hold_repeat["delta"] = None
+        self._aim_hold_repeat["pressed_at"] = 0.0
+        self._aim_hold_repeat["last_repeat_at"] = 0.0
+
+    def _mark_aim_hold_direction(self, key):
+        delta = self.movement_keys.get(key)
+        if not delta:
+            self._reset_aim_hold_repeat()
             return
+        now = time.monotonic()
+        self._aim_hold_repeat["delta"] = (int(delta[0]), int(delta[1]))
+        self._aim_hold_repeat["pressed_at"] = float(now)
+        self._aim_hold_repeat["last_repeat_at"] = float(now)
+
+    def _held_aim_repeat_key(self, look_state):
+        if not look_state or not look_state.get("active"):
+            self._reset_aim_hold_repeat()
+            return None
+        if str(look_state.get("purpose", "inspect")).strip().lower() != "aim":
+            self._reset_aim_hold_repeat()
+            return None
+        if str(look_state.get("mode", "city")).strip().lower() != "city":
+            self._reset_aim_hold_repeat()
+            return None
+
+        held_delta_fn = getattr(self.view, "held_movement_delta", None)
+        if not callable(held_delta_fn):
+            return None
+
+        held_delta = held_delta_fn()
+        if not held_delta:
+            self._reset_aim_hold_repeat()
+            return None
+
+        try:
+            dx = int(held_delta[0])
+            dy = int(held_delta[1])
+        except (TypeError, ValueError, IndexError):
+            self._reset_aim_hold_repeat()
+            return None
+
+        delta = (max(-1, min(1, dx)), max(-1, min(1, dy)))
+        key = self._canonical_movement_key_for_delta.get(delta)
+        if key is None:
+            self._reset_aim_hold_repeat()
+            return None
+
+        now = time.monotonic()
+        state = self._aim_hold_repeat
+        if state.get("delta") != delta:
+            state["delta"] = delta
+            state["pressed_at"] = float(now)
+            state["last_repeat_at"] = float(now)
+            return None
+
+        initial_delay, repeat_interval = self._aim_repeat_timings()
+        if (float(now) - float(state.get("pressed_at", 0.0))) < initial_delay:
+            return None
+        if (float(now) - float(state.get("last_repeat_at", 0.0))) < repeat_interval:
+            return None
+
+        state["last_repeat_at"] = float(now)
+        return key
+
+    def _should_collapse_input_burst(self, *, look_state=None, help_state=None, dialog_state=None, report_state=None, log_state=None, debug_state=None, inventory_state=None, trade_state=None):
+        if help_state and help_state.get("open"):
+            return False
+        if dialog_state and dialog_state.get("open"):
+            return False
+        if report_state and report_state.get("open"):
+            return False
+        if log_state and log_state.get("open"):
+            return False
+        if debug_state and debug_state.get("open"):
+            return False
+        if inventory_state and inventory_state.get("open"):
+            return False
+        if trade_state and trade_state.get("open"):
+            return False
+
+        if look_state and look_state.get("active"):
+            purpose = str(look_state.get("purpose", "inspect")).strip().lower() or "inspect"
+            if purpose == "aim":
+                return True
+
+        return bool(getattr(self.sim, "turn_based", False))
+
+    def _next_input_key(self, *, collapse_burst=False):
+        if collapse_burst:
+            drain = getattr(self.view, "drain_keys", None)
+            if callable(drain):
+                keys = [key for key in drain() if key is not None]
+                if not keys:
+                    return None
+                return keys[-1]
+        return self.view.get_key()
+
+    def on_move_blocked(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if self._auto_walk_state().get("active"):
+            self._stop_auto_walk(reason="blocked", announce=False)
+
+    def on_zoom_mode_changed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        mode = str(event.data.get("mode", "city")).strip().lower() or "city"
+        if self._auto_walk_state().get("active") and mode != "city":
+            self._stop_auto_walk(reason="stopped", announce=False)
+        if self._auto_drive_state().get("active") and mode != "overworld":
+            self._stop_auto_drive(reason="stopped", announce=False)
+
+    def on_combat_overlay_entered(self, event):
+        if self._auto_walk_state().get("active"):
+            self._stop_auto_walk(reason="combat", announce=True)
+        if self._auto_drive_state().get("active"):
+            self._stop_auto_drive(reason="combat", announce=True)
+
+    def on_vehicle_action_blocked(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if self._auto_drive_state().get("active"):
+            self._stop_auto_drive(reason="blocked", announce=False)
+
+    def update(self):
 
         state = self._inventory_state()
         trade_state = self._trade_state()
@@ -6890,6 +7717,51 @@ class InputSystem(System):
         log_state = self._log_state()
         debug_state = self._debug_state()
         zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
+        key = self._next_input_key(
+            collapse_burst=self._should_collapse_input_burst(
+                look_state=look_state,
+                help_state=help_state,
+                dialog_state=dialog_state,
+                report_state=report_state,
+                log_state=log_state,
+                debug_state=debug_state,
+                inventory_state=state,
+                trade_state=trade_state,
+            )
+        )
+        if key is None:
+            key = self._held_aim_repeat_key(look_state)
+        if key is None:
+            if self._maybe_continue_auto_walk(
+                zoom_mode=zoom_mode,
+                look_state=look_state,
+                help_state=help_state,
+                dialog_state=dialog_state,
+                report_state=report_state,
+                log_state=log_state,
+                debug_state=debug_state,
+                inventory_state=state,
+                trade_state=trade_state,
+            ):
+                return
+            if self._maybe_continue_auto_drive(
+                zoom_mode=zoom_mode,
+                look_state=look_state,
+                help_state=help_state,
+                dialog_state=dialog_state,
+                report_state=report_state,
+                log_state=log_state,
+                debug_state=debug_state,
+                inventory_state=state,
+                trade_state=trade_state,
+            ):
+                return
+            return
+
+        if self._auto_walk_state().get("active"):
+            self._stop_auto_walk(reason="interrupted", announce=True)
+        if self._auto_drive_state().get("active"):
+            self._stop_auto_drive(reason="interrupted", announce=True)
 
         if help_state.get("open"):
             if key in ENTER_KEYS or key in (27, ord("?"), ord("/"), ord("q"), ord("Q")):
@@ -6993,6 +7865,20 @@ class InputSystem(System):
 
             if key in (ord("n"), ord("N")):
                 self._emit_player_action("overworld_marker_nearest", consume_turn=False)
+                return
+
+            if key in (ord("g"), ord("G")):
+                marker = self._preferred_overworld_marker()
+                if marker:
+                    self._start_overworld_drive_to_marker(marker)
+                else:
+                    _log_player_feedback(
+                        self.sim,
+                        "No destination marker. Use M or notebook G first.",
+                        kind="movement",
+                        dedupe_window=2,
+                        dedupe_key="autodrive:no_marker",
+                    )
                 return
 
             if key in self.wait_keys:
@@ -8904,6 +9790,17 @@ class NPCInteractionSystem(System):
     def _player_person_contact_entry(self, person_eid):
         return _person_contact_entry(self.sim, self.player_eid, person_eid)
 
+    def _player_knows_person_name(self, person_eid):
+        entry = self._player_person_contact_entry(person_eid)
+        if not entry:
+            return False
+        benefits = {
+            str(bit).strip().lower()
+            for bit in tuple(entry.get("benefits", ()) or ())
+            if str(bit).strip()
+        }
+        return bool(entry.get("introduced", False)) or "known_name" in benefits
+
     def _remember_player_person_contact(
         self,
         person_eid,
@@ -8947,6 +9844,35 @@ class NPCInteractionSystem(System):
             or next_benefits != prior_benefits
             or (prior_standing < 0.66 <= float(standing))
         )
+
+    def _remember_revealed_social_lead_names(self, context, response):
+        if not isinstance(context, dict) or not isinstance(response, dict):
+            return
+        npc_lines = tuple(response.get("npc_lines", ()) or ())
+        if not npc_lines:
+            return
+
+        source_eid = context.get("npc_eid")
+        standing = float(context.get("contact_standing", 0.0) or 0.0)
+        for lead in tuple(context.get("social_leads", ()) or ()):
+            if not isinstance(lead, dict):
+                continue
+            person_eid = lead.get("eid")
+            name = str(lead.get("name", "")).strip()
+            if person_eid is None or not name or self._player_knows_person_name(person_eid):
+                continue
+            pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", re.IGNORECASE)
+            if not any(pattern.search(str(line)) for line in npc_lines):
+                continue
+            self._remember_player_person_contact(
+                person_eid,
+                source_eid=source_eid,
+                relation_kind=lead.get("relation_kind"),
+                standing=max(0.18, standing),
+                property_id=lead.get("property_id"),
+                introduced=False,
+                benefits={"known_name"},
+            )
 
     def _contact_standing(self, bond, rapport):
         trust = float((bond or {}).get("trust", 0.0))
@@ -10087,7 +11013,11 @@ class NPCInteractionSystem(System):
             "hours_text": hours_text,
             "shift_text": shift_text,
             "social_leads": social_leads,
-            "social_lead_name": str(primary_social_lead.get("name", "")).strip() if primary_social_lead else "",
+            "social_lead_name": (
+                str(primary_social_lead.get("name", "")).strip()
+                if primary_social_lead and self._player_knows_person_name(primary_social_lead.get("eid"))
+                else ""
+            ),
             "social_lead_relation": str(primary_social_lead.get("relation_text", "")).strip() if primary_social_lead else "",
             "intro_entry": intro_entry,
             "intro_source_name": intro_source_name,
@@ -12260,6 +13190,7 @@ class NPCInteractionSystem(System):
             return
         response = self._resolve_dialog_topic(context, topic_id)
         response = self._apply_dialogue_repeat_friction(context, topic_id, response)
+        self._remember_revealed_social_lead_names(context, response)
         self._append_dialogue_response(context, topic_id, response)
         refreshed = self._dialogue_context(npc_eid)
         if not refreshed:
@@ -13418,6 +14349,45 @@ class PlayerActionSystem(System):
             return ingress_kind in {"boundary_breach", "deep_breach"}
         return True
 
+    def _internal_ingress_candidate(self, pos, prop, target_x, target_y, target_z, *, tile=None, aperture=None):
+        origin_prop = _property_covering(self.sim, pos.x, pos.y, pos.z)
+        if not origin_prop or origin_prop.get("id") != prop.get("id"):
+            return None
+
+        if aperture is None:
+            aperture = _property_aperture_at(prop, target_x, target_y, target_z)
+        if aperture and not bool(aperture.get("ordinary")):
+            kind = str(aperture.get("kind", "") or "").strip().lower()
+            if kind in {"window", "skylight"}:
+                severity = 0.45
+            elif kind in {"side_door", "service_door", "employee_door"}:
+                severity = 0.22
+            else:
+                severity = 0.32
+            return PropertyIngressResult(
+                property_id=prop.get("id") if isinstance(prop, dict) else None,
+                from_inside=True,
+                to_inside=True,
+                entered_bounds=False,
+                ingress_kind="alternate_aperture",
+                aperture_kind=kind,
+                breach_severity=severity,
+            )
+
+        if tile is None:
+            tile = self.sim.tilemap.tile_at(target_x, target_y, target_z)
+        if tile and not tile.walkable and _property_boundary_tile(prop, target_x, target_y, target_z):
+            return PropertyIngressResult(
+                property_id=prop.get("id") if isinstance(prop, dict) else None,
+                from_inside=True,
+                to_inside=True,
+                entered_bounds=False,
+                ingress_kind="boundary_breach",
+                aperture_kind="",
+                breach_severity=0.58,
+            )
+        return None
+
     def _adjacent_ingress_candidates(self, pos, ingress_mode=None):
         candidates = []
         for dx, dy in ((0, -1), (1, 0), (0, 1), (-1, 0)):
@@ -13438,13 +14408,23 @@ class PlayerActionSystem(System):
                 to_y=ty,
                 to_z=tz,
             )
+            tile = self.sim.tilemap.tile_at(tx, ty, tz)
+            aperture = _property_aperture_at(prop, tx, ty, tz)
             if not ingress.entered_bounds:
-                continue
+                ingress = self._internal_ingress_candidate(
+                    pos,
+                    prop,
+                    tx,
+                    ty,
+                    tz,
+                    tile=tile,
+                    aperture=aperture,
+                )
+                if not ingress:
+                    continue
             if ingress.ingress_kind == "ordinary_entry":
                 continue
 
-            tile = self.sim.tilemap.tile_at(tx, ty, tz)
-            aperture = _property_aperture_at(prop, tx, ty, tz)
             if ingress.ingress_kind == "alternate_aperture":
                 priority = 0
             elif tile and not tile.walkable:
@@ -14309,6 +15289,7 @@ class PlayerActionSystem(System):
         chunk = marker.get("chunk", (0, 0))
         cx = int(chunk[0])
         cy = int(chunk[1])
+        label = str(marker.get("label", "") or "").strip()
         dist = _manhattan(origin_chunk[0], origin_chunk[1], cx, cy)
         direction = self._chunk_direction(origin_chunk, (cx, cy))
         (
@@ -14330,30 +15311,69 @@ class PlayerActionSystem(System):
         interest_text = f" poi:{interest_detail}" if interest_detail else ""
         summary_bits = list(_overworld_travel_summary_bits(travel)) + list(_overworld_discovery_summary_bits(discovery))
         travel_text = f" {' '.join(summary_bits)}" if summary_bits else ""
+        label_text = f" [{label}]" if label else ""
         return (
             dist,
             marker_id,
-            f"M{marker_id} ({cx},{cy}) {dist}c {direction} "
+            f"M{marker_id}{label_text} ({cx},{cy}) {dist}c {direction} "
             f"{area_type}/{district_type} terr:{terrain}"
             f"{path_text}{landmark_text}{interest_text}{region_text}{settlement_text}{travel_text}",
         )
 
-    def _handle_overworld_marker_add(self, eid, pos):
-        current_chunk = self.sim.chunk_coords(pos.x, pos.y)
+    def _set_overworld_marker(self, eid, chunk, *, label="", property_id=None):
+        try:
+            target_chunk = (int(chunk[0]), int(chunk[1]))
+        except (TypeError, ValueError, IndexError):
+            return False
+
         markers = self._overworld_markers_for(eid)
-        for marker in markers:
-            chunk = marker.get("chunk")
-            if not isinstance(chunk, (list, tuple)) or len(chunk) != 2:
-                continue
-            if (int(chunk[0]), int(chunk[1])) != current_chunk:
-                continue
-            marker["updated_tick"] = self.sim.tick
-            area_type, district_type, terrain, path, landmark, region_name, settlement_name, interest_detail, travel, discovery = self._marker_descriptor(current_chunk)
+        marker_label = str(label or "").strip()
+        property_id = str(property_id or "").strip() or None
+
+        existing = None
+        old_chunk = None
+        if property_id:
+            for marker in markers:
+                if str(marker.get("property_id", "") or "").strip() != property_id:
+                    continue
+                chunk_value = marker.get("chunk")
+                if isinstance(chunk_value, (list, tuple)) and len(chunk_value) == 2:
+                    old_chunk = (int(chunk_value[0]), int(chunk_value[1]))
+                existing = marker
+                break
+
+        if existing is None:
+            for marker in markers:
+                chunk_value = marker.get("chunk")
+                if not isinstance(chunk_value, (list, tuple)) or len(chunk_value) != 2:
+                    continue
+                marker_chunk = (int(chunk_value[0]), int(chunk_value[1]))
+                if marker_chunk != target_chunk:
+                    continue
+                existing = marker
+                old_chunk = marker_chunk
+                break
+
+        area_type, district_type, terrain, path, landmark, region_name, settlement_name, interest_detail, travel, discovery = self._marker_descriptor(target_chunk)
+        if existing is not None:
+            existing["chunk"] = target_chunk
+            existing["updated_tick"] = self.sim.tick
+            if marker_label:
+                existing["label"] = marker_label
+            if property_id:
+                existing["property_id"] = property_id
+            elif marker_label and not str(existing.get("property_id", "") or "").strip():
+                existing["property_id"] = None
+
             self.sim.emit(Event(
                 "overworld_marker_updated",
                 eid=eid,
-                marker_id=int(marker.get("id", 0)),
-                chunk=current_chunk,
+                marker_id=int(existing.get("id", 0)),
+                chunk=target_chunk,
+                old_chunk=old_chunk,
+                retargeted=bool(old_chunk and tuple(old_chunk) != tuple(target_chunk)),
+                marker_label=marker_label or str(existing.get("label", "") or "").strip(),
+                property_id=property_id,
                 area_type=area_type,
                 district_type=district_type,
                 terrain=terrain,
@@ -14370,21 +15390,24 @@ class PlayerActionSystem(System):
                 discovery=str(discovery.get("label", "")).strip(),
                 total=len(markers),
             ))
-            return
+            return True
 
         marker_id = self._next_overworld_marker_id(eid)
         markers.append({
             "id": marker_id,
-            "chunk": current_chunk,
+            "chunk": target_chunk,
+            "label": marker_label or None,
+            "property_id": property_id,
             "created_tick": self.sim.tick,
             "updated_tick": self.sim.tick,
         })
-        area_type, district_type, terrain, path, landmark, region_name, settlement_name, interest_detail, travel, discovery = self._marker_descriptor(current_chunk)
         self.sim.emit(Event(
             "overworld_marker_added",
             eid=eid,
             marker_id=marker_id,
-            chunk=current_chunk,
+            chunk=target_chunk,
+            marker_label=marker_label,
+            property_id=property_id,
             area_type=area_type,
             district_type=district_type,
             terrain=terrain,
@@ -14401,6 +15424,11 @@ class PlayerActionSystem(System):
             discovery=str(discovery.get("label", "")).strip(),
             total=len(markers),
         ))
+        return True
+
+    def _handle_overworld_marker_add(self, eid, pos):
+        current_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        self._set_overworld_marker(eid=eid, chunk=current_chunk)
 
     def _handle_overworld_marker_list(self, eid, pos, limit=8):
         markers = self._overworld_markers_for(eid)
@@ -14917,12 +15945,7 @@ class PlayerActionSystem(System):
         if best_npc:
             npc_eid, npc_pos, npc_ai, npc_memory, npc_throttle, npc_effects, npc_identity, npc_occupation, npc_routine = best_npc
             npc_state = npc_ai.state if npc_ai else "idle"
-            status_speed_mult = 1.0
-            if npc_effects:
-                try:
-                    status_speed_mult += float(npc_effects.modifiers_sum().get("move_speed_mult", 0.0))
-                except (TypeError, ValueError):
-                    status_speed_mult = 1.0
+            status_speed_mult = _entity_status_move_speed_multiplier(self.sim, npc_eid)
             speed = npc_throttle.effective_speed(status_multiplier=status_speed_mult) if npc_throttle else status_speed_mult
             if npc_identity:
                 taxonomy = str(npc_identity.taxonomy_class).title()
@@ -15039,6 +16062,18 @@ class PlayerActionSystem(System):
             if zoom_mode != "overworld":
                 return
             self._handle_overworld_marker_add(eid=eid, pos=pos)
+            return
+
+        if action == "overworld_marker_set":
+            self._set_overworld_marker(
+                eid=eid,
+                chunk=(
+                    event.data.get("target_chunk_x", 0),
+                    event.data.get("target_chunk_y", 0),
+                ),
+                label=str(event.data.get("marker_label", "")).strip(),
+                property_id=str(event.data.get("property_id", "")).strip(),
+            )
             return
 
         if action == "overworld_marker_list":
@@ -25313,6 +26348,7 @@ def _pick_property_roam_tile(sim, prop, eid):
     entry = _property_focus_position(prop)
     metadata = _property_metadata(prop)
     footprint = metadata.get("footprint")
+    actor_pos = sim.ecs.get(Position).get(eid)
 
     interior = []
     if isinstance(footprint, dict):
@@ -25321,9 +26357,9 @@ def _pick_property_roam_tile(sim, prop, eid):
             right = int(footprint.get("right"))
             top = int(footprint.get("top"))
             bottom = int(footprint.get("bottom"))
-            z = int(prop.get("z", 0))
+            base_z = int(prop.get("z", 0))
         except (TypeError, ValueError):
-            left = right = top = bottom = z = None
+            left = right = top = bottom = base_z = None
 
         if left is not None:
             doorway_tiles = set()
@@ -25338,18 +26374,28 @@ def _pick_property_roam_tile(sim, prop, eid):
                 for ddx, ddy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                     doorway_tiles.add((ex + ddx, ey + ddy))
 
-            all_inside = []
-            for ty in range(top, bottom + 1):
-                for tx in range(left, right + 1):
-                    if not sim.tilemap.is_walkable(tx, ty, z):
-                        continue
-                    covered = sim.property_covering(tx, ty, z)
-                    if not (covered and covered.get("id") == prop.get("id")):
-                        continue
-                    all_inside.append((tx, ty, z))
+            floor_order = [base_z]
+            if actor_pos:
+                covered = sim.property_covering(actor_pos.x, actor_pos.y, actor_pos.z)
+                if covered and covered.get("id") == prop.get("id"):
+                    current_z = int(actor_pos.z)
+                    floor_order = [current_z] + [z for z in floor_order if int(z) != current_z]
 
-            clear = [t for t in all_inside if (t[0], t[1]) not in doorway_tiles]
-            interior = clear if clear else all_inside
+            for z in floor_order:
+                all_inside = []
+                for ty in range(top, bottom + 1):
+                    for tx in range(left, right + 1):
+                        if not sim.tilemap.is_walkable(tx, ty, z):
+                            continue
+                        covered = sim.property_covering(tx, ty, z)
+                        if not (covered and covered.get("id") == prop.get("id")):
+                            continue
+                        all_inside.append((tx, ty, z))
+                if not all_inside:
+                    continue
+                clear = [t for t in all_inside if (t[0], t[1]) not in doorway_tiles]
+                interior = clear if clear else all_inside
+                break
 
     # Outdoor perimeter: walkable tiles just outside the entrance (radius 1-2)
     perimeter = []
@@ -26936,15 +27982,7 @@ class NPCInvestigateSystem(System):
                 continue
 
             throttle = move_throttles.get(eid)
-            status_speed_mult = 1.0
-            effects = effects_map.get(eid)
-            if effects:
-                modifiers = effects.modifiers_sum()
-                try:
-                    status_speed_mult += float(modifiers.get("move_speed_mult", 0.0))
-                except (TypeError, ValueError):
-                    status_speed_mult = 1.0
-            status_speed_mult = max(0.2, min(3.0, status_speed_mult))
+            status_speed_mult = _entity_status_move_speed_multiplier(self.sim, eid)
 
             next_move_tick = throttle.next_move_tick if throttle else self.next_move_tick.get(eid, 0)
             if self.sim.tick < next_move_tick:
@@ -28854,11 +29892,7 @@ class EventLogSystem(System):
 
         to_z = event.data.get("to_z")
         kind = event.data.get("kind")
-        try:
-            floor_number = int(to_z) + 1
-        except (TypeError, ValueError):
-            floor_number = to_z
-        _log_player_feedback(self.sim, f"You take the {kind} to floor {floor_number}.", kind="movement")
+        _log_player_feedback(self.sim, f"You take the {kind} to {_floor_label(to_z, long=True)}.", kind="movement")
 
     def on_noise(self, event):
         if event.data.get("source_eid") != self.player_eid:
@@ -30892,6 +31926,7 @@ class EventLogSystem(System):
             return
         marker_id = int(event.data.get("marker_id", 0))
         chunk = event.data.get("chunk")
+        marker_label = str(event.data.get("marker_label", "") or "").strip()
         terrain = str(event.data.get("terrain", "plain")).strip()
         landmark = str(event.data.get("landmark", "")).strip()
         region_name = str(event.data.get("region_name", "")).strip()
@@ -30926,6 +31961,9 @@ class EventLogSystem(System):
         if settlement_name:
             extras.append(f"city:{settlement_name}")
         suffix = f" {' '.join(extras)}" if extras else ""
+        if marker_label:
+            self.sim.log.add(f"Marker M{marker_id} set for {marker_label} at {chunk}.{suffix}")
+            return
         self.sim.log.add(f"Marker M{marker_id} set at {chunk}.{suffix}")
 
     def on_overworld_marker_updated(self, event):
@@ -30933,6 +31971,9 @@ class EventLogSystem(System):
             return
         marker_id = int(event.data.get("marker_id", 0))
         chunk = event.data.get("chunk")
+        marker_label = str(event.data.get("marker_label", "") or "").strip()
+        retargeted = bool(event.data.get("retargeted", False))
+        old_chunk = event.data.get("old_chunk")
         interest = str(event.data.get("interest", "")).strip()
         risk = str(event.data.get("risk", "")).strip()
         support = str(event.data.get("support", "")).strip()
@@ -30946,8 +31987,22 @@ class EventLogSystem(System):
             extras.append(f"support:{support}")
         if discovery:
             extras.append(f"opp:{discovery}")
+        if retargeted:
+            label_text = f" for {marker_label}" if marker_label else ""
+            origin_text = f" from {old_chunk}" if old_chunk else ""
+            if extras:
+                self.sim.log.add(f"Marker M{marker_id} retargeted{label_text} to {chunk}{origin_text} ({' '.join(extras)}).")
+                return
+            self.sim.log.add(f"Marker M{marker_id} retargeted{label_text} to {chunk}{origin_text}.")
+            return
         if extras:
+            if marker_label:
+                self.sim.log.add(f"Marker M{marker_id} already tracks {marker_label} at {chunk} ({' '.join(extras)}).")
+                return
             self.sim.log.add(f"Marker M{marker_id} already exists at {chunk} ({' '.join(extras)}).")
+            return
+        if marker_label:
+            self.sim.log.add(f"Marker M{marker_id} already tracks {marker_label} at {chunk}.")
             return
         self.sim.log.add(f"Marker M{marker_id} already exists at {chunk}.")
 
@@ -31626,7 +32681,7 @@ class RenderSystem(System):
             "Services: M trade panel, B bank, N insurance, P buy property.",
         ]
         if zoom_mode == "overworld":
-            lines.append("In-vehicle map: E exit to on-foot, M add marker, l list markers, N nearest marker, O ops, Y locations, L log.")
+            lines.append("In-vehicle map: E exit to on-foot, G drive to last marker, M add marker, l list markers, N nearest marker, O ops, Y locations, L log.")
             lines.append("Overworld POIs: stronger non-city chunks can replace the center glyph with a site initial.")
             lines.append("Overworld centers: every chunk has a center icon; uppercase means loaded and lowercase means distant.")
             lines.append("Overworld regions: soft boundary lines separate major outside regions.")
@@ -32035,7 +33090,10 @@ class RenderSystem(System):
                 if not visible_now and not explored:
                     continue
                 tile = self.sim.tilemap.tile_at(display_pos[0], display_pos[1], active_z)
-                if _tile_prefers_feature_legend(self.sim, tile, display_pos[0], display_pos[1], active_z):
+                if (
+                    str(prop.get("kind", "") or "").strip().lower() != "vehicle"
+                    and _tile_prefers_feature_legend(self.sim, tile, display_pos[0], display_pos[1], active_z)
+                ):
                     continue
 
                 glyph, color = _property_render_style(prop, active_quest_target=active_quest_target)
@@ -32530,7 +33588,7 @@ class RenderSystem(System):
         elif report_ui.get("open"):
             report_kind = str(report_ui.get("kind", "progress")).strip().lower() or "progress"
             if report_kind == "known_locations":
-                controls = "Notebook: Up/Down choose, PgUp/PgDn jump, R hide/restore, H hidden view, O ops, Y close, L log, D debug, ? help"
+                controls = "Notebook: Up/Down choose, Enter inspect, G go, M mark, R hide/restore, H hidden view, O ops, Y close, L log, D debug, ? help"
             else:
                 controls = "Notebook: Up/Down browse, PgUp/PgDn jump, O ops, Y locations, L log, D debug, Esc close, ? help"
         elif log_ui.get("open"):
@@ -32540,7 +33598,7 @@ class RenderSystem(System):
         elif overlay.get("active"):
             controls = "Combat: move or act, F aim, c cover, C hop, Shift+S sneak, ? help, q quit"
         elif zoom_mode == "overworld":
-            controls = "In-vehicle: move, M/l/N markers, O ops, Y locations, L log, E exit on-foot, center icons UPPER=loaded lower=distant, ? help"
+            controls = "In-vehicle: move, G drive marker, M/l/N markers, O ops, Y locations, L log, E exit on-foot, center icons UPPER=loaded lower=distant, ? help"
         else:
             controls = "Move: arrows/WASD/HJKL, O ops, Y locations, L log, D debug, M trade, or ? for help"
 
@@ -33023,7 +34081,7 @@ class RenderSystem(System):
                     footer_bits.append("more below")
                 footer = " | ".join(footer_bits) if footer_bits else ""
                 action_verb = "restore" if filter_mode == "hidden" else "hide"
-                action_tail = f"R {action_verb} | H toggle hidden | Y close | O ops | L log | D debug | ? help"
+                action_tail = f"Enter inspect | G go | M mark | R {action_verb} | H hidden | Y close | O ops | L log | D debug | ? help"
                 if footer:
                     footer = f"{footer} | {action_tail}"
                 else:

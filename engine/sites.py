@@ -129,6 +129,89 @@ SITE_GAMEPLAY_PROFILES = {
 }
 
 
+def _clamp(value, low, high):
+    return max(int(low), min(int(high), int(value)))
+
+
+def _wall_points(left, right, top, bottom, side):
+    left = int(left)
+    right = int(right)
+    top = int(top)
+    bottom = int(bottom)
+    side = str(side or "south").strip().lower() or "south"
+
+    if side == "north":
+        xs = list(range(left + 1, right))
+        if not xs:
+            xs = [(left + right) // 2]
+        return [(int(x), top, 0) for x in xs]
+    if side == "south":
+        xs = list(range(left + 1, right))
+        if not xs:
+            xs = [(left + right) // 2]
+        return [(int(x), bottom, 0) for x in xs]
+    if side == "west":
+        ys = list(range(top + 1, bottom))
+        if not ys:
+            ys = [(top + bottom) // 2]
+        return [(left, int(y), 0) for y in ys]
+
+    ys = list(range(top + 1, bottom))
+    if not ys:
+        ys = [(top + bottom) // 2]
+    return [(right, int(y), 0) for y in ys]
+
+
+def _wall_point_from_bias(left, right, top, bottom, side, bias):
+    points = _wall_points(left, right, top, bottom, side)
+    if not points:
+        return int(left), int(bottom)
+
+    side = str(side or "south").strip().lower() or "south"
+    if side in {"north", "south"}:
+        xs = [point[0] for point in points]
+        target_x = _clamp(int(bias), min(xs), max(xs))
+        for x, y, _ in points:
+            if int(x) == target_x:
+                return int(x), int(y)
+    else:
+        ys = [point[1] for point in points]
+        target_y = _clamp(int(bias), min(ys), max(ys))
+        for x, y, _ in points:
+            if int(y) == target_y:
+                return int(x), int(y)
+
+    x, y, _ = points[len(points) // 2]
+    return int(x), int(y)
+
+
+def _adjacent_sign_point(left, right, top, bottom, side, entry_x, entry_y):
+    side = str(side or "south").strip().lower() or "south"
+    entry_x = int(entry_x)
+    entry_y = int(entry_y)
+    if side in {"north", "south"}:
+        candidates = ((entry_x - 1, entry_y), (entry_x + 1, entry_y))
+    else:
+        candidates = ((entry_x, entry_y - 1), (entry_x, entry_y + 1))
+
+    for sx, sy in candidates:
+        if int(left) <= int(sx) <= int(right) and int(top) <= int(sy) <= int(bottom):
+            if (int(sx), int(sy)) != (entry_x, entry_y):
+                return int(sx), int(sy)
+    return None
+
+
+def _front_side_toward_target(left, right, top, bottom, target_x, target_y, rng):
+    scores = {}
+    for side in ("north", "south", "west", "east"):
+        px, py = _wall_point_from_bias(left, right, top, bottom, side, target_x if side in {"north", "south"} else target_y)
+        scores[side] = abs(int(px) - int(target_x)) + abs(int(py) - int(target_y))
+
+    best = min(scores.values())
+    choices = sorted(side for side, score in scores.items() if int(score) == int(best))
+    return rng.choice(choices) if choices else "south"
+
+
 def _site_kind(site):
     if not isinstance(site, dict):
         return ""
@@ -238,6 +321,8 @@ def layout_chunk_site(origin_x, origin_y, chunk_size, site_index, site=None, res
         (center_x - 1, center_y),
         (center_x, center_y),
     )
+    arrival_cx = sum(point[0] for point in arrival_pad) / float(len(arrival_pad))
+    arrival_cy = sum(point[1] for point in arrival_pad) / float(len(arrival_pad))
 
     offsets = list(SITE_LAYOUT_OFFSETS)
     block_rng = random.Random(f"site_layout_offsets:{int(origin_x)}:{int(origin_y)}:{int(chunk_size)}")
@@ -303,40 +388,44 @@ def layout_chunk_site(origin_x, origin_y, chunk_size, site_index, site=None, res
                 continue
             anchor_x = max(left + 1, min(right - 1, shell_cx))
             anchor_y = max(top + 1, min(bottom - 1, shell_cy))
-            entry_x = max(left + 1, min(right - 1, shell_cx + cand_rng.randint(-1, 1)))
-            entry_y = bottom
+            front_side = _front_side_toward_target(left, right, top, bottom, arrival_cx, arrival_cy, cand_rng)
+            entry_bias = arrival_cx if front_side in {"north", "south"} else arrival_cy
+            entry_x, entry_y = _wall_point_from_bias(left, right, top, bottom, front_side, entry_bias)
 
             apertures = [{
                 "x": int(entry_x),
                 "y": int(entry_y),
                 "z": 0,
-                "side": "south",
+                "side": front_side,
                 "kind": "door",
                 "ordinary": True,
             }]
 
             if kind in WINDOWED_SITE_KINDS:
-                for wx in (left + 1, right - 1):
-                    if wx == entry_x:
+                front_points = [point for point in _wall_points(left, right, top, bottom, front_side) if (int(point[0]), int(point[1])) != (int(entry_x), int(entry_y))]
+                for point in (front_points[:1] + front_points[-1:]):
+                    wx, wy, _ = point
+                    if (int(wx), int(wy)) == (int(entry_x), int(entry_y)):
                         continue
                     apertures.append({
                         "x": int(wx),
-                        "y": int(entry_y),
+                        "y": int(wy),
                         "z": 0,
-                        "side": "south",
+                        "side": front_side,
                         "kind": "window",
                         "ordinary": False,
                     })
 
             signage = None
             if sign_text:
-                sign_x = entry_x - 1 if entry_x - 1 >= left else entry_x + 1
-                if left <= sign_x <= right and sign_x != entry_x:
+                sign_point = _adjacent_sign_point(left, right, top, bottom, front_side, entry_x, entry_y)
+                if sign_point is not None:
+                    sign_x, sign_y = sign_point
                     signage = {
                         "x": int(sign_x),
-                        "y": int(entry_y),
+                        "y": int(sign_y),
                         "z": 0,
-                        "side": "south",
+                        "side": front_side,
                         "kind": "wall_sign",
                         "text": sign_text,
                     }
@@ -354,7 +443,7 @@ def layout_chunk_site(origin_x, origin_y, chunk_size, site_index, site=None, res
                     "x": int(entry_x),
                     "y": int(entry_y),
                     "z": 0,
-                    "side": "south",
+                    "side": front_side,
                     "kind": "door",
                 },
                 "apertures": apertures,

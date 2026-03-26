@@ -1,8 +1,8 @@
 {
   "_comment": "Map semantic tile IDs to atlas tile IDs. Edit safely by hand.",
   "source": {
-    "tile_map": "assets/tiles/tile_map.json",
-    "manifest": "assets/tiles/atlas/tileset.json"
+    "tile_map": "/home/adri/Documents/bakerrrr/assets/tiles/tile_map.json",
+    "manifest": "/home/adri/Documents/bakerrrr/assets/tiles/atlas/tileset.json"
   },
   "color_aliases": {
     "aqua": [
@@ -29,9 +29,7 @@
       "building_roof_civic",
       "building_roof_industrial",
       "building_roof_storefront",
-      "vehicle_parked",
-      "canine",
-      "insect"
+      "vehicle_parked"
     ],
     "pink": [
       "human",
@@ -46,7 +44,8 @@
       "cat_purple",
       "item_restricted",
       "item_tool",
-      "property_service_zone"
+      "property_service_zone",
+      "player"
     ],
     "red": [
       "guard",
@@ -56,8 +55,12 @@
       "infra_hydrant"
     ],
     "green": [
-      "player",
-      "terrain_generic"
+      "terrain_generic",
+      "lizard",
+      "insect"
+    ],
+    "blue": [
+      "canine"
     ]
   },
   "glyph_semantic_lookup": {
@@ -537,13 +540,13 @@
   },
   "stats": {
     "required_count": 82,
-    "available_count": 979,
-    "assigned_count": 77,
-    "unassigned_count": 5,
-    "metadata_matched_count": 30,
-    "glyph_fallback_matched_count": 47,
-    "metadata_unmatched_count": 706,
-    "metadata_duplicate_match_count": 183
+    "available_count": 829,
+    "assigned_count": 82,
+    "unassigned_count": 0,
+    "metadata_matched_count": 32,
+    "glyph_fallback_matched_count": 42,
+    "metadata_unmatched_count": 465,
+    "metadata_duplicate_match_count": 330
   },
   "assignments": {
     "cat_black": "F__aqua",
@@ -556,7 +559,7 @@
     "cat_tuxedo": "F__aqua",
     "cat_white": "F__aqua",
     "elevator": "E__aqua",
-    "entity_player": "at__green",
+    "entity_player": "at__purple",
     "feature_breach": "slash__darkgray",
     "feature_door": "plus__aqua",
     "feature_window": "quote__aqua",
@@ -586,16 +589,16 @@
     "item_illegal": "x__red",
     "item_medical": "bang__pink",
     "item_objective": "o__aqua",
-    "item_restricted": "star__aqua",
+    "item_restricted": "u0000__blank",
     "item_token": "i__aqua",
-    "item_tool": "rparen__aqua",
+    "item_tool": "d__amber",
     "npc_avian": "d__aqua",
-    "npc_canine": "C__aqua",
+    "npc_canine": "d__blue",
     "npc_civilian": "H__aqua",
     "npc_guard": "d__red",
-    "npc_insect": "I__aqua",
+    "npc_insect": "d__green",
     "npc_scout": "H__aqua",
-    "projectile": "star__aqua",
+    "projectile": "d__brown",
     "prop_asset": "A__darkgray",
     "prop_building_generic": "B__darkgray",
     "prop_civic": "O__darkgray",
@@ -618,24 +621,18 @@
     "terrain_trail": "colon__darkgray",
     "terrain_water": "tilde__aqua",
     "transit_stair_landing": "colon__aqua",
-    "ui_cursor": null,
-    "ui_look_cursor": null,
-    "ui_objective_marker": null,
-    "ui_overworld_marker": null,
-    "ui_overworld_marker_nearest": null,
+    "ui_cursor": "d__darkgray",
+    "ui_look_cursor": "d__orange",
+    "ui_objective_marker": "d__pink",
+    "ui_overworld_marker": "d__purple",
+    "ui_overworld_marker_nearest": "e__amber",
     "vehicle_new": "amp__red",
     "vehicle_parked": "amp__darkgray",
     "vehicle_player": "amp__aqua",
     "wall_building": "hash__darkgray",
     "wall_generic": "hash__aqua"
   },
-  "unassigned_required_ids": [
-    "ui_cursor",
-    "ui_look_cursor",
-    "ui_objective_marker",
-    "ui_overworld_marker",
-    "ui_overworld_marker_nearest"
-  ],
+  "unassigned_required_ids": [],
   "metadata_unmatched_tiles": [
     {
       "id": "u0000__blank",
@@ -653,15 +650,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "d__blue",
-      "source": "100-blue.png",
-      "glyph": "d",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -696,24 +684,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "d__green",
-      "source": "100-green.png",
-      "glyph": "d",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -756,7 +727,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -771,15 +743,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "e__blue",
-      "source": "101-blue.png",
-      "glyph": "e",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -814,24 +777,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "e__green",
-      "source": "101-green.png",
-      "glyph": "e",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -874,7 +820,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -889,15 +836,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "f__blue",
-      "source": "102-blue.png",
-      "glyph": "f",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -932,24 +870,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "f__green",
-      "source": "102-green.png",
-      "glyph": "f",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -992,7 +913,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1007,15 +929,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "g__blue",
-      "source": "103-blue.png",
-      "glyph": "g",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -1050,24 +963,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "g__green",
-      "source": "103-green.png",
-      "glyph": "g",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -1110,7 +1006,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1125,15 +1022,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "h__blue",
-      "source": "104-blue.png",
-      "glyph": "h",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -1168,24 +1056,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "h__green",
-      "source": "104-green.png",
-      "glyph": "h",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -1228,7 +1099,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1243,15 +1115,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "i__blue",
-      "source": "105-blue.png",
-      "glyph": "i",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -1286,24 +1149,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "i__green",
-      "source": "105-green.png",
-      "glyph": "i",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -1346,7 +1192,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1361,15 +1208,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "j__blue",
-      "source": "106-blue.png",
-      "glyph": "j",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -1404,24 +1242,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "j__green",
-      "source": "106-green.png",
-      "glyph": "j",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -1464,7 +1285,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1479,15 +1301,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "k__blue",
-      "source": "107-blue.png",
-      "glyph": "k",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -1522,24 +1335,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "k__green",
-      "source": "107-green.png",
-      "glyph": "k",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -1582,7 +1378,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1597,15 +1394,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "l__blue",
-      "source": "108-blue.png",
-      "glyph": "l",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -1640,24 +1428,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "l__green",
-      "source": "108-green.png",
-      "glyph": "l",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -1700,7 +1471,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1715,15 +1487,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "m__blue",
-      "source": "109-blue.png",
-      "glyph": "m",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -1758,24 +1521,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "m__green",
-      "source": "109-green.png",
-      "glyph": "m",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -1818,7 +1564,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1833,15 +1580,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "n__blue",
-      "source": "110-blue.png",
-      "glyph": "n",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -1876,24 +1614,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "n__green",
-      "source": "110-green.png",
-      "glyph": "n",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -1936,7 +1657,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1951,15 +1673,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "o__blue",
-      "source": "111-blue.png",
-      "glyph": "o",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -1994,24 +1707,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "o__green",
-      "source": "111-green.png",
-      "glyph": "o",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -2054,7 +1750,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2069,15 +1766,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "p__blue",
-      "source": "112-blue.png",
-      "glyph": "p",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -2112,24 +1800,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "p__green",
-      "source": "112-green.png",
-      "glyph": "p",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -2172,7 +1843,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2187,15 +1859,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "q__blue",
-      "source": "113-blue.png",
-      "glyph": "q",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -2230,24 +1893,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "q__green",
-      "source": "113-green.png",
-      "glyph": "q",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -2290,7 +1936,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2305,15 +1952,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "r__blue",
-      "source": "114-blue.png",
-      "glyph": "r",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -2348,24 +1986,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "r__green",
-      "source": "114-green.png",
-      "glyph": "r",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -2408,7 +2029,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2423,15 +2045,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "s__blue",
-      "source": "115-blue.png",
-      "glyph": "s",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -2466,24 +2079,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "s__green",
-      "source": "115-green.png",
-      "glyph": "s",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -2526,7 +2122,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2541,15 +2138,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "t__blue",
-      "source": "116-blue.png",
-      "glyph": "t",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -2584,24 +2172,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "t__green",
-      "source": "116-green.png",
-      "glyph": "t",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -2644,7 +2215,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2659,15 +2231,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "u__blue",
-      "source": "117-blue.png",
-      "glyph": "u",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -2702,24 +2265,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "u__green",
-      "source": "117-green.png",
-      "glyph": "u",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -2762,7 +2308,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2777,15 +2324,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "v__blue",
-      "source": "118-blue.png",
-      "glyph": "v",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -2820,24 +2358,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "v__green",
-      "source": "118-green.png",
-      "glyph": "v",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -2880,7 +2401,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2895,15 +2417,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "w__blue",
-      "source": "119-blue.png",
-      "glyph": "w",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -2938,24 +2451,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "w__green",
-      "source": "119-green.png",
-      "glyph": "w",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -2998,7 +2494,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3013,15 +2510,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "x__blue",
-      "source": "120-blue.png",
-      "glyph": "x",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -3056,24 +2544,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "x__green",
-      "source": "120-green.png",
-      "glyph": "x",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -3116,7 +2587,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3131,15 +2603,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "y__blue",
-      "source": "121-blue.png",
-      "glyph": "y",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -3174,24 +2637,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "y__green",
-      "source": "121-green.png",
-      "glyph": "y",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -3234,7 +2680,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3249,15 +2696,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "z__blue",
-      "source": "122-blue.png",
-      "glyph": "z",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -3292,24 +2730,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "z__green",
-      "source": "122-green.png",
-      "glyph": "z",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -3352,7 +2773,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3370,62 +2792,6 @@
       ]
     },
     {
-      "id": "u007b__blue",
-      "source": "123-blue.png",
-      "glyph": "{",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "u007b__brown",
-      "source": "123-brown.png",
-      "glyph": "{",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "u007b__green",
-      "source": "123-green.png",
-      "glyph": "{",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "u007b__orange",
-      "source": "123-orange.png",
-      "glyph": "{",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
-      "id": "pipe__amber",
-      "source": "124-amber.png",
-      "glyph": "|",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "pipe__blue",
-      "source": "124-blue.png",
-      "glyph": "|",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "pipe__brown",
       "source": "124-brown.png",
       "glyph": "|",
@@ -3435,67 +2801,9 @@
       ]
     },
     {
-      "id": "pipe__green",
-      "source": "124-green.png",
-      "glyph": "|",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
       "id": "pipe__orange",
       "source": "124-orange.png",
       "glyph": "|",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
-      "id": "u007d__amber",
-      "source": "125-amber.png",
-      "glyph": "}",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "u007d__blue",
-      "source": "125-blue.png",
-      "glyph": "}",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "u007d__brown",
-      "source": "125-brown.png",
-      "glyph": "}",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "u007d__green",
-      "source": "125-green.png",
-      "glyph": "}",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "u007d__orange",
-      "source": "125-orange.png",
-      "glyph": "}",
       "color": "orange",
       "candidate_colors": [
         "orange"
@@ -3511,12 +2819,12 @@
       ]
     },
     {
-      "id": "tilde__blue",
-      "source": "126-blue.png",
+      "id": "tilde__aqua_copy",
+      "source": "126-aqua copy.png",
       "glyph": "~",
-      "color": "blue",
+      "color": "aqua_copy",
       "candidate_colors": [
-        "blue"
+        "aqua_copy"
       ]
     },
     {
@@ -3542,24 +2850,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "tilde__green",
-      "source": "126-green.png",
-      "glyph": "~",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -3578,15 +2869,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "bang__blue",
-      "source": "33-blue.png",
-      "glyph": "!",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -3621,24 +2903,16 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
+        "vehicle_parked"
       ]
     },
     {
-      "id": "bang__green",
-      "source": "33-green.png",
+      "id": "bang__darkgrey",
+      "source": "33-darkgrey.png",
       "glyph": "!",
-      "color": "green",
+      "color": "darkgrey",
       "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "darkgrey"
       ]
     },
     {
@@ -3662,7 +2936,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3680,35 +2955,6 @@
       ]
     },
     {
-      "id": "quote__blue",
-      "source": "34-blue.png",
-      "glyph": "\"",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "quote__darkgrey",
-      "source": "34-darkgrey.png",
-      "glyph": "\"",
-      "color": "darkgrey",
-      "candidate_colors": [
-        "darkgrey"
-      ]
-    },
-    {
-      "id": "quote__green",
-      "source": "34-green.png",
-      "glyph": "\"",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
       "id": "quote__purple",
       "source": "34-purple.png",
       "glyph": "\"",
@@ -3720,7 +2966,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3738,26 +2985,6 @@
       ]
     },
     {
-      "id": "hash__blue",
-      "source": "35-blue.png",
-      "glyph": "#",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "hash__green",
-      "source": "35-green.png",
-      "glyph": "#",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
       "id": "hash__purple",
       "source": "35-purple.png",
       "glyph": "#",
@@ -3769,7 +2996,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3787,32 +3015,12 @@
       ]
     },
     {
-      "id": "dollar__blue",
-      "source": "36-blue.png",
-      "glyph": "$",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "dollar__brown",
       "source": "36-brown.png",
       "glyph": "$",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "dollar__green",
-      "source": "36-green.png",
-      "glyph": "$",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -3855,7 +3063,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3870,15 +3079,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "percent__blue",
-      "source": "37-blue.png",
-      "glyph": "%",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -3913,24 +3113,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "percent__green",
-      "source": "37-green.png",
-      "glyph": "%",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -3973,7 +3156,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3991,32 +3175,12 @@
       ]
     },
     {
-      "id": "amp__blue",
-      "source": "38-blue.png",
-      "glyph": "&",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "amp__brown",
       "source": "38-brown.png",
       "glyph": "&",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "amp__green",
-      "source": "38-green.png",
-      "glyph": "&",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -4057,15 +3221,6 @@
       ]
     },
     {
-      "id": "apostrophe__blue",
-      "source": "39-blue.png",
-      "glyph": "'",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "apostrophe__brown",
       "source": "39-brown.png",
       "glyph": "'",
@@ -4097,24 +3252,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "apostrophe__green",
-      "source": "39-green.png",
-      "glyph": "'",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -4146,300 +3284,6 @@
       ]
     },
     {
-      "id": "lparen__amber",
-      "source": "40-amber.png",
-      "glyph": "(",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "lparen__blue",
-      "source": "40-blue.png",
-      "glyph": "(",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "lparen__brown",
-      "source": "40-brown.png",
-      "glyph": "(",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "lparen__darkgray",
-      "source": "40-darkgray.png",
-      "glyph": "(",
-      "color": "darkgray",
-      "candidate_colors": [
-        "darkgray",
-        "building_edge",
-        "building_fill",
-        "terrain_block",
-        "terrain_rock",
-        "terrain_salt",
-        "terrain_trail",
-        "feature_door",
-        "feature_breach",
-        "property_building",
-        "property_fixture",
-        "property_asset",
-        "property_service",
-        "building_roof_residential",
-        "building_roof_civic",
-        "building_roof_industrial",
-        "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "lparen__green",
-      "source": "40-green.png",
-      "glyph": "(",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "lparen__orange",
-      "source": "40-orange.png",
-      "glyph": "(",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
-      "id": "lparen__pink",
-      "source": "40-pink.png",
-      "glyph": "(",
-      "color": "pink",
-      "candidate_colors": [
-        "pink",
-        "human",
-        "item_medical",
-        "building_roof_entertainment",
-        "cat_calico",
-        "cat_white"
-      ],
-      "candidate_semantic_ids": [
-        "npc_civilian",
-        "cat_calico",
-        "cat_white"
-      ]
-    },
-    {
-      "id": "rparen__amber",
-      "source": "41-amber.png",
-      "glyph": ")",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "rparen__blue",
-      "source": "41-blue.png",
-      "glyph": ")",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "rparen__brown",
-      "source": "41-brown.png",
-      "glyph": ")",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "rparen__darkgray",
-      "source": "41-darkgray.png",
-      "glyph": ")",
-      "color": "darkgray",
-      "candidate_colors": [
-        "darkgray",
-        "building_edge",
-        "building_fill",
-        "terrain_block",
-        "terrain_rock",
-        "terrain_salt",
-        "terrain_trail",
-        "feature_door",
-        "feature_breach",
-        "property_building",
-        "property_fixture",
-        "property_asset",
-        "property_service",
-        "building_roof_residential",
-        "building_roof_civic",
-        "building_roof_industrial",
-        "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "rparen__green",
-      "source": "41-green.png",
-      "glyph": ")",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "rparen__orange",
-      "source": "41-orange.png",
-      "glyph": ")",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
-      "id": "rparen__pink",
-      "source": "41-pink.png",
-      "glyph": ")",
-      "color": "pink",
-      "candidate_colors": [
-        "pink",
-        "human",
-        "item_medical",
-        "building_roof_entertainment",
-        "cat_calico",
-        "cat_white"
-      ],
-      "candidate_semantic_ids": [
-        "npc_civilian",
-        "cat_calico",
-        "cat_white"
-      ]
-    },
-    {
-      "id": "star__amber",
-      "source": "42-amber.png",
-      "glyph": "*",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "star__blue",
-      "source": "42-blue.png",
-      "glyph": "*",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "star__brown",
-      "source": "42-brown.png",
-      "glyph": "*",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "star__darkgray",
-      "source": "42-darkgray.png",
-      "glyph": "*",
-      "color": "darkgray",
-      "candidate_colors": [
-        "darkgray",
-        "building_edge",
-        "building_fill",
-        "terrain_block",
-        "terrain_rock",
-        "terrain_salt",
-        "terrain_trail",
-        "feature_door",
-        "feature_breach",
-        "property_building",
-        "property_fixture",
-        "property_asset",
-        "property_service",
-        "building_roof_residential",
-        "building_roof_civic",
-        "building_roof_industrial",
-        "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "star__green",
-      "source": "42-green.png",
-      "glyph": "*",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "star__orange",
-      "source": "42-orange.png",
-      "glyph": "*",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
-      "id": "star__pink",
-      "source": "42-pink.png",
-      "glyph": "*",
-      "color": "pink",
-      "candidate_colors": [
-        "pink",
-        "human",
-        "item_medical",
-        "building_roof_entertainment",
-        "cat_calico",
-        "cat_white"
-      ],
-      "candidate_semantic_ids": [
-        "npc_civilian",
-        "cat_calico",
-        "cat_white"
-      ]
-    },
-    {
       "id": "plus__amber",
       "source": "43-amber.png",
       "glyph": "+",
@@ -4449,32 +3293,12 @@
       ]
     },
     {
-      "id": "plus__blue",
-      "source": "43-blue.png",
-      "glyph": "+",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "plus__darkgrey",
       "source": "43-darkgrey.png",
       "glyph": "+",
       "color": "darkgrey",
       "candidate_colors": [
         "darkgrey"
-      ]
-    },
-    {
-      "id": "plus__green",
-      "source": "43-green.png",
-      "glyph": "+",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -4489,7 +3313,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4504,15 +3329,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "comma__blue",
-      "source": "44-blue.png",
-      "glyph": ",",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -4547,24 +3363,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "comma__green",
-      "source": "44-green.png",
-      "glyph": ",",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -4605,15 +3404,6 @@
       ]
     },
     {
-      "id": "dash__blue",
-      "source": "45-blue.png",
-      "glyph": "-",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "dash__brown",
       "source": "45-brown.png",
       "glyph": "-",
@@ -4645,24 +3435,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "dash__green",
-      "source": "45-green.png",
-      "glyph": "-",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -4703,15 +3476,6 @@
       ]
     },
     {
-      "id": "dot__blue",
-      "source": "46-blue.png",
-      "glyph": ".",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "dot__brown",
       "source": "46-brown.png",
       "glyph": ".",
@@ -4743,24 +3507,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "dot__green",
-      "source": "46-green.png",
-      "glyph": ".",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -4801,32 +3548,12 @@
       ]
     },
     {
-      "id": "slash__blue",
-      "source": "47-blue.png",
-      "glyph": "/",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "slash__brown",
       "source": "47-brown.png",
       "glyph": "/",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "slash__green",
-      "source": "47-green.png",
-      "glyph": "/",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -4867,15 +3594,6 @@
       ]
     },
     {
-      "id": "0__blue",
-      "source": "48-blue.png",
-      "glyph": "0",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "0__brown",
       "source": "48-brown.png",
       "glyph": "0",
@@ -4907,24 +3625,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "0__green",
-      "source": "48-green.png",
-      "glyph": "0",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -4967,7 +3668,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4982,15 +3684,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "1__blue",
-      "source": "49-blue.png",
-      "glyph": "1",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -5025,24 +3718,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "1__green",
-      "source": "49-green.png",
-      "glyph": "1",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -5085,7 +3761,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5100,15 +3777,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "2__blue",
-      "source": "50-blue.png",
-      "glyph": "2",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -5143,24 +3811,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "2__green",
-      "source": "50-green.png",
-      "glyph": "2",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -5203,7 +3854,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5218,15 +3870,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "3__blue",
-      "source": "51-blue.png",
-      "glyph": "3",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -5261,24 +3904,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "3__green",
-      "source": "51-green.png",
-      "glyph": "3",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -5321,7 +3947,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5336,15 +3963,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "4__blue",
-      "source": "52-blue.png",
-      "glyph": "4",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -5379,24 +3997,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "4__green",
-      "source": "52-green.png",
-      "glyph": "4",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -5439,7 +4040,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5457,32 +4059,12 @@
       ]
     },
     {
-      "id": "5__blue",
-      "source": "53-blue.png",
-      "glyph": "5",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "5__darkgrey",
       "source": "53-darkgrey.png",
       "glyph": "5",
       "color": "darkgrey",
       "candidate_colors": [
         "darkgrey"
-      ]
-    },
-    {
-      "id": "5__green",
-      "source": "53-green.png",
-      "glyph": "5",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -5497,7 +4079,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5512,15 +4095,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "6__blue",
-      "source": "54-blue.png",
-      "glyph": "6",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -5555,24 +4129,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "6__green",
-      "source": "54-green.png",
-      "glyph": "6",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -5615,7 +4172,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5630,15 +4188,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "7__blue",
-      "source": "55-blue.png",
-      "glyph": "7",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -5673,24 +4222,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "7__green",
-      "source": "55-green.png",
-      "glyph": "7",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -5733,7 +4265,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5748,15 +4281,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "8__blue",
-      "source": "56-blue.png",
-      "glyph": "8",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -5791,24 +4315,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "8__green",
-      "source": "56-green.png",
-      "glyph": "8",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -5851,7 +4358,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5866,15 +4374,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "9__blue",
-      "source": "57-blue.png",
-      "glyph": "9",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -5909,24 +4408,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "9__green",
-      "source": "57-green.png",
-      "glyph": "9",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -5969,7 +4451,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5987,32 +4470,12 @@
       ]
     },
     {
-      "id": "colon__blue",
-      "source": "58-blue.png",
-      "glyph": ":",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "colon__brown",
       "source": "58-brown.png",
       "glyph": ":",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "colon__green",
-      "source": "58-green.png",
-      "glyph": ":",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -6062,15 +4525,6 @@
       ]
     },
     {
-      "id": "semicolon__blue",
-      "source": "59-blue.png",
-      "glyph": ";",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "semicolon__brown",
       "source": "59-brown.png",
       "glyph": ";",
@@ -6102,24 +4556,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "semicolon__green",
-      "source": "59-green.png",
-      "glyph": ";",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -6160,15 +4597,6 @@
       ]
     },
     {
-      "id": "lt__blue",
-      "source": "60-blue.png",
-      "glyph": "<",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "lt__brown",
       "source": "60-brown.png",
       "glyph": "<",
@@ -6200,24 +4628,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "lt__green",
-      "source": "60-green.png",
-      "glyph": "<",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -6258,32 +4669,12 @@
       ]
     },
     {
-      "id": "equals__blue",
-      "source": "61-blue.png",
-      "glyph": "=",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "equals__darkgrey",
       "source": "61-darkgrey.png",
       "glyph": "=",
       "color": "darkgrey",
       "candidate_colors": [
         "darkgrey"
-      ]
-    },
-    {
-      "id": "equals__green",
-      "source": "61-green.png",
-      "glyph": "=",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -6298,7 +4689,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -6313,15 +4705,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "gt__blue",
-      "source": "62-blue.png",
-      "glyph": ">",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -6356,24 +4739,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "gt__green",
-      "source": "62-green.png",
-      "glyph": ">",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -6414,15 +4780,6 @@
       ]
     },
     {
-      "id": "question__blue",
-      "source": "63-blue.png",
-      "glyph": "?",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "question__brown",
       "source": "63-brown.png",
       "glyph": "?",
@@ -6454,24 +4811,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "question__green",
-      "source": "63-green.png",
-      "glyph": "?",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -6512,41 +4852,12 @@
       ]
     },
     {
-      "id": "at__blue",
-      "source": "64-blue.png",
-      "glyph": "@",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "at__darkgrey",
       "source": "64-darkgrey.png",
       "glyph": "@",
       "color": "darkgrey",
       "candidate_colors": [
         "darkgrey"
-      ]
-    },
-    {
-      "id": "at__purple",
-      "source": "64-purple.png",
-      "glyph": "@",
-      "color": "purple",
-      "candidate_colors": [
-        "purple",
-        "scout",
-        "feline",
-        "cat_purple",
-        "item_restricted",
-        "item_tool",
-        "property_service_zone"
-      ],
-      "candidate_semantic_ids": [
-        "npc_scout",
-        "cat_generic",
-        "cat_purple"
       ]
     },
     {
@@ -6559,32 +4870,12 @@
       ]
     },
     {
-      "id": "A__blue",
-      "source": "65-blue.png",
-      "glyph": "A",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "A__brown",
       "source": "65-brown.png",
       "glyph": "A",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "A__green",
-      "source": "65-green.png",
-      "glyph": "A",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -6627,7 +4918,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -6645,32 +4937,12 @@
       ]
     },
     {
-      "id": "B__blue",
-      "source": "66-blue.png",
-      "glyph": "B",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "B__brown",
       "source": "66-brown.png",
       "glyph": "B",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "B__green",
-      "source": "66-green.png",
-      "glyph": "B",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -6713,7 +4985,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -6728,15 +5001,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "C__blue",
-      "source": "67-blue.png",
-      "glyph": "C",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -6771,24 +5035,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "C__green",
-      "source": "67-green.png",
-      "glyph": "C",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -6831,7 +5078,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -6846,15 +5094,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "D__blue",
-      "source": "68-blue.png",
-      "glyph": "D",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -6889,24 +5128,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "D__green",
-      "source": "68-green.png",
-      "glyph": "D",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -6949,7 +5171,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -6964,15 +5187,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "E__blue",
-      "source": "69-blue.png",
-      "glyph": "E",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -7007,24 +5221,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "E__green",
-      "source": "69-green.png",
-      "glyph": "E",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -7067,7 +5264,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -7085,32 +5283,12 @@
       ]
     },
     {
-      "id": "F__blue",
-      "source": "70-blue.png",
-      "glyph": "F",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "F__brown",
       "source": "70-brown.png",
       "glyph": "F",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "F__green",
-      "source": "70-green.png",
-      "glyph": "F",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -7153,7 +5331,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -7168,15 +5347,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "G__blue",
-      "source": "71-blue.png",
-      "glyph": "G",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -7211,24 +5381,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "G__green",
-      "source": "71-green.png",
-      "glyph": "G",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -7271,7 +5424,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -7289,32 +5443,12 @@
       ]
     },
     {
-      "id": "H__blue",
-      "source": "72-blue.png",
-      "glyph": "H",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "H__brown",
       "source": "72-brown.png",
       "glyph": "H",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "H__green",
-      "source": "72-green.png",
-      "glyph": "H",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -7357,7 +5491,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -7372,15 +5507,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "I__blue",
-      "source": "73-blue.png",
-      "glyph": "I",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -7415,24 +5541,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "I__green",
-      "source": "73-green.png",
-      "glyph": "I",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -7475,7 +5584,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -7490,15 +5600,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "J__blue",
-      "source": "74-blue.png",
-      "glyph": "J",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -7533,24 +5634,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "J__green",
-      "source": "74-green.png",
-      "glyph": "J",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -7593,7 +5677,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -7608,15 +5693,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "K__blue",
-      "source": "75-blue.png",
-      "glyph": "K",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -7651,24 +5727,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "K__green",
-      "source": "75-green.png",
-      "glyph": "K",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -7711,7 +5770,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -7726,15 +5786,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "L__blue",
-      "source": "76-blue.png",
-      "glyph": "L",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -7769,24 +5820,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "L__green",
-      "source": "76-green.png",
-      "glyph": "L",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -7829,7 +5863,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -7844,15 +5879,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "M__blue",
-      "source": "77-blue.png",
-      "glyph": "M",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -7887,24 +5913,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "M__green",
-      "source": "77-green.png",
-      "glyph": "M",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -7928,7 +5937,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -7943,15 +5953,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "N__blue",
-      "source": "78-blue.png",
-      "glyph": "N",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -7986,24 +5987,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "N__green",
-      "source": "78-green.png",
-      "glyph": "N",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -8027,7 +6011,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -8045,32 +6030,12 @@
       ]
     },
     {
-      "id": "O__blue",
-      "source": "79-blue.png",
-      "glyph": "O",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "O__brown",
       "source": "79-brown.png",
       "glyph": "O",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "O__green",
-      "source": "79-green.png",
-      "glyph": "O",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -8113,7 +6078,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -8128,15 +6094,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "P__blue",
-      "source": "80-blue.png",
-      "glyph": "P",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -8171,24 +6128,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "P__green",
-      "source": "80-green.png",
-      "glyph": "P",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -8231,7 +6171,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -8246,15 +6187,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "Q__blue",
-      "source": "81-blue.png",
-      "glyph": "Q",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -8289,24 +6221,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "Q__green",
-      "source": "81-green.png",
-      "glyph": "Q",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -8349,7 +6264,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -8367,32 +6283,12 @@
       ]
     },
     {
-      "id": "R__blue",
-      "source": "82-blue.png",
-      "glyph": "R",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "R__brown",
       "source": "82-brown.png",
       "glyph": "R",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "R__green",
-      "source": "82-green.png",
-      "glyph": "R",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -8435,7 +6331,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -8450,15 +6347,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "S__blue",
-      "source": "83-blue.png",
-      "glyph": "S",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -8493,24 +6381,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "S__green",
-      "source": "83-green.png",
-      "glyph": "S",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -8553,7 +6424,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -8571,32 +6443,12 @@
       ]
     },
     {
-      "id": "T__blue",
-      "source": "84-blue.png",
-      "glyph": "T",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "T__brown",
       "source": "84-brown.png",
       "glyph": "T",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "T__green",
-      "source": "84-green.png",
-      "glyph": "T",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -8639,7 +6491,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -8654,15 +6507,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "U__blue",
-      "source": "85-blue.png",
-      "glyph": "U",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -8697,24 +6541,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "U__green",
-      "source": "85-green.png",
-      "glyph": "U",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -8757,7 +6584,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -8775,32 +6603,12 @@
       ]
     },
     {
-      "id": "V__blue",
-      "source": "86-blue.png",
-      "glyph": "V",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "V__brown",
       "source": "86-brown.png",
       "glyph": "V",
       "color": "brown",
       "candidate_colors": [
         "brown"
-      ]
-    },
-    {
-      "id": "V__green",
-      "source": "86-green.png",
-      "glyph": "V",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -8843,7 +6651,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -8858,15 +6667,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "W__blue",
-      "source": "87-blue.png",
-      "glyph": "W",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -8901,24 +6701,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "W__green",
-      "source": "87-green.png",
-      "glyph": "W",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -8961,7 +6744,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -8976,15 +6760,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "X__blue",
-      "source": "88-blue.png",
-      "glyph": "X",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -9019,24 +6794,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "X__green",
-      "source": "88-green.png",
-      "glyph": "X",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -9079,7 +6837,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -9094,15 +6853,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "Y__blue",
-      "source": "89-blue.png",
-      "glyph": "Y",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -9137,24 +6887,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "Y__green",
-      "source": "89-green.png",
-      "glyph": "Y",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -9197,7 +6930,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -9212,15 +6946,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "Z__blue",
-      "source": "90-blue.png",
-      "glyph": "Z",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -9255,24 +6980,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "Z__green",
-      "source": "90-green.png",
-      "glyph": "Z",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -9315,7 +7023,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -9330,15 +7039,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "lbracket__blue",
-      "source": "91-blue.png",
-      "glyph": "[",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -9373,24 +7073,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "lbracket__green",
-      "source": "91-green.png",
-      "glyph": "[",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -9431,15 +7114,6 @@
       ]
     },
     {
-      "id": "u005c__blue",
-      "source": "92-blue.png",
-      "glyph": "\\",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
       "id": "u005c__brown",
       "source": "92-brown.png",
       "glyph": "\\",
@@ -9471,24 +7145,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "u005c__green",
-      "source": "92-green.png",
-      "glyph": "\\",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -9529,110 +7186,12 @@
       ]
     },
     {
-      "id": "rbracket__blue",
-      "source": "93-blue.png",
-      "glyph": "]",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "rbracket__brown",
-      "source": "93-brown.png",
-      "glyph": "]",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "rbracket__darkgray",
-      "source": "93-darkgray.png",
-      "glyph": "]",
-      "color": "darkgray",
-      "candidate_colors": [
-        "darkgray",
-        "building_edge",
-        "building_fill",
-        "terrain_block",
-        "terrain_rock",
-        "terrain_salt",
-        "terrain_trail",
-        "feature_door",
-        "feature_breach",
-        "property_building",
-        "property_fixture",
-        "property_asset",
-        "property_service",
-        "building_roof_residential",
-        "building_roof_civic",
-        "building_roof_industrial",
-        "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "rbracket__green",
-      "source": "93-green.png",
-      "glyph": "]",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "rbracket__orange",
-      "source": "93-orange.png",
-      "glyph": "]",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
-      "id": "rbracket__pink",
-      "source": "93-pink.png",
-      "glyph": "]",
-      "color": "pink",
-      "candidate_colors": [
-        "pink",
-        "human",
-        "item_medical",
-        "building_roof_entertainment",
-        "cat_calico",
-        "cat_white"
-      ],
-      "candidate_semantic_ids": [
-        "npc_civilian",
-        "cat_calico",
-        "cat_white"
-      ]
-    },
-    {
       "id": "caret__amber",
       "source": "94-amber.png",
       "glyph": "^",
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "caret__blue",
-      "source": "94-blue.png",
-      "glyph": "^",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -9651,17 +7210,6 @@
       "color": "darkgrey",
       "candidate_colors": [
         "darkgrey"
-      ]
-    },
-    {
-      "id": "caret__green",
-      "source": "94-green.png",
-      "glyph": "^",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
       ]
     },
     {
@@ -9704,128 +7252,13 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
         "cat_generic",
         "cat_purple"
-      ]
-    },
-    {
-      "id": "underscore__amber",
-      "source": "95-amber.png",
-      "glyph": "_",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "underscore__blue",
-      "source": "95-blue.png",
-      "glyph": "_",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "underscore__brown",
-      "source": "95-brown.png",
-      "glyph": "_",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "underscore__darkgray",
-      "source": "95-darkgray.png",
-      "glyph": "_",
-      "color": "darkgray",
-      "candidate_colors": [
-        "darkgray",
-        "building_edge",
-        "building_fill",
-        "terrain_block",
-        "terrain_rock",
-        "terrain_salt",
-        "terrain_trail",
-        "feature_door",
-        "feature_breach",
-        "property_building",
-        "property_fixture",
-        "property_asset",
-        "property_service",
-        "building_roof_residential",
-        "building_roof_civic",
-        "building_roof_industrial",
-        "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "underscore__green",
-      "source": "95-green.png",
-      "glyph": "_",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "underscore__orange",
-      "source": "95-orange.png",
-      "glyph": "_",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
-      "id": "underscore__pink",
-      "source": "95-pink.png",
-      "glyph": "_",
-      "color": "pink",
-      "candidate_colors": [
-        "pink",
-        "human",
-        "item_medical",
-        "building_roof_entertainment",
-        "cat_calico",
-        "cat_white"
-      ],
-      "candidate_semantic_ids": [
-        "npc_civilian",
-        "cat_calico",
-        "cat_white"
-      ]
-    },
-    {
-      "id": "a__amber",
-      "source": "97-amber.png",
-      "glyph": "a",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "a__blue",
-      "source": "97-blue.png",
-      "glyph": "a",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -9860,24 +7293,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "a__green",
-      "source": "97-green.png",
-      "glyph": "a",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -9920,7 +7336,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -9935,15 +7352,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "b__blue",
-      "source": "98-blue.png",
-      "glyph": "b",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -9978,24 +7386,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "b__green",
-      "source": "98-green.png",
-      "glyph": "b",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -10038,7 +7429,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -10053,15 +7445,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "c__blue",
-      "source": "99-blue.png",
-      "glyph": "c",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
       ]
     },
     {
@@ -10096,24 +7479,7 @@
         "building_roof_civic",
         "building_roof_industrial",
         "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "c__green",
-      "source": "99-green.png",
-      "glyph": "c",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
+        "vehicle_parked"
       ]
     },
     {
@@ -10156,389 +7522,8 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone"
-      ],
-      "candidate_semantic_ids": [
-        "npc_scout",
-        "cat_generic",
-        "cat_purple"
-      ]
-    },
-    {
-      "id": "c__amber_02",
-      "source": "c-amber.png",
-      "glyph": "c",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "c__blue_02",
-      "source": "c-blue.png",
-      "glyph": "c",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "c__darkgray_02",
-      "source": "c-darkgray.png",
-      "glyph": "c",
-      "color": "darkgray",
-      "candidate_colors": [
-        "darkgray",
-        "building_edge",
-        "building_fill",
-        "terrain_block",
-        "terrain_rock",
-        "terrain_salt",
-        "terrain_trail",
-        "feature_door",
-        "feature_breach",
-        "property_building",
-        "property_fixture",
-        "property_asset",
-        "property_service",
-        "building_roof_residential",
-        "building_roof_civic",
-        "building_roof_industrial",
-        "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "c__green_02",
-      "source": "c-green.png",
-      "glyph": "c",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "c__purple_02",
-      "source": "c-purple.png",
-      "glyph": "c",
-      "color": "purple",
-      "candidate_colors": [
-        "purple",
-        "scout",
-        "feline",
-        "cat_purple",
-        "item_restricted",
-        "item_tool",
-        "property_service_zone"
-      ],
-      "candidate_semantic_ids": [
-        "npc_scout",
-        "cat_generic",
-        "cat_purple"
-      ]
-    },
-    {
-      "id": "caret__amber_02",
-      "source": "caret-amber.png",
-      "glyph": "^",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "caret__blue_02",
-      "source": "caret-blue.png",
-      "glyph": "^",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "caret__darkgrey_02",
-      "source": "caret-darkgrey.png",
-      "glyph": "^",
-      "color": "darkgrey",
-      "candidate_colors": [
-        "darkgrey"
-      ]
-    },
-    {
-      "id": "caret__green_02",
-      "source": "caret-green.png",
-      "glyph": "^",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "caret__purple_02",
-      "source": "caret-purple.png",
-      "glyph": "^",
-      "color": "purple",
-      "candidate_colors": [
-        "purple",
-        "scout",
-        "feline",
-        "cat_purple",
-        "item_restricted",
-        "item_tool",
-        "property_service_zone"
-      ],
-      "candidate_semantic_ids": [
-        "npc_scout",
-        "cat_generic",
-        "cat_purple"
-      ]
-    },
-    {
-      "id": "d__amber_02",
-      "source": "d-amber.png",
-      "glyph": "d",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "d__blue_02",
-      "source": "d-blue.png",
-      "glyph": "d",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "d__darkgray_02",
-      "source": "d-darkgray.png",
-      "glyph": "d",
-      "color": "darkgray",
-      "candidate_colors": [
-        "darkgray",
-        "building_edge",
-        "building_fill",
-        "terrain_block",
-        "terrain_rock",
-        "terrain_salt",
-        "terrain_trail",
-        "feature_door",
-        "feature_breach",
-        "property_building",
-        "property_fixture",
-        "property_asset",
-        "property_service",
-        "building_roof_residential",
-        "building_roof_civic",
-        "building_roof_industrial",
-        "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "d__green_02",
-      "source": "d-green.png",
-      "glyph": "d",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "d__purple_02",
-      "source": "d-purple.png",
-      "glyph": "d",
-      "color": "purple",
-      "candidate_colors": [
-        "purple",
-        "scout",
-        "feline",
-        "cat_purple",
-        "item_restricted",
-        "item_tool",
-        "property_service_zone"
-      ],
-      "candidate_semantic_ids": [
-        "npc_scout",
-        "cat_generic",
-        "cat_purple"
-      ]
-    },
-    {
-      "id": "e__amber_02",
-      "source": "e-amber.png",
-      "glyph": "e",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "e__blue_02",
-      "source": "e-blue.png",
-      "glyph": "e",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "e__darkgray_02",
-      "source": "e-darkgray.png",
-      "glyph": "e",
-      "color": "darkgray",
-      "candidate_colors": [
-        "darkgray",
-        "building_edge",
-        "building_fill",
-        "terrain_block",
-        "terrain_rock",
-        "terrain_salt",
-        "terrain_trail",
-        "feature_door",
-        "feature_breach",
-        "property_building",
-        "property_fixture",
-        "property_asset",
-        "property_service",
-        "building_roof_residential",
-        "building_roof_civic",
-        "building_roof_industrial",
-        "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "e__green_02",
-      "source": "e-green.png",
-      "glyph": "e",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "e__purple_02",
-      "source": "e-purple.png",
-      "glyph": "e",
-      "color": "purple",
-      "candidate_colors": [
-        "purple",
-        "scout",
-        "feline",
-        "cat_purple",
-        "item_restricted",
-        "item_tool",
-        "property_service_zone"
-      ],
-      "candidate_semantic_ids": [
-        "npc_scout",
-        "cat_generic",
-        "cat_purple"
-      ]
-    },
-    {
-      "id": "f__amber_02",
-      "source": "f-amber.png",
-      "glyph": "f",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "f__blue_02",
-      "source": "f-blue.png",
-      "glyph": "f",
-      "color": "blue",
-      "candidate_colors": [
-        "blue"
-      ]
-    },
-    {
-      "id": "f__darkgray_02",
-      "source": "f-darkgray.png",
-      "glyph": "f",
-      "color": "darkgray",
-      "candidate_colors": [
-        "darkgray",
-        "building_edge",
-        "building_fill",
-        "terrain_block",
-        "terrain_rock",
-        "terrain_salt",
-        "terrain_trail",
-        "feature_door",
-        "feature_breach",
-        "property_building",
-        "property_fixture",
-        "property_asset",
-        "property_service",
-        "building_roof_residential",
-        "building_roof_civic",
-        "building_roof_industrial",
-        "building_roof_storefront",
-        "vehicle_parked",
-        "canine",
-        "insect"
-      ],
-      "candidate_semantic_ids": [
-        "npc_canine",
-        "npc_insect"
-      ]
-    },
-    {
-      "id": "f__green_02",
-      "source": "f-green.png",
-      "glyph": "f",
-      "color": "green",
-      "candidate_colors": [
-        "green",
-        "player",
-        "terrain_generic"
-      ]
-    },
-    {
-      "id": "f__purple_02",
-      "source": "f-purple.png",
-      "glyph": "f",
-      "color": "purple",
-      "candidate_colors": [
-        "purple",
-        "scout",
-        "feline",
-        "cat_purple",
-        "item_restricted",
-        "item_tool",
-        "property_service_zone"
+        "property_service_zone",
+        "player"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -10576,9 +7561,6 @@
       "dollar__aqua",
       "percent__aqua",
       "apostrophe__aqua",
-      "lparen__aqua",
-      "rparen__aqua",
-      "star__aqua",
       "plus__aqua",
       "comma__aqua",
       "dash__aqua",
@@ -10627,15 +7609,183 @@
       "u005c__aqua",
       "rbracket__aqua",
       "caret__aqua",
-      "underscore__aqua",
       "a__aqua",
       "b__aqua",
-      "c__aqua",
-      "c__aqua_02",
-      "caret__aqua_02",
-      "d__aqua_02",
-      "e__aqua_02",
-      "f__aqua_02"
+      "c__aqua"
+    ],
+    "npc_canine": [
+      "e__blue",
+      "f__blue",
+      "g__blue",
+      "h__blue",
+      "i__blue",
+      "j__blue",
+      "k__blue",
+      "l__blue",
+      "m__blue",
+      "n__blue",
+      "o__blue",
+      "p__blue",
+      "q__blue",
+      "r__blue",
+      "s__blue",
+      "t__blue",
+      "u__blue",
+      "v__blue",
+      "w__blue",
+      "x__blue",
+      "y__blue",
+      "z__blue",
+      "u007b__blue",
+      "tilde__blue",
+      "bang__blue",
+      "quote__blue",
+      "hash__blue",
+      "dollar__blue",
+      "percent__blue",
+      "amp__blue",
+      "apostrophe__blue",
+      "plus__blue",
+      "comma__blue",
+      "dash__blue",
+      "dot__blue",
+      "slash__blue",
+      "0__blue",
+      "1__blue",
+      "2__blue",
+      "3__blue",
+      "4__blue",
+      "5__blue",
+      "6__blue",
+      "7__blue",
+      "8__blue",
+      "9__blue",
+      "colon__blue",
+      "semicolon__blue",
+      "lt__blue",
+      "equals__blue",
+      "gt__blue",
+      "question__blue",
+      "at__blue",
+      "A__blue",
+      "B__blue",
+      "C__blue",
+      "D__blue",
+      "E__blue",
+      "F__blue",
+      "G__blue",
+      "H__blue",
+      "I__blue",
+      "J__blue",
+      "K__blue",
+      "L__blue",
+      "M__blue",
+      "N__blue",
+      "O__blue",
+      "P__blue",
+      "Q__blue",
+      "R__blue",
+      "S__blue",
+      "T__blue",
+      "U__blue",
+      "V__blue",
+      "W__blue",
+      "X__blue",
+      "Y__blue",
+      "Z__blue",
+      "lbracket__blue",
+      "u005c__blue",
+      "caret__blue",
+      "a__blue",
+      "b__blue",
+      "c__blue"
+    ],
+    "npc_insect": [
+      "e__green",
+      "f__green",
+      "g__green",
+      "h__green",
+      "i__green",
+      "j__green",
+      "k__green",
+      "l__green",
+      "m__green",
+      "n__green",
+      "o__green",
+      "p__green",
+      "q__green",
+      "r__green",
+      "s__green",
+      "t__green",
+      "u__green",
+      "v__green",
+      "w__green",
+      "x__green",
+      "y__green",
+      "z__green",
+      "pipe__green",
+      "tilde__green",
+      "bang__green",
+      "quote__green",
+      "hash__green",
+      "dollar__green",
+      "percent__green",
+      "amp__green",
+      "apostrophe__green",
+      "plus__green",
+      "comma__green",
+      "dash__green",
+      "dot__green",
+      "slash__green",
+      "0__green",
+      "1__green",
+      "2__green",
+      "3__green",
+      "4__green",
+      "5__green",
+      "6__green",
+      "7__green",
+      "8__green",
+      "9__green",
+      "colon__green",
+      "semicolon__green",
+      "lt__green",
+      "equals__green",
+      "gt__green",
+      "question__green",
+      "at__green",
+      "A__green",
+      "B__green",
+      "C__green",
+      "D__green",
+      "E__green",
+      "F__green",
+      "G__green",
+      "H__green",
+      "I__green",
+      "J__green",
+      "K__green",
+      "L__green",
+      "M__green",
+      "N__green",
+      "O__green",
+      "P__green",
+      "Q__green",
+      "R__green",
+      "S__green",
+      "T__green",
+      "U__green",
+      "V__green",
+      "W__green",
+      "X__green",
+      "Y__green",
+      "Z__green",
+      "lbracket__green",
+      "u005c__green",
+      "caret__green",
+      "a__green",
+      "b__green",
+      "c__green"
     ],
     "npc_guard": [
       "e__red",
@@ -10659,9 +7809,7 @@
       "w__red",
       "y__red",
       "z__red",
-      "u007b__red",
       "pipe__red",
-      "u007d__red",
       "tilde__red",
       "bang__red",
       "quote__red",
@@ -10669,9 +7817,6 @@
       "dollar__red",
       "percent__red",
       "apostrophe__red",
-      "lparen__red",
-      "rparen__red",
-      "star__red",
       "plus__red",
       "comma__red",
       "dash__red",
@@ -10721,19 +7866,10 @@
       "Z__red",
       "lbracket__red",
       "u005c__red",
-      "rbracket__red",
       "caret__red",
-      "underscore__red",
       "a__red",
       "b__red",
-      "c__red",
-      "a__red_02",
-      "b__red_02",
-      "c__red_02",
-      "caret__red_02",
-      "d__red_02",
-      "e__red_02",
-      "f__red_02"
+      "c__red"
     ]
   },
   "glyph_fallback_assignments": [
@@ -11044,15 +8180,6 @@
       "source": "33-aqua.png"
     },
     {
-      "semantic_id": "item_restricted",
-      "tile_id": "star__aqua",
-      "glyph": "*",
-      "category": "items",
-      "source_key": "*",
-      "asset_color": "aqua",
-      "source": "42-aqua.png"
-    },
-    {
       "semantic_id": "item_token",
       "tile_id": "i__aqua",
       "glyph": "i",
@@ -11060,24 +8187,6 @@
       "source_key": "i",
       "asset_color": "aqua",
       "source": "105-aqua.png"
-    },
-    {
-      "semantic_id": "item_tool",
-      "tile_id": "rparen__aqua",
-      "glyph": ")",
-      "category": "items",
-      "source_key": ")",
-      "asset_color": "aqua",
-      "source": "41-aqua.png"
-    },
-    {
-      "semantic_id": "npc_canine",
-      "tile_id": "C__aqua",
-      "glyph": "C",
-      "category": "entities",
-      "source_key": "canine",
-      "asset_color": "aqua",
-      "source": "67-aqua.png"
     },
     {
       "semantic_id": "npc_civilian",
@@ -11089,15 +8198,6 @@
       "source": "72-aqua.png"
     },
     {
-      "semantic_id": "npc_insect",
-      "tile_id": "I__aqua",
-      "glyph": "I",
-      "category": "entities",
-      "source_key": "insect",
-      "asset_color": "aqua",
-      "source": "73-aqua.png"
-    },
-    {
       "semantic_id": "npc_scout",
       "tile_id": "H__aqua",
       "glyph": "H",
@@ -11105,15 +8205,6 @@
       "source_key": "hominid",
       "asset_color": "aqua",
       "source": "72-aqua.png"
-    },
-    {
-      "semantic_id": "projectile",
-      "tile_id": "star__aqua",
-      "glyph": "*",
-      "category": "projectiles",
-      "source_key": "*",
-      "asset_color": "aqua",
-      "source": "42-aqua.png"
     },
     {
       "semantic_id": "property_service_zone",
@@ -11395,23 +8486,12 @@
     "z__red",
     "u007b__amber",
     "u007b__blue",
-    "u007b__brown",
-    "u007b__green",
-    "u007b__orange",
-    "u007b__red",
-    "pipe__amber",
-    "pipe__blue",
     "pipe__brown",
     "pipe__green",
     "pipe__orange",
     "pipe__red",
-    "u007d__amber",
-    "u007d__blue",
-    "u007d__brown",
-    "u007d__green",
-    "u007d__orange",
-    "u007d__red",
     "tilde__amber",
+    "tilde__aqua_copy",
     "tilde__aqua",
     "tilde__blue",
     "tilde__darkgray",
@@ -11423,6 +8503,7 @@
     "bang__blue",
     "bang__brown",
     "bang__darkgray",
+    "bang__darkgrey",
     "bang__green",
     "bang__orange",
     "bang__pink",
@@ -11431,7 +8512,6 @@
     "quote__amber",
     "quote__aqua",
     "quote__blue",
-    "quote__darkgrey",
     "quote__green",
     "quote__purple",
     "quote__red",
@@ -11480,33 +8560,6 @@
     "apostrophe__orange",
     "apostrophe__pink",
     "apostrophe__red",
-    "lparen__amber",
-    "lparen__aqua",
-    "lparen__blue",
-    "lparen__brown",
-    "lparen__darkgray",
-    "lparen__green",
-    "lparen__orange",
-    "lparen__pink",
-    "lparen__red",
-    "rparen__amber",
-    "rparen__aqua",
-    "rparen__blue",
-    "rparen__brown",
-    "rparen__darkgray",
-    "rparen__green",
-    "rparen__orange",
-    "rparen__pink",
-    "rparen__red",
-    "star__amber",
-    "star__aqua",
-    "star__blue",
-    "star__brown",
-    "star__darkgray",
-    "star__green",
-    "star__orange",
-    "star__pink",
-    "star__red",
     "plus__amber",
     "plus__aqua",
     "plus__blue",
@@ -11987,13 +9040,6 @@
     "u005c__red",
     "rbracket__amber",
     "rbracket__aqua",
-    "rbracket__blue",
-    "rbracket__brown",
-    "rbracket__darkgray",
-    "rbracket__green",
-    "rbracket__orange",
-    "rbracket__pink",
-    "rbracket__red",
     "caret__amber",
     "caret__aqua",
     "caret__blue",
@@ -12005,16 +9051,6 @@
     "caret__pink",
     "caret__purple",
     "caret__red",
-    "underscore__amber",
-    "underscore__aqua",
-    "underscore__blue",
-    "underscore__brown",
-    "underscore__darkgray",
-    "underscore__green",
-    "underscore__orange",
-    "underscore__pink",
-    "underscore__red",
-    "a__amber",
     "a__aqua",
     "a__blue",
     "a__brown",
@@ -12044,102 +9080,7 @@
     "c__pink",
     "c__purple",
     "c__red",
-    "a__red_02",
-    "b__red_02",
-    "c__amber_02",
-    "c__aqua_02",
-    "c__blue_02",
-    "c__darkgray_02",
-    "c__green_02",
-    "c__purple_02",
-    "c__red_02",
-    "caret__amber_02",
-    "caret__aqua_02",
-    "caret__blue_02",
-    "caret__darkgrey_02",
-    "caret__green_02",
-    "caret__purple_02",
-    "caret__red_02",
-    "d__amber_02",
-    "d__aqua_02",
-    "d__blue_02",
-    "d__darkgray_02",
-    "d__green_02",
-    "d__purple_02",
-    "d__red_02",
-    "downstairs-amber",
-    "downstairs-aqua",
-    "downstairs-blue",
-    "downstairs-darkgrey",
-    "downstairs-green",
-    "downstairs-purple",
-    "downstairs-red",
-    "e__amber_02",
-    "e__aqua_02",
-    "e__blue_02",
-    "e__darkgray_02",
-    "e__green_02",
-    "e__purple_02",
-    "e__red_02",
-    "equal-amber",
-    "equal-aqua",
-    "equal-blue",
-    "equal-darkgrey",
-    "equal-green",
-    "equal-purple",
-    "equal-red",
-    "f__amber_02",
-    "f__aqua_02",
-    "f__blue_02",
-    "f__darkgray_02",
-    "f__green_02",
-    "f__purple_02",
-    "f__red_02",
-    "grass-aqua",
-    "key-amber",
     "key-aqua",
-    "key-blue",
-    "key-darkgrey",
-    "key-green",
-    "key-purple",
-    "key-red",
-    "male-amber",
-    "male-aqua",
-    "male-blue",
-    "male-darkgrey",
-    "male-green",
-    "male-purple",
-    "male-red",
-    "player-green",
-    "sprig-amber",
-    "sprig-aqua",
-    "sprig-blue",
-    "sprig-purple",
-    "sprig-red",
-    "tool-aqua",
-    "tool-blue",
-    "tool-darkgrey",
-    "tool-green",
-    "tool-purple",
-    "tool-red",
-    "tuft-amber",
-    "tuft-blue",
-    "tuft-darkgrey",
-    "tuft-green",
-    "tuft-purple",
-    "tuft-red",
-    "upstairs-amber",
-    "upstairs-aqua",
-    "upstairs-blue",
-    "upstairs-darkgrey",
-    "upstairs-green",
-    "upstairs-purple",
-    "upstairs-red",
-    "water-amber",
-    "water-blue",
-    "water-darkgrey",
-    "water-green",
-    "water-purple",
-    "water-red"
+    "rodent-purple"
   ]
 }

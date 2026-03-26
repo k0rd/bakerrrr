@@ -160,6 +160,20 @@ LARGE_STAFF_ARCHETYPES = {
     "cold_storage",
     "brokerage",
 }
+VERTICAL_WORK_ARCHETYPES = {
+    "bank",
+    "brokerage",
+    "co_working_hub",
+    "courthouse",
+    "data_center",
+    "field_hospital",
+    "hotel",
+    "lab",
+    "metro_exchange",
+    "office",
+    "server_hub",
+    "tower",
+}
 ROUND_CLOCK_ARCHETYPES = {
     "checkpoint",
     "armory",
@@ -441,6 +455,22 @@ def _property_entry(prop):
 def _property_footprint(prop):
     footprint = _property_metadata(prop).get("footprint")
     return footprint if isinstance(footprint, dict) else {}
+
+
+def _property_level_bounds(prop):
+    metadata = _property_metadata(prop)
+    try:
+        base_z = int(prop.get("z", 0))
+        floors = max(1, int(metadata.get("floors", 1)))
+        basement_levels = max(0, int(metadata.get("basement_levels", 0)))
+    except (TypeError, ValueError):
+        return 0, 0
+    return base_z - basement_levels, base_z + floors - 1
+
+
+def _property_total_levels(prop):
+    low_z, high_z = _property_level_bounds(prop)
+    return max(1, (int(high_z) - int(low_z)) + 1)
 
 
 def _hour_in_window(hour, start_hour, end_hour):
@@ -767,18 +797,19 @@ def _walkable_inside_tiles(sim, prop):
         right = int(footprint.get("right"))
         top = int(footprint.get("top"))
         bottom = int(footprint.get("bottom"))
-        z = int(prop.get("z", 0))
     except (TypeError, ValueError):
         return []
+    low_z, high_z = _property_level_bounds(prop)
 
     tiles = []
-    for y in range(top, bottom + 1):
-        for x in range(left, right + 1):
-            if not sim.tilemap.is_walkable(x, y, z):
-                continue
-            if not _inside_property(sim, prop, x, y, z):
-                continue
-            tiles.append((x, y, z))
+    for z in range(int(low_z), int(high_z) + 1):
+        for y in range(top, bottom + 1):
+            for x in range(left, right + 1):
+                if not sim.tilemap.is_walkable(x, y, z):
+                    continue
+                if not _inside_property(sim, prop, x, y, z):
+                    continue
+                tiles.append((x, y, z))
     return tiles
 
 
@@ -1014,6 +1045,8 @@ def _wildlife_tile_candidates(sim, chunk, property_records, profile, outdoor_til
 def _loot_spawn_profile(prop, rng):
     kind = str(prop.get("kind", "")).strip().lower()
     archetype = _property_archetype(prop)
+    total_levels = _property_total_levels(prop)
+    metadata = _property_metadata(prop)
     if kind == "vehicle":
         return 0.0, 0
     if kind in {"fixture", "asset"}:
@@ -1033,6 +1066,12 @@ def _loot_spawn_profile(prop, rng):
         count += 1
     elif rng.random() < 0.2:
         count += 1
+    if total_levels > 1:
+        chance += 0.05
+        if rng.random() < 0.34:
+            count += 1
+    if int(metadata.get("basement_levels", 0) or 0) > 0:
+        chance += 0.03
     return chance, count
 
 
@@ -1120,6 +1159,8 @@ def _spawn_zone_for_actor(role, prop, at_work):
         return "interior"
     if role == "guard" or archetype in SECURITY_ARCHETYPES:
         return "perimeter"
+    if _property_total_levels(prop) > 1 and (archetype in LARGE_STAFF_ARCHETYPES or archetype in VERTICAL_WORK_ARCHETYPES):
+        return "interior"
     if archetype in STOREFRONT_ARCHETYPES or archetype in TRANSIT_ARCHETYPES or property_is_public(prop):
         return "frontage"
     return "interior"
@@ -1945,6 +1986,10 @@ def spawn_chunk_npcs(sim, chunk, property_records, reserved_property_ids=None):
         tile = _pick_tile(sim, _tile_candidates_for_property(sim, spawn_prop, spawn_zone), rng, allow_entities=False)
         if not tile:
             continue
+        if home_prop and spawn_prop is home_prop:
+            home_anchor = tile
+        if workplace_prop and at_work and spawn_prop is workplace_prop:
+            work_anchor = tile
 
         eid = _spawn_human(
             sim,
@@ -2037,6 +2082,10 @@ def spawn_chunk_npcs(sim, chunk, property_records, reserved_property_ids=None):
         tile = _pick_tile(sim, _tile_candidates_for_property(sim, spawn_prop, spawn_zone), rng, allow_entities=False)
         if not tile:
             continue
+        if home_prop and spawn_prop is home_prop:
+            home_anchor = tile
+        if workplace_prop and at_work and spawn_prop is workplace_prop:
+            work_anchor = tile
 
         eid = _spawn_human(
             sim,
