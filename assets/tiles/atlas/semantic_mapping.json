@@ -540,13 +540,13 @@
   },
   "stats": {
     "required_count": 82,
-    "available_count": 829,
+    "available_count": 732,
     "assigned_count": 82,
     "unassigned_count": 0,
-    "metadata_matched_count": 32,
+    "metadata_matched_count": 31,
     "glyph_fallback_matched_count": 42,
-    "metadata_unmatched_count": 465,
-    "metadata_duplicate_match_count": 330
+    "metadata_unmatched_count": 376,
+    "metadata_duplicate_match_count": 323
   },
   "assignments": {
     "cat_black": "F__aqua",
@@ -598,7 +598,7 @@
     "npc_guard": "d__red",
     "npc_insect": "d__green",
     "npc_scout": "H__aqua",
-    "projectile": "d__brown",
+    "projectile": "d__darkgray",
     "prop_asset": "A__darkgray",
     "prop_building_generic": "B__darkgray",
     "prop_civic": "O__darkgray",
@@ -612,7 +612,7 @@
     "prop_secure": "G__red",
     "prop_vehicle_service": "V__darkgray",
     "property_service_zone": "S__aqua",
-    "stair_down": "lt__aqua",
+    "stair_down": "d__orange",
     "stair_up": "gt__aqua",
     "terrain_block": "hash__aqua",
     "terrain_brush": "comma__aqua",
@@ -621,11 +621,11 @@
     "terrain_trail": "colon__darkgray",
     "terrain_water": "tilde__aqua",
     "transit_stair_landing": "colon__aqua",
-    "ui_cursor": "d__darkgray",
-    "ui_look_cursor": "d__orange",
-    "ui_objective_marker": "d__pink",
-    "ui_overworld_marker": "d__purple",
-    "ui_overworld_marker_nearest": "e__amber",
+    "ui_cursor": "d__pink",
+    "ui_look_cursor": "d__purple",
+    "ui_objective_marker": "e__amber",
+    "ui_overworld_marker": "e__aqua",
+    "ui_overworld_marker_nearest": "e__blue",
     "vehicle_new": "amp__red",
     "vehicle_parked": "amp__darkgray",
     "vehicle_player": "amp__aqua",
@@ -650,15 +650,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "d__brown",
-      "source": "100-brown.png",
-      "glyph": "d",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -746,15 +737,6 @@
       ]
     },
     {
-      "id": "e__brown",
-      "source": "101-brown.png",
-      "glyph": "e",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "e__darkgray",
       "source": "101-darkgray.png",
       "glyph": "e",
@@ -836,15 +818,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "f__brown",
-      "source": "102-brown.png",
-      "glyph": "f",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -932,15 +905,6 @@
       ]
     },
     {
-      "id": "g__brown",
-      "source": "103-brown.png",
-      "glyph": "g",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "g__darkgray",
       "source": "103-darkgray.png",
       "glyph": "g",
@@ -1022,15 +986,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "h__brown",
-      "source": "104-brown.png",
-      "glyph": "h",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -1118,15 +1073,6 @@
       ]
     },
     {
-      "id": "i__brown",
-      "source": "105-brown.png",
-      "glyph": "i",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "i__darkgray",
       "source": "105-darkgray.png",
       "glyph": "i",
@@ -1208,15 +1154,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "j__brown",
-      "source": "106-brown.png",
-      "glyph": "j",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -1304,15 +1241,6 @@
       ]
     },
     {
-      "id": "k__brown",
-      "source": "107-brown.png",
-      "glyph": "k",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "k__darkgray",
       "source": "107-darkgray.png",
       "glyph": "k",
@@ -1394,15 +1322,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "l__brown",
-      "source": "108-brown.png",
-      "glyph": "l",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -1490,15 +1409,6 @@
       ]
     },
     {
-      "id": "m__brown",
-      "source": "109-brown.png",
-      "glyph": "m",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "m__darkgray",
       "source": "109-darkgray.png",
       "glyph": "m",
@@ -1580,15 +1490,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "n__brown",
-      "source": "110-brown.png",
-      "glyph": "n",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -1676,15 +1577,6 @@
       ]
     },
     {
-      "id": "o__brown",
-      "source": "111-brown.png",
-      "glyph": "o",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "o__darkgray",
       "source": "111-darkgray.png",
       "glyph": "o",
@@ -1766,15 +1658,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "p__brown",
-      "source": "112-brown.png",
-      "glyph": "p",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -1862,15 +1745,6 @@
       ]
     },
     {
-      "id": "q__brown",
-      "source": "113-brown.png",
-      "glyph": "q",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "q__darkgray",
       "source": "113-darkgray.png",
       "glyph": "q",
@@ -1952,15 +1826,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "r__brown",
-      "source": "114-brown.png",
-      "glyph": "r",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -2048,15 +1913,6 @@
       ]
     },
     {
-      "id": "s__brown",
-      "source": "115-brown.png",
-      "glyph": "s",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "s__darkgray",
       "source": "115-darkgray.png",
       "glyph": "s",
@@ -2138,15 +1994,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "t__brown",
-      "source": "116-brown.png",
-      "glyph": "t",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -2234,15 +2081,6 @@
       ]
     },
     {
-      "id": "u__brown",
-      "source": "117-brown.png",
-      "glyph": "u",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "u__darkgray",
       "source": "117-darkgray.png",
       "glyph": "u",
@@ -2324,15 +2162,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "v__brown",
-      "source": "118-brown.png",
-      "glyph": "v",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -2420,15 +2249,6 @@
       ]
     },
     {
-      "id": "w__brown",
-      "source": "119-brown.png",
-      "glyph": "w",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "w__darkgray",
       "source": "119-darkgray.png",
       "glyph": "w",
@@ -2510,15 +2330,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "x__brown",
-      "source": "120-brown.png",
-      "glyph": "x",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -2606,15 +2417,6 @@
       ]
     },
     {
-      "id": "y__brown",
-      "source": "121-brown.png",
-      "glyph": "y",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "y__darkgray",
       "source": "121-darkgray.png",
       "glyph": "y",
@@ -2696,15 +2498,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "z__brown",
-      "source": "122-brown.png",
-      "glyph": "z",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -2792,15 +2585,6 @@
       ]
     },
     {
-      "id": "pipe__brown",
-      "source": "124-brown.png",
-      "glyph": "|",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "pipe__orange",
       "source": "124-orange.png",
       "glyph": "|",
@@ -2869,15 +2653,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "bang__brown",
-      "source": "33-brown.png",
-      "glyph": "!",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -3015,15 +2790,6 @@
       ]
     },
     {
-      "id": "dollar__brown",
-      "source": "36-brown.png",
-      "glyph": "$",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "dollar__orange",
       "source": "36-orange.png",
       "glyph": "$",
@@ -3079,15 +2845,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "percent__brown",
-      "source": "37-brown.png",
-      "glyph": "%",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -3175,15 +2932,6 @@
       ]
     },
     {
-      "id": "amp__brown",
-      "source": "38-brown.png",
-      "glyph": "&",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "amp__orange",
       "source": "38-orange.png",
       "glyph": "&",
@@ -3218,15 +2966,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "apostrophe__brown",
-      "source": "39-brown.png",
-      "glyph": "'",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -3332,15 +3071,6 @@
       ]
     },
     {
-      "id": "comma__brown",
-      "source": "44-brown.png",
-      "glyph": ",",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "comma__darkgray",
       "source": "44-darkgray.png",
       "glyph": ",",
@@ -3401,15 +3131,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "dash__brown",
-      "source": "45-brown.png",
-      "glyph": "-",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -3476,15 +3197,6 @@
       ]
     },
     {
-      "id": "dot__brown",
-      "source": "46-brown.png",
-      "glyph": ".",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "dot__darkgray",
       "source": "46-darkgray.png",
       "glyph": ".",
@@ -3548,15 +3260,6 @@
       ]
     },
     {
-      "id": "slash__brown",
-      "source": "47-brown.png",
-      "glyph": "/",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "slash__orange",
       "source": "47-orange.png",
       "glyph": "/",
@@ -3591,15 +3294,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "0__brown",
-      "source": "48-brown.png",
-      "glyph": "0",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -3687,15 +3381,6 @@
       ]
     },
     {
-      "id": "1__brown",
-      "source": "49-brown.png",
-      "glyph": "1",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "1__darkgray",
       "source": "49-darkgray.png",
       "glyph": "1",
@@ -3777,15 +3462,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "2__brown",
-      "source": "50-brown.png",
-      "glyph": "2",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -3873,15 +3549,6 @@
       ]
     },
     {
-      "id": "3__brown",
-      "source": "51-brown.png",
-      "glyph": "3",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "3__darkgray",
       "source": "51-darkgray.png",
       "glyph": "3",
@@ -3963,15 +3630,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "4__brown",
-      "source": "52-brown.png",
-      "glyph": "4",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -4098,15 +3756,6 @@
       ]
     },
     {
-      "id": "6__brown",
-      "source": "54-brown.png",
-      "glyph": "6",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "6__darkgray",
       "source": "54-darkgray.png",
       "glyph": "6",
@@ -4188,15 +3837,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "7__brown",
-      "source": "55-brown.png",
-      "glyph": "7",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -4284,15 +3924,6 @@
       ]
     },
     {
-      "id": "8__brown",
-      "source": "56-brown.png",
-      "glyph": "8",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "8__darkgray",
       "source": "56-darkgray.png",
       "glyph": "8",
@@ -4374,15 +4005,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "9__brown",
-      "source": "57-brown.png",
-      "glyph": "9",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -4470,193 +4092,12 @@
       ]
     },
     {
-      "id": "colon__brown",
-      "source": "58-brown.png",
-      "glyph": ":",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "colon__orange",
-      "source": "58-orange.png",
-      "glyph": ":",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
       "id": "colon__pastel_purple",
       "source": "58-pastel_purple.png",
       "glyph": ":",
       "color": "pastel_purple",
       "candidate_colors": [
         "pastel_purple"
-      ]
-    },
-    {
-      "id": "colon__pink",
-      "source": "58-pink.png",
-      "glyph": ":",
-      "color": "pink",
-      "candidate_colors": [
-        "pink",
-        "human",
-        "item_medical",
-        "building_roof_entertainment",
-        "cat_calico",
-        "cat_white"
-      ],
-      "candidate_semantic_ids": [
-        "npc_civilian",
-        "cat_calico",
-        "cat_white"
-      ]
-    },
-    {
-      "id": "semicolon__amber",
-      "source": "59-amber.png",
-      "glyph": ";",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "semicolon__brown",
-      "source": "59-brown.png",
-      "glyph": ";",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "semicolon__darkgray",
-      "source": "59-darkgray.png",
-      "glyph": ";",
-      "color": "darkgray",
-      "candidate_colors": [
-        "darkgray",
-        "building_edge",
-        "building_fill",
-        "terrain_block",
-        "terrain_rock",
-        "terrain_salt",
-        "terrain_trail",
-        "feature_door",
-        "feature_breach",
-        "property_building",
-        "property_fixture",
-        "property_asset",
-        "property_service",
-        "building_roof_residential",
-        "building_roof_civic",
-        "building_roof_industrial",
-        "building_roof_storefront",
-        "vehicle_parked"
-      ]
-    },
-    {
-      "id": "semicolon__orange",
-      "source": "59-orange.png",
-      "glyph": ";",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
-      "id": "semicolon__pink",
-      "source": "59-pink.png",
-      "glyph": ";",
-      "color": "pink",
-      "candidate_colors": [
-        "pink",
-        "human",
-        "item_medical",
-        "building_roof_entertainment",
-        "cat_calico",
-        "cat_white"
-      ],
-      "candidate_semantic_ids": [
-        "npc_civilian",
-        "cat_calico",
-        "cat_white"
-      ]
-    },
-    {
-      "id": "lt__amber",
-      "source": "60-amber.png",
-      "glyph": "<",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "lt__brown",
-      "source": "60-brown.png",
-      "glyph": "<",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "lt__darkgray",
-      "source": "60-darkgray.png",
-      "glyph": "<",
-      "color": "darkgray",
-      "candidate_colors": [
-        "darkgray",
-        "building_edge",
-        "building_fill",
-        "terrain_block",
-        "terrain_rock",
-        "terrain_salt",
-        "terrain_trail",
-        "feature_door",
-        "feature_breach",
-        "property_building",
-        "property_fixture",
-        "property_asset",
-        "property_service",
-        "building_roof_residential",
-        "building_roof_civic",
-        "building_roof_industrial",
-        "building_roof_storefront",
-        "vehicle_parked"
-      ]
-    },
-    {
-      "id": "lt__orange",
-      "source": "60-orange.png",
-      "glyph": "<",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
-      "id": "lt__pink",
-      "source": "60-pink.png",
-      "glyph": "<",
-      "color": "pink",
-      "candidate_colors": [
-        "pink",
-        "human",
-        "item_medical",
-        "building_roof_entertainment",
-        "cat_calico",
-        "cat_white"
-      ],
-      "candidate_semantic_ids": [
-        "npc_civilian",
-        "cat_calico",
-        "cat_white"
       ]
     },
     {
@@ -4705,15 +4146,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "gt__brown",
-      "source": "62-brown.png",
-      "glyph": ">",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -4777,15 +4209,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "question__brown",
-      "source": "63-brown.png",
-      "glyph": "?",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -4870,15 +4293,6 @@
       ]
     },
     {
-      "id": "A__brown",
-      "source": "65-brown.png",
-      "glyph": "A",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "A__orange",
       "source": "65-orange.png",
       "glyph": "A",
@@ -4937,15 +4351,6 @@
       ]
     },
     {
-      "id": "B__brown",
-      "source": "66-brown.png",
-      "glyph": "B",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "B__orange",
       "source": "66-orange.png",
       "glyph": "B",
@@ -5001,15 +4406,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "C__brown",
-      "source": "67-brown.png",
-      "glyph": "C",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -5097,15 +4493,6 @@
       ]
     },
     {
-      "id": "D__brown",
-      "source": "68-brown.png",
-      "glyph": "D",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "D__darkgray",
       "source": "68-darkgray.png",
       "glyph": "D",
@@ -5187,15 +4574,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "E__brown",
-      "source": "69-brown.png",
-      "glyph": "E",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -5283,15 +4661,6 @@
       ]
     },
     {
-      "id": "F__brown",
-      "source": "70-brown.png",
-      "glyph": "F",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "F__orange",
       "source": "70-orange.png",
       "glyph": "F",
@@ -5347,15 +4716,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "G__brown",
-      "source": "71-brown.png",
-      "glyph": "G",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -5443,15 +4803,6 @@
       ]
     },
     {
-      "id": "H__brown",
-      "source": "72-brown.png",
-      "glyph": "H",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "H__orange",
       "source": "72-orange.png",
       "glyph": "H",
@@ -5507,15 +4858,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "I__brown",
-      "source": "73-brown.png",
-      "glyph": "I",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -5603,15 +4945,6 @@
       ]
     },
     {
-      "id": "J__brown",
-      "source": "74-brown.png",
-      "glyph": "J",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "J__darkgray",
       "source": "74-darkgray.png",
       "glyph": "J",
@@ -5693,15 +5026,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "K__brown",
-      "source": "75-brown.png",
-      "glyph": "K",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -5789,15 +5113,6 @@
       ]
     },
     {
-      "id": "L__brown",
-      "source": "76-brown.png",
-      "glyph": "L",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "L__darkgray",
       "source": "76-darkgray.png",
       "glyph": "L",
@@ -5882,15 +5197,6 @@
       ]
     },
     {
-      "id": "M__brown",
-      "source": "77-brown.png",
-      "glyph": "M",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "M__darkgray",
       "source": "77-darkgray.png",
       "glyph": "M",
@@ -5953,15 +5259,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "N__brown",
-      "source": "78-brown.png",
-      "glyph": "N",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -6030,15 +5327,6 @@
       ]
     },
     {
-      "id": "O__brown",
-      "source": "79-brown.png",
-      "glyph": "O",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "O__orange",
       "source": "79-orange.png",
       "glyph": "O",
@@ -6094,15 +5382,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "P__brown",
-      "source": "80-brown.png",
-      "glyph": "P",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -6190,15 +5469,6 @@
       ]
     },
     {
-      "id": "Q__brown",
-      "source": "81-brown.png",
-      "glyph": "Q",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "Q__darkgray",
       "source": "81-darkgray.png",
       "glyph": "Q",
@@ -6283,15 +5553,6 @@
       ]
     },
     {
-      "id": "R__brown",
-      "source": "82-brown.png",
-      "glyph": "R",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "R__orange",
       "source": "82-orange.png",
       "glyph": "R",
@@ -6347,15 +5608,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "S__brown",
-      "source": "83-brown.png",
-      "glyph": "S",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -6443,15 +5695,6 @@
       ]
     },
     {
-      "id": "T__brown",
-      "source": "84-brown.png",
-      "glyph": "T",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "T__orange",
       "source": "84-orange.png",
       "glyph": "T",
@@ -6507,15 +5750,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "U__brown",
-      "source": "85-brown.png",
-      "glyph": "U",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -6603,15 +5837,6 @@
       ]
     },
     {
-      "id": "V__brown",
-      "source": "86-brown.png",
-      "glyph": "V",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "V__orange",
       "source": "86-orange.png",
       "glyph": "V",
@@ -6667,15 +5892,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "W__brown",
-      "source": "87-brown.png",
-      "glyph": "W",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -6763,15 +5979,6 @@
       ]
     },
     {
-      "id": "X__brown",
-      "source": "88-brown.png",
-      "glyph": "X",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "X__darkgray",
       "source": "88-darkgray.png",
       "glyph": "X",
@@ -6853,15 +6060,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "Y__brown",
-      "source": "89-brown.png",
-      "glyph": "Y",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -6949,15 +6147,6 @@
       ]
     },
     {
-      "id": "Z__brown",
-      "source": "90-brown.png",
-      "glyph": "Z",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "Z__darkgray",
       "source": "90-darkgray.png",
       "glyph": "Z",
@@ -7042,15 +6231,6 @@
       ]
     },
     {
-      "id": "lbracket__brown",
-      "source": "91-brown.png",
-      "glyph": "[",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "lbracket__darkgray",
       "source": "91-darkgray.png",
       "glyph": "[",
@@ -7111,15 +6291,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "u005c__brown",
-      "source": "92-brown.png",
-      "glyph": "\\",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -7195,15 +6366,6 @@
       ]
     },
     {
-      "id": "caret__brown",
-      "source": "94-brown.png",
-      "glyph": "^",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "caret__darkgrey",
       "source": "94-darkgrey.png",
       "glyph": "^",
@@ -7259,15 +6421,6 @@
         "npc_scout",
         "cat_generic",
         "cat_purple"
-      ]
-    },
-    {
-      "id": "a__brown",
-      "source": "97-brown.png",
-      "glyph": "a",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -7355,15 +6508,6 @@
       ]
     },
     {
-      "id": "b__brown",
-      "source": "98-brown.png",
-      "glyph": "b",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "b__darkgray",
       "source": "98-darkgray.png",
       "glyph": "b",
@@ -7445,15 +6589,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "c__brown",
-      "source": "99-brown.png",
-      "glyph": "c",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -7576,7 +6711,6 @@
       "7__aqua",
       "8__aqua",
       "9__aqua",
-      "semicolon__aqua",
       "equals__aqua",
       "question__aqua",
       "at__aqua",
@@ -7661,8 +6795,6 @@
       "8__blue",
       "9__blue",
       "colon__blue",
-      "semicolon__blue",
-      "lt__blue",
       "equals__blue",
       "gt__blue",
       "question__blue",
@@ -7748,8 +6880,6 @@
       "8__green",
       "9__green",
       "colon__green",
-      "semicolon__green",
-      "lt__green",
       "equals__green",
       "gt__green",
       "question__green",
@@ -7833,8 +6963,6 @@
       "8__red",
       "9__red",
       "colon__red",
-      "semicolon__red",
-      "lt__red",
       "equals__red",
       "gt__red",
       "question__red",
@@ -8257,7 +7385,6 @@
     "d__amber",
     "d__aqua",
     "d__blue",
-    "d__brown",
     "d__darkgray",
     "d__green",
     "d__orange",
@@ -8267,7 +7394,6 @@
     "e__amber",
     "e__aqua",
     "e__blue",
-    "e__brown",
     "e__darkgray",
     "e__green",
     "e__orange",
@@ -8277,7 +7403,6 @@
     "f__amber",
     "f__aqua",
     "f__blue",
-    "f__brown",
     "f__darkgray",
     "f__green",
     "f__orange",
@@ -8287,7 +7412,6 @@
     "g__amber",
     "g__aqua",
     "g__blue",
-    "g__brown",
     "g__darkgray",
     "g__green",
     "g__orange",
@@ -8297,7 +7421,6 @@
     "h__amber",
     "h__aqua",
     "h__blue",
-    "h__brown",
     "h__darkgray",
     "h__green",
     "h__orange",
@@ -8307,7 +7430,6 @@
     "i__amber",
     "i__aqua",
     "i__blue",
-    "i__brown",
     "i__darkgray",
     "i__green",
     "i__orange",
@@ -8317,7 +7439,6 @@
     "j__amber",
     "j__aqua",
     "j__blue",
-    "j__brown",
     "j__darkgray",
     "j__green",
     "j__orange",
@@ -8327,7 +7448,6 @@
     "k__amber",
     "k__aqua",
     "k__blue",
-    "k__brown",
     "k__darkgray",
     "k__green",
     "k__orange",
@@ -8337,7 +7457,6 @@
     "l__amber",
     "l__aqua",
     "l__blue",
-    "l__brown",
     "l__darkgray",
     "l__green",
     "l__orange",
@@ -8347,7 +7466,6 @@
     "m__amber",
     "m__aqua",
     "m__blue",
-    "m__brown",
     "m__darkgray",
     "m__green",
     "m__orange",
@@ -8357,7 +7475,6 @@
     "n__amber",
     "n__aqua",
     "n__blue",
-    "n__brown",
     "n__darkgray",
     "n__green",
     "n__orange",
@@ -8367,7 +7484,6 @@
     "o__amber",
     "o__aqua",
     "o__blue",
-    "o__brown",
     "o__darkgray",
     "o__green",
     "o__orange",
@@ -8377,7 +7493,6 @@
     "p__amber",
     "p__aqua",
     "p__blue",
-    "p__brown",
     "p__darkgray",
     "p__green",
     "p__orange",
@@ -8387,7 +7502,6 @@
     "q__amber",
     "q__aqua",
     "q__blue",
-    "q__brown",
     "q__darkgray",
     "q__green",
     "q__orange",
@@ -8397,7 +7511,6 @@
     "r__amber",
     "r__aqua",
     "r__blue",
-    "r__brown",
     "r__darkgray",
     "r__green",
     "r__orange",
@@ -8407,7 +7520,6 @@
     "s__amber",
     "s__aqua",
     "s__blue",
-    "s__brown",
     "s__darkgray",
     "s__green",
     "s__orange",
@@ -8417,7 +7529,6 @@
     "t__amber",
     "t__aqua",
     "t__blue",
-    "t__brown",
     "t__darkgray",
     "t__green",
     "t__orange",
@@ -8427,7 +7538,6 @@
     "u__amber",
     "u__aqua",
     "u__blue",
-    "u__brown",
     "u__darkgray",
     "u__green",
     "u__orange",
@@ -8437,7 +7547,6 @@
     "v__amber",
     "v__aqua",
     "v__blue",
-    "v__brown",
     "v__darkgray",
     "v__green",
     "v__orange",
@@ -8447,7 +7556,6 @@
     "w__amber",
     "w__aqua",
     "w__blue",
-    "w__brown",
     "w__darkgray",
     "w__green",
     "w__orange",
@@ -8457,7 +7565,6 @@
     "x__amber",
     "x__aqua",
     "x__blue",
-    "x__brown",
     "x__darkgray",
     "x__green",
     "x__orange",
@@ -8467,7 +7574,6 @@
     "y__amber",
     "y__aqua",
     "y__blue",
-    "y__brown",
     "y__darkgray",
     "y__green",
     "y__orange",
@@ -8477,7 +7583,6 @@
     "z__amber",
     "z__aqua",
     "z__blue",
-    "z__brown",
     "z__darkgray",
     "z__green",
     "z__orange",
@@ -8486,7 +7591,6 @@
     "z__red",
     "u007b__amber",
     "u007b__blue",
-    "pipe__brown",
     "pipe__green",
     "pipe__orange",
     "pipe__red",
@@ -8501,7 +7605,6 @@
     "bang__amber",
     "bang__aqua",
     "bang__blue",
-    "bang__brown",
     "bang__darkgray",
     "bang__darkgrey",
     "bang__green",
@@ -8525,7 +7628,6 @@
     "dollar__amber",
     "dollar__aqua",
     "dollar__blue",
-    "dollar__brown",
     "dollar__darkgray",
     "dollar__green",
     "dollar__orange",
@@ -8535,7 +7637,6 @@
     "percent__amber",
     "percent__aqua",
     "percent__blue",
-    "percent__brown",
     "percent__darkgray",
     "percent__green",
     "percent__orange",
@@ -8545,7 +7646,6 @@
     "amp__amber",
     "amp__aqua",
     "amp__blue",
-    "amp__brown",
     "amp__darkgray",
     "amp__green",
     "amp__orange",
@@ -8554,7 +7654,6 @@
     "apostrophe__amber",
     "apostrophe__aqua",
     "apostrophe__blue",
-    "apostrophe__brown",
     "apostrophe__darkgray",
     "apostrophe__green",
     "apostrophe__orange",
@@ -8570,7 +7669,6 @@
     "comma__amber",
     "comma__aqua",
     "comma__blue",
-    "comma__brown",
     "comma__darkgray",
     "comma__green",
     "comma__orange",
@@ -8579,7 +7677,6 @@
     "dash__amber",
     "dash__aqua",
     "dash__blue",
-    "dash__brown",
     "dash__darkgray",
     "dash__green",
     "dash__orange",
@@ -8588,7 +7685,6 @@
     "dot__amber",
     "dot__aqua",
     "dot__blue",
-    "dot__brown",
     "dot__darkgray",
     "dot__green",
     "dot__orange",
@@ -8597,7 +7693,6 @@
     "slash__amber",
     "slash__aqua",
     "slash__blue",
-    "slash__brown",
     "slash__darkgray",
     "slash__green",
     "slash__orange",
@@ -8606,7 +7701,6 @@
     "0__amber",
     "0__aqua",
     "0__blue",
-    "0__brown",
     "0__darkgray",
     "0__green",
     "0__orange",
@@ -8616,7 +7710,6 @@
     "1__amber",
     "1__aqua",
     "1__blue",
-    "1__brown",
     "1__darkgray",
     "1__green",
     "1__orange",
@@ -8626,7 +7719,6 @@
     "2__amber",
     "2__aqua",
     "2__blue",
-    "2__brown",
     "2__darkgray",
     "2__green",
     "2__orange",
@@ -8636,7 +7728,6 @@
     "3__amber",
     "3__aqua",
     "3__blue",
-    "3__brown",
     "3__darkgray",
     "3__green",
     "3__orange",
@@ -8646,7 +7737,6 @@
     "4__amber",
     "4__aqua",
     "4__blue",
-    "4__brown",
     "4__darkgray",
     "4__green",
     "4__orange",
@@ -8663,7 +7753,6 @@
     "6__amber",
     "6__aqua",
     "6__blue",
-    "6__brown",
     "6__darkgray",
     "6__green",
     "6__orange",
@@ -8673,7 +7762,6 @@
     "7__amber",
     "7__aqua",
     "7__blue",
-    "7__brown",
     "7__darkgray",
     "7__green",
     "7__orange",
@@ -8683,7 +7771,6 @@
     "8__amber",
     "8__aqua",
     "8__blue",
-    "8__brown",
     "8__darkgray",
     "8__green",
     "8__orange",
@@ -8693,7 +7780,6 @@
     "9__amber",
     "9__aqua",
     "9__blue",
-    "9__brown",
     "9__darkgray",
     "9__green",
     "9__orange",
@@ -8703,31 +7789,10 @@
     "colon__amber",
     "colon__aqua",
     "colon__blue",
-    "colon__brown",
     "colon__darkgray",
     "colon__green",
-    "colon__orange",
     "colon__pastel_purple",
-    "colon__pink",
     "colon__red",
-    "semicolon__amber",
-    "semicolon__aqua",
-    "semicolon__blue",
-    "semicolon__brown",
-    "semicolon__darkgray",
-    "semicolon__green",
-    "semicolon__orange",
-    "semicolon__pink",
-    "semicolon__red",
-    "lt__amber",
-    "lt__aqua",
-    "lt__blue",
-    "lt__brown",
-    "lt__darkgray",
-    "lt__green",
-    "lt__orange",
-    "lt__pink",
-    "lt__red",
     "equals__amber",
     "equals__aqua",
     "equals__blue",
@@ -8738,7 +7803,6 @@
     "gt__amber",
     "gt__aqua",
     "gt__blue",
-    "gt__brown",
     "gt__darkgray",
     "gt__green",
     "gt__orange",
@@ -8747,7 +7811,6 @@
     "question__amber",
     "question__aqua",
     "question__blue",
-    "question__brown",
     "question__darkgray",
     "question__green",
     "question__orange",
@@ -8763,7 +7826,6 @@
     "A__amber",
     "A__aqua",
     "A__blue",
-    "A__brown",
     "A__darkgray",
     "A__green",
     "A__orange",
@@ -8773,7 +7835,6 @@
     "B__amber",
     "B__aqua",
     "B__blue",
-    "B__brown",
     "B__darkgray",
     "B__green",
     "B__orange",
@@ -8783,7 +7844,6 @@
     "C__amber",
     "C__aqua",
     "C__blue",
-    "C__brown",
     "C__darkgray",
     "C__green",
     "C__orange",
@@ -8793,7 +7853,6 @@
     "D__amber",
     "D__aqua",
     "D__blue",
-    "D__brown",
     "D__darkgray",
     "D__green",
     "D__orange",
@@ -8803,7 +7862,6 @@
     "E__amber",
     "E__aqua",
     "E__blue",
-    "E__brown",
     "E__darkgray",
     "E__green",
     "E__orange",
@@ -8813,7 +7871,6 @@
     "F__amber",
     "F__aqua",
     "F__blue",
-    "F__brown",
     "F__darkgray",
     "F__green",
     "F__orange",
@@ -8823,7 +7880,6 @@
     "G__amber",
     "G__aqua",
     "G__blue",
-    "G__brown",
     "G__darkgray",
     "G__green",
     "G__orange",
@@ -8833,7 +7889,6 @@
     "H__amber",
     "H__aqua",
     "H__blue",
-    "H__brown",
     "H__darkgray",
     "H__green",
     "H__orange",
@@ -8843,7 +7898,6 @@
     "I__amber",
     "I__aqua",
     "I__blue",
-    "I__brown",
     "I__darkgray",
     "I__green",
     "I__orange",
@@ -8853,7 +7907,6 @@
     "J__amber",
     "J__aqua",
     "J__blue",
-    "J__brown",
     "J__darkgray",
     "J__green",
     "J__orange",
@@ -8863,7 +7916,6 @@
     "K__amber",
     "K__aqua",
     "K__blue",
-    "K__brown",
     "K__darkgray",
     "K__green",
     "K__orange",
@@ -8873,7 +7925,6 @@
     "L__amber",
     "L__aqua",
     "L__blue",
-    "L__brown",
     "L__darkgray",
     "L__green",
     "L__orange",
@@ -8883,7 +7934,6 @@
     "M__amber",
     "M__aqua",
     "M__blue",
-    "M__brown",
     "M__darkgray",
     "M__green",
     "M__orange",
@@ -8893,7 +7943,6 @@
     "N__amber",
     "N__aqua",
     "N__blue",
-    "N__brown",
     "N__darkgray",
     "N__green",
     "N__orange",
@@ -8903,7 +7952,6 @@
     "O__amber",
     "O__aqua",
     "O__blue",
-    "O__brown",
     "O__darkgray",
     "O__green",
     "O__orange",
@@ -8913,7 +7961,6 @@
     "P__amber",
     "P__aqua",
     "P__blue",
-    "P__brown",
     "P__darkgray",
     "P__green",
     "P__orange",
@@ -8923,7 +7970,6 @@
     "Q__amber",
     "Q__aqua",
     "Q__blue",
-    "Q__brown",
     "Q__darkgray",
     "Q__green",
     "Q__orange",
@@ -8933,7 +7979,6 @@
     "R__amber",
     "R__aqua",
     "R__blue",
-    "R__brown",
     "R__darkgray",
     "R__green",
     "R__orange",
@@ -8943,7 +7988,6 @@
     "S__amber",
     "S__aqua",
     "S__blue",
-    "S__brown",
     "S__darkgray",
     "S__green",
     "S__orange",
@@ -8953,7 +7997,6 @@
     "T__amber",
     "T__aqua",
     "T__blue",
-    "T__brown",
     "T__darkgray",
     "T__green",
     "T__orange",
@@ -8963,7 +8006,6 @@
     "U__amber",
     "U__aqua",
     "U__blue",
-    "U__brown",
     "U__darkgray",
     "U__green",
     "U__orange",
@@ -8973,7 +8015,6 @@
     "V__amber",
     "V__aqua",
     "V__blue",
-    "V__brown",
     "V__darkgray",
     "V__green",
     "V__orange",
@@ -8983,7 +8024,6 @@
     "W__amber",
     "W__aqua",
     "W__blue",
-    "W__brown",
     "W__darkgray",
     "W__green",
     "W__orange",
@@ -8993,7 +8033,6 @@
     "X__amber",
     "X__aqua",
     "X__blue",
-    "X__brown",
     "X__darkgray",
     "X__green",
     "X__orange",
@@ -9003,7 +8042,6 @@
     "Y__amber",
     "Y__aqua",
     "Y__blue",
-    "Y__brown",
     "Y__darkgray",
     "Y__green",
     "Y__orange",
@@ -9013,7 +8051,6 @@
     "Z__amber",
     "Z__aqua",
     "Z__blue",
-    "Z__brown",
     "Z__darkgray",
     "Z__green",
     "Z__orange",
@@ -9023,7 +8060,6 @@
     "lbracket__amber",
     "lbracket__aqua",
     "lbracket__blue",
-    "lbracket__brown",
     "lbracket__darkgray",
     "lbracket__green",
     "lbracket__orange",
@@ -9032,7 +8068,6 @@
     "u005c__amber",
     "u005c__aqua",
     "u005c__blue",
-    "u005c__brown",
     "u005c__darkgray",
     "u005c__green",
     "u005c__orange",
@@ -9043,7 +8078,6 @@
     "caret__amber",
     "caret__aqua",
     "caret__blue",
-    "caret__brown",
     "caret__darkgray",
     "caret__darkgrey",
     "caret__green",
@@ -9053,7 +8087,6 @@
     "caret__red",
     "a__aqua",
     "a__blue",
-    "a__brown",
     "a__darkgray",
     "a__green",
     "a__orange",
@@ -9063,7 +8096,6 @@
     "b__amber",
     "b__aqua",
     "b__blue",
-    "b__brown",
     "b__darkgray",
     "b__green",
     "b__orange",
@@ -9073,7 +8105,6 @@
     "c__amber",
     "c__aqua",
     "c__blue",
-    "c__brown",
     "c__darkgray",
     "c__green",
     "c__orange",

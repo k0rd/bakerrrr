@@ -112,7 +112,7 @@ TOPIC_DEFS = {
         "unlocks": ("access", "entry", "keyholder"),
     },
     "access": {
-        "label": "What gets people through the door?",
+        "label": "How is it secured?",
         "root": False,
         "unlocks": ("entry", "keyholder"),
     },
@@ -187,17 +187,17 @@ TOPIC_DEFS = {
         "unlocks": (),
     },
     "weird": {
-        "label": "Ask something weird.",
+        "label": "Your sister... [creepy] ",
         "root": False,
         "unlocks": (),
     },
     "pry": {
-        "label": "Get a little too personal.",
+        "label": "Whats your interest here, anyway? [hostile]",
         "root": False,
         "unlocks": (),
     },
     "insult": {
-        "label": "Throw a cheap shot.",
+        "label": "Your momma... [hostile]",
         "root": False,
         "unlocks": (),
     },
@@ -232,54 +232,55 @@ TOPIC_DEFS = {
 AREA_STYLE_HINTS = {
     "city": {
         "farewell_tags": (
-            "City keeps moving.",
+            "The city keeps moving.",
             "Nothing stays quiet for long.",
-            "Stay in the current.",
+            "Keep up.",
+            "Later.",
         ),
         "catch_phrases": (
             "This place never really sleeps.",
             "Word moves fast here.",
-            "City keeps no secrets long.",
-            "Streets talk louder than people think.",
+            "The city keeps no secrets long.",
+            "The streets talk louder than people think.",
         ),
     },
     "frontier": {
         "farewell_tags": (
-            "Road runs long out here.",
-            "Weather turns quick out here.",
-            "Keep one eye on the horizon.",
+            "The road runs long out here.",
+            "The weather turns quick out here.",
+            "Always keep one eye on the horizon.",
         ),
         "catch_phrases": (
-            "Road dust remembers.",
+            "Even road dust remembers...",
             "Nothing stays easy for long out here.",
-            "Frontier holds on to things.",
-            "Distance out here is honest.",
+            "The frontier holds on to things.",
+            "The distance out here is honest.",
         ),
     },
     "coastal": {
         "farewell_tags": (
             "Mind the tide.",
-            "Storm shifts quick on the coast.",
-            "Sea has long ears.",
+            "The storm shifts quick on the coast.",
+            "The sea has long ears.",
         ),
         "catch_phrases": (
-            "Docks hear everything.",
-            "Salt air carries talk farther than people think.",
-            "Tide brings more than water.",
-            "Port knows what moves and what stays.",
+            "The docks hear everything.",
+            "The salt air carries talk farther than people think.",
+            "The tide brings more than water.",
+            "The port knows what moves and what stays.",
         ),
     },
     "wilderness": {
         "farewell_tags": (
-            "Quiet carries out here.",
-            "Tree line remembers.",
+            "The quiet carries out here.",
+            "The tree line remembers.",
             "The wild does not forget.",
         ),
         "catch_phrases": (
             "The quiet tells on people.",
             "Nothing in the wild stays hidden forever.",
-            "Trees remember faces.",
-            "Out here everything listens.",
+            "The trees remember faces.",
+            "Out here, you can't help but listen.",
         ),
     },
 }
@@ -288,10 +289,10 @@ AREA_STYLE_HINTS = {
 DISTRICT_STYLE_HINTS = {
     "industrial": {
         "catch_phrases": (
-            "Shift whistle never lies.",
+            "The shift whistle never lies.",
             "Keep your gears straight.",
-            "Floor never forgets.",
-            "Sweat tells the honest story.",
+            "The floor never forgets.",
+            "A person's sweat tells the honest story.",
         ),
         "address_terms": (
             "friend",
@@ -300,8 +301,8 @@ DISTRICT_STYLE_HINTS = {
     },
     "residential": {
         "catch_phrases": (
-            "Block remembers faces.",
-            "Neighbors notice plenty.",
+            "The block remembers faces.",
+            "Our neighbors notice plenty.",
             "Nobody forgets a face on their block.",
         ),
         "address_terms": (
@@ -311,8 +312,8 @@ DISTRICT_STYLE_HINTS = {
     },
     "downtown": {
         "catch_phrases": (
-            "Center never really sleeps.",
-            "Money moves fast downtown.",
+            "The center never really sleeps.",
+            "The money moves fast downtown.",
             "Speed is the price of being central.",
         ),
         "address_terms": (
@@ -324,7 +325,7 @@ DISTRICT_STYLE_HINTS = {
     },
     "slums": {
         "catch_phrases": (
-            "Street's got ears.",
+            "The street's got ears.",
             "It gets real out here.",
             "Keep your pockets close.",
             "Help has a price out here.",
@@ -332,16 +333,16 @@ DISTRICT_STYLE_HINTS = {
         "address_terms": (
             "friend",
             "pal",
-            "my nigga",
+            "my homie",
             "dude"
         ),
     },
     "corporate": {
         "catch_phrases": (
-            "Paper walls talk.",
+            "Paper walls are always talking.",
             "Gotta keep it professional.",
             "That is above somebody's pay grade.",
-            "Numbers cover a lot of ground.",
+            "The numbers cover a lot of ground.",
             "Every room here has a budget.",
         ),
         "address_terms": (
@@ -351,9 +352,9 @@ DISTRICT_STYLE_HINTS = {
     },
     "military": {
         "catch_phrases": (
-            "Chain of command sees plenty.",
+            "The chain of command sees plenty.",
             "Keep it clean.",
-            "Orders cut clean.",
+            "My orders cut clean.",
             "How copy?",
         ),
         "address_terms": (
@@ -364,11 +365,11 @@ DISTRICT_STYLE_HINTS = {
     },
     "entertainment": {
         "catch_phrases": (
-            "Crowd hears everything.",
-            "Show's still running.",
-            "Applause covers a lot.",
-            "Applause is the loudest voice in the room.",
-            "Applause is the toughest critic.",
+            "The crowd hears everything.",
+            "The show's still running.",
+            "The applause covers a lot.",
+            "The applause is the loudest voice in the room.",
+            "The applause is the toughest critic.",
         ),
         "address_terms": (
             "friend",
@@ -407,9 +408,10 @@ ROLE_STYLE_HINTS = {
             "Heads up,",
         ),
         "catch_phrases": (
-            "Zone stays clear.",
+            "The zone stays clear.",
             "Keep it orderly.",
             "Eyes open.",
+            "Head on a swivel!",
         ),
         "address_terms": (
             "citizen",
@@ -424,7 +426,7 @@ ROLE_STYLE_HINTS = {
             "Quick note,",
         ),
         "catch_phrases": (
-            "Quiet carries.",
+            "The quiet carries.",
             "Eyes stay open out here.",
         ),
     },
@@ -434,10 +436,12 @@ ROLE_STYLE_HINTS = {
             "Straight up,",
             "Look,",
             "Real talk,",
+            "Ay, peep this :",
         ),
         "catch_phrases": (
             "Loose talk costs.",
             "Keep it quiet.",
+            "You better not be the one time",
         ),
     },
     "drunk": {
@@ -446,16 +450,20 @@ ROLE_STYLE_HINTS = {
             "Easy,",
             "Look,",
             "Between us,",
+            "*hic*",
         ),
         "catch_phrases": (
-            "Night's got long legs.",
+            "The night's got long legs.",
             "Easy now.",
+            "*hic*",
         ),
     },
     "bartender": {
         "catch_phrases": (
             "I hear plenty at the bar.",
             "People talk when they drink.",
+            "You'd be surprised what I hear at the job.",
+            "Bartenders are the universe's secret keepers.",
         ),
         "address_terms": (
             "friend",
@@ -487,8 +495,8 @@ ROLE_STYLE_HINTS = {
             "Between us,",
         ),
         "catch_phrases": (
-            "Market keeps moving.",
-            "Value finds its level.",
+            "The market keeps moving.",
+            "Value finds its level... without guidance.",
         ),
         "address_terms": (
             "associate",
@@ -510,10 +518,14 @@ REGISTER_STYLE_HINTS = {
             "Look,",
             "Truth is,",
             "Between us,",
+            "Okay..",
         ),
         "address_terms": (
             "friend",
             "neighbor",
+            "hun",
+            "my dear",
+            "youngster",
         ),
     },
     "clipped": {
@@ -549,6 +561,7 @@ REGISTER_STYLE_HINTS = {
         "address_terms": (
             "friend",
             "pal",
+            "bud",
         ),
     },
     "theatrical": {
@@ -695,6 +708,7 @@ DIALOGUE_BANKS = {
         "Talk fast. You are pushing it.",
         "Make it quick.",
         "You have a question, ask it.",
+        "I haven't shot you yet, so go on.",
     ),
     "greet_wary": (
         "Yeah?",
@@ -837,6 +851,7 @@ DIALOGUE_BANKS = {
     "people_none": (
         "No one I would point you at just yet.",
         "Nobody I feel like handing over cold.",
+        "It wouldn't make sense for me to stick my neck out when your name keeps popping up on the wrong side of reports.",
         "Not a clean name worth passing along from me right now.",
     ),
     "chatter_offense": (
@@ -1288,11 +1303,13 @@ DIALOGUE_BANKS = {
         "Not yet. We are not there.",
         "Maybe later, once I trust the shape of you better.",
         "I am not ready to lend my name out yet.",
+        "Listen, once I trust you more, i'll reconsider.... but no.",
     ),
     "vouch_caution_no": (
         "Not with this kind of attention on you.",
         "No. My name is not covering heat I did not make.",
         "Cool things down first. I am not staking my name on you while people are watching.",
+        "Naw, you *way* too hot.",
     ),
     "vouch_offer_caution": (
         "You can use my name, but keep the ask small.",
