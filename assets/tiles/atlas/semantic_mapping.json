@@ -10,7 +10,8 @@
       "transit",
       "terrain_water",
       "vehicle_player",
-      "avian"
+      "avian",
+      "player"
     ],
     "darkgray": [
       "building_edge",
@@ -44,8 +45,7 @@
       "cat_purple",
       "item_restricted",
       "item_tool",
-      "property_service_zone",
-      "player"
+      "property_service_zone"
     ],
     "red": [
       "guard",
@@ -540,13 +540,13 @@
   },
   "stats": {
     "required_count": 82,
-    "available_count": 672,
+    "available_count": 745,
     "assigned_count": 82,
     "unassigned_count": 0,
     "metadata_matched_count": 27,
-    "glyph_fallback_matched_count": 45,
-    "metadata_unmatched_count": 346,
-    "metadata_duplicate_match_count": 297
+    "glyph_fallback_matched_count": 46,
+    "metadata_unmatched_count": 420,
+    "metadata_duplicate_match_count": 296
   },
   "assignments": {
     "cat_black": "F__aqua",
@@ -559,8 +559,8 @@
     "cat_tuxedo": "F__aqua",
     "cat_white": "F__aqua",
     "elevator": "E__aqua",
-    "entity_player": "at__purple",
-    "feature_breach": "u0000__blank",
+    "entity_player": "at__aqua",
+    "feature_breach": "slash__brown",
     "feature_door": "plus__aqua",
     "feature_window": "quote__aqua",
     "floor_building_fill": "equals__aqua",
@@ -589,16 +589,16 @@
     "item_illegal": "x__red",
     "item_medical": "bang__aqua",
     "item_objective": "o__aqua",
-    "item_restricted": "d__amber",
+    "item_restricted": "u0000__blank",
     "item_token": "i__aqua",
-    "item_tool": "d__darkgray",
+    "item_tool": "d__amber",
     "npc_avian": "d__aqua",
     "npc_canine": "d__blue",
     "npc_civilian": "H__aqua",
     "npc_guard": "d__red",
     "npc_insect": "d__green",
     "npc_scout": "H__aqua",
-    "projectile": "d__orange",
+    "projectile": "d__brown",
     "prop_asset": "A__darkgray",
     "prop_building_generic": "B__darkgray",
     "prop_civic": "O__darkgray",
@@ -612,7 +612,7 @@
     "prop_secure": "G__red",
     "prop_vehicle_service": "V__darkgray",
     "property_service_zone": "S__aqua",
-    "stair_down": "d__pink",
+    "stair_down": "d__darkgray",
     "stair_up": "gt__aqua",
     "terrain_block": "hash__aqua",
     "terrain_brush": "comma__aqua",
@@ -621,11 +621,11 @@
     "terrain_trail": "colon__aqua",
     "terrain_water": "tilde__aqua",
     "transit_stair_landing": "colon__aqua",
-    "ui_cursor": "d__purple",
-    "ui_look_cursor": "e__amber",
-    "ui_objective_marker": "e__aqua",
-    "ui_overworld_marker": "e__blue",
-    "ui_overworld_marker_nearest": "e__darkgray",
+    "ui_cursor": "d__orange",
+    "ui_look_cursor": "d__pink",
+    "ui_objective_marker": "d__purple",
+    "ui_overworld_marker": "e__amber",
+    "ui_overworld_marker_nearest": "e__aqua",
     "vehicle_new": "amp__red",
     "vehicle_parked": "amp__aqua",
     "vehicle_player": "amp__aqua",
@@ -650,6 +650,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "d__brown",
+      "source": "100-brown.png",
+      "glyph": "d",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -718,8 +727,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -734,6 +742,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "e__brown",
+      "source": "101-brown.png",
+      "glyph": "e",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -802,8 +819,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -818,6 +834,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "f__brown",
+      "source": "102-brown.png",
+      "glyph": "f",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -886,8 +911,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -902,6 +926,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "g__brown",
+      "source": "103-brown.png",
+      "glyph": "g",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -970,8 +1003,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -986,6 +1018,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "h__brown",
+      "source": "104-brown.png",
+      "glyph": "h",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -1054,8 +1095,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1070,6 +1110,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "i__brown",
+      "source": "105-brown.png",
+      "glyph": "i",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -1138,8 +1187,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1154,6 +1202,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "j__brown",
+      "source": "106-brown.png",
+      "glyph": "j",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -1222,8 +1279,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1238,6 +1294,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "k__brown",
+      "source": "107-brown.png",
+      "glyph": "k",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -1306,8 +1371,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1322,6 +1386,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "l__brown",
+      "source": "108-brown.png",
+      "glyph": "l",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -1390,8 +1463,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1406,6 +1478,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "m__brown",
+      "source": "109-brown.png",
+      "glyph": "m",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -1474,8 +1555,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1490,6 +1570,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "n__brown",
+      "source": "110-brown.png",
+      "glyph": "n",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -1558,8 +1647,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1574,6 +1662,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "o__brown",
+      "source": "111-brown.png",
+      "glyph": "o",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -1642,8 +1739,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1658,6 +1754,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "p__brown",
+      "source": "112-brown.png",
+      "glyph": "p",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -1726,8 +1831,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1742,6 +1846,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "q__brown",
+      "source": "113-brown.png",
+      "glyph": "q",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -1810,8 +1923,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1894,8 +2006,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1978,8 +2089,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -1994,6 +2104,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "t__brown",
+      "source": "116-brown.png",
+      "glyph": "t",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2062,8 +2181,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2078,6 +2196,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "u__brown",
+      "source": "117-brown.png",
+      "glyph": "u",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2146,8 +2273,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2162,6 +2288,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "v__brown",
+      "source": "118-brown.png",
+      "glyph": "v",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2230,8 +2365,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2246,6 +2380,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "w__brown",
+      "source": "119-brown.png",
+      "glyph": "w",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2314,8 +2457,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2330,6 +2472,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "x__brown",
+      "source": "120-brown.png",
+      "glyph": "x",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2398,8 +2549,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2414,6 +2564,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "y__brown",
+      "source": "121-brown.png",
+      "glyph": "y",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2482,8 +2641,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2498,6 +2656,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "z__brown",
+      "source": "122-brown.png",
+      "glyph": "z",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2566,13 +2733,21 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
         "cat_generic",
         "cat_purple"
+      ]
+    },
+    {
+      "id": "pipe__brown",
+      "source": "124-brown.png",
+      "glyph": "|",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2609,6 +2784,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "bang__brown",
+      "source": "33-brown.png",
+      "glyph": "!",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2658,8 +2842,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2688,8 +2871,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2718,8 +2900,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2734,6 +2915,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "dollar__brown",
+      "source": "36-brown.png",
+      "glyph": "$",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2776,8 +2966,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2792,6 +2981,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "percent__brown",
+      "source": "37-brown.png",
+      "glyph": "%",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2860,8 +3058,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2876,6 +3073,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "amp__brown",
+      "source": "38-brown.png",
+      "glyph": "&",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2904,6 +3110,15 @@
         "npc_civilian",
         "cat_calico",
         "cat_white"
+      ]
+    },
+    {
+      "id": "apostrophe__brown",
+      "source": "39-brown.png",
+      "glyph": "'",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2936,8 +3151,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -2952,6 +3166,24 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "comma__brown",
+      "source": "44-brown.png",
+      "glyph": ",",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
+      ]
+    },
+    {
+      "id": "dash__brown",
+      "source": "45-brown.png",
+      "glyph": "-",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -2992,12 +3224,30 @@
       ]
     },
     {
+      "id": "slash__brown",
+      "source": "47-brown.png",
+      "glyph": "/",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
+      ]
+    },
+    {
       "id": "0__amber",
       "source": "48-amber.png",
       "glyph": "0",
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "0__brown",
+      "source": "48-brown.png",
+      "glyph": "0",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3066,8 +3316,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3082,6 +3331,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "1__brown",
+      "source": "49-brown.png",
+      "glyph": "1",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3150,8 +3408,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3166,6 +3423,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "2__brown",
+      "source": "50-brown.png",
+      "glyph": "2",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3234,8 +3500,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3250,6 +3515,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "3__brown",
+      "source": "51-brown.png",
+      "glyph": "3",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3318,8 +3592,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3334,6 +3607,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "4__brown",
+      "source": "52-brown.png",
+      "glyph": "4",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3402,8 +3684,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3441,8 +3722,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3457,6 +3737,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "6__brown",
+      "source": "54-brown.png",
+      "glyph": "6",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3525,8 +3814,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3541,6 +3829,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "7__brown",
+      "source": "55-brown.png",
+      "glyph": "7",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3609,8 +3906,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3625,6 +3921,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "8__brown",
+      "source": "56-brown.png",
+      "glyph": "8",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3693,8 +3998,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3709,6 +4013,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "9__brown",
+      "source": "57-brown.png",
+      "glyph": "9",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3777,8 +4090,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3834,8 +4146,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -3850,6 +4161,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "gt__brown",
+      "source": "62-brown.png",
+      "glyph": ">",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3887,6 +4207,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "question__brown",
+      "source": "63-brown.png",
+      "glyph": "?",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3936,12 +4265,41 @@
       ]
     },
     {
+      "id": "at__purple",
+      "source": "64-purple.png",
+      "glyph": "@",
+      "color": "purple",
+      "candidate_colors": [
+        "purple",
+        "scout",
+        "feline",
+        "cat_purple",
+        "item_restricted",
+        "item_tool",
+        "property_service_zone"
+      ],
+      "candidate_semantic_ids": [
+        "npc_scout",
+        "cat_generic",
+        "cat_purple"
+      ]
+    },
+    {
       "id": "A__amber",
       "source": "65-amber.png",
       "glyph": "A",
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "A__brown",
+      "source": "65-brown.png",
+      "glyph": "A",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -3984,8 +4342,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4000,6 +4357,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "B__brown",
+      "source": "66-brown.png",
+      "glyph": "B",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4042,8 +4408,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4058,6 +4423,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "C__brown",
+      "source": "67-brown.png",
+      "glyph": "C",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4126,8 +4500,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4142,6 +4515,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "D__brown",
+      "source": "68-brown.png",
+      "glyph": "D",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4210,8 +4592,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4226,6 +4607,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "E__brown",
+      "source": "69-brown.png",
+      "glyph": "E",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4294,8 +4684,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4310,6 +4699,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "F__brown",
+      "source": "70-brown.png",
+      "glyph": "F",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4352,8 +4750,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4368,6 +4765,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "G__brown",
+      "source": "71-brown.png",
+      "glyph": "G",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4436,8 +4842,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4452,6 +4857,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "H__brown",
+      "source": "72-brown.png",
+      "glyph": "H",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4494,8 +4908,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4510,6 +4923,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "I__brown",
+      "source": "73-brown.png",
+      "glyph": "I",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4578,8 +5000,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4594,6 +5015,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "J__brown",
+      "source": "74-brown.png",
+      "glyph": "J",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4662,8 +5092,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4678,6 +5107,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "K__brown",
+      "source": "75-brown.png",
+      "glyph": "K",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4746,8 +5184,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4762,6 +5199,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "L__brown",
+      "source": "76-brown.png",
+      "glyph": "L",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4830,8 +5276,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4846,6 +5291,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "M__brown",
+      "source": "77-brown.png",
+      "glyph": "M",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4895,8 +5349,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4911,6 +5364,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "N__brown",
+      "source": "78-brown.png",
+      "glyph": "N",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -4960,8 +5422,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -4976,6 +5437,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "O__brown",
+      "source": "79-brown.png",
+      "glyph": "O",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5018,8 +5488,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5034,6 +5503,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "P__brown",
+      "source": "80-brown.png",
+      "glyph": "P",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5102,8 +5580,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5118,6 +5595,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "Q__brown",
+      "source": "81-brown.png",
+      "glyph": "Q",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5186,8 +5672,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5202,6 +5687,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "R__brown",
+      "source": "82-brown.png",
+      "glyph": "R",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5244,8 +5738,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5260,6 +5753,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "S__brown",
+      "source": "83-brown.png",
+      "glyph": "S",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5328,8 +5830,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5344,6 +5845,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "T__brown",
+      "source": "84-brown.png",
+      "glyph": "T",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5386,8 +5896,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5402,6 +5911,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "U__brown",
+      "source": "85-brown.png",
+      "glyph": "U",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5470,8 +5988,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5486,6 +6003,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "V__brown",
+      "source": "86-brown.png",
+      "glyph": "V",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5528,8 +6054,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5544,6 +6069,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "W__brown",
+      "source": "87-brown.png",
+      "glyph": "W",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5612,8 +6146,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5628,6 +6161,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "X__brown",
+      "source": "88-brown.png",
+      "glyph": "X",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5696,8 +6238,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5712,6 +6253,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "Y__brown",
+      "source": "89-brown.png",
+      "glyph": "Y",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5780,8 +6330,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -5796,6 +6345,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "Z__brown",
+      "source": "90-brown.png",
+      "glyph": "Z",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5864,13 +6422,30 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
         "cat_generic",
         "cat_purple"
+      ]
+    },
+    {
+      "id": "lbracket__brown",
+      "source": "91-brown.png",
+      "glyph": "[",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
+      ]
+    },
+    {
+      "id": "u005c__brown",
+      "source": "92-brown.png",
+      "glyph": "\\",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5880,6 +6455,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "caret__brown",
+      "source": "94-brown.png",
+      "glyph": "^",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -5931,13 +6515,21 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
         "cat_generic",
         "cat_purple"
+      ]
+    },
+    {
+      "id": "a__brown",
+      "source": "97-brown.png",
+      "glyph": "a",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -6006,8 +6598,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -6022,6 +6613,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "b__brown",
+      "source": "98-brown.png",
+      "glyph": "b",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -6090,8 +6690,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -6106,6 +6705,15 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
+      ]
+    },
+    {
+      "id": "c__brown",
+      "source": "99-brown.png",
+      "glyph": "c",
+      "color": "brown",
+      "candidate_colors": [
+        "brown"
       ]
     },
     {
@@ -6174,8 +6782,7 @@
         "cat_purple",
         "item_restricted",
         "item_tool",
-        "property_service_zone",
-        "player"
+        "property_service_zone"
       ],
       "candidate_semantic_ids": [
         "npc_scout",
@@ -6227,7 +6834,6 @@
       "9__aqua",
       "equals__aqua",
       "question__aqua",
-      "at__aqua",
       "A__aqua",
       "B__aqua",
       "C__aqua",
@@ -6574,6 +7180,15 @@
       "source": "70-aqua.png"
     },
     {
+      "semantic_id": "feature_breach",
+      "tile_id": "slash__brown",
+      "glyph": "/",
+      "category": "features",
+      "source_key": "/",
+      "asset_color": "brown",
+      "source": "47-brown.png"
+    },
+    {
       "semantic_id": "feature_door",
       "tile_id": "plus__aqua",
       "glyph": "+",
@@ -6903,6 +7518,7 @@
     "d__amber",
     "d__aqua",
     "d__blue",
+    "d__brown",
     "d__darkgray",
     "d__green",
     "d__orange",
@@ -6912,6 +7528,7 @@
     "e__amber",
     "e__aqua",
     "e__blue",
+    "e__brown",
     "e__darkgray",
     "e__green",
     "e__orange",
@@ -6921,6 +7538,7 @@
     "f__amber",
     "f__aqua",
     "f__blue",
+    "f__brown",
     "f__darkgray",
     "f__green",
     "f__orange",
@@ -6930,6 +7548,7 @@
     "g__amber",
     "g__aqua",
     "g__blue",
+    "g__brown",
     "g__darkgray",
     "g__green",
     "g__orange",
@@ -6939,6 +7558,7 @@
     "h__amber",
     "h__aqua",
     "h__blue",
+    "h__brown",
     "h__darkgray",
     "h__green",
     "h__orange",
@@ -6948,6 +7568,7 @@
     "i__amber",
     "i__aqua",
     "i__blue",
+    "i__brown",
     "i__darkgray",
     "i__green",
     "i__orange",
@@ -6957,6 +7578,7 @@
     "j__amber",
     "j__aqua",
     "j__blue",
+    "j__brown",
     "j__darkgray",
     "j__green",
     "j__orange",
@@ -6966,6 +7588,7 @@
     "k__amber",
     "k__aqua",
     "k__blue",
+    "k__brown",
     "k__darkgray",
     "k__green",
     "k__orange",
@@ -6975,6 +7598,7 @@
     "l__amber",
     "l__aqua",
     "l__blue",
+    "l__brown",
     "l__darkgray",
     "l__green",
     "l__orange",
@@ -6984,6 +7608,7 @@
     "m__amber",
     "m__aqua",
     "m__blue",
+    "m__brown",
     "m__darkgray",
     "m__green",
     "m__orange",
@@ -6993,6 +7618,7 @@
     "n__amber",
     "n__aqua",
     "n__blue",
+    "n__brown",
     "n__darkgray",
     "n__green",
     "n__orange",
@@ -7002,6 +7628,7 @@
     "o__amber",
     "o__aqua",
     "o__blue",
+    "o__brown",
     "o__darkgray",
     "o__green",
     "o__orange",
@@ -7011,6 +7638,7 @@
     "p__amber",
     "p__aqua",
     "p__blue",
+    "p__brown",
     "p__darkgray",
     "p__green",
     "p__orange",
@@ -7020,6 +7648,7 @@
     "q__amber",
     "q__aqua",
     "q__blue",
+    "q__brown",
     "q__darkgray",
     "q__green",
     "q__orange",
@@ -7047,6 +7676,7 @@
     "t__amber",
     "t__aqua",
     "t__blue",
+    "t__brown",
     "t__darkgray",
     "t__green",
     "t__orange",
@@ -7056,6 +7686,7 @@
     "u__amber",
     "u__aqua",
     "u__blue",
+    "u__brown",
     "u__darkgray",
     "u__green",
     "u__orange",
@@ -7065,6 +7696,7 @@
     "v__amber",
     "v__aqua",
     "v__blue",
+    "v__brown",
     "v__darkgray",
     "v__green",
     "v__orange",
@@ -7074,6 +7706,7 @@
     "w__amber",
     "w__aqua",
     "w__blue",
+    "w__brown",
     "w__darkgray",
     "w__green",
     "w__orange",
@@ -7083,6 +7716,7 @@
     "x__amber",
     "x__aqua",
     "x__blue",
+    "x__brown",
     "x__darkgray",
     "x__green",
     "x__orange",
@@ -7092,6 +7726,7 @@
     "y__amber",
     "y__aqua",
     "y__blue",
+    "y__brown",
     "y__darkgray",
     "y__green",
     "y__orange",
@@ -7101,12 +7736,14 @@
     "z__amber",
     "z__aqua",
     "z__blue",
+    "z__brown",
     "z__darkgray",
     "z__green",
     "z__orange",
     "z__pink",
     "z__purple",
     "z__red",
+    "pipe__brown",
     "tilde__amber",
     "tilde__aqua_copy",
     "tilde__aqua",
@@ -7117,6 +7754,7 @@
     "bang__amber",
     "bang__aqua",
     "bang__blue",
+    "bang__brown",
     "bang__darkgray",
     "bang__darkgrey",
     "bang__green",
@@ -7138,6 +7776,7 @@
     "dollar__amber",
     "dollar__aqua",
     "dollar__blue",
+    "dollar__brown",
     "dollar__darkgray",
     "dollar__green",
     "dollar__orange",
@@ -7147,6 +7786,7 @@
     "percent__amber",
     "percent__aqua",
     "percent__blue",
+    "percent__brown",
     "percent__darkgray",
     "percent__green",
     "percent__orange",
@@ -7156,10 +7796,12 @@
     "amp__amber",
     "amp__aqua",
     "amp__blue",
+    "amp__brown",
     "amp__green",
     "amp__orange",
     "amp__pink",
     "amp__red",
+    "apostrophe__brown",
     "plus__amber",
     "plus__aqua",
     "plus__blue",
@@ -7169,6 +7811,8 @@
     "plus__red",
     "comma__amber",
     "comma__aqua",
+    "comma__brown",
+    "dash__brown",
     "dot__amber",
     "dot__aqua",
     "dot__blue",
@@ -7176,9 +7820,11 @@
     "dot__orange",
     "dot__pink",
     "dot__red",
+    "slash__brown",
     "0__amber",
     "0__aqua",
     "0__blue",
+    "0__brown",
     "0__darkgray",
     "0__green",
     "0__orange",
@@ -7188,6 +7834,7 @@
     "1__amber",
     "1__aqua",
     "1__blue",
+    "1__brown",
     "1__darkgray",
     "1__green",
     "1__orange",
@@ -7197,6 +7844,7 @@
     "2__amber",
     "2__aqua",
     "2__blue",
+    "2__brown",
     "2__darkgray",
     "2__green",
     "2__orange",
@@ -7206,6 +7854,7 @@
     "3__amber",
     "3__aqua",
     "3__blue",
+    "3__brown",
     "3__darkgray",
     "3__green",
     "3__orange",
@@ -7215,6 +7864,7 @@
     "4__amber",
     "4__aqua",
     "4__blue",
+    "4__brown",
     "4__darkgray",
     "4__green",
     "4__orange",
@@ -7231,6 +7881,7 @@
     "6__amber",
     "6__aqua",
     "6__blue",
+    "6__brown",
     "6__darkgray",
     "6__green",
     "6__orange",
@@ -7240,6 +7891,7 @@
     "7__amber",
     "7__aqua",
     "7__blue",
+    "7__brown",
     "7__darkgray",
     "7__green",
     "7__orange",
@@ -7249,6 +7901,7 @@
     "8__amber",
     "8__aqua",
     "8__blue",
+    "8__brown",
     "8__darkgray",
     "8__green",
     "8__orange",
@@ -7258,6 +7911,7 @@
     "9__amber",
     "9__aqua",
     "9__blue",
+    "9__brown",
     "9__darkgray",
     "9__green",
     "9__orange",
@@ -7280,6 +7934,7 @@
     "gt__amber",
     "gt__aqua",
     "gt__blue",
+    "gt__brown",
     "gt__green",
     "gt__orange",
     "gt__pink",
@@ -7287,6 +7942,7 @@
     "question__amber",
     "question__aqua",
     "question__blue",
+    "question__brown",
     "question__green",
     "question__orange",
     "question__pink",
@@ -7301,6 +7957,7 @@
     "A__amber",
     "A__aqua",
     "A__blue",
+    "A__brown",
     "A__darkgray",
     "A__green",
     "A__orange",
@@ -7310,6 +7967,7 @@
     "B__amber",
     "B__aqua",
     "B__blue",
+    "B__brown",
     "B__darkgray",
     "B__green",
     "B__orange",
@@ -7319,6 +7977,7 @@
     "C__amber",
     "C__aqua",
     "C__blue",
+    "C__brown",
     "C__darkgray",
     "C__green",
     "C__orange",
@@ -7328,6 +7987,7 @@
     "D__amber",
     "D__aqua",
     "D__blue",
+    "D__brown",
     "D__darkgray",
     "D__green",
     "D__orange",
@@ -7337,6 +7997,7 @@
     "E__amber",
     "E__aqua",
     "E__blue",
+    "E__brown",
     "E__darkgray",
     "E__green",
     "E__orange",
@@ -7346,6 +8007,7 @@
     "F__amber",
     "F__aqua",
     "F__blue",
+    "F__brown",
     "F__darkgray",
     "F__green",
     "F__orange",
@@ -7355,6 +8017,7 @@
     "G__amber",
     "G__aqua",
     "G__blue",
+    "G__brown",
     "G__darkgray",
     "G__green",
     "G__orange",
@@ -7364,6 +8027,7 @@
     "H__amber",
     "H__aqua",
     "H__blue",
+    "H__brown",
     "H__darkgray",
     "H__green",
     "H__orange",
@@ -7373,6 +8037,7 @@
     "I__amber",
     "I__aqua",
     "I__blue",
+    "I__brown",
     "I__darkgray",
     "I__green",
     "I__orange",
@@ -7382,6 +8047,7 @@
     "J__amber",
     "J__aqua",
     "J__blue",
+    "J__brown",
     "J__darkgray",
     "J__green",
     "J__orange",
@@ -7391,6 +8057,7 @@
     "K__amber",
     "K__aqua",
     "K__blue",
+    "K__brown",
     "K__darkgray",
     "K__green",
     "K__orange",
@@ -7400,6 +8067,7 @@
     "L__amber",
     "L__aqua",
     "L__blue",
+    "L__brown",
     "L__darkgray",
     "L__green",
     "L__orange",
@@ -7409,6 +8077,7 @@
     "M__amber",
     "M__aqua",
     "M__blue",
+    "M__brown",
     "M__darkgray",
     "M__green",
     "M__orange",
@@ -7418,6 +8087,7 @@
     "N__amber",
     "N__aqua",
     "N__blue",
+    "N__brown",
     "N__darkgray",
     "N__green",
     "N__orange",
@@ -7427,6 +8097,7 @@
     "O__amber",
     "O__aqua",
     "O__blue",
+    "O__brown",
     "O__darkgray",
     "O__green",
     "O__orange",
@@ -7436,6 +8107,7 @@
     "P__amber",
     "P__aqua",
     "P__blue",
+    "P__brown",
     "P__darkgray",
     "P__green",
     "P__orange",
@@ -7445,6 +8117,7 @@
     "Q__amber",
     "Q__aqua",
     "Q__blue",
+    "Q__brown",
     "Q__darkgray",
     "Q__green",
     "Q__orange",
@@ -7454,6 +8127,7 @@
     "R__amber",
     "R__aqua",
     "R__blue",
+    "R__brown",
     "R__darkgray",
     "R__green",
     "R__orange",
@@ -7463,6 +8137,7 @@
     "S__amber",
     "S__aqua",
     "S__blue",
+    "S__brown",
     "S__darkgray",
     "S__green",
     "S__orange",
@@ -7472,6 +8147,7 @@
     "T__amber",
     "T__aqua",
     "T__blue",
+    "T__brown",
     "T__darkgray",
     "T__green",
     "T__orange",
@@ -7481,6 +8157,7 @@
     "U__amber",
     "U__aqua",
     "U__blue",
+    "U__brown",
     "U__darkgray",
     "U__green",
     "U__orange",
@@ -7490,6 +8167,7 @@
     "V__amber",
     "V__aqua",
     "V__blue",
+    "V__brown",
     "V__darkgray",
     "V__green",
     "V__orange",
@@ -7499,6 +8177,7 @@
     "W__amber",
     "W__aqua",
     "W__blue",
+    "W__brown",
     "W__darkgray",
     "W__green",
     "W__orange",
@@ -7508,6 +8187,7 @@
     "X__amber",
     "X__aqua",
     "X__blue",
+    "X__brown",
     "X__darkgray",
     "X__green",
     "X__orange",
@@ -7517,6 +8197,7 @@
     "Y__amber",
     "Y__aqua",
     "Y__blue",
+    "Y__brown",
     "Y__darkgray",
     "Y__green",
     "Y__orange",
@@ -7526,16 +8207,20 @@
     "Z__amber",
     "Z__aqua",
     "Z__blue",
+    "Z__brown",
     "Z__darkgray",
     "Z__green",
     "Z__orange",
     "Z__pink",
     "Z__purple",
     "Z__red",
+    "lbracket__brown",
+    "u005c__brown",
     "u005c__red",
     "caret__amber",
     "caret__aqua",
     "caret__blue",
+    "caret__brown",
     "caret__darkgray",
     "caret__darkgrey",
     "caret__green",
@@ -7545,6 +8230,7 @@
     "caret__red",
     "a__aqua",
     "a__blue",
+    "a__brown",
     "a__darkgray",
     "a__green",
     "a__orange",
@@ -7554,6 +8240,7 @@
     "b__amber",
     "b__aqua",
     "b__blue",
+    "b__brown",
     "b__darkgray",
     "b__green",
     "b__orange",
@@ -7563,6 +8250,7 @@
     "c__amber",
     "c__aqua",
     "c__blue",
+    "c__brown",
     "c__darkgray",
     "c__green",
     "c__orange",

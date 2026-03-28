@@ -30,6 +30,7 @@ SIGNAGE_ARCHETYPE_HINTS = {
     "bank",
     "bar",
     "bookshop",
+    "casino",
     "brokerage",
     "checkpoint",
     "courier_office",
@@ -55,6 +56,7 @@ SIGNAGE_ARCHETYPE_HINTS = {
     "soup_kitchen",
     "street_kitchen",
     "theater",
+    "tavern",
     "tool_depot",
     "tower",
 }
@@ -180,12 +182,14 @@ SECURE_ARCHETYPE_HINTS = {
 ENTERTAINMENT_ARCHETYPE_HINTS = {
     "arcade",
     "bar",
+    "casino",
     "gallery",
     "gaming_hall",
     "karaoke_box",
     "music_venue",
     "nightclub",
     "pool_hall",
+    "tavern",
     "theater",
 }
 

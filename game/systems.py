@@ -1,10 +1,11 @@
 import curses
+import itertools
 import json
 import random
 import re
 import textwrap
 import time
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 
 from engine.buildings import building_exterior_profile, layout_chunk_building, world_building_id
@@ -129,6 +130,7 @@ from game.property_keys import (
 from game.property_access import (
     PropertyIngressResult,
     _boundary_tile as _property_boundary_tile,
+    default_site_services_for_archetype as _default_site_services_for_archetype,
     property_access_controller as _property_access_controller,
     evaluate_property_access as _evaluate_property_access,
     sync_property_access_controller as _sync_property_access_controller,
@@ -250,6 +252,7 @@ PROPERTY_ARCHETYPE_DISPLAY = {
     "field_hospital": ("M", "item_medical"),
     "tide_station": ("M", "item_medical"),
     "herbalist_camp": ("M", "item_medical"),
+    "casino": ("C", "building_roof_entertainment"),
     "checkpoint": ("G", "building_roof_secure"),
     "armory": ("G", "building_roof_secure"),
     "barracks": ("G", "building_roof_secure"),
@@ -265,6 +268,7 @@ PROPERTY_ARCHETYPE_DISPLAY = {
     "karaoke_box": ("N", "building_roof_entertainment"),
     "pool_hall": ("N", "building_roof_entertainment"),
     "gallery": ("N", "building_roof_entertainment"),
+    "tavern": ("T", "building_roof_entertainment"),
     "restaurant": ("R", "building_roof_storefront"),
     "street_kitchen": ("R", "building_roof_storefront"),
     "soup_kitchen": ("R", "building_roof_storefront"),
@@ -2625,7 +2629,12 @@ def _trade_contact_terms(sim, viewer_eid, prop):
     }
     if pressure_tier in {"medium", "high"}:
         note_bits.append(f"city attention {pressure_tier}")
-    event_labels = [e.get("label", "") for e in active_world_events_for_chunk(sim, store_chunk) if e.get("trade_buy_mult", 1.0) != 1.0 or e.get("trade_sell_mult", 1.0) != 1.0]
+    event_labels = [
+        e.get("label", "")
+        for e in active_world_events_for_chunk(sim, store_chunk)
+        if (e.get("trade_buy_mult", 1.0) != 1.0 or e.get("trade_sell_mult", 1.0) != 1.0)
+        and world_event_visible_to_viewer(sim, e, viewer_eid=viewer_eid)
+    ]
     if event_labels:
         note_bits.append("local: " + ", ".join(event_labels))
     if note_bits:
@@ -3747,6 +3756,10 @@ def _known_location_fact_lines(sim, player_eid, prop, known):
     hours_text = _dialogue_hours_text(controller.get("opening_window")) if isinstance(controller, dict) else ""
     requirement = _controller_access_requirement_text(controller) if isinstance(controller, dict) else "the matching key"
     security_text = _dialogue_security_tier_text(controller.get("security_tier")) if isinstance(controller, dict) else "security"
+    infrastructure_role = _property_infrastructure_role(prop)
+    kind = str(prop.get("kind", "") or "").strip().lower()
+    metadata = _property_metadata(prop)
+    fixture_label = str(metadata.get("fixture_type", metadata.get("archetype", kind or "property")) or "").strip().replace("_", " ")
 
     owner_eid = prop.get("owner_eid")
     owner_tag = str(prop.get("owner_tag", "") or "").strip().lower()
@@ -3800,7 +3813,17 @@ def _known_location_fact_lines(sim, player_eid, prop, known):
             facts.append(f"Access: {access_level}; {security_text}.")
 
     if not facts:
-        if _property_is_storefront(prop):
+        if infrastructure_role:
+            target = _infrastructure_target_property(sim, prop)
+            role_label = _infrastructure_role_label(infrastructure_role)
+            if isinstance(target, dict):
+                target_name = str(target.get("name", target.get("id", "site"))).strip() or "site"
+                facts.append(f"Known {role_label} for {target_name}.")
+            else:
+                facts.append(f"Known {role_label}.")
+        elif kind in {"asset", "fixture"}:
+            facts.append(f"Known {fixture_label or kind}.")
+        elif _property_is_storefront(prop):
             facts.append("Known storefront.")
         elif _property_is_public(prop):
             facts.append("Known public-facing location.")
@@ -3821,6 +3844,83 @@ def _known_location_fact_lines(sim, player_eid, prop, known):
     return deduped[:4]
 
 
+def _known_vehicle_report_row(
+    sim,
+    player_eid,
+    prop,
+    *,
+    known=None,
+    hidden=False,
+    confidence=None,
+    tick=None,
+    first_tick=None,
+    anchored=None,
+):
+    if not _property_is_vehicle(prop):
+        return None
+
+    known = known if isinstance(known, dict) else {}
+    vehicle_id = str(prop.get("id", "")).strip() or None
+    assets = sim.ecs.get(PlayerAssets).get(player_eid)
+    owned = bool(
+        prop.get("owner_eid") == player_eid
+        or str(prop.get("owner_tag", "") or "").strip().lower() == "player"
+        or (assets and vehicle_id and vehicle_id in getattr(assets, "owned_property_ids", set()))
+    )
+
+    if confidence is None:
+        try:
+            confidence = float(known.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+    confidence = max(0.0, min(1.0, float(confidence)))
+
+    if anchored is None:
+        anchored = bool(known.get("anchored"))
+
+    row_tick = _int_or_default(known.get("tick"), _int_or_default(tick, 0))
+    row_first_tick = _int_or_default(known.get("first_tick"), _int_or_default(first_tick, row_tick))
+
+    fuel, fuel_capacity = _vehicle_fuel_values(prop)
+    profile = _vehicle_profile_from_property(prop)
+    vehicle_class = str(profile.get("vehicle_class", "") or "").strip().replace("_", " ")
+    quality = str(profile.get("quality", "") or "").strip().replace("_", " ")
+
+    fact_lines = [
+        "Your owned vehicle." if owned else "Known vehicle.",
+    ]
+    if fuel_capacity > 0 or fuel > 0:
+        fact_lines.append(f"Fuel {fuel}/{fuel_capacity}.")
+    if vehicle_class and quality:
+        fact_lines.append(f"{quality.title()} {vehicle_class}.")
+    elif vehicle_class:
+        fact_lines.append(f"{vehicle_class.title()}.")
+    elif quality:
+        fact_lines.append(f"{quality.title()} condition.")
+
+    summary_bits = []
+    if anchored or owned or confidence >= 0.95:
+        summary_bits.append("confirmed")
+    summary_bits.append("owned vehicle" if owned else "vehicle")
+    if quality:
+        summary_bits.append(quality)
+    if vehicle_class:
+        summary_bits.append(vehicle_class)
+
+    return {
+        "property_id": vehicle_id or str(prop.get("id", "")),
+        "name": _vehicle_label(prop),
+        "coords": _known_location_coords_text(prop),
+        "confidence": confidence,
+        "tick": row_tick,
+        "first_tick": row_first_tick,
+        "anchored": bool(anchored or owned),
+        "hidden": bool(hidden),
+        "summary_bits": summary_bits,
+        "fact_lines": fact_lines,
+    }
+
+
 def _build_known_locations_report(sim, player_eid, limit=None, include_hidden=False):
     knowledge = sim.ecs.get(PropertyKnowledge).get(player_eid)
     known_map = knowledge.known if knowledge and isinstance(knowledge.known, dict) else {}
@@ -3832,12 +3932,11 @@ def _build_known_locations_report(sim, player_eid, limit=None, include_hidden=Fa
             if str(property_id).strip()
         }
     rows = []
+    seen_property_ids = set()
 
     for property_id, known in known_map.items():
         prop = sim.properties.get(property_id)
         if not isinstance(prop, dict):
-            continue
-        if _property_is_vehicle(prop):
             continue
         property_id = str(prop.get("id", property_id)).strip() or str(property_id).strip()
         hidden = property_id in hidden_ids
@@ -3846,6 +3945,23 @@ def _build_known_locations_report(sim, player_eid, limit=None, include_hidden=Fa
         known = known if isinstance(known, dict) else {}
         anchored = bool(known.get("anchored"))
         confidence = max(0.0, min(1.0, float(known.get("confidence", 0.0) or 0.0)))
+
+        if _property_is_vehicle(prop):
+            vehicle_row = _known_vehicle_report_row(
+                sim,
+                player_eid,
+                prop,
+                known=known,
+                hidden=hidden,
+                confidence=confidence,
+                tick=_int_or_default(known.get("tick"), 0),
+                first_tick=_int_or_default(known.get("first_tick"), _int_or_default(known.get("tick"), 0)),
+                anchored=anchored,
+            )
+            if vehicle_row:
+                rows.append(vehicle_row)
+                seen_property_ids.add(property_id)
+            continue
 
         name = str(prop.get("name", prop.get("id", "location"))).strip() or "location"
         summary_bits = _known_location_summary_bits(prop, known)
@@ -3862,12 +3978,17 @@ def _build_known_locations_report(sim, player_eid, limit=None, include_hidden=Fa
             "summary_bits": summary_bits,
             "fact_lines": fact_lines,
         })
+        seen_property_ids.add(property_id)
 
     vehicle_state = sim.ecs.get(VehicleState).get(player_eid)
     assets = sim.ecs.get(PlayerAssets).get(player_eid)
-    zoom_mode = str(getattr(sim, "zoom_mode", "city")).strip().lower() or "city"
-    if vehicle_state and not bool(getattr(vehicle_state, "in_vehicle", False)) and zoom_mode == "city":
-        candidate_ids = []
+    candidate_ids = []
+    if assets:
+        for raw_vehicle_id in sorted(getattr(assets, "owned_property_ids", ()) or ()):
+            vehicle_id = str(raw_vehicle_id or "").strip()
+            if vehicle_id and vehicle_id not in candidate_ids:
+                candidate_ids.append(vehicle_id)
+    if vehicle_state:
         for raw_vehicle_id in (
             getattr(vehicle_state, "active_vehicle_id", None),
             getattr(vehicle_state, "last_vehicle_id", None),
@@ -3876,45 +3997,36 @@ def _build_known_locations_report(sim, player_eid, limit=None, include_hidden=Fa
             if vehicle_id and vehicle_id not in candidate_ids:
                 candidate_ids.append(vehicle_id)
 
-        for vehicle_id in candidate_ids:
-            prop = sim.properties.get(vehicle_id)
-            if not _property_is_vehicle(prop):
-                continue
-            hidden = vehicle_id in hidden_ids
-            if include_hidden != hidden:
-                continue
-            owned = bool(
-                prop.get("owner_eid") == player_eid
-                or str(prop.get("owner_tag", "") or "").strip().lower() == "player"
-                or (assets and vehicle_id in assets.owned_property_ids)
-            )
-            if not owned:
-                continue
-            fuel, fuel_capacity = _vehicle_fuel_values(prop)
-            profile = _vehicle_profile_from_property(prop)
-            vehicle_class = str(profile.get("vehicle_class", "") or "").strip().replace("_", " ")
-            quality = str(profile.get("quality", "") or "").strip().replace("_", " ")
-            fact_lines = [
-                "Your owned vehicle.",
-                f"Fuel {fuel}/{fuel_capacity}.",
-            ]
-            if vehicle_class and quality:
-                fact_lines.append(f"{quality.title()} {vehicle_class}.")
-            elif vehicle_class:
-                fact_lines.append(f"{vehicle_class.title()}.")
-            rows.append({
-                "property_id": vehicle_id,
-                "name": _vehicle_label(prop),
-                "coords": _known_location_coords_text(prop),
-                "confidence": 1.0,
-                "tick": int(getattr(vehicle_state, "last_changed_tick", 0) or 0),
-                "first_tick": int(getattr(vehicle_state, "last_changed_tick", 0) or 0),
-                "anchored": True,
-                "hidden": hidden,
-                "summary_bits": ["confirmed", "owned vehicle"],
-                "fact_lines": fact_lines,
-            })
-            break
+    for vehicle_id in candidate_ids:
+        if vehicle_id in seen_property_ids:
+            continue
+        prop = sim.properties.get(vehicle_id)
+        if not _property_is_vehicle(prop):
+            continue
+        hidden = vehicle_id in hidden_ids
+        if include_hidden != hidden:
+            continue
+        owned = bool(
+            prop.get("owner_eid") == player_eid
+            or str(prop.get("owner_tag", "") or "").strip().lower() == "player"
+            or (assets and vehicle_id in assets.owned_property_ids)
+        )
+        if not owned:
+            continue
+        vehicle_tick = int(getattr(vehicle_state, "last_changed_tick", getattr(sim, "tick", 0)) or 0)
+        vehicle_row = _known_vehicle_report_row(
+            sim,
+            player_eid,
+            prop,
+            hidden=hidden,
+            confidence=1.0,
+            tick=vehicle_tick,
+            first_tick=vehicle_tick,
+            anchored=True,
+        )
+        if vehicle_row:
+            rows.append(vehicle_row)
+            seen_property_ids.add(vehicle_id)
 
     rows.sort(
         key=lambda row: (
@@ -4550,6 +4662,7 @@ BUILDING_STREET_LABELS = {
     "backroom_clinic": "clinic frontage",
     "bank": "bank branch",
     "bar": "bar frontage",
+    "casino": "casino frontage",
     "checkpoint": "checkpoint",
     "corner_store": "corner storefront",
     "courthouse": "civic building",
@@ -4574,6 +4687,7 @@ BUILDING_STREET_LABELS = {
     "server_hub": "utility block",
     "survey_post": "survey post",
     "soup_kitchen": "soup kitchen",
+    "tavern": "tavern frontage",
     "theater": "theater frontage",
     "tide_station": "tide station",
     "tower": "tower block",
@@ -5163,9 +5277,1096 @@ def _ingress_method_from_context(ingress_kind, aperture_kind=""):
         return "deep_breach"
     return ingress_kind
 
+CASINO_CARD_RANKS = "23456789TJQKA"
+CASINO_CARD_SUITS = ("S", "H", "D", "C")
+CASINO_CARD_VALUE_BY_RANK = {
+    "2": 2,
+    "3": 3,
+    "4": 4,
+    "5": 5,
+    "6": 6,
+    "7": 7,
+    "8": 8,
+    "9": 9,
+    "T": 10,
+    "J": 11,
+    "Q": 12,
+    "K": 13,
+    "A": 14,
+}
+CASINO_RANK_NAME_BY_VALUE = {
+    2: "two",
+    3: "three",
+    4: "four",
+    5: "five",
+    6: "six",
+    7: "seven",
+    8: "eight",
+    9: "nine",
+    10: "ten",
+    11: "jack",
+    12: "queen",
+    13: "king",
+    14: "ace",
+}
+CASINO_SLOT_REELS = (
+    ("CHERRY", "LEMON", "BAR", "HORSESHOE", "BELL", "CHERRY", "BAR", "SEVEN", "LEMON", "BAR", "BELL", "SEVEN"),
+    ("BAR", "CHERRY", "BELL", "LEMON", "BAR", "HORSESHOE", "SEVEN", "CHERRY", "BAR", "BELL", "LEMON", "SEVEN"),
+    ("LEMON", "BAR", "CHERRY", "SEVEN", "BAR", "BELL", "CHERRY", "HORSESHOE", "BAR", "SEVEN", "LEMON", "BELL"),
+)
+CASINO_SLOT_SYMBOL_LABELS = {
+    "CHERRY": "Cherry",
+    "LEMON": "Lemon",
+    "BAR": "Bar",
+    "HORSESHOE": "Horseshoe",
+    "BELL": "Bell",
+    "SEVEN": "Seven",
+}
+CASINO_PLINKO_LANE_COUNT = 7
+CASINO_PLINKO_ROWS = 8
+CASINO_PLINKO_BUCKET_MULTIPLIERS = (0.0, 0.4, 0.8, 1.2, 3.0, 1.2, 0.8, 0.4, 0.0)
+CASINO_POKER_CATEGORY_NAMES = {
+    8: "straight flush",
+    7: "four of a kind",
+    6: "full house",
+    5: "flush",
+    4: "straight",
+    3: "three of a kind",
+    2: "two pair",
+    1: "pair",
+    0: "high card",
+}
+CASINO_HOLDEM_ANTE_BONUS_MULTIPLIERS = {
+    "royal_flush": 100,
+    8: 20,
+    7: 10,
+    6: 3,
+    5: 2,
+    4: 1,
+}
+CASINO_GAME_PROFILES = {
+    "slots": {
+        "title": "Slots",
+        "service_label": "slots",
+        "menu_label": "Play slots",
+        "bet_options": (10, 25, 50),
+        "prompt": "Pick a stake and let the reels fly.",
+        "note": "Three reels, classic symbols, and a loud machine when the sevens land.",
+        "social_gain": (1, 3),
+    },
+    "casino_holdem": {
+        "title": "Casino Hold'em",
+        "service_label": "casino hold'em",
+        "menu_label": "Play casino hold'em",
+        "bet_options": (25, 50, 100),
+        "prompt": "Post an ante, read the flop, then decide whether to call or fold.",
+        "note": "You get two hole cards, the flop comes out first, and calling adds a matching stake.",
+        "social_gain": (2, 5),
+    },
+    "plinko": {
+        "title": "Plinko",
+        "service_label": "plinko",
+        "menu_label": "Play plinko",
+        "bet_options": (5, 15, 30),
+        "prompt": "Choose a chip size and a drop lane.",
+        "note": "The center buckets pay best if the pegs break your way.",
+        "social_gain": (1, 3),
+    },
+    "twenty_one": {
+        "title": "21",
+        "service_label": "21",
+        "menu_label": "Play 21",
+        "bet_options": (10, 25, 50),
+        "prompt": "Pick a wager and play a real hand against the dealer.",
+        "note": "Hit, stand, and hope the house runs cold.",
+        "social_gain": (2, 4),
+    },
+}
+CASINO_GAME_SERVICE_IDS = frozenset(CASINO_GAME_PROFILES)
+
+
+def _site_service_state(sim):
+    state = getattr(sim, "site_service_state", None)
+    if not isinstance(state, dict):
+        state = {"cooldowns": {}}
+        sim.site_service_state = state
+    cooldowns = state.get("cooldowns")
+    if not isinstance(cooldowns, dict):
+        cooldowns = {}
+        state["cooldowns"] = cooldowns
+    return state
+
+
+def _site_service_roll_index(sim, eid, prop_or_id, service):
+    state = _site_service_state(sim)
+    rolls = state.get("roll_counts")
+    if not isinstance(rolls, dict):
+        rolls = {}
+        state["roll_counts"] = rolls
+    prop_id = prop_or_id.get("id") if isinstance(prop_or_id, dict) else prop_or_id
+    key = (int(eid), str(prop_id), str(service or "").strip().lower())
+    index = int(rolls.get(key, 0))
+    rolls[key] = index + 1
+    return index
+
+
+def _casino_round_seed(sim, eid, prop_or_id, service, wager, round_index):
+    prop_id = prop_or_id.get("id") if isinstance(prop_or_id, dict) else prop_or_id
+    return (
+        f"{sim.seed}:casino:{prop_id}:{int(eid)}:{str(service or '').strip().lower()}:"
+        f"{int(sim.tick)}:{int(round_index)}:{int(wager)}"
+    )
+
+
+def _casino_social_gain(service, seed_token):
+    profile = _casino_game_profile(service)
+    social_lo, social_hi = (1, 3)
+    if profile:
+        social_lo, social_hi = profile.get("social_gain", (1, 3))
+    social_rng = random.Random(f"{seed_token}:social")
+    social_lo = int(social_lo)
+    social_hi = int(max(social_lo, social_hi))
+    return social_rng.randint(social_lo, social_hi)
+
+
+def _casino_card_rank(card):
+    return CASINO_CARD_VALUE_BY_RANK.get(str(card or "??")[0].upper(), 0)
+
+
+def _casino_card_suit(card):
+    text = str(card or "??").strip().upper()
+    return text[1:2] if len(text) >= 2 else "?"
+
+
+def _casino_card_label(card):
+    text = str(card or "??").strip().upper()
+    if len(text) < 2:
+        return "??"
+    rank = text[0]
+    suit = text[1]
+    rank_label = "10" if rank == "T" else rank
+    return f"{rank_label}{suit}"
+
+
+def _casino_cards_text(cards):
+    rendered = [_casino_card_label(card) for card in list(cards or ())]
+    return " ".join(rendered) if rendered else "--"
+
+
+def _casino_shuffled_deck(seed_token):
+    deck = [f"{rank}{suit}" for suit in CASINO_CARD_SUITS for rank in CASINO_CARD_RANKS]
+    rng = random.Random(f"{seed_token}:deck")
+    rng.shuffle(deck)
+    return deck
+
+
+def _casino_blackjack_value(card):
+    rank = str(card or "??").strip().upper()[:1]
+    if rank == "A":
+        return 11
+    if rank in {"T", "J", "Q", "K"}:
+        return 10
+    try:
+        return int(rank)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _casino_blackjack_total(cards):
+    total = 0
+    aces = 0
+    for card in list(cards or ()):
+        total += _casino_blackjack_value(card)
+        if str(card or "??").strip().upper().startswith("A"):
+            aces += 1
+    while total > 21 and aces > 0:
+        total -= 10
+        aces -= 1
+    return total, aces > 0
+
+
+def _casino_blackjack_line(label, cards, *, hide_hole=False):
+    shown = []
+    for idx, card in enumerate(list(cards or ())):
+        if hide_hole and idx == 1:
+            shown.append("??")
+        else:
+            shown.append(_casino_card_label(card))
+    total, soft = _casino_blackjack_total(cards)
+    suffix = ""
+    if not hide_hole:
+        suffix = f" ({total}"
+        if soft and total <= 21:
+            suffix += " soft"
+        suffix += ")"
+    return f"{label}: {' '.join(shown) if shown else '--'}{suffix}"
+
+
+def _casino_straight_high(ranks):
+    unique = sorted({int(rank) for rank in list(ranks or ()) if int(rank) > 0}, reverse=True)
+    if 14 in unique:
+        unique.append(1)
+    streak = 1
+    for idx in range(len(unique) - 1):
+        if unique[idx] - 1 == unique[idx + 1]:
+            streak += 1
+            if streak >= 5:
+                return unique[idx - 3]
+        elif unique[idx] != unique[idx + 1]:
+            streak = 1
+    return 0
+
+
+def _casino_rank_name(rank):
+    return CASINO_RANK_NAME_BY_VALUE.get(int(rank), str(rank))
+
+
+def _casino_poker_hand_name(score):
+    category = int(score[0]) if score else 0
+    primary = int(score[1]) if len(score) > 1 else 0
+    secondary = int(score[2]) if len(score) > 2 else 0
+    if category == 8 and primary == 14:
+        return "royal flush"
+    if category == 8:
+        return f"{_casino_rank_name(primary)}-high straight flush"
+    if category == 7:
+        return f"four {_casino_rank_name(primary)}s"
+    if category == 6:
+        return f"{_casino_rank_name(primary)}s full of {_casino_rank_name(secondary)}s"
+    if category == 5:
+        return f"{_casino_rank_name(primary)}-high flush"
+    if category == 4:
+        return f"{_casino_rank_name(primary)}-high straight"
+    if category == 3:
+        return f"three {_casino_rank_name(primary)}s"
+    if category == 2:
+        return f"{_casino_rank_name(primary)}s and {_casino_rank_name(secondary)}s"
+    if category == 1:
+        return f"pair of {_casino_rank_name(primary)}s"
+    return f"{_casino_rank_name(primary)}-high"
+
+
+def _casino_evaluate_five_card_poker(cards):
+    ranks = sorted((_casino_card_rank(card) for card in list(cards or ())), reverse=True)
+    suits = [_casino_card_suit(card) for card in list(cards or ())]
+    counts = Counter(ranks)
+    ordered_counts = sorted(counts.items(), key=lambda item: (item[1], item[0]), reverse=True)
+    flush = len(set(suits)) == 1 if suits else False
+    straight_high = _casino_straight_high(ranks)
+
+    if flush and straight_high:
+        return (8, straight_high)
+
+    if ordered_counts and ordered_counts[0][1] == 4:
+        quad_rank = ordered_counts[0][0]
+        kicker = max(rank for rank in ranks if rank != quad_rank)
+        return (7, quad_rank, kicker)
+
+    if len(ordered_counts) >= 2 and ordered_counts[0][1] == 3 and ordered_counts[1][1] >= 2:
+        return (6, ordered_counts[0][0], ordered_counts[1][0])
+
+    if flush:
+        return tuple([5] + sorted(ranks, reverse=True))
+
+    if straight_high:
+        return (4, straight_high)
+
+    if ordered_counts and ordered_counts[0][1] == 3:
+        trips = ordered_counts[0][0]
+        kickers = sorted((rank for rank in ranks if rank != trips), reverse=True)
+        return tuple([3, trips] + kickers)
+
+    pair_ranks = [rank for rank, count in ordered_counts if count == 2]
+    if len(pair_ranks) >= 2:
+        high_pair, low_pair = sorted(pair_ranks, reverse=True)[:2]
+        kicker = max(rank for rank in ranks if rank not in {high_pair, low_pair})
+        return (2, high_pair, low_pair, kicker)
+
+    if len(pair_ranks) == 1:
+        pair_rank = pair_ranks[0]
+        kickers = sorted((rank for rank in ranks if rank != pair_rank), reverse=True)
+        return tuple([1, pair_rank] + kickers)
+
+    return tuple([0] + sorted(ranks, reverse=True))
+
+
+def _casino_best_poker_hand(cards):
+    best_score = None
+    best_cards = None
+    for combo in itertools.combinations(list(cards or ()), 5):
+        score = _casino_evaluate_five_card_poker(combo)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_cards = combo
+    if best_score is None:
+        best_score = (0, 0)
+        best_cards = ()
+    return {
+        "score": best_score,
+        "name": _casino_poker_hand_name(best_score),
+        "category": CASINO_POKER_CATEGORY_NAMES.get(int(best_score[0]), "hand"),
+        "cards": tuple(best_cards),
+    }
+
+
+def _casino_slots_resolve(seed_token, wager):
+    reels = []
+    spin_rng = random.Random(f"{seed_token}:slots")
+    for strip in CASINO_SLOT_REELS:
+        reels.append(str(strip[spin_rng.randrange(len(strip))]).strip().upper() or "BAR")
+    counts = Counter(reels)
+    payout_mult = 0.0
+    outcome_key = "blank"
+    headline = "Cold reels."
+    detail = "The machine clacks through a dead spin and the house keeps the bet."
+    if len(counts) == 1:
+        symbol = reels[0]
+        if symbol == "SEVEN":
+            payout_mult = 8.0
+            outcome_key = "jackpot"
+            headline = "Triple sevens."
+            detail = "All three reels land on sevens and the cabinet starts screaming."
+        elif symbol == "BAR":
+            payout_mult = 5.0
+            outcome_key = "triple_bar"
+            headline = "Triple bars."
+            detail = "The bars line up cleanly and the hopper rattles out a chunky win."
+        elif symbol == "BELL":
+            payout_mult = 4.0
+            outcome_key = "triple_bell"
+            headline = "Bell line."
+            detail = "Three bells ring together and the machine pays with gusto."
+        elif symbol == "CHERRY":
+            payout_mult = 3.0
+            outcome_key = "triple_cherry"
+            headline = "Cherry line."
+            detail = "Three cherries roll through and the house coughs up a bright little prize."
+        else:
+            payout_mult = 2.0
+            outcome_key = "triple_match"
+            headline = "Full match."
+            detail = "All three reels match for a tidy line hit."
+    elif counts.get("CHERRY", 0) == 2:
+        payout_mult = 1.4
+        outcome_key = "double_cherry"
+        headline = "Two cherries."
+        detail = "A pair of cherries catches the payline and softens the swing."
+    elif counts.get("CHERRY", 0) == 1 and counts.get("SEVEN", 0) == 1:
+        payout_mult = 1.1
+        outcome_key = "mixed_line"
+        headline = "Mixed line."
+        detail = "A cherry and a seven clip the line for a tiny kickback."
+
+    payout = max(0, int(round(float(payout_mult) * float(wager))))
+    reel_text = " | ".join(CASINO_SLOT_SYMBOL_LABELS.get(symbol, symbol.title()) for symbol in reels)
+    return {
+        "service": "slots",
+        "wager": int(wager),
+        "stake": int(wager),
+        "payout": int(payout),
+        "outcome_key": outcome_key,
+        "headline": headline,
+        "detail": detail,
+        "summary": f"Reels {reel_text}. {headline}",
+        "result_lines": [
+            f"Reels: {reel_text}",
+            detail,
+        ],
+        "reels": tuple(reels),
+        "social_gain": _casino_social_gain("slots", seed_token),
+    }
+
+
+def _casino_plinko_resolve(seed_token, wager, drop_lane):
+    lane = max(0, min(int(drop_lane), CASINO_PLINKO_LANE_COUNT - 1))
+    bounce_rng = random.Random(f"{seed_token}:plinko:{lane}")
+    position = lane + 1
+    path = []
+    for _ in range(CASINO_PLINKO_ROWS):
+        step = -1 if bounce_rng.random() < 0.5 else 1
+        path.append("L" if step < 0 else "R")
+        position = max(0, min(position + step, len(CASINO_PLINKO_BUCKET_MULTIPLIERS) - 1))
+    payout_mult = float(CASINO_PLINKO_BUCKET_MULTIPLIERS[position])
+    payout = max(0, int(round(float(wager) * payout_mult)))
+    if payout_mult <= 0.0:
+        headline = "Edge bucket."
+        detail = "The disc chatters off the pegs and dies in a zero lane."
+        outcome_key = "rim"
+    elif payout_mult < 1.0:
+        headline = "Shallow bucket."
+        detail = "The board gives a little back, but not enough to cover the full drop."
+        outcome_key = "low"
+    elif payout_mult < 2.0:
+        headline = "Middle bucket."
+        detail = "The disc settles into a fair-paying lane and the crowd gives a polite murmur."
+        outcome_key = "mid"
+    else:
+        headline = "Center bucket."
+        detail = "The disc fights through the pegs and snaps into the hot center pocket."
+        outcome_key = "center"
+    return {
+        "service": "plinko",
+        "wager": int(wager),
+        "stake": int(wager),
+        "payout": int(payout),
+        "outcome_key": outcome_key,
+        "headline": headline,
+        "detail": detail,
+        "summary": f"Lane {lane + 1} rides {' '.join(path)} into bucket {position + 1}. {headline}",
+        "result_lines": [
+            f"Drop lane {lane + 1}: {' '.join(path)}",
+            f"Bucket {position + 1} pays x{payout_mult:.1f}.",
+            detail,
+        ],
+        "drop_lane": int(lane),
+        "bucket_index": int(position),
+        "path": tuple(path),
+        "social_gain": _casino_social_gain("plinko", seed_token),
+    }
+
+
+def _casino_blackjack_can_split(cards):
+    cards = list(cards or ())
+    if len(cards) != 2:
+        return False
+    return _casino_blackjack_value(cards[0]) == _casino_blackjack_value(cards[1])
+
+
+def _casino_twenty_one_hand(cards, stake, *, state="pending", doubled=False, natural_eligible=True, split_origin=False):
+    return {
+        "cards": list(cards or ()),
+        "stake": int(stake),
+        "state": str(state or "pending").strip().lower() or "pending",
+        "doubled": bool(doubled),
+        "natural_eligible": bool(natural_eligible),
+        "split_origin": bool(split_origin),
+    }
+
+
+def _casino_twenty_one_normalize_session(session):
+    if not isinstance(session, dict):
+        return None
+    current = {
+        "service": "twenty_one",
+        "seed_token": str(session.get("seed_token", "")).strip(),
+        "wager": int(session.get("wager", 0)),
+        "stake": int(session.get("stake", session.get("wager", 0))),
+        "deck": list(session.get("deck", ()) or ()),
+        "deck_index": int(session.get("deck_index", 0)),
+        "dealer_cards": list(session.get("dealer_cards", ()) or ()),
+        "property_id": session.get("property_id"),
+        "property_name": str(session.get("property_name", "")).strip(),
+        "split_used": bool(session.get("split_used", False)),
+    }
+    raw_hands = list(session.get("hands", ()) or ())
+    hands = []
+    if raw_hands:
+        for idx, raw in enumerate(raw_hands):
+            raw = raw if isinstance(raw, dict) else {}
+            hands.append(_casino_twenty_one_hand(
+                raw.get("cards", ()),
+                raw.get("stake", current["wager"]),
+                state=raw.get("state", "active" if idx == 0 else "pending"),
+                doubled=raw.get("doubled", False),
+                natural_eligible=raw.get("natural_eligible", True),
+                split_origin=raw.get("split_origin", False),
+            ))
+    else:
+        hands.append(_casino_twenty_one_hand(
+            session.get("player_cards", ()),
+            current["stake"],
+            state="active",
+            natural_eligible=True,
+        ))
+    current["hands"] = hands
+    current["split_used"] = bool(current["split_used"] or len(hands) > 1)
+    active_hand_index = int(session.get("active_hand_index", 0))
+    active_found = False
+    for idx, hand in enumerate(current["hands"]):
+        state = str(hand.get("state", "pending")).strip().lower()
+        if state == "active":
+            current["active_hand_index"] = idx
+            active_found = True
+            break
+    if not active_found:
+        if current["hands"]:
+            active_hand_index = max(0, min(active_hand_index, len(current["hands"]) - 1))
+            if str(current["hands"][active_hand_index].get("state", "pending")).strip().lower() == "pending":
+                current["hands"][active_hand_index]["state"] = "active"
+                current["active_hand_index"] = active_hand_index
+                active_found = True
+        if not active_found:
+            for idx, hand in enumerate(current["hands"]):
+                if str(hand.get("state", "pending")).strip().lower() == "pending":
+                    hand["state"] = "active"
+                    current["active_hand_index"] = idx
+                    active_found = True
+                    break
+    if not active_found:
+        current["active_hand_index"] = -1
+    current["stake"] = sum(max(0, int(hand.get("stake", 0))) for hand in current["hands"])
+    return current
+
+
+def _casino_twenty_one_active_hand(session):
+    if not isinstance(session, dict):
+        return None
+    hands = list(session.get("hands", ()) or ())
+    idx = int(session.get("active_hand_index", -1))
+    if 0 <= idx < len(hands):
+        return hands[idx]
+    return None
+
+
+def _casino_twenty_one_draw_card(session):
+    if not isinstance(session, dict):
+        return None
+    deck = list(session.get("deck", ()) or ())
+    deck_index = int(session.get("deck_index", 0))
+    if deck_index >= len(deck):
+        return None
+    card = deck[deck_index]
+    session["deck_index"] = deck_index + 1
+    return card
+
+
+def _casino_twenty_one_activate_next_hand(session):
+    if not isinstance(session, dict):
+        return False
+    for idx, hand in enumerate(list(session.get("hands", ()) or ())):
+        if str(hand.get("state", "pending")).strip().lower() == "pending":
+            hand["state"] = "active"
+            session["active_hand_index"] = idx
+            return True
+    session["active_hand_index"] = -1
+    return False
+
+
+def _casino_twenty_one_auto_progress(session):
+    if not isinstance(session, dict):
+        return False
+    while True:
+        hand = _casino_twenty_one_active_hand(session)
+        if not isinstance(hand, dict):
+            return False
+        total, _soft = _casino_blackjack_total(hand.get("cards", ()))
+        if total > 21:
+            hand["state"] = "bust"
+        elif total == 21:
+            hand["state"] = "stood"
+        else:
+            return True
+        if not _casino_twenty_one_activate_next_hand(session):
+            return False
+
+
+def _casino_twenty_one_action_ids(session, wallet_credits=0):
+    current = _casino_twenty_one_normalize_session(session)
+    hand = _casino_twenty_one_active_hand(current)
+    if not current or not isinstance(hand, dict):
+        return ()
+    action_ids = ["twenty_one:hit", "twenty_one:stand"]
+    wager = int(current.get("wager", 0))
+    if len(list(hand.get("cards", ()) or ())) == 2 and wallet_credits >= wager:
+        action_ids.append("twenty_one:double")
+        if (
+            len(list(current.get("hands", ()) or ())) == 1
+            and not bool(current.get("split_used", False))
+            and _casino_blackjack_can_split(hand.get("cards", ()))
+        ):
+            action_ids.append("twenty_one:split")
+    return tuple(action_ids)
+
+
+def _casino_twenty_one_finalize(session):
+    current = _casino_twenty_one_normalize_session(session)
+    if not current:
+        return None
+    while True:
+        dealer_total, dealer_soft = _casino_blackjack_total(current["dealer_cards"])
+        if dealer_total > 17:
+            break
+        if dealer_total == 17 and not dealer_soft:
+            break
+        card = _casino_twenty_one_draw_card(current)
+        if not card:
+            break
+        current["dealer_cards"].append(card)
+
+    dealer_total, _dealer_soft = _casino_blackjack_total(current["dealer_cards"])
+    hand_results = []
+    payout = 0
+    for idx, hand in enumerate(current["hands"]):
+        cards = list(hand.get("cards", ()) or ())
+        total, _soft = _casino_blackjack_total(cards)
+        hand_stake = int(hand.get("stake", current["wager"]))
+        if total > 21 or str(hand.get("state", "")).strip().lower() == "bust":
+            result_key = "bust"
+            hand_payout = 0
+        elif dealer_total > 21 or total > dealer_total:
+            result_key = "win"
+            hand_payout = hand_stake * 2
+        elif dealer_total == total:
+            result_key = "push"
+            hand_payout = hand_stake
+        else:
+            result_key = "lose"
+            hand_payout = 0
+        hand_results.append({
+            "index": idx,
+            "cards": tuple(cards),
+            "total": int(total),
+            "stake": int(hand_stake),
+            "result": result_key,
+            "doubled": bool(hand.get("doubled", False)),
+            "split_origin": bool(hand.get("split_origin", False)),
+        })
+        payout += int(hand_payout)
+
+    result_counter = Counter(row["result"] for row in hand_results)
+    if result_counter.get("win", 0) > 0 and result_counter.get("lose", 0) == 0 and result_counter.get("bust", 0) == 0:
+        outcome_key = "player_win"
+        headline = "You beat the dealer."
+    elif result_counter.get("win", 0) > 0 and (result_counter.get("lose", 0) > 0 or result_counter.get("bust", 0) > 0):
+        outcome_key = "mixed"
+        headline = "The split goes both ways."
+    elif result_counter.get("push", 0) == len(hand_results):
+        outcome_key = "push"
+        headline = "Push."
+    elif dealer_total > 21 and result_counter.get("bust", 0) == len(hand_results):
+        outcome_key = "player_bust"
+        headline = "Every hand busts."
+    elif dealer_total > 21:
+        outcome_key = "dealer_bust"
+        headline = "Dealer busts."
+    elif result_counter.get("bust", 0) == len(hand_results):
+        outcome_key = "player_bust"
+        headline = "Every hand busts."
+    else:
+        outcome_key = "dealer_win"
+        headline = "Dealer takes it."
+
+    detail_bits = []
+    for row in hand_results:
+        label = f"Hand {row['index'] + 1}"
+        status = row["result"]
+        if status == "win":
+            status_text = "wins"
+        elif status == "push":
+            status_text = "pushes"
+        elif status == "bust":
+            status_text = "busts"
+        else:
+            status_text = "loses"
+        detail_bits.append(f"{label} {status_text}")
+    detail = ", ".join(detail_bits) + "."
+
+    result_lines = [_casino_blackjack_line("Dealer", current["dealer_cards"])]
+    for row in hand_results:
+        tags = []
+        if row["split_origin"]:
+            tags.append("split")
+        if row["doubled"]:
+            tags.append("double")
+        suffix = f" [{', '.join(tags)}]" if tags else ""
+        result_lines.append(
+            f"{_casino_blackjack_line(f'Hand {row['index'] + 1}', row['cards'])}{suffix} -> {row['result']}."
+        )
+    result_lines.append(detail)
+
+    return {
+        "service": "twenty_one",
+        "wager": int(current["wager"]),
+        "stake": int(current["stake"]),
+        "payout": int(payout),
+        "outcome_key": outcome_key,
+        "headline": headline,
+        "detail": detail,
+        "summary": (
+            f"Dealer {_casino_cards_text(current['dealer_cards'])} ({dealer_total}). "
+            f"{detail}"
+        ),
+        "result_lines": result_lines,
+        "player_cards": tuple(hand_results[0]["cards"]) if hand_results else (),
+        "player_hands": tuple(row["cards"] for row in hand_results),
+        "player_total": int(hand_results[0]["total"]) if hand_results else 0,
+        "player_totals": tuple(int(row["total"]) for row in hand_results),
+        "dealer_cards": tuple(current["dealer_cards"]),
+        "dealer_total": int(dealer_total),
+        "hand_results": tuple(
+            {
+                "index": int(row["index"]),
+                "total": int(row["total"]),
+                "stake": int(row["stake"]),
+                "result": str(row["result"]),
+                "doubled": bool(row["doubled"]),
+                "split_origin": bool(row["split_origin"]),
+            }
+            for row in hand_results
+        ),
+        "social_gain": _casino_social_gain("twenty_one", f"{current['seed_token']}:{outcome_key}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_twenty_one_start(seed_token, wager):
+    deck = _casino_shuffled_deck(seed_token)
+    return {
+        "service": "twenty_one",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": int(wager),
+        "deck": list(deck),
+        "deck_index": 4,
+        "dealer_cards": [deck[1], deck[3]],
+        "hands": [
+            _casino_twenty_one_hand([deck[0], deck[2]], int(wager), state="active", natural_eligible=True),
+        ],
+        "active_hand_index": 0,
+        "split_used": False,
+    }
+
+
+def _casino_twenty_one_resolve(session, action):
+    current = _casino_twenty_one_normalize_session(session)
+    if not current:
+        return None, None
+    action = str(action or "").strip().lower()
+    active_hand = _casino_twenty_one_active_hand(current)
+    dealer_total, _dealer_soft = _casino_blackjack_total(current["dealer_cards"])
+
+    if action == "start" and isinstance(active_hand, dict):
+        player_total, _player_soft = _casino_blackjack_total(active_hand.get("cards", ()))
+        player_natural = len(list(active_hand.get("cards", ()) or ())) == 2 and player_total == 21 and bool(active_hand.get("natural_eligible", True))
+        dealer_natural = len(current["dealer_cards"]) == 2 and dealer_total == 21
+        if player_natural or dealer_natural:
+            if player_natural and dealer_natural:
+                outcome_key = "push_blackjack"
+                payout = int(active_hand.get("stake", current["wager"]))
+                headline = "Both hands open hot."
+                detail = "You and the dealer both flip blackjack, so the bet pushes."
+            elif player_natural:
+                outcome_key = "player_blackjack"
+                payout = int(round(float(active_hand.get("stake", current["wager"])) * 2.5))
+                headline = "Natural 21."
+                detail = "You peel blackjack off the deal and the table pays 3 to 2."
+            else:
+                outcome_key = "dealer_blackjack"
+                payout = 0
+                headline = "Dealer blackjack."
+                detail = "The dealer turns over a natural and sweeps the felt clean."
+            return None, {
+                "service": "twenty_one",
+                "wager": int(current["wager"]),
+                "stake": int(current["stake"]),
+                "payout": int(payout),
+                "outcome_key": outcome_key,
+                "headline": headline,
+                "detail": detail,
+                "summary": (
+                    f"Dealer {_casino_cards_text(current['dealer_cards'])} against "
+                    f"{_casino_cards_text(active_hand.get('cards', ())) }. {headline}"
+                ).replace("  ", " "),
+                "result_lines": [
+                    _casino_blackjack_line("Dealer", current["dealer_cards"]),
+                    _casino_blackjack_line("You", active_hand.get("cards", ())),
+                    detail,
+                ],
+                "player_cards": tuple(active_hand.get("cards", ()) or ()),
+                "player_hands": (tuple(active_hand.get("cards", ()) or ()),),
+                "player_total": int(player_total),
+                "player_totals": (int(player_total),),
+                "dealer_cards": tuple(current["dealer_cards"]),
+                "dealer_total": int(dealer_total),
+                "social_gain": _casino_social_gain("twenty_one", current["seed_token"]),
+                "stake_already_paid": True,
+            }
+        return current, None
+
+    if not isinstance(active_hand, dict):
+        return None, _casino_twenty_one_finalize(current)
+
+    if action == "split" and _casino_blackjack_can_split(active_hand.get("cards", ())):
+        cards = list(active_hand.get("cards", ()) or ())
+        card_a = _casino_twenty_one_draw_card(current)
+        card_b = _casino_twenty_one_draw_card(current)
+        if card_a:
+            current["hands"][0] = _casino_twenty_one_hand(
+                [cards[0], card_a],
+                current["wager"],
+                state="active",
+                natural_eligible=False,
+                split_origin=True,
+            )
+        if card_b:
+            current["hands"].append(_casino_twenty_one_hand(
+                [cards[1], card_b],
+                current["wager"],
+                state="pending",
+                natural_eligible=False,
+                split_origin=True,
+            ))
+        current["active_hand_index"] = 0
+        current["split_used"] = True
+        current["stake"] = sum(int(hand.get("stake", 0)) for hand in current["hands"])
+        if _casino_twenty_one_auto_progress(current):
+            return current, None
+        return None, _casino_twenty_one_finalize(current)
+
+    if action == "double":
+        active_hand["stake"] = int(active_hand.get("stake", current["wager"])) + int(current["wager"])
+        active_hand["doubled"] = True
+        current["stake"] = sum(int(hand.get("stake", 0)) for hand in current["hands"])
+        card = _casino_twenty_one_draw_card(current)
+        if card:
+            active_hand["cards"].append(card)
+        total, _soft = _casino_blackjack_total(active_hand.get("cards", ()))
+        active_hand["state"] = "bust" if total > 21 else "stood"
+        if _casino_twenty_one_activate_next_hand(current) and _casino_twenty_one_auto_progress(current):
+            return current, None
+        return None, _casino_twenty_one_finalize(current)
+
+    if action == "hit":
+        card = _casino_twenty_one_draw_card(current)
+        if card:
+            active_hand["cards"].append(card)
+        total, _soft = _casino_blackjack_total(active_hand.get("cards", ()))
+        if total > 21:
+            active_hand["state"] = "bust"
+            if _casino_twenty_one_activate_next_hand(current) and _casino_twenty_one_auto_progress(current):
+                return current, None
+            return None, _casino_twenty_one_finalize(current)
+        if total == 21:
+            active_hand["state"] = "stood"
+            if _casino_twenty_one_activate_next_hand(current) and _casino_twenty_one_auto_progress(current):
+                return current, None
+            return None, _casino_twenty_one_finalize(current)
+        return current, None
+
+    if action == "stand":
+        active_hand["state"] = "stood"
+        if _casino_twenty_one_activate_next_hand(current) and _casino_twenty_one_auto_progress(current):
+            return current, None
+        return None, _casino_twenty_one_finalize(current)
+
+    return current, None
+
+
+def _casino_holdem_dealer_qualifies(score):
+    if not score:
+        return False
+    category = int(score[0])
+    if category >= 2:
+        return True
+    if category == 1:
+        return int(score[1]) >= 4
+    return False
+
+
+def _casino_holdem_ante_bonus_multiplier(score):
+    if not score:
+        return 0
+    if int(score[0]) == 8 and len(score) > 1 and int(score[1]) == 14:
+        return int(CASINO_HOLDEM_ANTE_BONUS_MULTIPLIERS.get("royal_flush", 0))
+    return int(CASINO_HOLDEM_ANTE_BONUS_MULTIPLIERS.get(int(score[0]), 0))
+
+
+def _casino_holdem_start(seed_token, wager):
+    deck = _casino_shuffled_deck(seed_token)
+    return {
+        "service": "casino_holdem",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": int(wager),
+        "player_cards": [deck[0], deck[2]],
+        "dealer_cards": [deck[1], deck[3]],
+        "flop": [deck[4], deck[5], deck[6]],
+        "turn": deck[7],
+        "river": deck[8],
+    }
+
+
+def _casino_holdem_resolve(session, action):
+    if not isinstance(session, dict):
+        return None
+    wager = int(session.get("wager", 0))
+    stake = int(session.get("stake", wager))
+    action = str(action or "").strip().lower()
+    player_cards = list(session.get("player_cards", ()) or ())
+    dealer_cards = list(session.get("dealer_cards", ()) or ())
+    flop = list(session.get("flop", ()) or ())
+    turn = str(session.get("turn", "")).strip().upper()
+    river = str(session.get("river", "")).strip().upper()
+    board = flop + ([turn] if turn else []) + ([river] if river else [])
+    board_text = _casino_cards_text(board)
+    if action == "fold":
+        return {
+            "service": "casino_holdem",
+            "wager": int(wager),
+            "stake": int(stake),
+            "payout": 0,
+            "outcome_key": "fold",
+            "headline": "You fold the ante.",
+            "detail": "The flop looks wrong, so you release the hand and leave the ante in the circle.",
+            "summary": f"You fold after the flop and forfeit the {wager}c ante.",
+            "result_lines": [
+                f"Your hand: {_casino_cards_text(player_cards)}",
+                f"Flop: {_casino_cards_text(flop)}",
+                "You fold and let the ante go.",
+            ],
+            "player_cards": tuple(player_cards),
+            "dealer_cards": tuple(dealer_cards),
+            "board": tuple(flop),
+            "social_gain": _casino_social_gain("casino_holdem", f"{session.get('seed_token', '')}:fold"),
+            "stake_already_paid": True,
+        }
+
+    ante_stake = int(wager)
+    call_stake = max(0, int(stake) - int(ante_stake))
+    player_best = _casino_best_poker_hand(player_cards + board)
+    dealer_best = _casino_best_poker_hand(dealer_cards + board)
+    dealer_qualifies = _casino_holdem_dealer_qualifies(dealer_best["score"])
+    ante_bonus_mult = _casino_holdem_ante_bonus_multiplier(player_best["score"])
+    ante_bonus = int(max(0, ante_bonus_mult) * ante_stake)
+
+    if not dealer_qualifies:
+        outcome_key = "dealer_not_qualify"
+        payout = int((ante_stake * 2) + call_stake + ante_bonus)
+        headline = "Dealer doesn't qualify."
+        detail = "The dealer misses pair of fours, so the ante wins and the call pushes."
+    elif player_best["score"] > dealer_best["score"]:
+        outcome_key = "player_win"
+        payout = int((stake * 2) + ante_bonus)
+        headline = "You drag the pot."
+        detail = "Your made hand holds up, so both circles win even money."
+    elif player_best["score"] == dealer_best["score"]:
+        outcome_key = "push"
+        payout = int(stake + ante_bonus)
+        headline = "Split pot."
+        detail = "The board runs out into a tie, so the ante and call both push."
+    else:
+        outcome_key = "dealer_win"
+        payout = int(ante_bonus)
+        headline = "Dealer takes it."
+        detail = "The house makes the better hand and sweeps the ante and call."
+
+    result_lines = [
+        f"Board: {board_text}",
+        f"You: {_casino_cards_text(player_cards)} ({player_best['name']})",
+        f"Dealer: {_casino_cards_text(dealer_cards)} ({dealer_best['name']})",
+        "Dealer qualifies." if dealer_qualifies else "Dealer does not qualify (needs pair of 4s+).",
+    ]
+    if ante_bonus > 0:
+        result_lines.append(f"Ante bonus pays x{ante_bonus_mult} for your {player_best['name']}.")
+    result_lines.append(detail)
+    return {
+        "service": "casino_holdem",
+        "wager": int(wager),
+        "stake": int(stake),
+        "payout": int(payout),
+        "outcome_key": outcome_key,
+        "headline": headline,
+        "detail": detail,
+        "summary": (
+            f"Board {board_text}. You show {player_best['name']}; dealer shows {dealer_best['name']}. {headline}"
+        ),
+        "result_lines": result_lines,
+        "player_cards": tuple(player_cards),
+        "dealer_cards": tuple(dealer_cards),
+        "board": tuple(board),
+        "player_hand_name": str(player_best["name"]),
+        "dealer_hand_name": str(dealer_best["name"]),
+        "dealer_qualifies": bool(dealer_qualifies),
+        "ante_bonus": int(ante_bonus),
+        "ante_bonus_mult": int(ante_bonus_mult),
+        "social_gain": _casino_social_gain("casino_holdem", f"{session.get('seed_token', '')}:{outcome_key}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_apply_round_result(sim, eid, prop, service, round_result):
+    service = str(service or "").strip().lower()
+    profile = _casino_game_profile(service)
+    if not profile or not isinstance(round_result, dict):
+        return None, {
+            "eid": eid,
+            "property_id": prop.get("id") if isinstance(prop, dict) else None,
+            "property_name": prop.get("name", prop.get("id")) if isinstance(prop, dict) else str(prop or "Casino"),
+            "service": service,
+            "reason": "invalid_round",
+        }
+
+    wager = max(0, int(round_result.get("wager", 0)))
+    stake = max(0, int(round_result.get("stake", wager)))
+    payout = max(0, int(round_result.get("payout", 0)))
+    stake_already_paid = bool(round_result.get("stake_already_paid", False))
+    assets = sim.ecs.get(PlayerAssets).get(eid)
+    credits_before = int(getattr(assets, "credits", 0)) if assets else 0
+    if not stake_already_paid:
+        if credits_before < stake:
+            return None, {
+                "eid": eid,
+                "property_id": prop.get("id") if isinstance(prop, dict) else None,
+                "property_name": prop.get("name", prop.get("id")) if isinstance(prop, dict) else str(prop or "Casino"),
+                "service": service,
+                "reason": "no_credits",
+                "cost": int(stake),
+                "credits": int(credits_before),
+            }
+        if assets:
+            assets.credits = max(0, int(assets.credits) - int(stake))
+            assets.credits = int(assets.credits) + int(payout)
+            credits_after = int(assets.credits)
+        else:
+            credits_after = max(0, int(credits_before) - int(stake) + int(payout))
+    else:
+        if assets:
+            assets.credits = int(assets.credits) + int(payout)
+            credits_after = int(assets.credits)
+        else:
+            credits_after = int(credits_before) + int(payout)
+
+    social_gain = max(0, int(round_result.get("social_gain", 0)))
+    needs = sim.ecs.get(NPCNeeds).get(eid)
+    if needs and social_gain > 0:
+        needs.social = _clamp(float(needs.social) + float(social_gain))
+
+    payload = dict(round_result)
+    payload.update({
+        "eid": eid,
+        "property_id": prop.get("id") if isinstance(prop, dict) else None,
+        "property_name": (
+            str(prop.get("name", prop.get("id", "Casino"))).strip()
+            if isinstance(prop, dict)
+            else str(prop or "Casino").strip()
+        ) or "Casino",
+        "service": service,
+        "wager": int(wager),
+        "stake": int(stake),
+        "payout": int(payout),
+        "net_credits": int(payout - stake),
+        "credits_after": int(credits_after),
+        "social_gain": int(social_gain),
+    })
+    return payload, None
+
+
+def _casino_game_profile(service):
+    return CASINO_GAME_PROFILES.get(str(service or "").strip().lower())
+
+
+def _casino_game_title(service):
+    profile = _casino_game_profile(service)
+    if profile:
+        return str(profile.get("title", service)).strip() or str(service or "Casino game").strip()
+    return str(service or "Casino game").replace("_", " ").title()
+
 
 def _site_service_label(service):
     service = str(service or "").strip().lower()
+    casino_profile = CASINO_GAME_PROFILES.get(service)
+    if casino_profile:
+        return str(casino_profile.get("service_label", casino_profile.get("title", service))).strip().lower()
     mapping = {
         "intel": "intel",
         "shelter": "shelter",
@@ -5180,6 +6381,9 @@ def _site_service_label(service):
 
 def _service_menu_option_label(option_id):
     option_id = str(option_id or "").strip().lower()
+    casino_profile = _casino_game_profile(option_id)
+    if casino_profile:
+        return str(casino_profile.get("menu_label", _casino_game_title(option_id))).strip()
     mapping = {
         "trade_buy": "Browse goods",
         "trade_sell": "Sell goods",
@@ -8048,7 +9252,10 @@ class WorldStreamingSystem(System):
                 local_building_id = str(building.get("building_id", "") or "").strip()
                 chunk_building_id = world_building_id(key[0], key[1], local_building_id)
                 finance_services = list(finance_by_archetype.get(archetype, ()))
-                vehicle_services = list(vehicle_services_for_archetype(archetype))
+                site_services = list(dict.fromkeys(
+                    list(_default_site_services_for_archetype(archetype))
+                    + list(vehicle_services_for_archetype(archetype))
+                ))
                 business_name = str(building.get("business_name") or "").strip()
                 business_founder_name = str(building.get("business_founder_name") or "").strip()
                 business_founder_first_name = str(building.get("business_founder_first_name") or "").strip()
@@ -8075,7 +9282,7 @@ class WorldStreamingSystem(System):
                         "security_features": list(building.get("security_features", ())),
                         "purchase_cost": rng.randint(180, 460),
                         "finance_services": finance_services,
-                        "site_services": vehicle_services,
+                        "site_services": site_services,
                         "is_storefront": bool(building.get("is_storefront")),
                         "business_name": business_name or None,
                         "business_founder_name": business_founder_name or None,
@@ -18246,7 +19453,13 @@ class TradeSystem(System):
             blocked_reason = "no_machine_store" if automated_only else "no_store"
             self.sim.emit(Event("trade_panel_blocked", eid=self.player_eid, reason=blocked_reason))
             return False
-        if not service or not service.get("available"):
+        retain_open_session = bool(
+            bool(state.get("open"))
+            and isinstance(store_prop, dict)
+            and str(state.get("property_id", "") or "").strip()
+            and str(store_prop.get("id", "") or "").strip() == str(state.get("property_id", "") or "").strip()
+        )
+        if (not service or not service.get("available")) and not retain_open_session:
             was_open = bool(state.get("open"))
             state["open"] = False
             state["rows"] = []
@@ -18309,8 +19522,8 @@ class TradeSystem(System):
         state["property_id"] = store_prop["id"]
         state["supply_note"] = str(store.get("supply_note", "")).strip()
         state["contact_note"] = str(terms.get("note", "")).strip()
-        state["service_note"] = str(service.get("service_note", "")).strip()
-        state["service_eid"] = service.get("service_eid")
+        state["service_note"] = str(service.get("service_note", "")).strip() if isinstance(service, dict) else ""
+        state["service_eid"] = service.get("service_eid") if isinstance(service, dict) else None
         self._refresh_trade_inspect_text(state)
 
         if emit_toggle:
@@ -18634,7 +19847,7 @@ class TradeSystem(System):
             success = self._trade_sell(self.player_eid, pos, target_instance_id=instance_id)
             self._refresh_trade_ui(
                 mode="sell",
-                keep_selection=not success,
+                keep_selection=True,
                 preferred_instance_id=instance_id if not success else None,
             )
 
@@ -19443,15 +20656,7 @@ class SiteServiceSystem(System):
         self.sim.events.subscribe("site_service_request", self.on_site_service_request)
 
     def _state(self):
-        state = getattr(self.sim, "site_service_state", None)
-        if not isinstance(state, dict):
-            state = {"cooldowns": {}}
-            self.sim.site_service_state = state
-        cooldowns = state.get("cooldowns")
-        if not isinstance(cooldowns, dict):
-            cooldowns = {}
-            state["cooldowns"] = cooldowns
-        return state
+        return _site_service_state(self.sim)
 
     def _cooldown_key(self, eid, prop, service):
         return (int(eid), str(prop.get("id")), str(service).strip().lower())
@@ -19464,6 +20669,9 @@ class SiteServiceSystem(System):
     def _set_service_cooldown(self, eid, prop, service, duration):
         cooldowns = self._state()["cooldowns"]
         cooldowns[self._cooldown_key(eid, prop, service)] = int(self.sim.tick) + max(1, int(duration))
+
+    def _next_service_roll_index(self, eid, prop, service):
+        return _site_service_roll_index(self.sim, eid, prop, service)
 
     def _position_for(self, eid):
         return self.sim.ecs.get(Position).get(eid)
@@ -19759,7 +20967,69 @@ class SiteServiceSystem(System):
             return "fuel"
         return services[0]
 
-    def _run_site_service(self, eid, prop, pos, service):
+    def _apply_casino_game(self, eid, prop, service, request=None):
+        service = str(service or "").strip().lower()
+        profile = _casino_game_profile(service)
+        if not profile:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                reason="unavailable",
+            ))
+            return
+
+        raw_wager = 0 if not isinstance(request, dict) else request.get("wager", 0)
+        try:
+            wager = int(raw_wager)
+        except (TypeError, ValueError):
+            wager = 0
+        valid_wagers = {int(amount) for amount in profile.get("bet_options", ())}
+        if wager <= 0 or (valid_wagers and wager not in valid_wagers):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                reason="invalid_wager",
+                wager=wager,
+            ))
+            return
+        round_result = dict(request.get("round_result", {}) or {}) if isinstance(request, dict) else {}
+        if not round_result:
+            roll_index = self._next_service_roll_index(eid, prop, service)
+            seed_token = _casino_round_seed(self.sim, eid, prop, service, wager, roll_index)
+            if service == "slots":
+                round_result = _casino_slots_resolve(seed_token, wager)
+            elif service == "plinko":
+                drop_lane = CASINO_PLINKO_LANE_COUNT // 2
+                if isinstance(request, dict):
+                    try:
+                        drop_lane = int(request.get("drop_lane", drop_lane))
+                    except (TypeError, ValueError):
+                        drop_lane = CASINO_PLINKO_LANE_COUNT // 2
+                round_result = _casino_plinko_resolve(seed_token, wager, drop_lane)
+            else:
+                self.sim.emit(Event(
+                    "site_service_blocked",
+                    eid=eid,
+                    property_id=prop["id"],
+                    property_name=prop.get("name", prop["id"]),
+                    service=service,
+                    reason="invalid_round",
+                ))
+                return
+
+        payload, blocked = _casino_apply_round_result(self.sim, eid, prop, service, round_result)
+        if blocked:
+            self.sim.emit(Event("site_service_blocked", **blocked))
+            return
+        self.sim.emit(Event("site_service_used", **payload))
+
+    def _run_site_service(self, eid, prop, pos, service, request=None):
         service = str(service or "").strip().lower()
         if service == "shelter":
             self._apply_shelter(eid, prop)
@@ -19769,6 +21039,9 @@ class SiteServiceSystem(System):
             return True
         if service == "intel":
             self._emit_intel(eid, prop, pos)
+            return True
+        if service in CASINO_GAME_SERVICE_IDS:
+            self._apply_casino_game(eid, prop, service, request=request)
             return True
         if service == "fuel":
             self._apply_fuel_service(eid, prop, pos)
@@ -20172,7 +21445,7 @@ class SiteServiceSystem(System):
             return
 
         service = self._choose_site_service(eid, prop)
-        self._run_site_service(eid, prop, pos, service)
+        self._run_site_service(eid, prop, pos, service, request=event.data)
 
     def on_site_service_request(self, event):
         eid = event.data.get("eid")
@@ -20215,7 +21488,7 @@ class SiteServiceSystem(System):
             ))
             return
 
-        self._run_site_service(eid, prop, pos, service)
+        self._run_site_service(eid, prop, pos, service, request=event.data)
 
 
 class ServiceMenuSystem(System):
@@ -20258,6 +21531,7 @@ class ServiceMenuSystem(System):
         state.setdefault("close_pending", False)
         state.setdefault("machine_action", None)
         state.setdefault("service_menu_mode", "root")
+        state.setdefault("casino_session", None)
         return state
 
     def _position_for(self, eid):
@@ -20291,6 +21565,444 @@ class ServiceMenuSystem(System):
                 return name
         name = str(pending.get("property_name", fallback)).strip()
         return name or fallback
+
+    def _wallet_credits(self):
+        assets = self._assets_for(self.player_eid)
+        return int(getattr(assets, "credits", 0)) if assets else 0
+
+    def _casino_session(self):
+        state = self._dialog_ui_state()
+        session = state.get("casino_session")
+        return session if isinstance(session, dict) else None
+
+    def _set_casino_session(self, session):
+        state = self._dialog_ui_state()
+        state["casino_session"] = dict(session) if isinstance(session, dict) else None
+
+    def _clear_casino_session(self):
+        state = self._dialog_ui_state()
+        state["casino_session"] = None
+
+    def _casino_prop_name(self, prop):
+        if isinstance(prop, dict):
+            name = str(prop.get("name", prop.get("id", "Casino"))).strip()
+            if name:
+                return name
+        return "Casino"
+
+    def _casino_round_seed(self, prop, service, wager):
+        round_index = _site_service_roll_index(self.sim, self.player_eid, prop, service)
+        return _casino_round_seed(self.sim, self.player_eid, prop, service, wager, round_index)
+
+    def _casino_commit_stake(self, amount):
+        amount = max(0, int(amount))
+        assets = self._assets_for(self.player_eid)
+        credits = int(getattr(assets, "credits", 0)) if assets else 0
+        if credits < amount:
+            return False, credits
+        if assets and amount > 0:
+            assets.credits = max(0, int(assets.credits) - amount)
+            credits = int(assets.credits)
+        return True, credits
+
+    def _open_casino_modal(self, prop, service, *, subtitle="", transcript=None, topics=None, hint="", mode="root", session=None):
+        state = self._dialog_ui_state()
+        prop_name = self._casino_prop_name(prop)
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": prop.get("id") if isinstance(prop, dict) else None,
+            "title": f"{_casino_game_title(service)}: {prop_name}",
+            "subtitle": str(subtitle or "").strip(),
+            "transcript": list(transcript or ()),
+            "topics": list(topics or ()),
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": str(hint or "").strip(),
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": str(mode or "root").strip() or "root",
+            "casino_session": dict(session) if isinstance(session, dict) else None,
+        })
+
+    def _emit_casino_blocked(self, prop, service, reason, **data):
+        prop_name = self._casino_prop_name(prop)
+        self._begin_pending_service_result(
+            channel="site",
+            property_id=prop.get("id") if isinstance(prop, dict) else None,
+            property_name=prop_name,
+            service=service,
+        )
+        payload = {
+            "eid": self.player_eid,
+            "property_id": prop.get("id") if isinstance(prop, dict) else None,
+            "property_name": prop_name,
+            "service": str(service or "").strip().lower(),
+            "reason": str(reason or "blocked").strip().lower(),
+        }
+        payload.update(data)
+        self.sim.emit(Event("site_service_blocked", **payload))
+
+    def _emit_casino_round(self, prop, service, round_result, *, show_result=True):
+        payload, blocked = _casino_apply_round_result(self.sim, self.player_eid, prop, service, round_result)
+        if blocked:
+            if show_result:
+                self._begin_pending_service_result(
+                    channel="site",
+                    property_id=blocked.get("property_id"),
+                    property_name=blocked.get("property_name", self._casino_prop_name(prop)),
+                    service=service,
+                )
+            self.sim.emit(Event("site_service_blocked", **blocked))
+            return False
+        self._clear_casino_session()
+        if show_result:
+            self._begin_pending_service_result(
+                channel="site",
+                property_id=payload.get("property_id"),
+                property_name=payload.get("property_name", self._casino_prop_name(prop)),
+                service=service,
+            )
+        self.sim.emit(Event("site_service_used", **payload))
+        return True
+
+    def _open_plinko_lane_menu(self, prop, service, wager):
+        session = {
+            "service": service,
+            "property_id": prop.get("id"),
+            "property_name": self._casino_prop_name(prop),
+            "wager": int(wager),
+            "stake": int(wager),
+            "seed_token": self._casino_round_seed(prop, service, wager),
+        }
+        topics = [
+            {"id": f"plinko:lane:{lane}", "label": f"Drop lane {lane + 1}"}
+            for lane in range(CASINO_PLINKO_LANE_COUNT)
+        ]
+        transcript = [
+            f"Choose a lane for {_credit_amount_label(wager)}.",
+            "Center buckets pay best if the pegs keep the disc alive.",
+            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+        ]
+        self._open_casino_modal(
+            prop,
+            service,
+            subtitle="Choose a drop lane",
+            transcript=transcript,
+            topics=topics,
+            hint="Pick a lane to drop the disc. Esc walks away and forfeits the posted chip.",
+            mode="casino:plinko:lane",
+            session=session,
+        )
+
+    def _open_twenty_one_table(self, prop, session):
+        session = _casino_twenty_one_normalize_session(session)
+        dealer_cards = list(session.get("dealer_cards", ()) or ()) if isinstance(session, dict) else []
+        hands = list(session.get("hands", ()) or ()) if isinstance(session, dict) else []
+        active_idx = int(session.get("active_hand_index", -1)) if isinstance(session, dict) else -1
+        transcript = [
+            f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is on the felt.",
+            _casino_blackjack_line("Dealer", dealer_cards, hide_hole=True),
+        ]
+        for idx, hand in enumerate(hands):
+            label = f"Hand {idx + 1}"
+            if idx == active_idx:
+                label += " *"
+            line = _casino_blackjack_line(label, hand.get("cards", ()))
+            tags = []
+            if bool(hand.get("split_origin", False)):
+                tags.append("split")
+            if bool(hand.get("doubled", False)):
+                tags.append("double")
+            state = str(hand.get("state", "")).strip().lower()
+            if state in {"stood", "bust"} and idx != active_idx:
+                tags.append(state)
+            if tags:
+                line = f"{line} [{', '.join(tags)}]"
+            transcript.append(line)
+        transcript.append(f"Wallet {_credit_amount_label(self._wallet_credits())}.")
+        topics = []
+        action_ids = _casino_twenty_one_action_ids(session, self._wallet_credits())
+        label_by_action = {
+            "twenty_one:hit": "Hit",
+            "twenty_one:stand": "Stand",
+            "twenty_one:double": f"Double Down (+{_credit_amount_label(int(session.get('wager', 0)))})",
+            "twenty_one:split": f"Split Pair (+{_credit_amount_label(int(session.get('wager', 0)))})",
+        }
+        for action_id in action_ids:
+            topics.append({"id": action_id, "label": label_by_action.get(action_id, action_id)})
+        self._open_casino_modal(
+            prop,
+            "twenty_one",
+            subtitle="Play the hand",
+            transcript=transcript,
+            topics=topics,
+            hint="Hit, stand, double, or split when the table allows it. Esc forfeits the full posted stake.",
+            mode="casino:twenty_one:hand",
+            session=session,
+        )
+
+    def _open_holdem_table(self, prop, session):
+        wager = int(session.get("wager", 0))
+        transcript = [
+            f"Ante {_credit_amount_label(wager)} is posted.",
+            f"Your hand: {_casino_cards_text(session.get('player_cards', ())) }".rstrip(),
+            f"Flop: {_casino_cards_text(session.get('flop', ())) }".rstrip(),
+            "Dealer: ?? ??",
+            f"Call adds {_credit_amount_label(wager)} more; fold surrenders the ante.",
+            "Dealer qualifies with pair of 4s or better. Straight or better pays an ante bonus.",
+            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+        ]
+        topics = [
+            {"id": "casino_holdem:call", "label": f"Call {_credit_amount_label(wager)}"},
+            {"id": "casino_holdem:fold", "label": "Fold"},
+        ]
+        self._open_casino_modal(
+            prop,
+            "casino_holdem",
+            subtitle="Read the flop",
+            transcript=transcript,
+            topics=topics,
+            hint="Call or fold. Esc walks away and forfeits the ante.",
+            mode="casino:holdem:hand",
+            session=session,
+        )
+
+    def _start_casino_round(self, prop, service, wager):
+        wager = int(wager)
+        prop_name = self._casino_prop_name(prop)
+        profile = _casino_game_profile(service)
+        valid_wagers = {int(amount) for amount in profile.get("bet_options", ())} if profile else set()
+        if wager <= 0 or (valid_wagers and wager not in valid_wagers):
+            self._emit_casino_blocked(prop, service, "invalid_wager", wager=wager)
+            return
+
+        if service == "slots":
+            seed_token = self._casino_round_seed(prop, service, wager)
+            self._emit_casino_round(prop, service, _casino_slots_resolve(seed_token, wager))
+            return
+
+        if service == "plinko":
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            self._open_plinko_lane_menu(prop, service, wager)
+            return
+
+        if service == "twenty_one":
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            session = _casino_twenty_one_start(self._casino_round_seed(prop, service, wager), wager)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            next_session, round_result = _casino_twenty_one_resolve(session, "start")
+            if round_result:
+                self._emit_casino_round(prop, service, round_result)
+                return
+            self._open_twenty_one_table(prop, next_session or session)
+            return
+
+        if service == "casino_holdem":
+            needed = int(wager) * 2
+            if self._wallet_credits() < needed:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=needed, credits=self._wallet_credits(), wager=wager)
+                return
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            session = _casino_holdem_start(self._casino_round_seed(prop, service, wager), wager)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            self._open_holdem_table(prop, session)
+            return
+
+        self._present_service_result("Casino", ["That game is not available right now."], property_id=prop.get("id"))
+
+    def _handle_active_casino_option(self, prop, option_id):
+        session = self._casino_session()
+        if not session:
+            return False
+        if not isinstance(prop, dict):
+            self._present_service_result("Casino", ["That table is not available right now."], property_id=prop.get("id") if isinstance(prop, dict) else None)
+            return True
+
+        service = str(session.get("service", "")).strip().lower()
+        if service == "plinko" and option_id.startswith("plinko:lane:"):
+            try:
+                lane = int(option_id.rsplit(":", 1)[-1])
+            except (TypeError, ValueError):
+                lane = -1
+            if lane < 0:
+                self._present_service_result("Plinko", ["That drop lane is not valid."], property_id=prop.get("id"))
+                return True
+            seed_token = str(session.get("seed_token", "")).strip() or self._casino_round_seed(prop, service, session.get("wager", 0))
+            round_result = _casino_plinko_resolve(seed_token, int(session.get("wager", 0)), lane)
+            round_result["stake_already_paid"] = True
+            self._emit_casino_round(prop, service, round_result)
+            return True
+
+        if service == "twenty_one" and option_id in {"twenty_one:hit", "twenty_one:stand"}:
+            action = "hit" if option_id.endswith(":hit") else "stand"
+            next_session, round_result = _casino_twenty_one_resolve(session, action)
+            if round_result:
+                self._emit_casino_round(prop, service, round_result)
+            elif next_session:
+                self._open_twenty_one_table(prop, next_session)
+            return True
+
+        if service == "twenty_one" and option_id in {"twenty_one:double", "twenty_one:split"}:
+            wager = int(session.get("wager", 0))
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return True
+            action = "double" if option_id.endswith(":double") else "split"
+            next_session, round_result = _casino_twenty_one_resolve(session, action)
+            if round_result:
+                self._emit_casino_round(prop, service, round_result)
+            elif next_session:
+                self._open_twenty_one_table(prop, next_session)
+            return True
+
+        if service == "casino_holdem" and option_id in {"casino_holdem:call", "casino_holdem:fold"}:
+            if option_id.endswith(":call"):
+                ok, credits = self._casino_commit_stake(int(session.get("wager", 0)))
+                if not ok:
+                    self._emit_casino_blocked(prop, service, "no_credits", cost=int(session.get("wager", 0)), credits=credits)
+                    return True
+                session = dict(session)
+                session["stake"] = int(session.get("stake", session.get("wager", 0))) + int(session.get("wager", 0))
+                round_result = _casino_holdem_resolve(session, "call")
+            else:
+                round_result = _casino_holdem_resolve(session, "fold")
+            self._emit_casino_round(prop, service, round_result)
+            return True
+
+        return False
+
+    def _forfeit_active_casino_session(self):
+        session = self._casino_session()
+        if not isinstance(session, dict):
+            return
+        service = str(session.get("service", "")).strip().lower()
+        if service not in {"plinko", "twenty_one", "casino_holdem"}:
+            self._clear_casino_session()
+            return
+        prop = self.sim.properties.get(session.get("property_id"))
+        if not isinstance(prop, dict):
+            prop = {
+                "id": session.get("property_id"),
+                "name": session.get("property_name", "Casino"),
+            }
+        wager = int(session.get("wager", 0))
+        stake = int(session.get("stake", wager))
+        if service == "plinko":
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You pull the chip back too late.",
+                "detail": "The board keeps the wager when you walk away after posting the drop.",
+                "summary": f"You back out of plinko and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    f"Drop not taken. Posted wager: {_credit_amount_label(stake)}.",
+                    "The attendant sweeps the chip off the rail.",
+                ],
+                "drop_lane": None,
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        elif service == "twenty_one":
+            current = _casino_twenty_one_normalize_session(session)
+            hand_results = []
+            if isinstance(current, dict):
+                for idx, hand in enumerate(list(current.get("hands", ()) or ())):
+                    cards = tuple(hand.get("cards", ()) or ())
+                    total, _soft = _casino_blackjack_total(cards)
+                    hand_results.append({
+                        "index": idx,
+                        "cards": cards,
+                        "total": int(total),
+                        "stake": int(hand.get("stake", wager)),
+                        "doubled": bool(hand.get("doubled", False)),
+                        "split_origin": bool(hand.get("split_origin", False)),
+                    })
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You abandon the hand.",
+                "detail": "You step away from the table and the dealer pulls in the chips.",
+                "summary": f"You walk away from 21 and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    _casino_blackjack_line("Dealer", session.get("dealer_cards", ())),
+                    *[
+                        (
+                            f"{_casino_blackjack_line(f'Hand {row['index'] + 1}', row['cards'])}"
+                            f"{' [split]' if row['split_origin'] else ''}"
+                            f"{' [double]' if row['doubled'] else ''}"
+                        )
+                        for row in hand_results
+                    ],
+                    "You leave the hand unfinished and the bet is gone.",
+                ],
+                "player_cards": tuple(hand_results[0]["cards"]) if hand_results else (),
+                "player_hands": tuple(row["cards"] for row in hand_results),
+                "dealer_cards": tuple(session.get("dealer_cards", ()) or ()),
+                "player_total": int(hand_results[0]["total"]) if hand_results else 0,
+                "player_totals": tuple(int(row["total"]) for row in hand_results),
+                "dealer_total": _casino_blackjack_total(session.get("dealer_cards", ()))[0],
+                "hand_results": tuple(
+                    {
+                        "index": int(row["index"]),
+                        "total": int(row["total"]),
+                        "stake": int(row["stake"]),
+                        "result": "forfeit",
+                        "doubled": bool(row["doubled"]),
+                        "split_origin": bool(row["split_origin"]),
+                    }
+                    for row in hand_results
+                ),
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        else:
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You leave the table.",
+                "detail": "The dealer rakes in the ante while you push back from the felt.",
+                "summary": f"You walk away from the hold'em table and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    f"Your hand: {_casino_cards_text(session.get('player_cards', ())) }".rstrip(),
+                    f"Flop: {_casino_cards_text(session.get('flop', ())) }".rstrip(),
+                    "You leave the hand before showdown and the ante stays behind.",
+                ],
+                "player_cards": tuple(session.get("player_cards", ()) or ()),
+                "dealer_cards": tuple(session.get("dealer_cards", ()) or ()),
+                "board": tuple(session.get("flop", ()) or ()),
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        self._emit_casino_round(prop, service, round_result, show_result=False)
 
     def _bank_amount_choices(self, available, step):
         try:
@@ -20411,6 +22123,7 @@ class ServiceMenuSystem(System):
     def _open_banking_menu(self, prop):
         state = self._dialog_ui_state()
         self._clear_pending_service_result()
+        self._clear_casino_session()
         prop_name = str(prop.get("name", prop.get("id", "Banking"))).strip() or "Banking"
         assets = self._assets_for(self.player_eid)
         profile = self._profile_for(self.player_eid)
@@ -20456,11 +22169,58 @@ class ServiceMenuSystem(System):
             "close_pending": False,
             "machine_action": None,
             "service_menu_mode": "banking",
+            "casino_session": None,
+        })
+
+    def _open_casino_game_menu(self, prop, service):
+        state = self._dialog_ui_state()
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        profile = _casino_game_profile(service)
+        if not profile:
+            self._present_service_result("Casino", ["That game is not available right now."], property_id=prop.get("id"))
+            return
+
+        prop_name = str(prop.get("name", prop.get("id", "Casino"))).strip() or "Casino"
+        assets = self._assets_for(self.player_eid)
+        wallet_credits = int(getattr(assets, "credits", 0)) if assets else 0
+        wager_options = [
+            {
+                "id": f"{str(service).strip().lower()}:bet:{int(amount)}",
+                "label": f"Bet {_credit_amount_label(amount)}",
+            }
+            for amount in profile.get("bet_options", ())
+        ]
+        transcript = [
+            str(profile.get("prompt", "Choose a wager.")).strip() or "Choose a wager.",
+            str(profile.get("note", "")).strip() or "Pick a stake and play a round.",
+            f"Wallet {_credit_amount_label(wallet_credits)}.",
+        ]
+
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": prop.get("id"),
+            "title": f"{_casino_game_title(service)}: {prop_name}",
+            "subtitle": "Choose a wager",
+            "transcript": transcript,
+            "topics": wager_options,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Pick a stake to play one round. Esc closes; Space clears result messages.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": f"casino:{str(service).strip().lower()}",
+            "casino_session": None,
         })
 
     def _open_service_menu(self, prop, options, storefront_service=None):
         state = self._dialog_ui_state()
         self._clear_pending_service_result()
+        self._clear_casino_session()
         prop_name = str(prop.get("name", prop.get("id", "Service"))).strip() or "Service"
         transcript = [f"Choose a service at {prop_name}."]
         subtitle_bits = []
@@ -20495,10 +22255,12 @@ class ServiceMenuSystem(System):
             "close_pending": False,
             "machine_action": machine_action,
             "service_menu_mode": "root",
+            "casino_session": None,
         })
 
     def _close_service_menu(self):
         self._clear_pending_service_result()
+        self._clear_casino_session()
         state = self._dialog_ui_state()
         self.sim.set_time_paused(False, reason="dialog")
         state.update({
@@ -20517,6 +22279,7 @@ class ServiceMenuSystem(System):
             "close_pending": False,
             "machine_action": None,
             "service_menu_mode": "root",
+            "casino_session": None,
         })
 
     def _begin_pending_service_result(self, *, channel, property_id, property_name, service=""):
@@ -20552,6 +22315,29 @@ class ServiceMenuSystem(System):
     def _site_service_result_lines(self, event):
         service = str(event.data.get("service", "")).strip().lower()
         prop_name = str(event.data.get("property_name", self._pending_property_name("Service"))).strip() or self._pending_property_name("Service")
+        if service in CASINO_GAME_SERVICE_IDS:
+            wager = int(event.data.get("wager", 0))
+            stake = int(event.data.get("stake", wager))
+            payout = int(event.data.get("payout", 0))
+            net_credits = int(event.data.get("net_credits", payout - stake))
+            credits_after = int(event.data.get("credits_after", 0))
+            social_gain = int(event.data.get("social_gain", 0))
+            detail = str(event.data.get("detail", "")).strip()
+            headline = str(event.data.get("headline", "")).strip() or f"You play {_site_service_label(service)}."
+            lines = [
+                str(line).strip()
+                for line in list(event.data.get("result_lines", ()) or ())
+                if str(line).strip()
+            ]
+            if not lines:
+                lines = [detail or headline]
+            lines.append(
+                f"Stake {_credit_amount_label(stake)} | payout {_credit_amount_label(payout)} | "
+                f"net {net_credits:+d}c | wallet {_credit_amount_label(credits_after)}."
+            )
+            if social_gain > 0:
+                lines.append(f"The room livens you up a bit (So +{social_gain}).")
+            return f"{_casino_game_title(service)}: {prop_name}", lines
         if service == "fuel":
             fuel_gain = int(event.data.get("fuel_gain", 0))
             credits_spent = int(event.data.get("credits_spent", 0))
@@ -20625,7 +22411,11 @@ class ServiceMenuSystem(System):
         service = str(event.data.get("service", "")).strip().lower()
         prop_name = str(event.data.get("property_name", self._pending_property_name("Service"))).strip() or self._pending_property_name("Service")
         reason = str(event.data.get("reason", "blocked")).strip().lower()
-        title = f"Service: {prop_name}"
+        title = f"{_casino_game_title(service)}: {prop_name}" if service in CASINO_GAME_SERVICE_IDS else f"Service: {prop_name}"
+        if reason == "invalid_wager" and service in CASINO_GAME_SERVICE_IDS:
+            return f"{_casino_game_title(service)}: {prop_name}", ["The house refuses that stake.", "Choose one of the posted wager sizes."]
+        if reason == "invalid_round" and service in CASINO_GAME_SERVICE_IDS:
+            return title, ["That hand cannot be resolved cleanly right now.", "Step away and try a fresh round."]
         if reason == "cooldown":
             ready_in = int(event.data.get("ready_in", 0))
             return title, [f"{_site_service_label(service).title()} is not available again yet.", f"Ready in {ready_in}t."]
@@ -20782,6 +22572,8 @@ class ServiceMenuSystem(System):
             return
         state = self._dialog_ui_state()
         if str(state.get("kind", "")).strip().lower() == "service_menu":
+            if self._casino_session() and not bool(state.get("close_pending")):
+                self._forfeit_active_casino_session()
             self._close_service_menu()
             return
         self._clear_pending_service_result()
@@ -20859,6 +22651,30 @@ class ServiceMenuSystem(System):
                 property_id=property_id,
                 service="insurance",
             ))
+            return
+        if self._handle_active_casino_option(prop, option_id):
+            return
+        if option_id in CASINO_GAME_SERVICE_IDS:
+            if isinstance(prop, dict):
+                self._open_casino_game_menu(prop, option_id)
+            else:
+                self._present_service_result("Casino", ["That table is not available right now."])
+            return
+        for service in CASINO_GAME_SERVICE_IDS:
+            prefix = f"{service}:bet:"
+            if not option_id.startswith(prefix):
+                continue
+            if not isinstance(prop, dict):
+                self._present_service_result(_casino_game_title(service), ["That table is not available right now."])
+                return
+            try:
+                wager = int(option_id.rsplit(":", 1)[-1])
+            except (TypeError, ValueError):
+                wager = 0
+            if wager <= 0:
+                self._present_service_result(_casino_game_title(service), ["That wager is not valid."])
+                return
+            self._start_casino_round(prop, service, wager)
             return
         prop_name = prop.get("name", property_id) if isinstance(prop, dict) else event.data.get("property_name", "site")
         self._begin_pending_service_result(
@@ -26418,7 +28234,7 @@ def _pick_property_roam_tile(sim, prop, eid):
 
 
 _SOCIAL_VENUE_ARCHETYPES = frozenset({
-    "bar", "cafe", "restaurant", "diner", "tavern", "club", "lounge",
+    "bar", "cafe", "casino", "restaurant", "diner", "tavern", "club", "lounge",
     "park", "plaza", "market", "shop", "store", "pharmacy",
     "library", "gym", "barbershop", "salon",
 })
@@ -28309,6 +30125,127 @@ _WORLD_EVENT_MAX_ACTIVE = 3
 _WORLD_EVENT_DURATION_SCALE = 4
 _WORLD_EVENT_ROLL_INTERVAL = 180
 _WORLD_EVENT_COOLDOWN_PER_CHUNK = 360
+_WORLD_EVENT_PLAYER_REVEAL_RADIUS = 1
+
+
+def _normalize_chunk_coord(value):
+    if isinstance(value, (tuple, list)) and len(value) >= 2:
+        try:
+            return (int(value[0]), int(value[1]))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _world_event_chunk_coord(event):
+    if not isinstance(event, dict):
+        return None
+    try:
+        return (int(event.get("cx", 0)), int(event.get("cy", 0)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _chunk_chebyshev_distance(first, second):
+    first_chunk = _normalize_chunk_coord(first)
+    second_chunk = _normalize_chunk_coord(second)
+    if first_chunk is None or second_chunk is None:
+        return None
+    return max(abs(first_chunk[0] - second_chunk[0]), abs(first_chunk[1] - second_chunk[1]))
+
+
+def _viewer_chunk_coord(sim, viewer_eid=None):
+    target_eid = viewer_eid if viewer_eid is not None else getattr(sim, "player_eid", None)
+    if target_eid is not None:
+        pos = sim.ecs.get(Position).get(target_eid)
+        if pos is not None:
+            try:
+                cx, cy = sim.chunk_coords(pos.x, pos.y)
+                return (int(cx), int(cy))
+            except (TypeError, ValueError):
+                pass
+    return _normalize_chunk_coord(getattr(sim, "active_chunk_coord", None))
+
+
+def active_world_events_near_chunk(sim, chunk, radius=_WORLD_EVENT_PLAYER_REVEAL_RADIUS):
+    center_chunk = _normalize_chunk_coord(chunk)
+    if center_chunk is None:
+        return []
+    state = _world_events_state(sim)
+    nearby = []
+    max_radius = max(0, int(radius))
+    for event in state["active"]:
+        event_chunk = _world_event_chunk_coord(event)
+        if event_chunk is None:
+            continue
+        distance = _chunk_chebyshev_distance(center_chunk, event_chunk)
+        if distance is None or distance > max_radius:
+            continue
+        nearby.append((distance, int(event_chunk[1]), int(event_chunk[0]), str(event.get("label", "")), event))
+    nearby.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+    return [row[-1] for row in nearby]
+
+
+def world_event_visible_to_viewer(sim, event, viewer_eid=None, radius=_WORLD_EVENT_PLAYER_REVEAL_RADIUS):
+    viewer_chunk = _viewer_chunk_coord(sim, viewer_eid=viewer_eid)
+    if viewer_chunk is None:
+        return False
+    event_chunk = _world_event_chunk_coord(event)
+    if event_chunk is None:
+        return False
+    distance = _chunk_chebyshev_distance(viewer_chunk, event_chunk)
+    return distance is not None and distance <= max(0, int(radius))
+
+
+def _world_event_revealed_ids(sim):
+    state = _world_events_state(sim)
+    revealed = []
+    seen = set()
+    for raw_event_id in state.get("revealed_event_ids", ()):
+        try:
+            event_id = int(raw_event_id)
+        except (TypeError, ValueError):
+            continue
+        if event_id <= 0 or event_id in seen:
+            continue
+        seen.add(event_id)
+        revealed.append(event_id)
+    state["revealed_event_ids"] = revealed
+    return set(revealed)
+
+
+def _mark_world_event_revealed(sim, event_id):
+    try:
+        clean_event_id = int(event_id)
+    except (TypeError, ValueError):
+        return
+    if clean_event_id <= 0:
+        return
+    state = _world_events_state(sim)
+    revealed = _world_event_revealed_ids(sim)
+    if clean_event_id in revealed:
+        return
+    state["revealed_event_ids"] = list(state.get("revealed_event_ids", [])) + [clean_event_id]
+
+
+def _clear_world_event_revealed(sim, event_id):
+    try:
+        clean_event_id = int(event_id)
+    except (TypeError, ValueError):
+        return
+    if clean_event_id <= 0:
+        return
+    state = _world_events_state(sim)
+    kept_ids = []
+    for raw_existing_id in state.get("revealed_event_ids", ()):
+        try:
+            existing_id = int(raw_existing_id)
+        except (TypeError, ValueError):
+            continue
+        if existing_id == clean_event_id:
+            continue
+        kept_ids.append(existing_id)
+    state["revealed_event_ids"] = kept_ids
 
 
 def _world_events_state(sim):
@@ -28323,8 +30260,15 @@ def _world_events_state(sim):
             "history": [],
             "next_roll_tick": 0,
             "next_event_id": 1,
+            "revealed_event_ids": [],
         }
         traits["world_events"] = state
+    if not isinstance(state.get("revealed_event_ids"), list):
+        raw_revealed = state.get("revealed_event_ids", ())
+        if isinstance(raw_revealed, (tuple, set)):
+            state["revealed_event_ids"] = list(raw_revealed)
+        else:
+            state["revealed_event_ids"] = []
     return state
 
 
@@ -28378,12 +30322,16 @@ class WorldEventsSystem(System):
         self.sim.events.subscribe("world_event_ended", self.on_world_event_ended)
 
     def on_world_event_started(self, event):
+        if not world_event_visible_to_viewer(self.sim, event.data, self.player_eid):
+            return
         label = event.data.get("label", "World Event")
         text = event.data.get("flavor") or f"World event started: {label}"
         self.sim.log.add(text, channel="status", priority=LOG_PRIORITY_HIGH)
         self.sim.log.add(f"[{label}] event started", channel="status", priority=LOG_PRIORITY_NORMAL)
 
     def on_world_event_ended(self, event):
+        if not world_event_visible_to_viewer(self.sim, event.data, self.player_eid):
+            return
         label = event.data.get("label", "World Event")
         text = event.data.get("flavor") or f"World event ended: {label}"
         self.sim.log.add(text, channel="status", priority=LOG_PRIORITY_HIGH)
@@ -29091,15 +31039,37 @@ class SuppressionSystem(System):
 
 class EventLogSystem(System):
     def on_world_event_started(self, event):
+        if not world_event_visible_to_viewer(self.sim, event.data, self.player_eid):
+            return
         # Log the start of a world event with its label and flavor text
+        event_id = _int_or_default(event.data.get("event_id"), 0)
+        if event_id > 0:
+            _mark_world_event_revealed(self.sim, event_id)
         label = event.data.get("label", "World Event")
         flavor = event.data.get("flavor", "Something unusual is happening in the world.")
-        self._log(f"[WORLD EVENT BEGINS] {label}: {flavor}", channel="world", priority="high", dedupe_window=10, dedupe_key=f"world_event_start_{label}")
+        self._log(
+            f"[WORLD EVENT BEGINS] {label}: {flavor}",
+            channel="world",
+            priority="high",
+            dedupe_window=10,
+            dedupe_key=f"world_event_start_{event_id or label}",
+        )
 
     def on_world_event_ended(self, event):
+        if not world_event_visible_to_viewer(self.sim, event.data, self.player_eid):
+            _clear_world_event_revealed(self.sim, _int_or_default(event.data.get("event_id"), 0))
+            return
         # Log the end of a world event with its label
+        event_id = _int_or_default(event.data.get("event_id"), 0)
         label = event.data.get("label", "World Event")
-        self._log(f"[WORLD EVENT ENDED] {label} has concluded.", channel="world", priority="normal", dedupe_window=10, dedupe_key=f"world_event_end_{label}")
+        self._log(
+            f"[WORLD EVENT ENDED] {label} has concluded.",
+            channel="world",
+            priority="normal",
+            dedupe_window=10,
+            dedupe_key=f"world_event_end_{event_id or label}",
+        )
+        _clear_world_event_revealed(self.sim, event_id)
 
     def __init__(self, sim, player_eid):
         super().__init__(sim)
@@ -29670,7 +31640,8 @@ class EventLogSystem(System):
         for block in chunk.get("blocks", ()):
             for building in block.get("buildings", ()):
                 archetype = str(building.get("archetype", "")).strip().lower()
-                if service_key not in set(vehicle_services_for_archetype(archetype)):
+                services = list(_default_site_services_for_archetype(archetype)) + list(vehicle_services_for_archetype(archetype))
+                if service_key not in {str(item).strip().lower() for item in services if str(item).strip()}:
                     continue
                 label = str(building.get("business_name") or archetype.replace("_", " ").title()).strip()
                 if label:
@@ -30367,6 +32338,19 @@ class EventLogSystem(System):
 
         service = str(event.data.get("service", "")).strip().lower()
         prop_name = str(event.data.get("property_name", "site")).strip() or "site"
+        if service in CASINO_GAME_SERVICE_IDS:
+            stake = int(event.data.get("stake", event.data.get("wager", 0)))
+            payout = int(event.data.get("payout", 0))
+            net_credits = int(event.data.get("net_credits", payout - stake))
+            headline = str(event.data.get("headline", "")).strip() or f"You play {_site_service_label(service)}."
+            summary = str(event.data.get("summary", "")).strip() or headline
+            social_gain = int(event.data.get("social_gain", 0))
+            social_note = f" So +{social_gain}." if social_gain > 0 else ""
+            self.sim.log.add(
+                f"{_casino_game_title(service)}: {prop_name}. {summary} "
+                f"Stake {stake}c, payout {payout}c, net {net_credits:+d}c.{social_note}"
+            )
+            return
         if service == "fuel":
             fuel_gain = int(event.data.get("fuel_gain", 0))
             credits_spent = int(event.data.get("credits_spent", 0))
@@ -30434,6 +32418,12 @@ class EventLogSystem(System):
         service = str(event.data.get("service", "")).strip().lower()
         prop_name = str(event.data.get("property_name", "site")).strip() or "site"
         reason = str(event.data.get("reason", "blocked")).strip().lower()
+        if reason == "invalid_wager" and service in CASINO_GAME_SERVICE_IDS:
+            self.sim.log.add(f"{_casino_game_title(service)}: {prop_name} refuses that stake. Pick one of the posted bets.")
+            return
+        if reason == "invalid_round" and service in CASINO_GAME_SERVICE_IDS:
+            self.sim.log.add(f"{_casino_game_title(service)}: {prop_name} cannot resolve that hand. Start a fresh round.")
+            return
         if reason == "cooldown":
             ready_in = int(event.data.get("ready_in", 0))
             self.sim.log.add(f"{prop_name} cannot help with {_site_service_label(service)} again yet ({ready_in}t).")
@@ -32415,6 +34405,30 @@ class EventLogSystem(System):
                 note = f"{note}; {pressure_note}"
             self.sim.log.add(f"Local feel: {note}.")
 
+        revealed_ids = _world_event_revealed_ids(self.sim)
+        for active_event in active_world_events_near_chunk(self.sim, (cx, cy), radius=_WORLD_EVENT_PLAYER_REVEAL_RADIUS):
+            event_id = _int_or_default(active_event.get("id"), 0)
+            if event_id > 0 and event_id in revealed_ids:
+                continue
+            label = str(active_event.get("label", "World Event")).strip() or "World Event"
+            flavor = str(active_event.get("flavor_start", "")).strip()
+            distance = _chunk_chebyshev_distance((cx, cy), _world_event_chunk_coord(active_event))
+            if distance == 0:
+                message = f"[WORLD EVENT ACTIVE] {label}: {flavor}" if flavor else f"[WORLD EVENT ACTIVE] {label}."
+                priority = "high"
+            else:
+                message = f"[WORLD EVENT NEARBY] {label}: {flavor}" if flavor else f"[WORLD EVENT NEARBY] {label} close by."
+                priority = "normal"
+            self._log(
+                message,
+                channel="world",
+                priority=priority,
+                dedupe_window=20,
+                dedupe_key=f"world_event_reveal_{event_id or label}",
+            )
+            if event_id > 0:
+                _mark_world_event_revealed(self.sim, event_id)
+
 
 class RenderSystem(System):
 
@@ -32587,13 +34601,42 @@ class RenderSystem(System):
 
         if self._hud_queue and current_tick != self._hud_last_tick:
             self._hud_last_tick = current_tick
-            drain = min(2, len(self._hud_queue))
+            overlay = getattr(self.sim, "combat_overlay", {})
+            in_turn_based = bool(getattr(self.sim, "turn_based", False))
+            combat_active = bool(isinstance(overlay, dict) and overlay.get("active"))
+            backlog_flush = len(self._hud_queue) > max(2, int(budget))
+            if in_turn_based or combat_active or backlog_flush:
+                drain = len(self._hud_queue)
+            else:
+                drain = min(2, len(self._hud_queue))
             self._hud_display.extend(self._hud_queue[:drain])
             self._hud_queue = self._hud_queue[drain:]
 
         max_keep = max(budget * 2, 20)
         if len(self._hud_display) > max_keep:
             self._hud_display = self._hud_display[-max_keep:]
+
+    def _visible_hud_logs(self, budget):
+        budget = max(0, int(budget))
+        if budget <= 0:
+            return []
+
+        log_ui = getattr(self.sim, "log_ui", None)
+        if isinstance(log_ui, dict):
+            filter_id = _log_filter_spec(log_ui.get("hud_filter", "priority"))["id"]
+        else:
+            filter_id = "priority"
+
+        combined = list(self._hud_display) + list(self._hud_queue)
+        if not combined:
+            return []
+
+        overlay = getattr(self.sim, "combat_overlay", {})
+        in_turn_based = bool(getattr(self.sim, "turn_based", False))
+        combat_active = bool(isinstance(overlay, dict) and overlay.get("active"))
+        if in_turn_based or combat_active:
+            return _filtered_log_lines(combined, filter_id)[-budget:]
+        return _hud_log_lines(combined, filter_id, budget)
 
     def _draw(self, x, y, glyph, color=None, attrs=0):
         if color is None:
@@ -34139,10 +36182,12 @@ class RenderSystem(System):
                 self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
             title = str(log_ui.get("title", "Event Log")).strip() or "Event Log"
             filter_label = _log_filter_label(log_ui.get("view_filter", "all"))
+            hud_filter_label = _log_filter_label(log_ui.get("hud_filter", "priority"))
             filtered_lines = _filtered_log_lines(list(log_ui.get("lines", ()) or ()), log_ui.get("view_filter", "all"))
             entry_count = len(filtered_lines)
             total_count = len(list(log_ui.get("lines", ()) or ()))
-            title_text = f" {title}: {filter_label} ({entry_count}/{total_count}) | HUD queue "
+            pending_count = len(self._hud_queue)
+            title_text = f" {title}: {filter_label} ({entry_count}/{total_count}) | HUD {hud_filter_label} | queue {pending_count} "
             self.view.draw_text(panel_x + 2, panel_y + 1, _clip(title_text, panel_w - 4))
 
             body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
@@ -34256,7 +36301,7 @@ class RenderSystem(System):
 
         log_budget = max(1, self.hud_lines - (hud_y - map_h))
         self._advance_hud_queue(log_budget)
-        logs = self._hud_display[-log_budget:]
+        logs = self._visible_hud_logs(log_budget)
         log_y = hud_y
         for line in logs:
             prefixed = _line_with_prefix(line, _log_prefix(line))

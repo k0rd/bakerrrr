@@ -10,6 +10,7 @@ DEFAULT_START_HOUR = 9
 DEFAULT_TICKS_PER_HOUR = 600
 
 STOREFRONT_ARCHETYPE_HINTS = {
+    "casino",
     "corner_store",
     "restaurant",
     "pawn_shop",
@@ -33,6 +34,7 @@ STOREFRONT_ARCHETYPE_HINTS = {
     "roadhouse",
     "soup_kitchen",
     "street_kitchen",
+    "tavern",
     "theater",
     "tool_depot",
     "music_venue",
@@ -67,6 +69,7 @@ PUBLIC_HOURS_BY_ARCHETYPE = {
     "backroom_clinic": (10, 20),
     "bookshop": (9, 20),
     "brokerage": (8, 18),
+    "casino": (12, 4),
     "corner_store": (6, 23),
     "courier_office": (7, 19),
     "daycare": (7, 18),
@@ -90,6 +93,7 @@ PUBLIC_HOURS_BY_ARCHETYPE = {
     "roadhouse": (6, 23),
     "soup_kitchen": (10, 19),
     "street_kitchen": (11, 23),
+    "tavern": (14, 2),
     "theater": (14, 23),
     "tool_depot": (7, 19),
     "dock_shack": (6, 19),
@@ -131,6 +135,13 @@ MANAGER_CAREER_KEYWORDS = {
 }
 VALID_CREDENTIAL_MODES = {"mechanical_key", "badge", "biometric"}
 VALID_STOREFRONT_SERVICE_MODES = {"automated", "staffed"}
+
+DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
+    "casino": ("slots", "casino_holdem", "plinko", "twenty_one"),
+    "flophouse": ("rest",),
+    "hotel": ("rest",),
+    "tavern": ("intel",),
+}
 
 
 def _clamp_unit(value, default=0.0):
@@ -177,6 +188,11 @@ def finance_services_for_property(prop):
     return ()
 
 
+def default_site_services_for_archetype(archetype):
+    key = str(archetype or "").strip().lower()
+    return tuple(DEFAULT_SITE_SERVICES_BY_ARCHETYPE.get(key, ()))
+
+
 def site_services_for_property(prop):
     metadata = _property_metadata(prop)
     configured = metadata.get("site_services", [])
@@ -185,7 +201,19 @@ def site_services_for_property(prop):
         services = [str(service).strip().lower() for service in configured if str(service).strip()]
     elif isinstance(configured, str) and configured.strip():
         services = [configured.strip().lower()]
-    return tuple(sorted(set(services)))
+
+    if not services:
+        services = list(default_site_services_for_archetype(metadata.get("archetype")))
+
+    ordered = []
+    seen = set()
+    for service in services:
+        key = str(service).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+    return tuple(ordered)
 
 
 def property_is_storefront(prop):
