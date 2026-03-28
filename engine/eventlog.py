@@ -120,8 +120,18 @@ class EventLog:
         if entry_index is None or entry_index < 0 or entry_index >= len(self.entries):
             return False
 
-        self.entries[entry_index]["repeat_count"] = int(self.entries[entry_index].get("repeat_count", 1)) + 1
-        self._recent_keys[key] = {"tick": tick, "index": entry_index}
+        refreshed = dict(self.entries.pop(entry_index))
+        refreshed["repeat_count"] = int(refreshed.get("repeat_count", 1)) + 1
+        refreshed["tick"] = tick
+        refreshed["sequence"] = self._next_sequence
+        refreshed["priority"] = max(int(refreshed.get("priority", 1) or 1), int(entry.get("priority", 1) or 1))
+        refreshed["text"] = str(entry.get("text", refreshed.get("text", "")))
+        if entry.get("segments"):
+            refreshed["segments"] = entry["segments"]
+        self.entries.append(refreshed)
+        self._next_sequence += 1
+        self._trim_recent_keys()
+        self._recent_keys[key] = {"tick": tick, "index": len(self.entries) - 1}
         return True
 
     def _trim_recent_keys(self):

@@ -70,6 +70,7 @@ from game.vehicles import (
     vehicle_services_for_archetype,
 )
 from game.opportunities import evaluate_opportunity_board, seed_run_opportunities
+from game.property_access import default_site_services_for_archetype
 from game.property_keys import ensure_actor_has_property_key, ensure_property_lock
 from game.run_objectives import evaluate_run_objective, seed_run_objective
 from game.skills import seed_skill_profile
@@ -675,9 +676,10 @@ def _register_chunk_properties(sim, chunk):
             local_building_id = str(building.get("building_id", "") or "").strip()
             chunk_building_id = world_building_id(chunk["cx"], chunk["cy"], local_building_id)
             finance_services = list(finance_by_archetype.get(archetype, ()))
-            vehicle_services = list(vehicle_services_for_archetype(archetype))
-            if archetype in {"hotel", "flophouse"}:
-                vehicle_services.append("rest")
+            site_services = list(dict.fromkeys(
+                list(default_site_services_for_archetype(archetype))
+                + list(vehicle_services_for_archetype(archetype))
+            ))
             business_name = str(building.get("business_name") or "").strip()
             business_founder_name = str(building.get("business_founder_name") or "").strip()
             business_founder_first_name = str(building.get("business_founder_first_name") or "").strip()
@@ -705,7 +707,7 @@ def _register_chunk_properties(sim, chunk):
                     "security_features": list(building.get("security_features", ())),
                     "purchase_cost": rng.randint(180, 460),
                     "finance_services": finance_services,
-                    "site_services": vehicle_services,
+                    "site_services": site_services,
                     "is_storefront": bool(building.get("is_storefront")),
                     "business_name": business_name or None,
                     "business_founder_name": business_founder_name or None,

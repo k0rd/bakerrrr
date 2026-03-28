@@ -3170,13 +3170,20 @@ def _hud_log_lines(lines, filter_id, budget):
     indexed = list(enumerate(filtered))
     recent_budget = indexed[-budget:]
     recent_indexes = {idx for idx, _line in recent_budget}
+    recent_min_priority = min(
+        (_line_priority(line) for _idx, line in recent_budget),
+        default=LOG_PRIORITY_LOW,
+    )
     sticky_indexes = []
     sticky_limit = min(2, budget)
     sticky_window = indexed[-max(budget * 4, 12):]
     for idx, line in reversed(sticky_window):
-        if _line_priority(line) < LOG_PRIORITY_HIGH:
+        line_priority = _line_priority(line)
+        if line_priority < LOG_PRIORITY_HIGH:
             continue
         if idx in recent_indexes or idx in sticky_indexes:
+            continue
+        if line_priority <= recent_min_priority:
             continue
         sticky_indexes.insert(0, idx)
         if len(sticky_indexes) >= sticky_limit:
@@ -5395,6 +5402,154 @@ def _site_service_state(sim):
         cooldowns = {}
         state["cooldowns"] = cooldowns
     return state
+
+
+def _vehicle_sale_quality(quality):
+    quality = str(quality or "used").strip().lower()
+    if quality not in {"new", "used"}:
+        return "used"
+    return quality
+
+
+def _vehicle_sale_quality_title(quality):
+    return "New" if _vehicle_sale_quality(quality) == "new" else "Used"
+
+
+def _vehicle_sale_stock_count(quality):
+    quality = _vehicle_sale_quality(quality)
+    return 3 if quality == "new" else 5
+
+
+def _vehicle_sale_inventory(sim):
+    state = _site_service_state(sim)
+    inventory = state.get("vehicle_sale_inventory")
+    if not isinstance(inventory, dict):
+        inventory = {}
+        state["vehicle_sale_inventory"] = inventory
+    return inventory
+
+
+def _vehicle_sale_offer_record(profile, quality, cycle_index, slot_index):
+    quality = _vehicle_sale_quality(quality)
+    vehicle_name = f"{profile.get('make', 'Unknown')} {profile.get('model', 'Vehicle')}"
+    return {
+        "offering_id": f"{quality}-{int(cycle_index)}-{int(slot_index)}",
+        "quality": quality,
+        "vehicle_name": vehicle_name,
+        "make": str(profile.get("make", "Unknown")).strip() or "Unknown",
+        "model": str(profile.get("model", "Vehicle")).strip() or "Vehicle",
+        "vehicle_class": str(profile.get("vehicle_class", "sedan")).strip().lower() or "sedan",
+        "price": int(max(80, _int_or_default(profile.get("price"), 500))),
+        "power": max(1, min(10, _int_or_default(profile.get("power"), 5))),
+        "durability": max(1, min(10, _int_or_default(profile.get("durability"), 5))),
+        "fuel_efficiency": max(1, min(10, _int_or_default(profile.get("fuel_efficiency"), 5))),
+        "fuel": max(0, _int_or_default(profile.get("fuel"), _int_or_default(profile.get("fuel_capacity"), 60))),
+        "fuel_capacity": max(10, _int_or_default(profile.get("fuel_capacity"), 60)),
+        "glyph": str(profile.get("glyph", "&"))[:1] or "&",
+    }
+
+
+def _vehicle_sale_generate_offers(sim, prop_or_id, quality, cycle_index):
+    prop_id = prop_or_id.get("id") if isinstance(prop_or_id, dict) else prop_or_id
+    quality = _vehicle_sale_quality(quality)
+    offers = []
+    for slot_index in range(_vehicle_sale_stock_count(quality)):
+        rng = random.Random(f"{sim.seed}:vehicle_sale_inventory:{prop_id}:{quality}:{int(cycle_index)}:{int(slot_index)}")
+        profile = roll_vehicle_profile(rng, quality=quality)
+        offers.append(_vehicle_sale_offer_record(profile, quality, cycle_index, slot_index))
+    offers.sort(key=lambda offer: (int(offer.get("price", 0)), str(offer.get("vehicle_name", ""))))
+    for slot_index, offer in enumerate(offers):
+        offer["offering_id"] = f"{quality}-{int(cycle_index)}-{int(slot_index)}"
+    return offers
+
+
+def _vehicle_sale_listing(sim, prop_or_id, quality, *, create=True):
+    inventory = _vehicle_sale_inventory(sim)
+    prop_id = prop_or_id.get("id") if isinstance(prop_or_id, dict) else prop_or_id
+    quality = _vehicle_sale_quality(quality)
+    key = (str(prop_id), quality)
+    listing = inventory.get(key)
+    if not isinstance(listing, dict):
+        listing = None
+    if listing is not None:
+        offers = listing.get("offers")
+        if not isinstance(offers, list):
+            offers = []
+            listing["offers"] = offers
+    if create and (listing is None or not list(listing.get("offers", ()) or ())):
+        next_cycle = int(listing.get("cycle", -1)) + 1 if isinstance(listing, dict) else 0
+        listing = {
+            "property_id": str(prop_id),
+            "quality": quality,
+            "cycle": int(next_cycle),
+            "offers": _vehicle_sale_generate_offers(sim, prop_id, quality, next_cycle),
+        }
+        inventory[key] = listing
+    return listing
+
+
+def _vehicle_sale_offers(sim, prop_or_id, quality):
+    listing = _vehicle_sale_listing(sim, prop_or_id, quality, create=True)
+    offers = list(listing.get("offers", ()) or []) if isinstance(listing, dict) else []
+    return [dict(offer) for offer in offers if isinstance(offer, dict)]
+
+
+def _vehicle_sale_lookup_offer(sim, prop_or_id, quality, offering_id=None):
+    listing = _vehicle_sale_listing(sim, prop_or_id, quality, create=True)
+    offers = list(listing.get("offers", ()) or []) if isinstance(listing, dict) else []
+    if not offers:
+        return None
+    offering_id = str(offering_id or "").strip().lower()
+    if offering_id:
+        for offer in offers:
+            if str(offer.get("offering_id", "")).strip().lower() == offering_id:
+                return dict(offer)
+    return dict(offers[0])
+
+
+def _vehicle_sale_remove_offer(sim, prop_or_id, quality, offering_id):
+    listing = _vehicle_sale_listing(sim, prop_or_id, quality, create=False)
+    if not isinstance(listing, dict):
+        return None
+    offers = list(listing.get("offers", ()) or [])
+    offering_id = str(offering_id or "").strip().lower()
+    for idx, offer in enumerate(offers):
+        if str(offer.get("offering_id", "")).strip().lower() != offering_id:
+            continue
+        removed = dict(offer)
+        del offers[idx]
+        listing["offers"] = offers
+        return removed
+    return None
+
+
+def _vehicle_sale_stats_text(data):
+    if not isinstance(data, dict):
+        return ""
+    vehicle_class = str(data.get("vehicle_class", "")).strip().replace("_", " ")
+    power = max(1, min(10, _int_or_default(data.get("power"), 5)))
+    durability = max(1, min(10, _int_or_default(data.get("durability"), 5)))
+    fuel_efficiency = max(1, min(10, _int_or_default(data.get("fuel_efficiency"), 5)))
+    fuel_capacity = max(0, _int_or_default(data.get("fuel_capacity"), 0))
+    fuel = max(0, min(fuel_capacity if fuel_capacity > 0 else 9999, _int_or_default(data.get("fuel"), fuel_capacity)))
+    bits = []
+    if vehicle_class:
+        bits.append(vehicle_class.title())
+    if fuel_capacity > 0:
+        bits.append(f"fuel {fuel}/{fuel_capacity}")
+    bits.append(f"P{power}/D{durability}/E{fuel_efficiency}")
+    return " | ".join(bits)
+
+
+def _vehicle_sale_offer_label(offer):
+    if not isinstance(offer, dict):
+        return "Vehicle"
+    vehicle_name = str(offer.get("vehicle_name", "Vehicle")).strip() or "Vehicle"
+    price = _credit_amount_label(offer.get("price", 0))
+    stats = _vehicle_sale_stats_text(offer)
+    if stats:
+        return f"{vehicle_name} {price} {stats}"
+    return f"{vehicle_name} {price}"
 
 
 def _site_service_roll_index(sim, eid, prop_or_id, service):
@@ -20803,14 +20958,34 @@ class SiteServiceSystem(System):
             vehicle_name=_vehicle_label(vehicle_prop),
         ))
 
-    def _apply_vehicle_sale(self, eid, prop, pos, quality):
-        quality = str(quality or "used").strip().lower()
-        if quality not in {"new", "used"}:
-            quality = "used"
+    def _apply_vehicle_sale(self, eid, prop, pos, quality, request=None):
+        quality = _vehicle_sale_quality(quality)
+        request = dict(request or {}) if isinstance(request, dict) else {}
+        requested_offering_id = str(request.get("offering_id", "") or "").strip().lower()
+        selected_offer = _vehicle_sale_lookup_offer(
+            self.sim,
+            prop,
+            quality,
+            offering_id=requested_offering_id,
+        )
+        if (
+            not isinstance(selected_offer, dict)
+            or (
+                requested_offering_id
+                and str(selected_offer.get("offering_id", "")).strip().lower() != requested_offering_id
+            )
+        ):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=f"vehicle_sales_{quality}",
+                reason="unavailable",
+            ))
+            return
 
-        listing_rng = random.Random(f"{self.sim.seed}:vehicle_sale:{prop.get('id')}:{self.sim.tick}:{quality}")
-        profile = roll_vehicle_profile(listing_rng, quality=quality)
-        price = int(max(80, _int_or_default(profile.get("price"), 500)))
+        price = int(max(80, _int_or_default(selected_offer.get("price"), 500)))
 
         assets = self._assets_for(eid)
         credits = int(getattr(assets, "credits", 0)) if assets else 0
@@ -20841,8 +21016,24 @@ class SiteServiceSystem(System):
 
         sx, sy = spawn_tile
         chunk_coord = self.sim.chunk_coords(sx, sy)
-        vehicle_name = f"{profile['make']} {profile['model']}"
-        vehicle_token = f"veh:purchase:{chunk_coord[0]}:{chunk_coord[1]}:{self.sim.tick}:{quality}"
+        vehicle_name = str(selected_offer.get("vehicle_name", "Vehicle")).strip() or "Vehicle"
+        vehicle_token = (
+            f"veh:purchase:{chunk_coord[0]}:{chunk_coord[1]}:{self.sim.tick}:{quality}:"
+            f"{str(selected_offer.get('offering_id', 'offer')).strip() or 'offer'}"
+        )
+        profile = {
+            "quality": quality,
+            "make": str(selected_offer.get("make", "Unknown")).strip() or "Unknown",
+            "model": str(selected_offer.get("model", "Vehicle")).strip() or "Vehicle",
+            "vehicle_class": str(selected_offer.get("vehicle_class", "sedan")).strip().lower() or "sedan",
+            "power": max(1, min(10, _int_or_default(selected_offer.get("power"), 5))),
+            "durability": max(1, min(10, _int_or_default(selected_offer.get("durability"), 5))),
+            "fuel_efficiency": max(1, min(10, _int_or_default(selected_offer.get("fuel_efficiency"), 5))),
+            "fuel_capacity": max(10, _int_or_default(selected_offer.get("fuel_capacity"), 60)),
+            "fuel": max(0, _int_or_default(selected_offer.get("fuel"), _int_or_default(selected_offer.get("fuel_capacity"), 60))),
+            "price": price,
+            "glyph": str(selected_offer.get("glyph", "&"))[:1] or "&",
+        }
         metadata = vehicle_metadata(
             profile,
             chunk=chunk_coord,
@@ -20896,6 +21087,7 @@ class SiteServiceSystem(System):
 
         if assets:
             assets.credits = max(0, int(assets.credits) - int(price))
+        _vehicle_sale_remove_offer(self.sim, prop, quality, selected_offer.get("offering_id"))
         vehicle_state = self._vehicle_state_for(eid)
         if vehicle_state and not vehicle_state.active_vehicle_id:
             vehicle_state.set_active_vehicle(vehicle_id, tick=self.sim.tick)
@@ -20910,6 +21102,13 @@ class SiteServiceSystem(System):
             vehicle_name=vehicle_name,
             price=int(price),
             quality=quality,
+            offering_id=str(selected_offer.get("offering_id", "")).strip(),
+            vehicle_class=str(profile.get("vehicle_class", "sedan")).strip().lower() or "sedan",
+            power=int(profile.get("power", 5)),
+            durability=int(profile.get("durability", 5)),
+            fuel_efficiency=int(profile.get("fuel_efficiency", 5)),
+            fuel=int(profile.get("fuel", 0)),
+            fuel_capacity=int(profile.get("fuel_capacity", 0)),
             key_issued=bool(key_ok),
         ))
 
@@ -21047,10 +21246,10 @@ class SiteServiceSystem(System):
             self._apply_fuel_service(eid, prop, pos)
             return True
         if service == "vehicle_sales_new":
-            self._apply_vehicle_sale(eid, prop, pos, quality="new")
+            self._apply_vehicle_sale(eid, prop, pos, quality="new", request=request)
             return True
         if service == "vehicle_sales_used":
-            self._apply_vehicle_sale(eid, prop, pos, quality="used")
+            self._apply_vehicle_sale(eid, prop, pos, quality="used", request=request)
             return True
         if service == "vehicle_fetch":
             self._apply_vehicle_fetch(eid, prop, pos)
@@ -22047,6 +22246,53 @@ class ServiceMenuSystem(System):
             })
         return options
 
+    def _open_vehicle_sale_menu(self, prop, quality):
+        quality = _vehicle_sale_quality(quality)
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        prop_name = str(prop.get("name", prop.get("id", "Vehicle Sales"))).strip() or "Vehicle Sales"
+        offers = _vehicle_sale_offers(self.sim, prop, quality)
+        if not offers:
+            self._present_service_result(
+                f"{_vehicle_sale_quality_title(quality)} Vehicles: {prop_name}",
+                [f"No {_site_service_label(f'vehicle_sales_{quality}')} are posted right now."],
+                property_id=prop.get("id"),
+            )
+            return
+
+        topics = []
+        for offer in offers:
+            topic = dict(offer)
+            topic["id"] = f"vehicle_sales_{quality}:offer:{str(offer.get('offering_id', '')).strip()}"
+            topic["label"] = _vehicle_sale_offer_label(offer)
+            topics.append(topic)
+
+        state = self._dialog_ui_state()
+        transcript = [
+            f"Choose a {quality} vehicle at {prop_name}.",
+            "Each listing shows price, class, fuel, and drive stats.",
+            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+        ]
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": prop.get("id"),
+            "title": f"{_vehicle_sale_quality_title(quality)} Vehicles: {prop_name}",
+            "subtitle": "Available offerings",
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Choose the exact vehicle you want. Esc closes; Space clears result messages.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": f"vehicles:{quality}",
+            "casino_session": None,
+        })
+
     def _present_service_result(self, title, lines, *, subtitle="", property_id=None):
         state = self._dialog_ui_state()
         transcript = [str(line).strip() for line in list(lines or ()) if str(line).strip()]
@@ -22359,6 +22605,9 @@ class ServiceMenuSystem(System):
                 f"Purchased {vehicle_name}.",
                 f"{quality.title()} unit for {_credit_amount_label(price)}.",
             ]
+            stats = _vehicle_sale_stats_text(event.data)
+            if stats:
+                lines.append(stats + ".")
             if bool(event.data.get("key_issued", False)):
                 lines.append("A key was issued with the vehicle.")
             return f"Vehicles: {prop_name}", lines
@@ -22605,6 +22854,38 @@ class ServiceMenuSystem(System):
                 self._open_banking_menu(prop)
             else:
                 self._present_service_result("Banking", ["No banking service is available right now."])
+            return
+        if option_id in {"vehicle_sales_new", "vehicle_sales_used"}:
+            if isinstance(prop, dict):
+                self._open_vehicle_sale_menu(prop, "new" if option_id == "vehicle_sales_new" else "used")
+            else:
+                self._present_service_result("Vehicles", ["That vehicle service is not available right now."])
+            return
+        if option_id.startswith("vehicle_sales_new:offer:") or option_id.startswith("vehicle_sales_used:offer:"):
+            service, _sep, offering_id = option_id.partition(":offer:")
+            service = str(service or "").strip().lower()
+            if service not in {"vehicle_sales_new", "vehicle_sales_used"} or not isinstance(prop, dict):
+                self._present_service_result("Vehicles", ["That vehicle offering is not available right now."])
+                return
+            offering_id = str(offering_id or "").strip().lower()
+            if not offering_id:
+                self._present_service_result("Vehicles", ["That vehicle offering is not valid."])
+                return
+            prop_name = prop.get("name", property_id)
+            self._begin_pending_service_result(
+                channel="site",
+                property_id=property_id,
+                property_name=prop_name,
+                service=service,
+            )
+            self.sim.emit(Event(
+                "site_service_request",
+                eid=self.player_eid,
+                property_id=property_id,
+                service=service,
+                property_name=prop_name,
+                offering_id=offering_id,
+            ))
             return
         if option_id.startswith("banking:"):
             parts = option_id.split(":")
@@ -32366,7 +32647,11 @@ class EventLogSystem(System):
             price = int(event.data.get("price", 0))
             quality = "new" if service == "vehicle_sales_new" else "used"
             key_note = " Key issued." if bool(event.data.get("key_issued", False)) else ""
-            self.sim.log.add(f"Vehicle purchase: {vehicle_name} ({quality}) for {price} credits at {prop_name}.{key_note}")
+            stats = _vehicle_sale_stats_text(event.data)
+            stats_note = f" {stats}." if stats else ""
+            self.sim.log.add(
+                f"Vehicle purchase: {vehicle_name} ({quality}) for {price} credits at {prop_name}.{stats_note}{key_note}"
+            )
             return
         if service == "shelter":
             bits = []
