@@ -283,6 +283,43 @@ def _footprint_contains_point(footprint, x, y):
     return left <= int(x) <= right and top <= int(y) <= bottom
 
 
+def site_entry_front_cell(entry):
+    if not isinstance(entry, dict):
+        return None
+    try:
+        x = int(entry.get("x"))
+        y = int(entry.get("y"))
+        z = int(entry.get("z", 0))
+    except (TypeError, ValueError):
+        return None
+
+    side = str(entry.get("side", "south") or "south").strip().lower() or "south"
+    deltas = {
+        "north": (0, -1),
+        "south": (0, 1),
+        "west": (-1, 0),
+        "east": (1, 0),
+    }
+    dx, dy = deltas.get(side, (0, 1))
+    return (int(x + dx), int(y + dy), int(z))
+
+
+def site_layout_reserved_footprints(layout):
+    if not isinstance(layout, dict):
+        return ()
+
+    reserved = []
+    footprint = layout.get("footprint")
+    if isinstance(footprint, dict):
+        reserved.append(dict(footprint))
+
+    front = site_entry_front_cell(layout.get("entry"))
+    if front is not None:
+        fx, fy, _fz = front
+        reserved.append(_footprint_rect(fx, fx, fy, fy))
+    return tuple(reserved)
+
+
 def site_is_public(site):
     kind = _site_kind(site)
     if kind in PUBLIC_SITE_KINDS:
@@ -391,6 +428,16 @@ def layout_chunk_site(origin_x, origin_y, chunk_size, site_index, site=None, res
             front_side = _front_side_toward_target(left, right, top, bottom, arrival_cx, arrival_cy, cand_rng)
             entry_bias = arrival_cx if front_side in {"north", "south"} else arrival_cy
             entry_x, entry_y = _wall_point_from_bias(left, right, top, bottom, front_side, entry_bias)
+            front_cell = site_entry_front_cell({
+                "x": int(entry_x),
+                "y": int(entry_y),
+                "z": 0,
+                "side": front_side,
+            })
+            if front_cell is not None:
+                front_x, front_y, _front_z = front_cell
+                if any(_footprint_contains_point(reserved, front_x, front_y) for reserved in reserved_footprints or ()):
+                    continue
 
             apertures = [{
                 "x": int(entry_x),

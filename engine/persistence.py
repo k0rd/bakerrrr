@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .events import EventBus
 from .sim import Simulation
+from game.appearance import AppearanceManager
 from game.components import Position
 
 SAVE_VERSION = 1
@@ -15,6 +16,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "events",
     "systems",
     "mutators",
+    "appearance",
     "npc_social_dynamics_system",
     "property_anchor_index",
     "property_cover_index",
@@ -348,6 +350,7 @@ def restore_simulation(snapshot):
     sim.events = EventBus()
     sim.systems = []
     sim.mutators = []
+    sim.appearance = AppearanceManager(sim)
     sim.running = True
     if hasattr(sim, "_bind_runtime_state"):
         sim._bind_runtime_state()

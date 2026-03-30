@@ -174,6 +174,111 @@ VERTICAL_WORK_ARCHETYPES = {
     "server_hub",
     "tower",
 }
+SECURE_ROOM_KINDS = {
+    "vault",
+    "secure_storage",
+    "secure_cage",
+    "security_room",
+    "count_room",
+    "cash_cage",
+    "surveillance_room",
+    "holding",
+    "armored_store",
+    "cold_backup",
+    "server_room",
+    "signals_room",
+    "control_room",
+    "control_booth",
+    "noc",
+}
+ADMIN_ROOM_KINDS = {
+    "office",
+    "back_office",
+    "front_office",
+    "executive_office",
+    "executive_suite",
+    "manager_office",
+    "meeting_room",
+    "conference",
+    "records",
+    "records_room",
+    "records_office",
+    "dispatch",
+    "dispatch_desk",
+    "briefing_room",
+    "reception",
+    "lobby",
+    "front_counter",
+    "service_counter",
+}
+MEDICAL_ROOM_KINDS = {
+    "exam",
+    "treatment_room",
+    "testing_lab",
+    "triage",
+    "recovery",
+    "dispensary",
+    "intake",
+    "surgery",
+    "storage",
+    "cold_storage",
+}
+WORKROOM_KINDS = {
+    "tool_crib",
+    "parts",
+    "parts_room",
+    "parts_store",
+    "stock_room",
+    "stock_rack",
+    "repair_bench",
+    "maintenance",
+    "service_bay",
+    "shop_floor",
+    "assembly",
+    "assembly_line",
+    "sorting_floor",
+    "loading_bay",
+    "loading_lane",
+    "receiving",
+    "storage",
+    "power_room",
+    "racks",
+}
+FRONT_ROOM_KINDS = {
+    "entry",
+    "entrance",
+    "lobby",
+    "reception",
+    "waiting",
+    "foyer",
+    "concourse",
+    "public_hall",
+    "counter",
+    "front_counter",
+    "host_desk",
+    "service_counter",
+    "showroom",
+    "sales",
+    "gaming_floor",
+    "main_floor",
+    "dining",
+    "seating",
+    "common_room",
+}
+HOSPITALITY_ROOM_KINDS = {
+    "bar",
+    "bar_top",
+    "booth_row",
+    "vip_lounge",
+    "green_room",
+    "commons",
+    "kitchen",
+    "prep_kitchen",
+    "kitchenette",
+    "breakroom",
+    "reading_nook",
+    "guest_floor",
+}
 ROUND_CLOCK_ARCHETYPES = {
     "checkpoint",
     "armory",
@@ -839,12 +944,15 @@ def _sorted_by_distance(positions, origin, reverse=False):
 def _tile_candidates_for_property(sim, prop, zone):
     zone = str(zone or "entry").strip().lower() or "entry"
     entry = _property_entry(prop)
+    entry_key = tuple(int(v) for v in entry) if entry else None
     inside_tiles = _walkable_inside_tiles(sim, prop)
-    near_inside = _sorted_by_distance(inside_tiles, entry, reverse=False)
-    deep_inside = _sorted_by_distance(inside_tiles, entry, reverse=True)
+    near_inside = [tile for tile in _sorted_by_distance(inside_tiles, entry, reverse=False) if tile != entry_key]
+    deep_inside = [tile for tile in _sorted_by_distance(inside_tiles, entry, reverse=True) if tile != entry_key]
     boundary_inside = []
     for tile in inside_tiles:
         x, y, z = tile
+        if tile == entry_key:
+            continue
         entry_dist = abs(x - entry[0]) + abs(y - entry[1]) if entry else 0
         if entry_dist <= 2:
             boundary_inside.append(tile)
@@ -880,15 +988,66 @@ def _tile_candidates_for_property(sim, prop, zone):
     if zone == "interior":
         return _unique_positions(deep_inside + near_inside)
     if zone == "frontage":
-        return _unique_positions(_within(4, frontage)[:6] + ([entry] if entry else []) + _within(3, near_inside)[:4])
+        return _unique_positions(_within(4, frontage)[:6] + boundary_inside[:4] + _within(3, near_inside)[:4])
     if zone == "street":
         return _unique_positions(_within(5, street)[:8] + _within(4, frontage)[:4])
     if zone == "perimeter":
         return _unique_positions(boundary_inside[:8] + _within(4, frontage)[:4] + _within(3, near_inside)[:4])
-    return _unique_positions(([entry] if entry else []) + _within(3, near_inside)[:6] + _within(4, frontage)[:4])
+    return _unique_positions(boundary_inside[:8] + _within(3, near_inside)[:6] + _within(4, frontage)[:2])
 
 
-def _pick_tile(sim, candidates, rng, allow_entities=False):
+def _room_kind_at(sim, x, y, z):
+    info = sim.structure_at(x, y, z) if hasattr(sim, "structure_at") else None
+    if not isinstance(info, dict):
+        return ""
+    return str(info.get("room_kind", "") or "").strip().lower()
+
+
+def _item_tile_weight(sim, prop, item_def, zone, pos):
+    room_kind = _room_kind_at(sim, pos[0], pos[1], pos[2])
+    tags = {str(tag).strip().lower() for tag in item_def.get("tags", ()) if str(tag).strip()}
+    weight = 1.0
+
+    if zone == "entry":
+        if room_kind in FRONT_ROOM_KINDS:
+            weight += 3.0
+        elif room_kind:
+            weight += 1.0
+    elif zone == "interior":
+        if room_kind and room_kind not in FRONT_ROOM_KINDS:
+            weight += 0.5
+        elif room_kind in FRONT_ROOM_KINDS:
+            weight = max(0.35, weight - 0.45)
+
+    if "medical" in tags and room_kind in MEDICAL_ROOM_KINDS:
+        weight += 6.0
+    if {"weapon", "restricted", "illegal"} & tags:
+        if room_kind in SECURE_ROOM_KINDS:
+            weight += 7.0
+        elif room_kind in ADMIN_ROOM_KINDS:
+            weight += 2.5
+    if {"credential", "token", "key"} & tags:
+        if room_kind in ADMIN_ROOM_KINDS:
+            weight += 5.0
+        elif room_kind in SECURE_ROOM_KINDS:
+            weight += 2.5
+    if "tool" in tags:
+        if room_kind in WORKROOM_KINDS:
+            weight += 5.0
+        elif room_kind in SECURE_ROOM_KINDS:
+            weight += 1.5
+    if {"food", "drink", "social", "stimulant"} & tags and room_kind in HOSPITALITY_ROOM_KINDS:
+        weight += 4.0
+
+    archetype = _property_archetype(prop)
+    if zone == "interior" and archetype in SECURITY_ARCHETYPES and room_kind in SECURE_ROOM_KINDS:
+        weight += 1.5
+    if zone == "interior" and archetype in MEDICAL_ARCHETYPES and room_kind in MEDICAL_ROOM_KINDS:
+        weight += 1.5
+    return max(0.1, float(weight))
+
+
+def _pick_tile(sim, candidates, rng, allow_entities=False, weight_fn=None):
     filtered = []
     for x, y, z in candidates:
         if not sim.tilemap.is_walkable(x, y, z):
@@ -898,6 +1057,17 @@ def _pick_tile(sim, candidates, rng, allow_entities=False):
         filtered.append((x, y, z))
     if not filtered:
         return None
+    if callable(weight_fn):
+        weighted = []
+        for pos in filtered:
+            try:
+                weight = float(weight_fn(pos))
+            except (TypeError, ValueError):
+                weight = 1.0
+            weighted.append((pos, max(0.0, weight)))
+        picked = _weighted_choice(rng, weighted)
+        if picked is not None:
+            return picked
     return rng.choice(filtered)
 
 
@@ -1096,9 +1266,16 @@ def seed_chunk_items(sim, chunk, property_records):
             if not item_def:
                 continue
             zone = item_zone_for_property(prop, item_def)
-            tile = _pick_tile(sim, _tile_candidates_for_property(sim, prop, zone), rng, allow_entities=True)
+            tile = _pick_tile(
+                sim,
+                _tile_candidates_for_property(sim, prop, zone),
+                rng,
+                allow_entities=True,
+                weight_fn=lambda pos, _prop=prop, _item_def=item_def, _zone=zone: _item_tile_weight(sim, _prop, _item_def, _zone, pos),
+            )
             if not tile:
                 continue
+            room_kind = _room_kind_at(sim, tile[0], tile[1], tile[2])
             ground_id = sim.register_ground_item(
                 item_id=item_id,
                 x=tile[0],
@@ -1111,6 +1288,7 @@ def seed_chunk_items(sim, chunk, property_records):
                     "source_property_id": prop.get("id"),
                     "chunk": key,
                     "placement_zone": zone,
+                    "placement_room_kind": room_kind or None,
                 },
             )
             spawned.append(ground_id)

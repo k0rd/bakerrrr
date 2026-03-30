@@ -14,7 +14,7 @@ from engine.persistence import (
     normalize_character_name,
     save_character_run,
 )
-from engine.sites import layout_chunk_site, site_gameplay_profile
+from engine.sites import layout_chunk_site, site_gameplay_profile, site_layout_reserved_footprints
 from engine.sim import Simulation
 from engine.tilemap import Tile
 from game.components import (
@@ -697,6 +697,9 @@ def _register_chunk_properties(sim, chunk):
                     "archetype": archetype,
                     "building_id": chunk_building_id,
                     "local_building_id": local_building_id or None,
+                    "large_parcel": bool(building.get("large_parcel")),
+                    "parcel_span_x": int(building.get("parcel_span_x", 1) or 1),
+                    "parcel_span_y": int(building.get("parcel_span_y", 1) or 1),
                     "floors": int(building.get("floors", 1)),
                     "basement_levels": int(building.get("basement_levels", 0)),
                     "rooms": list(building.get("rooms", ())),
@@ -746,7 +749,7 @@ def _register_chunk_properties(sim, chunk):
         )
         if not layout:
             continue
-        reserved_site_footprints.append(dict(layout.get("footprint", {})))
+        reserved_site_footprints.extend(site_layout_reserved_footprints(layout))
 
         x = int(layout["anchor_x"])
         y = int(layout["anchor_y"])
@@ -1977,7 +1980,7 @@ def _run_new_game(view, character_name):
     sim.log.add(
         "Controls: move with arrows/WASD/HJKL or numpad 1-9, and press ? for the full help panel."
     )
-    sim.log.add('City legend: + door, " window, / breach opening, > higher stairs, < lower stairs, : stair landing, E elevator.')
+    sim.log.add('City legend: + closed door, \' open door, " window, / breach opening, > higher stairs, < lower stairs, : stair landing, E elevator.')
     sim.log.add("Local terrain: = road, : trail, , brush, ^ rock, ~ water, _ shore flats.")
     sim.log.add("City legend: uppercase property markers are protected, lowercase are public, and S/s mark service access.")
     sim.log.add("Infrastructure markers now use typed street symbols (for example l lamp, p pole, h hydrant, u stop, j/t utility hardware).")

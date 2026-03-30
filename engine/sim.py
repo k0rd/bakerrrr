@@ -3,10 +3,11 @@ import random
 from .buildings import layout_chunk_building, world_building_id
 from .ecs import ECS
 from .events import EventBus
-from .sites import layout_chunk_site
+from .sites import layout_chunk_site, site_entry_front_cell, site_layout_reserved_footprints
 from .world import World
 from .eventlog import EventLog
 from .tilemap import Tile, TileMap
+from game.appearance import AppearanceManager
 
 class Simulation:
 
@@ -45,6 +46,7 @@ class Simulation:
         self.property_cover_index = {}
         self.property_order = {}
         self.next_property_order = 0
+        self.door_states = {}
         self.structure_cells = {}
         self.next_property_id = 1
         self.ground_items = {}
@@ -97,6 +99,7 @@ class Simulation:
         }
 
         self.systems = []
+        self.appearance = AppearanceManager(self)
 
         self.mutators = mutators or []
 
@@ -111,6 +114,69 @@ class Simulation:
     def _bind_runtime_state(self):
         if isinstance(getattr(self, "log", None), EventLog):
             self.log.default_tick_source = self._log_tick
+        if not isinstance(getattr(self, "door_states", None), dict):
+            self.door_states = {}
+
+    def door_state_at(self, x, y, z=0):
+        key = self._coord_key(x, y, z)
+        if key is None:
+            return None
+        state = self.door_states.get(key)
+        return state if isinstance(state, dict) else None
+
+    def set_door_state(
+        self,
+        x,
+        y,
+        z=0,
+        *,
+        open=None,
+        kind=None,
+        ordinary=None,
+        property_id=None,
+        auto_managed=None,
+    ):
+        key = self._coord_key(x, y, z)
+        if key is None:
+            return None
+
+        state = self.door_states.get(key)
+        if not isinstance(state, dict):
+            state = {}
+
+        if open is not None:
+            state["open"] = bool(open)
+        if kind is not None:
+            state["kind"] = str(kind or "door").strip().lower() or "door"
+        if ordinary is not None:
+            state["ordinary"] = bool(ordinary)
+        if property_id is not None:
+            state["property_id"] = str(property_id).strip() or None
+        if auto_managed is not None:
+            state["auto_managed"] = bool(auto_managed)
+
+        self.door_states[key] = state
+        return state
+
+    def apply_door_state(self, x, y, z=0):
+        state = self.door_state_at(x, y, z)
+        tile = self.tilemap.tile_at(x, y, z)
+        if not state or tile is None:
+            return False
+
+        kind = str(state.get("kind", "door") or "door").strip().lower() or "door"
+        if kind not in {"door", "side_door", "service_door", "employee_door"}:
+            return False
+
+        is_open = bool(state.get("open", False))
+        tile.walkable = bool(is_open)
+        tile.transparent = bool(is_open)
+        tile.set_appearance(
+            glyph="'" if is_open else "+",
+            color="feature_door",
+            semantic_id=None,
+        )
+        return True
 
     def set_time_paused(self, active=True, *, reason="modal"):
         reason_key = str(reason or "modal").strip().lower() or "modal"
@@ -299,6 +365,25 @@ class Simulation:
         start = min(max_start, int(max(0, floor)))
         return tuple(labels[start:start + window])
 
+    def _split_span(self, start, end, parts):
+        start = int(start)
+        end = int(end)
+        parts = max(1, int(parts))
+        length = end - start + 1
+        if length <= 0:
+            return ()
+        parts = max(1, min(parts, length))
+        base = length // parts
+        extra = length % parts
+        spans = []
+        cursor = start
+        for index in range(parts):
+            span = base + (1 if index < extra else 0)
+            span_end = cursor + span - 1
+            spans.append((int(cursor), int(span_end)))
+            cursor = span_end + 1
+        return tuple(spans)
+
     def _room_plan_for_shell(self, rooms, left, right, top, bottom, floor=0, floors=1, basement_levels=0):
         interior_left = int(left) + 1
         interior_right = int(right) - 1
@@ -313,12 +398,17 @@ class Simulation:
 
         width = interior_right - interior_left + 1
         height = interior_bottom - interior_top + 1
+        max_rooms = 3
+        if width >= 9 and height >= 7:
+            max_rooms = 5
+        elif width >= 7 and height >= 7:
+            max_rooms = 4
         floor_rooms = self._floor_room_sequence(
             rooms,
             floor=floor,
             floors=floors,
             basement_levels=basement_levels,
-            max_rooms=3,
+            max_rooms=max_rooms,
         )
 
         if len(floor_rooms) <= 1 or width < 2 or height < 2:
@@ -334,6 +424,125 @@ class Simulation:
                 ),
                 "walls": (),
                 "doors": (),
+            }
+
+        if len(floor_rooms) >= 5 and width >= 9 and height >= 7:
+            front_depth = 3 if height >= 9 else 2
+            front_top = max(interior_top, interior_bottom - front_depth + 1)
+            front_wall_y = front_top - 1
+            back_top = interior_top
+            back_bottom = max(interior_top, front_wall_y - 1)
+            mid_x = interior_left + (width // 2)
+            back_mid_y = back_top + max(1, ((back_bottom - back_top + 1) // 2))
+
+            walls = [(x, front_wall_y) for x in range(interior_left, interior_right + 1)]
+            if back_bottom >= back_top:
+                for y in range(back_top, back_bottom + 1):
+                    walls.append((mid_x, y))
+            if back_mid_y <= back_bottom:
+                for x in range(interior_left, interior_right + 1):
+                    walls.append((x, back_mid_y))
+
+            rooms_out = [
+                {
+                    "kind": floor_rooms[0],
+                    "left": interior_left,
+                    "right": interior_right,
+                    "top": front_top,
+                    "bottom": interior_bottom,
+                },
+                {
+                    "kind": floor_rooms[1],
+                    "left": interior_left,
+                    "right": max(interior_left, mid_x - 1),
+                    "top": interior_top,
+                    "bottom": max(interior_top, back_mid_y - 1),
+                },
+                {
+                    "kind": floor_rooms[2],
+                    "left": min(interior_right, mid_x + 1),
+                    "right": interior_right,
+                    "top": interior_top,
+                    "bottom": max(interior_top, back_mid_y - 1),
+                },
+                {
+                    "kind": floor_rooms[3],
+                    "left": interior_left,
+                    "right": max(interior_left, mid_x - 1),
+                    "top": min(back_bottom, back_mid_y + 1),
+                    "bottom": back_bottom,
+                },
+                {
+                    "kind": floor_rooms[4],
+                    "left": min(interior_right, mid_x + 1),
+                    "right": interior_right,
+                    "top": min(back_bottom, back_mid_y + 1),
+                    "bottom": back_bottom,
+                },
+            ]
+            rooms_out = tuple(
+                room for room in rooms_out
+                if int(room["left"]) <= int(room["right"]) and int(room["top"]) <= int(room["bottom"])
+            )
+            doors = [
+                (interior_left + (width // 2), front_wall_y),
+                (mid_x, back_top + ((back_mid_y - back_top) // 2)) if back_mid_y > back_top else None,
+                (mid_x, min(back_bottom, back_mid_y + max(1, (back_bottom - back_mid_y) // 2))) if back_bottom > back_mid_y else None,
+                (interior_left + (max(1, width // 4)), back_mid_y) if back_mid_y <= back_bottom else None,
+                (interior_right - (max(1, width // 4)), back_mid_y) if back_mid_y <= back_bottom else None,
+            ]
+            return {
+                "rooms": rooms_out,
+                "walls": tuple(dict.fromkeys(walls)),
+                "doors": tuple(dict.fromkeys(door for door in doors if door is not None)),
+            }
+
+        if len(floor_rooms) >= 4 and width >= 7 and height >= 7:
+            mid_x = interior_left + (width // 2)
+            mid_y = interior_top + (height // 2)
+            walls = [(x, mid_y) for x in range(interior_left, interior_right + 1)]
+            walls.extend((mid_x, y) for y in range(interior_top, interior_bottom + 1))
+            rooms_out = (
+                {
+                    "kind": floor_rooms[0],
+                    "left": interior_left,
+                    "right": max(interior_left, mid_x - 1),
+                    "top": interior_top,
+                    "bottom": max(interior_top, mid_y - 1),
+                },
+                {
+                    "kind": floor_rooms[1],
+                    "left": min(interior_right, mid_x + 1),
+                    "right": interior_right,
+                    "top": interior_top,
+                    "bottom": max(interior_top, mid_y - 1),
+                },
+                {
+                    "kind": floor_rooms[2],
+                    "left": interior_left,
+                    "right": max(interior_left, mid_x - 1),
+                    "top": min(interior_bottom, mid_y + 1),
+                    "bottom": interior_bottom,
+                },
+                {
+                    "kind": floor_rooms[3],
+                    "left": min(interior_right, mid_x + 1),
+                    "right": interior_right,
+                    "top": min(interior_bottom, mid_y + 1),
+                    "bottom": interior_bottom,
+                },
+            )
+            doors = (
+                (interior_left + (width // 2), mid_y),
+                (mid_x, interior_top + (height // 2)),
+            )
+            return {
+                "rooms": tuple(
+                    room for room in rooms_out
+                    if int(room["left"]) <= int(room["right"]) and int(room["top"]) <= int(room["bottom"])
+                ),
+                "walls": tuple(dict.fromkeys(walls)),
+                "doors": tuple(dict.fromkeys(doors)),
             }
 
         if len(floor_rooms) >= 3 and width >= 5 and height >= 4:
@@ -508,7 +717,7 @@ class Simulation:
                     ordinary = bool(aperture.get("ordinary"))
                     glyph = '"' if kind in {"window", "skylight"} else "+"
                     walkable = ordinary and kind == "door"
-                    transparent = walkable
+                    transparent = bool(walkable or kind in {"window", "skylight"})
 
                 self.tilemap.set_tile(
                     x,
@@ -749,7 +958,7 @@ class Simulation:
             )
             if not layout:
                 continue
-            reserved_footprints.append(dict(layout.get("footprint", {})))
+            reserved_footprints.extend(site_layout_reserved_footprints(layout))
 
             left = int(layout["left"])
             right = int(layout["right"])
@@ -801,6 +1010,28 @@ class Simulation:
                 info=structure_info,
                 room_plan=room_plan,
             )
+            self._clear_non_city_entry_front(entry)
+
+    def _clear_non_city_entry_front(self, entry):
+        front = site_entry_front_cell(entry)
+        if front is None:
+            return False
+
+        x, y, z = front
+        if self.structure_at(x, y, z) is not None:
+            return False
+
+        tile = self.tilemap.tile_at(x, y, z)
+        if tile and tile.walkable and tile.transparent:
+            return False
+
+        self.tilemap.set_tile(
+            int(x),
+            int(y),
+            Tile(walkable=True, transparent=True, glyph="."),
+            z=int(z),
+        )
+        return True
 
     def _realize_non_city_chunk(self, chunk, rng, ox, oy, size):
         district = chunk.get("district", {})
@@ -950,6 +1181,9 @@ class Simulation:
                             "name": str(building.get("business_name") or building.get("archetype") or "building"),
                             "archetype": str(building.get("archetype", "")).strip().lower(),
                             "is_storefront": bool(building.get("is_storefront")),
+                            "large_parcel": bool(building.get("large_parcel")),
+                            "parcel_span_x": int(building.get("parcel_span_x", 1) or 1),
+                            "parcel_span_y": int(building.get("parcel_span_y", 1) or 1),
                             "floor": z,
                             "floors": floors,
                             "basement_levels": basement_levels,

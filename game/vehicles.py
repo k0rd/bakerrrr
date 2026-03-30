@@ -74,6 +74,12 @@ DEFAULT_CATALOG = {
             "work_shed",
             "survey_post",
         ),
+        "fetch": (
+            "truck_stop",
+            "auto_garage",
+            "roadhouse",
+            "breaker_yard",
+        ),
     },
 }
 
@@ -169,6 +175,7 @@ def load_vehicle_catalog(path=VEHICLE_DATA_PATH):
         "fuel": _string_list(services.get("fuel"), DEFAULT_CATALOG["service_archetypes"]["fuel"]),
         "new_sales": _string_list(services.get("new_sales"), DEFAULT_CATALOG["service_archetypes"]["new_sales"]),
         "used_sales": _string_list(services.get("used_sales"), DEFAULT_CATALOG["service_archetypes"]["used_sales"]),
+        "fetch": _string_list(services.get("fetch"), DEFAULT_CATALOG["service_archetypes"]["fetch"]),
     }
 
     return {

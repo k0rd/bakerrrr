@@ -839,7 +839,7 @@ def _validate_vehicles(path, report):
     if not isinstance(service_archetypes, dict):
         report.error(source, ["service_archetypes"], "service_archetypes must be an object")
     else:
-        for key in ("fuel", "new_sales", "used_sales"):
+        for key in ("fuel", "new_sales", "used_sales", "fetch"):
             values = service_archetypes.get(key)
             if values is None:
                 report.error(source, ["service_archetypes"], f"missing service_archetypes key {key!r}")

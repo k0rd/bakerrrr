@@ -5,12 +5,12 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from game.semantic_catalog import DEFAULT_RUNTIME_MAP_PATH, get_runtime_semantic_catalog
 from ui.input_keys import KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_UP
 
-_TILE_MAP_PATH = Path(__file__).resolve().parents[1] / "assets" / "tiles" / "tile_map.json"
 _DEFAULT_ATLAS_PATH = Path(__file__).resolve().parents[1] / "assets" / "tiles" / "atlas" / "tileset.png"
 _DEFAULT_MANIFEST_PATH = Path(__file__).resolve().parents[1] / "assets" / "tiles" / "atlas" / "tileset.json"
-_DEFAULT_SEMANTIC_MAP_PATH = Path(__file__).resolve().parents[1] / "assets" / "tiles" / "atlas" / "semantic_mapping.json"
+_DEFAULT_RUNTIME_SEMANTIC_MAP_PATH = DEFAULT_RUNTIME_MAP_PATH
 
 
 def atlas_manifest_tile_size(manifest_path=None, default=40, minimum=8):
@@ -64,12 +64,16 @@ class PygameView:
         self._ui_font = pygame.font.SysFont("DejaVu Sans Mono", ui_font_px)
         self._ui_bold_font = pygame.font.SysFont("DejaVu Sans Mono", ui_font_px, bold=True)
         self.key_queue = deque()
+        self._animation_tick = 0
+        self._queued_draw_calls = []
+        self._draw_sequence = 0
 
         # Atlas tile rendering. Populated by _load_atlas().
         self._atlas: Any = None            # pygame.Surface or None
         self._tile_rects: dict = {}        # tile_id -> pygame.Rect
         self._glyph_color_tiles: dict = {} # (glyph, asset_color) -> tile_id
-        self._tile_map: dict = {}          # glyph/category lookup table from tile_map.json
+        self._semantic_catalog = None
+        self._tile_map: dict = {}          # glyph/category lookup table from semantic_map.json
         self._semantic_aliases: dict = {}  # semantic tile_id -> atlas tile_id
         self._runtime_color_asset_families: dict = {}
         self._load_atlas()
@@ -352,17 +356,15 @@ class PygameView:
         self._glyph_color_tiles = glyph_color_tiles
 
     def _load_tile_map(self, path=None):
-        """Load the glyph -> tile_id mapping table."""
-        path = Path(path) if path else _TILE_MAP_PATH
-        if not path.exists():
-            return
+        """Load the runtime semantic catalog used by renderer lookup."""
+        catalog_path = Path(path) if path else _DEFAULT_RUNTIME_SEMANTIC_MAP_PATH
         try:
-            with path.open("r", encoding="utf-8") as fh:
-                raw = json.load(fh)
+            self._semantic_catalog = get_runtime_semantic_catalog(str(catalog_path))
         except Exception:
-            return
-        self._tile_map = {k: v for k, v in raw.items() if not k.startswith("_")}
-        aliases = raw.get("_color_aliases", {}) if isinstance(raw, dict) else {}
+            self._semantic_catalog = get_runtime_semantic_catalog()
+
+        self._tile_map = dict(getattr(self._semantic_catalog, "categories", {}) or {})
+        aliases = getattr(self._semantic_catalog, "color_aliases", {}) or {}
         runtime_to_asset = {}
         if isinstance(aliases, dict):
             for asset_family, runtime_colors in aliases.items():
@@ -383,26 +385,26 @@ class PygameView:
 
     def _load_semantic_aliases(self, path=None):
         """Load semantic tile aliases to atlas IDs if available."""
-        path = Path(path) if path else _DEFAULT_SEMANTIC_MAP_PATH
-        if not path.exists():
+        if self._semantic_catalog is None:
+            self._load_tile_map(path=path)
+        semantics = getattr(self._semantic_catalog, "semantics", {}) if self._semantic_catalog is not None else {}
+        if not isinstance(semantics, dict):
+            self._semantic_aliases = {}
             return
-        try:
-            with path.open("r", encoding="utf-8") as fh:
-                raw = json.load(fh)
-        except Exception:
-            return
-
-        mapping = raw.get("assignments", {}) if isinstance(raw, dict) else {}
-        if not isinstance(mapping, dict):
-            return
-        self._semantic_aliases = {
-            str(k): str(v)
-            for k, v in mapping.items()
-            if k and v
-        }
+        mapping = {}
+        for semantic_id, entry in semantics.items():
+            if not isinstance(entry, dict):
+                continue
+            atlas_id = str(entry.get("atlas_id", "") or "").strip()
+            semantic_key = str(semantic_id or "").strip()
+            if semantic_key and atlas_id:
+                mapping[semantic_key] = atlas_id
+        self._semantic_aliases = mapping
 
     def _category_order_for_color(self, color_key):
         """Return preferred tile-map category order for a given color key."""
+        if self._semantic_catalog is not None:
+            return list(self._semantic_catalog.category_order_for_color(color_key))
         key = str(color_key or "default").strip().lower()
         default_order = [
             "terrain",
@@ -452,6 +454,8 @@ class PygameView:
         return default_order
 
     def _strict_categories_for_color(self, color_key):
+        if self._semantic_catalog is not None:
+            return tuple(self._semantic_catalog.strict_categories_for_color(color_key))
         key = str(color_key or "default").strip().lower()
         if key.startswith("item_"):
             return ("items",)
@@ -461,12 +465,59 @@ class PygameView:
 
     def _preserve_background_for_color(self, color_key):
         key = str(color_key or "default").strip().lower()
-        return key.startswith("item_") or key.startswith("vehicle_")
+        return key.startswith("item_") or key.startswith("vehicle_") or key == "feature_window"
 
-    def _tile_id_for(self, glyph, color):
-        """Resolve a tile_id from glyph+color using tile_map; return None if unmapped."""
+    def _draw_window_overlay(self, x, y, color=None, attrs=0):
+        frame = self._color_value(color)
+        if self._has_attr(attrs, "A_DIM"):
+            frame = (frame[0] // 2, frame[1] // 2, frame[2] // 2)
+        if self._has_attr(attrs, "A_BOLD"):
+            frame = (
+                min(255, int(frame[0] * 1.15)),
+                min(255, int(frame[1] * 1.15)),
+                min(255, int(frame[2] * 1.15)),
+            )
+
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        inset = max(1, self.cell_px // 8)
+        inner_w = max(1, self.cell_px - (inset * 2))
+        inner_h = max(1, self.cell_px - (inset * 2))
+        frame_alpha = 188
+        glass_alpha = 54
+
+        glass = (frame[0], frame[1], frame[2], glass_alpha)
+        stroke = (frame[0], frame[1], frame[2], frame_alpha)
+        self.pygame.draw.rect(overlay, glass, (inset, inset, inner_w, inner_h))
+        self.pygame.draw.rect(overlay, stroke, (inset, inset, inner_w, inner_h), max(1, self.cell_px // 12))
+
+        mid_x = self.cell_px // 2
+        self.pygame.draw.line(
+            overlay,
+            stroke,
+            (mid_x, inset + 1),
+            (mid_x, self.cell_px - inset - 2),
+            max(1, self.cell_px // 12),
+        )
+
+        cross_y = max(inset + 2, self.cell_px // 3)
+        self.pygame.draw.line(
+            overlay,
+            (frame[0], frame[1], frame[2], max(120, frame_alpha - 28)),
+            (inset + 1, cross_y),
+            (self.cell_px - inset - 2, cross_y),
+            max(1, self.cell_px // 16),
+        )
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
+    def _tile_id_for(self, glyph, color, semantic_id=None):
+        """Resolve a sprite tile from direct atlas glyphs or semantic runtime IDs."""
         if not self._tile_map or self._atlas is None:
-            return None
+            semantic_key = str(semantic_id or "").strip()
+            return semantic_key or None
 
         glyph = str(glyph)[:1] if glyph else ""
         color_key = str(color) if color else "default"
@@ -475,6 +526,10 @@ class PygameView:
         tile_id = self._direct_tile_id_for(glyph, color_key)
         if tile_id:
             return tile_id
+
+        semantic_key = str(semantic_id or "").strip()
+        if semantic_key:
+            return semantic_key
 
         ordered_categories = [
             self._tile_map.get(name)
@@ -527,6 +582,15 @@ class PygameView:
         for asset_color in self._asset_color_candidates(color_key):
             tile_id = self._glyph_color_tiles.get((glyph, asset_color))
             if tile_id:
+                return str(tile_id)
+        return None
+
+    def _any_direct_tile_id_for_glyph(self, glyph):
+        glyph_key = str(glyph or "")[:1]
+        if not glyph_key:
+            return None
+        for (candidate_glyph, _candidate_color), tile_id in self._glyph_color_tiles.items():
+            if candidate_glyph == glyph_key:
                 return str(tile_id)
         return None
 
@@ -595,6 +659,95 @@ class PygameView:
 
     def clear(self):
         self.surface.fill((0, 0, 0))
+        self._queued_draw_calls.clear()
+        self._draw_sequence = 0
+
+    def begin_frame(self, *, animation_tick=None):
+        if animation_tick is None:
+            animation_tick = int(time.monotonic() * 10.0)
+        try:
+            self._animation_tick = int(animation_tick)
+        except (TypeError, ValueError):
+            self._animation_tick = 0
+
+    def _wants_layered_draw(self, layer=None, priority=None):
+        return layer is not None or priority is not None
+
+    def _queue_draw_call(self, kind, **payload):
+        self._draw_sequence += 1
+        queued = {"kind": str(kind), "sequence": int(self._draw_sequence)}
+        queued.update(payload)
+        self._queued_draw_calls.append(queued)
+
+    def _queued_draw_sort_key(self, queued):
+        layer_name = queued.get("layer")
+        if self._semantic_catalog is not None:
+            layer_order = self._semantic_catalog.render_layer_order(layer_name)
+        else:
+            layer_key = str(layer_name or "").strip().lower() or "ground_overlay"
+            layer_order = 0
+            if layer_key == "ground_overlay":
+                layer_order = 10
+            elif layer_key == "item":
+                layer_order = 20
+            elif layer_key == "actor":
+                layer_order = 30
+            elif layer_key == "fx":
+                layer_order = 40
+            elif layer_key == "ui_overlay":
+                layer_order = 50
+        try:
+            priority = int(queued.get("priority", 0) or 0)
+        except (TypeError, ValueError):
+            priority = 0
+        return (int(layer_order), priority, int(queued.get("sequence", 0) or 0))
+
+    def _flush_queued_draws(self):
+        if not self._queued_draw_calls:
+            return
+        queued = sorted(self._queued_draw_calls, key=self._queued_draw_sort_key)
+        self._queued_draw_calls.clear()
+        for call in queued:
+            kind = call.get("kind")
+            if kind == "glyph":
+                self._draw_char(
+                    call.get("x", 0),
+                    call.get("y", 0),
+                    call.get("glyph", " "),
+                    color=call.get("color"),
+                    attrs=call.get("attrs", 0),
+                    semantic_id=call.get("semantic_id"),
+                    effects=call.get("effects", ()),
+                    overlays=call.get("overlays", ()),
+                )
+                continue
+            if kind == "text":
+                self._draw_text_now(
+                    call.get("x", 0),
+                    call.get("y", 0),
+                    call.get("text", ""),
+                    color=call.get("color"),
+                    attrs=call.get("attrs", 0),
+                )
+                continue
+            if kind == "segments":
+                self._draw_segments_now(
+                    call.get("x", 0),
+                    call.get("y", 0),
+                    call.get("segments", ()),
+                    max_width=call.get("max_width"),
+                    attrs=call.get("attrs", 0),
+                )
+
+    def _effects_visible(self, effects):
+        effect_set = {
+            str(effect).strip().lower()
+            for effect in (effects or ())
+            if str(effect).strip()
+        }
+        if "blink" in effect_set:
+            return ((int(self._animation_tick) // 4) % 2) == 0
+        return True
 
     def _clip_text(self, x, y, text):
         x = int(x)
@@ -621,20 +774,53 @@ class PygameView:
 
         return x, y, text
 
-    def _draw_char(self, x, y, ch, color=None, attrs=0):
+    def _draw_overlay_stack(self, x, y, overlays, attrs=0):
+        for overlay in overlays or ():
+            if not isinstance(overlay, dict):
+                continue
+            if not bool(overlay.get("visible", True)):
+                continue
+            if not self._effects_visible(overlay.get("effects", ())):
+                continue
+            glyph = str(overlay.get("glyph", " ") or " ")[:1] or " "
+            color = overlay.get("color")
+            semantic_id = overlay.get("semantic_id")
+            overlay_attrs = int(attrs or 0) | int(overlay.get("attrs", 0) or 0)
+            tile_id = self._tile_id_for(glyph, color, semantic_id=semantic_id)
+            if tile_id and self._blit_tile(tile_id, x, y, attrs=overlay_attrs, preserve_background=True):
+                continue
+            self._draw_font_char(
+                x,
+                y,
+                glyph,
+                color=color,
+                attrs=overlay_attrs,
+                preserve_background=True,
+            )
+
+    def _draw_char(self, x, y, ch, color=None, attrs=0, semantic_id=None, effects=None, overlays=None):
         region = self._clip_text(x, y, str(ch)[:1] or " ")
         if region is None:
             return
+        if not self._effects_visible(effects):
+            return
         x, y, text = region
+        semantic_key = str(semantic_id or "").strip().lower()
+        if semantic_key == "feature_window" or (text == '"' and str(color or "").strip().lower() == "feature_window"):
+            self._draw_window_overlay(x, y, color=color, attrs=attrs)
+            self._draw_overlay_stack(x, y, overlays, attrs=attrs)
+            return
         preserve_background = self._preserve_background_for_color(color)
 
         # Try sprite tile first; fall back to glyph text when no atlas loaded or
         # tile_id not yet available for this glyph+color pair.
-        tile_id = self._tile_id_for(text, color)
+        tile_id = self._tile_id_for(text, color, semantic_id=semantic_id)
         if tile_id and self._blit_tile(tile_id, x, y, attrs=attrs, preserve_background=preserve_background):
+            self._draw_overlay_stack(x, y, overlays, attrs=attrs)
             return
 
         self._draw_font_char(x, y, text[0], color=color, attrs=attrs, preserve_background=preserve_background)
+        self._draw_overlay_stack(x, y, overlays, attrs=attrs)
 
     def _draw_font_char(self, x, y, ch, color=None, attrs=0, preserve_background=False):
         fg = self._color_value(color)
@@ -759,6 +945,8 @@ class PygameView:
     def _draw_inline_glyph_run(self, pixel_x, y, ch, color=None, attrs=0):
         text = str(ch)[:1] or " "
         tile_id = self._tile_id_for(text, color)
+        if tile_id is None:
+            tile_id = self._any_direct_tile_id_for_glyph(text)
         if tile_id and self._blit_tile_pixels(tile_id, pixel_x, y, attrs=attrs):
             return self.cell_px
 
@@ -784,10 +972,35 @@ class PygameView:
         self.surface.blit(surface, (int(pixel_x), dest_y))
         return self.cell_px
 
-    def draw(self, x, y, glyph, color=None, attrs=0):
-        self._draw_char(x, y, glyph, color=color, attrs=attrs)
+    def draw(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None):
+        if self._wants_layered_draw(layer=layer, priority=priority):
+            self._queue_draw_call(
+                "glyph",
+                x=int(x),
+                y=int(y),
+                glyph=str(glyph)[:1] or " ",
+                color=color,
+                attrs=int(attrs or 0),
+                semantic_id=semantic_id,
+                effects=tuple(effects or ()),
+                overlays=tuple(overlays or ()),
+                layer=layer,
+                priority=0 if priority is None else int(priority),
+            )
+            return
+        self._flush_queued_draws()
+        self._draw_char(
+            x,
+            y,
+            glyph,
+            color=color,
+            attrs=attrs,
+            semantic_id=semantic_id,
+            effects=effects,
+            overlays=overlays,
+        )
 
-    def draw_text(self, x, y, text, color=None, attrs=0):
+    def _draw_text_now(self, x, y, text, color=None, attrs=0):
         if self._should_use_grid_text(text):
             region = self._clip_text(x, y, text)
             if region is None:
@@ -808,7 +1021,23 @@ class PygameView:
             return
         self._draw_text_run(pixel_x, y, text, color=color, attrs=attrs)
 
-    def draw_segments(self, x, y, segments, max_width=None, attrs=0):
+    def draw_text(self, x, y, text, color=None, attrs=0, layer=None, priority=None):
+        if self._wants_layered_draw(layer=layer, priority=priority):
+            self._queue_draw_call(
+                "text",
+                x=int(x),
+                y=int(y),
+                text=str(text),
+                color=color,
+                attrs=int(attrs or 0),
+                layer=layer,
+                priority=0 if priority is None else int(priority),
+            )
+            return
+        self._flush_queued_draws()
+        self._draw_text_now(x, y, text, color=color, attrs=attrs)
+
+    def _draw_segments_now(self, x, y, segments, max_width=None, attrs=0):
         region = self._clip_draw_position(x, y)
         if region is None:
             return
@@ -857,6 +1086,22 @@ class PygameView:
             pixel_x += drawn_px
             if remaining_px is not None:
                 remaining_px -= drawn_px
+
+    def draw_segments(self, x, y, segments, max_width=None, attrs=0, layer=None, priority=None):
+        if self._wants_layered_draw(layer=layer, priority=priority):
+            self._queue_draw_call(
+                "segments",
+                x=int(x),
+                y=int(y),
+                segments=list(segments or ()),
+                max_width=max_width,
+                attrs=int(attrs or 0),
+                layer=layer,
+                priority=0 if priority is None else int(priority),
+            )
+            return
+        self._flush_queued_draws()
+        self._draw_segments_now(x, y, segments, max_width=max_width, attrs=attrs)
 
     def _map_key(self, event):
         if event.type == self.pygame.QUIT:
@@ -969,6 +1214,7 @@ class PygameView:
         return None
 
     def refresh(self):
+        self._flush_queued_draws()
         self.pygame.display.flip()
 
     def close(self):

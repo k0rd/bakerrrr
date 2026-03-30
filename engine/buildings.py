@@ -258,6 +258,17 @@ BUILDING_SHELL_SPAN_OPTIONS = {
     "entertainment": ((7, 5), (9, 5), (7, 7), (9, 7)),
 }
 
+BUILDING_LARGE_PARCEL_SPAN_OPTIONS = {
+    "building": ((11, 7), (13, 7), (11, 9)),
+    "residential": ((11, 7), (13, 7), (11, 9)),
+    "storefront": ((11, 7), (13, 7), (11, 9), (13, 9)),
+    "industrial": ((11, 9), (13, 9), (15, 9)),
+    "corporate": ((11, 9), (13, 9), (15, 9)),
+    "civic": ((11, 7), (13, 7), (11, 9), (13, 9)),
+    "secure": ((11, 9), (13, 9), (15, 9)),
+    "entertainment": ((11, 7), (13, 7), (11, 9), (13, 9)),
+}
+
 BUILDING_SHAPE_WEIGHTS = {
     "building":      {"rect": 7, "notch": 2, "setback": 1},
     "residential":   {"rect": 5, "notch": 3, "l_shape": 1, "setback": 1},
@@ -388,7 +399,65 @@ def _center_strip_cells(left, right, top, bottom, side, depth):
     return {(int(x), int(y)) for x in xs for y in ys}
 
 
-def building_shape_exclusions(rng, exterior_class, left, right, top, bottom, entry_x, entry_y, entry_side="south"):
+def _linked_wing_cells(left, right, top, bottom, axis="horizontal"):
+    left = int(left)
+    right = int(right)
+    top = int(top)
+    bottom = int(bottom)
+    axis = str(axis or "horizontal").strip().lower() or "horizontal"
+    width = right - left + 1
+    height = bottom - top + 1
+    excluded = set()
+
+    if axis == "vertical":
+        if height < 7 or width < 5:
+            return excluded
+        connector_h = 3 if height >= 11 else 1
+        connector_w = 3 if width >= 7 else 1
+        center_y = (top + bottom) // 2
+        center_x = (left + right) // 2
+        connector_top = max(top + 1, center_y - (connector_h // 2))
+        connector_bottom = min(bottom - 1, connector_top + connector_h - 1)
+        connector_left = max(left + 1, center_x - (connector_w // 2))
+        connector_right = min(right - 1, connector_left + connector_w - 1)
+        for y in range(connector_top, connector_bottom + 1):
+            for x in range(left + 1, right):
+                if connector_left <= x <= connector_right:
+                    continue
+                excluded.add((int(x), int(y)))
+        return excluded
+
+    if width < 7 or height < 5:
+        return excluded
+    connector_w = 3 if width >= 11 else 1
+    connector_h = 3 if height >= 7 else 1
+    center_x = (left + right) // 2
+    center_y = (top + bottom) // 2
+    connector_left = max(left + 1, center_x - (connector_w // 2))
+    connector_right = min(right - 1, connector_left + connector_w - 1)
+    connector_top = max(top + 1, center_y - (connector_h // 2))
+    connector_bottom = min(bottom - 1, connector_top + connector_h - 1)
+    for x in range(connector_left, connector_right + 1):
+        for y in range(top + 1, bottom):
+            if connector_top <= y <= connector_bottom:
+                continue
+            excluded.add((int(x), int(y)))
+    return excluded
+
+
+def building_shape_exclusions(
+    rng,
+    exterior_class,
+    left,
+    right,
+    top,
+    bottom,
+    entry_x,
+    entry_y,
+    entry_side="south",
+    parcel_span_x=1,
+    parcel_span_y=1,
+):
     """Return a frozenset of (x, y) cells to exclude from the building footprint."""
     width = right - left + 1
     height = bottom - top + 1
@@ -400,6 +469,18 @@ def building_shape_exclusions(rng, exterior_class, left, right, top, bottom, ent
     )
     shapes = list(weights.keys())
     shape_weights = [weights[s] for s in shapes]
+    parcel_span_x = max(1, int(parcel_span_x))
+    parcel_span_y = max(1, int(parcel_span_y))
+    linked_axis = ""
+    if parcel_span_x > parcel_span_y and width >= 7 and height >= 5:
+        linked_axis = "horizontal"
+    elif parcel_span_y > parcel_span_x and width >= 5 and height >= 7:
+        linked_axis = "vertical"
+    elif (parcel_span_x > 1 or parcel_span_y > 1) and width >= 7 and height >= 7:
+        linked_axis = "horizontal" if width >= height else "vertical"
+    if linked_axis:
+        shapes.append("linked_wings")
+        shape_weights.append(3 if width >= 11 or height >= 11 else 2)
     shape = rng.choices(shapes, weights=shape_weights, k=1)[0]
     if shape == "rect":
         return frozenset()
@@ -442,6 +523,9 @@ def building_shape_exclusions(rng, exterior_class, left, right, top, bottom, ent
         else:
             setback_depth = min(2, max(1, width - 4))
         excluded.update(_center_strip_cells(left, right, top, bottom, back_side, setback_depth))
+
+    elif shape == "linked_wings":
+        excluded.update(_linked_wing_cells(left, right, top, bottom, axis=linked_axis or "horizontal"))
 
     # Never exclude the front facade that carries the entry/signage.
     if entry_side in {"north", "south"}:
@@ -524,13 +608,38 @@ def building_exterior_profile(building):
     return profile
 
 
+def building_parcel_span(building):
+    span_x = 1
+    span_y = 1
+    if isinstance(building, dict):
+        try:
+            span_x = max(1, int(building.get("parcel_span_x", 1)))
+        except (TypeError, ValueError, AttributeError):
+            span_x = 1
+        try:
+            span_y = max(1, int(building.get("parcel_span_y", 1)))
+        except (TypeError, ValueError, AttributeError):
+            span_y = 1
+    return int(span_x), int(span_y)
+
+
 def building_shell_span(building, rng=None):
     profile = building_exterior_profile(building)
     exterior_class = str(profile.get("class", "building")).strip().lower() or "building"
+    parcel_span_x, parcel_span_y = building_parcel_span(building)
     options = BUILDING_SHELL_SPAN_OPTIONS.get(
         exterior_class,
         (BUILDING_SHELL_SPANS.get(exterior_class, BUILDING_SHELL_SPANS["building"]),),
     )
+    if parcel_span_x > 1 or parcel_span_y > 1:
+        large_options = BUILDING_LARGE_PARCEL_SPAN_OPTIONS.get(exterior_class, ())
+        if large_options:
+            if parcel_span_x > 1 and parcel_span_y > 1:
+                options = tuple(dict.fromkeys(tuple(large_options) + tuple((h, w) for w, h in large_options)))
+            elif parcel_span_y > 1:
+                options = tuple((h, w) for w, h in large_options)
+            else:
+                options = tuple(large_options)
     if rng is not None and len(options) > 1:
         width, height = rng.choice(tuple(options))
     else:
@@ -713,11 +822,16 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
     block_h = max(4, chunk_size // 2)
     block_grid_x = int(block_grid_x)
     block_grid_y = int(block_grid_y)
+    block_cols = max(1, chunk_size // block_w)
+    block_rows = max(1, chunk_size // block_h)
+    parcel_span_x, parcel_span_y = building_parcel_span(building)
+    parcel_span_x = max(1, min(int(parcel_span_x), max(1, block_cols - block_grid_x)))
+    parcel_span_y = max(1, min(int(parcel_span_y), max(1, block_rows - block_grid_y)))
 
     block_left = int(origin_x) + (block_grid_x * block_w) + 1
-    block_right = int(origin_x) + ((block_grid_x + 1) * block_w) - 2
+    block_right = int(origin_x) + ((block_grid_x + parcel_span_x) * block_w) - 2
     block_top = int(origin_y) + (block_grid_y * block_h) + 1
-    block_bottom = int(origin_y) + ((block_grid_y + 1) * block_h) - 2
+    block_bottom = int(origin_y) + ((block_grid_y + parcel_span_y) * block_h) - 2
     if block_right - block_left < 4 or block_bottom - block_top < 4:
         return None
 
@@ -729,6 +843,8 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
     except (TypeError, ValueError):
         building_count = 1
     building_count = max(1, building_count)
+    if parcel_span_x > 1 or parcel_span_y > 1:
+        building_count = 1
     block_rng = random.Random(
         f"layout_offsets:{int(origin_x)}:{int(origin_y)}:{int(chunk_size)}:{block_grid_x}:{block_grid_y}"
     )
@@ -828,6 +944,8 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
         entry_x=entry_x,
         entry_y=entry_y,
         entry_side=front_side,
+        parcel_span_x=parcel_span_x,
+        parcel_span_y=parcel_span_y,
     )
 
     apertures = [

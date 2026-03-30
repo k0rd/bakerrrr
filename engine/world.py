@@ -11,6 +11,13 @@ BUSINESS_NAME_DATA_PATH = Path(__file__).resolve().parent.parent / "game" / "bus
 
 
 class World:
+    RUNTIME_ONLY_STATE_KEYS = {
+        "business_name_data",
+        "buildings_by_district",
+        "building_archetypes",
+        "career_pool",
+        "_overworld_region_cache",
+    }
 
     AREA_TYPES = (
         "city",
@@ -425,21 +432,21 @@ class World:
     }
 
     ROOM_TEMPLATES = {
-        "warehouse": ("loading_bay", "storage", "office", "secure_cage"),
-        "factory": ("assembly", "maintenance", "control", "parts_store"),
+        "warehouse": ("loading_bay", "receiving", "storage", "dispatch", "office", "secure_cage"),
+        "factory": ("assembly", "maintenance", "control", "parts_store", "breakroom"),
         "machine_shop": ("shop_floor", "parts", "breakroom", "tool_crib"),
         "apartment": ("hallway", "bedroom", "kitchen", "bathroom"),
         "house": ("living_room", "bedroom", "kitchen"),
         "corner_store": ("entrance", "shop_floor", "storage"),
-        "office": ("lobby", "open_office", "conference", "records"),
-        "bank": ("lobby", "teller_row", "security_room", "vault"),
+        "office": ("lobby", "open_office", "meeting_room", "records", "breakroom", "executive_office"),
+        "bank": ("lobby", "teller_row", "records", "security_room", "manager_office", "vault"),
         "restaurant": ("dining", "kitchen", "office"),
-        "tenement": ("hallway", "units", "laundry", "boiler"),
+        "tenement": ("hallway", "units", "laundry", "boiler", "storage"),
         "pawn_shop": ("sales", "storage", "back_office"),
         "backroom_clinic": ("waiting", "exam", "storage", "back_office"),
-        "tower": ("reception", "workspace", "server_room", "executive_suite"),
-        "lab": ("lab_floor", "chemical_storage", "office", "specimen_vault"),
-        "server_hub": ("security_room", "racks", "power_room", "cold_backup"),
+        "tower": ("reception", "workspace", "meeting_room", "records", "server_room", "executive_suite"),
+        "lab": ("intake", "lab_floor", "chemical_storage", "office", "testing_lab", "specimen_vault"),
+        "server_hub": ("security_room", "racks", "power_room", "noc", "cold_backup"),
         "barracks": ("bunks", "mess", "armory"),
         "armory": ("entry", "secure_storage", "office"),
         "checkpoint": ("gate", "inspection", "control"),
@@ -447,40 +454,40 @@ class World:
         "arcade": ("floor", "prize_room", "staff"),
         "bar": ("seating", "bar_top", "storage"),
         "tavern": ("common_room", "bar_top", "booth_row", "cellar"),
-        "recycling_plant": ("sorting_line", "crusher_floor", "hazmat_bay"),
-        "auto_garage": ("service_bay", "parts_room", "front_office"),
-        "freight_depot": ("loading_lane", "sorting_floor", "dispatch_office"),
-        "cold_storage": ("loading_bay", "freezer_row", "packing_line", "dispatch_office"),
+        "recycling_plant": ("sorting_line", "crusher_floor", "hazmat_bay", "parts_store"),
+        "auto_garage": ("front_office", "service_bay", "parts_room", "repair_bench"),
+        "freight_depot": ("loading_lane", "sorting_floor", "dispatch_desk", "storage"),
+        "cold_storage": ("loading_bay", "freezer_row", "packing_line", "dispatch_desk", "cold_storage"),
         "tool_depot": ("showroom", "stock_rack", "service_counter", "repair_bench"),
         "daycare": ("reception", "playroom", "nap_room", "kitchenette"),
         "laundromat": ("machine_row", "folding_station", "supply_closet"),
         "pharmacy": ("counter", "shelving", "dispensary", "storage"),
         "bookshop": ("front_table", "shelves", "reading_nook", "back_stock"),
         "hardware_store": ("counter", "aisles", "stock_room", "repair_bench"),
-        "hotel": ("lobby", "guest_floor", "laundry", "service_office"),
-        "courthouse": ("public_hall", "courtroom", "records_office", "holding"),
-        "metro_exchange": ("concourse", "platform", "control_booth", "maintenance_tunnel"),
-        "courier_office": ("front_counter", "sorting_rack", "dispatch_desk", "locker_wall"),
+        "hotel": ("lobby", "guest_floor", "laundry", "service_office", "bar"),
+        "courthouse": ("public_hall", "courtroom", "records_office", "holding", "judge_chambers"),
+        "metro_exchange": ("concourse", "platform", "ticketing", "control_booth", "maintenance_tunnel"),
+        "courier_office": ("front_counter", "sorting_rack", "dispatch_desk", "locker_wall", "records"),
         "gallery": ("foyer", "exhibit_room", "prep_room", "office"),
         "chop_shop": ("tear_down_bay", "parts_shelf", "back_gate"),
         "junk_market": ("open_stalls", "weigh_station", "salvage_pile"),
         "soup_kitchen": ("serving_line", "prep_kitchen", "storage", "commons"),
         "flophouse": ("desk", "shared_room", "washroom", "linen_closet"),
         "street_kitchen": ("service_window", "grill_line", "prep_corner", "supply_crate"),
-        "data_center": ("airlock", "racks", "power_room", "noc"),
-        "co_working_hub": ("reception", "hotdesk_floor", "meeting_room", "event_space"),
-        "biotech_clinic": ("intake", "testing_lab", "treatment_room", "cold_storage"),
-        "brokerage": ("reception", "trading_floor", "records_room", "conference"),
-        "media_lab": ("edit_bay", "control_room", "studio", "archive"),
-        "command_center": ("ops_floor", "briefing_room", "signals_room"),
+        "data_center": ("airlock", "racks", "power_room", "noc", "cold_backup"),
+        "co_working_hub": ("reception", "hotdesk_floor", "meeting_room", "quiet_room", "event_space"),
+        "biotech_clinic": ("intake", "testing_lab", "treatment_room", "records", "cold_storage"),
+        "brokerage": ("reception", "trading_floor", "conference", "records_room", "executive_office"),
+        "media_lab": ("reception", "edit_bay", "control_room", "studio", "archive"),
+        "command_center": ("ops_floor", "briefing_room", "signals_room", "armored_store"),
         "motor_pool": ("garage_bay", "parts_depot", "fuel_pad", "dispatch"),
-        "field_hospital": ("triage", "surgery", "recovery", "supply_tent"),
-        "recruitment_office": ("lobby", "interview_room", "records_office", "briefing_room"),
+        "field_hospital": ("triage", "surgery", "recovery", "supply_tent", "records"),
+        "recruitment_office": ("lobby", "interview_room", "records_office", "briefing_room", "holding"),
         "supply_bunker": ("airlock", "supply_lockup", "issue_room", "armored_store"),
         "theater": ("foyer", "stage", "backstage", "costume_room"),
-        "music_venue": ("entrance", "stage_floor", "green_room", "bar"),
-        "gaming_hall": ("main_floor", "cash_cage", "surveillance_room", "vip_lounge"),
-        "casino": ("gaming_floor", "cash_cage", "count_room", "vip_lounge"),
+        "music_venue": ("entrance", "stage_floor", "green_room", "bar", "sound_booth"),
+        "gaming_hall": ("main_floor", "cash_cage", "count_room", "surveillance_room", "vip_lounge"),
+        "casino": ("gaming_floor", "cash_cage", "count_room", "surveillance_room", "vip_lounge"),
         "karaoke_box": ("host_desk", "song_room", "bar_nook", "sound_closet"),
         "pool_hall": ("front_counter", "table_floor", "back_bar", "storage"),
     }
@@ -589,6 +596,47 @@ class World:
         "street_kitchen",
         "truck_stop",
         "work_shed",
+    }
+
+    LARGE_PARCEL_ARCHETYPES = {
+        "apartment",
+        "bank",
+        "biotech_clinic",
+        "brokerage",
+        "casino",
+        "co_working_hub",
+        "command_center",
+        "courthouse",
+        "data_center",
+        "factory",
+        "field_hospital",
+        "freight_depot",
+        "gaming_hall",
+        "hotel",
+        "lab",
+        "machine_shop",
+        "media_lab",
+        "metro_exchange",
+        "music_venue",
+        "office",
+        "recruitment_office",
+        "server_hub",
+        "supply_bunker",
+        "tenement",
+        "theater",
+        "tool_depot",
+        "tower",
+        "warehouse",
+    }
+
+    LARGE_PARCEL_BASE_CHANCE_BY_DISTRICT = {
+        "residential": 0.08,
+        "downtown": 0.24,
+        "industrial": 0.18,
+        "slums": 0.10,
+        "corporate": 0.28,
+        "military": 0.16,
+        "entertainment": 0.18,
     }
 
     CAREERS_BY_ARCHETYPE = {
@@ -892,6 +940,23 @@ class World:
                 "Career pool must be at least as large as building archetype count. "
                 f"careers={len(self.career_pool)} buildings={len(self.building_archetypes)}"
             )
+
+    def _rebuild_runtime_state(self):
+        self._overworld_region_cache = {}
+        self.business_name_data = self._load_business_name_data()
+        self.buildings_by_district = self._build_district_building_pools()
+        self.building_archetypes = self._all_building_archetypes()
+        self.career_pool = self._all_careers()
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        for key in self.RUNTIME_ONLY_STATE_KEYS:
+            state.pop(key, None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state if isinstance(state, dict) else {})
+        self._rebuild_runtime_state()
 
     def get_chunk(self, cx, cy):
 
@@ -1908,9 +1973,16 @@ class World:
             "settlement_name": descriptor.get("settlement_name"),
         }
 
-    def generate_building(self, district, bx, by, i, rng, used_business_names=None):
+    def generate_building(self, district, bx, by, i, rng, used_business_names=None, preferred_archetypes=None):
         district_type = district["district_type"]
-        options = self._buildings_for_district(district_type)
+        options = list(self._buildings_for_district(district_type))
+        preferred = [
+            str(archetype).strip().lower()
+            for archetype in (preferred_archetypes or ())
+            if str(archetype).strip().lower() in options
+        ]
+        if preferred:
+            options = preferred
         archetype = rng.choice(options)
         wealth = int(district.get("wealth", 5))
         density = int(district.get("population_density", 5))
@@ -1993,8 +2065,89 @@ class World:
             "is_storefront": archetype in self.STOREFRONT_ARCHETYPES,
         }
 
+    def _large_parcel_chance(self, district_type, density, wealth):
+        chance = float(self.LARGE_PARCEL_BASE_CHANCE_BY_DISTRICT.get(district_type, 0.0))
+        if chance <= 0.0:
+            return 0.0
+        density = int(max(1, density))
+        wealth = int(max(0, wealth))
+        if density <= 4:
+            chance += 0.06
+        elif density >= 8:
+            chance -= 0.05
+        if wealth >= 7:
+            chance += 0.04
+        return max(0.0, min(0.42, chance))
+
+    def _reserve_large_city_parcel(self, blocks_by_coord, district, rng, used_business_names):
+        district_type = str(district.get("district_type", "residential")).strip().lower() or "residential"
+        density = int(max(1, district.get("population_density", 5)))
+        wealth = int(max(0, district.get("wealth", 5)))
+        chance = self._large_parcel_chance(district_type, density, wealth)
+        if chance <= 0.0 or rng.random() >= chance:
+            return False
+
+        preferred = [
+            archetype
+            for archetype in self._buildings_for_district(district_type)
+            if archetype in self.LARGE_PARCEL_ARCHETYPES
+        ]
+        if not preferred:
+            return False
+
+        candidates = []
+        for by in range(2):
+            for bx in range(2):
+                if bx < 1 and not blocks_by_coord[(bx, by)].get("buildings") and not blocks_by_coord[(bx + 1, by)].get("buildings"):
+                    candidates.append((bx, by, 2, 1))
+                if by < 1 and not blocks_by_coord[(bx, by)].get("buildings") and not blocks_by_coord[(bx, by + 1)].get("buildings"):
+                    candidates.append((bx, by, 1, 2))
+        if not candidates:
+            return False
+
+        anchor_bx, anchor_by, span_x, span_y = rng.choice(candidates)
+        anchor_block = blocks_by_coord[(anchor_bx, anchor_by)]
+        building = self.generate_building(
+            district,
+            anchor_bx,
+            anchor_by,
+            0,
+            rng,
+            used_business_names=used_business_names,
+            preferred_archetypes=preferred,
+        )
+        building["parcel_span_x"] = int(span_x)
+        building["parcel_span_y"] = int(span_y)
+        building["large_parcel"] = True
+        anchor_block["buildings"] = [building]
+        anchor_block["parcel_span_x"] = int(span_x)
+        anchor_block["parcel_span_y"] = int(span_y)
+
+        for dy in range(span_y):
+            for dx in range(span_x):
+                if dx == 0 and dy == 0:
+                    continue
+                covered = blocks_by_coord[(anchor_bx + dx, anchor_by + dy)]
+                covered["parcel_reserved"] = True
+                covered["reserved_by"] = building["building_id"]
+                covered["buildings"] = []
+        return True
+
     def generate_blocks(self, district, rng):
-        blocks = []
+        blocks = [
+            {
+                "grid_x": bx,
+                "grid_y": by,
+                "street_edges": ["N", "S", "E", "W"],
+                "buildings": [],
+            }
+            for by in range(2)
+            for bx in range(2)
+        ]
+        blocks_by_coord = {
+            (int(block.get("grid_x", 0)), int(block.get("grid_y", 0))): block
+            for block in blocks
+        }
         used_business_names = set()
         district_type = str(district.get("district_type", "residential")).strip().lower() or "residential"
         density = int(max(1, district.get("population_density", 5)))
@@ -2025,36 +2178,44 @@ class World:
                 min_buildings = min(max_buildings, min_buildings + 1)
             empty_block_chance = max(0.0, empty_block_chance - 0.15)
 
-        populated_blocks = 0
-        for by in range(2):
-            for bx in range(2):
-                if min_buildings == 0 and rng.random() < empty_block_chance:
-                    building_count = 0
-                else:
-                    building_count = rng.randint(min_buildings, max_buildings)
-                buildings = [
-                    self.generate_building(
-                        district,
-                        bx,
-                        by,
-                        i,
-                        rng,
-                        used_business_names=used_business_names,
-                    )
-                    for i in range(building_count)
-                ]
-                if buildings:
-                    populated_blocks += 1
+        self._reserve_large_city_parcel(
+            blocks_by_coord,
+            district,
+            rng,
+            used_business_names,
+        )
 
-                blocks.append({
-                    "grid_x": bx,
-                    "grid_y": by,
-                    "street_edges": ["N", "S", "E", "W"],
-                    "buildings": buildings,
-                })
+        populated_blocks = 0
+        for block in blocks:
+            if block.get("parcel_reserved"):
+                continue
+            if block.get("buildings"):
+                populated_blocks += 1
+                continue
+
+            bx = int(block.get("grid_x", 0))
+            by = int(block.get("grid_y", 0))
+            if min_buildings == 0 and rng.random() < empty_block_chance:
+                building_count = 0
+            else:
+                building_count = rng.randint(min_buildings, max_buildings)
+            block["buildings"] = [
+                self.generate_building(
+                    district,
+                    bx,
+                    by,
+                    i,
+                    rng,
+                    used_business_names=used_business_names,
+                )
+                for i in range(building_count)
+            ]
+            if block["buildings"]:
+                populated_blocks += 1
 
         if populated_blocks == 0 and blocks:
-            fallback_block = rng.choice(blocks)
+            fallback_candidates = [block for block in blocks if not block.get("parcel_reserved")]
+            fallback_block = rng.choice(fallback_candidates or blocks)
             fallback_block["buildings"] = [
                 self.generate_building(
                     district,

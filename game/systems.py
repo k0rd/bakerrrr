@@ -27,6 +27,16 @@ from game.checks import (
     rumor_truth_read as _rumor_truth_read,
     social_read_axes as _social_read_axes,
 )
+from game.appearance import (
+    creature_color_key as _appearance_creature_color_key,
+    district_floor_color as _appearance_district_floor_color,
+    district_floor_glyph as _appearance_district_floor_glyph,
+    feature_tile_style as _appearance_feature_tile_style,
+    ground_item_color as _appearance_ground_item_color,
+    item_display_glyph as _appearance_item_display_glyph,
+    property_render_snapshot as _appearance_property_render_snapshot,
+    CAT_COAT_COLOR as APPEARANCE_CAT_COAT_COLOR,
+)
 from game.components import (
     AI,
     ArmorLoadout,
@@ -327,6 +337,7 @@ DEFAULT_ACTION_OFFENSE_BASE = {
     "floor_change": 3,
     "wait": 0,
     "interact": 14,
+    "toggle_door_lock": 14,
     "pickup_item": 1,
     "drop_item": 0,
     "use_item": 6,
@@ -364,6 +375,7 @@ QUIET_NOISE_CAUSES = {
     "floor_change",
     "wait",
     "interact",
+    "toggle_door_lock",
     "pickup_item",
     "drop_item",
     "use_item",
@@ -681,6 +693,31 @@ def _first_blocking_entity_at(sim, x, y, z, exclude_eid=None):
             continue
         return other_eid
     return None
+
+
+def _entity_is_downed(sim, eid):
+    if sim is None or eid is None:
+        return False
+    vitality = sim.ecs.get(Vitality).get(eid)
+    return bool(vitality and bool(getattr(vitality, "downed", False)))
+
+
+def _apply_downed_actor_state(sim, eid, *, tick=None):
+    if not _entity_is_downed(sim, eid):
+        return False
+    ai = sim.ecs.get(AI).get(eid)
+    if ai:
+        ai.state = "downed"
+        ai.target = None
+        ai.target_eid = None
+    will = sim.ecs.get(NPCWill).get(eid)
+    if will:
+        will.intent = "downed"
+        will.score = max(float(getattr(will, "score", 0.0) or 0.0), 100.0)
+        will.target = None
+        will.target_eid = None
+        will.last_tick = int(getattr(sim, "tick", 0) if tick is None else tick)
+    return True
 
 
 def _projectile_endpoint(sx, sy, tx, ty, max_steps):
@@ -2104,52 +2141,11 @@ def _path_next_step(sim, eid, sx, sy, tx, ty, z, max_nodes=512):
 
 
 def _district_floor_glyph(sim, x, y):
-    cx, cy = sim.chunk_coords(x, y)
-    loaded = sim.world.loaded_chunks.get((cx, cy))
-    if not loaded:
-        return " "
-
-    district = loaded["chunk"].get("district", {})
-    area_type = str(district.get("area_type", "city")).strip().lower() or "city"
-    district_type = district.get("district_type", "residential")
-    detail = str(loaded.get("detail", "active") or "active").strip().lower() or "active"
-    if detail == "coarse":
-        glyph = AREA_GLYPHS.get(area_type, ".")
-        modulus = 2
-    elif area_type != "city":
-        glyph = AREA_GLYPHS.get(area_type, ".")
-        modulus = 4
-    else:
-        glyph = DISTRICT_GLYPHS.get(district_type, ".")
-        modulus = 5
-
-    texture_seed = (
-        (int(x) * 17)
-        + (int(y) * 31)
-        + (int(cx) * 13)
-        + (int(cy) * 19)
-    )
-    if texture_seed % modulus != 0:
-        return " "
-    return glyph
+    return _appearance_district_floor_glyph(sim, x, y)
 
 
 def _district_floor_color(sim, x, y):
-    cx, cy = sim.chunk_coords(x, y)
-    loaded = sim.world.loaded_chunks.get((cx, cy))
-    if not loaded:
-        return None
-
-    district = loaded["chunk"].get("district", {})
-    area_type = str(district.get("area_type", "city")).strip().lower() or "city"
-    district_type = str(district.get("district_type", "residential")).strip().lower() or "residential"
-    detail = loaded.get("detail", "active")
-
-    if detail == "coarse":
-        return "floor_coarse"
-    if area_type != "city":
-        return AREA_FLOOR_COLORS.get(area_type, "floor_residential")
-    return DISTRICT_FLOOR_COLORS.get(district_type, "floor_residential")
+    return _appearance_district_floor_color(sim, x, y)
 
 
 def _floor_link_flags(sim, x, y, z):
@@ -2164,59 +2160,7 @@ def _floor_link_flags(sim, x, y, z):
 
 
 def _feature_tile_style(sim, tile, x, y, z=0):
-    if not tile:
-        return None
-
-    glyph = str(tile.glyph)[:1] or "."
-    cx, cy = sim.chunk_coords(x, y)
-    loaded = sim.world.loaded_chunks.get((cx, cy), {})
-    district = loaded.get("chunk", {}).get("district", {}) if isinstance(loaded, dict) else {}
-    area_type = str(district.get("area_type", "city")).strip().lower() or "city"
-    if glyph == '"':
-        return '"', "feature_window", "window"
-    if glyph == "+":
-        prop = _property_covering(sim, x, y, z)
-        aperture = _property_aperture_at(prop, x, y, z)
-        if aperture:
-            kind = str(aperture.get("kind", "door") or "door").strip().lower()
-            if kind in {"service_door", "employee_door", "side_door"}:
-                return "+", "feature_door", "service door"
-            if kind in {"window", "skylight"}:
-                label = "skylight" if kind == "skylight" else "window"
-                return '"', "feature_window", label
-        return "+", "feature_door", "door"
-    if glyph == "/":
-        return "/", "feature_breach", "breach opening"
-    if glyph == "=":
-        return "=", "terrain_road", "road"
-    if glyph == ":":
-        has_higher, has_lower = _floor_link_flags(sim, x, y, z)
-        if area_type != "city" and not has_higher and not has_lower:
-            return ":", "terrain_trail", "trail"
-        return ":", "transit", "stairs between floors"
-    if glyph == ">":
-        return ">", "transit", "stairs to higher floor"
-    if glyph == "<":
-        return "<", "transit", "stairs to lower floor"
-    if glyph == "S":
-        has_higher, has_lower = _floor_link_flags(sim, x, y, z)
-        if has_higher and has_lower:
-            return ":", "transit", "stairs between floors"
-        if has_higher:
-            return ">", "transit", "stairs to higher floor"
-        if has_lower:
-            return "<", "transit", "stairs to lower floor"
-        return ":", "transit", "stairs"
-    if glyph == "E":
-        has_higher, has_lower = _floor_link_flags(sim, x, y, z)
-        if has_higher and has_lower:
-            return "E", "transit", "elevator access"
-        if has_higher:
-            return "E", "transit", "elevator to higher floor"
-        if has_lower:
-            return "E", "transit", "elevator to lower floor"
-        return "E", "transit", "elevator"
-    return None
+    return _appearance_feature_tile_style(sim, tile, x, y, z)
 
 
 def _tile_prefers_feature_legend(sim, tile, x, y, z=0):
@@ -2242,24 +2186,14 @@ def _building_roof_style(info):
 
 
 def _tile_render_style(sim, tile, x, y, z=0, revealed_building_id=""):
-    if not tile or (tile.walkable and tile.glyph == "."):
-        return _district_floor_glyph(sim, x, y), _district_floor_color(sim, x, y)
-
-    if tile and str(tile.glyph)[:1] == "b":
-        structure = sim.structure_at(x, y, z) if hasattr(sim, "structure_at") else None
-        building_id = _building_id_from_structure(structure)
-        if building_id and building_id != str(revealed_building_id or ""):
-            return "#", _building_roof_style(structure)
-
-    feature_style = _feature_tile_style(sim, tile, x, y, z)
-    if feature_style:
-        return feature_style[0], feature_style[1]
-
-    glyph = str(tile.glyph)[:1] or "?"
-    style = SPECIAL_TILE_RENDER_STYLES.get(glyph)
-    if style:
-        return style
-    return glyph, None
+    appearance = sim.appearance.tile(
+        tile,
+        x,
+        y,
+        z=z,
+        revealed_building_id=revealed_building_id,
+    )
+    return appearance.glyph, appearance.color
 
 
 def _storefront_service_role_priority(role):
@@ -2729,75 +2663,15 @@ def _insurance_contact_terms(sim, viewer_eid, prop):
 
 
 def _property_render_style(prop, active_quest_target=None):
-    if not isinstance(prop, dict):
-        return "B", "property_building"
-
-    if prop.get("id") == active_quest_target:
-        return "!", "objective"
-
-    metadata = _property_metadata(prop)
-    kind = str(prop.get("kind", "building")).strip().lower() or "building"
-    archetype = str(metadata.get("archetype", "")).strip().lower()
-    explicit_glyph = str(metadata.get("display_glyph", "")).strip()
-    explicit_color = str(metadata.get("display_color", "")).strip()
-    default_glyph, default_color = PROPERTY_ARCHETYPE_DISPLAY.get(
-        archetype,
-        (PROPERTY_GLYPHS.get(kind, "P"), PROPERTY_COLORS.get(kind, "property_building")),
+    appearance = _appearance_property_render_snapshot(
+        prop,
+        active_quest_target=active_quest_target,
     )
-    if kind == "building" and not explicit_glyph and archetype not in PROPERTY_ARCHETYPE_DISPLAY and _finance_services_for_property(prop):
-        default_glyph, default_color = "$", "property_service"
-    if kind == "building" and not explicit_glyph and archetype not in PROPERTY_ARCHETYPE_DISPLAY and bool(metadata.get("is_storefront")):
-        default_glyph, default_color = "S", "building_roof_storefront"
-
-    glyph = str(explicit_glyph or default_glyph)[:1] or "P"
-    color = str(explicit_color or default_color or "property_building")
-    if kind == "vehicle":
-        quality = str(metadata.get("vehicle_quality", "used")).strip().lower()
-        owner_tag = str(prop.get("owner_tag", "")).strip().lower()
-        if owner_tag == "player":
-            color = "vehicle_player"
-        elif quality == "new":
-            color = "vehicle_new"
-        elif not color:
-            color = "vehicle_parked"
-    if _property_is_public(prop) and glyph.isalpha():
-        glyph = glyph.lower()
-    return glyph, color
+    return appearance.glyph, appearance.color
 
 
 def _item_display_glyph(item_def):
-    if not isinstance(item_def, dict):
-        return "*"
-
-    item_id = str(item_def.get("id", "")).strip().lower()
-    tags = {
-        str(tag).strip().lower()
-        for tag in item_def.get("tags", [])
-        if str(tag).strip()
-    }
-    raw = str(item_def.get("glyph", "*"))[:1] or "*"
-
-    if item_id == "credstick_chip":
-        return "$"
-    if "weapon" in tags:
-        return "/"
-    if "armor" in tags:
-        return "["
-    if "medical" in tags:
-        return "!"
-    if "food" in tags:
-        return "%"
-    if "drink" in tags or "stimulant" in tags or "consumable" in tags:
-        return "!"
-    if "credential" in tags or "key" in tags:
-        return ":"
-    if "token" in tags:
-        return "="
-    if "tool" in tags:
-        return ")"
-    if "junk" in tags:
-        return "*"
-    return raw
+    return _appearance_item_display_glyph(item_def)
 
 
 def _cover_source_label(sim, cover_state, short=False):
@@ -2860,37 +2734,7 @@ def _cover_source_render(sim, cover_state, active_quest_target=None):
 
 
 def _ground_item_color(item_def):
-    if not isinstance(item_def, dict):
-        return "item_ground"
-
-    legal_status = str(item_def.get("legal_status", "legal")).strip().lower()
-    tags = {
-        str(tag).strip().lower()
-        for tag in item_def.get("tags", [])
-        if str(tag).strip()
-    }
-
-    if legal_status == "illegal":
-        return "item_illegal"
-    if legal_status == "restricted":
-        return "item_restricted"
-    if "weapon" in tags:
-        return "item_weapon"
-    if "armor" in tags:
-        return "item_armor"
-    if "medical" in tags:
-        return "item_medical"
-    if "food" in tags:
-        return "item_food"
-    if "drink" in tags or "stimulant" in tags:
-        return "item_drink"
-    if "credential" in tags or "key" in tags:
-        return "item_access"
-    if "tool" in tags:
-        return "item_tool"
-    if "token" in tags:
-        return "item_token"
-    return "item_ground"
+    return _appearance_ground_item_color(item_def)
 
 
 def _segment(text, color=None, attrs=0, **extras):
@@ -4547,88 +4391,21 @@ def _overworld_discovery_summary_bits(profile):
 
 
 def _creature_color_key(identity, *, role="", cat_color_map=None):
-    if not identity:
-        return None
-
-    taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower()
-    common_name = str(getattr(identity, "common_name", "") or "").strip().lower()
-    species = str(getattr(identity, "species", "") or "").strip().lower()
-    coat = str(getattr(identity, "coat_variant", "") or "").strip().lower()
-    role = str(role or "").strip().lower()
-
-    if taxonomy == "hominid":
-        if role == "guard":
-            return "guard"
-        if role == "scout":
-            return "scout"
-        return "human"
-
-    if taxonomy == "feline":
-        palette = cat_color_map if isinstance(cat_color_map, dict) else {}
-        if coat:
-            mapped = palette.get(coat)
-            if mapped:
-                return mapped
-        if "orange" in common_name or "ginger" in common_name:
-            return "cat_orange"
-        if "black" in common_name:
-            return "cat_black"
-        if "calico" in common_name:
-            return "cat_calico"
-        if "tabby" in common_name:
-            return "cat_tabby"
-        if species in {"felis catus", "felis silvestris catus"}:
-            return "cat_tabby"
-        return "feline"
-
-    taxonomy_colors = {
-        "canine": "canine",
-        "avian": "avian",
-        "insect": "insect",
-        "arachnid": "insect",
-        "rodent": "rodent",
-        "reptile": "reptile",
-        "amphibian": "amphibian",
-        "fish": "fish",
-        "ungulate": "ungulate",
-        "other": "other",
-    }
-    return taxonomy_colors.get(taxonomy)
+    return _appearance_creature_color_key(identity, role=role)
 
 
 def _entity_render_style(sim, eid, player_eid=None):
-    render = sim.ecs.get(Render).get(eid)
-    identity = sim.ecs.get(CreatureIdentity).get(eid)
-    ai = sim.ecs.get(AI).get(eid)
-
-    glyph = str(getattr(render, "glyph", "?"))[:1] or "?"
-    if identity:
-        taxonomy = str(identity.taxonomy_class).strip().lower()
-        if taxonomy == "hominid":
-            glyph = "@"
-        elif not glyph.isalpha() or glyph.islower():
-            glyph = identity.taxonomy_glyph(fallback=glyph)
-        else:
-            glyph = glyph.upper()
-
-    if eid == player_eid:
-        return glyph, "player"
-
-    color = getattr(render, "color", None)
-    if identity:
-        role = str(getattr(ai, "role", "") or "").strip().lower()
-        color = _creature_color_key(
-            identity,
-            role=role,
-            cat_color_map=RenderSystem.CAT_COAT_COLOR,
-        ) or color
-
-    return glyph, color
+    return sim.appearance.entity(eid, player_eid=player_eid)
 
 
 def _entity_legend_line(sim, eid, text, player_eid=None):
-    glyph, color = _entity_render_style(sim, eid, player_eid=player_eid)
-    return _legend_line(text, glyph=glyph, color=color, attrs=getattr(curses, "A_BOLD", 0))
+    appearance = _entity_render_style(sim, eid, player_eid=player_eid)
+    return _legend_line(
+        text,
+        glyph=appearance.glyph,
+        color=appearance.color,
+        attrs=getattr(curses, "A_BOLD", 0),
+    )
 
 
 def _tile_label(sim, tile, x, y, z=0):
@@ -5226,6 +5003,11 @@ def _is_window_aperture(aperture_kind):
 
 def _is_side_aperture(aperture_kind):
     return str(aperture_kind or "").strip().lower() in {"service_door", "employee_door", "side_door"}
+
+
+def _is_operable_door_aperture(aperture_kind):
+    kind = str(aperture_kind or "").strip().lower()
+    return kind == "door" or _is_side_aperture(kind)
 
 
 def _trespass_label_from_score(score):
@@ -6656,6 +6438,312 @@ def _entity_blocks(sim, moving_eid, x, y, z):
     return False, None
 
 
+def _actor_is_animal_or_wildlife(sim, eid):
+    ais = sim.ecs.get(AI)
+    identities = sim.ecs.get(CreatureIdentity)
+    ai = ais.get(eid)
+    identity = identities.get(eid)
+    role = str(getattr(ai, "role", "") or "").strip().lower()
+    creature_type = str(getattr(identity, "creature_type", "") or "").strip().lower()
+    return role == "wildlife" or creature_type == "animal"
+
+
+def _door_state_at(sim, x, y, z=0):
+    helper = getattr(sim, "door_state_at", None)
+    if callable(helper):
+        return helper(x, y, z)
+    states = getattr(sim, "door_states", None)
+    if not isinstance(states, dict):
+        return None
+    try:
+        return states.get((int(x), int(y), int(z)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _ordinary_door_state_at(sim, x, y, z=0):
+    state = _door_state_at(sim, x, y, z)
+    if not isinstance(state, dict):
+        return None
+    kind = str(state.get("kind", "door") or "door").strip().lower() or "door"
+    ordinary = bool(state.get("ordinary", kind == "door"))
+    if kind != "door" or not ordinary:
+        return None
+    return state
+
+
+def _operable_door_state_at(sim, x, y, z=0):
+    state = _door_state_at(sim, x, y, z)
+    if not isinstance(state, dict):
+        return None
+    kind = str(state.get("kind", "door") or "door").strip().lower() or "door"
+    if not _is_operable_door_aperture(kind):
+        return None
+    return state
+
+
+def _door_tile_is_occupied(sim, x, y, z=0):
+    try:
+        occupants = tuple(sim.tilemap.entities_at(int(x), int(y), int(z)))
+    except (TypeError, ValueError):
+        return True
+    return bool(occupants)
+
+
+def _set_door_open_state(sim, x, y, z, is_open):
+    helper = getattr(sim, "set_door_state", None)
+    if callable(helper):
+        state = helper(x, y, z, open=bool(is_open))
+    else:
+        state = _operable_door_state_at(sim, x, y, z)
+        if state is None:
+            return False
+        state["open"] = bool(is_open)
+
+    apply_helper = getattr(sim, "apply_door_state", None)
+    if callable(apply_helper):
+        apply_helper(x, y, z)
+        return True
+
+    tile = sim.tilemap.tile_at(x, y, z)
+    if tile is None:
+        return False
+    tile.walkable = bool(is_open)
+    tile.transparent = bool(is_open)
+    tile.set_appearance(
+        glyph="'" if is_open else "+",
+        color="feature_door",
+        semantic_id=None,
+    )
+    return True
+
+
+def _door_open_attempt(sim, eid, x, y, z, *, allow_override=False):
+    state = _operable_door_state_at(sim, x, y, z)
+    if state is None:
+        return False, "not_door"
+    if bool(state.get("open", False)):
+        return True, "already_open"
+    if _actor_is_animal_or_wildlife(sim, eid):
+        return False, "blocked_animal_doorway"
+
+    positions = sim.ecs.get(Position)
+    pos = positions.get(eid)
+    if not pos:
+        return False, "missing_position"
+
+    prop = _property_covering(sim, x, y, z)
+    ingress = None
+    if prop:
+        ingress = _property_ingress_context(
+            prop,
+            from_x=pos.x,
+            from_y=pos.y,
+            from_z=pos.z,
+            to_x=x,
+            to_y=y,
+            to_z=z,
+        )
+    if ingress and ingress.from_inside:
+        return (_set_door_open_state(sim, x, y, z, True), "opened_inside")
+
+    if prop:
+        access = _evaluate_property_access(
+            sim,
+            eid,
+            prop,
+            x=x,
+            y=y,
+            z=z,
+            breach_severity=float(getattr(ingress, "breach_severity", 0.0) or 0.0),
+        )
+        if access.permitted:
+            return (_set_door_open_state(sim, x, y, z, True), access.standing_reason or "authorized_open")
+
+        lock_state = property_lock_state(prop)
+        if not bool(lock_state.get("locked")):
+            return (_set_door_open_state(sim, x, y, z, True), "opened_unlocked")
+        if (
+            allow_override
+            and ingress
+            and ingress.ingress_kind == "ordinary_entry"
+            and bool(lock_state.get("locked"))
+        ):
+            success, override_reason = _attempt_locked_property_entry_with_sim(
+                sim,
+                eid,
+                prop,
+                target_x=x,
+                target_y=y,
+                target_z=z,
+            )
+            if success:
+                return (_set_door_open_state(sim, x, y, z, True), override_reason or "override_open")
+            return False, override_reason
+
+        if bool(lock_state.get("locked")):
+            return False, "locked_property"
+        if access.access_level == "public" and access.currently_open is False:
+            return False, "closed_property"
+        return False, "door_access_denied"
+
+    return (_set_door_open_state(sim, x, y, z, True), "opened")
+
+
+def _auto_open_closed_door_for_move(sim, eid, from_x, from_y, to_x, to_y, z, *, move_reason="move"):
+    state = _operable_door_state_at(sim, to_x, to_y, z)
+    if state is None or bool(state.get("open", False)):
+        return True, None
+    allow_override = (
+        str(move_reason or "").strip().lower() == "player_move"
+        and int(eid) == int(getattr(sim, "player_eid", -1))
+    )
+    return _door_open_attempt(
+        sim,
+        eid,
+        to_x,
+        to_y,
+        z,
+        allow_override=allow_override,
+    )
+
+
+def _door_close_attempt(sim, eid, x, y, z):
+    state = _operable_door_state_at(sim, x, y, z)
+    if state is None:
+        return False, "not_door"
+    if not bool(state.get("open", False)):
+        return False, "already_closed"
+    if _door_tile_is_occupied(sim, x, y, z):
+        return False, "door_occupied"
+    return (_set_door_open_state(sim, x, y, z, False), "closed")
+
+
+def _set_property_locked_override(prop, *, locked, tick=0, method="manual_lock"):
+    if not isinstance(prop, dict):
+        return False
+
+    state = property_lock_state(prop)
+    ensure_property_lock(
+        prop,
+        locked=bool(locked),
+        lock_tier=max(1, _int_or_default(state.get("lock_tier"), 1)),
+        key_label=str(state.get("key_label") or prop.get("name", prop.get("id", "Property"))).strip() or "Property",
+    )
+    metadata = _property_metadata(prop)
+    metadata["property_override_tick"] = int(_int_or_default(tick, 0))
+    metadata["property_override_method"] = (
+        str(method or ("manual_lock" if locked else "manual_unlock")).strip().lower()
+        or ("manual_lock" if locked else "manual_unlock")
+    )
+    return True
+
+
+def _door_interaction_candidate(sim, pos):
+    if pos is None:
+        return None
+
+    candidates = [
+        (int(pos.x), int(pos.y), int(pos.z)),
+        (int(pos.x), int(pos.y) - 1, int(pos.z)),
+        (int(pos.x) + 1, int(pos.y), int(pos.z)),
+        (int(pos.x), int(pos.y) + 1, int(pos.z)),
+        (int(pos.x) - 1, int(pos.y), int(pos.z)),
+    ]
+    for x, y, z in candidates:
+        state = _operable_door_state_at(sim, x, y, z)
+        if state is not None:
+            return {
+                "x": x,
+                "y": y,
+                "z": z,
+                "state": state,
+                "prop": _property_covering(sim, x, y, z),
+            }
+    return None
+
+
+def _door_action_text(reason, *, opening=False):
+    reason_key = str(reason or "").strip().lower()
+    if opening:
+        if reason_key in {"authorized_open", "opened", "opened_inside", "opened_unlocked", "override_open", "picked_front_door", "manual_front_door_override"}:
+            return "You open the door."
+        if reason_key == "locked_property":
+            return "The door is locked."
+        if reason_key == "closed_property":
+            return "The place is closed."
+        if reason_key == "door_access_denied":
+            return "You cannot open that door."
+        if reason_key == "lock_override_failed":
+            return "You fail to work the lock."
+        if reason_key == "lock_override_fumble":
+            return "You botch the lock and the door stays shut."
+        if reason_key == "blocked_animal_doorway":
+            return "Animals do not work doors."
+        return "The door will not open."
+
+    if reason_key == "closed":
+        return "You close the door."
+    if reason_key == "door_occupied":
+        return "Something is in the doorway."
+    if reason_key == "already_closed":
+        return "The door is already closed."
+    return "You cannot close the door."
+
+
+def _door_lock_action_text(reason, *, requirement="the matching key"):
+    reason_key = str(reason or "").strip().lower()
+    requirement_text = str(requirement or "the matching key").strip() or "the matching key"
+    if reason_key == "closed_locked":
+        return "You close the locked door."
+    if reason_key == "closed_then_locked":
+        return "You close and lock the door."
+    if reason_key == "locked":
+        return "You lock the door."
+    if reason_key == "unlocked":
+        return "You unlock the door."
+    if reason_key == "door_occupied":
+        return "Something is in the doorway."
+    if reason_key == "lock_access_denied":
+        return f"You need {requirement_text} to work that lock."
+    if reason_key == "not_property_door":
+        return "That doorway has no lock you can work."
+    return "You cannot change that lock."
+
+
+def _animal_npc_cannot_cross_doorway(sim, moving_eid, from_x, from_y, to_x, to_y, z):
+    if not _actor_is_animal_or_wildlife(sim, moving_eid):
+        return None
+
+    origin_prop = _property_covering(sim, from_x, from_y, z)
+    target_prop = _property_covering(sim, to_x, to_y, z)
+    origin_id = origin_prop.get("id") if isinstance(origin_prop, dict) else None
+    target_id = target_prop.get("id") if isinstance(target_prop, dict) else None
+
+    if origin_id and target_id and origin_id == target_id:
+        return None
+
+    if target_prop:
+        ingress = _property_ingress_context(
+            target_prop,
+            from_x=from_x,
+            from_y=from_y,
+            from_z=z,
+            to_x=to_x,
+            to_y=to_y,
+            to_z=z,
+        )
+        if ingress.entered_bounds and ingress.ingress_kind in {"ordinary_entry", "alternate_aperture"}:
+            return "blocked_animal_doorway"
+
+    if origin_prop and origin_id != target_id:
+        aperture = _property_aperture_at(origin_prop, from_x, from_y, z)
+        if aperture:
+            return "blocked_animal_doorway"
+
+    return None
+
+
 def _is_traversable_for(sim, moving_eid, x, y, z):
     if sim.detail_for_xy(x, y) == "unloaded":
         return False, "out_of_bounds"
@@ -6673,6 +6761,17 @@ def _can_step_transition_for(sim, moving_eid, from_x, from_y, to_x, to_y, z):
     traversable, reason = _is_traversable_for(sim, moving_eid, to_x, to_y, z)
     if not traversable:
         return False, reason
+    animal_transition_reason = _animal_npc_cannot_cross_doorway(
+        sim,
+        moving_eid,
+        from_x,
+        from_y,
+        to_x,
+        to_y,
+        z,
+    )
+    if animal_transition_reason:
+        return False, animal_transition_reason
     return True, None
 
 
@@ -6681,6 +6780,19 @@ def try_move_entity(sim, eid, new_x, new_y, new_z, reason="move"):
     pos = positions.get(eid)
     if not pos:
         return False, "missing_position"
+
+    opened, open_reason = _auto_open_closed_door_for_move(
+        sim,
+        eid,
+        pos.x,
+        pos.y,
+        new_x,
+        new_y,
+        new_z,
+        move_reason=reason,
+    )
+    if not opened and open_reason is not None:
+        return False, open_reason
 
     step_ok, reason_text = _can_step_transition_for(
         sim,
@@ -9272,7 +9384,11 @@ class InputSystem(System):
             self._emit_turn_action("toggle_sneak")
             return
 
-        if key in (ord("e"), ord("E")):
+        if key == ord("E"):
+            self._emit_turn_action("toggle_door_lock")
+            return
+
+        if key == ord("e"):
             self._emit_turn_action("interact")
             return
 
@@ -9428,6 +9544,9 @@ class WorldStreamingSystem(System):
                         "archetype": archetype,
                         "building_id": chunk_building_id,
                         "local_building_id": local_building_id or None,
+                        "large_parcel": bool(building.get("large_parcel")),
+                        "parcel_span_x": int(building.get("parcel_span_x", 1) or 1),
+                        "parcel_span_y": int(building.get("parcel_span_y", 1) or 1),
                         "floors": int(building.get("floors", 1)),
                         "rooms": list(building.get("rooms", ())),
                         "footprint": dict(layout.get("footprint", {})),
@@ -9969,6 +10088,7 @@ class PropertySystem(System):
                 continue
             controller = _sync_property_access_controller(self.sim, prop, hour=hour)
             self._ensure_access_panel(prop, controller)
+            self._sync_property_doors(prop, controller, emit_closing_warning=True)
 
     def _sync_property_credentials(self, prop, controller, *, previous_holders=()):
         if not isinstance(prop, dict):
@@ -10043,6 +10163,118 @@ class PropertySystem(System):
             "authorized_access": bool(issued_any or direct_authorized or not current_map),
         }
 
+    def _iter_property_doors(self, prop):
+        for aperture in _property_apertures(prop):
+            kind = str(aperture.get("kind", "door") or "door").strip().lower() or "door"
+            if _is_operable_door_aperture(kind):
+                yield aperture
+
+    def _default_door_open_state(self, prop, controller, *, aperture=None):
+        kind = str((aperture or {}).get("kind", "door") or "door").strip().lower() or "door"
+        ordinary = bool((aperture or {}).get("ordinary", kind == "door"))
+        if _property_access_level(prop) == "public" and kind == "door" and ordinary:
+            return controller.get("open_now") is not False
+        return False
+
+    def _closing_warning_speaker(self, prop, controller):
+        if not isinstance(prop, dict):
+            return None
+
+        positions = self.sim.ecs.get(Position)
+        focus = _property_focus_position(prop)
+        focus_x = int(focus[0]) if focus else int(prop.get("x", 0))
+        focus_y = int(focus[1]) if focus else int(prop.get("y", 0))
+        focus_z = int(focus[2]) if focus else int(prop.get("z", 0))
+        prop_id = str(prop.get("id", "")).strip()
+
+        candidates = []
+        for holder in tuple(controller.get("authorized_holders", ()) or ()):
+            if not isinstance(holder, dict):
+                continue
+            holder_eid = holder.get("eid")
+            if holder_eid is None:
+                continue
+            pos = positions.get(holder_eid)
+            if not pos or int(pos.z) != focus_z:
+                continue
+            if _entity_is_downed(self.sim, holder_eid):
+                continue
+
+            holder_cover = _property_covering(self.sim, pos.x, pos.y, pos.z)
+            nearby = _manhattan(int(pos.x), int(pos.y), focus_x, focus_y) <= 6
+            same_property = bool(holder_cover and str(holder_cover.get("id", "")).strip() == prop_id)
+            if not same_property and not nearby:
+                continue
+
+            role = str(holder.get("role", "staff") or "staff").strip().lower() or "staff"
+            role_rank = 0 if role == "owner" else 1 if role == "manager" else 2
+            distance = _manhattan(int(pos.x), int(pos.y), focus_x, focus_y)
+            candidates.append((role_rank, distance, int(holder_eid)))
+
+        if not candidates:
+            return None
+
+        candidates.sort()
+        return candidates[0][2]
+
+    def _sync_property_doors(self, prop, controller, *, emit_closing_warning=False):
+        if not isinstance(prop, dict):
+            return
+
+        auto_managed = _property_access_level(prop) == "public"
+        default_open = bool(self._default_door_open_state(prop, controller))
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        player_cover = (
+            _property_covering(self.sim, player_pos.x, player_pos.y, player_pos.z)
+            if player_pos
+            else None
+        )
+        player_inside = bool(player_cover and player_cover.get("id") == prop.get("id"))
+        warned = False
+
+        for aperture in self._iter_property_doors(prop):
+            ax = int(aperture.get("x", prop.get("x", 0)))
+            ay = int(aperture.get("y", prop.get("y", 0)))
+            az = int(aperture.get("z", prop.get("z", 0)))
+            kind = str(aperture.get("kind", "door") or "door").strip().lower() or "door"
+            ordinary = bool(aperture.get("ordinary", kind == "door"))
+            existing = self.sim.door_state_at(ax, ay, az)
+            default_open = bool(self._default_door_open_state(prop, controller, aperture=aperture))
+            previous_open = bool(existing.get("open", default_open)) if isinstance(existing, dict) else bool(default_open)
+            previous_auto = bool(existing.get("auto_managed")) if isinstance(existing, dict) else False
+
+            if auto_managed or existing is None or previous_auto != auto_managed or "open" not in existing:
+                desired_open = bool(default_open)
+            else:
+                desired_open = bool(existing.get("open", False))
+
+            if not desired_open and _door_tile_is_occupied(self.sim, ax, ay, az):
+                desired_open = True
+
+            self.sim.set_door_state(
+                ax,
+                ay,
+                az,
+                open=desired_open,
+                kind=kind,
+                ordinary=ordinary,
+                property_id=prop.get("id"),
+                auto_managed=auto_managed,
+            )
+            self.sim.apply_door_state(ax, ay, az)
+
+            if emit_closing_warning and player_inside and previous_open and not desired_open:
+                warned = True
+
+        if warned:
+            self.sim.emit(Event(
+                "property_closing_time_warning",
+                eid=self.player_eid,
+                property_id=prop.get("id"),
+                property_name=str(prop.get("name", prop.get("id", "property"))).strip() or "property",
+                speaker_eid=self._closing_warning_speaker(prop, controller),
+            ))
+
     def _sync_from_registry(self):
         portfolios = self.sim.ecs.get(PropertyPortfolio)
         knowledges = self.sim.ecs.get(PropertyKnowledge)
@@ -10081,6 +10313,7 @@ class PropertySystem(System):
                     metadata = prop.get("metadata")
                     if isinstance(metadata, dict):
                         metadata["property_locked"] = False
+                self._sync_property_doors(prop, controller)
 
             if owner_eid is not None:
                 owner_portfolio = portfolios.get(owner_eid)
@@ -15364,6 +15597,143 @@ class PlayerActionSystem(System):
                 return prop
         return None
 
+    def _handle_door_interaction(self, eid, pos):
+        candidate = _door_interaction_candidate(self.sim, pos)
+        if not candidate:
+            return False
+
+        prop = candidate.get("prop")
+        if prop:
+            self._remember_player_property_discovery(eid, prop, discovery_mode="interact")
+
+        x = int(candidate["x"])
+        y = int(candidate["y"])
+        z = int(candidate["z"])
+        state = candidate.get("state") or {}
+        is_open = bool(state.get("open", False))
+
+        if is_open:
+            success, reason = _door_close_attempt(self.sim, eid, x, y, z)
+            _log_player_feedback(
+                self.sim,
+                _door_action_text(reason, opening=False),
+                kind="interaction",
+            )
+            return bool(success or reason)
+
+        success, reason = _door_open_attempt(
+            self.sim,
+            eid,
+            x,
+            y,
+            z,
+            allow_override=(int(eid) == int(getattr(self.sim, "player_eid", eid))),
+        )
+        _log_player_feedback(
+            self.sim,
+            _door_action_text(reason, opening=True),
+            kind="interaction",
+        )
+        return bool(success or reason)
+
+    def _handle_door_lock_toggle(self, eid, pos):
+        candidate = _door_interaction_candidate(self.sim, pos)
+        if not candidate:
+            _log_player_feedback(
+                self.sim,
+                "No door nearby to lock.",
+                kind="interaction",
+            )
+            return True
+
+        prop = candidate.get("prop")
+        if prop:
+            self._remember_player_property_discovery(eid, prop, discovery_mode="interact")
+        if not isinstance(prop, dict):
+            _log_player_feedback(
+                self.sim,
+                _door_lock_action_text("not_property_door"),
+                kind="interaction",
+            )
+            return True
+
+        access_entry = self._property_lock_access_for(eid, prop)
+        if not access_entry:
+            controller = _property_access_controller(self.sim, prop)
+            _log_player_feedback(
+                self.sim,
+                _door_lock_action_text(
+                    "lock_access_denied",
+                    requirement=_controller_access_requirement_text(controller),
+                ),
+                kind="interaction",
+            )
+            return True
+
+        x = int(candidate["x"])
+        y = int(candidate["y"])
+        z = int(candidate["z"])
+        state = candidate.get("state") or {}
+        lock_state = property_lock_state(prop)
+        currently_locked = bool(lock_state.get("locked"))
+        access_mode = str(access_entry.get("mode", "authorized")).strip().lower() or "authorized"
+
+        if bool(state.get("open", False)):
+            success, reason = _door_close_attempt(self.sim, eid, x, y, z)
+            if not success:
+                _log_player_feedback(
+                    self.sim,
+                    _door_lock_action_text(reason),
+                    kind="interaction",
+                )
+                return True
+            if currently_locked:
+                _log_player_feedback(
+                    self.sim,
+                    _door_lock_action_text("closed_locked"),
+                    kind="interaction",
+                )
+                return True
+            success = _set_property_locked_override(
+                prop,
+                locked=True,
+                tick=self.sim.tick,
+                method=f"{access_mode}_manual_lock",
+            )
+            _log_player_feedback(
+                self.sim,
+                _door_lock_action_text("closed_then_locked" if success else "not_property_door"),
+                kind="interaction",
+            )
+            return True
+
+        if currently_locked:
+            success = _set_property_locked_override(
+                prop,
+                locked=False,
+                tick=self.sim.tick,
+                method=f"{access_mode}_manual_unlock",
+            )
+            _log_player_feedback(
+                self.sim,
+                _door_lock_action_text("unlocked" if success else "not_property_door"),
+                kind="interaction",
+            )
+            return True
+
+        success = _set_property_locked_override(
+            prop,
+            locked=True,
+            tick=self.sim.tick,
+            method=f"{access_mode}_manual_lock",
+        )
+        _log_player_feedback(
+            self.sim,
+            _door_lock_action_text("locked" if success else "not_property_door"),
+            kind="interaction",
+        )
+        return True
+
     def _npc_for_player_action(self, eid, pos, radius=1):
         positions = self.sim.ecs.get(Position)
         ais = self.sim.ecs.get(AI)
@@ -15495,6 +15865,29 @@ class PlayerActionSystem(System):
                     "reason": "biometric_authorization",
                 }
         return None
+
+    def _property_lock_access_for(self, eid, prop):
+        if not isinstance(prop, dict):
+            return None
+
+        owner_eid = prop.get("owner_eid")
+        try:
+            owner_eid = int(owner_eid) if owner_eid is not None else None
+        except (TypeError, ValueError):
+            owner_eid = None
+        if owner_eid is not None and int(eid) == owner_eid:
+            return {
+                "mode": "owner",
+                "entry": None,
+                "reason": "owner",
+            }
+        if str(prop.get("owner_tag", "") or "").strip().lower() == "player":
+            return {
+                "mode": "owner",
+                "entry": None,
+                "reason": "owner",
+            }
+        return self._property_credential_access_for(eid, prop)
 
     def _access_skill(self, eid):
         return _actor_skill(self.sim, eid, "intrusion")
@@ -15858,6 +16251,15 @@ class PlayerActionSystem(System):
 
         ingress = candidate["ingress"]
         aperture_kind = str(ingress.aperture_kind or "").strip().lower()
+        if ingress.ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind):
+            if _set_door_open_state(
+                self.sim,
+                int(candidate["x"]),
+                int(candidate["y"]),
+                int(candidate["z"]),
+                True,
+            ):
+                return
         if not hostile and ingress.ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
             glyph = '"'
         elif not hostile and ingress.ingress_kind == "alternate_aperture":
@@ -17624,6 +18026,10 @@ class PlayerActionSystem(System):
             self._set_sneak_mode(eid, not mode_state.sneak, reason="manual")
             return
 
+        if action == "toggle_door_lock":
+            self._handle_door_lock_toggle(eid, pos)
+            return
+
         if action == "scan":
             self._handle_scan_action(eid=eid, pos=pos, zoom_mode=zoom_mode, radius=8)
             return
@@ -17644,6 +18050,9 @@ class PlayerActionSystem(System):
                     y=pos.y,
                     z=pos.z,
                 ))
+                return
+
+            if self._handle_door_interaction(eid, pos):
                 return
 
             if not prop:
@@ -18290,6 +18699,10 @@ class ItemSystem(System):
     def on_use_item_request(self, event):
         eid = event.data.get("eid")
         if eid is None:
+            return
+
+        if _entity_is_downed(self.sim, eid):
+            _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
             return
 
         positions = self.sim.ecs.get(Position)
@@ -23563,11 +23976,7 @@ class WeaponSystem(System):
             ))
             return True
 
-        ai = ais.get(target_eid)
-        if ai:
-            ai.state = "downed"
-            ai.target = None
-            ai.target_eid = None
+        _apply_downed_actor_state(self.sim, target_eid, tick=self.sim.tick)
 
         collider = colliders.get(target_eid)
         if collider:
@@ -24072,6 +24481,7 @@ class NPCWeaponSystem(System):
             if not ai or not pos:
                 continue
             if vitality and vitality.downed:
+                _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
                 continue
             if ai.state != "protecting":
                 continue
@@ -24246,6 +24656,9 @@ class NPCItemUseSystem(System):
             needs = needs_map.get(eid)
             pos = positions.get(eid)
             if not ai or not inventory or not needs or not pos:
+                continue
+            if _entity_is_downed(self.sim, eid):
+                _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
                 continue
             if not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
                 continue
@@ -24431,6 +24844,8 @@ class CombatPacingSystem(System):
                 continue
             if ai.state not in THREAT_STATES:
                 continue
+            if _entity_is_downed(self.sim, eid):
+                continue
 
             pos = positions.get(eid)
             if not pos or pos.z != player_pos.z:
@@ -24532,6 +24947,8 @@ class NoiseSystem(System):
             radius += 1
         elif action == "interact":
             radius = max(2, radius - 1)
+        elif action == "toggle_door_lock":
+            radius = max(2, radius - 1)
         elif action == "pickup_item":
             radius = max(1, radius - 3)
         elif action == "drop_item":
@@ -24549,6 +24966,7 @@ class NoiseSystem(System):
             "floor_change",
             "wait",
             "interact",
+            "toggle_door_lock",
             "pickup_item",
             "drop_item",
             "use_item",
@@ -27254,6 +27672,9 @@ class PropertyDefenseSystem(System):
             pos = positions.get(defender_eid)
             if not ai or not pos:
                 continue
+            if _entity_is_downed(self.sim, defender_eid):
+                _apply_downed_actor_state(self.sim, defender_eid, tick=self.sim.tick)
+                continue
             if pos.z != prop["z"]:
                 continue
             if (
@@ -28757,6 +29178,9 @@ def _pick_wildlife_escape_target(sim, pos, threat, routine, behavior):
 class NPCWillSystem(System):
 
     def _set_intent(self, eid, ai, will, intent, score, target=None, target_eid=None):
+        if _entity_is_downed(self.sim, eid):
+            _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+            return
         previous = (ai.state, ai.target, ai.target_eid)
         next_state = (intent, target, target_eid)
         if previous == next_state and will.intent == intent:
@@ -29709,6 +30133,9 @@ class NPCSocialDynamicsSystem(System):
             pos = positions.get(npc_eid)
             if not ai or not pos:
                 continue
+            if _entity_is_downed(self.sim, npc_eid):
+                _apply_downed_actor_state(self.sim, npc_eid, tick=self.sim.tick)
+                continue
 
             if pos.z != ally_pos.z:
                 continue
@@ -29992,6 +30419,9 @@ class NPCInvestigateSystem(System):
         for eid, ai in ais.items():
             if eid == source_eid:
                 continue
+            if _entity_is_downed(self.sim, eid):
+                _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+                continue
 
             pos = positions.get(eid)
             if not pos or pos.z != nz:
@@ -30070,6 +30500,9 @@ class NPCInvestigateSystem(System):
 
             pos = positions.get(eid)
             if not pos:
+                continue
+            if _entity_is_downed(self.sim, eid):
+                _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
                 continue
 
             if global_stride > 1 and ((self.sim.tick + eid) % global_stride != 0):
@@ -31358,6 +31791,7 @@ class EventLogSystem(System):
         self.run_warning_flags = set()
 
         self.sim.events.subscribe("move_blocked", self.on_move_blocked)
+        self.sim.events.subscribe("entity_moved", self.on_entity_moved)
         self.sim.events.subscribe("floor_change_blocked", self.on_floor_change_blocked)
         self.sim.events.subscribe("entity_changed_floor", self.on_entity_changed_floor)
         self.sim.events.subscribe("noise", self.on_noise)
@@ -31383,6 +31817,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("site_service_blocked", self.on_site_service_blocked)
         self.sim.events.subscribe("site_intel_report", self.on_site_intel_report)
         self.sim.events.subscribe("vehicle_delivered", self.on_vehicle_delivered)
+        self.sim.events.subscribe("property_closing_time_warning", self.on_property_closing_time_warning)
         self.sim.events.subscribe("npc_investigate", self.on_npc_investigate)
         self.sim.events.subscribe("npc_warn_property", self.on_npc_warn_property)
         self.sim.events.subscribe("npc_protect_ally", self.on_npc_protect_ally)
@@ -31576,6 +32011,8 @@ class EventLogSystem(System):
                 return f"You cannot walk by {label} here."
 
         tile = self.sim.tilemap.tile_at(x, y, z) if x is not None and y is not None and z is not None else None
+        if reason == "blocked_animal_doorway":
+            return "Animals do not pass through doorways on their own."
         if tile and not tile.walkable:
             glyph = str(getattr(tile, "glyph", "") or "")[:1]
             if glyph in {"#", "B", "b"}:
@@ -31629,6 +32066,49 @@ class EventLogSystem(System):
 
     def _player_position(self):
         return self.sim.ecs.get(Position).get(self.player_eid)
+
+    def _ground_item_notice_label(self, ground):
+        if not isinstance(ground, dict):
+            return ""
+        item_id = str(ground.get("item_id", "item")).strip() or "item"
+        item_name = item_display_name(
+            item_id,
+            metadata=ground.get("metadata"),
+            item_catalog=ITEM_CATALOG,
+        )
+        qty = int(max(1, _int_or_default(ground.get("quantity"), 1)))
+        if qty <= 1:
+            return item_name
+        return f"{item_name} x{qty}"
+
+    def _ground_item_notice_text(self, x, y, z):
+        ground_items = list(self.sim.ground_items_at(x, y, z=z))
+        if not ground_items:
+            return "", ""
+
+        labels = [
+            self._ground_item_notice_label(ground)
+            for ground in ground_items[:2]
+            if self._ground_item_notice_label(ground)
+        ]
+        if not labels:
+            return "", ""
+
+        remaining = max(0, len(ground_items) - len(labels))
+        if remaining <= 0:
+            if len(labels) == 1:
+                item_text = labels[0]
+            else:
+                item_text = f"{labels[0]} and {labels[1]}"
+        else:
+            suffix = "item" if remaining == 1 else "items"
+            item_text = f"{', '.join(labels)}, and {remaining} more {suffix}"
+
+        signature = ",".join(
+            f"{str(ground.get('ground_item_id', '')).strip()}:{int(max(1, _int_or_default(ground.get('quantity'), 1)))}"
+            for ground in ground_items
+        )
+        return f"You see {item_text} here.", signature
 
     def _player_is_near_event_position(self, event, radius=8):
         x = event.data.get("x")
@@ -31875,6 +32355,24 @@ class EventLogSystem(System):
             "You hear someone shouting on another floor.",
         )
 
+    def _closing_time_bark(self, npc_eid, prop):
+        role = self._npc_role(npc_eid)
+        prop_name = str((prop or {}).get("name", "") or "").strip()
+        if role == "guard":
+            quote = "Closing time. Move along."
+        elif role in {"worker", "manager"}:
+            quote = "We're closing. Don't linger."
+        elif prop_name:
+            quote = f"Closing time at {prop_name}. Out you go."
+        else:
+            quote = "Closing time. Out you go."
+
+        return (
+            quote,
+            "You hear someone ushering people out nearby.",
+            "You hear someone calling closing time on another floor.",
+        )
+
     def _offended_bark(self, event):
         action = str(event.data.get("action", "") or "").strip().lower()
         context = str(event.data.get("context", "") or "").strip().lower()
@@ -32104,6 +32602,15 @@ class EventLogSystem(System):
                 kind="movement",
             )
             return
+        if reason == "closed_property":
+            prop = (
+                self.sim.properties.get(event.data.get("property_id"))
+                or self.sim.property_at(event.data.get("x"), event.data.get("y"), event.data.get("z"))
+                or _property_covering(self.sim, event.data.get("x"), event.data.get("y"), event.data.get("z"))
+            )
+            name = str(prop.get("name", prop.get("id", "place"))).strip() if prop else "The place"
+            _log_player_feedback(self.sim, f"{name} is closed.", kind="movement")
+            return
         if reason == "lock_override_failed":
             prop = self.sim.properties.get(event.data.get("property_id"))
             name = str(prop.get("name", prop.get("id", "property"))).strip() if prop else "the lock"
@@ -32122,6 +32629,9 @@ class EventLogSystem(System):
                 kind="movement",
             )
             return
+        if reason == "door_access_denied":
+            _log_player_feedback(self.sim, "You cannot open that door.", kind="movement")
+            return
         _log_player_feedback(
             self.sim,
             self._move_blocked_phrase(
@@ -32131,6 +32641,31 @@ class EventLogSystem(System):
                 reason,
             ),
             kind="movement",
+        )
+
+    def on_entity_moved(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+
+        reason = str(event.data.get("reason", "")).strip().lower()
+        if reason == "cover_hop":
+            return
+
+        x = event.data.get("x")
+        y = event.data.get("y")
+        z = event.data.get("z")
+        if x is None or y is None or z is None:
+            return
+
+        text, signature = self._ground_item_notice_text(x, y, z)
+        if not text:
+            return
+
+        _log_player_feedback(
+            self.sim,
+            text,
+            kind="movement",
+            dedupe_key=f"ground-item-notice:{int(x)}:{int(y)}:{int(z)}:{signature}",
         )
 
     def on_floor_change_blocked(self, event):
@@ -32790,6 +33325,35 @@ class EventLogSystem(System):
         vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
         site_name = str(event.data.get("site_prop_name", "site")).strip() or "site"
         self.sim.log.add(f"Delivery: your {vehicle_name} has arrived (courtesy of {site_name}).")
+
+    def on_property_closing_time_warning(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+
+        prop = self.sim.properties.get(event.data.get("property_id"))
+        speaker_eid = event.data.get("speaker_eid")
+        dedupe_key = f"closing-time:{event.data.get('property_id')}"
+        if speaker_eid is not None and self.sim.ecs.get(Position).get(speaker_eid):
+            quote, nearby_audio, other_floor_audio = self._closing_time_bark(speaker_eid, prop)
+            self._log_npc_bark(
+                speaker_eid,
+                quote,
+                nearby_audio,
+                other_floor_audio,
+                channel="alerts",
+                priority="high",
+                dedupe_key=dedupe_key,
+            )
+            return
+
+        prop_name = str(event.data.get("property_name", "property")).strip() or "property"
+        self._log(
+            f"Closing time at {prop_name}. Somebody wants you heading out.",
+            channel="alerts",
+            priority="high",
+            dedupe_window=4,
+            dedupe_key=dedupe_key,
+        )
 
     def on_npc_investigate(self, event):
         if event.data.get("source_eid") != self.player_eid:
@@ -34717,22 +35281,7 @@ class EventLogSystem(System):
 
 class RenderSystem(System):
 
-    CAT_COAT_COLOR = {
-        "orange": "cat_orange",
-        "ginger": "cat_orange",
-        "orange_tabby": "cat_orange",
-        "tabby": "cat_tabby",
-        "brown_tabby": "cat_tabby",
-        "gray_tabby": "cat_gray",
-        "grey_tabby": "cat_gray",
-        "black": "cat_black",
-        "white": "cat_white",
-        "calico": "cat_calico",
-        "tuxedo": "cat_tuxedo",
-        "gray": "cat_gray",
-        "grey": "cat_gray",
-        "purple": "cat_purple",
-    }
+    CAT_COAT_COLOR = dict(APPEARANCE_CAT_COAT_COLOR)
     OVERWORLD_DISTRICT_GLYPHS = {
         "industrial": "I",
         "residential": "R",
@@ -34923,14 +35472,54 @@ class RenderSystem(System):
             return _filtered_log_lines(combined, filter_id)[-budget:]
         return _hud_log_lines(combined, filter_id, budget)
 
-    def _draw(self, x, y, glyph, color=None, attrs=0):
-        if color is None:
-            self.view.draw(x, y, glyph, attrs=attrs)
-            return
+    def _draw(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None):
+        kwargs = {"attrs": int(attrs or 0)}
+        if color is not None:
+            kwargs["color"] = color
+        if semantic_id:
+            kwargs["semantic_id"] = semantic_id
+        if effects:
+            kwargs["effects"] = effects
+        if overlays:
+            kwargs["overlays"] = overlays
+        if layer is not None:
+            kwargs["layer"] = layer
+        if priority is not None:
+            kwargs["priority"] = int(priority)
         try:
-            self.view.draw(x, y, glyph, color=color, attrs=attrs)
+            self.view.draw(x, y, glyph, **kwargs)
+            return
+        except TypeError:
+            pass
+
+        if color is None:
+            try:
+                self.view.draw(x, y, glyph, attrs=int(attrs or 0))
+                return
+            except TypeError:
+                self.view.draw(x, y, glyph)
+                return
+
+        try:
+            self.view.draw(x, y, glyph, color=color, attrs=int(attrs or 0))
         except TypeError:
             self.view.draw(x, y, glyph)
+
+    def _draw_appearance(self, x, y, appearance, attrs=0):
+        if not appearance or not bool(getattr(appearance, "visible", True)):
+            return
+        self._draw(
+            x,
+            y,
+            getattr(appearance, "glyph", "?"),
+            color=getattr(appearance, "color", None),
+            attrs=int(attrs or 0) | int(getattr(appearance, "attrs", 0) or 0),
+            semantic_id=getattr(appearance, "semantic_id", None),
+            effects=getattr(appearance, "effects", ()),
+            overlays=getattr(appearance, "overlays", ()),
+            layer=getattr(appearance, "layer", None),
+            priority=getattr(appearance, "priority", None),
+        )
 
     def _entity_color(self, eid, render, identity):
         if eid == self.player_eid:
@@ -34993,10 +35582,10 @@ class RenderSystem(System):
             "",
             f"World seed: {self.sim.seed}",
             "Move: arrows, WASD, HJKL, or numpad 1-9. Wait with . space or 5.",
-            "Observe: E interact/use/talk, x scan, X or ; look cursor, Z map (vehicle only).",
+            "Observe: e interact/use/talk, Shift+E lock or unlock a nearby door, x scan, X or ; look cursor, Z map (vehicle only).",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
             "Ingress: Shift+J side entry, Shift+W window entry, Shift+K forced breach.",
-            'Features: + door, " window, / breach opening, > higher stairs, < lower stairs, : stair landing, E elevator.',
+            'Features: + closed door, \' open door, " window, / breach opening, > higher stairs, < lower stairs, : stair landing, E elevator.',
             "Infrastructure: typed markers (l lamp, p pole, h hydrant, u stop, j/t utility, $ ATM, c claim terminal, r access panel).",
             "Local terrain: = road, : trail, , brush, ^ rock, ~ water, _ shore flats.",
             "Remote sites: relay/lookout/survey sites provide intel; camps and huts can offer shelter.",
@@ -35027,6 +35616,9 @@ class RenderSystem(System):
 
     def update(self):
         self.view.clear()
+        begin_frame = getattr(self.view, "begin_frame", None)
+        if callable(begin_frame):
+            begin_frame(animation_tick=int(getattr(self.sim, "tick", 0)))
 
         positions = self.sim.ecs.get(Position)
         renders = self.sim.ecs.get(Render)
@@ -35375,28 +35967,44 @@ class RenderSystem(System):
                     wy = camera_y + sy
                     detail = self.sim.detail_for_xy(wx, wy)
                     if detail == "unloaded":
-                        self._draw(sx, sy, " ")
+                        self._draw(sx, sy, " ", layer="terrain", priority=-1000)
                         continue
                     visible_now = _is_visible(wx, wy, active_z)
                     explored = _is_explored(wx, wy, active_z)
                     if not visible_now and not explored:
-                        self._draw(sx, sy, " ")
+                        self._draw(sx, sy, " ", layer="terrain", priority=-1000)
                         continue
 
                     tile = self.sim.tilemap.tile_at(wx, wy, active_z)
-                    glyph, color = _tile_render_style(
-                        self.sim,
+                    appearance = self.sim.appearance.tile(
                         tile,
                         wx,
                         wy,
-                        active_z,
+                        z=active_z,
                         revealed_building_id=revealed_building_id,
                     )
                     if visible_now:
                         attrs = _ambient_attr(wx, wy, active_z)
                     else:
                         attrs = getattr(curses, "A_DIM", 0)
-                    self._draw(sx, sy, glyph, color=color, attrs=attrs)
+                    if str(getattr(appearance, "semantic_id", "") or "").strip().lower() == "feature_window":
+                        floor_glyph = _district_floor_glyph(self.sim, wx, wy)
+                        floor_color = _district_floor_color(self.sim, wx, wy)
+                        self._draw(
+                            sx,
+                            sy,
+                            floor_glyph,
+                            color=floor_color,
+                            attrs=attrs,
+                            semantic_id=self.sim.appearance.semantic_id_for(
+                                floor_glyph,
+                                floor_color,
+                                preferred_categories=("terrain",),
+                            ),
+                            layer="terrain",
+                            priority=-1000,
+                        )
+                    self._draw_appearance(sx, sy, appearance, attrs=attrs)
 
             active_quest_target = None
             if self.sim.quests["active"]:
@@ -35424,12 +36032,15 @@ class RenderSystem(System):
                 ):
                     continue
 
-                glyph, color = _property_render_style(prop, active_quest_target=active_quest_target)
+                appearance = self.sim.appearance.property(
+                    prop,
+                    active_quest_target=active_quest_target,
+                )
                 if visible_now:
                     attrs = _ambient_attr(display_pos[0], display_pos[1], active_z)
                 else:
                     attrs = getattr(curses, "A_DIM", 0)
-                self._draw(screen_x, screen_y, glyph, color=color, attrs=attrs)
+                self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
 
             for ground in self.sim.ground_items.values():
                 if ground["z"] != active_z:
@@ -35444,15 +36055,9 @@ class RenderSystem(System):
                     continue
 
                 item_def = ITEM_CATALOG.get(ground["item_id"], {})
-                glyph = _item_display_glyph(item_def)
+                appearance = self.sim.appearance.item(item_def)
                 attrs = getattr(curses, "A_BOLD", 0) | _ambient_attr(ground["x"], ground["y"], active_z)
-                self._draw(
-                    screen_x,
-                    screen_y,
-                    glyph,
-                    color=_ground_item_color(item_def),
-                    attrs=attrs,
-                )
+                self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
 
             for projectile in self.sim.projectiles.values():
                 if projectile.get("z") != active_z:
@@ -35467,11 +36072,12 @@ class RenderSystem(System):
                     continue
                 if not _is_visible(wx, wy, active_z):
                     continue
-                self._draw(
+                projectile_glyph = str(projectile.get("projectile_glyph", "."))[:1] or "."
+                appearance = self.sim.appearance.projectile(projectile_glyph)
+                self._draw_appearance(
                     screen_x,
                     screen_y,
-                    str(projectile.get("projectile_glyph", "."))[:1] or ".",
-                    color="projectile",
+                    appearance,
                     attrs=_ambient_attr(wx, wy, active_z),
                 )
 
@@ -35498,6 +36104,8 @@ class RenderSystem(System):
                         player_cover_source["glyph"],
                         color=player_cover_source["color"],
                         attrs=attrs,
+                        layer="ground_overlay",
+                        priority=30,
                     )
 
             drawables = []
@@ -35516,9 +36124,13 @@ class RenderSystem(System):
                 drawables.append((pos.z, eid, pos, render, screen_x, screen_y))
 
             for _, eid, _pos, render, screen_x, screen_y in sorted(drawables, key=lambda item: (item[0], item[1])):
-                identity = identities.get(eid)
-                glyph, color = _entity_render_style(self.sim, eid, player_eid=self.player_eid)
-                self._draw(screen_x, screen_y, glyph, color=color, attrs=_ambient_attr(_pos.x, _pos.y, _pos.z))
+                appearance = _entity_render_style(self.sim, eid, player_eid=self.player_eid)
+                self._draw_appearance(
+                    screen_x,
+                    screen_y,
+                    appearance,
+                    attrs=_ambient_attr(_pos.x, _pos.y, _pos.z),
+                )
 
             if look_ui.get("active") and look_purpose == "aim" and player_pos:
                 preview = _manual_fire_preview(
@@ -35540,7 +36152,13 @@ class RenderSystem(System):
                         continue
                     if (sx, sy) in occupied:
                         continue
-                    self._draw(sx, sy, projectile_glyph, color="projectile", attrs=dim_attr)
+                    appearance = self.sim.appearance.projectile(projectile_glyph, priority=-20)
+                    self._draw_appearance(
+                        sx,
+                        sy,
+                        appearance,
+                        attrs=dim_attr,
+                    )
 
             if look_ui.get("active") and str(look_ui.get("mode", "")).lower() == "city":
                 cursor_x = int(look_ui.get("x", player_pos.x if player_pos else 0))
@@ -35561,11 +36179,15 @@ class RenderSystem(System):
                                 attrs |= getattr(curses, "A_DIM", 0)
                             else:
                                 attrs |= _ambient_attr(cursor_x, cursor_y, cursor_z)
-                            self._draw(
-                                sx,
-                                sy,
+                            appearance = self.sim.appearance.marker(
+                                "ui_cursor" if glyph == "@" else "ui_look_cursor",
                                 glyph,
                                 color="player",
+                            )
+                            self._draw_appearance(
+                                sx,
+                                sy,
+                                appearance,
                                 attrs=attrs,
                             )
 
@@ -35928,7 +36550,7 @@ class RenderSystem(System):
         elif zoom_mode == "overworld":
             controls = "In-vehicle: move, G drive marker, M/l/N markers, O ops, Y locations, L log, E exit on-foot, center icons UPPER=loaded lower=distant, ? help"
         else:
-            controls = "Move: arrows/WASD/HJKL, O ops, Y locations, L log, D debug, M trade, or ? for help"
+            controls = "Move: arrows/WASD/HJKL, e interact, Shift+E lock door, O ops, Y locations, L log, D debug, M trade, or ? for help"
 
         mode_line = _mode_line(
             mode_state=player_modes,

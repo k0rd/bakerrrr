@@ -9,12 +9,83 @@ fast lookups used by gameplay systems.
 """
 
 
+_UNCHANGED = object()
+
+
 class Tile:
 
-    def __init__(self, walkable=True, transparent=True, glyph="."):
+    def __init__(
+        self,
+        walkable=True,
+        transparent=True,
+        glyph=".",
+        *,
+        color=None,
+        semantic_id=None,
+        layer=None,
+        priority=None,
+        effects=None,
+        overlays=None,
+        attrs=0,
+        visible=True,
+    ):
         self.walkable = walkable
         self.transparent = transparent
         self.glyph = glyph
+        self.color = color
+        self.semantic_id = str(semantic_id).strip() if semantic_id else None
+        self.layer = str(layer).strip().lower() if str(layer or "").strip() else None
+        self.priority = None if priority is None else int(priority)
+        self.effects = tuple(
+            dict.fromkeys(
+                str(effect).strip().lower()
+                for effect in (effects or ())
+                if str(effect).strip()
+            )
+        )
+        self.overlays = tuple(overlay for overlay in (overlays or ()) if isinstance(overlay, dict))
+        self.attrs = int(attrs or 0)
+        self.visible = bool(visible)
+
+    def set_appearance(
+        self,
+        *,
+        glyph=_UNCHANGED,
+        color=_UNCHANGED,
+        semantic_id=_UNCHANGED,
+        layer=_UNCHANGED,
+        priority=_UNCHANGED,
+        effects=_UNCHANGED,
+        overlays=_UNCHANGED,
+        attrs=_UNCHANGED,
+        visible=_UNCHANGED,
+    ):
+        if glyph is not _UNCHANGED:
+            self.glyph = str(glyph)[:1] or "."
+        if color is not _UNCHANGED:
+            self.color = color
+        if semantic_id is not _UNCHANGED:
+            semantic_text = str(semantic_id).strip()
+            self.semantic_id = semantic_text or None
+        if layer is not _UNCHANGED:
+            layer_text = str(layer).strip().lower()
+            self.layer = layer_text or None
+        if priority is not _UNCHANGED:
+            self.priority = None if priority is None else int(priority)
+        if effects is not _UNCHANGED:
+            self.effects = tuple(
+                dict.fromkeys(
+                    str(effect).strip().lower()
+                    for effect in effects
+                    if str(effect).strip()
+                )
+            )
+        if overlays is not _UNCHANGED:
+            self.overlays = tuple(overlay for overlay in overlays if isinstance(overlay, dict))
+        if attrs is not _UNCHANGED:
+            self.attrs = int(attrs or 0)
+        if visible is not _UNCHANGED:
+            self.visible = bool(visible)
 
 
 class TileMap:

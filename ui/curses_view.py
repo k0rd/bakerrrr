@@ -15,6 +15,9 @@ class CursesView:
         except curses.error:
             pass
         self._init_colors()
+        self._animation_tick = 0
+        self._queued_draw_calls = []
+        self._draw_sequence = 0
 
     def _init_colors(self):
         if not curses.has_colors():
@@ -195,6 +198,76 @@ class CursesView:
 
     def clear(self):
         self.scr.erase()
+        self._queued_draw_calls.clear()
+        self._draw_sequence = 0
+
+    def begin_frame(self, *, animation_tick=None):
+        try:
+            self._animation_tick = int(animation_tick or 0)
+        except (TypeError, ValueError):
+            self._animation_tick = 0
+
+    def _wants_layered_draw(self, layer=None, priority=None):
+        return layer is not None or priority is not None
+
+    def _queue_draw_call(self, kind, **payload):
+        self._draw_sequence += 1
+        queued = {"kind": str(kind), "sequence": int(self._draw_sequence)}
+        queued.update(payload)
+        self._queued_draw_calls.append(queued)
+
+    def _queued_draw_sort_key(self, queued):
+        layer_key = str(queued.get("layer", "") or "").strip().lower() or "ground_overlay"
+        layer_order = {
+            "terrain": 0,
+            "ground_overlay": 10,
+            "item": 20,
+            "actor": 30,
+            "fx": 40,
+            "ui_overlay": 50,
+        }.get(layer_key, 10)
+        try:
+            priority = int(queued.get("priority", 0) or 0)
+        except (TypeError, ValueError):
+            priority = 0
+        return (layer_order, priority, int(queued.get("sequence", 0) or 0))
+
+    def _flush_queued_draws(self):
+        if not self._queued_draw_calls:
+            return
+        queued = sorted(self._queued_draw_calls, key=self._queued_draw_sort_key)
+        self._queued_draw_calls.clear()
+        for call in queued:
+            kind = call.get("kind")
+            if kind == "glyph":
+                self._draw_now(
+                    call.get("x", 0),
+                    call.get("y", 0),
+                    call.get("glyph", " "),
+                    color=call.get("color"),
+                    attrs=call.get("attrs", 0),
+                    semantic_id=call.get("semantic_id"),
+                    effects=call.get("effects", ()),
+                    overlays=call.get("overlays", ()),
+                )
+                continue
+            if kind == "text":
+                self._draw_text_now(
+                    call.get("x", 0),
+                    call.get("y", 0),
+                    call.get("text", ""),
+                    color=call.get("color"),
+                    attrs=call.get("attrs", 0),
+                )
+                continue
+            if kind == "segments":
+                self._draw_segments_now(
+                    call.get("x", 0),
+                    call.get("y", 0),
+                    call.get("segments", ()),
+                    max_width=call.get("max_width"),
+                    attrs=call.get("attrs", 0),
+                )
 
     def _clip_draw_region(self, x, y, text=""):
         width, height = self.size()
@@ -226,18 +299,44 @@ class CursesView:
 
         return x, y, text
 
-    def draw(self, x, y, glyph, color=None, attrs=0):
+    def _draw_now(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None):
         region = self._clip_draw_region(x, y, str(glyph)[:1] or " ")
         if region is None:
             return
         try:
             x, y, text = region
             attr = self._attr_for(color) | int(attrs)
+            effect_set = {
+                str(effect).strip().lower()
+                for effect in (effects or ())
+                if str(effect).strip()
+            }
+            if "blink" in effect_set:
+                attr |= int(getattr(curses, "A_BLINK", 0) or 0)
             self.scr.addch(y, x, text[0], attr)
         except curses.error:
             pass
 
-    def draw_text(self, x, y, text, color=None, attrs=0):
+    def draw(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None):
+        if self._wants_layered_draw(layer=layer, priority=priority):
+            self._queue_draw_call(
+                "glyph",
+                x=int(x),
+                y=int(y),
+                glyph=str(glyph)[:1] or " ",
+                color=color,
+                attrs=int(attrs or 0),
+                semantic_id=semantic_id,
+                effects=tuple(effects or ()),
+                overlays=tuple(overlays or ()),
+                layer=layer,
+                priority=0 if priority is None else int(priority),
+            )
+            return
+        self._flush_queued_draws()
+        self._draw_now(x, y, glyph, color=color, attrs=attrs, semantic_id=semantic_id, effects=effects, overlays=overlays)
+
+    def _draw_text_now(self, x, y, text, color=None, attrs=0):
         region = self._clip_draw_region(x, y, text)
         if region is None:
             return
@@ -248,7 +347,23 @@ class CursesView:
         except curses.error:
             pass
 
-    def draw_segments(self, x, y, segments, max_width=None, attrs=0):
+    def draw_text(self, x, y, text, color=None, attrs=0, layer=None, priority=None):
+        if self._wants_layered_draw(layer=layer, priority=priority):
+            self._queue_draw_call(
+                "text",
+                x=int(x),
+                y=int(y),
+                text=str(text),
+                color=color,
+                attrs=int(attrs or 0),
+                layer=layer,
+                priority=0 if priority is None else int(priority),
+            )
+            return
+        self._flush_queued_draws()
+        self._draw_text_now(x, y, text, color=color, attrs=attrs)
+
+    def _draw_segments_now(self, x, y, segments, max_width=None, attrs=0):
         cursor_x = int(x)
         remaining = None if max_width is None else max(0, int(max_width))
         base_attrs = int(attrs)
@@ -275,8 +390,24 @@ class CursesView:
             if not text:
                 continue
 
-            self.draw_text(cursor_x, y, text, color=color, attrs=base_attrs | seg_attrs)
+            self._draw_text_now(cursor_x, y, text, color=color, attrs=base_attrs | seg_attrs)
             cursor_x += len(text)
+
+    def draw_segments(self, x, y, segments, max_width=None, attrs=0, layer=None, priority=None):
+        if self._wants_layered_draw(layer=layer, priority=priority):
+            self._queue_draw_call(
+                "segments",
+                x=int(x),
+                y=int(y),
+                segments=list(segments or ()),
+                max_width=max_width,
+                attrs=int(attrs or 0),
+                layer=layer,
+                priority=0 if priority is None else int(priority),
+            )
+            return
+        self._flush_queued_draws()
+        self._draw_segments_now(x, y, segments, max_width=max_width, attrs=attrs)
 
     def get_key(self):
         key = self.scr.getch()
@@ -296,4 +427,5 @@ class CursesView:
         return keys
 
     def refresh(self):
+        self._flush_queued_draws()
         self.scr.refresh()

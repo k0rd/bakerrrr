@@ -23,7 +23,6 @@ _PHASE_WINDOWS = (
     ("dusk", 18, 21),
 )
 
-_APERTURE_GLYPHS = {'"', "+", "/"}
 _APERTURE_KIND_SCALE = {
     "window": 1.0,
     "skylight": 1.0,
@@ -112,6 +111,54 @@ def _structure_at(sim, x, y, z=0):
         return None
 
 
+def _door_open_at(sim, x, y, z=0):
+    if sim is None:
+        return False
+    helper = getattr(sim, "door_state_at", None)
+    state = None
+    if callable(helper):
+        try:
+            state = helper(int(x), int(y), int(z))
+        except (TypeError, ValueError):
+            state = None
+    if isinstance(state, dict):
+        kind = str(state.get("kind", "door") or "door").strip().lower() or "door"
+        if kind in {"door", "side_door", "service_door", "employee_door"}:
+            return bool(state.get("open", False))
+
+    tile = sim.tilemap.tile_at(int(x), int(y), int(z)) if hasattr(sim, "tilemap") else None
+    return bool(tile and str(getattr(tile, "glyph", "") or "")[:1] == "'")
+
+
+def _aperture_allows_light(sim, aperture, *, x=None, y=None, z=0):
+    if not isinstance(aperture, dict):
+        return False
+    kind = str(aperture.get("kind", "door") or "door").strip().lower() or "door"
+    if kind in {"door", "side_door", "service_door", "employee_door"}:
+        try:
+            ax = int(aperture.get("x", x))
+            ay = int(aperture.get("y", y))
+            az = int(aperture.get("z", z))
+        except (TypeError, ValueError):
+            return False
+        return _door_open_at(sim, ax, ay, az)
+    return True
+
+
+def _tile_aperture_allows_light(sim, x, y, z=0):
+    tile = sim.tilemap.tile_at(int(x), int(y), int(z)) if sim is not None and hasattr(sim, "tilemap") else None
+    if not tile:
+        return False
+    glyph = str(getattr(tile, "glyph", "") or "")[:1]
+    if glyph == "'":
+        return True
+    if glyph in {'"', "/"}:
+        return True
+    if glyph != "+":
+        return False
+    return _door_open_at(sim, x, y, z)
+
+
 def is_interior_tile(sim, x, y, z=0):
     structure = _structure_at(sim, x, y, z)
     if not isinstance(structure, dict):
@@ -152,6 +199,8 @@ def _neighbor_aperture_bonus(sim, x, y, z=0):
             dist = abs(ax - x) + abs(ay - y)
             if dist > 2:
                 continue
+            if not _aperture_allows_light(sim, aperture, x=ax, y=ay, z=az):
+                continue
             if dist == 0:
                 strength = 1.0
             elif dist == 1:
@@ -166,13 +215,11 @@ def _neighbor_aperture_bonus(sim, x, y, z=0):
     if strongest >= 0.999:
         return 1.0
 
-    tile = sim.tilemap.tile_at(x, y, z) if sim is not None else None
-    if tile and str(tile.glyph)[:1] in _APERTURE_GLYPHS:
+    if _tile_aperture_allows_light(sim, x, y, z):
         strongest = max(strongest, 0.85)
 
     for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
-        ntile = sim.tilemap.tile_at(nx, ny, z) if sim is not None else None
-        if ntile and str(ntile.glyph)[:1] in _APERTURE_GLYPHS:
+        if _tile_aperture_allows_light(sim, nx, ny, z):
             strongest = max(strongest, 0.6)
 
     return _clamp_unit(strongest)
@@ -355,6 +402,8 @@ def _aperture_light_sources(sim, clock):
             except (TypeError, ValueError):
                 continue
             if az != 0:
+                continue
+            if not _aperture_allows_light(sim, aperture, x=ax, y=ay, z=az):
                 continue
 
             kind = str(aperture.get("kind", "door") or "door").strip().lower()
