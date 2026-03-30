@@ -540,13 +540,13 @@
   },
   "stats": {
     "required_count": 82,
-    "available_count": 745,
+    "available_count": 736,
     "assigned_count": 82,
     "unassigned_count": 0,
     "metadata_matched_count": 27,
     "glyph_fallback_matched_count": 46,
-    "metadata_unmatched_count": 420,
-    "metadata_duplicate_match_count": 296
+    "metadata_unmatched_count": 412,
+    "metadata_duplicate_match_count": 295
   },
   "assignments": {
     "cat_black": "F__aqua",
@@ -589,7 +589,7 @@
     "item_illegal": "x__red",
     "item_medical": "bang__aqua",
     "item_objective": "o__aqua",
-    "item_restricted": "u0000__blank",
+    "item_restricted": "u0000__unk",
     "item_token": "i__aqua",
     "item_tool": "d__amber",
     "npc_avian": "d__aqua",
@@ -635,12 +635,12 @@
   "unassigned_required_ids": [],
   "metadata_unmatched_tiles": [
     {
-      "id": "u0000__blank",
-      "source": "00-blank.png",
+      "id": "u0000__unk",
+      "source": "00-unk.png",
       "glyph": "\u0000",
-      "color": "blank",
+      "color": "unk",
       "candidate_colors": [
-        "blank"
+        "unk"
       ]
     },
     {
@@ -2760,15 +2760,6 @@
       ]
     },
     {
-      "id": "tilde__aqua_copy",
-      "source": "126-aqua copy.png",
-      "glyph": "~",
-      "color": "aqua_copy",
-      "candidate_colors": [
-        "aqua_copy"
-      ]
-    },
-    {
       "id": "tilde__pastel_purple",
       "source": "126-pastel_purple.png",
       "glyph": "~",
@@ -4394,26 +4385,6 @@
         "npc_civilian",
         "cat_calico",
         "cat_white"
-      ]
-    },
-    {
-      "id": "B__purple",
-      "source": "66-purple.png",
-      "glyph": "B",
-      "color": "purple",
-      "candidate_colors": [
-        "purple",
-        "scout",
-        "feline",
-        "cat_purple",
-        "item_restricted",
-        "item_tool",
-        "property_service_zone"
-      ],
-      "candidate_semantic_ids": [
-        "npc_scout",
-        "cat_generic",
-        "cat_purple"
       ]
     },
     {
@@ -6431,24 +6402,6 @@
       ]
     },
     {
-      "id": "lbracket__brown",
-      "source": "91-brown.png",
-      "glyph": "[",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "u005c__brown",
-      "source": "92-brown.png",
-      "glyph": "\\",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "caret__amber",
       "source": "94-amber.png",
       "glyph": "^",
@@ -6458,49 +6411,12 @@
       ]
     },
     {
-      "id": "caret__brown",
-      "source": "94-brown.png",
-      "glyph": "^",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "caret__darkgrey",
       "source": "94-darkgrey.png",
       "glyph": "^",
       "color": "darkgrey",
       "candidate_colors": [
         "darkgrey"
-      ]
-    },
-    {
-      "id": "caret__orange",
-      "source": "94-orange.png",
-      "glyph": "^",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
-      "id": "caret__pink",
-      "source": "94-pink.png",
-      "glyph": "^",
-      "color": "pink",
-      "candidate_colors": [
-        "pink",
-        "human",
-        "item_medical",
-        "building_roof_entertainment",
-        "cat_calico",
-        "cat_white"
-      ],
-      "candidate_semantic_ids": [
-        "npc_civilian",
-        "cat_calico",
-        "cat_white"
       ]
     },
     {
@@ -6676,26 +6592,6 @@
         "npc_civilian",
         "cat_calico",
         "cat_white"
-      ]
-    },
-    {
-      "id": "b__purple",
-      "source": "98-purple.png",
-      "glyph": "b",
-      "color": "purple",
-      "candidate_colors": [
-        "purple",
-        "scout",
-        "feline",
-        "cat_purple",
-        "item_restricted",
-        "item_tool",
-        "property_service_zone"
-      ],
-      "candidate_semantic_ids": [
-        "npc_scout",
-        "cat_generic",
-        "cat_purple"
       ]
     },
     {
@@ -7090,7 +6986,6 @@
       "X__red",
       "Y__red",
       "Z__red",
-      "u005c__red",
       "caret__red",
       "a__red",
       "b__red",
@@ -7514,7 +7409,7 @@
     }
   ],
   "available_atlas_ids": [
-    "u0000__blank",
+    "u0000__unk",
     "d__amber",
     "d__aqua",
     "d__blue",
@@ -7745,7 +7640,6 @@
     "z__red",
     "pipe__brown",
     "tilde__amber",
-    "tilde__aqua_copy",
     "tilde__aqua",
     "tilde__blue",
     "tilde__green",
@@ -7972,7 +7866,6 @@
     "B__green",
     "B__orange",
     "B__pink",
-    "B__purple",
     "B__red",
     "C__amber",
     "C__aqua",
@@ -8214,18 +8107,12 @@
     "Z__pink",
     "Z__purple",
     "Z__red",
-    "lbracket__brown",
-    "u005c__brown",
-    "u005c__red",
     "caret__amber",
     "caret__aqua",
     "caret__blue",
-    "caret__brown",
     "caret__darkgray",
     "caret__darkgrey",
     "caret__green",
-    "caret__orange",
-    "caret__pink",
     "caret__purple",
     "caret__red",
     "a__aqua",
@@ -8245,7 +8132,6 @@
     "b__green",
     "b__orange",
     "b__pink",
-    "b__purple",
     "b__red",
     "c__amber",
     "c__aqua",
@@ -8257,7 +8143,7 @@
     "c__pink",
     "c__purple",
     "c__red",
-    "key-aqua",
-    "rodent-purple"
+    "panel-0",
+    "tricky-0"
   ]
 }
