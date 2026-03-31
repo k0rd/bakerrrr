@@ -331,6 +331,22 @@
         "mechanics_bonus": 0.5,
         "perception_bonus": 0.35,
         "requirement_delta": -0.85
+      },
+      {
+        "contexts": ["schedule_controller"],
+        "enable_contexts": ["schedule_controller"],
+        "intrusion_bonus": 0.7,
+        "mechanics_bonus": 0.45,
+        "perception_bonus": 0.2,
+        "requirement_delta": -0.9
+      },
+      {
+        "contexts": ["relay_controller"],
+        "enable_contexts": ["relay_controller"],
+        "intrusion_bonus": 0.8,
+        "mechanics_bonus": 0.4,
+        "perception_bonus": 0.25,
+        "requirement_delta": -1.0
       }
     ]
   },
@@ -762,6 +778,20 @@
         "intrusion_bonus": 0.25,
         "mechanics_bonus": 0.75,
         "perception_bonus": 0.25,
+        "requirement_delta": -0.45
+      },
+      {
+        "contexts": ["schedule_controller"],
+        "intrusion_bonus": 0.25,
+        "mechanics_bonus": 0.7,
+        "perception_bonus": 0.15,
+        "requirement_delta": -0.4
+      },
+      {
+        "contexts": ["relay_controller"],
+        "intrusion_bonus": 0.3,
+        "mechanics_bonus": 0.75,
+        "perception_bonus": 0.15,
         "requirement_delta": -0.45
       },
       {

@@ -5,6 +5,19 @@ from pathlib import Path
 
 ITEMS_PATH = Path(__file__).resolve().parent / "items.json"
 LOOT_TABLES_PATH = Path(__file__).resolve().parent / "loot_tables.json"
+ITEM_QUALITY_TIERS = ("poor", "standard", "good", "excellent")
+ITEM_QUALITY_SCORE_BONUS = {
+    "poor": -0.35,
+    "standard": 0.0,
+    "good": 0.2,
+    "excellent": 0.45,
+}
+ITEM_QUALITY_REQUIREMENT_DELTA = {
+    "poor": 0.28,
+    "standard": 0.0,
+    "good": -0.18,
+    "excellent": -0.4,
+}
 
 
 def _float_or_default(value, default=0.0):
@@ -14,6 +27,15 @@ def _float_or_default(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _int_or_default(value, default=0):
+    try:
+        if value is None:
+            raise TypeError
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def _string_tuple(values):
@@ -64,6 +86,49 @@ def _normalize_armor_profile(value):
     return {
         "slot": slot,
         "damage_reduction": reduction,
+    }
+
+
+def normalize_item_quality(value, default="standard"):
+    token = str(value or "").strip().lower()
+    if token not in ITEM_QUALITY_TIERS:
+        token = str(default or "standard").strip().lower()
+    if token not in ITEM_QUALITY_TIERS:
+        token = "standard"
+    return token
+
+
+def _normalize_condition_profile(value, *, tool_profiles=None, weapon_id=None, armor=None, stack_max=1):
+    raw = value if isinstance(value, dict) else {}
+    gear_default = bool(tool_profiles or weapon_id or armor)
+    if _int_or_default(stack_max, 1) > 1 and "supports_quality" not in raw and "supports_durability" not in raw:
+        gear_default = False
+
+    supports_quality = bool(raw.get("supports_quality", gear_default))
+    supports_durability = bool(raw.get("supports_durability", gear_default))
+    default_quality = normalize_item_quality(raw.get("default_quality"), default="standard")
+
+    if tool_profiles:
+        default_max_durability = 4
+    elif weapon_id:
+        default_max_durability = 6
+    elif armor:
+        default_max_durability = 7
+    else:
+        default_max_durability = 0
+
+    max_durability = max(
+        0,
+        _int_or_default(raw.get("max_durability"), default_max_durability if supports_durability else 0),
+    )
+    if supports_durability and max_durability <= 0:
+        max_durability = max(1, default_max_durability or 4)
+
+    return {
+        "supports_quality": supports_quality,
+        "supports_durability": supports_durability,
+        "default_quality": default_quality,
+        "max_durability": int(max_durability),
     }
 
 
@@ -361,6 +426,22 @@ DEFAULT_ITEM_CATALOG = {
                 "perception_bonus": 0.35,
                 "requirement_delta": -0.85,
             },
+            {
+                "contexts": ["schedule_controller"],
+                "enable_contexts": ["schedule_controller"],
+                "intrusion_bonus": 0.7,
+                "mechanics_bonus": 0.45,
+                "perception_bonus": 0.2,
+                "requirement_delta": -0.9,
+            },
+            {
+                "contexts": ["relay_controller"],
+                "enable_contexts": ["relay_controller"],
+                "intrusion_bonus": 0.8,
+                "mechanics_bonus": 0.4,
+                "perception_bonus": 0.25,
+                "requirement_delta": -1.0,
+            },
         ],
     },
     "rust_revolver": {
@@ -467,6 +548,20 @@ DEFAULT_ITEM_CATALOG = {
                 "intrusion_bonus": 0.25,
                 "mechanics_bonus": 0.75,
                 "perception_bonus": 0.25,
+                "requirement_delta": -0.45,
+            },
+            {
+                "contexts": ["schedule_controller"],
+                "intrusion_bonus": 0.25,
+                "mechanics_bonus": 0.7,
+                "perception_bonus": 0.15,
+                "requirement_delta": -0.4,
+            },
+            {
+                "contexts": ["relay_controller"],
+                "intrusion_bonus": 0.3,
+                "mechanics_bonus": 0.75,
+                "perception_bonus": 0.15,
                 "requirement_delta": -0.45,
             },
             {
@@ -624,6 +719,13 @@ def load_item_catalog(path=ITEMS_PATH):
             "tool_profiles": _normalize_tool_profiles(item.get("tool_profiles")),
             "weapon_id": str(item.get("weapon_id", "")).strip() or None,
             "armor": _normalize_armor_profile(item.get("armor")),
+            "condition_profile": _normalize_condition_profile(
+                item.get("condition_profile"),
+                tool_profiles=item.get("tool_profiles"),
+                weapon_id=item.get("weapon_id"),
+                armor=item.get("armor"),
+                stack_max=stack_max,
+            ),
         }
 
     if not parsed:
@@ -665,6 +767,107 @@ def load_loot_tables(path=LOOT_TABLES_PATH, item_catalog=None):
     return parsed
 
 
+def item_condition_profile(item_id, item_catalog=None):
+    catalog = item_catalog or ITEM_CATALOG
+    item_def = catalog.get(item_id, {})
+    profile = item_def.get("condition_profile")
+    if isinstance(profile, dict):
+        return {
+            "supports_quality": bool(profile.get("supports_quality", False)),
+            "supports_durability": bool(profile.get("supports_durability", False)),
+            "default_quality": normalize_item_quality(profile.get("default_quality"), default="standard"),
+            "max_durability": max(0, _int_or_default(profile.get("max_durability"), 0)),
+        }
+    return _normalize_condition_profile(
+        item_def.get("condition_profile"),
+        tool_profiles=item_def.get("tool_profiles"),
+        weapon_id=item_def.get("weapon_id"),
+        armor=item_def.get("armor"),
+        stack_max=item_def.get("stack_max", 1),
+    )
+
+
+def normalize_item_instance_metadata(item_id, metadata=None, item_catalog=None):
+    catalog = item_catalog or ITEM_CATALOG
+    merged = dict(metadata or {})
+    profile = item_condition_profile(item_id, item_catalog=catalog)
+
+    if profile.get("supports_quality"):
+        merged["item_quality"] = normalize_item_quality(
+            merged.get("item_quality"),
+            default=profile.get("default_quality", "standard"),
+        )
+    if profile.get("supports_durability"):
+        max_durability = max(1, _int_or_default(merged.get("item_max_durability"), profile.get("max_durability", 1)))
+        durability = _int_or_default(merged.get("item_durability"), max_durability)
+        merged["item_max_durability"] = int(max_durability)
+        merged["item_durability"] = max(0, min(int(max_durability), int(durability)))
+    return merged
+
+
+def item_instance_condition(item_id, metadata=None, item_catalog=None):
+    catalog = item_catalog or ITEM_CATALOG
+    profile = item_condition_profile(item_id, item_catalog=catalog)
+    normalized = normalize_item_instance_metadata(item_id, metadata=metadata, item_catalog=catalog)
+    quality = normalize_item_quality(
+        normalized.get("item_quality"),
+        default=profile.get("default_quality", "standard"),
+    )
+    max_durability = max(0, _int_or_default(normalized.get("item_max_durability"), profile.get("max_durability", 0)))
+    durability = max(0, _int_or_default(normalized.get("item_durability"), max_durability))
+    if profile.get("supports_durability") and max_durability > 0:
+        durability_ratio = max(0.0, min(1.0, float(durability) / float(max_durability)))
+    else:
+        durability_ratio = 1.0
+
+    wear_penalty = 0.0 if durability_ratio >= 1.0 else (1.0 - durability_ratio) * 0.55
+    wear_requirement = 0.0 if durability_ratio >= 1.0 else (1.0 - durability_ratio) * 0.45
+    usable = (not profile.get("supports_durability")) or durability > 0
+    return {
+        "profile": profile,
+        "quality": quality,
+        "max_durability": max_durability,
+        "durability": durability,
+        "durability_ratio": durability_ratio,
+        "usable": bool(usable),
+        "score_bonus": float(ITEM_QUALITY_SCORE_BONUS.get(quality, 0.0)) - float(wear_penalty),
+        "requirement_delta": float(ITEM_QUALITY_REQUIREMENT_DELTA.get(quality, 0.0)) + float(wear_requirement),
+    }
+
+
+def apply_item_durability_loss(item_id, metadata=None, amount=1, item_catalog=None):
+    catalog = item_catalog or ITEM_CATALOG
+    normalized = normalize_item_instance_metadata(item_id, metadata=metadata, item_catalog=catalog)
+    condition = item_instance_condition(item_id, metadata=normalized, item_catalog=catalog)
+    profile = condition.get("profile", {})
+    loss = max(0, _int_or_default(amount, 0))
+    before = max(0, _int_or_default(condition.get("durability"), 0))
+    max_durability = max(0, _int_or_default(condition.get("max_durability"), 0))
+
+    if not profile.get("supports_durability") or max_durability <= 0 or loss <= 0:
+        return {
+            "metadata": normalized,
+            "before": before,
+            "after": before,
+            "lost": 0,
+            "max_durability": max_durability,
+            "broken": False,
+        }
+
+    after = max(0, before - loss)
+    updated = dict(normalized)
+    updated["item_max_durability"] = int(max_durability)
+    updated["item_durability"] = int(after)
+    return {
+        "metadata": updated,
+        "before": before,
+        "after": after,
+        "lost": max(0, before - after),
+        "max_durability": max_durability,
+        "broken": bool(before > 0 and after <= 0),
+    }
+
+
 def item_display_name(item_id, metadata=None, item_catalog=None):
     catalog = item_catalog or ITEM_CATALOG
     item_def = catalog.get(item_id, {})
@@ -672,7 +875,12 @@ def item_display_name(item_id, metadata=None, item_catalog=None):
         custom = str(metadata.get("display_name", "")).strip()
         if custom:
             return custom
-    return str(item_def.get("name", item_id)).strip() or str(item_id or "item")
+    base = str(item_def.get("name", item_id)).strip() or str(item_id or "item")
+    condition = item_instance_condition(item_id, metadata=metadata, item_catalog=catalog)
+    quality = str(condition.get("quality", "standard")).strip().lower()
+    if quality and quality != "standard":
+        return f"{quality.title()} {base}"
+    return base
 
 
 def loot_table_for_property(kind=None, archetype=None, loot_tables=None):

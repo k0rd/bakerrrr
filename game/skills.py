@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 
 from game.components import CoreStats, InsightStats, Inventory, SkillProfile, StatusEffects
-from game.items import ITEM_CATALOG
+from game.items import ITEM_CATALOG, item_instance_condition
 
 
 SKILL_DEFS = {
@@ -47,6 +47,11 @@ TOOL_CONTEXT_ALIASES = {
     "hotwire": "vehicle_ignition",
     "badge": "badge_controller",
     "biometric": "biometric_controller",
+    "schedule": "schedule_controller",
+    "schedule_relay": "schedule_controller",
+    "timer": "relay_controller",
+    "relay": "relay_controller",
+    "timer_relay": "relay_controller",
     "side_door": "side_entry",
 }
 
@@ -283,9 +288,8 @@ def insurance_skill_terms(sim, eid):
     }
 
 
-def actor_tool_terms(sim, eid, context):
-    context_key = normalize_tool_context(context)
-    terms = {
+def _tool_terms_template(context_key):
+    return {
         "context": context_key,
         "enabled": False,
         "intrusion_bonus": 0.0,
@@ -295,7 +299,31 @@ def actor_tool_terms(sim, eid, context):
         "requirement_delta": 0.0,
         "item_ids": (),
         "enabled_item_ids": (),
+        "selected_item_id": "",
+        "selected_instance_id": "",
     }
+
+
+def _tool_terms_utility(sim, eid, context_key, terms):
+    ignition = context_key == "vehicle_ignition"
+    intrusion = actor_skill(sim, eid, "intrusion") + _num(terms.get("intrusion_bonus"), 0.0)
+    mechanics = actor_skill(sim, eid, "mechanics") + _num(terms.get("mechanics_bonus"), 0.0)
+    perception = actor_skill(sim, eid, "perception") + _num(terms.get("perception_bonus"), 0.0)
+
+    score = intrusion
+    score += max(0.0, intrusion - 5.0) * 0.28
+    score += max(0.0, mechanics - 5.0) * (0.4 if ignition else 0.18)
+    score += max(0.0, perception - 5.0) * 0.16
+    score += _num(terms.get("score_bonus"), 0.0)
+    score -= _num(terms.get("requirement_delta"), 0.0)
+    if bool(terms.get("enabled")):
+        score += 3.0
+    return float(score)
+
+
+def actor_tool_terms(sim, eid, context):
+    context_key = normalize_tool_context(context)
+    terms = _tool_terms_template(context_key)
     if sim is None or eid is None or not context_key:
         return terms
 
@@ -304,39 +332,79 @@ def actor_tool_terms(sim, eid, context):
     if not inventory or not inventory.items:
         return terms
 
-    item_ids = []
-    enabled_item_ids = []
-    seen_item_ids = set()
+    best_terms = None
+    best_utility = None
     for entry in inventory.items:
         item_id = str(entry.get("item_id", "")).strip().lower()
-        if not item_id or int(entry.get("quantity", 0)) <= 0 or item_id in seen_item_ids:
+        if not item_id or int(entry.get("quantity", 0)) <= 0:
             continue
-        seen_item_ids.add(item_id)
 
         item_def = ITEM_CATALOG.get(item_id, {})
-        matched = False
+        candidate = _tool_terms_template(context_key)
         for profile in item_def.get("tool_profiles", ()):
             contexts = tuple(profile.get("contexts", ()))
             if context_key not in contexts and "any" not in contexts:
                 continue
-            matched = True
-            terms["intrusion_bonus"] += _num(profile.get("intrusion_bonus"), 0.0)
-            terms["mechanics_bonus"] += _num(profile.get("mechanics_bonus"), 0.0)
-            terms["perception_bonus"] += _num(profile.get("perception_bonus"), 0.0)
-            terms["score_bonus"] += _num(profile.get("score_bonus"), 0.0)
-            terms["requirement_delta"] += _num(profile.get("requirement_delta"), 0.0)
+            candidate["intrusion_bonus"] += _num(profile.get("intrusion_bonus"), 0.0)
+            candidate["mechanics_bonus"] += _num(profile.get("mechanics_bonus"), 0.0)
+            candidate["perception_bonus"] += _num(profile.get("perception_bonus"), 0.0)
+            candidate["score_bonus"] += _num(profile.get("score_bonus"), 0.0)
+            candidate["requirement_delta"] += _num(profile.get("requirement_delta"), 0.0)
 
             enable_contexts = tuple(profile.get("enable_contexts", ()))
             if context_key in enable_contexts or "any" in enable_contexts:
-                terms["enabled"] = True
-                enabled_item_ids.append(item_id)
-        if matched:
-            item_ids.append(item_id)
+                candidate["enabled"] = True
 
-    terms["requirement_delta"] = max(-3.5, float(terms["requirement_delta"]))
-    terms["item_ids"] = tuple(item_ids)
-    terms["enabled_item_ids"] = tuple(dict.fromkeys(enabled_item_ids))
-    return terms
+        condition = item_instance_condition(item_id, metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG)
+        if not bool(condition.get("usable", True)):
+            continue
+        candidate["score_bonus"] += float(condition.get("score_bonus", 0.0))
+        candidate["requirement_delta"] += float(condition.get("requirement_delta", 0.0))
+
+        if not any(
+            (
+                candidate["enabled"],
+                candidate["intrusion_bonus"],
+                candidate["mechanics_bonus"],
+                candidate["perception_bonus"],
+                candidate["score_bonus"],
+                candidate["requirement_delta"],
+            )
+        ):
+            continue
+
+        candidate["requirement_delta"] = max(-3.5, float(candidate["requirement_delta"]))
+        candidate["selected_item_id"] = item_id
+        candidate["selected_instance_id"] = str(entry.get("instance_id", "")).strip()
+        candidate["item_ids"] = (item_id,)
+        if candidate["enabled"]:
+            candidate["enabled_item_ids"] = (item_id,)
+
+        utility = _tool_terms_utility(sim, eid, context_key, candidate)
+        if (
+            best_terms is None
+            or utility > best_utility
+            or (
+                utility == best_utility
+                and bool(candidate["enabled"])
+                and not bool(best_terms.get("enabled"))
+            )
+            or (
+                utility == best_utility
+                and bool(candidate.get("enabled")) == bool(best_terms.get("enabled"))
+                and (
+                    str(candidate.get("selected_instance_id", "")) < str(best_terms.get("selected_instance_id", ""))
+                    or (
+                        str(candidate.get("selected_instance_id", "")) == str(best_terms.get("selected_instance_id", ""))
+                        and item_id < str(best_terms.get("selected_item_id", ""))
+                    )
+                )
+            )
+        ):
+            best_terms = dict(candidate)
+            best_utility = float(utility)
+
+    return best_terms or terms
 
 
 def seed_skill_profile(rng, *, role="", career="", core=None, insight=None, jitter=0.35):

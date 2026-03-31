@@ -1,3 +1,6 @@
+from game.items import normalize_item_instance_metadata
+
+
 _UNCHANGED = object()
 
 
@@ -925,7 +928,7 @@ class Inventory:
                 "quantity": amount,
                 "owner_eid": owner_eid,
                 "owner_tag": owner_tag,
-                "metadata": dict(metadata or {}),
+                "metadata": normalize_item_instance_metadata(item_id, metadata=metadata),
             })
 
             if created_instance_id is None:
@@ -966,6 +969,16 @@ class Inventory:
                 self.items.pop(idx)
             return removed
         return None
+
+    def update_item_metadata(self, instance_id, metadata=None):
+        target = self.find(instance_id=instance_id)
+        if not target:
+            return None
+        merged = dict(target.get("metadata") or {})
+        if metadata is not None:
+            merged.update(dict(metadata))
+        target["metadata"] = normalize_item_instance_metadata(target["item_id"], metadata=merged)
+        return target["metadata"]
 
     def first_usable(self, catalog):
         for entry in self.items:

@@ -84,16 +84,26 @@ from game.dialogue import (
 )
 from game.economy import chunk_economy_profile, item_market_bias, store_supply_profile
 from game.final_operation import (
+    active_final_operation_target_property_id,
     ensure_final_operation_unlocked,
     evaluate_final_operation,
+    mark_final_operation_target_recovered,
+    sync_final_operation_runtime,
     try_complete_final_operation,
     try_fail_final_operation,
 )
-from game.items import ITEM_CATALOG, item_display_name
+from game.items import ITEM_CATALOG, apply_item_durability_loss, item_display_name
 from game.lighting import (
     ambient_snapshot as _lighting_ambient_snapshot,
     lighting_state as _lighting_state,
     update_lighting_state as _update_lighting_state,
+)
+from game.organization_reputation import (
+    apply_organization_reputation_delta as _apply_organization_reputation_delta,
+    decay_organization_heat as _decay_organization_heat,
+    organization_snapshot as _organization_snapshot,
+    organization_terms_for_property as _organization_terms_for_property,
+    top_organization_snapshots as _top_organization_snapshots,
 )
 from game.skills import actor_skill as _actor_skill
 from game.objective_progress import (
@@ -103,6 +113,7 @@ from game.objective_progress import (
 )
 from game.npc_judgment import evaluate_opportunity_judgment
 from game.opportunities import (
+    append_external_opportunity,
     evaluate_opportunity_board,
     evaluate_opportunity_facts,
     format_reward_text,
@@ -140,6 +151,9 @@ from game.property_keys import (
 from game.property_access import (
     PropertyIngressResult,
     _boundary_tile as _property_boundary_tile,
+    apply_controller_intrusion as _apply_controller_intrusion,
+    controller_intrusion_access_for_actor as _controller_intrusion_access_for_actor,
+    controller_intrusion_state as _controller_intrusion_state,
     default_site_services_for_archetype as _default_site_services_for_archetype,
     property_access_controller as _property_access_controller,
     evaluate_property_access as _evaluate_property_access,
@@ -1667,8 +1681,53 @@ def _access_fumble_chance(score, required):
     return max(0.002, min(0.22, chance))
 
 
-def _maybe_break_access_tool(sim, eid, tool_terms, *, prop, score, required, context, channel, fumbled=False):
+def _access_success_chance(score, required):
+    margin = float(score) - float(required)
+    chance = 0.5 + (margin * 0.14)
+    if margin > 0.0:
+        chance += min(0.08, margin * 0.02)
+    elif margin < 0.0:
+        chance -= min(0.12, abs(margin) * 0.03)
+    return max(0.04, min(0.97, chance))
+
+
+def _resolve_access_skill_check(
+    sim,
+    *,
+    eid,
+    prop,
+    context,
+    channel,
+    score,
+    required,
+    tool_terms=None,
+    allow_fumble=True,
+):
+    tool_terms = tool_terms or {}
+    roll = _access_attempt_roll(
+        sim,
+        eid=eid,
+        prop=prop,
+        context=context,
+        channel=channel,
+    )
+    success_chance = _access_success_chance(score, required)
+    fumbled = bool(allow_fumble and tool_terms.get("enabled")) and roll < _access_fumble_chance(score, required)
+    success = bool(roll <= success_chance and not fumbled)
+    return {
+        "success": success,
+        "fumbled": bool(fumbled),
+        "roll": float(roll),
+        "success_chance": float(success_chance),
+        "score": float(score),
+        "required": float(required),
+        "margin": float(score) - float(required),
+    }
+
+
+def _maybe_damage_access_tool(sim, eid, tool_terms, *, prop, score, required, context, channel, fumbled=False):
     enabled_ids = tuple(str(item_id).strip().lower() for item_id in tool_terms.get("enabled_item_ids", ()))
+    selected_instance_id = str(tool_terms.get("selected_instance_id", "")).strip()
     if not enabled_ids:
         return None
 
@@ -1681,42 +1740,115 @@ def _maybe_break_access_tool(sim, eid, tool_terms, *, prop, score, required, con
         entry
         for entry in inventory.items
         if int(entry.get("quantity", 0)) > 0
+        and (not selected_instance_id or str(entry.get("instance_id", "")).strip() == selected_instance_id)
         and str(entry.get("item_id", "")).strip().lower() in enabled_ids
     ]
+    if not candidates and selected_instance_id:
+        candidates = [
+            entry
+            for entry in inventory.items
+            if int(entry.get("quantity", 0)) > 0
+            and str(entry.get("item_id", "")).strip().lower() in enabled_ids
+        ]
     if not candidates:
         return None
 
     fail_gap = max(0.0, float(required) - float(score))
-    break_chance = 0.09 + min(0.45, fail_gap * 0.11)
+    strain_chance = 0.09 + min(0.45, fail_gap * 0.11)
     if fumbled:
-        break_chance += 0.16
-    break_chance = max(0.01, min(0.85, break_chance))
+        strain_chance += 0.16
+    strain_chance = max(0.01, min(0.85, strain_chance))
 
-    if _access_attempt_roll(sim, eid=eid, prop=prop, context=context, channel=f"{channel}:tool_break") >= break_chance:
+    if _access_attempt_roll(sim, eid=eid, prop=prop, context=context, channel=f"{channel}:tool_break") >= strain_chance:
         return None
 
     pick_roll = _access_attempt_roll(sim, eid=eid, prop=prop, context=context, channel=f"{channel}:tool_pick")
     pick_index = int(pick_roll * len(candidates))
     pick_index = max(0, min(len(candidates) - 1, pick_index))
     picked = candidates[pick_index]
-    removed = inventory.remove_item(instance_id=picked.get("instance_id"), quantity=1)
-    if not removed:
+    item_id = str(picked.get("item_id", "")).strip() or "item"
+    instance_id = str(picked.get("instance_id", "")).strip() or None
+    wear_amount = 1
+    if fumbled:
+        wear_amount += 1
+    if fail_gap >= 2.5:
+        wear_amount += 1
+
+    wear = apply_item_durability_loss(
+        item_id,
+        metadata=picked.get("metadata"),
+        amount=wear_amount,
+        item_catalog=ITEM_CATALOG,
+    )
+    if int(wear.get("lost", 0)) <= 0:
         return None
 
-    item_name = item_display_name(str(removed.get("item_id", "")).strip() or "item")
+    item_name = item_display_name(item_id, metadata=picked.get("metadata"), item_catalog=ITEM_CATALOG)
+    if wear.get("broken"):
+        removed = inventory.remove_item(instance_id=instance_id, quantity=1)
+        if not removed:
+            return None
+        item_name = item_display_name(
+            str(removed.get("item_id", "")).strip() or item_id,
+            metadata=removed.get("metadata"),
+            item_catalog=ITEM_CATALOG,
+        )
+        if _int_or_default(eid, -1) == _int_or_default(getattr(sim, "player_eid", None), -2):
+            sim.log.add(f"Your {item_name} breaks during the attempt.")
+
+        sim.emit(Event(
+            "access_tool_broken",
+            eid=eid,
+            property_id=prop.get("id") if isinstance(prop, dict) else None,
+            item_id=removed.get("item_id"),
+            item_name=item_name,
+            instance_id=removed.get("instance_id"),
+            context=str(context or "").strip().lower(),
+            channel=str(channel or "access").strip().lower() or "access",
+            fumbled=bool(fumbled),
+            durability_before=int(wear.get("before", 0)),
+            durability_after=int(wear.get("after", 0)),
+            durability_lost=int(wear.get("lost", 0)),
+            durability_max=int(wear.get("max_durability", 0)),
+        ))
+        return {
+            "item_id": removed.get("item_id"),
+            "instance_id": removed.get("instance_id"),
+            "broken": True,
+        }
+
+    updated_metadata = inventory.update_item_metadata(instance_id, wear.get("metadata"))
+    if updated_metadata is None:
+        return None
+
     if _int_or_default(eid, -1) == _int_or_default(getattr(sim, "player_eid", None), -2):
-        sim.log.add(f"Your {item_name} breaks during the attempt.")
+        strain_text = "takes heavy strain" if int(wear.get("lost", 0)) > 1 else "takes strain"
+        sim.log.add(
+            f"Your {item_name} {strain_text} ({int(wear.get('after', 0))}/{int(wear.get('max_durability', 0))})."
+        )
 
     sim.emit(Event(
-        "access_tool_broken",
+        "access_tool_damaged",
         eid=eid,
         property_id=prop.get("id") if isinstance(prop, dict) else None,
-        item_id=removed.get("item_id"),
+        item_id=item_id,
         item_name=item_name,
+        instance_id=instance_id,
         context=str(context or "").strip().lower(),
         channel=str(channel or "access").strip().lower() or "access",
         fumbled=bool(fumbled),
+        durability_before=int(wear.get("before", 0)),
+        durability_after=int(wear.get("after", 0)),
+        durability_lost=int(wear.get("lost", 0)),
+        durability_max=int(wear.get("max_durability", 0)),
     ))
+    return {
+        "item_id": item_id,
+        "instance_id": instance_id,
+        "broken": False,
+        "durability_after": int(wear.get("after", 0)),
+        "durability_max": int(wear.get("max_durability", 0)),
+    }
     return removed
 
 
@@ -1769,10 +1901,13 @@ def _emit_property_lock_tamper_event(sim, eid, prop, *, x, y, z, method):
         int(z),
         exclude_eid=eid,
     )
+    method_key = str(method or "").strip().lower()
     severity_score = min(
         100,
         18 + (lock_state["lock_tier"] * 7) + (6 if access_level == "restricted" else 0),
     )
+    if method_key in {"badge_reader_spoof", "biometric_spoof", "biometric_jam"}:
+        severity_score = max(8, severity_score - (6 if method_key == "badge_reader_spoof" else 4))
     sim.emit(Event(
         "property_tamper",
         offender_eid=eid,
@@ -1789,7 +1924,7 @@ def _emit_property_lock_tamper_event(sim, eid, prop, *, x, y, z, method):
         severity_label=_trespass_label_from_score(severity_score),
         standing_reason="none",
         ingress_kind="ordinary_entry",
-        ingress_method=method,
+        ingress_method=method_key,
     ))
     _emit_action_offense_event(
         sim,
@@ -1807,7 +1942,7 @@ def _attempt_locked_property_entry_with_sim(sim, eid, prop, *, target_x, target_
     tool_terms = _access_tool_terms_for_actor(sim, eid, prop)
     score = _access_override_score_for_actor(sim, eid, tool_terms=tool_terms)
     required = _lock_override_required_for_prop(sim, prop, tool_terms=tool_terms, ignition=False)
-    if not tool_terms.get("enabled") and score < required:
+    if not tool_terms.get("enabled") and score + 1.5 < required:
         return False, "locked_property"
 
     if context == "badge_controller":
@@ -1825,23 +1960,30 @@ def _attempt_locked_property_entry_with_sim(sim, eid, prop, *, target_x, target_
         z=target_z,
         method=method,
     )
-    fumbled = False
-    if tool_terms.get("enabled") and score >= required:
-        roll = _access_attempt_roll(sim, eid=eid, prop=prop, context=context, channel="property_fumble")
-        fumbled = roll < _access_fumble_chance(score, required)
-    if score < required or fumbled:
-        _maybe_break_access_tool(
+    attempt = _resolve_access_skill_check(
+        sim,
+        eid=eid,
+        prop=prop,
+        context=context,
+        channel="property_override",
+        score=score,
+        required=required,
+        tool_terms=tool_terms,
+        allow_fumble=True,
+    )
+    if not attempt["success"]:
+        _maybe_damage_access_tool(
             sim,
             eid,
             tool_terms,
             prop=prop,
-            score=score,
-            required=required,
+            score=attempt["score"],
+            required=attempt["required"],
             context=context,
             channel="property_override",
-            fumbled=fumbled,
+            fumbled=attempt["fumbled"],
         )
-        if fumbled:
+        if attempt["fumbled"]:
             return False, "lock_override_fumble"
         return False, "lock_override_failed"
 
@@ -2544,6 +2686,7 @@ def _trade_contact_terms(sim, viewer_eid, prop):
     pressure_buy = float(effects.get("trade_buy_mult", 1.0))
     pressure_sell = float(effects.get("trade_sell_mult", 1.0))
     skill_terms = _trade_skill_terms(sim, viewer_eid)
+    org_terms = _organization_terms_for_property(sim, prop)
 
     # World event trade modifiers for the store's chunk.
     prop_x = int(prop.get("x", 0)) if isinstance(prop, dict) else 0
@@ -2555,9 +2698,30 @@ def _trade_contact_terms(sim, viewer_eid, prop):
     skill_note = str(skill_terms.get("note", "")).strip()
     if skill_note:
         note_bits.append(skill_note)
+    org_note = str(org_terms.get("note", "")).strip()
+    if org_note:
+        note_bits.append(org_note)
     base = {
-        "buy_mult": max(0.75, min(1.6, pressure_buy * event_buy * float(skill_terms.get("buy_mult", 1.0)))),
-        "sell_mult": max(0.6, min(1.6, pressure_sell * event_sell * float(skill_terms.get("sell_mult", 1.0)))),
+        "buy_mult": max(
+            0.75,
+            min(
+                1.6,
+                pressure_buy
+                * event_buy
+                * float(skill_terms.get("buy_mult", 1.0))
+                * float(org_terms.get("buy_mult", 1.0)),
+            ),
+        ),
+        "sell_mult": max(
+            0.6,
+            min(
+                1.6,
+                pressure_sell
+                * event_sell
+                * float(skill_terms.get("sell_mult", 1.0))
+                * float(org_terms.get("sell_mult", 1.0)),
+            ),
+        ),
         "source_eid": None,
         "note": "",
     }
@@ -2592,11 +2756,25 @@ def _trade_contact_terms(sim, viewer_eid, prop):
 
     buy_mult = max(
         0.75,
-        min(1.6, buy_mult * max(0.75, pressure_buy) * event_buy * float(skill_terms.get("buy_mult", 1.0))),
+        min(
+            1.6,
+            buy_mult
+            * max(0.75, pressure_buy)
+            * event_buy
+            * float(skill_terms.get("buy_mult", 1.0))
+            * float(org_terms.get("buy_mult", 1.0)),
+        ),
     )
     sell_mult = max(
         0.6,
-        min(1.6, sell_mult * max(0.6, pressure_sell) * event_sell * float(skill_terms.get("sell_mult", 1.0))),
+        min(
+            1.6,
+            sell_mult
+            * max(0.6, pressure_sell)
+            * event_sell
+            * float(skill_terms.get("sell_mult", 1.0))
+            * float(org_terms.get("sell_mult", 1.0)),
+        ),
     )
 
     note_bits = []
@@ -2605,6 +2783,8 @@ def _trade_contact_terms(sim, viewer_eid, prop):
         note_bits.append(f"{source_name}: {', '.join(labels)}")
     if skill_note:
         note_bits.append(skill_note)
+    if org_note:
+        note_bits.append(org_note)
     if pressure_tier in {"medium", "high"}:
         note_bits.append(f"attention {pressure_tier}")
     if event_labels:
@@ -2625,12 +2805,24 @@ def _insurance_contact_terms(sim, viewer_eid, prop):
     pressure_tier = str(pressure.get("tier", "low")).strip().lower()
     pressure_mult = float(effects.get("insurance_premium_mult", 1.0))
     skill_terms = _insurance_skill_terms(sim, viewer_eid)
+    org_terms = _organization_terms_for_property(sim, prop)
     note_bits = []
     skill_note = str(skill_terms.get("note", "")).strip()
     if skill_note:
         note_bits.append(skill_note)
+    org_note = str(org_terms.get("note", "")).strip()
+    if org_note:
+        note_bits.append(org_note)
     base = {
-        "premium_mult": max(0.75, min(1.8, pressure_mult * float(skill_terms.get("premium_mult", 1.0)))),
+        "premium_mult": max(
+            0.75,
+            min(
+                1.8,
+                pressure_mult
+                * float(skill_terms.get("premium_mult", 1.0))
+                * float(org_terms.get("premium_mult", 1.0)),
+            ),
+        ),
         "source_eid": None,
         "note": "",
     }
@@ -2648,11 +2840,22 @@ def _insurance_contact_terms(sim, viewer_eid, prop):
     standing = max(0.0, min(1.0, float(entry.get("standing", 0.0))))
     source_eid = entry.get("source_eid")
     premium_mult = max(0.82, 1.0 - (0.04 + (standing * 0.1)))
-    premium_mult = max(0.75, min(1.8, premium_mult * pressure_mult * float(skill_terms.get("premium_mult", 1.0))))
+    premium_mult = max(
+        0.75,
+        min(
+            1.8,
+            premium_mult
+            * pressure_mult
+            * float(skill_terms.get("premium_mult", 1.0))
+            * float(org_terms.get("premium_mult", 1.0)),
+        ),
+    )
     source_name = _entity_display_name(sim, source_eid, title_case=True) if source_eid is not None else "Local contact"
     note_bits = [f"{source_name}: policy rate eased"]
     if skill_note:
         note_bits.append(skill_note)
+    if org_note:
+        note_bits.append(org_note)
     if pressure_tier in {"medium", "high"}:
         note_bits.append(f"attention {pressure_tier}")
     return {
@@ -3413,6 +3616,80 @@ def _pressure_report_line(snapshot):
     return f"Heat {tier} {attention}. Local response is near baseline."
 
 
+def _current_or_nearby_property(sim, player_eid, radius=1):
+    pos = sim.ecs.get(Position).get(player_eid) if sim is not None else None
+    if not pos:
+        return None
+    prop = _property_covering(sim, pos.x, pos.y, pos.z)
+    if prop is not None:
+        return prop
+    return _property_for_action(sim, pos, radius=radius)
+
+
+def _organization_snapshot_line(snapshot):
+    if not isinstance(snapshot, dict):
+        return ""
+    name = str(snapshot.get("name", "Organization")).strip() or "Organization"
+    standing = float(snapshot.get("standing", 0.0))
+    standing_tier = str(snapshot.get("standing_tier", "neutral")).strip().lower() or "neutral"
+    heat = int(snapshot.get("heat", 0))
+    heat_tier = str(snapshot.get("heat_tier", "quiet")).strip().lower() or "quiet"
+    site_count = max(0, int(snapshot.get("site_count", 0)))
+    return (
+        f"{name} | standing {standing_tier} {standing:+.2f} | "
+        f"heat {heat_tier} {heat} | sites {site_count}"
+    )
+
+
+def _organization_summary_rows(sim, *, current_prop=None):
+    rows = []
+
+    current_snapshot = _organization_snapshot(sim, prop=current_prop, ensure=True) if current_prop else None
+    if current_snapshot is not None:
+        rows.append(f"Current: {_organization_snapshot_line(current_snapshot)}")
+
+    hot_rows = [
+        row for row in _top_organization_snapshots(sim, limit=3, sort_by="heat")
+        if int(row.get("heat", 0)) > 0
+    ]
+    if hot_rows:
+        rows.append(
+            "Heat: "
+            + " || ".join(
+                f"{str(row.get('name', 'Organization')).strip() or 'Organization'} "
+                f"{str(row.get('heat_tier', 'quiet')).strip().lower() or 'quiet'} "
+                f"{int(row.get('heat', 0))}"
+                for row in hot_rows
+            )
+        )
+
+    best_rows = _top_organization_snapshots(sim, limit=2, sort_by="positive_standing")
+    if best_rows:
+        rows.append(
+            "Best standing: "
+            + " || ".join(
+                f"{str(row.get('name', 'Organization')).strip() or 'Organization'} "
+                f"{str(row.get('standing_tier', 'neutral')).strip().lower() or 'neutral'} "
+                f"{float(row.get('standing', 0.0)):+.2f}"
+                for row in best_rows
+            )
+        )
+
+    worst_rows = _top_organization_snapshots(sim, limit=2, sort_by="negative_standing")
+    if worst_rows:
+        rows.append(
+            "Worst standing: "
+            + " || ".join(
+                f"{str(row.get('name', 'Organization')).strip() or 'Organization'} "
+                f"{str(row.get('standing_tier', 'neutral')).strip().lower() or 'neutral'} "
+                f"{float(row.get('standing', 0.0)):+.2f}"
+                for row in worst_rows
+            )
+        )
+
+    return rows
+
+
 def _build_progress_report(sim, player_eid, opportunity_limit=8):
     refresh_dynamic_opportunities(sim, player_eid)
     objective_eval = evaluate_run_objective(sim, player_eid)
@@ -3496,6 +3773,17 @@ def _build_progress_report(sim, player_eid, opportunity_limit=8):
     lines.append("")
     lines.append("PRESSURE")
     lines.append(_pressure_report_line(pressure))
+
+    organization_lines = _organization_summary_rows(
+        sim,
+        current_prop=_current_or_nearby_property(sim, player_eid, radius=1),
+    )
+    lines.append("")
+    lines.append("ORGANIZATIONS")
+    if organization_lines:
+        lines.extend(organization_lines)
+    else:
+        lines.append("No organization heat or standing established yet.")
 
     remaining = max(0, int(opportunity_count) - len(opportunity_rows))
     if opportunity_rows:
@@ -4084,12 +4372,10 @@ def _build_debug_overlay(sim, player_eid):
             f"Mode {'driving' if vehicle_state and vehicle_state.in_vehicle else 'parked'}"
         )
 
-    prop = _property_covering(sim, player_pos.x, player_pos.y, player_pos.z) if player_pos else None
-    prop_scope = "Current"
-    if prop is None and player_pos:
-        prop = _property_for_action(sim, player_pos, radius=1)
-        if prop is not None:
-            prop_scope = "Nearby"
+    prop = _current_or_nearby_property(sim, player_eid, radius=1)
+    prop_scope = "Current" if (player_pos and prop is not None and _property_covering(sim, player_pos.x, player_pos.y, player_pos.z) is prop) else "Nearby"
+    if prop is None:
+        prop_scope = "Current"
     if prop is not None:
         prop_name = str(prop.get("name", prop.get("id", "property"))).strip() or "property"
         prop_archetype = str(
@@ -4116,9 +4402,20 @@ def _build_debug_overlay(sim, player_eid):
             f"sec{max(1, _int_or_default(controller.get('security_tier'), 1))} {open_text} "
             f"auth {len(tuple(controller.get('authorized_holders', ()) or ()))}"
         )
+        if controller.get("intrusion_active"):
+            intrusion_label = str(controller.get("intrusion_label", "") or "intrusion").strip() or "intrusion"
+            source_item_id = str(controller.get("intrusion_source_item_id", "") or "").strip().lower()
+            source_text = f" via {source_item_id}" if source_item_id else ""
+            lines.append(
+                f"Intrusion {intrusion_label} | t{int(controller.get('intrusion_until_tick', 0) or 0)} "
+                f"({int(controller.get('intrusion_remaining_ticks', 0) or 0)} left){source_text}"
+            )
         service_bits = list(_finance_services_for_property(prop)) + list(_site_services_for_property(prop))
         if service_bits:
             lines.append("Services " + ", ".join(service_bits))
+        org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
+        if org_snapshot is not None:
+            lines.append("Org " + _organization_snapshot_line(org_snapshot))
     else:
         lines.append("No current or adjacent property anchor.")
 
@@ -4162,6 +4459,16 @@ def _build_debug_overlay(sim, player_eid):
             f"insurance x{float(pressure_effects.get('insurance_premium_mult', 1.0)):.2f}"
         ),
     ])
+
+    organization_lines = _organization_summary_rows(sim, current_prop=prop)
+    lines.extend([
+        "",
+        "ORGANIZATIONS",
+    ])
+    if organization_lines:
+        lines.extend(organization_lines)
+    else:
+        lines.append("No organization heat or standing established yet.")
 
     if objective_eval:
         lines.append(
@@ -4976,7 +5283,7 @@ def _ingress_label(ingress_kind, aperture_kind=""):
         if aperture_kind in {"window", "skylight"}:
             return "via window"
         if aperture_kind in {"side_door", "service_door", "employee_door"}:
-            return "via side entry"
+            return "via side door"
         if aperture_kind:
             return f"via {aperture_kind.replace('_', ' ')}"
         return "via alternate entry"
@@ -4990,9 +5297,9 @@ def _ingress_label(ingress_kind, aperture_kind=""):
 def _ingress_mode_label(mode):
     mode = str(mode or "").strip().lower()
     mapping = {
-        "side_entry": "side entry",
+        "side_entry": "door breach",
         "window_entry": "window",
-        "forced_breach": "breach",
+        "forced_breach": "wall breach",
     }
     return mapping.get(mode, mode.replace("_", " "))
 
@@ -5027,6 +5334,7 @@ def _trespass_label_from_score(score):
 def _ingress_method_label(method):
     method = str(method or "").strip().lower()
     mapping = {
+        "side_entry": "door breach",
         "authorized_side_entry": "authorized",
         "jimmied_side_entry": "jimmied",
         "manual_side_entry": "manual bypass",
@@ -5036,6 +5344,7 @@ def _ingress_method_label(method):
         "badge_reader_spoof": "badge spoof",
         "badge_reader_override": "badge override",
         "biometric_spoof": "biometric spoof",
+        "biometric_jam": "biometric jam",
         "biometric_override": "biometric override",
         "quiet_window_entry": "quiet window",
         "careful_window_entry": "careful window",
@@ -9799,13 +10108,172 @@ class PropertySystem(System):
             return False
 
         access_level = _property_access_level(prop)
+        controller_kind = str(controller.get("kind", "")).strip().lower()
         credential_mode = str(controller.get("credential_mode", "mechanical_key")).strip().lower()
         security_tier = max(1, _int_or_default(controller.get("security_tier"), 1))
         return bool(
-            credential_mode in {"badge", "biometric"}
+            controller_kind in {"owner_schedule", "auto_timer"}
+            or credential_mode in {"badge", "biometric"}
             or access_level == "restricted"
             or security_tier >= 3
         )
+
+    def _building_service_terminal_profile(self, prop):
+        if not isinstance(prop, dict):
+            return None
+        if str(prop.get("kind", "")).strip().lower() != "building":
+            return None
+
+        metadata = _property_metadata(prop)
+        if bool(metadata.get("disable_service_terminal")):
+            return None
+
+        finance_services = []
+        for service in _finance_services_for_property(prop):
+            label = str(service or "").strip().lower()
+            if label in {"banking", "insurance"} and label not in finance_services:
+                finance_services.append(label)
+
+        site_services = []
+        for service in _site_services_for_property(prop):
+            label = str(service or "").strip().lower()
+            if label in {"intel"} and label not in site_services:
+                site_services.append(label)
+
+        if not finance_services and not site_services:
+            return None
+
+        service_set = set(finance_services) | set(site_services)
+        if service_set == {"banking"}:
+            return {
+                "name": "ATM Kiosk",
+                "fixture_type": "atm_kiosk",
+                "glyph": "$",
+                "cover_value": 0.38,
+                "finance_services": tuple(finance_services),
+                "site_services": tuple(site_services),
+            }
+        if service_set == {"insurance"}:
+            return {
+                "name": "Claim Terminal",
+                "fixture_type": "claim_terminal",
+                "glyph": "c",
+                "cover_value": 0.36,
+                "finance_services": tuple(finance_services),
+                "site_services": tuple(site_services),
+            }
+        if service_set == {"intel"}:
+            return {
+                "name": "Info Terminal",
+                "fixture_type": "service_terminal",
+                "glyph": "i",
+                "cover_value": 0.32,
+                "finance_services": tuple(finance_services),
+                "site_services": tuple(site_services),
+            }
+
+        prop_name = str(prop.get("name", prop.get("id", "Property"))).strip() or "Property"
+        return {
+            "name": f"{prop_name} Service Terminal",
+            "fixture_type": "service_terminal",
+            "glyph": "t",
+            "cover_value": 0.34,
+            "finance_services": tuple(finance_services),
+            "site_services": tuple(site_services),
+        }
+
+    def _service_terminal_anchor(self, prop, existing_terminal=None):
+        focus = _property_focus_position(prop)
+        if focus is None:
+            return None
+
+        ex, ey, ez = focus
+        existing_id = existing_terminal.get("id") if isinstance(existing_terminal, dict) else None
+        candidates = (
+            (ex + 2, ey + 1, ez),
+            (ex - 2, ey + 1, ez),
+            (ex + 2, ey + 2, ez),
+            (ex - 2, ey + 2, ez),
+            (ex, ey + 3, ez),
+            (ex + 1, ey + 3, ez),
+            (ex - 1, ey + 3, ez),
+            (ex + 2, ey, ez),
+            (ex - 2, ey, ez),
+        )
+        for x, y, z in candidates:
+            tile = self.sim.tilemap.tile_at(x, y, z)
+            if not tile or not tile.walkable:
+                continue
+            anchored = self.sim.property_at(x, y, z)
+            if anchored and anchored.get("id") != existing_id:
+                continue
+            covering = self.sim.property_covering(x, y, z)
+            if covering and covering.get("id") != existing_id:
+                continue
+            return int(x), int(y), int(z)
+
+        if existing_terminal is not None:
+            return (
+                int(existing_terminal.get("x", ex)),
+                int(existing_terminal.get("y", ey + 2)),
+                int(existing_terminal.get("z", ez)),
+            )
+        return None
+
+    def _ensure_service_terminal(self, prop):
+        profile = self._building_service_terminal_profile(prop)
+        if profile is None:
+            return None
+
+        metadata = _property_metadata(prop)
+        terminal_id = str(metadata.get("service_terminal_property_id", "") or "").strip()
+        terminal = self.sim.properties.get(terminal_id) if terminal_id else None
+        if terminal and _property_infrastructure_role(terminal) != "service_terminal":
+            terminal = None
+
+        anchor = self._service_terminal_anchor(prop, existing_terminal=terminal)
+        if anchor is None:
+            return terminal
+
+        owner_eid = prop.get("owner_eid")
+        owner_tag = prop.get("owner_tag")
+        terminal_metadata = {
+            "archetype": str(profile.get("fixture_type", "service_terminal")),
+            "fixture_type": str(profile.get("fixture_type", "service_terminal")),
+            "interaction_role": "service_terminal",
+            "linked_property_id": prop.get("id"),
+            "linked_building_id": _building_id_from_property(prop),
+            "finance_services": list(profile.get("finance_services", ())),
+            "site_services": list(profile.get("site_services", ())),
+            "display_glyph": str(profile.get("glyph", "t"))[:1] or "t",
+            "display_color": "property_service",
+            "cover_kind": "low",
+            "cover_value": float(profile.get("cover_value", 0.34) or 0.34),
+            "public": True,
+            "chunk": metadata.get("chunk"),
+        }
+
+        if terminal is not None:
+            self.sim.move_property(terminal["id"], anchor[0], anchor[1], z=anchor[2])
+            terminal["name"] = str(profile.get("name", terminal.get("name", "Service Terminal"))).strip() or "Service Terminal"
+            terminal["owner_eid"] = owner_eid
+            terminal["owner_tag"] = owner_tag
+            terminal["metadata"] = terminal_metadata
+        else:
+            terminal_id = self.sim.register_property(
+                name=str(profile.get("name", "Service Terminal")).strip() or "Service Terminal",
+                kind="asset",
+                x=anchor[0],
+                y=anchor[1],
+                z=anchor[2],
+                owner_eid=owner_eid,
+                owner_tag=owner_tag,
+                metadata=terminal_metadata,
+            )
+            terminal = self.sim.properties.get(terminal_id)
+
+        metadata["service_terminal_property_id"] = terminal["id"]
+        return terminal
 
     def _access_panel_anchor(self, prop, existing_panel=None):
         focus = _property_focus_position(prop)
@@ -9947,6 +10415,14 @@ class PropertySystem(System):
                 "reason": "key",
             }
 
+        intrusion_access = _controller_intrusion_access_for_actor(self.sim, eid, prop)
+        if intrusion_access:
+            return {
+                "mode": str(intrusion_access.get("mode", "badge")).strip().lower() or "badge",
+                "entry": None,
+                "reason": str(intrusion_access.get("reason", "spoofed_access")).strip().lower() or "spoofed_access",
+            }
+
         controller = _property_access_controller(self.sim, prop)
         required_tier = max(1, _int_or_default(controller.get("required_credential_tier"), 1))
         inventory = self.sim.ecs.get(Inventory).get(eid)
@@ -9975,6 +10451,134 @@ class PropertySystem(System):
                 }
         return None
 
+    def _panel_intrusion_profile(self, controller):
+        mode = str((controller or {}).get("credential_mode", "") or "").strip().lower()
+        if mode == "badge":
+            return {
+                "mode": "badge_spoof",
+                "label": "badge spoof",
+                "method": "badge_reader_spoof",
+                "duration_ticks": 84,
+                "required_delta": -0.85,
+            }
+        if mode == "biometric":
+            return {
+                "mode": "biometric_jam",
+                "label": "biometric jam",
+                "method": "biometric_jam",
+                "duration_ticks": 60,
+                "required_delta": -0.55,
+            }
+
+        controller_kind = str((controller or {}).get("kind", "") or "").strip().lower()
+        if controller_kind == "owner_schedule":
+            return {
+                "mode": "schedule_latch",
+                "label": "schedule latch",
+                "method": "schedule_latch",
+                "duration_ticks": 90,
+                "required_delta": -0.7,
+                "tool_context": "schedule_controller",
+            }
+        if controller_kind == "auto_timer":
+            return {
+                "mode": "relay_latch",
+                "label": "relay latch",
+                "method": "relay_latch",
+                "duration_ticks": 96,
+                "required_delta": -0.8,
+                "tool_context": "relay_controller",
+            }
+        return None
+
+    def _attempt_access_panel_intrusion(self, eid, panel_prop, target_prop, controller):
+        profile = self._panel_intrusion_profile(controller)
+        if profile is None or not isinstance(target_prop, dict) or not isinstance(panel_prop, dict):
+            return None
+
+        entry = _property_focus_position(target_prop)
+        if entry is None:
+            return {
+                "success": False,
+                "reason": "offline",
+                "profile": profile,
+            }
+
+        base_context = _access_tool_context_for(self.sim, target_prop)
+        context = str(profile.get("tool_context", "") or "").strip().lower() or base_context
+        tool_terms = _access_tool_terms_for_actor(self.sim, eid, target_prop, context=context)
+        score = _access_override_score_for_actor(self.sim, eid, tool_terms=tool_terms)
+        required = max(
+            1.0,
+            _lock_override_required_for_prop(self.sim, target_prop, tool_terms=tool_terms)
+            + float(profile.get("required_delta", 0.0)),
+        )
+        if not tool_terms.get("enabled") and score + 1.5 < required:
+            return None
+
+        method = str(profile.get("method", profile["mode"])).strip().lower() or profile["mode"]
+        _emit_property_lock_tamper_event(
+            self.sim,
+            eid,
+            target_prop,
+            x=int(panel_prop.get("x", entry[0])),
+            y=int(panel_prop.get("y", entry[1])),
+            z=int(panel_prop.get("z", entry[2])),
+            method=method,
+        )
+        attempt = _resolve_access_skill_check(
+            self.sim,
+            eid=eid,
+            prop=target_prop,
+            context=context,
+            channel="panel_intrusion",
+            score=score,
+            required=required,
+            tool_terms=tool_terms,
+            allow_fumble=True,
+        )
+        if not attempt["success"]:
+            _maybe_damage_access_tool(
+                self.sim,
+                eid,
+                tool_terms,
+                prop=target_prop,
+                score=attempt["score"],
+                required=attempt["required"],
+                context=context,
+                channel="panel_intrusion",
+                fumbled=attempt["fumbled"],
+            )
+            return {
+                "success": False,
+                "reason": "panel_intrusion_fumble" if attempt["fumbled"] else "panel_intrusion_failed",
+                "profile": profile,
+                "method": method,
+            }
+
+        _apply_controller_intrusion(
+            target_prop,
+            mode=profile["mode"],
+            tick=self.sim.tick,
+            duration=profile["duration_ticks"],
+            actor_eid=eid if profile["mode"] == "badge_spoof" else None,
+            source_item_id=tool_terms.get("selected_item_id", ""),
+            method=method,
+        )
+        metadata = _property_metadata(target_prop)
+        metadata["property_locked"] = False
+        metadata["property_override_tick"] = int(self.sim.tick)
+        metadata["property_override_method"] = method
+        intrusion = _controller_intrusion_state(self.sim, target_prop)
+        return {
+            "success": True,
+            "reason": method,
+            "profile": profile,
+            "method": method,
+            "intrusion": intrusion,
+            "source_item_id": str(tool_terms.get("selected_item_id", "") or "").strip().lower(),
+        }
+
     def _handle_access_panel_interaction(self, eid, panel_prop):
         target_prop = _infrastructure_target_property(self.sim, panel_prop)
         if not target_prop or str(target_prop.get("kind", "")).strip().lower() != "building":
@@ -9991,6 +10595,7 @@ class PropertySystem(System):
         entry = _property_focus_position(target_prop)
         lock_state = property_lock_state(target_prop)
         credential = self._property_credential_access_for(eid, target_prop)
+        intrusion_state = _controller_intrusion_state(self.sim, target_prop)
 
         if credential:
             metadata = _property_metadata(target_prop)
@@ -10005,6 +10610,9 @@ class PropertySystem(System):
                 controller=controller,
                 outcome="authorized_open" if lock_state["locked"] or controller.get("open_now") is False else "status",
                 method=str(credential.get("reason", "credential")).strip().lower() or "credential",
+                intrusion_mode=str(intrusion_state.get("mode", "") or "").strip().lower(),
+                intrusion_label=str(intrusion_state.get("label", "") or "").strip(),
+                intrusion_remaining_ticks=int(intrusion_state.get("remaining_ticks", 0) or 0),
             )
             return
 
@@ -10017,6 +10625,9 @@ class PropertySystem(System):
                 controller=controller,
                 outcome="status",
                 method="status_check",
+                intrusion_mode=str(intrusion_state.get("mode", "") or "").strip().lower(),
+                intrusion_label=str(intrusion_state.get("label", "") or "").strip(),
+                intrusion_remaining_ticks=int(intrusion_state.get("remaining_ticks", 0) or 0),
             )
             return
 
@@ -10028,6 +10639,40 @@ class PropertySystem(System):
                 target_prop=target_prop,
                 controller=controller,
                 reason="offline",
+            )
+            return
+
+        intrusion_attempt = self._attempt_access_panel_intrusion(eid, panel_prop, target_prop, controller)
+        if intrusion_attempt is not None:
+            if not intrusion_attempt.get("success"):
+                profile = intrusion_attempt.get("profile") or {}
+                self._emit_access_panel_event(
+                    "access_panel_blocked",
+                    eid=eid,
+                    panel_prop=panel_prop,
+                    target_prop=target_prop,
+                    controller=controller,
+                    reason=str(intrusion_attempt.get("reason", "panel_intrusion_failed")).strip().lower() or "panel_intrusion_failed",
+                    intrusion_mode=str(profile.get("mode", "") or "").strip().lower(),
+                    intrusion_label=str(profile.get("label", "") or "").strip(),
+                    method=str(intrusion_attempt.get("method", profile.get("method", "")) or "").strip().lower(),
+                )
+                return
+
+            intrusion = intrusion_attempt.get("intrusion") or {}
+            controller = _property_access_controller(self.sim, target_prop)
+            self._emit_access_panel_event(
+                "access_panel_used",
+                eid=eid,
+                panel_prop=panel_prop,
+                target_prop=target_prop,
+                controller=controller,
+                outcome="intrusion_open",
+                method=str(intrusion_attempt.get("method", intrusion.get("method", "")) or "").strip().lower(),
+                intrusion_mode=str(intrusion.get("mode", "") or "").strip().lower(),
+                intrusion_label=str(intrusion.get("label", "") or "").strip(),
+                intrusion_remaining_ticks=int(intrusion.get("remaining_ticks", 0) or 0),
+                source_item_id=str(intrusion_attempt.get("source_item_id", "") or "").strip().lower(),
             )
             return
 
@@ -10088,7 +10733,44 @@ class PropertySystem(System):
                 continue
             controller = _sync_property_access_controller(self.sim, prop, hour=hour)
             self._ensure_access_panel(prop, controller)
+            self._ensure_service_terminal(prop)
             self._sync_property_doors(prop, controller, emit_closing_warning=True)
+
+    def _sync_intrusion_properties(self, hour=None):
+        if hour is None:
+            hour = _world_hour(self.sim)
+        for prop in list(self.sim.properties.values()):
+            if str(prop.get("kind", "")).strip().lower() != "building":
+                continue
+            metadata = _property_metadata(prop)
+            if not isinstance(metadata, dict):
+                continue
+            if "controller_intrusion_mode" not in metadata and "controller_intrusion_until_tick" not in metadata:
+                continue
+
+            previous_holders = tuple(metadata.get("access_authorized_holders", ()))
+            controller = _sync_property_access_controller(self.sim, prop, hour=hour)
+            self._ensure_access_panel(prop, controller)
+            self._ensure_service_terminal(prop)
+
+            owner_eid = prop.get("owner_eid")
+            lock_if_controlled = bool(controller.get("managed_lock") and controller.get("open_now") is not True)
+            if owner_eid is not None and not controller.get("managed_lock"):
+                lock_if_controlled = True
+            ensure_property_lock(
+                prop,
+                locked=lock_if_controlled,
+                lock_tier=self._owned_property_lock_tier(prop),
+                key_label=str(prop.get("name", prop.get("id", "Property"))).strip() or "Property",
+            )
+            credential_state = self._sync_property_credentials(
+                prop,
+                controller,
+                previous_holders=previous_holders,
+            )
+            if lock_if_controlled and owner_eid is not None and not credential_state["authorized_access"]:
+                metadata["property_locked"] = False
+            self._sync_property_doors(prop, controller)
 
     def _sync_property_credentials(self, prop, controller, *, previous_holders=()):
         if not isinstance(prop, dict):
@@ -10295,6 +10977,7 @@ class PropertySystem(System):
                 previous_holders = tuple(metadata.get("access_authorized_holders", ())) if isinstance(metadata, dict) else ()
                 controller = _sync_property_access_controller(self.sim, prop, hour=current_hour)
                 self._ensure_access_panel(prop, controller)
+                self._ensure_service_terminal(prop)
                 lock_if_controlled = bool(controller.get("managed_lock") and controller.get("open_now") is not True)
                 if owner_eid is not None and not controller.get("managed_lock"):
                     lock_if_controlled = True
@@ -10358,6 +11041,8 @@ class PropertySystem(System):
         if current_hour != self.last_controller_hour:
             self._sync_access_controllers(hour=current_hour)
             self.last_controller_hour = current_hour
+        else:
+            self._sync_intrusion_properties(hour=current_hour)
 
 
 class QuestSystem(System):
@@ -15838,6 +16523,14 @@ class PlayerActionSystem(System):
                 "reason": "key",
             }
 
+        intrusion_access = _controller_intrusion_access_for_actor(self.sim, eid, prop)
+        if intrusion_access:
+            return {
+                "mode": str(intrusion_access.get("mode", "badge")).strip().lower() or "badge",
+                "entry": None,
+                "reason": str(intrusion_access.get("reason", "spoofed_access")).strip().lower() or "spoofed_access",
+            }
+
         controller = _property_access_controller(self.sim, prop)
         required_tier = max(1, _int_or_default(controller.get("required_credential_tier"), 1))
         inventory = self._inventory_for(eid)
@@ -15982,35 +16675,36 @@ class PlayerActionSystem(System):
         tool_terms = self._access_tool_terms_for(eid, vehicle_prop, ignition=True)
         score = self._vehicle_hotwire_score(eid, tool_terms=tool_terms)
         required = self._lock_override_required(vehicle_prop, tool_terms=tool_terms, ignition=True)
-        if not tool_terms.get("enabled") and score < required:
+        if not tool_terms.get("enabled") and score + 1.5 < required:
             self._emit_vehicle_tamper(eid, vehicle_prop, method="locked_vehicle_entry")
             return False, "key_required", "blocked"
         method = "hotwire" if tool_terms.get("enabled") else "ignition_override"
         self._emit_vehicle_tamper(eid, vehicle_prop, method=method)
         context = self._access_tool_context(vehicle_prop, ignition=True)
-        fumbled = False
-        if tool_terms.get("enabled") and score >= required:
-            roll = _access_attempt_roll(
-                self.sim,
-                eid=eid,
-                prop=vehicle_prop,
-                context=context,
-                channel="vehicle_fumble",
-            )
-            fumbled = roll < _access_fumble_chance(score, required)
-        if score < required or fumbled:
-            _maybe_break_access_tool(
+        attempt = _resolve_access_skill_check(
+            self.sim,
+            eid=eid,
+            prop=vehicle_prop,
+            context=context,
+            channel="vehicle_theft",
+            score=score,
+            required=required,
+            tool_terms=tool_terms,
+            allow_fumble=True,
+        )
+        if not attempt["success"]:
+            _maybe_damage_access_tool(
                 self.sim,
                 eid,
                 tool_terms,
                 prop=vehicle_prop,
-                score=score,
-                required=required,
+                score=attempt["score"],
+                required=attempt["required"],
                 context=context,
                 channel="vehicle_theft",
-                fumbled=fumbled,
+                fumbled=attempt["fumbled"],
             )
-            if fumbled:
+            if attempt["fumbled"]:
                 return False, "hotwire_fumble", "blocked"
             return False, "hotwire_failed", "blocked"
 
@@ -16060,6 +16754,10 @@ class PlayerActionSystem(System):
         ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
         aperture_kind = str(getattr(ingress, "aperture_kind", "") or "").strip().lower()
         side_entry_terms = self._access_tool_terms_for(eid, prop, context="side_entry")
+        door_like_ingress = (
+            ingress_kind == "ordinary_entry"
+            or (ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind))
+        )
 
         if ingress_kind == "deep_breach":
             return "deep_breach", 10, 12
@@ -16073,7 +16771,7 @@ class PlayerActionSystem(System):
                 return "careful_window_entry", 4, 6
             return "crash_window_entry", 8, 10
 
-        if ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind):
+        if door_like_ingress:
             if claim_reason:
                 return "authorized_side_entry", 0, 0
             if (
@@ -16090,6 +16788,161 @@ class PlayerActionSystem(System):
             return "authorized_side_entry", 0, 0
         return "forced_side_entry", 5, 7
 
+    def _ingress_attempt_profile(self, eid, prop, ingress, claim_reason):
+        ingress_method, severity_bonus, offense_bonus = self._ingress_method_profile(
+            eid,
+            prop,
+            ingress,
+            claim_reason,
+        )
+        profile = {
+            "method": ingress_method,
+            "severity_bonus": severity_bonus,
+            "offense_bonus": offense_bonus,
+            "hostile": ingress_method in {
+                "quiet_window_entry",
+                "careful_window_entry",
+                "crash_window_entry",
+                "forced_breach",
+                "deep_breach",
+            },
+            "unauthorized": ingress_method in {
+                "manual_side_entry",
+                "jimmied_side_entry",
+                "forced_side_entry",
+            },
+            "automatic": ingress_method == "authorized_side_entry",
+        }
+        if profile["automatic"]:
+            return profile
+
+        tool_terms = self._access_tool_terms_for(eid, prop, context="side_entry")
+        score = self._access_override_score(eid, tool_terms=tool_terms)
+        required = self._lock_override_required(prop, tool_terms=tool_terms)
+        ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
+        aperture_kind = str(getattr(ingress, "aperture_kind", "") or "").strip().lower()
+        breach_severity = max(0.0, float(getattr(ingress, "breach_severity", 0.0) or 0.0))
+        athletics = _actor_skill(self.sim, eid, "athletics")
+
+        if ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
+            score += max(0.0, athletics - 5.0) * 0.24
+            if ingress_method == "quiet_window_entry":
+                score += 0.35
+            elif ingress_method == "careful_window_entry":
+                score += 0.18
+            required += 0.35 + (breach_severity * 1.2)
+            context = "window_entry"
+            channel = "window_entry"
+        elif ingress_kind in {"boundary_breach", "deep_breach"}:
+            mechanics = _actor_skill(self.sim, eid, "mechanics")
+            score += max(0.0, athletics - 5.0) * 0.36
+            score += max(0.0, mechanics - 5.0) * 0.14
+            required += 0.75 + (breach_severity * 1.9)
+            context = "wall_breach"
+            channel = "wall_breach"
+        else:
+            required += 0.2 + (breach_severity * 0.9)
+            if ingress_method == "manual_side_entry":
+                score += 0.15
+            elif ingress_method == "forced_side_entry":
+                required += 0.2
+            context = "side_entry"
+            channel = "door_breach"
+
+        profile["context"] = context
+        profile["channel"] = channel
+        profile["tool_terms"] = tool_terms
+        profile["attempt"] = _resolve_access_skill_check(
+            self.sim,
+            eid=eid,
+            prop=prop,
+            context=context,
+            channel=channel,
+            score=score,
+            required=required,
+            tool_terms=tool_terms,
+            allow_fumble=True,
+        )
+        return profile
+
+    def _failed_ingress_attempt_text(self, ingress_mode, ingress_method, prop, *, fumbled=False, eid=None):
+        prop_name = str((prop or {}).get("name", (prop or {}).get("id", "property"))).strip() or "property"
+        method = str(ingress_method or "").strip().lower()
+
+        if method in {"quiet_window_entry", "careful_window_entry", "crash_window_entry"}:
+            base = f"You {'botch' if fumbled else 'fail'} the window entry at {prop_name}."
+        elif method in {"forced_breach", "deep_breach"}:
+            base = f"You {'botch' if fumbled else 'fail'} the wall breach at {prop_name}."
+        else:
+            mode_text = _ingress_mode_label(ingress_mode)
+            if fumbled:
+                base = f"You botch the {mode_text} at {prop_name}."
+            else:
+                base = f"You fail to make the {mode_text} at {prop_name}."
+
+        hint = self._ingress_tool_hint(eid, ingress_mode)
+        if hint:
+            return f"{base} {hint}".strip()
+        return base
+
+    def _emit_failed_ingress_attempt(self, eid, candidate, prop, ingress, ingress_method, *, severity_bonus=0, offense_bonus=0):
+        access = _evaluate_property_access(
+            self.sim,
+            eid,
+            prop,
+            x=candidate["x"],
+            y=candidate["y"],
+            z=candidate["z"],
+            breach_severity=ingress.breach_severity,
+        )
+        witnesses = _watchers_for_position(
+            self.sim,
+            candidate["x"],
+            candidate["y"],
+            candidate["z"],
+            exclude_eid=eid,
+        )
+        severity_score = max(
+            18,
+            int(access.severity_score) + int(round(float(ingress.breach_severity) * 10.0)),
+        )
+        severity_score = min(100, severity_score + int(max(0, severity_bonus)))
+        self.sim.emit(Event(
+            "property_tamper",
+            offender_eid=eid,
+            property_id=prop["id"],
+            owner_eid=prop.get("owner_eid"),
+            x=candidate["x"],
+            y=candidate["y"],
+            z=candidate["z"],
+            witnessed=bool(witnesses),
+            witness_count=len(witnesses),
+            witnesses=tuple(witnesses[:4]),
+            access_level=access.access_level,
+            severity_score=severity_score,
+            severity_label=_trespass_label_from_score(severity_score),
+            standing_reason=access.standing_reason,
+            ingress_kind=ingress.ingress_kind,
+            aperture_kind=ingress.aperture_kind,
+            ingress_method=ingress_method,
+            breach_severity=ingress.breach_severity,
+        ))
+        offense_score = min(
+            100,
+            self._offense_score_for("tamper", context="ordinary")
+            + int(round(float(ingress.breach_severity) * 12.0))
+            + int(max(0, offense_bonus)),
+        )
+        self._emit_action_offense(
+            eid=eid,
+            action="tamper",
+            context="ordinary",
+            score=offense_score,
+            x=candidate["x"],
+            y=candidate["y"],
+            z=candidate["z"],
+        )
+
     def _ingress_mode_matches(self, candidate, ingress_mode):
         ingress_mode = str(ingress_mode or "").strip().lower()
         ingress = candidate.get("ingress")
@@ -16097,7 +16950,9 @@ class PlayerActionSystem(System):
         ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
 
         if ingress_mode == "side_entry":
-            return ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind)
+            return ingress_kind == "ordinary_entry" or (
+                ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind)
+            )
         if ingress_mode == "window_entry":
             return ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind)
         if ingress_mode == "forced_breach":
@@ -16178,9 +17033,8 @@ class PlayerActionSystem(System):
                 if not ingress:
                     continue
             if ingress.ingress_kind == "ordinary_entry":
-                continue
-
-            if ingress.ingress_kind == "alternate_aperture":
+                priority = 0
+            elif ingress.ingress_kind == "alternate_aperture":
                 priority = 0
             elif tile and not tile.walkable:
                 priority = 1
@@ -16216,9 +17070,13 @@ class PlayerActionSystem(System):
         pos = self.sim.ecs.get(Position).get(eid)
         prop = candidate["prop"]
         ingress = candidate["ingress"]
-        if ingress.ingress_kind != "alternate_aperture":
+        aperture_kind = str(ingress.aperture_kind or "").strip().lower()
+        if _is_window_aperture(aperture_kind):
             return ""
-        if _is_window_aperture(ingress.aperture_kind):
+        if not (
+            str(ingress.ingress_kind or "").strip().lower() == "ordinary_entry"
+            or _is_side_aperture(aperture_kind)
+        ):
             return ""
 
         access = _evaluate_property_access(
@@ -16251,7 +17109,10 @@ class PlayerActionSystem(System):
 
         ingress = candidate["ingress"]
         aperture_kind = str(ingress.aperture_kind or "").strip().lower()
-        if ingress.ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind):
+        if (
+            str(ingress.ingress_kind or "").strip().lower() == "ordinary_entry"
+            or (ingress.ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind))
+        ):
             if _set_door_open_state(
                 self.sim,
                 int(candidate["x"]),
@@ -16280,12 +17141,12 @@ class PlayerActionSystem(System):
         side_terms = self._access_tool_terms_for(eid, context="side_entry")
         if side_terms.get("enabled"):
             return "Sneak plus your current tools improve your odds."
-        return "A lockpick kit or prybar can help with side entries and window ingress."
+        return "A lockpick kit or prybar can help with door breaches and window ingress."
 
     def _missing_ingress_text(self, ingress_mode, *, eid=None):
         ingress_mode = str(ingress_mode or "").strip().lower()
         if ingress_mode == "side_entry":
-            base = "No adjacent side or service entry."
+            base = "No adjacent door to breach."
             hint = self._ingress_tool_hint(eid, ingress_mode)
             return f"{base} {hint}".strip()
         if ingress_mode == "window_entry":
@@ -16331,15 +17192,48 @@ class PlayerActionSystem(System):
         prop = candidate["prop"]
         ingress = candidate["ingress"]
         claim_reason = self._authorized_side_entry_reason(eid, candidate)
-        ingress_method, severity_bonus, offense_bonus = self._ingress_method_profile(eid, prop, ingress, claim_reason)
-        hostile = ingress_method in {
-            "quiet_window_entry",
-            "careful_window_entry",
-            "crash_window_entry",
-            "forced_breach",
-            "deep_breach",
-        }
-        unauthorized_entry = ingress_method in {"jimmied_side_entry", "forced_side_entry"}
+        ingress_profile = self._ingress_attempt_profile(eid, prop, ingress, claim_reason)
+        ingress_method = ingress_profile["method"]
+        severity_bonus = ingress_profile["severity_bonus"]
+        offense_bonus = ingress_profile["offense_bonus"]
+        hostile = bool(ingress_profile["hostile"])
+        unauthorized_entry = bool(ingress_profile["unauthorized"])
+
+        if not ingress_profile["automatic"]:
+            attempt = ingress_profile.get("attempt") or {}
+            if not bool(attempt.get("success")):
+                self._emit_failed_ingress_attempt(
+                    eid,
+                    candidate,
+                    prop,
+                    ingress,
+                    ingress_method,
+                    severity_bonus=severity_bonus,
+                    offense_bonus=offense_bonus,
+                )
+                _maybe_damage_access_tool(
+                    self.sim,
+                    eid,
+                    ingress_profile.get("tool_terms") or {},
+                    prop=prop,
+                    score=attempt.get("score", 0.0),
+                    required=attempt.get("required", 0.0),
+                    context=ingress_profile.get("context") or "side_entry",
+                    channel=ingress_profile.get("channel") or "ingress_attempt",
+                    fumbled=bool(attempt.get("fumbled")),
+                )
+                _log_player_feedback(
+                    self.sim,
+                    self._failed_ingress_attempt_text(
+                        ingress_mode,
+                        ingress_method,
+                        prop,
+                        fumbled=bool(attempt.get("fumbled")),
+                        eid=eid,
+                    ),
+                    kind="movement",
+                )
+                return
 
         self._open_ingress_tile(
             candidate,
@@ -26368,6 +27262,219 @@ class RivalOperatorSystem(System):
             return "burned"
         return "scouted"
 
+    def _offscreen_casualty_outcome(self, rival, entry, *, resolution):
+        if resolution not in {"claimed", "burned"}:
+            return ""
+        if self._materialized_eid(rival):
+            return ""
+
+        risk = str(entry.get("risk", "low")).strip().lower() or "low"
+        kind = str(entry.get("kind", "")).strip().lower()
+        styles = {
+            str(style).strip().lower()
+            for style in entry.get("playstyles", ())
+            if str(style).strip()
+        }
+
+        injury_chance = 0.0
+        if risk == "hazardous":
+            injury_chance += 0.22
+        elif risk == "exposed":
+            injury_chance += 0.1
+        if kind == "contract_kill":
+            injury_chance += 0.16
+        if "combat" in styles:
+            injury_chance += 0.08
+        if resolution == "burned":
+            injury_chance += 0.08
+        injury_chance += min(0.08, max(0.0, float(rival.get("heat", 0) or 0)) / 100.0)
+        injury_chance -= float(rival.get("caution", 0.5)) * 0.1
+        injury_chance -= float(rival.get("discipline", 0.5)) * 0.08
+        injury_chance -= float(rival.get("nerve", 0.5)) * 0.04
+        injury_chance -= int(rival.get("gear_tier", 1) or 1) * 0.025
+        injury_chance = float(_clamp(injury_chance, lo=0.0, hi=0.52))
+
+        lethal_chance = injury_chance * 0.22
+        if risk == "hazardous":
+            lethal_chance += 0.04
+        if kind == "contract_kill":
+            lethal_chance += 0.07
+        if "combat" in styles:
+            lethal_chance += 0.03
+        if resolution == "burned":
+            lethal_chance += 0.02
+        lethal_chance -= int(rival.get("gear_tier", 1) or 1) * 0.01
+        lethal_chance -= float(rival.get("caution", 0.5)) * 0.02
+        lethal_chance = float(_clamp(lethal_chance, lo=0.0, hi=min(0.28, injury_chance)))
+
+        roll = self._rival_rng(rival, f"casualty:{int(entry.get('id', 0) or 0)}:{resolution}").random()
+        if roll < lethal_chance:
+            return "dead"
+        if roll < injury_chance:
+            return "wounded"
+        return ""
+
+    def _offscreen_casualty_reason(self, entry, *, resolution, casualty):
+        risk = str(entry.get("risk", "low")).strip().lower() or "low"
+        kind = str(entry.get("kind", "")).strip().lower()
+        if casualty == "dead":
+            if kind == "contract_kill":
+                return "contract_backfire"
+            if risk == "hazardous":
+                return "job_went_bad"
+            return "ambushed_offscreen"
+        if kind == "contract_kill":
+            return "wounded_on_contract"
+        if resolution == "burned":
+            return "burned_on_scene"
+        return "job_gone_loud"
+
+    def _apply_offscreen_casualty(self, rival, entry, *, resolution):
+        casualty = self._offscreen_casualty_outcome(rival, entry, resolution=resolution)
+        if not casualty:
+            return ""
+
+        tick = int(self.sim.tick)
+        rival["target_opportunity_id"] = 0
+        rival["last_action_tick"] = tick
+        rival["last_decision_tick"] = tick
+        reason = self._offscreen_casualty_reason(entry, resolution=resolution, casualty=casualty)
+
+        if casualty == "dead":
+            rival["status"] = "dead"
+            rival["recover_until_tick"] = -1
+            rival["materialized_eid"] = None
+            self.sim.emit(Event(
+                "rival_operator_removed",
+                eid=self.player_eid,
+                rival_id=int(rival.get("id", 0) or 0),
+                rival_name=str(rival.get("name", "rival")).strip() or "rival",
+                source_eid=None,
+                by_player=False,
+                reason=reason,
+            ))
+            return casualty
+
+        rival["status"] = "wounded"
+        rival["recover_until_tick"] = tick + int(self.RECOVERY_TICKS) + 60
+        rival["target_chunk"] = self._normalize_chunk(rival.get("home_chunk"), fallback=rival.get("current_chunk"))
+        self.sim.emit(Event(
+            "rival_operator_wounded",
+            eid=self.player_eid,
+            rival_id=int(rival.get("id", 0) or 0),
+            rival_name=str(rival.get("name", "rival")).strip() or "rival",
+            reason=reason,
+            recover_until_tick=int(rival.get("recover_until_tick", tick)),
+        ))
+        return casualty
+
+    def _rival_followup_reward(self, rival, resolved, *, resolution, casualty=""):
+        reward = {
+            "credits": 10,
+            "intel": 1,
+        }
+        risk = str((resolved or {}).get("risk", "low")).strip().lower() or "low"
+        hustle = str(rival.get("hustle", "cash")).strip().lower() or "cash"
+        if resolution == "burned":
+            reward["credits"] += 8
+        if casualty == "dead":
+            reward["credits"] += 16
+            reward["intel"] += 1
+        if risk == "hazardous":
+            reward["credits"] += 8
+            reward["intel"] += 1
+        elif risk == "exposed":
+            reward["credits"] += 4
+        if hustle == "network":
+            reward["standing"] = reward.get("standing", 0) + 1
+        elif hustle == "intel":
+            reward["intel"] += 1
+        else:
+            reward["credits"] += 6
+        return {key: int(value) for key, value in reward.items() if int(value) > 0}
+
+    def _spawn_rival_followup(self, rival, resolved, *, resolution, casualty=""):
+        if not isinstance(resolved, dict):
+            return None
+        chunk = self._normalize_chunk(resolved.get("chunk"), fallback=rival.get("current_chunk"))
+        rival_name = str(rival.get("name", "rival")).strip() or "rival"
+        title = str(resolved.get("title", "Opportunity")).strip() or "Opportunity"
+        risk = str(resolved.get("risk", "low")).strip().lower() or "low"
+
+        if casualty == "dead":
+            followup_title = f"Last Trace: {rival_name}"
+            summary = (
+                f"{rival_name} may have died working {title}. Loose gear, chatter, or "
+                "panicked contacts could still be in play if you move fast."
+            )
+        elif resolution == "burned":
+            followup_title = f"Burned Trail: {title}"
+            summary = (
+                f"{rival_name} scorched {title}. The scene may still pay in salvage, "
+                "fresh intel, or a quick opening if you get there first."
+            )
+        else:
+            followup_title = f"Rival Aftermath: {title}"
+            summary = (
+                f"{rival_name} got to {title} first. Their wake may still hold loose intel, "
+                "rattled contacts, or quick margin if you move before it cools."
+            )
+
+        if casualty == "dead":
+            risk_label = "exposed" if risk == "low" else risk
+        elif resolution == "burned":
+            risk_label = "hazardous" if risk == "hazardous" else "exposed"
+        else:
+            risk_label = risk
+
+        hustle = str(rival.get("hustle", "cash")).strip().lower() or "cash"
+        playstyles = ("economic", "stealth")
+        if hustle == "network":
+            playstyles = ("social", "stealth")
+        elif hustle == "intel":
+            playstyles = ("stealth", "social")
+
+        added = append_external_opportunity(
+            self.sim,
+            {
+                "key": f"rival_followup:{int(resolved.get('id', 0) or 0)}",
+                "title": followup_title,
+                "summary": summary,
+                "kind": "rival_followup",
+                "source": "rival_operator",
+                "chunk": chunk,
+                "playstyles": playstyles,
+                "reward": self._rival_followup_reward(rival, resolved, resolution=resolution, casualty=casualty),
+                "risk": risk_label,
+                "pressure": 3 if risk_label == "hazardous" else 2 if risk_label == "exposed" else 1,
+                "requirements": {
+                    "visit_chunk": chunk,
+                    "rival_followup": True,
+                    "followup_from_opportunity_id": int(resolved.get("id", 0) or 0),
+                },
+                "seed_tick": int(self.sim.tick),
+            },
+            observer_eid=self.player_eid,
+            awareness_state="heard",
+            confidence=0.66 if casualty else 0.6,
+            source="rival_operator",
+        )
+        if not isinstance(added, dict):
+            return None
+        self.sim.emit(Event(
+            "rival_followup_seeded",
+            eid=self.player_eid,
+            rival_id=int(rival.get("id", 0) or 0),
+            rival_name=rival_name,
+            opportunity_id=int(resolved.get("id", 0) or 0),
+            followup_id=int(added.get("id", 0) or 0),
+            followup_title=str(added.get("title", "Opportunity")).strip() or "Opportunity",
+            chunk=chunk,
+            resolution=resolution,
+            casualty=casualty,
+        ))
+        return added
+
     def _resolution_confidence(self, rival, *, resolution, player_distance, known_to_player):
         confidence = 0.48 + (float(rival.get("honesty", 0.5)) * 0.22)
         confidence += min(0.14, max(0, 4 - int(player_distance)) * 0.03)
@@ -26535,7 +27642,10 @@ class RivalOperatorSystem(System):
         rival["resolved_count"] = int(rival.get("resolved_count", 0) or 0) + 1
         rival["last_action_tick"] = int(self.sim.tick)
         rival["target_opportunity_id"] = 0
-        rival["status"] = "resetting"
+        casualty = self._apply_offscreen_casualty(rival, entry, resolution=resolution)
+        if not casualty:
+            rival["status"] = "resetting"
+        followup = self._spawn_rival_followup(rival, resolved, resolution=resolution, casualty=casualty)
 
         confidence = self._resolution_confidence(
             rival,
@@ -26560,6 +27670,9 @@ class RivalOperatorSystem(System):
             player_distance=player_distance,
             known_to_player=bool(known_before),
             confidence=confidence,
+            casualty=str(casualty or "").strip().lower(),
+            followup_id=int((followup or {}).get("id", 0) or 0),
+            followup_title=str((followup or {}).get("title", "")).strip(),
         ))
 
     def on_npc_downed(self, event):
@@ -27255,6 +28368,262 @@ class RunPressureSystem(System):
         )
 
 
+class OrganizationReputationSystem(System):
+
+    HEAT_DECAY_INTERVAL = 60
+    HEAT_DECAY_IDLE_TICKS = 90
+
+    def __init__(self, sim, player_eid):
+        super().__init__(sim)
+        self.player_eid = player_eid
+        self.sim.events.subscribe("property_trespass", self.on_property_trespass)
+        self.sim.events.subscribe("property_tamper", self.on_property_tamper)
+        self.sim.events.subscribe("item_stolen", self.on_item_stolen)
+        self.sim.events.subscribe("trade_bought", self.on_trade_bought)
+        self.sim.events.subscribe("trade_sold", self.on_trade_sold)
+        self.sim.events.subscribe("bank_transaction", self.on_bank_transaction)
+        self.sim.events.subscribe("insurance_policy_purchased", self.on_insurance_policy_purchased)
+        self.sim.events.subscribe("site_service_used", self.on_site_service_used)
+
+    def _property_from_event(self, event):
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        if property_id:
+            prop = self.sim.properties.get(property_id)
+            if isinstance(prop, dict):
+                return prop
+
+        try:
+            x = int(event.data.get("x"))
+            y = int(event.data.get("y"))
+            z = int(event.data.get("z", 0))
+        except (TypeError, ValueError):
+            return None
+
+        prop = _property_covering(self.sim, x, y, z)
+        if prop is None:
+            prop = self.sim.property_at(x, y, z)
+        return prop if isinstance(prop, dict) else None
+
+    def _emit_org_change_events(self, change, *, property_id=None):
+        if not isinstance(change, dict):
+            return
+
+        base_payload = {
+            "eid": self.player_eid,
+            "organization_eid": change.get("organization_eid"),
+            "organization_key": str(change.get("organization_key", "")).strip(),
+            "organization_name": str(change.get("organization_name", "Organization")).strip() or "Organization",
+            "organization_kind": str(change.get("organization_kind", "organization")).strip().lower() or "organization",
+            "property_id": property_id,
+            "source": str(change.get("source", "unknown")).strip().lower() or "unknown",
+            "reason": str(change.get("reason", "")).strip().lower(),
+            "source_event": str(change.get("source_event", "")).strip().lower(),
+            "tick": int(change.get("tick", getattr(self.sim, "tick", 0))),
+            "heat_delta": int(change.get("heat_delta", 0)),
+            "standing_delta": float(change.get("standing_delta", 0.0)),
+            "before_heat": int(change.get("before_heat", 0)),
+            "after_heat": int(change.get("after_heat", 0)),
+            "before_standing": float(change.get("before_standing", 0.0)),
+            "after_standing": float(change.get("after_standing", 0.0)),
+        }
+        self.sim.emit(Event("organization_reputation_changed", **base_payload))
+
+        if bool(change.get("heat_tier_changed")):
+            self.sim.emit(Event(
+                "organization_heat_tier_changed",
+                **base_payload,
+                before_tier=str(change.get("before_heat_tier", "quiet")).strip().lower() or "quiet",
+                after_tier=str(change.get("after_heat_tier", "quiet")).strip().lower() or "quiet",
+            ))
+
+        if bool(change.get("standing_tier_changed")):
+            self.sim.emit(Event(
+                "organization_standing_tier_changed",
+                **base_payload,
+                before_tier=str(change.get("before_standing_tier", "neutral")).strip().lower() or "neutral",
+                after_tier=str(change.get("after_standing_tier", "neutral")).strip().lower() or "neutral",
+            ))
+
+    def _apply_org_delta(
+        self,
+        prop,
+        *,
+        heat_delta=0,
+        standing_delta=0.0,
+        source,
+        reason="",
+        source_event="",
+    ):
+        if not isinstance(prop, dict):
+            return None
+        change = _apply_organization_reputation_delta(
+            self.sim,
+            prop=prop,
+            heat_delta=heat_delta,
+            standing_delta=standing_delta,
+            source=source,
+            reason=reason,
+            source_event=source_event,
+        )
+        if change is not None:
+            self._emit_org_change_events(change, property_id=prop.get("id"))
+        return change
+
+    def on_property_trespass(self, event):
+        if event.data.get("offender_eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+
+        severity_label = str(event.data.get("severity_label", "trespass")).strip().lower() or "trespass"
+        access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
+        witnessed = bool(event.data.get("witnessed", True))
+        heat_delta = 2 if severity_label == "suspicious" else 4
+        standing_delta = -0.03 if severity_label == "suspicious" else -0.06
+        if severity_label == "serious_trespass":
+            heat_delta = 7
+            standing_delta = -0.12
+        if witnessed:
+            heat_delta += 2
+            standing_delta -= 0.02
+        if access_level == "restricted":
+            heat_delta += 2
+            standing_delta -= 0.02
+        self._apply_org_delta(
+            prop,
+            heat_delta=min(18, heat_delta),
+            standing_delta=max(-0.24, standing_delta),
+            source="trespass",
+            reason=severity_label,
+            source_event="property_trespass",
+        )
+
+    def on_property_tamper(self, event):
+        if event.data.get("offender_eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
+        severity_score = max(0, int(event.data.get("severity_score", 0)))
+        heat_delta = 6 + max(0, severity_score // 30)
+        standing_delta = -0.1
+        if access_level == "restricted":
+            heat_delta += 2
+            standing_delta -= 0.03
+        self._apply_org_delta(
+            prop,
+            heat_delta=min(20, heat_delta),
+            standing_delta=max(-0.28, standing_delta),
+            source="tamper",
+            reason="property_tamper",
+            source_event="property_tamper",
+        )
+
+    def on_item_stolen(self, event):
+        if event.data.get("offender_eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        self._apply_org_delta(
+            prop,
+            heat_delta=5,
+            standing_delta=-0.08,
+            source="theft",
+            reason="item_stolen",
+            source_event="item_stolen",
+        )
+
+    def on_trade_bought(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        self._apply_org_delta(
+            prop,
+            standing_delta=0.025,
+            source="trade",
+            reason="bought_goods",
+            source_event="trade_bought",
+        )
+
+    def on_trade_sold(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        self._apply_org_delta(
+            prop,
+            standing_delta=0.02,
+            source="trade",
+            reason="sold_goods",
+            source_event="trade_sold",
+        )
+
+    def on_bank_transaction(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        self._apply_org_delta(
+            prop,
+            standing_delta=0.02,
+            source="banking",
+            reason=str(event.data.get("kind", "transaction")).strip().lower() or "transaction",
+            source_event="bank_transaction",
+        )
+
+    def on_insurance_policy_purchased(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        self._apply_org_delta(
+            prop,
+            standing_delta=0.04,
+            source="insurance",
+            reason=str(event.data.get("policy_key", "policy")).strip().lower() or "policy",
+            source_event="insurance_policy_purchased",
+        )
+
+    def on_site_service_used(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        service = str(event.data.get("service", "")).strip().lower()
+        standing_delta = 0.015
+        if service in {"rest", "fuel", "vehicle_fetch"}:
+            standing_delta = 0.02
+        elif service.startswith("vehicle_sales_"):
+            standing_delta = 0.04
+        elif service in {"banking", "insurance"}:
+            standing_delta = 0.03
+        self._apply_org_delta(
+            prop,
+            standing_delta=standing_delta,
+            source="service",
+            reason=service or "site_service",
+            source_event="site_service_used",
+        )
+
+    def update(self):
+        for change in _decay_organization_heat(
+            self.sim,
+            interval=self.HEAT_DECAY_INTERVAL,
+            idle_ticks=self.HEAT_DECAY_IDLE_TICKS,
+            amount=1,
+        ):
+            self._emit_org_change_events(change)
+
+
 class FinalOperationSystem(System):
 
     def __init__(self, sim, player_eid):
@@ -27262,6 +28631,7 @@ class FinalOperationSystem(System):
         self.player_eid = player_eid
         self.last_unlock_tick = -10_000
         self.sim.events.subscribe("player_downed", self.on_player_downed)
+        self.sim.events.subscribe("item_picked_up", self.on_item_picked_up)
 
     def _conclude_run(self, *, outcome, reason, objective_title, summary_lines):
         traits = getattr(self.sim, "world_traits", None)
@@ -27330,6 +28700,78 @@ class FinalOperationSystem(System):
             summary_lines=failed.get("summary_lines", ()),
         )
 
+    def _remember_target_property(self, property_id):
+        property_id = str(property_id or "").strip()
+        if not property_id:
+            return
+        knowledge = self.sim.ecs.get(PropertyKnowledge).get(self.player_eid)
+        if knowledge is None:
+            return
+        prop = self.sim.properties.get(property_id)
+        if not isinstance(prop, dict):
+            return
+        knowledge.remember(
+            property_id,
+            owner_eid=prop.get("owner_eid"),
+            owner_tag=prop.get("owner_tag"),
+            confidence=1.0,
+            tick=int(getattr(self.sim, "tick", 0)),
+            anchored=True,
+            anchor_kind="final_operation",
+        )
+        knowledge.unhide(property_id)
+
+    def _finish_completed(self, completed):
+        self.sim.emit(Event(
+            "final_operation_completed",
+            eid=self.player_eid,
+            objective_id=str(completed.get("objective_id", "")),
+            objective_title=str(completed.get("objective_title", "")),
+            target_chunk=tuple(completed.get("target_chunk", (0, 0))),
+            target_label=str(completed.get("target_label", "")),
+            target_property_id=str(completed.get("target_property_id", "")),
+            target_property_name=str(completed.get("target_property_name", "")),
+            target_item_name=str(completed.get("target_item_name", "")),
+            complete_tick=int(completed.get("complete_tick", 0)),
+            summary_lines=tuple(completed.get("summary_lines", ())),
+        ))
+        self._conclude_run(
+            outcome="success",
+            reason="final_operation_success",
+            objective_title=str(completed.get("objective_title", "")),
+            summary_lines=completed.get("summary_lines", ()),
+        )
+
+    def on_item_picked_up(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+
+        recovered = mark_final_operation_target_recovered(
+            self.sim,
+            self.player_eid,
+            instance_id=event.data.get("instance_id"),
+        )
+        if not recovered:
+            return
+
+        self.sim.emit(Event(
+            "final_operation_target_recovered",
+            eid=self.player_eid,
+            objective_id=str(recovered.get("objective_id", "")),
+            objective_title=str(recovered.get("objective_title", "")),
+            target_chunk=tuple(recovered.get("target_chunk", (0, 0))),
+            target_label=str(recovered.get("target_label", "")),
+            target_property_id=str(recovered.get("target_property_id", "")),
+            target_property_name=str(recovered.get("target_property_name", "")),
+            target_item_id=str(recovered.get("target_item_id", "")),
+            target_item_name=str(recovered.get("target_item_name", "")),
+            target_recovered_tick=int(recovered.get("target_recovered_tick", 0)),
+        ))
+
+        completed = try_complete_final_operation(self.sim, self.player_eid)
+        if completed:
+            self._finish_completed(completed)
+
     def update(self):
         objective_eval = evaluate_run_objective(self.sim, self.player_eid)
         unlocked = ensure_final_operation_unlocked(
@@ -27351,25 +28793,25 @@ class FinalOperationSystem(System):
 
         if int(getattr(self.sim, "tick", 0)) <= self.last_unlock_tick:
             return
+        target_identified = sync_final_operation_runtime(self.sim, self.player_eid)
+        if target_identified:
+            self._remember_target_property(target_identified.get("target_property_id"))
+            self.sim.emit(Event(
+                "final_operation_target_identified",
+                eid=self.player_eid,
+                objective_id=str(target_identified.get("objective_id", "")),
+                objective_title=str(target_identified.get("objective_title", "")),
+                target_chunk=tuple(target_identified.get("target_chunk", (0, 0))),
+                target_label=str(target_identified.get("target_label", "")),
+                target_property_id=str(target_identified.get("target_property_id", "")),
+                target_property_name=str(target_identified.get("target_property_name", "")),
+                target_item_id=str(target_identified.get("target_item_id", "")),
+                target_item_name=str(target_identified.get("target_item_name", "")),
+            ))
         completed = try_complete_final_operation(self.sim, self.player_eid)
         if not completed:
             return
-        self.sim.emit(Event(
-            "final_operation_completed",
-            eid=self.player_eid,
-            objective_id=str(completed.get("objective_id", "")),
-            objective_title=str(completed.get("objective_title", "")),
-            target_chunk=tuple(completed.get("target_chunk", (0, 0))),
-            target_label=str(completed.get("target_label", "")),
-            complete_tick=int(completed.get("complete_tick", 0)),
-            summary_lines=tuple(completed.get("summary_lines", ())),
-        ))
-        self._conclude_run(
-            outcome="success",
-            reason="final_operation_success",
-            objective_title=str(completed.get("objective_title", "")),
-            summary_lines=completed.get("summary_lines", ()),
-        )
+        self._finish_completed(completed)
 
 
 class PropertyAwarenessSystem(System):
@@ -31905,15 +33347,21 @@ class EventLogSystem(System):
         self.sim.events.subscribe("rival_operator_spotted", self.on_rival_operator_spotted)
         self.sim.events.subscribe("rival_operator_activity", self.on_rival_operator_activity)
         self.sim.events.subscribe("rival_opportunity_resolved", self.on_rival_opportunity_resolved)
+        self.sim.events.subscribe("rival_followup_seeded", self.on_rival_followup_seeded)
+        self.sim.events.subscribe("rival_operator_wounded", self.on_rival_operator_wounded)
         self.sim.events.subscribe("rival_operator_removed", self.on_rival_operator_removed)
         self.sim.events.subscribe("objective_progress_awarded", self.on_objective_progress_awarded)
         self.sim.events.subscribe("final_operation_unlocked", self.on_final_operation_unlocked)
+        self.sim.events.subscribe("final_operation_target_identified", self.on_final_operation_target_identified)
+        self.sim.events.subscribe("final_operation_target_recovered", self.on_final_operation_target_recovered)
         self.sim.events.subscribe("final_operation_failed", self.on_final_operation_failed)
         self.sim.events.subscribe("final_operation_completed", self.on_final_operation_completed)
         self.sim.events.subscribe("run_concluded", self.on_run_concluded)
         self.sim.events.subscribe("run_pressure_changed", self.on_run_pressure_changed)
         self.sim.events.subscribe("run_pressure_tier_changed", self.on_run_pressure_tier_changed)
         self.sim.events.subscribe("run_pressure_mitigated", self.on_run_pressure_mitigated)
+        self.sim.events.subscribe("organization_heat_tier_changed", self.on_organization_heat_tier_changed)
+        self.sim.events.subscribe("organization_standing_tier_changed", self.on_organization_standing_tier_changed)
         self.sim.events.subscribe("lighting_phase_changed", self.on_lighting_phase_changed)
         self.sim.events.subscribe("chunk_focus_changed", self.on_chunk_focus_changed)
         self.sim.events.subscribe("npc_suppressed", self.on_npc_suppressed)
@@ -32854,9 +34302,16 @@ class EventLogSystem(System):
         method = str(event.data.get("method", "status_check")).strip().lower()
         requirement = str(event.data.get("requirement", "authorization")).strip() or "authorization"
         open_now = event.data.get("open_now")
+        intrusion_label = str(event.data.get("intrusion_label", "")).strip()
+        intrusion_ticks = max(0, _int_or_default(event.data.get("intrusion_remaining_ticks"), 0))
 
         if outcome == "authorized_open":
             self.sim.log.add(f"You use {panel_name}. {target_name} unlocks for authorized access.")
+            return
+        if outcome == "intrusion_open":
+            self.sim.log.add(
+                f"You work the {panel_name} ({_ingress_method_label(method)}). {target_name} opens under {intrusion_label or 'an intrusion window'} for {intrusion_ticks} ticks."
+            )
             return
         if outcome == "override_open":
             self.sim.log.add(f"You work the {panel_name} ({_ingress_method_label(method)}). {target_name} unlocks.")
@@ -32868,6 +34323,11 @@ class EventLogSystem(System):
             status_text = "closed"
         else:
             status_text = "secured"
+        if intrusion_label and intrusion_ticks > 0:
+            self.sim.log.add(
+                f"{panel_name}: {target_name} shows {status_text}. {intrusion_label.title()} active for {intrusion_ticks} ticks."
+            )
+            return
         self.sim.log.add(f"{panel_name}: {target_name} reads {status_text}. Requirement: {requirement}.")
 
     def on_access_panel_blocked(self, event):
@@ -32878,9 +34338,16 @@ class EventLogSystem(System):
         target_name = str(event.data.get("target_property_name", "property")).strip() or "property"
         reason = str(event.data.get("reason", "")).strip().lower()
         requirement = str(event.data.get("requirement", "authorization")).strip() or "authorization"
+        intrusion_label = str(event.data.get("intrusion_label", "")).strip() or "intrusion"
 
         if reason == "offline":
             self.sim.log.add(f"{panel_name} has no live link.")
+            return
+        if reason == "panel_intrusion_failed":
+            self.sim.log.add(f"You fail to land the {intrusion_label} on {panel_name}.")
+            return
+        if reason == "panel_intrusion_fumble":
+            self.sim.log.add(f"You fumble the {intrusion_label} on {panel_name}.")
             return
         if reason == "lock_override_failed":
             self.sim.log.add(f"You fail to defeat the {panel_name} guarding {target_name}.")
@@ -33428,7 +34895,7 @@ class EventLogSystem(System):
             label = f"{label} via {standing_reason}"
         if ingress_text:
             label = f"{label} {ingress_text}"
-        if method_text and method_text not in {"authorized", "side entry", "window entry", "alternate entry"}:
+        if method_text and method_text not in {"authorized", "door breach", "window entry", "alternate entry"}:
             label = f"{label} ({method_text})"
 
         if bool(event.data.get("witnessed", True)):
@@ -33439,12 +34906,12 @@ class EventLogSystem(System):
             if ingress_method == "jimmied_side_entry":
                 self._warn_once(
                     "jimmied_entry",
-                    "Warning: jimmied side entry is still trespass and can escalate if spotted.",
+                    "Warning: a jimmied door breach is still trespass and can escalate if spotted.",
                 )
             elif ingress_method == "forced_side_entry":
                 self._warn_once(
                     "forced_side_entry",
-                    "Warning: forcing side/service entries is treated as overtly hostile ingress.",
+                    "Warning: forcing a door is treated as overtly hostile ingress.",
                 )
             elif ingress_method == "quiet_window_entry":
                 self._warn_once(
@@ -33480,7 +34947,7 @@ class EventLogSystem(System):
         method_text = _ingress_method_label(event.data.get("ingress_method"))
         if ingress_text:
             label = f"{label} {ingress_text}"
-        if method_text and method_text not in {"authorized", "side entry", "window entry", "alternate entry"}:
+        if method_text and method_text not in {"authorized", "door breach", "window entry", "alternate entry"}:
             label = f"{label} ({method_text})"
         self._log(f"Tampering: {label}.", channel="alerts", priority="high", dedupe_window=4)
         self._warn_once(
@@ -34361,7 +35828,7 @@ class EventLogSystem(System):
         base_price = int(event.data.get("base_price", price))
         store = event.data.get("store_name", "store")
         contact_note = str(event.data.get("contact_note", "")).strip()
-        if contact_note and price < base_price:
+        if contact_note and price != base_price:
             self.sim.log.add(f"Bought {item_name} for {price} credits at {store}. {contact_note}.")
             return
         self.sim.log.add(f"Bought {item_name} for {price} credits at {store}.")
@@ -34480,7 +35947,7 @@ class EventLogSystem(System):
         duration_ticks = int(event.data.get("duration_ticks", max(0, expires_tick - int(self.sim.tick))))
         duration_text = _tick_duration_label(self.sim, duration_ticks)
         contact_note = str(event.data.get("contact_note", "")).strip()
-        if contact_note and premium < base_premium:
+        if contact_note and premium != base_premium:
             self.sim.log.add(
                 f"Purchased {policy_name} via {channel} (-{premium} credits, covers {duration_text}, expires t{expires_tick}). {contact_note}."
             )
@@ -35018,6 +36485,8 @@ class EventLogSystem(System):
         resolution = str(event.data.get("resolution", "claimed")).strip().lower() or "claimed"
         confidence_pct = max(0, min(100, int(round(confidence * 100.0))))
         reward_text = str(event.data.get("reward_text", "")).strip()
+        casualty = str(event.data.get("casualty", "")).strip().lower()
+        followup_title = str(event.data.get("followup_title", "")).strip()
         opp_id = int(event.data.get("opportunity_id", 0) or 0)
         opp_label = f"O{opp_id} {title}" if known_to_player and opp_id > 0 else title
 
@@ -35034,6 +36503,47 @@ class EventLogSystem(System):
         )
         if reward_text and resolution == "claimed":
             self.sim.log.add(f"  Street read: {rival_name} probably walked away with {reward_text}.")
+        if casualty == "dead":
+            self.sim.log.add(f"  Street read: {rival_name} may not have made it out clean.")
+        elif casualty == "wounded":
+            self.sim.log.add(f"  Street read: {rival_name} may have been hurt on the job.")
+        if followup_title:
+            self.sim.log.add(f"  New lead posted: {followup_title}. Press O for report.")
+
+    def on_rival_followup_seeded(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        title = str(event.data.get("followup_title", "Opportunity")).strip() or "Opportunity"
+        rival_name = str(event.data.get("rival_name", "someone")).strip() or "someone"
+        casualty = str(event.data.get("casualty", "")).strip().lower()
+        if casualty == "dead":
+            self._log(
+                f"Fresh fallout: {title} opened after {rival_name}'s last job.",
+                channel="opportunity",
+                priority="high",
+                dedupe_window=30,
+                dedupe_key=f"rival-followup:{event.data.get('followup_id')}",
+            )
+            return
+        self._log(
+            f"Fresh fallout: {title} opened in {rival_name}'s wake.",
+            channel="opportunity",
+            priority="high",
+            dedupe_window=30,
+            dedupe_key=f"rival-followup:{event.data.get('followup_id')}",
+        )
+
+    def on_rival_operator_wounded(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        rival_name = str(event.data.get("rival_name", "someone")).strip() or "someone"
+        self._log(
+            f"Street word: {rival_name} got chewed up on a job and is laying low.",
+            channel="opportunity",
+            priority="normal",
+            dedupe_window=40,
+            dedupe_key=f"rival-wounded:{event.data.get('rival_id')}",
+        )
 
     def on_rival_operator_removed(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -35046,6 +36556,15 @@ class EventLogSystem(System):
                 f"{rival_name} is out of the run.",
                 channel="opportunity",
                 priority="high",
+                dedupe_window=40,
+                dedupe_key=f"rival-removed:{event.data.get('rival_id')}",
+            )
+            return
+        if reason in {"job went bad", "contract backfire", "ambushed offscreen"}:
+            self._log(
+                f"Street word: {rival_name} died offscreen ({reason}).",
+                channel="opportunity",
+                priority="normal",
                 dedupe_window=40,
                 dedupe_key=f"rival-removed:{event.data.get('rival_id')}",
             )
@@ -35084,6 +36603,21 @@ class EventLogSystem(System):
             target = (0, 0)
         target_label = str(event.data.get("target_label", "")).strip()
         objective_title = str(event.data.get("objective_title", "Run Objective")).strip() or "Run Objective"
+        objective_id = str(event.data.get("objective_id", "")).strip().lower()
+        if objective_id == "high_value_retrieval":
+            if target_label:
+                self._log(
+                    f"Final operation unlocked: {objective_title}. Reach ({int(target[0])},{int(target[1])}) [{target_label}], enter local, and identify the retrieval site.",
+                    channel="mission",
+                    priority="critical",
+                )
+            else:
+                self._log(
+                    f"Final operation unlocked: {objective_title}. Reach ({int(target[0])},{int(target[1])}), enter local, and identify the retrieval site.",
+                    channel="mission",
+                    priority="critical",
+                )
+            return
         if target_label:
             self._log(
                 f"Final operation unlocked: {objective_title}. Reach ({int(target[0])},{int(target[1])}) [{target_label}] and enter local.",
@@ -35096,6 +36630,28 @@ class EventLogSystem(System):
                 channel="mission",
                 priority="critical",
             )
+
+    def on_final_operation_target_identified(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        property_name = str(event.data.get("target_property_name", "")).strip() or "target site"
+        item_name = str(event.data.get("target_item_name", "")).strip() or "target asset"
+        self._log(
+            f"Target site identified: {property_name}. Recover {item_name}.",
+            channel="mission",
+            priority="critical",
+        )
+
+    def on_final_operation_target_recovered(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        property_name = str(event.data.get("target_property_name", "")).strip() or "target site"
+        item_name = str(event.data.get("target_item_name", "")).strip() or "target asset"
+        self._log(
+            f"Target recovered: {item_name} from {property_name}.",
+            channel="mission",
+            priority="critical",
+        )
 
     def on_final_operation_completed(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -35194,6 +36750,54 @@ class EventLogSystem(System):
             f"Attention {delta} via {source} -> {after} [{tier}].",
             channel="mission",
             priority="high",
+        )
+
+    def on_organization_heat_tier_changed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        name = str(event.data.get("organization_name", "Organization")).strip() or "Organization"
+        after_tier = str(event.data.get("after_tier", "quiet")).strip().lower() or "quiet"
+        before_tier = str(event.data.get("before_tier", "quiet")).strip().lower() or "quiet"
+        after_heat = int(event.data.get("after_heat", 0))
+        if after_tier == "burned":
+            text = f"{name} is burned on you ({after_heat})."
+        elif after_tier == "hot":
+            text = f"{name} is on alert ({after_heat})."
+        elif after_tier == "watchful":
+            text = f"{name} gets watchful ({after_heat})."
+        elif before_tier != after_tier:
+            text = f"{name} cools off ({after_heat})."
+        else:
+            return
+        self._log(
+            text,
+            channel="mission",
+            priority="high",
+            dedupe_window=20,
+            dedupe_key=f"org-heat:{str(event.data.get('organization_key', name)).strip().lower()}:{after_tier}",
+        )
+
+    def on_organization_standing_tier_changed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        name = str(event.data.get("organization_name", "Organization")).strip() or "Organization"
+        after_tier = str(event.data.get("after_tier", "neutral")).strip().lower() or "neutral"
+        before_tier = str(event.data.get("before_tier", "neutral")).strip().lower() or "neutral"
+        after_standing = float(event.data.get("after_standing", 0.0))
+        if after_tier in {"trusted", "favored"}:
+            text = f"{name} warms to you ({after_tier} {after_standing:+.2f})."
+        elif after_tier in {"hostile", "blacklisted"}:
+            text = f"{name} freezes you out ({after_tier} {after_standing:+.2f})."
+        elif before_tier != after_tier:
+            text = f"{name} resets to neutral standing ({after_standing:+.2f})."
+        else:
+            return
+        self._log(
+            text,
+            channel="mission",
+            priority="high",
+            dedupe_window=20,
+            dedupe_key=f"org-standing:{str(event.data.get('organization_key', name)).strip().lower()}:{after_tier}",
         )
 
     def on_lighting_phase_changed(self, event):
@@ -35584,7 +37188,7 @@ class RenderSystem(System):
             "Move: arrows, WASD, HJKL, or numpad 1-9. Wait with . space or 5.",
             "Observe: e interact/use/talk, Shift+E lock or unlock a nearby door, x scan, X or ; look cursor, Z map (vehicle only).",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
-            "Ingress: Shift+J side entry, Shift+W window entry, Shift+K forced breach.",
+            "Ingress: Shift+J door breach, Shift+W window entry, Shift+K wall breach.",
             'Features: + closed door, \' open door, " window, / breach opening, > higher stairs, < lower stairs, : stair landing, E elevator.',
             "Infrastructure: typed markers (l lamp, p pole, h hydrant, u stop, j/t utility, $ ATM, c claim terminal, r access panel).",
             "Local terrain: = road, : trail, , brush, ^ rock, ~ water, _ shore flats.",
@@ -36010,6 +37614,8 @@ class RenderSystem(System):
             if self.sim.quests["active"]:
                 objective = self.sim.quests["active"][0].get("objective", {})
                 active_quest_target = objective.get("property_id")
+            if not active_quest_target:
+                active_quest_target = active_final_operation_target_property_id(self.sim)
 
             for prop in self.sim.properties.values():
                 display_pos = _property_display_position(prop, active_quest_target=active_quest_target)
@@ -36550,7 +38156,7 @@ class RenderSystem(System):
         elif zoom_mode == "overworld":
             controls = "In-vehicle: move, G drive marker, M/l/N markers, O ops, Y locations, L log, E exit on-foot, center icons UPPER=loaded lower=distant, ? help"
         else:
-            controls = "Move: arrows/WASD/HJKL, e interact, Shift+E lock door, O ops, Y locations, L log, D debug, M trade, or ? for help"
+            controls = "Move: arrows/WASD/HJKL, e interact, Shift+E lock door, Shift+J breach door, O ops, Y locations, L log, D debug, M trade, or ? for help"
 
         mode_line = _mode_line(
             mode_state=player_modes,

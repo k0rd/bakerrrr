@@ -97,6 +97,7 @@ from game.systems import (
     NoiseSystem,
     SuppressionSystem,
     ObjectiveProgressSystem,
+    OrganizationReputationSystem,
     OpportunitySystem,
     PlayerActionSystem,
     PropertyAwarenessSystem,
@@ -285,6 +286,7 @@ def _register_runtime_systems(sim, view, player):
     rival_operator_system = RivalOperatorSystem(sim, player)
     objective_progress_system = ObjectiveProgressSystem(sim, player)
     run_pressure_system = RunPressureSystem(sim, player)
+    organization_reputation_system = OrganizationReputationSystem(sim, player)
     final_operation_system = FinalOperationSystem(sim, player)
 
     log_system = EventLogSystem(sim, player)
@@ -328,6 +330,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(rival_operator_system)
     sim.register_system(objective_progress_system)
     sim.register_system(run_pressure_system)
+    sim.register_system(organization_reputation_system)
     sim.register_system(final_operation_system)
     sim.register_system(visibility_system)
     sim.register_system(stealth_system)

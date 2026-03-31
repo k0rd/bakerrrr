@@ -1,0 +1,1474 @@
+{
+  "_comment": "Runtime semantic catalog combining render semantics and atlas aliases.",
+  "asset_color_families": {
+    "current": [
+      "aqua",
+      "darkgray",
+      "pink",
+      "purple",
+      "red",
+      "blue",
+      "green",
+      "brown",
+      "amber",
+      "orange"
+    ]
+  },
+  "categories": {
+    "entities": {
+      "@": {
+        "default": "entity_player",
+        "player": "entity_player"
+      },
+      "avian": {
+        "avian": "npc_avian",
+        "default": "npc_avian"
+      },
+      "canine": {
+        "canine": "npc_canine",
+        "default": "npc_canine"
+      },
+      "feline": {
+        "cat_black": "cat_black",
+        "cat_calico": "cat_calico",
+        "cat_gray": "cat_gray",
+        "cat_orange": "cat_orange",
+        "cat_purple": "cat_purple",
+        "cat_tabby": "cat_tabby",
+        "cat_tuxedo": "cat_tuxedo",
+        "cat_white": "cat_white",
+        "default": "cat_generic",
+        "feline": "cat_generic"
+      },
+      "hominid": {
+        "default": "npc_civilian",
+        "guard": "npc_guard",
+        "human": "npc_civilian",
+        "scout": "npc_scout"
+      },
+      "insect": {
+        "default": "npc_insect",
+        "insect": "npc_insect"
+      }
+    },
+    "features": {
+      "\"": {
+        "default": "feature_window",
+        "feature_window": "feature_window"
+      },
+      "+": {
+        "default": "feature_door",
+        "feature_door": "feature_door"
+      },
+      "/": {
+        "default": "feature_breach",
+        "feature_breach": "feature_breach"
+      },
+      "<": {
+        "default": "stair_down",
+        "transit": "stair_down"
+      },
+      ">": {
+        "default": "stair_up",
+        "transit": "stair_up"
+      },
+      "E": {
+        "default": "elevator",
+        "transit": "elevator"
+      },
+      "S": {
+        "default": "property_service_zone"
+      }
+    },
+    "infrastructure": {
+      "$": {
+        "default": "infra_atm",
+        "property_service": "infra_atm"
+      },
+      "c": {
+        "default": "infra_claim_terminal"
+      },
+      "h": {
+        "default": "infra_hydrant"
+      },
+      "j": {
+        "default": "infra_utility_a"
+      },
+      "l": {
+        "default": "infra_lamp"
+      },
+      "p": {
+        "default": "infra_pole"
+      },
+      "r": {
+        "default": "infra_access_panel"
+      },
+      "t": {
+        "default": "infra_utility_b"
+      },
+      "u": {
+        "default": "infra_stop"
+      }
+    },
+    "items": {
+      "!": {
+        "default": "item_ground",
+        "item_ground": "item_ground",
+        "item_medical": "item_medical"
+      },
+      ")": {
+        "default": "item_tool",
+        "item_tool": "item_tool"
+      },
+      "*": {
+        "default": "item_restricted",
+        "item_restricted": "item_restricted"
+      },
+      "i": {
+        "default": "item_token",
+        "item_token": "item_token"
+      },
+      "o": {
+        "default": "item_objective",
+        "objective": "item_objective"
+      },
+      "x": {
+        "default": "item_illegal",
+        "item_illegal": "item_illegal"
+      }
+    },
+    "projectiles": {
+      "*": {
+        "default": "projectile",
+        "projectile": "projectile"
+      }
+    },
+    "properties": {
+      "$": {
+        "default": "prop_finance",
+        "property_service": "prop_finance"
+      },
+      "A": {
+        "default": "prop_asset",
+        "property_asset": "prop_asset"
+      },
+      "B": {
+        "default": "prop_building_generic",
+        "property_building": "prop_building_generic"
+      },
+      "F": {
+        "default": "prop_fixture",
+        "property_fixture": "prop_fixture"
+      },
+      "G": {
+        "building_roof_secure": "prop_secure",
+        "default": "prop_secure"
+      },
+      "H": {
+        "building_roof_residential": "prop_residential",
+        "default": "prop_residential"
+      },
+      "M": {
+        "default": "prop_medical",
+        "item_medical": "prop_medical"
+      },
+      "N": {
+        "building_roof_entertainment": "prop_entertainment",
+        "default": "prop_entertainment"
+      },
+      "O": {
+        "building_roof_civic": "prop_civic",
+        "default": "prop_civic"
+      },
+      "R": {
+        "building_roof_storefront": "prop_restaurant",
+        "default": "prop_restaurant"
+      },
+      "T": {
+        "building_roof_industrial": "prop_industrial",
+        "default": "prop_industrial"
+      },
+      "V": {
+        "default": "prop_vehicle_service",
+        "property_asset": "prop_vehicle_service"
+      }
+    },
+    "terrain": {
+      "#": {
+        "building_edge": "wall_building",
+        "default": "wall_generic",
+        "terrain_block": "terrain_block"
+      },
+      ",": {
+        "default": "terrain_brush",
+        "terrain_brush": "terrain_brush"
+      },
+      ".": {
+        "default": "floor_generic",
+        "floor_coarse": "floor_coarse",
+        "floor_coastal": "floor_coastal",
+        "floor_corporate": "floor_corporate",
+        "floor_downtown": "floor_downtown",
+        "floor_entertainment": "floor_entertainment",
+        "floor_frontier": "floor_frontier",
+        "floor_industrial": "floor_industrial",
+        "floor_military": "floor_military",
+        "floor_residential": "floor_residential",
+        "floor_slums": "floor_slums",
+        "floor_wilderness": "floor_wilderness"
+      },
+      ":": {
+        "default": "terrain_trail",
+        "terrain_trail": "terrain_trail",
+        "transit": "transit_stair_landing"
+      },
+      "=": {
+        "building_fill": "floor_building_fill",
+        "default": "terrain_road",
+        "terrain_road": "terrain_road"
+      },
+      "^": {
+        "default": "terrain_rock",
+        "terrain_rock": "terrain_rock"
+      },
+      "_": {
+        "default": "terrain_salt",
+        "terrain_salt": "terrain_salt"
+      },
+      "~": {
+        "default": "terrain_water",
+        "terrain_water": "terrain_water"
+      }
+    },
+    "ui_markers": {
+      "cursor": "ui_cursor",
+      "look_cursor": "ui_look_cursor",
+      "objective_marker": "ui_objective_marker",
+      "overworld_marker": "ui_overworld_marker",
+      "overworld_marker_nearest": "ui_overworld_marker_nearest"
+    },
+    "vehicles": {
+      "&": {
+        "default": "vehicle_parked",
+        "vehicle_new": "vehicle_new",
+        "vehicle_parked": "vehicle_parked",
+        "vehicle_player": "vehicle_player"
+      }
+    }
+  },
+  "category_render_defaults": {
+    "entities": {
+      "layer": "actor",
+      "priority": 0
+    },
+    "features": {
+      "layer": "ground_overlay",
+      "priority": 0
+    },
+    "infrastructure": {
+      "layer": "ground_overlay",
+      "priority": 5
+    },
+    "items": {
+      "layer": "item",
+      "priority": 0
+    },
+    "projectiles": {
+      "layer": "fx",
+      "priority": 0
+    },
+    "properties": {
+      "layer": "ground_overlay",
+      "priority": 10
+    },
+    "terrain": {
+      "layer": "terrain",
+      "priority": 0
+    },
+    "ui_markers": {
+      "layer": "ui_overlay",
+      "priority": 0
+    },
+    "vehicles": {
+      "layer": "ground_overlay",
+      "priority": 20
+    }
+  },
+  "color_aliases": {
+    "aqua": [
+      "objective",
+      "transit",
+      "terrain_water",
+      "vehicle_player",
+      "avian",
+      "player"
+    ],
+    "blue": [
+      "canine"
+    ],
+    "darkgray": [
+      "building_edge",
+      "building_fill",
+      "terrain_block",
+      "terrain_rock",
+      "terrain_salt",
+      "terrain_trail",
+      "feature_door",
+      "feature_breach",
+      "property_building",
+      "property_fixture",
+      "property_asset",
+      "property_service",
+      "building_roof_residential",
+      "building_roof_civic",
+      "building_roof_industrial",
+      "building_roof_storefront",
+      "vehicle_parked"
+    ],
+    "green": [
+      "terrain_generic",
+      "lizard",
+      "insect"
+    ],
+    "pink": [
+      "human",
+      "item_medical",
+      "building_roof_entertainment",
+      "cat_calico",
+      "cat_white"
+    ],
+    "purple": [
+      "scout",
+      "feline",
+      "cat_purple",
+      "item_restricted",
+      "item_tool",
+      "property_service_zone"
+    ],
+    "red": [
+      "guard",
+      "item_illegal",
+      "building_roof_secure",
+      "vehicle_new",
+      "infra_hydrant"
+    ]
+  },
+  "render_layers": {
+    "actor": 30,
+    "fx": 40,
+    "ground_overlay": 10,
+    "item": 20,
+    "terrain": 0,
+    "ui_overlay": 50
+  },
+  "semantic_render_defaults": {
+    "entity_player": {
+      "layer": "actor",
+      "priority": 100
+    },
+    "item_objective": {
+      "layer": "item",
+      "priority": 10
+    },
+    "objective": {
+      "layer": "ground_overlay",
+      "priority": 20
+    },
+    "transit": {
+      "layer": "ground_overlay",
+      "priority": 10
+    },
+    "ui_cursor": {
+      "layer": "ui_overlay",
+      "priority": 100
+    },
+    "ui_look_cursor": {
+      "layer": "ui_overlay",
+      "priority": 110
+    },
+    "ui_objective_marker": {
+      "layer": "ui_overlay",
+      "priority": 90
+    },
+    "ui_overworld_marker": {
+      "layer": "ui_overlay",
+      "priority": 80
+    },
+    "ui_overworld_marker_nearest": {
+      "layer": "ui_overlay",
+      "priority": 85
+    }
+  },
+  "semantics": {
+    "cat_black": {
+      "atlas_id": "F__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "feline"
+        }
+      ]
+    },
+    "cat_calico": {
+      "atlas_id": "F__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "feline"
+        }
+      ]
+    },
+    "cat_generic": {
+      "atlas_id": "F__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "feline"
+        }
+      ]
+    },
+    "cat_gray": {
+      "atlas_id": "F__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "feline"
+        }
+      ]
+    },
+    "cat_orange": {
+      "atlas_id": "F__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "feline"
+        }
+      ]
+    },
+    "cat_purple": {
+      "atlas_id": "F__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "feline"
+        }
+      ]
+    },
+    "cat_tabby": {
+      "atlas_id": "F__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "feline"
+        }
+      ]
+    },
+    "cat_tuxedo": {
+      "atlas_id": "F__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "feline"
+        }
+      ]
+    },
+    "cat_white": {
+      "atlas_id": "F__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "feline"
+        }
+      ]
+    },
+    "elevator": {
+      "atlas_id": "E__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "features",
+          "source_key": "E"
+        }
+      ]
+    },
+    "entity_player": {
+      "atlas_id": "at__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 100
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "@"
+        }
+      ]
+    },
+    "feature_breach": {
+      "atlas_id": "slash__brown",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "features",
+          "source_key": "/"
+        }
+      ]
+    },
+    "feature_door": {
+      "atlas_id": "plus__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "features",
+          "source_key": "+"
+        }
+      ]
+    },
+    "feature_window": {
+      "atlas_id": "quote__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "features",
+          "source_key": "\""
+        }
+      ]
+    },
+    "floor_building_fill": {
+      "atlas_id": "equals__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "="
+        }
+      ]
+    },
+    "floor_coarse": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "floor_coastal": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "floor_corporate": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "floor_downtown": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "floor_entertainment": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "floor_frontier": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "floor_generic": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "floor_industrial": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "floor_military": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "floor_residential": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "floor_slums": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "floor_wilderness": {
+      "atlas_id": "dot__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "."
+        }
+      ]
+    },
+    "infra_access_panel": {
+      "atlas_id": "r__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 5
+      },
+      "sources": [
+        {
+          "category": "infrastructure",
+          "source_key": "r"
+        }
+      ]
+    },
+    "infra_atm": {
+      "atlas_id": "dollar__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 5
+      },
+      "sources": [
+        {
+          "category": "infrastructure",
+          "source_key": "$"
+        }
+      ]
+    },
+    "infra_claim_terminal": {
+      "atlas_id": "c__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 5
+      },
+      "sources": [
+        {
+          "category": "infrastructure",
+          "source_key": "c"
+        }
+      ]
+    },
+    "infra_hydrant": {
+      "atlas_id": "h__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 5
+      },
+      "sources": [
+        {
+          "category": "infrastructure",
+          "source_key": "h"
+        }
+      ]
+    },
+    "infra_lamp": {
+      "atlas_id": "l__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 5
+      },
+      "sources": [
+        {
+          "category": "infrastructure",
+          "source_key": "l"
+        }
+      ]
+    },
+    "infra_pole": {
+      "atlas_id": "p__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 5
+      },
+      "sources": [
+        {
+          "category": "infrastructure",
+          "source_key": "p"
+        }
+      ]
+    },
+    "infra_stop": {
+      "atlas_id": "u__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 5
+      },
+      "sources": [
+        {
+          "category": "infrastructure",
+          "source_key": "u"
+        }
+      ]
+    },
+    "infra_utility_a": {
+      "atlas_id": "j__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 5
+      },
+      "sources": [
+        {
+          "category": "infrastructure",
+          "source_key": "j"
+        }
+      ]
+    },
+    "infra_utility_b": {
+      "atlas_id": "t__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 5
+      },
+      "sources": [
+        {
+          "category": "infrastructure",
+          "source_key": "t"
+        }
+      ]
+    },
+    "item_ground": {
+      "atlas_id": "bang__aqua",
+      "render": {
+        "layer": "item",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "items",
+          "source_key": "!"
+        }
+      ]
+    },
+    "item_illegal": {
+      "atlas_id": "x__red",
+      "render": {
+        "layer": "item",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "items",
+          "source_key": "x"
+        }
+      ]
+    },
+    "item_medical": {
+      "atlas_id": "bang__aqua",
+      "render": {
+        "layer": "item",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "items",
+          "source_key": "!"
+        }
+      ]
+    },
+    "item_objective": {
+      "atlas_id": "o__aqua",
+      "render": {
+        "layer": "item",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "items",
+          "source_key": "o"
+        }
+      ]
+    },
+    "item_restricted": {
+      "atlas_id": "u0000__unk",
+      "render": {
+        "layer": "item",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "items",
+          "source_key": "*"
+        }
+      ]
+    },
+    "item_token": {
+      "atlas_id": "i__aqua",
+      "render": {
+        "layer": "item",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "items",
+          "source_key": "i"
+        }
+      ]
+    },
+    "item_tool": {
+      "atlas_id": "d__amber",
+      "render": {
+        "layer": "item",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "items",
+          "source_key": ")"
+        }
+      ]
+    },
+    "npc_avian": {
+      "atlas_id": "d__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "avian"
+        }
+      ]
+    },
+    "npc_canine": {
+      "atlas_id": "d__blue",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "canine"
+        }
+      ]
+    },
+    "npc_civilian": {
+      "atlas_id": "H__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "hominid"
+        }
+      ]
+    },
+    "npc_guard": {
+      "atlas_id": "d__red",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "hominid"
+        }
+      ]
+    },
+    "npc_insect": {
+      "atlas_id": "d__green",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "insect"
+        }
+      ]
+    },
+    "npc_scout": {
+      "atlas_id": "H__aqua",
+      "render": {
+        "layer": "actor",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "entities",
+          "source_key": "hominid"
+        }
+      ]
+    },
+    "projectile": {
+      "atlas_id": "d__brown",
+      "render": {
+        "layer": "fx",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "projectiles",
+          "source_key": "*"
+        }
+      ]
+    },
+    "prop_asset": {
+      "atlas_id": "A__darkgray",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "A"
+        }
+      ]
+    },
+    "prop_building_generic": {
+      "atlas_id": "B__darkgray",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "B"
+        }
+      ]
+    },
+    "prop_civic": {
+      "atlas_id": "O__darkgray",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "O"
+        }
+      ]
+    },
+    "prop_entertainment": {
+      "atlas_id": "N__pink",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "N"
+        }
+      ]
+    },
+    "prop_finance": {
+      "atlas_id": "dollar__darkgray",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "$"
+        }
+      ]
+    },
+    "prop_fixture": {
+      "atlas_id": "F__darkgray",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "F"
+        }
+      ]
+    },
+    "prop_industrial": {
+      "atlas_id": "T__darkgray",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "T"
+        }
+      ]
+    },
+    "prop_medical": {
+      "atlas_id": "M__pink",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "M"
+        }
+      ]
+    },
+    "prop_residential": {
+      "atlas_id": "H__darkgray",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "H"
+        }
+      ]
+    },
+    "prop_restaurant": {
+      "atlas_id": "R__darkgray",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "R"
+        }
+      ]
+    },
+    "prop_secure": {
+      "atlas_id": "G__red",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "G"
+        }
+      ]
+    },
+    "prop_vehicle_service": {
+      "atlas_id": "V__darkgray",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 10
+      },
+      "sources": [
+        {
+          "category": "properties",
+          "source_key": "V"
+        }
+      ]
+    },
+    "property_service_zone": {
+      "atlas_id": "S__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "features",
+          "source_key": "S"
+        }
+      ]
+    },
+    "stair_down": {
+      "atlas_id": "d__darkgray",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "features",
+          "source_key": "<"
+        }
+      ]
+    },
+    "stair_up": {
+      "atlas_id": "gt__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "features",
+          "source_key": ">"
+        }
+      ]
+    },
+    "terrain_block": {
+      "atlas_id": "hash__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "#"
+        }
+      ]
+    },
+    "terrain_brush": {
+      "atlas_id": "comma__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": ","
+        }
+      ]
+    },
+    "terrain_road": {
+      "atlas_id": "equals__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "="
+        }
+      ]
+    },
+    "terrain_rock": {
+      "atlas_id": "caret__darkgray",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "^"
+        }
+      ]
+    },
+    "terrain_trail": {
+      "atlas_id": "colon__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": ":"
+        }
+      ]
+    },
+    "terrain_water": {
+      "atlas_id": "tilde__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "~"
+        }
+      ]
+    },
+    "transit_stair_landing": {
+      "atlas_id": "colon__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": ":"
+        }
+      ]
+    },
+    "ui_cursor": {
+      "atlas_id": "d__orange",
+      "render": {
+        "layer": "ui_overlay",
+        "priority": 100
+      },
+      "sources": [
+        {
+          "category": "ui_markers",
+          "source_key": "cursor"
+        }
+      ]
+    },
+    "ui_look_cursor": {
+      "atlas_id": "d__pink",
+      "render": {
+        "layer": "ui_overlay",
+        "priority": 110
+      },
+      "sources": [
+        {
+          "category": "ui_markers",
+          "source_key": "look_cursor"
+        }
+      ]
+    },
+    "ui_objective_marker": {
+      "atlas_id": "d__purple",
+      "render": {
+        "layer": "ui_overlay",
+        "priority": 90
+      },
+      "sources": [
+        {
+          "category": "ui_markers",
+          "source_key": "objective_marker"
+        }
+      ]
+    },
+    "ui_overworld_marker": {
+      "atlas_id": "e__amber",
+      "render": {
+        "layer": "ui_overlay",
+        "priority": 80
+      },
+      "sources": [
+        {
+          "category": "ui_markers",
+          "source_key": "overworld_marker"
+        }
+      ]
+    },
+    "ui_overworld_marker_nearest": {
+      "atlas_id": "e__aqua",
+      "render": {
+        "layer": "ui_overlay",
+        "priority": 85
+      },
+      "sources": [
+        {
+          "category": "ui_markers",
+          "source_key": "overworld_marker_nearest"
+        }
+      ]
+    },
+    "vehicle_new": {
+      "atlas_id": "amp__red",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 20
+      },
+      "sources": [
+        {
+          "category": "vehicles",
+          "source_key": "&"
+        }
+      ]
+    },
+    "vehicle_parked": {
+      "atlas_id": "amp__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 20
+      },
+      "sources": [
+        {
+          "category": "vehicles",
+          "source_key": "&"
+        }
+      ]
+    },
+    "vehicle_player": {
+      "atlas_id": "amp__aqua",
+      "render": {
+        "layer": "ground_overlay",
+        "priority": 20
+      },
+      "sources": [
+        {
+          "category": "vehicles",
+          "source_key": "&"
+        }
+      ]
+    },
+    "wall_building": {
+      "atlas_id": "hash__darkgray",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "#"
+        }
+      ]
+    },
+    "wall_generic": {
+      "atlas_id": "hash__aqua",
+      "render": {
+        "layer": "terrain",
+        "priority": 0
+      },
+      "sources": [
+        {
+          "category": "terrain",
+          "source_key": "#"
+        }
+      ]
+    }
+  },
+  "sources": {
+    "semantic_mapping": "/home/adri/Documents/bakerrrr/assets/tiles/atlas/semantic_mapping.json",
+    "tile_map": "/home/adri/Documents/bakerrrr/assets/tiles/tile_map.json"
+  }
+}

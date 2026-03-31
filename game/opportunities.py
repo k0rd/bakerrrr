@@ -38,6 +38,8 @@ OBJECTIVE_PREFERENCES = {
         "trade_loop",
         "district_contract",
         "paper_trail",
+        "debt_marker",
+        "supply_shortage",
         "distance_delivery",
         "distance_delivery_procure",
     },
@@ -46,11 +48,21 @@ OBJECTIVE_PREFERENCES = {
         "paper_trail",
         "shelter_stop",
         "district_contract",
+        "property_dispute",
+        "service_friction",
         "distance_delivery",
         "distance_delivery_procure",
         "distance_pickup",
     },
-    "high_value_retrieval": {"intel_scout", "landmark_survey", "lead_followup", "district_contract"},
+    "high_value_retrieval": {
+        "intel_scout",
+        "landmark_survey",
+        "lead_followup",
+        "district_contract",
+        "missing_person",
+        "service_friction",
+        "property_dispute",
+    },
 }
 
 COURIER_ITEM_POOL = (
@@ -617,6 +629,267 @@ def _item_stack_max(item_id):
     return max(1, _safe_int(item_def.get("stack_max"), default=1))
 
 
+def _run_objective_id(sim):
+    traits = getattr(sim, "world_traits", {}) if sim is not None else {}
+    if not isinstance(traits, dict):
+        return ""
+    objective = traits.get("run_objective", {})
+    if not isinstance(objective, dict):
+        return ""
+    return str(objective.get("id", "")).strip().lower()
+
+
+def _property_label(prop, property_id=None):
+    label = str((prop or {}).get("name", property_id or "site")).strip()
+    return label or str(property_id or "site")
+
+
+def _contact_variant_candidate(sim, prop, property_id, entry, objective_id):
+    if not isinstance(prop, dict):
+        return None
+    standing = float((entry or {}).get("standing", 0.5))
+    cx, cy = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+    prop_name = _property_label(prop, property_id)
+    pools = {
+        "debt_exit": ("debt_marker", "supply_shortage"),
+        "networked_extraction": ("property_dispute", "service_friction"),
+        "high_value_retrieval": ("service_friction", "property_dispute"),
+    }
+    pool = pools.get(objective_id, ("debt_marker", "service_friction", "property_dispute", "supply_shortage"))
+    kind = random.Random(f"{getattr(sim, 'seed', 'seed')}:opp-contact:{objective_id}:{property_id}").choice(pool)
+
+    if kind == "debt_marker":
+        return {
+            "key": f"debt_marker:{property_id}",
+            "title": "Debt Pressure",
+            "summary": f"Debt pressure around {prop_name} is loosening tongues and valuables.",
+            "kind": "debt_marker",
+            "source": "contact",
+            "chunk": (cx, cy),
+            "location": "contact",
+            "playstyles": ("social", "economic", "stealth"),
+            "reward": {
+                "credits": max(12, _safe_int(standing * 24, default=12)),
+                "intel": 1,
+            },
+            "risk": "low",
+            "pressure": "low",
+            "requirements": {"visit_chunk": (cx, cy), "property_id": property_id},
+            "status": "active",
+            "seed_tick": int(getattr(sim, "tick", 0)),
+        }
+
+    if kind == "supply_shortage":
+        return {
+            "key": f"supply_shortage:{property_id}",
+            "title": "Supply Shortage",
+            "summary": f"{prop_name} is running short; quick fills and side sales are paying right now.",
+            "kind": "supply_shortage",
+            "source": "contact",
+            "chunk": (cx, cy),
+            "location": "contact",
+            "playstyles": ("economic", "social", "stealth"),
+            "reward": {
+                "credits": max(10, _safe_int(standing * 20, default=10)),
+                "standing": 1,
+            },
+            "risk": "low",
+            "pressure": "low",
+            "requirements": {"visit_chunk": (cx, cy), "property_id": property_id},
+            "status": "active",
+            "seed_tick": int(getattr(sim, "tick", 0)),
+        }
+
+    if kind == "property_dispute":
+        return {
+            "key": f"property_dispute:{property_id}",
+            "title": "Local Dispute",
+            "summary": f"A dispute tied to {prop_name} is shaking routines and splitting loyalties.",
+            "kind": "property_dispute",
+            "source": "contact",
+            "chunk": (cx, cy),
+            "location": "contact",
+            "playstyles": ("social", "stealth", "economic"),
+            "reward": {
+                "credits": max(8, _safe_int(standing * 14, default=8)),
+                "standing": 2,
+                "intel": 1,
+            },
+            "risk": "exposed",
+            "pressure": "medium",
+            "requirements": {"visit_chunk": (cx, cy), "property_id": property_id},
+            "status": "active",
+            "seed_tick": int(getattr(sim, "tick", 0)),
+        }
+
+    return {
+        "key": f"service_friction:{property_id}",
+        "title": "Service Friction",
+        "summary": f"{prop_name} is jammed with complaints and delays; staff are getting sloppy and chatty.",
+        "kind": "service_friction",
+        "source": "contact",
+        "chunk": (cx, cy),
+        "location": "contact",
+        "playstyles": ("social", "stealth"),
+        "reward": {
+            "credits": max(6, _safe_int(standing * 12, default=6)),
+            "standing": 1,
+            "intel": 2,
+        },
+        "risk": "exposed",
+        "pressure": "medium",
+        "requirements": {"visit_chunk": (cx, cy), "property_id": property_id},
+        "status": "active",
+        "seed_tick": int(getattr(sim, "tick", 0)),
+    }
+
+
+def _intel_variant_candidate(sim, prop, property_id, entry, objective_id):
+    if not isinstance(prop, dict):
+        return None
+    confidence = float((entry or {}).get("confidence", 0.0))
+    lead_kind = str((entry or {}).get("lead_kind", "") or "").strip().lower()
+    cx, cy = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+    prop_name = _property_label(prop, property_id)
+
+    if lead_kind == "workplace":
+        kind = "missing_person"
+    elif lead_kind in {"access", "security", "hours"}:
+        kind = "service_friction"
+    elif lead_kind == "owner":
+        kind = "property_dispute"
+    else:
+        pools = {
+            "debt_exit": ("debt_marker", "supply_shortage", "lead_followup"),
+            "networked_extraction": ("property_dispute", "missing_person", "lead_followup"),
+            "high_value_retrieval": ("missing_person", "service_friction", "lead_followup"),
+        }
+        pool = pools.get(objective_id, ("lead_followup", "missing_person", "property_dispute", "service_friction"))
+        kind = random.Random(f"{getattr(sim, 'seed', 'seed')}:opp-intel:{objective_id}:{property_id}:{lead_kind}").choice(pool)
+
+    if kind == "missing_person":
+        return {
+            "key": f"missing_person:{property_id}",
+            "title": "Missing Person Lead",
+            "summary": f"Someone tied to {prop_name} is missing, and the search is exposing routines around the site.",
+            "kind": "missing_person",
+            "source": "intel",
+            "chunk": (cx, cy),
+            "location": "lead",
+            "playstyles": ("social", "stealth"),
+            "reward": {
+                "standing": 1,
+                "intel": max(2, _safe_int(confidence * 4, default=2)),
+            },
+            "risk": "exposed",
+            "pressure": "medium",
+            "requirements": {"visit_chunk": (cx, cy), "property_id": property_id},
+            "status": "active",
+            "seed_tick": int(getattr(sim, "tick", 0)),
+        }
+
+    if kind == "property_dispute":
+        return {
+            "key": f"property_dispute:intel:{property_id}",
+            "title": "Dispute Trail",
+            "summary": f"Tension around {prop_name} is splitting routines and making people talk.",
+            "kind": "property_dispute",
+            "source": "intel",
+            "chunk": (cx, cy),
+            "location": "lead",
+            "playstyles": ("social", "stealth", "economic"),
+            "reward": {
+                "credits": 8,
+                "standing": 1,
+                "intel": max(1, _safe_int(confidence * 3, default=1)),
+            },
+            "risk": "exposed",
+            "pressure": "medium",
+            "requirements": {"visit_chunk": (cx, cy), "property_id": property_id},
+            "status": "active",
+            "seed_tick": int(getattr(sim, "tick", 0)),
+        }
+
+    if kind == "service_friction":
+        return {
+            "key": f"service_friction:intel:{property_id}",
+            "title": "Service Friction",
+            "summary": f"Complaints and delays around {prop_name} are exposing timings, access habits, and weak points.",
+            "kind": "service_friction",
+            "source": "intel",
+            "chunk": (cx, cy),
+            "location": "lead",
+            "playstyles": ("social", "stealth"),
+            "reward": {
+                "intel": max(2, _safe_int(confidence * 4, default=2)),
+            },
+            "risk": "low",
+            "pressure": "low",
+            "requirements": {"visit_chunk": (cx, cy), "property_id": property_id},
+            "status": "active",
+            "seed_tick": int(getattr(sim, "tick", 0)),
+        }
+
+    if kind == "debt_marker":
+        return {
+            "key": f"debt_marker:intel:{property_id}",
+            "title": "Debt Marker",
+            "summary": f"Debt around {prop_name} is pushing someone there toward risky side deals.",
+            "kind": "debt_marker",
+            "source": "intel",
+            "chunk": (cx, cy),
+            "location": "lead",
+            "playstyles": ("social", "economic", "stealth"),
+            "reward": {
+                "credits": 10,
+                "intel": max(1, _safe_int(confidence * 2, default=1)),
+            },
+            "risk": "low",
+            "pressure": "low",
+            "requirements": {"visit_chunk": (cx, cy), "property_id": property_id},
+            "status": "active",
+            "seed_tick": int(getattr(sim, "tick", 0)),
+        }
+
+    if kind == "supply_shortage":
+        return {
+            "key": f"supply_shortage:intel:{property_id}",
+            "title": "Shortage Tip",
+            "summary": f"Supply around {prop_name} is thin, and somebody nearby is paying for fast cover.",
+            "kind": "supply_shortage",
+            "source": "intel",
+            "chunk": (cx, cy),
+            "location": "lead",
+            "playstyles": ("economic", "stealth"),
+            "reward": {
+                "credits": 12,
+                "standing": 1,
+            },
+            "risk": "low",
+            "pressure": "low",
+            "requirements": {"visit_chunk": (cx, cy), "property_id": property_id},
+            "status": "active",
+            "seed_tick": int(getattr(sim, "tick", 0)),
+        }
+
+    return {
+        "key": f"intel:{property_id}",
+        "title": "Follow a Lead",
+        "summary": f"Verify intel around {prop_name}.",
+        "kind": "lead_followup",
+        "source": "intel",
+        "chunk": (cx, cy),
+        "location": "lead",
+        "playstyles": ("social", "stealth", "economic"),
+        "reward": {"credits": 6, "intel": max(1, _safe_int(confidence * 3, default=1))},
+        "risk": "low",
+        "pressure": "low",
+        "requirements": {"visit_chunk": (cx, cy), "property_id": property_id},
+        "status": "active",
+        "seed_tick": int(getattr(sim, "tick", 0)),
+    }
+
+
 def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=None):
     chunk = sim.world.get_chunk(cx, cy)
     desc = sim.world.overworld_descriptor(cx, cy)
@@ -905,7 +1178,7 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
 def _append_opportunity(state, opportunity, existing_keys):
     key = str(opportunity.get("key", "")).strip().lower()
     if not key or key in existing_keys:
-        return False
+        return None
     next_id = max(1, _safe_int(state.get("next_id"), default=1))
     entry = dict(opportunity)
     entry["id"] = next_id
@@ -913,7 +1186,38 @@ def _append_opportunity(state, opportunity, existing_keys):
     state["next_id"] = next_id + 1
     state["active"].append(entry)
     existing_keys.add(key)
-    return True
+    return entry
+
+
+def append_external_opportunity(
+    sim,
+    opportunity,
+    *,
+    observer_eid=None,
+    awareness_state="heard",
+    confidence=0.0,
+    source="unknown",
+):
+    state = _state(sim)
+    existing_keys = {
+        str(entry.get("key", "")).strip().lower()
+        for entry in state.get("active", ())
+        if isinstance(entry, dict)
+    }
+    entry = _append_opportunity(state, opportunity, existing_keys)
+    if not isinstance(entry, dict):
+        return None
+    if observer_eid is not None:
+        _upsert_observer_intel(
+            sim,
+            state,
+            observer_eid=observer_eid,
+            opportunity_id=int(entry.get("id", 0) or 0),
+            awareness_state=awareness_state,
+            confidence=confidence,
+            source=source,
+        )
+    return entry
 
 
 def _seed_chunk_coordinates(origin, max_radius=8):
@@ -1067,6 +1371,7 @@ def _contact_and_intel_candidates(sim, player_eid):
     candidates = []
     ledger = sim.ecs.get(ContactLedger).get(player_eid)
     knowledge = sim.ecs.get(PropertyKnowledge).get(player_eid)
+    objective_id = _run_objective_id(sim)
 
     if ledger:
         sorted_contacts = sorted(
@@ -1078,27 +1383,9 @@ def _contact_and_intel_candidates(sim, player_eid):
             prop = sim.properties.get(property_id)
             if not prop:
                 continue
-            cx, cy = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
-            standing = float((entry or {}).get("standing", 0.5))
-            candidates.append({
-                "key": f"contact:{property_id}",
-                "title": "Call In a Favor",
-                "summary": f"Use a contact at {prop.get('name', property_id)}.",
-                "kind": "contact_run",
-                "source": "contact",
-                "chunk": (cx, cy),
-                "location": "contact",
-                "playstyles": ("social", "economic", "stealth"),
-                "reward": {
-                    "credits": max(8, _safe_int(standing * 20, default=10)),
-                    "standing": 1,
-                },
-                "risk": "low",
-                "pressure": "low",
-                "requirements": {"visit_chunk": (cx, cy)},
-                "status": "active",
-                "seed_tick": int(getattr(sim, "tick", 0)),
-            })
+            candidate = _contact_variant_candidate(sim, prop, property_id, entry, objective_id)
+            if candidate:
+                candidates.append(candidate)
 
     if knowledge:
         sorted_leads = sorted(
@@ -1113,23 +1400,9 @@ def _contact_and_intel_candidates(sim, player_eid):
             prop = sim.properties.get(property_id)
             if not prop:
                 continue
-            cx, cy = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
-            candidates.append({
-                "key": f"intel:{property_id}",
-                "title": "Follow a Lead",
-                "summary": f"Verify intel around {prop.get('name', property_id)}.",
-                "kind": "lead_followup",
-                "source": "intel",
-                "chunk": (cx, cy),
-                "location": "lead",
-                "playstyles": ("social", "stealth", "economic"),
-                "reward": {"credits": 6, "intel": max(1, _safe_int(confidence * 3, default=1))},
-                "risk": "low",
-                "pressure": "low",
-                "requirements": {"visit_chunk": (cx, cy)},
-                "status": "active",
-                "seed_tick": int(getattr(sim, "tick", 0)),
-            })
+            candidate = _intel_variant_candidate(sim, prop, property_id, entry, objective_id)
+            if candidate:
+                candidates.append(candidate)
 
     return candidates
 

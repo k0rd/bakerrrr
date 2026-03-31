@@ -7,6 +7,7 @@ main behavior file as a dumping ground for every property-adjacent utility.
 
 from game.components import Inventory, Position
 from game.property_access import (
+    controller_intrusion_access_for_actor as _controller_intrusion_access_for_actor,
     finance_services_for_property as _finance_services_for_property_base,
     property_access_controller as _property_access_controller,
     property_access_level as _property_access_level,
@@ -110,6 +111,11 @@ def controller_access_requirement_text(controller):
         return "a valid badge"
     if mode == "biometric":
         return "recognized biometric authorization"
+    kind = str(controller.get("kind", "") or "").strip().lower()
+    if kind == "owner_schedule":
+        return "the live schedule window or the matching key"
+    if kind == "auto_timer":
+        return "the live relay window or the matching key"
     return "the matching key"
 
 
@@ -123,6 +129,8 @@ def viewer_property_credential_status(sim, viewer_eid, prop):
 
     kind = str(prop.get("kind", "")).strip().lower()
     if kind == "building":
+        if _controller_intrusion_access_for_actor(sim, viewer_eid, prop):
+            return "spoofed"
         controller = _property_access_controller(sim, prop)
         required_tier = max(1, _int_or_default(controller.get("required_credential_tier"), 1))
         if inventory and inventory_matching_property_credential(

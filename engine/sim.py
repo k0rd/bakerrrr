@@ -8,6 +8,7 @@ from .world import World
 from .eventlog import EventLog
 from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
+from game.items import normalize_item_instance_metadata
 
 class Simulation:
 
@@ -1400,7 +1401,7 @@ class Simulation:
             "z": z,
             "owner_eid": owner_eid,
             "owner_tag": owner_tag,
-            "metadata": metadata or {},
+            "metadata": normalize_item_instance_metadata(item_id, metadata=metadata),
         }
         self._index_ground_item_record(ground_item_id, self.ground_items[ground_item_id])
         return ground_item_id

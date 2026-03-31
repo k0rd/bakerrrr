@@ -135,6 +135,48 @@ MANAGER_CAREER_KEYWORDS = {
 }
 VALID_CREDENTIAL_MODES = {"mechanical_key", "badge", "biometric"}
 VALID_STOREFRONT_SERVICE_MODES = {"automated", "staffed"}
+CONTROLLER_INTRUSION_PROFILES = {
+    "badge_spoof": {
+        "label": "badge spoof",
+        "credential_mode": "badge",
+        "security_tier_delta": -1,
+        "required_tier_delta": -1,
+        "open_override": True,
+        "grants_actor_access": True,
+        "standing": 0.82,
+        "standing_reason": "spoofed_badge",
+    },
+    "biometric_jam": {
+        "label": "biometric jam",
+        "credential_mode": "biometric",
+        "security_tier_delta": -2,
+        "required_tier_delta": -1,
+        "open_override": True,
+        "grants_actor_access": False,
+        "standing": 0.0,
+        "standing_reason": "",
+    },
+    "schedule_latch": {
+        "label": "schedule latch",
+        "credential_mode": "mechanical_key",
+        "security_tier_delta": -1,
+        "required_tier_delta": -1,
+        "open_override": True,
+        "grants_actor_access": False,
+        "standing": 0.0,
+        "standing_reason": "",
+    },
+    "relay_latch": {
+        "label": "relay latch",
+        "credential_mode": "mechanical_key",
+        "security_tier_delta": -1,
+        "required_tier_delta": -1,
+        "open_override": True,
+        "grants_actor_access": False,
+        "standing": 0.0,
+        "standing_reason": "",
+    },
+}
 
 DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "casino": ("slots", "casino_holdem", "plinko", "twenty_one"),
@@ -466,6 +508,141 @@ def _accepted_credentials_for_mode(credential_mode):
     return ("mechanical_key",)
 
 
+def clear_controller_intrusion(prop):
+    metadata = _property_metadata(prop)
+    if not metadata:
+        return False
+    changed = False
+    for key in (
+        "controller_intrusion_mode",
+        "controller_intrusion_until_tick",
+        "controller_intrusion_actor_eid",
+        "controller_intrusion_source_item_id",
+        "controller_intrusion_method",
+        "controller_intrusion_security_tier_delta",
+        "controller_intrusion_required_tier_delta",
+    ):
+        if key in metadata:
+            metadata.pop(key, None)
+            changed = True
+    return changed
+
+
+def controller_intrusion_state(sim, prop):
+    if not isinstance(prop, dict):
+        return {
+            "active": False,
+            "mode": "",
+            "label": "",
+            "credential_mode": "",
+            "actor_eid": None,
+            "source_item_id": "",
+            "method": "",
+            "until_tick": 0,
+            "remaining_ticks": 0,
+            "security_tier_delta": 0,
+            "required_tier_delta": 0,
+            "open_override": False,
+            "grants_actor_access": False,
+            "standing": 0.0,
+            "standing_reason": "",
+        }
+
+    metadata = _property_metadata(prop)
+    mode = str(metadata.get("controller_intrusion_mode", "") or "").strip().lower()
+    profile = CONTROLLER_INTRUSION_PROFILES.get(mode)
+    if profile is None:
+        clear_controller_intrusion(prop)
+        return controller_intrusion_state(sim, None)
+
+    tick = int(getattr(sim, "tick", 0) if sim is not None else 0)
+    until_tick = max(0, _int_or_default(metadata.get("controller_intrusion_until_tick"), 0))
+    if until_tick <= tick:
+        clear_controller_intrusion(prop)
+        return controller_intrusion_state(sim, None)
+
+    actor_eid = metadata.get("controller_intrusion_actor_eid")
+    try:
+        actor_eid = int(actor_eid) if actor_eid is not None else None
+    except (TypeError, ValueError):
+        actor_eid = None
+
+    return {
+        "active": True,
+        "mode": mode,
+        "label": str(profile.get("label", mode.replace("_", " "))).strip() or mode.replace("_", " "),
+        "credential_mode": str(profile.get("credential_mode", "") or "").strip().lower(),
+        "actor_eid": actor_eid,
+        "source_item_id": str(metadata.get("controller_intrusion_source_item_id", "") or "").strip().lower(),
+        "method": str(metadata.get("controller_intrusion_method", mode) or mode).strip().lower(),
+        "until_tick": until_tick,
+        "remaining_ticks": max(0, until_tick - tick),
+        "security_tier_delta": _int_or_default(
+            metadata.get("controller_intrusion_security_tier_delta"),
+            profile.get("security_tier_delta", 0),
+        ),
+        "required_tier_delta": _int_or_default(
+            metadata.get("controller_intrusion_required_tier_delta"),
+            profile.get("required_tier_delta", 0),
+        ),
+        "open_override": bool(profile.get("open_override", False)),
+        "grants_actor_access": bool(profile.get("grants_actor_access", False)),
+        "standing": float(profile.get("standing", 0.0) or 0.0),
+        "standing_reason": str(profile.get("standing_reason", "") or "").strip().lower(),
+    }
+
+
+def apply_controller_intrusion(
+    prop,
+    *,
+    mode,
+    tick=0,
+    duration=0,
+    actor_eid=None,
+    source_item_id="",
+    method="",
+):
+    if not isinstance(prop, dict):
+        return False
+    mode_key = str(mode or "").strip().lower()
+    profile = CONTROLLER_INTRUSION_PROFILES.get(mode_key)
+    duration_ticks = max(0, _int_or_default(duration, 0))
+    if profile is None or duration_ticks <= 0:
+        return clear_controller_intrusion(prop)
+
+    metadata = _property_metadata(prop)
+    until_tick = max(1, _int_or_default(tick, 0) + duration_ticks)
+    metadata["controller_intrusion_mode"] = mode_key
+    metadata["controller_intrusion_until_tick"] = int(until_tick)
+    metadata["controller_intrusion_method"] = (
+        str(method or mode_key).strip().lower() or mode_key
+    )
+    metadata["controller_intrusion_security_tier_delta"] = int(profile.get("security_tier_delta", 0) or 0)
+    metadata["controller_intrusion_required_tier_delta"] = int(profile.get("required_tier_delta", 0) or 0)
+    if actor_eid is not None:
+        metadata["controller_intrusion_actor_eid"] = int(actor_eid)
+    else:
+        metadata.pop("controller_intrusion_actor_eid", None)
+    if str(source_item_id or "").strip():
+        metadata["controller_intrusion_source_item_id"] = str(source_item_id).strip().lower()
+    else:
+        metadata.pop("controller_intrusion_source_item_id", None)
+    return True
+
+
+def controller_intrusion_access_for_actor(sim, actor_eid, prop):
+    state = controller_intrusion_state(sim, prop)
+    if not state["active"] or actor_eid is None or not state["grants_actor_access"]:
+        return None
+    intrusion_actor_eid = state.get("actor_eid")
+    if intrusion_actor_eid is not None and int(intrusion_actor_eid) != int(actor_eid):
+        return None
+    return {
+        "mode": str(state.get("credential_mode", "") or "").strip().lower() or "badge",
+        "reason": str(state.get("standing_reason", "") or "").strip().lower() or "spoofed_access",
+    }
+
+
 def _holder_credential_for_role(role, credential_mode):
     resolved_role = str(role or "staff").strip().lower() or "staff"
     mode = str(credential_mode or "mechanical_key").strip().lower() or "mechanical_key"
@@ -545,6 +722,14 @@ def property_access_controller(sim, prop, hour=None):
             "required_credential_tier": 1,
             "security_tier": 1,
             "authorized_holders": (),
+            "intrusion_active": False,
+            "intrusion_mode": "",
+            "intrusion_label": "",
+            "intrusion_method": "",
+            "intrusion_until_tick": 0,
+            "intrusion_remaining_ticks": 0,
+            "intrusion_actor_eid": None,
+            "intrusion_source_item_id": "",
         }
 
     metadata = _property_metadata(prop)
@@ -607,6 +792,13 @@ def property_access_controller(sim, prop, hour=None):
     elif kind == "auto_lock":
         open_now = False
 
+    intrusion = controller_intrusion_state(sim, prop)
+    if intrusion["active"]:
+        required_credential_tier = max(1, required_credential_tier + int(intrusion.get("required_tier_delta", 0)))
+        security_tier = max(1, security_tier + int(intrusion.get("security_tier_delta", 0)))
+        if intrusion.get("open_override"):
+            open_now = True
+
     return {
         "kind": kind,
         "authority_eid": owner_eid,
@@ -623,6 +815,14 @@ def property_access_controller(sim, prop, hour=None):
         "required_credential_tier": required_credential_tier,
         "security_tier": security_tier,
         "authorized_holders": authorized_holders,
+        "intrusion_active": bool(intrusion.get("active")),
+        "intrusion_mode": str(intrusion.get("mode", "") or "").strip().lower(),
+        "intrusion_label": str(intrusion.get("label", "") or "").strip(),
+        "intrusion_method": str(intrusion.get("method", "") or "").strip().lower(),
+        "intrusion_until_tick": int(intrusion.get("until_tick", 0) or 0),
+        "intrusion_remaining_ticks": int(intrusion.get("remaining_ticks", 0) or 0),
+        "intrusion_actor_eid": intrusion.get("actor_eid"),
+        "intrusion_source_item_id": str(intrusion.get("source_item_id", "") or "").strip().lower(),
     }
 
 
@@ -745,6 +945,14 @@ def _player_owns_property(sim, actor_eid, prop):
 def _credential_holder_standing(sim, actor_eid, prop):
     if actor_eid is None or not prop:
         return 0.0, ""
+
+    intrusion_access = controller_intrusion_access_for_actor(sim, actor_eid, prop)
+    if intrusion_access:
+        intrusion = controller_intrusion_state(sim, prop)
+        return float(intrusion.get("standing", 0.0) or 0.0), (
+            str(intrusion.get("standing_reason", "") or "").strip().lower()
+            or str(intrusion_access.get("reason", "") or "").strip().lower()
+        )
 
     controller = property_access_controller(sim, prop)
     required_tier = max(1, _int_or_default(controller.get("required_credential_tier"), 1))

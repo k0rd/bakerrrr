@@ -75,6 +75,36 @@
     "atlas_max_width_px": 1024,
     "format": "PNG RGBA transparent background"
   },
+  "_render_layers": {
+    "terrain": 0,
+    "ground_overlay": 10,
+    "item": 20,
+    "actor": 30,
+    "fx": 40,
+    "ui_overlay": 50
+  },
+  "_category_render_defaults": {
+    "terrain": { "layer": "terrain", "priority": 0 },
+    "features": { "layer": "ground_overlay", "priority": 0 },
+    "infrastructure": { "layer": "ground_overlay", "priority": 5 },
+    "properties": { "layer": "ground_overlay", "priority": 10 },
+    "vehicles": { "layer": "ground_overlay", "priority": 20 },
+    "items": { "layer": "item", "priority": 0 },
+    "projectiles": { "layer": "fx", "priority": 0 },
+    "entities": { "layer": "actor", "priority": 0 },
+    "ui_markers": { "layer": "ui_overlay", "priority": 0 }
+  },
+  "_semantic_render_defaults": {
+    "entity_player": { "layer": "actor", "priority": 100 },
+    "transit": { "layer": "ground_overlay", "priority": 10 },
+    "item_objective": { "layer": "item", "priority": 10 },
+    "objective": { "layer": "ground_overlay", "priority": 20 },
+    "ui_cursor": { "layer": "ui_overlay", "priority": 100 },
+    "ui_look_cursor": { "layer": "ui_overlay", "priority": 110 },
+    "ui_objective_marker": { "layer": "ui_overlay", "priority": 90 },
+    "ui_overworld_marker": { "layer": "ui_overlay", "priority": 80 },
+    "ui_overworld_marker_nearest": { "layer": "ui_overlay", "priority": 85 }
+  },
 
   "terrain": {
     ".": {
