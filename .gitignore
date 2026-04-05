@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+saves/
+#assets/tiles/src/
+assets/tiles/unused
+assets/tiles/atlas/review_sheet.png
+assets/tiles/old 
+.github/
+.githooks/
+update.sh

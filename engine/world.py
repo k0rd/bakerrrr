@@ -4,6 +4,7 @@ import random
 from pathlib import Path
 
 from engine.sites import site_gameplay_profile
+from game.content_warnings import warn_content_fallback
 from game.npc_names import CATALOG as NPC_NAME_CATALOG, DEFAULT_NAME_CATALOG
 
 
@@ -986,9 +987,12 @@ class World:
         raw = None
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
+        except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+            warn_content_fallback(path, "built-in business-name defaults", exc=exc)
             raw = None
 
+        if raw is not None and not isinstance(raw, dict):
+            warn_content_fallback(path, "built-in business-name defaults", problem="top-level JSON must be an object")
         if not isinstance(raw, dict):
             raw = {}
 

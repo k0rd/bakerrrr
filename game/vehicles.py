@@ -2,6 +2,7 @@ import json
 import random
 from pathlib import Path
 
+from game.content_warnings import warn_content_fallback
 from game.property_keys import ensure_property_lock_metadata
 
 
@@ -129,9 +130,12 @@ def load_vehicle_catalog(path=VEHICLE_DATA_PATH):
     raw = None
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+        warn_content_fallback(path, "built-in vehicle catalog defaults", exc=exc)
         raw = None
 
+    if raw is not None and not isinstance(raw, dict):
+        warn_content_fallback(path, "built-in vehicle catalog defaults", problem="top-level JSON must be an object")
     if not isinstance(raw, dict):
         raw = {}
 
@@ -189,10 +193,36 @@ def load_vehicle_catalog(path=VEHICLE_DATA_PATH):
 
 CATALOG = load_vehicle_catalog()
 
+USED_VEHICLE_PAINT_KEYS = (
+    "vehicle_paint_red",
+    "vehicle_paint_blue",
+    "vehicle_paint_green",
+    "vehicle_paint_white",
+    "vehicle_paint_black",
+    "vehicle_paint_teal",
+    "vehicle_paint_rust",
+    "vehicle_paint_brown",
+)
+
+NEW_VEHICLE_PAINT_KEYS = (
+    "vehicle_paint_red",
+    "vehicle_paint_blue",
+    "vehicle_paint_green",
+    "vehicle_paint_white",
+    "vehicle_paint_teal",
+    "vehicle_paint_yellow",
+)
+
 
 def vehicle_symbol(catalog=None):
     source = catalog if isinstance(catalog, dict) else CATALOG
     return str(source.get("vehicle_symbol", "&"))[:1] or "&"
+
+
+def roll_vehicle_paint_key(rng, quality="used"):
+    quality = str(quality or "used").strip().lower()
+    pool = NEW_VEHICLE_PAINT_KEYS if quality == "new" else USED_VEHICLE_PAINT_KEYS
+    return str(rng.choice(tuple(pool))) if pool else "vehicle_parked"
 
 
 def vehicle_services_for_archetype(archetype, catalog=None):
@@ -308,6 +338,7 @@ def vehicle_metadata(
     metadata = {
         "archetype": "vehicle",
         "vehicle_quality": str(data.get("quality", "used")).strip().lower() or "used",
+        "vehicle_paint": str(data.get("paint", "")).strip(),
         "vehicle_make": str(data.get("make", "Unknown")).strip() or "Unknown",
         "vehicle_model": str(data.get("model", "Vehicle")).strip() or "Vehicle",
         "vehicle_class": str(data.get("vehicle_class", "sedan")).strip().lower() or "sedan",
@@ -432,16 +463,17 @@ def generate_chunk_vehicle_records(
             quality = "new"
 
         profile = roll_vehicle_profile(rng, quality=quality, catalog=source)
+        paint_key = roll_vehicle_paint_key(rng, quality=quality)
+        profile["paint"] = paint_key
         vehicle_token = f"veh:{chunk_coord[0]}:{chunk_coord[1]}:{index}"
         owner_tag = "public" if rng.random() < 0.18 else "private"
         locked = owner_tag != "public"
-        color = "vehicle_new" if quality == "new" else "vehicle_parked"
         lock_tier = 3 if quality == "new" else 2
         metadata = vehicle_metadata(
             profile,
             chunk=chunk_coord,
             owner_tag=owner_tag,
-            display_color=color,
+            display_color=paint_key,
             locked=locked,
             key_id=vehicle_token,
             key_label=f"{profile['make']} {profile['model']}",

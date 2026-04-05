@@ -239,28 +239,120 @@ class SkillProfile:
     fallback skill values from CoreStats/InsightStats when no profile exists.
     """
 
-    def __init__(self, ratings=None, **skills):
+    DEFAULT_FLOOR_RATIO = 0.7
+
+    def __init__(
+        self,
+        ratings=None,
+        *,
+        baselines=None,
+        birth_biases=None,
+        practice=None,
+        last_practiced=None,
+        last_decay=None,
+        recent_changes=None,
+        **skills,
+    ):
         self.ratings = {}
+        self.baselines = {}
+        self.birth_biases = {}
+        self.practice = {}
+        self.last_practiced = {}
+        self.last_decay = {}
+        self.recent_changes = {}
+
+        if isinstance(baselines, dict):
+            for skill_id, value in baselines.items():
+                key = self._skill_key(skill_id)
+                if not key:
+                    continue
+                self.baselines[key] = _clamp_stat(value)
+        if isinstance(birth_biases, dict):
+            for skill_id, value in birth_biases.items():
+                key = self._skill_key(skill_id)
+                if not key:
+                    continue
+                try:
+                    delta = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if abs(delta) <= 1e-9:
+                    continue
+                self.birth_biases[key] = delta
+        if isinstance(practice, dict):
+            for skill_id, value in practice.items():
+                key = self._skill_key(skill_id)
+                if not key:
+                    continue
+                try:
+                    amount = float(value)
+                except (TypeError, ValueError):
+                    amount = 0.0
+                self.practice[key] = max(0.0, amount)
+        if isinstance(last_practiced, dict):
+            for skill_id, value in last_practiced.items():
+                key = self._skill_key(skill_id)
+                if not key:
+                    continue
+                try:
+                    self.last_practiced[key] = int(value)
+                except (TypeError, ValueError):
+                    continue
+        if isinstance(last_decay, dict):
+            for skill_id, value in last_decay.items():
+                key = self._skill_key(skill_id)
+                if not key:
+                    continue
+                try:
+                    self.last_decay[key] = int(value)
+                except (TypeError, ValueError):
+                    continue
+        if isinstance(recent_changes, dict):
+            for skill_id, entry in recent_changes.items():
+                key = self._skill_key(skill_id)
+                if not key or not isinstance(entry, dict):
+                    continue
+                sanitized = {}
+                try:
+                    sanitized["delta"] = float(entry.get("delta", 0.0))
+                except (TypeError, ValueError):
+                    sanitized["delta"] = 0.0
+                try:
+                    sanitized["tick"] = int(entry.get("tick", 0))
+                except (TypeError, ValueError):
+                    sanitized["tick"] = 0
+                sanitized["reason"] = str(entry.get("reason", "") or "").strip().lower()
+                if entry.get("value") is not None:
+                    sanitized["value"] = _clamp_stat(entry.get("value"))
+                self.recent_changes[key] = sanitized
+
         merged = {}
         if isinstance(ratings, dict):
             merged.update(ratings)
         merged.update(skills)
         for skill_id, value in merged.items():
-            self.set(skill_id, value)
+            self.set(skill_id, value, update_baseline=(self._skill_key(skill_id) not in self.baselines))
+
+    def _skill_key(self, skill_id):
+        key = str(skill_id or "").strip().lower()
+        return key
 
     def get(self, skill_id, default=None):
-        key = str(skill_id or "").strip().lower()
+        key = self._skill_key(skill_id)
         if not key:
             return default
         if key not in self.ratings:
             return default
         return float(self.ratings[key])
 
-    def set(self, skill_id, value):
-        key = str(skill_id or "").strip().lower()
+    def set(self, skill_id, value, *, update_baseline=False):
+        key = self._skill_key(skill_id)
         if not key:
             return
-        self.ratings[key] = _clamp_stat(value)
+        clamped = _clamp_stat(value)
+        self.ratings[key] = clamped
+        if update_baseline or key not in self.baselines:
+            self.baselines[key] = clamped
 
     def update(self, ratings=None, **skills):
         merged = {}
@@ -268,7 +360,149 @@ class SkillProfile:
             merged.update(ratings)
         merged.update(skills)
         for skill_id, value in merged.items():
-            self.set(skill_id, value)
+            self.set(skill_id, value, update_baseline=(self._skill_key(skill_id) not in self.baselines))
+
+    def skill_ids(self):
+        return tuple(sorted(set(self.ratings) | set(self.baselines) | set(self.practice) | set(self.last_practiced) | set(self.last_decay)))
+
+    def baseline(self, skill_id, default=None):
+        key = self._skill_key(skill_id)
+        if not key:
+            return default
+        if key not in self.baselines:
+            return default
+        return float(self.baselines[key])
+
+    def birth_bias(self, skill_id, default=0.0):
+        key = self._skill_key(skill_id)
+        if not key:
+            return float(default)
+        try:
+            return float((getattr(self, "birth_biases", {}) or {}).get(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    def set_baseline(self, skill_id, value):
+        key = self._skill_key(skill_id)
+        if not key:
+            return
+        self.baselines[key] = _clamp_stat(value)
+
+    def ensure_baseline(self, skill_id, value=None):
+        key = self._skill_key(skill_id)
+        if not key:
+            return None
+        if key not in self.baselines:
+            if value is None:
+                value = self.get(key, default=5.0)
+            self.baselines[key] = _clamp_stat(value)
+        return float(self.baselines[key])
+
+    def floor(self, skill_id, ratio=None, default=1.0):
+        base = self.ensure_baseline(skill_id, value=self.get(skill_id, default=default))
+        if base is None:
+            return _clamp_stat(default)
+        try:
+            floor_ratio = float(self.DEFAULT_FLOOR_RATIO if ratio is None else ratio)
+        except (TypeError, ValueError):
+            floor_ratio = float(self.DEFAULT_FLOOR_RATIO)
+        floor_ratio = max(0.1, min(1.0, floor_ratio))
+        return max(1.0, min(10.0, float(base) * floor_ratio))
+
+    def practice_amount(self, skill_id, default=0.0):
+        key = self._skill_key(skill_id)
+        if not key:
+            return float(default)
+        try:
+            return float(self.practice.get(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    def set_practice(self, skill_id, amount):
+        key = self._skill_key(skill_id)
+        if not key:
+            return
+        try:
+            value = float(amount)
+        except (TypeError, ValueError):
+            value = 0.0
+        self.practice[key] = max(0.0, value)
+
+    def add_practice(self, skill_id, amount, *, tick=None):
+        key = self._skill_key(skill_id)
+        if not key:
+            return 0.0
+        current = self.practice_amount(key, default=0.0)
+        try:
+            delta = float(amount)
+        except (TypeError, ValueError):
+            delta = 0.0
+        updated = max(0.0, current + delta)
+        self.practice[key] = updated
+        if tick is not None:
+            self.mark_last_practiced(key, tick)
+        return updated
+
+    def last_practiced_tick(self, skill_id, default=None):
+        key = self._skill_key(skill_id)
+        if not key:
+            return default
+        if key not in self.last_practiced:
+            return default
+        return int(self.last_practiced[key])
+
+    def mark_last_practiced(self, skill_id, tick):
+        key = self._skill_key(skill_id)
+        if not key:
+            return
+        try:
+            self.last_practiced[key] = int(tick)
+        except (TypeError, ValueError):
+            return
+
+    def last_decay_tick(self, skill_id, default=None):
+        key = self._skill_key(skill_id)
+        if not key:
+            return default
+        if key not in self.last_decay:
+            return default
+        return int(self.last_decay[key])
+
+    def mark_last_decay(self, skill_id, tick):
+        key = self._skill_key(skill_id)
+        if not key:
+            return
+        try:
+            self.last_decay[key] = int(tick)
+        except (TypeError, ValueError):
+            return
+
+    def note_change(self, skill_id, *, delta, tick, reason="", value=None):
+        key = self._skill_key(skill_id)
+        if not key:
+            return
+        try:
+            change_delta = float(delta)
+        except (TypeError, ValueError):
+            change_delta = 0.0
+        try:
+            change_tick = int(tick)
+        except (TypeError, ValueError):
+            change_tick = 0
+        entry = {
+            "delta": change_delta,
+            "tick": change_tick,
+            "reason": str(reason or "").strip().lower(),
+        }
+        if value is not None:
+            entry["value"] = _clamp_stat(value)
+        self.recent_changes[key] = entry
+
+    def recent_change(self, skill_id, default=None):
+        key = self._skill_key(skill_id)
+        if not key:
+            return default
+        return self.recent_changes.get(key, default)
 
     def as_dict(self):
         return dict(self.ratings)

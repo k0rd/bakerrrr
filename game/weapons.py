@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from game.content_warnings import warn_content_fallback
+
 WEAPONS_PATH = Path(__file__).resolve().parent / "weapons.json"
 
 DEFAULT_WEAPON = {
@@ -98,7 +100,11 @@ def load_weapon_catalog(path=WEAPONS_PATH):
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+        warn_content_fallback(path, "built-in weapon defaults", exc=exc)
+        raw = []
+    if raw is not None and not isinstance(raw, list):
+        warn_content_fallback(path, "built-in weapon defaults", problem="top-level JSON must be a list")
         raw = []
 
     if isinstance(raw, list):

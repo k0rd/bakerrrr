@@ -37,6 +37,7 @@
       "kind": "fixture",
       "display": {"glyph": "u", "color": "property_fixture"},
       "cover": {"kind": "low", "value": 0.5},
+      "cover_intended": true,
       "placement": {"weight": 2, "priorities": ["path_side", "path_tile", "street_side", "open"]},
       "public": true,
       "services": [],
@@ -48,6 +49,7 @@
       "kind": "fixture",
       "display": {"glyph": ";", "color": "property_fixture"},
       "cover": {"kind": "low", "value": 0.26},
+      "cover_intended": true,
       "placement": {"weight": 2, "priorities": ["path_side", "street_side", "open"]},
       "public": true,
       "services": []
@@ -112,7 +114,7 @@
       "cover": {"kind": "low", "value": 0.34},
       "placement": {"weight": 2, "priorities": ["path_side", "entry_side", "open"]},
       "public": true,
-      "services": [],
+      "services": ["vending"],
       "light": {"enabled": true, "radius": 2, "intensity": 0.18, "phases": ["dawn", "dusk", "night"]}
     },
     {
@@ -123,7 +125,7 @@
       "cover": {"kind": "low", "value": 0.22},
       "placement": {"weight": 2, "priorities": ["path_side", "street_side", "open"]},
       "public": true,
-      "services": []
+      "services": ["intel"]
     },
     {
       "id": "security_booth",
@@ -144,7 +146,7 @@
       "cover": {"kind": "low", "value": 0.3},
       "placement": {"weight": 1, "priorities": ["street_side", "path_side", "open"]},
       "public": true,
-      "services": [],
+      "services": ["fuel"],
       "light": {"enabled": true, "radius": 3, "intensity": 0.26, "phases": ["dawn", "dusk", "night"]}
     },
     {
@@ -153,6 +155,7 @@
       "kind": "fixture",
       "display": {"glyph": "o", "color": "property_fixture"},
       "cover": {"kind": "low", "value": 0.29},
+      "cover_intended": true,
       "placement": {"weight": 2, "priorities": ["street_side", "path_side", "open"]},
       "public": true,
       "services": []
@@ -218,7 +221,7 @@
       "cover": {"kind": "low", "value": 0.18},
       "placement": {"weight": 1, "priorities": ["open", "path_side", "edge"]},
       "public": true,
-      "services": [],
+      "services": ["rest"],
       "light": {"enabled": true, "radius": 3, "intensity": 0.42, "phases": ["dusk", "night"]}
     },
     {
@@ -238,6 +241,7 @@
       "kind": "fixture",
       "display": {"glyph": "f", "color": "property_fixture"},
       "cover": {"kind": "low", "value": 0.33},
+      "cover_intended": true,
       "placement": {"weight": 2, "priorities": ["edge", "path_side", "open"]},
       "public": true,
       "services": []

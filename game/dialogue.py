@@ -15,7 +15,18 @@ TOPIC_ORDER = (
     "supervisor",
     "coworkers",
     "people",
+    "hire",
+    "hire_manager",
+    "hire_staff",
+    "fire",
     "services",
+    "service_fuel",
+    "service_banking",
+    "service_insurance",
+    "service_rest",
+    "service_intel",
+    "service_trade",
+    "service_gaming",
     "hours",
     "owner",
     "security",
@@ -91,10 +102,74 @@ TOPIC_DEFS = {
         "root": False,
         "unlocks": (),
     },
+    "hire": {
+        "label": "Want a job?",
+        "root": True,
+        "unlocks": ("hire_manager", "hire_staff"),
+    },
+    "hire_manager": {
+        "label": "Run the place.",
+        "root": False,
+        "unlocks": (),
+    },
+    "hire_staff": {
+        "label": "Take a staff shift.",
+        "root": False,
+        "unlocks": (),
+    },
+    "fire": {
+        "label": "We need to talk about your job.",
+        "root": True,
+        "unlocks": (),
+    },
     "services": {
         "label": "What goes on there?",
         "root": False,
-        "unlocks": ("trade",),
+        "unlocks": (
+            "service_fuel",
+            "service_banking",
+            "service_insurance",
+            "service_rest",
+            "service_intel",
+            "service_trade",
+            "service_gaming",
+            "trade",
+        ),
+    },
+    "service_fuel": {
+        "label": "Any fuel nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_banking": {
+        "label": "Any bank nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_insurance": {
+        "label": "Any insurer nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_rest": {
+        "label": "Anywhere to sleep nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_intel": {
+        "label": "Anywhere selling intel nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_trade": {
+        "label": "Any shopping around here?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_gaming": {
+        "label": "Any gaming around here?",
+        "root": False,
+        "unlocks": (),
     },
     "hours": {
         "label": "When are they open?",
@@ -144,7 +219,18 @@ TOPIC_DEFS = {
     "local": {
         "label": "What's going on around here?",
         "root": True,
-        "unlocks": ("concern", "detail", "history"),
+        "unlocks": (
+            "concern",
+            "detail",
+            "history",
+            "service_fuel",
+            "service_banking",
+            "service_insurance",
+            "service_rest",
+            "service_intel",
+            "service_trade",
+            "service_gaming",
+        ),
     },
     "concern": {
         "label": "Anyone causing trouble?",
@@ -693,11 +779,23 @@ STYLE_ADDRESS_BANKS = {
     "introduction_offer",
     "introduction_repeat",
     "contacts_offer_caution",
+    "contacts_offer_caution_guard",
+    "contacts_offer_caution_worker",
+    "contacts_offer_caution_merchant",
+    "contacts_offer_caution_neighbor",
+    "contacts_offer_caution_chaotic",
     "introduction_offer_caution",
     "vouch_offer",
     "vouch_repeat",
     "vouch_offer_caution",
+    "vouch_offer_caution_guard",
+    "vouch_offer_caution_worker",
+    "vouch_offer_caution_merchant",
+    "vouch_offer_caution_neighbor",
+    "vouch_offer_caution_chaotic",
     "trade_yes_caution",
+    "trade_yes_caution_merchant",
+    "trade_yes_caution_chaotic",
     "farewell",
 }
 
@@ -926,6 +1024,16 @@ DIALOGUE_BANKS = {
         "Nothing special. People come and go.",
         "No big secret. It is just a place to be.",
         "Depends on the day more than the sign.",
+    ),
+    "service_locator": (
+        "For {service_label}? {service_locator_summary}",
+        "{service_locator_summary}",
+        "If you are after {service_label}, {service_locator_summary_lc}",
+    ),
+    "service_locator_none": (
+        "No clean {service_label} lead from me right now.",
+        "Nothing nearby I trust pointing you toward for {service_label}.",
+        "If there is {service_label} close, I do not have the name for it.",
     ),
     "hours": (
         "Usually {hours_text}.",
@@ -1244,10 +1352,60 @@ DIALOGUE_BANKS = {
         "People are noticing enough already. I am not opening another line for you right now.",
         "Cool the heat off first. I am not pointing you at anyone while eyes are up.",
     ),
+    "contacts_caution_no_guard": (
+        "No. Patrol memory is long, and I am not putting another name in your path while the city is keyed up.",
+        "Not with this much heat. The next person you touch turns into a report.",
+        "No. You are too hot for me to point at someone else cleanly.",
+    ),
+    "contacts_caution_no_worker": (
+        "No. I am not dragging a coworker into this while the floor is already twitchy.",
+        "Not on a hot day. I like keeping my job.",
+        "No. I am not putting another worker in your orbit while eyes are up.",
+    ),
+    "contacts_caution_no_merchant": (
+        "Not with this kind of attention on you. People remember who was seen talking at the counter.",
+        "No. Bad heat turns every introduction into shop gossip.",
+        "Cool it down first. I am not sending trouble through my front room.",
+    ),
+    "contacts_caution_no_neighbor": (
+        "Not on this block. Cool it down first.",
+        "No. People around here notice enough already.",
+        "Not while the street is talking about you.",
+    ),
+    "contacts_caution_no_chaotic": (
+        "Not with that kind of heat trailing you back here.",
+        "No. You are bringing too much watch with you.",
+        "Cool off first. I am not feeding a hot line.",
+    ),
     "contacts_offer_caution": (
         "Keep it quiet, but try {contact_place}.",
         "I can point you at {contact_place}, just do not make noise about it.",
         "Start with {contact_place}, and keep my name out of your mouth unless you need it.",
+    ),
+    "contacts_offer_caution_guard": (
+        "If you need a start, try {contact_place}, but keep it clean and do not say I sent you unless you have to.",
+        "Start with {contact_place}. Quiet feet, quiet mouth, no scene.",
+        "You can try {contact_place}, but do it like you belong there and keep me out of the report.",
+    ),
+    "contacts_offer_caution_worker": (
+        "Try {contact_place}, but keep me out of any supervisor talk.",
+        "Start with {contact_place}, just do not make it look like staff chatter.",
+        "You can try {contact_place}, but keep it quiet enough that it does not get back upstairs.",
+    ),
+    "contacts_offer_caution_merchant": (
+        "Keep it quiet and make it look like regular business at {contact_place}.",
+        "I can point you at {contact_place}; just do not make noise about it at the counter.",
+        "Start with {contact_place}, and keep my name out of the shop talk.",
+    ),
+    "contacts_offer_caution_neighbor": (
+        "Try {contact_place}, but keep it off this block.",
+        "Start with {contact_place}; just do not let the whole street clock you doing it.",
+        "You can try {contact_place}, but keep the noise away from the neighbors.",
+    ),
+    "contacts_offer_caution_chaotic": (
+        "Try {contact_place}, just do not drag the watch back here.",
+        "Start with {contact_place} and move quick.",
+        "You can try {contact_place}, but keep the trail thin.",
     ),
     "contacts_person_hint": (
         "If you are after a real name, try {contact_name}. They are {contact_context}.",
@@ -1311,10 +1469,60 @@ DIALOGUE_BANKS = {
         "Cool things down first. I am not staking my name on you while people are watching.",
         "Naw, you *way* too hot.",
     ),
+    "vouch_caution_no_guard": (
+        "No. I am not staking my name on a hot face while patrols are already looking.",
+        "Not now. That kind of favor turns into paperwork when the city is this keyed up.",
+        "Cool it down first. I am not pinning my name to active heat.",
+    ),
+    "vouch_caution_no_worker": (
+        "No. That kind of favor gets me called into someone's office.",
+        "Not while things are this hot. I am not risking my shift on your name.",
+        "Cool it first. I am not burning work trust on active heat.",
+    ),
+    "vouch_caution_no_merchant": (
+        "No. My name is not smoothing over heat at the counter.",
+        "Not with this much attention on you. Bad business sticks to a shop.",
+        "Cool things down first. I am not tying my trade name to that.",
+    ),
+    "vouch_caution_no_neighbor": (
+        "Not while people around here are already looking your way.",
+        "No. I am not hanging my name on block heat.",
+        "Cool it down first. I still have to live here.",
+    ),
+    "vouch_caution_no_chaotic": (
+        "Not with that much heat on you. I am not wearing your splash.",
+        "No. My name does not cover a trail that hot.",
+        "Cool off first. I am not pinning myself to active watch.",
+    ),
     "vouch_offer_caution": (
         "You can use my name, but keep the ask small.",
         "I will vouch once, quietly. Do not make me regret it.",
         "Use my name if you need to, just do not turn it into a scene.",
+    ),
+    "vouch_offer_caution_guard": (
+        "You get one quiet use of my name. Keep it clean and keep it short.",
+        "I will vouch once, quietly. Do not make me look twice at it.",
+        "Use my name if you need to, but no scene and no extra trouble.",
+    ),
+    "vouch_offer_caution_worker": (
+        "You get one quiet use of my name, and keep me out of trouble at work.",
+        "I will vouch once. Keep it small and keep it off the clock.",
+        "Use my name if you need to, just do not let it come back through the workplace.",
+    ),
+    "vouch_offer_caution_merchant": (
+        "You can use my name, but keep it looking like ordinary business.",
+        "I will vouch once, quietly. Do not turn the counter into a story.",
+        "Use my name if you need to, just keep the transaction clean.",
+    ),
+    "vouch_offer_caution_neighbor": (
+        "You get one quiet use of my name. Keep it off the block.",
+        "I will vouch once, but neighbor-quiet, understood?",
+        "Use my name if you need to, just do not let the whole street hear about it.",
+    ),
+    "vouch_offer_caution_chaotic": (
+        "Use my name once if it buys you a step, but do not drag heat back here.",
+        "I will vouch once, quietly. Then you move.",
+        "Use my name if you need to, just keep the trail thin.",
     ),
     "trade_yes": (
         "Sure. Let us see what you have got.",
@@ -1325,6 +1533,16 @@ DIALOGUE_BANKS = {
         "Fine, but keep it quick.",
         "Alright. Quiet business only.",
         "Yeah, but let us not make this look like a meeting.",
+    ),
+    "trade_yes_caution_merchant": (
+        "Fine. Keep it quick and make it look like shopping.",
+        "Alright. Quick business, no crowd, no scene.",
+        "Yeah, but I am not turning my counter into gossip.",
+    ),
+    "trade_yes_caution_chaotic": (
+        "Yeah. Fast hands, short words.",
+        "Alright, but move it. I do not hold hot business for long.",
+        "Sure. Quick deal, then disappear.",
     ),
     "trade_no": (
         "Not here.",
@@ -1543,6 +1761,13 @@ def topic_label(topic_id, context=None):
     topic_id = str(topic_id or "").strip().lower()
     context = context if isinstance(context, dict) else {}
 
+    def _with_hint(base, hint_key):
+        label = str(base or "").strip()
+        hint = str(context.get(hint_key, "") or "").strip()
+        if label and hint:
+            return f"{label} [{hint}]"
+        return label
+
     if topic_id == "workplace" and context.get("workplace_here"):
         return "Do you work here?"
     if topic_id == "organization" and context.get("workplace_name"):
@@ -1561,6 +1786,23 @@ def topic_label(topic_id, context=None):
         return f"Who should I know around {context['workplace_name']}?"
     if topic_id == "people" and context.get("social_lead_name"):
         return "Who should I know around here?"
+    if topic_id == "hire" and context.get("player_business_hire_name"):
+        open_roles = tuple(
+            str(role).strip().lower()
+            for role in tuple(context.get("player_business_hire_roles", ()) or ())
+            if str(role).strip()
+        )
+        if len(open_roles) > 1:
+            return _with_hint(f"Want work at {context['player_business_hire_name']}?", "player_business_hire_fit_hint")
+        if str(context.get("player_business_hire_role", "")).strip().lower() == "manager":
+            return _with_hint(f"Want to run {context['player_business_hire_name']}?", "player_business_hire_fit_hint")
+        return _with_hint(f"Want work at {context['player_business_hire_name']}?", "player_business_hire_fit_hint")
+    if topic_id == "hire_manager" and context.get("player_business_hire_name"):
+        return _with_hint(f"Would you run {context['player_business_hire_name']}?", "player_business_hire_manager_fit_hint")
+    if topic_id == "hire_staff" and context.get("player_business_hire_name"):
+        return _with_hint(f"Would you take a shift at {context['player_business_hire_name']}?", "player_business_hire_staff_fit_hint")
+    if topic_id == "fire" and context.get("player_business_fire_name"):
+        return f"I'm letting you go from {context['player_business_fire_name']}."
     if topic_id == "owner" and context.get("owner_place_name"):
         return f"Who runs {context['owner_place_name']}?"
     if topic_id == "security" and context.get("owner_place_name"):
@@ -1583,6 +1825,20 @@ def topic_label(topic_id, context=None):
         return "I'll go."
     if topic_id == "services" and context.get("owner_place_name"):
         return f"What goes on at {context['owner_place_name']}?"
+    if topic_id == "service_fuel":
+        return "Any fuel nearby?"
+    if topic_id == "service_banking":
+        return "Any bank nearby?"
+    if topic_id == "service_insurance":
+        return "Any insurer nearby?"
+    if topic_id == "service_rest":
+        return "Anywhere to sleep nearby?"
+    if topic_id == "service_intel":
+        return "Anywhere selling intel nearby?"
+    if topic_id == "service_trade":
+        return "Any shopping around here?"
+    if topic_id == "service_gaming":
+        return "Any gaming around here?"
     if topic_id == "hours" and context.get("owner_place_name"):
         return f"When is {context['owner_place_name']} open?"
     if topic_id == "concern" and context.get("guarded"):

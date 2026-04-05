@@ -9,6 +9,7 @@ from game.property_runtime import (
     finance_services_for_property,
     property_aperture_at,
     property_covering,
+    property_fixture_type,
     property_is_public,
     property_metadata,
 )
@@ -120,6 +121,16 @@ PROPERTY_ARCHETYPE_DISPLAY = {
     "media_lab": ("O", "building_roof_civic"),
     "data_center": ("O", "building_roof_civic"),
     "server_hub": ("O", "building_roof_civic"),
+}
+
+PROPERTY_FIXTURE_SEMANTICS = {
+    "bench": "prop_cover_bench",
+    "bus_stop": "prop_cover_shelter",
+    "planter_box": "prop_cover_planter",
+    "drift_fence": "prop_cover_fence",
+    "transformer": "prop_cover_transformer",
+    "field_cache_box": "prop_cover_cache",
+    "water_tank": "prop_cover_tank",
 }
 
 SPECIAL_TILE_RENDER_STYLES = {
@@ -606,15 +617,23 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None):
 
     glyph = str(explicit_glyph or default_glyph)[:1] or "P"
     color = str(explicit_color or default_color or "property_building")
+    semantic_id = None
     if kind == "vehicle":
         quality = str(metadata.get("vehicle_quality", "used")).strip().lower()
+        paint_color = str(metadata.get("vehicle_paint", "")).strip()
         owner_tag = str(prop.get("owner_tag", "")).strip().lower()
-        if owner_tag == "player":
+        if explicit_color:
+            color = explicit_color
+        elif paint_color:
+            color = paint_color
+        elif owner_tag == "player":
             color = "vehicle_player"
         elif quality == "new":
             color = "vehicle_new"
         elif not color:
             color = "vehicle_parked"
+    elif kind in {"fixture", "asset"}:
+        semantic_id = PROPERTY_FIXTURE_SEMANTICS.get(property_fixture_type(prop))
     if property_is_public(prop) and glyph.isalpha():
         glyph = glyph.lower()
 
@@ -622,6 +641,7 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None):
     return _semantic_snapshot(
         glyph,
         color=color,
+        semantic_id=semantic_id,
         catalog=catalog,
         preferred_categories=preferred_categories,
     )

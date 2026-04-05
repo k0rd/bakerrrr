@@ -56,6 +56,8 @@ TOOL_CONTEXT_ALIASES = {
 }
 
 HUD_SKILL_IDS = ("perception", "conversation", "streetwise", "intrusion", "mechanics")
+ALL_SKILL_IDS = tuple(SKILL_DEFS.keys())
+SKILL_FLOOR_RATIO = float(getattr(SkillProfile, "DEFAULT_FLOOR_RATIO", 0.7) or 0.7)
 
 ROLE_SKILL_MODS = {
     "player": {"intrusion": 0.3, "streetwise": 0.2, "perception": 0.15},
@@ -96,6 +98,13 @@ CAREER_KEYWORD_SKILL_MODS = {
     "pharmac": {"perception": 0.35, "conversation": 0.2},
 }
 
+PLAYER_BIRTH_SPECIALIZATION_MODS = (
+    0.45,
+    0.2,
+    -0.4,
+    -0.25,
+)
+
 
 def _num(value, default=5.0):
     try:
@@ -108,6 +117,23 @@ def _num(value, default=5.0):
 
 def _clamp_skill(value, default=5.0):
     return max(1.0, min(10.0, _num(value, default=default)))
+
+
+def _player_birth_skill_biases(birth_key):
+    birth_key = str(birth_key or "").strip()
+    if not birth_key:
+        return {}
+
+    skill_ids = list(ALL_SKILL_IDS)
+    if len(skill_ids) < len(PLAYER_BIRTH_SPECIALIZATION_MODS):
+        return {}
+
+    rng = random.Random(f"{birth_key}:player_birth_specialization")
+    rng.shuffle(skill_ids)
+    biases = {}
+    for skill_id, delta in zip(skill_ids, PLAYER_BIRTH_SPECIALIZATION_MODS):
+        biases[skill_id] = float(delta)
+    return biases
 
 
 def normalize_skill_id(skill_id):
@@ -226,6 +252,71 @@ def actor_skill(sim, eid, skill_id, default=5.0):
     return base
 
 
+def ensure_actor_skill_profile(sim, eid, *, skill_ids=ALL_SKILL_IDS, default=5.0):
+    if sim is None or eid is None:
+        return None
+
+    profiles = sim.ecs.get(SkillProfile)
+    profile = profiles.get(eid) if profiles else None
+    if isinstance(profile, SkillProfile):
+        for skill_id in tuple(skill_ids or ALL_SKILL_IDS):
+            key = normalize_skill_id(skill_id)
+            if not key:
+                continue
+            profile.ensure_baseline(key, value=profile.get(key, default=default))
+        return profile
+
+    ratings = {}
+    for skill_id in tuple(skill_ids or ALL_SKILL_IDS):
+        key = normalize_skill_id(skill_id)
+        if not key:
+            continue
+        ratings[key] = actor_skill(sim, eid, key, default=default)
+    profile = SkillProfile(ratings=ratings)
+    sim.ecs.add(eid, profile)
+    return profile
+
+
+def profile_skill_baseline(skill_id, *, profile=None, core=None, insight=None, default=5.0):
+    key = normalize_skill_id(skill_id)
+    if not key:
+        return _clamp_skill(default, default=default)
+
+    if isinstance(profile, SkillProfile):
+        baseline = profile.ensure_baseline(key, value=profile.get(key, default=default))
+        if baseline is not None:
+            return _clamp_skill(baseline, default=default)
+
+    return profile_skill(key, profile=profile, core=core, insight=insight, default=default)
+
+
+def actor_skill_baseline(sim, eid, skill_id, default=5.0):
+    if sim is None or eid is None:
+        return _clamp_skill(default, default=default)
+
+    profiles = sim.ecs.get(SkillProfile)
+    profile = profiles.get(eid) if profiles else None
+    insights = sim.ecs.get(InsightStats)
+    insight = insights.get(eid) if insights else None
+    cores = sim.ecs.get(CoreStats)
+    core = cores.get(eid) if cores else None
+    return profile_skill_baseline(skill_id, profile=profile, core=core, insight=insight, default=default)
+
+
+def skill_floor_value(baseline, floor_ratio=SKILL_FLOOR_RATIO):
+    try:
+        ratio = float(floor_ratio)
+    except (TypeError, ValueError):
+        ratio = float(SKILL_FLOOR_RATIO)
+    ratio = max(0.1, min(1.0, ratio))
+    return max(1.0, min(10.0, float(_clamp_skill(baseline)) * ratio))
+
+
+def actor_skill_floor(sim, eid, skill_id, default=5.0, floor_ratio=SKILL_FLOOR_RATIO):
+    baseline = actor_skill_baseline(sim, eid, skill_id, default=default)
+    return skill_floor_value(baseline, floor_ratio=floor_ratio)
+
+
 def actor_skill_bundle(sim, eid, skill_ids=HUD_SKILL_IDS):
     bundle = {}
     for skill_id in skill_ids:
@@ -234,6 +325,128 @@ def actor_skill_bundle(sim, eid, skill_ids=HUD_SKILL_IDS):
             continue
         bundle[key] = actor_skill(sim, eid, key)
     return bundle
+
+
+def profile_recent_skill_changes(profile, *, tick=None, skill_ids=ALL_SKILL_IDS, recent_window=None, limit=None):
+    if not isinstance(profile, SkillProfile):
+        return ()
+
+    try:
+        current_tick = int(tick) if tick is not None else None
+    except (TypeError, ValueError):
+        current_tick = None
+    try:
+        window = int(recent_window) if recent_window is not None else None
+    except (TypeError, ValueError):
+        window = None
+
+    rows = []
+    seen = set()
+    for skill_id in tuple(skill_ids or profile.skill_ids() or ALL_SKILL_IDS):
+        key = normalize_skill_id(skill_id)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        entry = profile.recent_change(key)
+        if not isinstance(entry, dict):
+            continue
+        try:
+            entry_tick = int(entry.get("tick", 0))
+        except (TypeError, ValueError):
+            entry_tick = 0
+        if current_tick is not None and window is not None and window >= 0 and (current_tick - entry_tick) > window:
+            continue
+        delta = _num(entry.get("delta", 0.0), 0.0)
+        if abs(delta) <= 1e-9:
+            continue
+        value = _clamp_skill(entry.get("value", profile.get(key, default=5.0)), default=5.0)
+        baseline = profile.ensure_baseline(key, value=value)
+        floor = profile.floor(key)
+        rows.append({
+            "skill_id": key,
+            "label": skill_label(key),
+            "delta": float(delta),
+            "tick": int(entry_tick),
+            "age_ticks": None if current_tick is None else max(0, int(current_tick) - int(entry_tick)),
+            "value": float(value),
+            "baseline": float(baseline if baseline is not None else value),
+            "floor": float(floor),
+            "reason": str(entry.get("reason", "") or "").strip().lower(),
+        })
+
+    rows.sort(key=lambda row: (-int(row["tick"]), -abs(float(row["delta"])), str(row["skill_id"])))
+    if limit is not None:
+        try:
+            max_items = max(0, int(limit))
+        except (TypeError, ValueError):
+            max_items = 0
+        rows = rows[:max_items]
+    return tuple(rows)
+
+
+def profile_neglect_pressure(profile, *, tick, skill_ids=ALL_SKILL_IDS, grace_ticks, warning_ticks=0, limit=None):
+    if not isinstance(profile, SkillProfile):
+        return ()
+    try:
+        current_tick = int(tick)
+        grace = int(grace_ticks)
+    except (TypeError, ValueError):
+        return ()
+    try:
+        warning = int(warning_ticks)
+    except (TypeError, ValueError):
+        warning = 0
+    warning = max(0, warning)
+    if grace <= 0:
+        return ()
+
+    rows = []
+    seen = set()
+    for skill_id in tuple(skill_ids or profile.skill_ids() or ALL_SKILL_IDS):
+        key = normalize_skill_id(skill_id)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        current = profile.get(key)
+        if current is None:
+            continue
+        floor = profile.floor(key)
+        if float(current) <= float(floor) + 1e-9:
+            continue
+        last_practiced = profile.last_practiced_tick(key)
+        if last_practiced is None:
+            continue
+        idle_ticks = max(0, current_tick - int(last_practiced))
+        due_in = int(grace) - int(idle_ticks)
+        if due_in > warning:
+            continue
+        baseline = profile.ensure_baseline(key, value=current)
+        rows.append({
+            "skill_id": key,
+            "label": skill_label(key),
+            "status": "overdue" if due_in <= 0 else "warning",
+            "idle_ticks": int(idle_ticks),
+            "due_in": int(due_in),
+            "last_practiced_tick": int(last_practiced),
+            "value": float(_clamp_skill(current, default=5.0)),
+            "baseline": float(baseline if baseline is not None else current),
+            "floor": float(floor),
+        })
+
+    rows.sort(
+        key=lambda row: (
+            0 if str(row.get("status", "")) == "overdue" else 1,
+            int(row.get("due_in", 0)),
+            str(row.get("skill_id", "")),
+        )
+    )
+    if limit is not None:
+        try:
+            max_items = max(0, int(limit))
+        except (TypeError, ValueError):
+            max_items = 0
+        rows = rows[:max_items]
+    return tuple(rows)
 
 
 def _service_edge(score, baseline=5.0):
@@ -285,6 +498,168 @@ def insurance_skill_terms(sim, eid):
         "score": score,
         "premium_mult": max(0.9, 1.0 - (edge * 0.1)),
         "note": _service_note("insurance", conversation, streetwise, perception, edge),
+    }
+
+
+def _mobility_service_note(mechanics, conversation, streetwise, perception, edge):
+    if float(edge) < 0.12:
+        return ""
+    if mechanics >= max(conversation, streetwise, perception):
+        return "you talk like you know the machine"
+    if streetwise >= max(mechanics, conversation, perception):
+        return "you know the local rate"
+    if perception >= max(mechanics, conversation, streetwise):
+        return "you catch the padded fees"
+    return "your pitch softens the quote"
+
+
+def mobility_service_skill_terms(sim, eid):
+    mechanics = actor_skill(sim, eid, "mechanics")
+    conversation = actor_skill(sim, eid, "conversation")
+    streetwise = actor_skill(sim, eid, "streetwise")
+    perception = actor_skill(sim, eid, "perception")
+    score = (mechanics * 0.44) + (conversation * 0.24) + (streetwise * 0.2) + (perception * 0.12)
+    edge = _service_edge(score, baseline=5.0)
+    return {
+        "score": score,
+        "price_mult": max(0.93, 1.0 - (edge * 0.07)),
+        "note": _mobility_service_note(mechanics, conversation, streetwise, perception, edge),
+    }
+
+
+def _intel_note(perception, conversation, streetwise, edge):
+    if float(edge) < 0.12:
+        return ""
+    if perception >= max(conversation, streetwise):
+        return "you catch the useful details"
+    if streetwise >= max(perception, conversation):
+        return "you know which leads are worth chasing"
+    return "you know what questions to ask"
+
+
+def intel_skill_terms(sim, eid):
+    perception = actor_skill(sim, eid, "perception")
+    conversation = actor_skill(sim, eid, "conversation")
+    streetwise = actor_skill(sim, eid, "streetwise")
+    score = (perception * 0.56) + (streetwise * 0.28) + (conversation * 0.16)
+    edge = _service_edge(score, baseline=5.0)
+    radius_bonus = 0
+    if score >= 6.2:
+        radius_bonus += 1
+    if score >= 8.1:
+        radius_bonus += 1
+    line_limit = 4
+    if score >= 5.8:
+        line_limit += 1
+    if score >= 7.8:
+        line_limit += 1
+    detail_level = 0
+    if edge >= 0.12:
+        detail_level = 1
+    if score >= 7.8:
+        detail_level = 2
+    return {
+        "score": score,
+        "radius_bonus": radius_bonus,
+        "line_limit": line_limit,
+        "detail_level": detail_level,
+        "note": _intel_note(perception, conversation, streetwise, edge),
+    }
+
+
+def access_prep_skill_terms(sim, eid):
+    intrusion = actor_skill(sim, eid, "intrusion")
+    mechanics = actor_skill(sim, eid, "mechanics")
+    perception = actor_skill(sim, eid, "perception")
+    streetwise = actor_skill(sim, eid, "streetwise")
+    score = (intrusion * 0.38) + (mechanics * 0.24) + (perception * 0.24) + (streetwise * 0.14)
+    edge = _service_edge(score, baseline=5.0)
+    reveal_tier = 0
+    if score >= 5.9:
+        reveal_tier = 1
+    if score >= 7.8:
+        reveal_tier = 2
+
+    if edge < 0.12:
+        note = ""
+    elif intrusion >= max(mechanics, perception, streetwise):
+        note = "you map the clean entry route"
+    elif mechanics >= max(intrusion, perception, streetwise):
+        note = "you read the hardware fast"
+    elif perception >= max(intrusion, mechanics, streetwise):
+        note = "you spot the useful seams"
+    else:
+        note = "you read the place like a local job"
+
+    return {
+        "score": score,
+        "reveal_tier": reveal_tier,
+        "note": note,
+    }
+
+
+def dialogue_prep_skill_terms(sim, eid):
+    conversation = actor_skill(sim, eid, "conversation")
+    intrusion = actor_skill(sim, eid, "intrusion")
+    perception = actor_skill(sim, eid, "perception")
+    streetwise = actor_skill(sim, eid, "streetwise")
+    mechanics = actor_skill(sim, eid, "mechanics")
+    score = (
+        (conversation * 0.28)
+        + (intrusion * 0.24)
+        + (perception * 0.18)
+        + (streetwise * 0.18)
+        + (mechanics * 0.12)
+    )
+    edge = _service_edge(score, baseline=5.0)
+    detail_level = 0
+    if score >= 5.9:
+        detail_level = 1
+    if score >= 7.9:
+        detail_level = 2
+
+    if edge < 0.12:
+        note = ""
+    elif conversation >= max(intrusion, perception, streetwise, mechanics):
+        note = "you ask the right way"
+    elif intrusion >= max(conversation, perception, streetwise, mechanics):
+        note = "you probe for the clean bypass"
+    elif perception >= max(conversation, intrusion, streetwise, mechanics):
+        note = "you catch the useful seams"
+    elif streetwise >= max(conversation, intrusion, perception, mechanics):
+        note = "you steer toward routines and blind spots"
+    else:
+        note = "you read the hardware underneath the answer"
+
+    return {
+        "score": score,
+        "detail_level": detail_level,
+        "note": note,
+    }
+
+
+def scan_skill_terms(sim, eid):
+    perception = actor_skill(sim, eid, "perception")
+    conversation = actor_skill(sim, eid, "conversation")
+    streetwise = actor_skill(sim, eid, "streetwise")
+    score = (perception * 0.7) + (streetwise * 0.2) + (conversation * 0.1)
+    edge = _service_edge(score, baseline=5.05)
+    radius_bonus = 0
+    if score >= 6.0:
+        radius_bonus += 1
+    if score >= 8.4:
+        radius_bonus += 1
+    detail_level = 0
+    if edge >= 0.12:
+        detail_level = 1
+    if score >= 7.7:
+        detail_level = 2
+    return {
+        "score": score,
+        "radius_bonus": radius_bonus,
+        "detail_level": detail_level,
+        "display_limit": 5 + (1 if score >= 7.2 else 0),
+        "note": _intel_note(perception, conversation, streetwise, edge),
     }
 
 
@@ -407,12 +782,13 @@ def actor_tool_terms(sim, eid, context):
     return best_terms or terms
 
 
-def seed_skill_profile(rng, *, role="", career="", core=None, insight=None, jitter=0.35):
+def seed_skill_profile(rng, *, role="", career="", core=None, insight=None, jitter=0.35, birth_key=""):
     if rng is None:
         rng = random.Random(0)
 
     role_key = str(role or "").strip().lower()
     career_text = str(career or "").strip().lower().replace(" ", "_")
+    birth_biases = _player_birth_skill_biases(birth_key) if role_key == "player" else {}
     ratings = {}
     for skill_id in SKILL_DEFS:
         value = derived_skill_value(skill_id, core=core, insight=insight, default=5.0)
@@ -421,5 +797,36 @@ def seed_skill_profile(rng, *, role="", career="", core=None, insight=None, jitt
             if keyword in career_text:
                 value += float(mods.get(skill_id, 0.0))
         value += float(rng.uniform(-abs(float(jitter)), abs(float(jitter))))
+        value += float(birth_biases.get(skill_id, 0.0))
         ratings[skill_id] = _clamp_skill(value)
-    return SkillProfile(ratings=ratings)
+    return SkillProfile(ratings=ratings, birth_biases=birth_biases)
+
+
+def access_skill_practice_awards(context, *, success, fumbled=False):
+    context_key = normalize_tool_context(context)
+    success = bool(success)
+    fumbled = bool(fumbled)
+
+    intrusion = 0.42 if success else 0.26
+    mechanics = 0.12 if success else 0.08
+    perception = 0.05 if success else 0.03
+
+    if context_key in {"vehicle_ignition", "relay_controller"}:
+        mechanics += 0.14 if success else 0.1
+    elif context_key in {"schedule_controller", "biometric_controller"}:
+        mechanics += 0.1 if success else 0.07
+    elif context_key in {"mechanical_lock", "side_entry"}:
+        mechanics += 0.06 if success else 0.04
+    elif context_key == "badge_controller":
+        perception += 0.03 if success else 0.02
+
+    if fumbled:
+        intrusion *= 0.7
+        mechanics *= 0.65
+        perception *= 0.6
+
+    return {
+        "intrusion": max(0.0, float(intrusion)),
+        "mechanics": max(0.0, float(mechanics)),
+        "perception": max(0.0, float(perception)),
+    }

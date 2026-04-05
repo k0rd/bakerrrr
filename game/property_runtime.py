@@ -309,6 +309,26 @@ def property_fixture_type(prop):
     return str(metadata.get("fixture_type", metadata.get("archetype", "")) or "").strip().lower()
 
 
+def property_cover_intended(prop):
+    if not isinstance(prop, dict):
+        return False
+    kind = str(prop.get("kind", "") or "").strip().lower()
+    if kind not in {"fixture", "asset"}:
+        return False
+
+    metadata = property_metadata(prop)
+    if bool(metadata.get("cover_intended")):
+        return True
+
+    # Keep older saves readable without requiring metadata migration.
+    return property_fixture_type(prop) in {
+        "bench",
+        "bus_stop",
+        "planter_box",
+        "drift_fence",
+    }
+
+
 def property_services(prop):
     services = []
     for service in finance_services_for_property(prop):

@@ -1,65 +1,68 @@
-# BAKERRRR
+BAKERRRR
+
+
+
 
 Terminal-native systemic sandbox roguelike prototype.
 
-Public alpha prep is in progress.
+BAKERRRR is a Python game built around emergent play, layered simulation, and readable chaos. It combines terminal-first design with systemic world logic, NPC behavior, economy, property access, and multiple UI backends. Public alpha prep is in progress.
 
-The game is written in python and requires the pygame and curses libraries. the license does not cover the terms of these licenses
+Project Status
 
-## Early Adopter Note
+BAKERRRR is under active development and is currently being shaped toward a public alpha.
 
-Planned direction (no date commitment):
+Current priorities include:
 
-- continue open alpha development with community feedback
-- target a free or low-cost Steam release once the core loop and onboarding are stable
-- validate controls and readability on Steam Deck during that process
+stabilizing the core loop
+improving onboarding and moment-to-moment readability
+refining controls across supported frontends
+continuing systemic expansion without losing clarity
 
-Early testers can have direct influence on UX priorities, controls, and readability decisions.
+BAKERRRR currently ships with simple launcher scripts for both supported frontends.
 
-## Community
+Launch the terminal version:
 
-If you love entropy-heavy roguelikes and systemic simulation, contributions are welcome.
+./bakerrrr
 
-Start here: [CONTRIBUTING.md](CONTRIBUTING.md)
+Launch the graphical frontend:
 
-Friendly ways to help:
+./bakerrrr-gui
 
-- report surprising outcomes, unclear UI states, and readability pain points
-- propose small, testable system interactions
-- add or tune content data with matching regression coverage
-- improve docs for onboarding and discoverability
+These wrappers handle the underlying startup details, so the launcher scripts are the intended day-to-day way to run the game.
 
+The shared Python entrypoint remains available through main.py for development and debugging.
 
-## Running
+Requirements
 
-The game uses a shared entrypoint: `main.py`.
+BAKERRRR is written in Python.
 
-Default launch uses the curses frontend:
+Current frontends use:
 
-- `python3 main.py`
+pygame
+curses / terminal support appropriate to your platform
 
-To launch the pygame frontend, select the backend explicitly:
+Dependency licensing remains under the terms of their respective upstream projects.
 
-- `python3 main.py --ui pygame`
-- `BAKERRRR_UI=pygame python3 main.py`
+Pull Requests
 
-Supported pygame aliases are `pygame`, `tile`, and `tiles`.
-When you use pygame, unless you have a really big monitor - you will want to set the environment variable
-- `BAKERRRR_TILE_SIZE_PX=26`
+Pull requests may be examined, but review is discretionary and acceptance is not guaranteed.
 
-## License
+Public discussion, bug reports, and clear reproduction notes are generally more useful than large unsolicited changes.
+
+License
 
 Code is licensed under the BAKERRRR Alpha Non-Commercial Source License.
 
-See `LICENSE`.
+See LICENSE.
 
-Assets are licensed separately under `LICENSE-ASSETS`.
+Assets are licensed separately under LICENSE-ASSETS.
 
 Commercial use by third parties is not permitted without written permission.
-bakerrrr belongs to Adrianna Harouff use is by license only.
 
-## Documentation
+Documentation
 
-Internal methodology and state-tracking notes are maintained privately and are intentionally omitted from the public release.
-Normal code and content contributions do not require an NDA.
-Method-sharing may be considered for trusted contributors who enter into a good-faith NDA with the project maintainers.
+Some internal methodology and state-tracking notes are maintained privately and are intentionally omitted from the public release.
+
+Normal use of the public code and content does not require access to private methodology.
+
+Internal materials may be shared separately at maintainer discretion.

@@ -4,6 +4,8 @@ import json
 import random
 from pathlib import Path
 
+from game.content_warnings import warn_content_fallback
+
 PATH_GLYPHS = {"=", ":"}
 PLACEMENT_BUCKETS = {"path_side", "path_tile", "entry_side", "street_side", "edge", "open"}
 FIXTURES_PATH = Path(__file__).resolve().parent.parent / "game" / "fixtures.json"
@@ -116,6 +118,7 @@ DEFAULT_CITY_FIXTURE_SPECS = (
         "weight": 1,
         "priorities": ("path_side", "street_side", "open"),
         "finance_services": ("banking",),
+        "site_services": (),
         "public": True,
         "light_enabled": True,
         "light_radius": 3,
@@ -133,6 +136,7 @@ DEFAULT_CITY_FIXTURE_SPECS = (
         "weight": 1,
         "priorities": ("path_side", "entry_side", "open"),
         "finance_services": ("insurance",),
+        "site_services": (),
         "public": True,
         "light_enabled": True,
         "light_radius": 3,
@@ -235,6 +239,7 @@ def _normalize_fixture_spec(raw):
         cover_kind = "low"
     cover_value = _num(raw.get("cover_value", cover.get("value", 0.35)), 0.35)
     cover_value = max(0.0, min(0.9, cover_value))
+    cover_intended = bool(raw.get("cover_intended", cover.get("intended", False)))
 
     weight = _num(raw.get("weight", placement.get("weight", 1.0)), 1.0)
     weight = max(0.1, weight)
@@ -249,13 +254,31 @@ def _normalize_fixture_spec(raw):
     if not priorities:
         priorities = ["open"]
 
-    raw_services = raw.get("services", raw.get("finance_services", ()))
-    services = []
+    finance_services = []
+    site_services = []
+
+    def _append_services(raw_values, target):
+        if not isinstance(raw_values, (list, tuple)):
+            return
+        for service in raw_values:
+            label = str(service).strip().lower()
+            if label and label not in target:
+                target.append(label)
+
+    _append_services(raw.get("finance_services", ()), finance_services)
+    _append_services(raw.get("site_services", ()), site_services)
+
+    raw_services = raw.get("services", ())
     if isinstance(raw_services, (list, tuple)):
         for service in raw_services:
             label = str(service).strip().lower()
-            if label and label not in services:
-                services.append(label)
+            if not label:
+                continue
+            if label in {"banking", "insurance"}:
+                if label not in finance_services:
+                    finance_services.append(label)
+            elif label not in site_services:
+                site_services.append(label)
 
     family = str(raw.get("family", "")).strip().lower()
     public_default = kind == "fixture"
@@ -284,9 +307,11 @@ def _normalize_fixture_spec(raw):
         "color": color,
         "cover_kind": cover_kind,
         "cover_value": cover_value,
+        "cover_intended": cover_intended,
         "weight": weight,
         "priorities": tuple(priorities),
-        "finance_services": tuple(services),
+        "finance_services": tuple(finance_services),
+        "site_services": tuple(site_services),
         "public": public,
         "family": family,
         "light_enabled": bool(light_enabled and light_radius > 0 and light_intensity > 0.0),
@@ -312,9 +337,12 @@ def _normalize_fixture_list(raw_specs, fallback_specs):
 def load_fixture_specs(path=FIXTURES_PATH):
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+        warn_content_fallback(path, "built-in fixture specs", exc=exc)
         raw = {}
 
+    if raw is not None and not isinstance(raw, dict):
+        warn_content_fallback(path, "built-in fixture specs", problem="top-level JSON must be an object")
     if not isinstance(raw, dict):
         raw = {}
 
@@ -490,6 +518,7 @@ def _build_fixture_metadata(spec, rng, area_type):
     public_default = kind == "fixture"
     public = bool(spec.get("public", public_default))
     finance_services = tuple(spec.get("finance_services", ()))
+    site_services = tuple(spec.get("site_services", ()))
     cost_min = 90 if kind == "fixture" else 120
     cost_max = 260 if kind == "fixture" else 320
 
@@ -500,9 +529,11 @@ def _build_fixture_metadata(spec, rng, area_type):
         "display_color": str(spec.get("color", "property_fixture" if kind == "fixture" else "property_asset")),
         "cover_kind": str(spec.get("cover_kind", "low")).strip().lower() or "low",
         "cover_value": float(spec.get("cover_value", 0.35)),
+        "cover_intended": bool(spec.get("cover_intended", False)),
         "infrastructure_family": str(spec.get("family", area_type or "city")).strip().lower() or "city",
         "public": public,
         "finance_services": list(finance_services),
+        "site_services": list(site_services),
         "purchase_cost": rng.randint(cost_min, cost_max),
         "light_enabled": bool(spec.get("light_enabled", False)),
         "light_radius": int(max(0, spec.get("light_radius", 0))),

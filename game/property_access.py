@@ -212,6 +212,17 @@ def _property_archetype(prop):
     return str(_property_metadata(prop).get("archetype", "") or "").strip().lower()
 
 
+def _player_business_customer_policy(prop):
+    metadata = _property_metadata(prop)
+    state = metadata.get("player_business")
+    if not isinstance(state, dict):
+        return "public"
+    clean = str(state.get("customer_policy", "") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if clean not in {"public", "staff_only", "closed"}:
+        return "public"
+    return clean
+
+
 def finance_services_for_property(prop):
     metadata = _property_metadata(prop)
     configured = metadata.get("finance_services", [])
@@ -1365,6 +1376,11 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
             or standing_reason in {"owner", "employee", "credential_holder"}
         )
     )
+    customer_policy = "public"
+    if _player_owns_property(sim, getattr(sim, "player_eid", None), prop):
+        customer_policy = _player_business_customer_policy(prop)
+    if can_use_services and customer_policy in {"staff_only", "closed"}:
+        can_use_services = standing_reason in {"owner", "employee", "credential_holder"}
 
     severity_score = 0
     if inside_bounds and not permitted:

@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from game.content_warnings import warn_content_fallback
 from game.components import CreatureIdentity
 
 
@@ -39,9 +40,12 @@ def load_npc_name_catalog(path=NPC_NAMES_PATH):
     raw = None
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+        warn_content_fallback(path, "built-in NPC name defaults", exc=exc)
         raw = None
 
+    if raw is not None and not isinstance(raw, dict):
+        warn_content_fallback(path, "built-in NPC name defaults", problem="top-level JSON must be an object")
     if not isinstance(raw, dict):
         raw = {}
 

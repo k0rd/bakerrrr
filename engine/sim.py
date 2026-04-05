@@ -775,6 +775,50 @@ class Simulation:
             self.tilemap.add_floor_link(int(x), int(y), from_z=from_z, to_z=from_z + 1, kind=kind)
         return top_floor - bottom_floor
 
+    def _pick_building_connector_cell(self, left, right, top, bottom, kind, excluded=None):
+        excluded = set(excluded or ())
+        interior_cells = [
+            (int(x), int(y))
+            for y in range(int(top) + 1, int(bottom))
+            for x in range(int(left) + 1, int(right))
+            if (int(x), int(y)) not in excluded
+        ]
+        if not interior_cells:
+            return None
+
+        kind_label = str(kind).strip().lower() or "stairs"
+        if kind_label == "elevator":
+            preferred_cells = (
+                (int(right) - 1, int(top) + 1),
+                (int(right) - 1, int(bottom) - 1),
+                (int(left) + 1, int(top) + 1),
+                (int(left) + 1, int(bottom) - 1),
+            )
+        else:
+            preferred_cells = (
+                (int(left) + 1, int(top) + 1),
+                (int(left) + 1, int(bottom) - 1),
+                (int(right) - 1, int(top) + 1),
+                (int(right) - 1, int(bottom) - 1),
+            )
+
+        center_x = (int(left) + int(right)) // 2
+        center_y = (int(top) + int(bottom)) // 2
+
+        def _score(cell):
+            cell_x, cell_y = cell
+            preferred_offsets = tuple(
+                max(abs(cell_x - pref_x), abs(cell_y - pref_y))
+                for pref_x, pref_y in preferred_cells
+            )
+            return preferred_offsets + (
+                abs(cell_x - center_x) + abs(cell_y - center_y),
+                cell_y,
+                cell_x,
+            )
+
+        return min(interior_cells, key=_score)
+
     def _core_area_clear(self, center_x, center_y, top_floor):
         left = int(center_x) - 1
         right = int(center_x) + 1
@@ -1221,8 +1265,19 @@ class Simulation:
                     if floors + basement_levels > 1:
                         archetype = str(building.get("archetype", "")).strip().lower()
                         connector_kind = "elevator" if archetype in elevator_archetypes else "stairs"
-                        connector_x = right - 1 if connector_kind == "elevator" else left + 1
-                        connector_y = top + 1
+                        connector_cell = self._pick_building_connector_cell(
+                            left=left,
+                            right=right,
+                            top=top,
+                            bottom=bottom,
+                            kind=connector_kind,
+                            excluded=shape_excluded,
+                        )
+                        if connector_cell is None:
+                            connector_x = right - 1 if connector_kind == "elevator" else left + 1
+                            connector_y = top + 1
+                        else:
+                            connector_x, connector_y = connector_cell
                         self._add_vertical_link_stack(
                             connector_x,
                             connector_y,

@@ -1203,7 +1203,13 @@ def _wildlife_tile_candidates(sim, chunk, property_records, profile, outdoor_til
     for prop in props:
         for zone in zones:
             candidates.extend(_tile_candidates_for_property(sim, prop, zone))
-    candidates = _unique_positions(candidates)
+    exterior_candidates = []
+    for x, y, z in _unique_positions(candidates):
+        covered = sim.property_covering(x, y, z)
+        if covered and str(covered.get("kind", "building")).strip().lower() == "building":
+            continue
+        exterior_candidates.append((x, y, z))
+    candidates = exterior_candidates
     if candidates:
         return candidates
 

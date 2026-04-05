@@ -55,6 +55,7 @@ from game.components import (
     WeaponUseProfile,
 )
 from game.economy import chunk_economy_profile, pick_career_for_workplace, workplace_archetype_weight
+from game.finance_services import FinanceSystem
 from game.items import ITEM_CATALOG
 from game.npc_names import (
     generate_human_household_names,
@@ -63,6 +64,7 @@ from game.npc_names import (
 )
 from game.organizations import ensure_property_organization, seed_property_organization_defaults, sync_actor_organization_affiliations
 from game.population import human_max_hp_for_role, seed_chunk_items, spawn_chunk_npcs
+from game.player_businesses import PlayerBusinessSystem
 from game.vehicles import (
     generate_chunk_vehicle_records,
     roll_vehicle_profile,
@@ -71,8 +73,12 @@ from game.vehicles import (
 )
 from game.opportunities import evaluate_opportunity_board, seed_run_opportunities
 from game.property_access import default_site_services_for_archetype
+from game.property_controllers import PropertySystem
 from game.property_keys import ensure_actor_has_property_key, ensure_property_lock
 from game.run_objectives import evaluate_run_objective, seed_run_objective
+from game.service_menu import ServiceMenuSystem
+from game.site_services import SiteServiceSystem
+from game.skill_progression import SkillProgressionSystem
 from game.skills import seed_skill_profile
 from game.systems import (
     CoverSystem,
@@ -81,7 +87,6 @@ from game.systems import (
     EavesdropSystem,
     EventLogSystem,
     FinalOperationSystem,
-    FinanceSystem,
     ItemSystem,
     InputSystem,
     LightingSystem,
@@ -102,12 +107,9 @@ from game.systems import (
     PlayerActionSystem,
     PropertyAwarenessSystem,
     PropertyDefenseSystem,
-    PropertySystem,
     RenderSystem,
     RivalOperatorSystem,
     RunPressureSystem,
-    ServiceMenuSystem,
-    SiteServiceSystem,
     StatusEffectSystem,
     StealthSystem,
     TradeSystem,
@@ -248,6 +250,7 @@ def _register_runtime_systems(sim, view, player):
     input_system = InputSystem(sim, view, player)
     cover_system = CoverSystem(sim)
     player_action_system = PlayerActionSystem(sim)
+    skill_progression_system = SkillProgressionSystem(sim, player)
     item_system = ItemSystem(sim, player)
     service_menu_system = ServiceMenuSystem(sim, player)
     trade_system = TradeSystem(sim, player)
@@ -264,6 +267,7 @@ def _register_runtime_systems(sim, view, player):
     creature_hazard_system = CreatureHazardSystem(sim, player)
 
     property_system = PropertySystem(sim, player)
+    player_business_system = PlayerBusinessSystem(sim, player)
     property_awareness_system = PropertyAwarenessSystem(sim)
     property_defense_system = PropertyDefenseSystem(sim)
 
@@ -296,6 +300,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(cover_system)
     sim.register_system(combat_pacing_system)
     sim.register_system(player_action_system)
+    sim.register_system(skill_progression_system)
     sim.register_system(item_system)
     sim.register_system(service_menu_system)
     sim.register_system(trade_system)
@@ -309,6 +314,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(creature_hazard_system)
 
     sim.register_system(property_system)
+    sim.register_system(player_business_system)
     sim.register_system(property_awareness_system)
     sim.register_system(property_defense_system)
 
@@ -1003,13 +1009,36 @@ def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc"):
     )[0]
 
 
-def _give_weapon(sim, eid, weapon_id, named_chance=0.2):
+def _give_weapon(sim, eid, weapon_id, named_chance=0.2, owner_tag="npc", inventory_backed=False):
     loadout = sim.ecs.get(WeaponLoadout).get(eid)
     if not loadout:
         return False
 
     rng = random.Random(f"{sim.seed}:weapon:{eid}:{weapon_id}")
     instance = roll_weapon_instance(rng, weapon_id, named_chance=named_chance)
+    if inventory_backed:
+        inventory = sim.ecs.get(Inventory).get(eid)
+        item_def = ITEM_CATALOG.get(weapon_id)
+        if inventory and item_def:
+            metadata = {
+                "starter_item": True,
+                "weapon_instance": dict(instance),
+            }
+            custom_name = str(instance.get("custom_name", "")).strip()
+            if custom_name:
+                metadata["display_name"] = custom_name
+            added, instance_id = inventory.add_item(
+                item_id=weapon_id,
+                quantity=1,
+                stack_max=item_def.get("stack_max", 1),
+                instance_factory=sim.new_item_instance_id,
+                owner_eid=eid,
+                owner_tag=owner_tag,
+                metadata=metadata,
+            )
+            if not added:
+                return False
+            instance["inventory_instance_id"] = instance_id
     loadout.add_weapon(weapon_id, instance=instance)
     return True
 
@@ -1452,6 +1481,7 @@ def _run_new_game(view, character_name):
         core=player_core_stats,
         insight=player_insight,
         jitter=0.18,
+        birth_key=f"{sim.seed}:player_birth",
     )
 
     player = _spawn(
@@ -1846,8 +1876,8 @@ def _run_new_game(view, character_name):
     _give_item(sim, sibling_b, "caff_shot", quantity=1, owner_tag="npc")
     _give_item(sim, sibling_b, "street_ration", quantity=1, owner_tag="npc")
 
-    _give_weapon(sim, player, "rust_revolver", named_chance=0.45)
-    _give_weapon(sim, player, "alley_shotgun", named_chance=0.35)
+    _give_weapon(sim, player, "rust_revolver", named_chance=0.45, owner_tag="player", inventory_backed=True)
+    _give_weapon(sim, player, "alley_shotgun", named_chance=0.35, owner_tag="player", inventory_backed=True)
 
     _give_weapon(sim, guard, "compact_smg", named_chance=0.4)
     _give_weapon(sim, guard, "rust_revolver", named_chance=0.3)

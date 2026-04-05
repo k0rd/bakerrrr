@@ -50,8 +50,8 @@
     "tags": ["consumable", "medical", "safety", "legal"],
     "legal_status": "legal",
     "effects": [
-      {"type": "modify_need", "need": "safety", "delta": 24},
-      {"type": "modify_need", "need": "energy", "delta": 6}
+      {"type": "restore_hp", "delta": 14},
+      {"type": "modify_need", "need": "safety", "delta": 24}
     ]
   },
   "focus_inhaler": {
@@ -117,8 +117,8 @@
     "tags": ["consumable", "medical", "safety", "legal"],
     "legal_status": "legal",
     "effects": [
-      {"type": "modify_need", "need": "safety", "delta": 18},
-      {"type": "modify_need", "need": "energy", "delta": 4}
+      {"type": "restore_hp", "delta": 22},
+      {"type": "modify_need", "need": "safety", "delta": 18}
     ]
   },
   "trauma_foam": {
@@ -128,6 +128,7 @@
     "tags": ["consumable", "medical", "safety", "restricted"],
     "legal_status": "restricted",
     "effects": [
+      {"type": "restore_hp", "delta": 30},
       {"type": "modify_need", "need": "safety", "delta": 24},
       {"type": "status", "status": "patched_up", "duration": 18, "modifiers": {"safety_tick_delta": 0.08, "move_speed_mult": -0.08}}
     ]
@@ -467,6 +468,7 @@
     "tags": ["consumable", "medical", "safety", "legal"],
     "legal_status": "legal",
     "effects": [
+      {"type": "restore_hp", "delta": 8},
       {"type": "modify_need", "need": "safety", "delta": 10}
     ]
   },
@@ -477,6 +479,7 @@
     "tags": ["consumable", "medical", "safety", "legal"],
     "legal_status": "legal",
     "effects": [
+      {"type": "restore_hp", "delta": 12},
       {"type": "modify_need", "need": "safety", "delta": 14},
       {"type": "status", "status": "patched_up", "duration": 10, "modifiers": {"safety_tick_delta": 0.04}}
     ]

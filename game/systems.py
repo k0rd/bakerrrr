@@ -6,6 +6,7 @@ import re
 import textwrap
 import time
 from collections import Counter, deque
+from dataclasses import replace
 from pathlib import Path
 
 from engine.buildings import building_exterior_profile, layout_chunk_building, world_building_id
@@ -92,6 +93,9 @@ from game.final_operation import (
     try_complete_final_operation,
     try_fail_final_operation,
 )
+from game.debug_overlay import (
+    build_debug_overlay as _build_debug_overlay,
+)
 from game.items import ITEM_CATALOG, apply_item_durability_loss, item_display_name
 from game.lighting import (
     ambient_snapshot as _lighting_ambient_snapshot,
@@ -103,13 +107,27 @@ from game.organization_reputation import (
     decay_organization_heat as _decay_organization_heat,
     organization_snapshot as _organization_snapshot,
     organization_terms_for_property as _organization_terms_for_property,
-    top_organization_snapshots as _top_organization_snapshots,
 )
-from game.skills import actor_skill as _actor_skill
+from game.player_businesses import (
+    actor_player_business_employment,
+    fire_actor_from_player_business,
+    hire_actor_into_player_business,
+    player_business_role_fit,
+    player_business_staffing_targets,
+)
+from game.character_sheet import (
+    build_character_sheet_pages as _build_character_sheet_pages,
+)
+from game.content_warnings import warn_content_fallback
+from game.report_runtime import (
+    build_known_locations_report as _report_runtime_build_known_locations_report,
+    build_progress_report as _report_runtime_build_progress_report,
+)
+from game.semantic_catalog import get_runtime_semantic_catalog
+from game.skill_progression import SkillProgressionSystem
 from game.objective_progress import (
     award_objective_progress,
     objective_progress_explain_delta,
-    objective_progress_recent_history,
 )
 from game.npc_judgment import evaluate_opportunity_judgment
 from game.opportunities import (
@@ -117,7 +135,6 @@ from game.opportunities import (
     evaluate_opportunity_board,
     evaluate_opportunity_facts,
     format_reward_text,
-    objective_focus_lines,
     opportunity_intel_for_observer,
     opportunity_distance_text,
     opportunity_known_count,
@@ -165,6 +182,8 @@ from game.property_access import (
     property_status_text as _property_status_text,
     world_hour as _world_hour,
 )
+from game.property_actions import PropertyActionRuntime
+from game.property_ingress import PropertyIngressRuntime
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
     building_id_from_structure as _building_id_from_structure,
@@ -172,6 +191,7 @@ from game.property_runtime import (
     controller_credential_short_label as _controller_credential_short_label,
     controller_holder_for_actor as _controller_holder_for_actor,
     finance_services_for_property as _finance_services_for_property,
+    property_cover_intended as _property_cover_intended,
     property_infrastructure_role as _property_infrastructure_role,
     property_linked_building_id as _property_linked_building_id,
     property_linked_property_id as _property_linked_property_id,
@@ -200,6 +220,22 @@ from game.run_pressure import (
     pressure_effects as _pressure_effects,
     pressure_snapshot as _pressure_snapshot,
 )
+from game.service_runtime import (
+    CASINO_GAME_SERVICE_IDS,
+    _casino_game_title,
+    _credit_amount_label,
+    _overworld_discovery_profile,
+    _overworld_discovery_summary_bits,
+    _overworld_legend_line,
+    _overworld_render_style,
+    _overworld_travel_profile,
+    _overworld_travel_tax_text,
+    _overworld_travel_summary_bits,
+    _service_menu_option_label,
+    _site_service_label,
+    _storefront_service_profile,
+    _vehicle_sale_stats_text,
+)
 from game.vehicles import (
     generate_chunk_vehicle_records,
     roll_vehicle_profile,
@@ -208,12 +244,19 @@ from game.vehicles import (
 )
 from game.run_objectives import evaluate_run_objective
 from game.skills import (
-    HUD_SKILL_IDS as _HUD_SKILL_IDS,
+    access_skill_practice_awards as _access_skill_practice_awards,
+    access_prep_skill_terms as _access_prep_skill_terms,
     actor_skill as _actor_skill,
     actor_tool_terms as _actor_tool_terms,
-    insurance_skill_terms as _insurance_skill_terms,
-    skill_short_label as _skill_short_label,
+    dialogue_prep_skill_terms as _dialogue_prep_skill_terms,
+    scan_skill_terms as _scan_skill_terms,
+    skill_label as _skill_label,
     trade_skill_terms as _trade_skill_terms,
+)
+from game.skill_ui import (
+    skill_change_reason_label as _skill_change_reason_label,
+    skill_debug_lines as _skill_debug_lines,
+    skill_hud_status_chunks as _skill_hud_status_chunks,
 )
 from game.weapons import WEAPON_CATALOG, roll_weapon_instance, weapon_by_id
 from ui.input_keys import ENTER_KEYS, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_UP
@@ -463,11 +506,15 @@ def _load_offense_profile(path=OFFENSE_PROFILE_PATH):
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        warn_content_fallback(path, "built-in offense profile defaults", exc=exc)
         return profile
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        warn_content_fallback(path, "built-in offense profile defaults", exc=exc)
         return profile
 
+    if not isinstance(raw, dict):
+        warn_content_fallback(path, "built-in offense profile defaults", problem="top-level JSON must be an object")
     if not isinstance(raw, dict):
         return profile
 
@@ -927,6 +974,71 @@ def _entity_uses_melee_aim(sim, eid):
     weapon = weapon_by_id(weapon_id)
     tags = {str(tag).strip().lower() for tag in weapon.get("tags", ()) if str(tag).strip()}
     return "melee" in tags
+
+
+def _aim_open_label(sim, eid):
+    return "F aim/strike" if _entity_uses_melee_aim(sim, eid) else "F aim"
+
+
+def _aim_confirm_label(sim, eid):
+    return "Enter strike" if _entity_uses_melee_aim(sim, eid) else "Enter fire"
+
+
+def _combat_overlay_state(sim):
+    overlay = getattr(sim, "combat_overlay", None)
+    if not isinstance(overlay, dict):
+        overlay = {}
+        sim.combat_overlay = overlay
+    overlay.setdefault("active", False)
+    overlay.setdefault("manual_pacing", False)
+    overlay.setdefault("threat_count", 0)
+    overlay.setdefault("nearest_threat_dist", None)
+    overlay.setdefault("player_exposure", 1.0)
+    return overlay
+
+
+def _set_manual_combat_pacing(sim, active):
+    overlay = _combat_overlay_state(sim)
+    overlay["manual_pacing"] = bool(active)
+    if active:
+        sim.turn_based = True
+    elif not bool(overlay.get("active")):
+        sim.turn_based = False
+    return overlay
+
+
+def _combat_turn_pacing_active(sim):
+    overlay = _combat_overlay_state(sim)
+    return bool(getattr(sim, "turn_based", False) or overlay.get("active") or overlay.get("manual_pacing"))
+
+
+def _appearance_with_effect(appearance, effect):
+    if appearance is None:
+        return None
+    effect = str(effect or "").strip().lower()
+    if not effect:
+        return appearance
+    effects = tuple(getattr(appearance, "effects", ()) or ())
+    if effect in effects:
+        return appearance
+    return replace(appearance, effects=tuple(dict.fromkeys(effects + (effect,))))
+
+
+def _entity_should_blink_in_combat(sim, eid, *, player_eid=None):
+    if eid is None or (player_eid is not None and int(eid) == int(player_eid)):
+        return False
+    if not _combat_turn_pacing_active(sim):
+        return False
+    ai = sim.ecs.get(AI).get(eid)
+    if not ai or str(ai.state or "").strip().lower() not in THREAT_STATES:
+        return False
+    if _entity_is_downed(sim, eid):
+        return False
+    player_pos = sim.ecs.get(Position).get(player_eid) if player_eid is not None else None
+    pos = sim.ecs.get(Position).get(eid)
+    if player_pos and pos and int(pos.z) != int(player_pos.z):
+        return False
+    return True
 
 
 def _item_weapon_id(item_def):
@@ -1704,16 +1816,37 @@ def _resolve_access_skill_check(
     allow_fumble=True,
 ):
     tool_terms = tool_terms or {}
+    context_key = str(context or "").strip().lower()
+    channel_key = str(channel or "access").strip().lower() or "access"
     roll = _access_attempt_roll(
         sim,
         eid=eid,
         prop=prop,
-        context=context,
-        channel=channel,
+        context=context_key,
+        channel=channel_key,
     )
     success_chance = _access_success_chance(score, required)
     fumbled = bool(allow_fumble and tool_terms.get("enabled")) and roll < _access_fumble_chance(score, required)
     success = bool(roll <= success_chance and not fumbled)
+    property_id = str(prop.get("id", "") if isinstance(prop, dict) else "").strip()
+    practice_awards = _access_skill_practice_awards(context_key, success=success, fumbled=fumbled)
+    for skill_id, amount in practice_awards.items():
+        if float(amount) <= 0.0:
+            continue
+        sim.emit(Event(
+            "skill_practice",
+            eid=eid,
+            skill_id=str(skill_id or "").strip().lower(),
+            amount=float(amount),
+            source="access_check",
+            context=context_key,
+            channel=channel_key,
+            property_id=property_id,
+            cooldown_key=f"{property_id}:{channel_key}:{context_key}",
+            cooldown=0,
+            success=bool(success),
+            fumbled=bool(fumbled),
+        ))
     return {
         "success": success,
         "fumbled": bool(fumbled),
@@ -1889,6 +2022,48 @@ def _lock_override_required_for_prop(sim, prop, *, tool_terms=None, ignition=Fal
     return max(1.0, required)
 
 
+QUIET_TAMPER_METHODS = {
+    "badge_reader_spoof",
+    "biometric_spoof",
+    "biometric_jam",
+    "picked_front_door",
+    "manual_front_door_override",
+    "hotwire",
+    "ignition_override",
+    "locked_vehicle_entry",
+}
+
+NOISY_TAMPER_METHODS = {
+    "forced_breach",
+    "forced_side_entry",
+    "deep_breach",
+    "crash_window_entry",
+}
+
+
+def _tamper_is_noisy(*, ingress_kind="", ingress_method="", breach_severity=0.0):
+    ingress_kind = str(ingress_kind or "").strip().lower()
+    ingress_method = str(ingress_method or "").strip().lower()
+    breach_severity = float(max(0.0, breach_severity))
+    if ingress_kind in {"boundary_breach", "deep_breach"}:
+        return True
+    if ingress_method in NOISY_TAMPER_METHODS:
+        return True
+    if ingress_method in QUIET_TAMPER_METHODS:
+        return False
+    return breach_severity >= 0.45
+
+
+def _quiet_unwitnessed_tamper(prop, *, witnessed, ingress_kind="", ingress_method="", breach_severity=0.0):
+    if bool(witnessed):
+        return False
+    return not _tamper_is_noisy(
+        ingress_kind=ingress_kind,
+        ingress_method=ingress_method,
+        breach_severity=breach_severity,
+    )
+
+
 def _emit_property_lock_tamper_event(sim, eid, prop, *, x, y, z, method):
     if not isinstance(prop, dict):
         return
@@ -2008,6 +2183,8 @@ def _emit_move_access_events(
     emit_clear_offense=True,
 ):
     prop = _property_covering(sim, target_x, target_y, target_z)
+    if prop and action in {"move", "cover_hop"} and _property_cover_intended(prop):
+        prop = None
     trespass_triggered = False
     if prop:
         ingress = _property_ingress_context(
@@ -2290,6 +2467,23 @@ def _district_floor_color(sim, x, y):
     return _appearance_district_floor_color(sim, x, y)
 
 
+def _appearance_prefers_floor_underlay(appearance):
+    semantic_key = str(getattr(appearance, "semantic_id", "") or "").strip().lower()
+    if semantic_key in {"feature_window", "feature_door", "feature_breach", "stair_up", "stair_down", "transit_stair_landing", "elevator"}:
+        return True
+    glyph = str(getattr(appearance, "glyph", "") or "")[:1]
+    color_key = str(getattr(appearance, "color", "") or "").strip().lower()
+    if color_key == "feature_window" and glyph == '"':
+        return True
+    if color_key == "feature_door" and glyph in {"+", "'"}:
+        return True
+    if color_key == "feature_breach" and glyph == "/":
+        return True
+    if color_key == "transit" and glyph in {">", "<", ":", "E"}:
+        return True
+    return False
+
+
 def _floor_link_flags(sim, x, y, z):
     tilemap = getattr(sim, "tilemap", None)
     if tilemap is None:
@@ -2336,171 +2530,6 @@ def _tile_render_style(sim, tile, x, y, z=0, revealed_building_id=""):
         revealed_building_id=revealed_building_id,
     )
     return appearance.glyph, appearance.color
-
-
-def _storefront_service_role_priority(role):
-    role = str(role or "").strip().lower()
-    return {
-        "owner": 0,
-        "manager": 1,
-        "staff": 2,
-    }.get(role, 3)
-
-
-def _occupation_targets_property(prop, occupation):
-    return occupation_targets_property(prop, occupation)
-
-
-def _occupation_service_role(occupation):
-    if not occupation:
-        return "staff"
-
-    workplace = getattr(occupation, "workplace", None)
-    if isinstance(workplace, dict):
-        configured = str(
-            workplace.get("authority_role", workplace.get("access_role", ""))
-            or ""
-        ).strip().lower()
-        if configured in {"owner", "manager", "staff"}:
-            return configured
-
-    career = str(getattr(occupation, "career", "") or "").strip().lower()
-    if any(keyword in career for keyword in ("manager", "director", "lead", "supervisor", "chief", "controller")):
-        return "manager"
-    return "staff"
-
-
-def _actor_in_storefront_service_zone(sim, actor_eid, prop):
-    positions = sim.ecs.get(Position)
-    actor_pos = positions.get(actor_eid)
-    if not actor_pos:
-        return False, 999999
-
-    focus = _property_focus_position(prop)
-    if not focus:
-        return False, 999999
-
-    if int(actor_pos.z) != int(focus[2]):
-        return False, 999999
-
-    dist = abs(int(actor_pos.x) - int(focus[0])) + abs(int(actor_pos.y) - int(focus[1]))
-    if dist <= 2:
-        return True, dist
-
-    covered = _property_covering(sim, actor_pos.x, actor_pos.y, actor_pos.z)
-    if covered and covered.get("id") == prop.get("id") and dist <= 3:
-        return True, dist
-    return False, dist
-
-
-def _storefront_service_profile(sim, prop):
-    profile = {
-        "mode": "",
-        "available": False,
-        "blocked_reason": "",
-        "service_eid": None,
-        "service_name": "",
-        "service_role": "",
-        "service_note": "",
-        "summary_label": "",
-        "fallback_self_serve": False,
-    }
-    if not isinstance(prop, dict) or not _property_is_storefront(prop):
-        return profile
-
-    mode = _storefront_service_mode(prop)
-    if mode == "automated":
-        profile.update({
-            "mode": "automated",
-            "available": True,
-            "service_note": "self-serve",
-            "summary_label": "self-serve",
-        })
-        return profile
-
-    ais = sim.ecs.get(AI)
-    occupations = sim.ecs.get(Occupation)
-    owner_eid = prop.get("owner_eid")
-    candidates_by_eid = {}
-
-    if owner_eid is not None:
-        candidates_by_eid[owner_eid] = {
-            "eid": owner_eid,
-            "role": "owner",
-            "occupation": occupations.get(owner_eid),
-        }
-
-    for member in property_org_members(sim, prop):
-        actor_eid = member.get("eid")
-        occupation = member.get("occupation")
-        existing = candidates_by_eid.get(actor_eid)
-        role = "owner" if actor_eid == owner_eid else str(member.get("role", "") or "").strip().lower()
-        if role not in {"owner", "manager", "staff"}:
-            role = _occupation_service_role(occupation)
-        if existing and existing.get("role") == "owner":
-            continue
-        candidates_by_eid[actor_eid] = {
-            "eid": actor_eid,
-            "role": role,
-            "occupation": occupation,
-            "source": member.get("source", "workplace"),
-        }
-
-    available = []
-    for info in candidates_by_eid.values():
-        actor_eid = info["eid"]
-        present, distance = _actor_in_storefront_service_zone(sim, actor_eid, prop)
-        occupation = info.get("occupation")
-        ai = ais.get(actor_eid)
-        on_shift = False
-        if occupation and (_occupation_targets_property(prop, occupation) or str(info.get("source", "")).strip().lower() == "affiliation"):
-            on_shift = bool(
-                work_shift_active(
-                    sim,
-                    occupation=occupation,
-                    workplace_prop=prop,
-                    role=getattr(ai, "role", None),
-                )
-            )
-        if not present:
-            continue
-        if info["role"] != "owner" and occupation and not on_shift:
-            continue
-        available.append((info["role"], distance, actor_eid))
-
-    if available:
-        available.sort(key=lambda row: (_storefront_service_role_priority(row[0]), row[1], row[2]))
-        service_role, _distance, service_eid = available[0]
-        service_name = _entity_display_name(sim, service_eid, title_case=True)
-        profile.update({
-            "mode": "staffed",
-            "available": True,
-            "service_eid": service_eid,
-            "service_name": service_name,
-            "service_role": service_role,
-            "service_note": f"served by {service_name}" if service_name else "counter service",
-            "summary_label": f"counter:{service_name}" if service_name else "counter",
-        })
-        return profile
-
-    if candidates_by_eid:
-        profile.update({
-            "mode": "staffed",
-            "available": False,
-            "blocked_reason": "no_staff",
-            "service_note": "counter service",
-            "summary_label": "counter",
-        })
-        return profile
-
-    profile.update({
-        "mode": "automated",
-        "available": True,
-        "service_note": "unattended self-serve",
-        "summary_label": "self-serve",
-        "fallback_self_serve": True,
-    })
-    return profile
 
 
 def _infrastructure_target_property(sim, prop):
@@ -2577,6 +2606,85 @@ def _property_access_summary(sim, prop, viewer_eid=None):
     if not access_modes:
         return ""
     return ",".join(access_modes)
+
+
+def _access_prep_detail_lines(sim, viewer_eid, prop, *, controller=None, reveal_tier=None):
+    if not isinstance(prop, dict) or str(prop.get("kind", "")).strip().lower() != "building":
+        return ()
+
+    if controller is None:
+        controller = _property_access_controller(sim, prop)
+    if not isinstance(controller, dict):
+        return ()
+
+    if reveal_tier is None:
+        terms = _access_prep_skill_terms(sim, viewer_eid)
+        reveal_tier = _int_or_default(terms.get("reveal_tier"), 0)
+    reveal_tier = max(0, int(reveal_tier))
+    if reveal_tier <= 0:
+        return ()
+
+    lines = []
+    detail_bits = []
+    controller_kind = str(controller.get("kind", "") or "").strip().lower()
+    if controller_kind and controller_kind != "none":
+        detail_bits.append("ctrl:" + controller_kind.replace("_", " "))
+    mode_text = _dialogue_credential_mode_text(controller.get("credential_mode"))
+    if mode_text:
+        detail_bits.append("mode:" + mode_text)
+    hours_text = _dialogue_hours_text(controller.get("opening_window"))
+    if hours_text:
+        detail_bits.append("hours:" + hours_text)
+    requirement = _controller_access_requirement_text(controller)
+    if requirement:
+        detail_bits.append("req:" + requirement)
+    if detail_bits:
+        lines.append("Prep detail: " + "  ".join(detail_bits))
+
+    if reveal_tier < 2:
+        return tuple(lines)
+
+    metadata = _property_metadata(prop)
+    followup_bits = []
+    panel_id = str(metadata.get("access_panel_property_id", "") or "").strip()
+    if panel_id and sim.properties.get(panel_id):
+        followup_bits.append("panel:street")
+    terminal_id = str(metadata.get("service_terminal_property_id", "") or "").strip()
+    if terminal_id:
+        terminal = sim.properties.get(terminal_id)
+        if isinstance(terminal, dict):
+            terminal_services = [
+                str(service).strip().lower()
+                for service in list(_property_services(terminal) or ())
+                if str(service).strip()
+            ]
+            if terminal_services:
+                followup_bits.append("terminal:" + ",".join(terminal_services[:3]))
+            else:
+                followup_bits.append("terminal:street")
+
+    alternate_labels = []
+    ordinary_count = 0
+    for aperture in _property_apertures(prop):
+        kind = str(aperture.get("kind", "") or "").strip().lower()
+        ordinary = bool(aperture.get("ordinary"))
+        if ordinary:
+            ordinary_count += 1
+            continue
+        label = kind.replace("_", " ").strip()
+        if label and label not in alternate_labels:
+            alternate_labels.append(label)
+    if alternate_labels:
+        followup_bits.append("alternates:" + _dialogue_human_join(alternate_labels[:3]))
+    elif ordinary_count > 0:
+        if ordinary_count == 1:
+            followup_bits.append("entry:ordinary door")
+        else:
+            followup_bits.append(f"entry:{ordinary_count} ordinary doors")
+
+    if followup_bits:
+        lines.append("Prep detail: " + "  ".join(followup_bits))
+    return tuple(lines)
 
 
 def _property_contact_lead(sim, prop, relation, viewer_eid=None):
@@ -2798,73 +2906,6 @@ def _trade_contact_terms(sim, viewer_eid, prop):
     }
 
 
-def _insurance_contact_terms(sim, viewer_eid, prop):
-    entry = _property_contact_entry(sim, viewer_eid, prop)
-    pressure = _pressure_snapshot(sim)
-    effects = pressure.get("effects", {})
-    pressure_tier = str(pressure.get("tier", "low")).strip().lower()
-    pressure_mult = float(effects.get("insurance_premium_mult", 1.0))
-    skill_terms = _insurance_skill_terms(sim, viewer_eid)
-    org_terms = _organization_terms_for_property(sim, prop)
-    note_bits = []
-    skill_note = str(skill_terms.get("note", "")).strip()
-    if skill_note:
-        note_bits.append(skill_note)
-    org_note = str(org_terms.get("note", "")).strip()
-    if org_note:
-        note_bits.append(org_note)
-    base = {
-        "premium_mult": max(
-            0.75,
-            min(
-                1.8,
-                pressure_mult
-                * float(skill_terms.get("premium_mult", 1.0))
-                * float(org_terms.get("premium_mult", 1.0)),
-            ),
-        ),
-        "source_eid": None,
-        "note": "",
-    }
-    if pressure_tier in {"medium", "high"}:
-        note_bits.append(f"city attention {pressure_tier}")
-    if note_bits:
-        base["note"] = "; ".join(note_bits)
-    if not entry:
-        return base
-
-    benefits = set(entry.get("benefits", ()))
-    if "insurance_discount" not in benefits:
-        return base
-
-    standing = max(0.0, min(1.0, float(entry.get("standing", 0.0))))
-    source_eid = entry.get("source_eid")
-    premium_mult = max(0.82, 1.0 - (0.04 + (standing * 0.1)))
-    premium_mult = max(
-        0.75,
-        min(
-            1.8,
-            premium_mult
-            * pressure_mult
-            * float(skill_terms.get("premium_mult", 1.0))
-            * float(org_terms.get("premium_mult", 1.0)),
-        ),
-    )
-    source_name = _entity_display_name(sim, source_eid, title_case=True) if source_eid is not None else "Local contact"
-    note_bits = [f"{source_name}: policy rate eased"]
-    if skill_note:
-        note_bits.append(skill_note)
-    if org_note:
-        note_bits.append(org_note)
-    if pressure_tier in {"medium", "high"}:
-        note_bits.append(f"attention {pressure_tier}")
-    return {
-        "premium_mult": premium_mult,
-        "source_eid": source_eid,
-        "note": "; ".join(note_bits),
-    }
-
-
 def _property_render_style(prop, active_quest_target=None):
     appearance = _appearance_property_render_snapshot(
         prop,
@@ -2923,13 +2964,17 @@ def _cover_source_render(sim, cover_state, active_quest_target=None):
     if cover_state.source_kind == "property":
         prop = sim.property_at(sx, sy, sz)
         if prop:
-            glyph, color = _property_render_style(prop, active_quest_target=active_quest_target)
+            appearance = _appearance_property_render_snapshot(
+                prop,
+                active_quest_target=active_quest_target,
+            )
             return {
                 "x": sx,
                 "y": sy,
                 "z": sz,
-                "glyph": glyph,
-                "color": color,
+                "glyph": appearance.glyph,
+                "color": appearance.color,
+                "semantic_id": appearance.semantic_id,
                 "attrs": getattr(curses, "A_BOLD", 0),
             }
 
@@ -2938,6 +2983,17 @@ def _cover_source_render(sim, cover_state, active_quest_target=None):
 
 def _ground_item_color(item_def):
     return _appearance_ground_item_color(item_def)
+
+
+def _item_reference_semantic_id(item_def):
+    catalog = get_runtime_semantic_catalog()
+    color_key = _ground_item_color(item_def)
+    semantic_key = str(color_key or "").strip()
+    semantics = getattr(catalog, "semantics", {})
+    if semantic_key and isinstance(semantics, dict) and semantic_key in semantics:
+        return semantic_key
+    glyph = _item_display_glyph(item_def)
+    return catalog.semantic_id_for(glyph, color_key, preferred_categories=("items",))
 
 
 def _segment(text, color=None, attrs=0, **extras):
@@ -3205,6 +3261,27 @@ def _log_prefix(line):
     return "- "
 
 
+def _log_display_line(line):
+    segments = _line_segments(line)
+    if segments:
+        return _rich_line(segments, text=_line_text(line))
+
+    prefix = _log_prefix(line)
+    priority = _line_priority(line)
+    if priority >= LOG_PRIORITY_CRITICAL:
+        prefix_color = "projectile"
+    elif priority >= LOG_PRIORITY_HIGH:
+        prefix_color = "property_asset"
+    else:
+        prefix_color = "building_edge"
+    prefix_attrs = getattr(curses, "A_BOLD", 0) if priority >= LOG_PRIORITY_HIGH else 0
+    prefixed_segments = [
+        _segment(prefix, color=prefix_color, attrs=prefix_attrs),
+        _segment(_line_text(line)),
+    ]
+    return _rich_line(prefixed_segments, text=prefix + _line_text(line))
+
+
 def _hud_log_lines(lines, filter_id, budget):
     budget = max(0, int(budget))
     if budget <= 0:
@@ -3278,7 +3355,7 @@ def _line_with_suffix(line, suffix):
     return _rich_line(appended, text=_line_text(line) + suffix)
 
 
-def _legend_line(text, glyph=None, color=None, prefix="", attrs=0):
+def _legend_line(text, glyph=None, color=None, prefix="", attrs=0, semantic_id=None):
     segments = []
     plain = ""
     prefix = str(prefix)
@@ -3287,7 +3364,10 @@ def _legend_line(text, glyph=None, color=None, prefix="", attrs=0):
         plain += prefix
     glyph_text = str(glyph)[:1] if glyph not in (None, "") else ""
     if glyph_text:
-        segments.append(_segment(glyph_text, color=color, attrs=attrs, inline_glyph=True))
+        extras = {"inline_glyph": True}
+        if semantic_id:
+            extras["semantic_id"] = str(semantic_id)
+        segments.append(_segment(glyph_text, color=color, attrs=attrs, **extras))
         plain += glyph_text
         if text:
             segments.append(_segment(" "))
@@ -3297,6 +3377,356 @@ def _legend_line(text, glyph=None, color=None, prefix="", attrs=0):
         segments.append(_segment(text))
         plain += text
     return _rich_line(segments, text=plain)
+
+
+def _bullet_display_line(text, *, bullet="-", bullet_color="building_edge", text_color=None):
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    bold = getattr(curses, "A_BOLD", 0)
+    segments = [
+        _segment(f"{str(bullet)[:1]} ", color=bullet_color, attrs=bold),
+        _segment(text, color=text_color),
+    ]
+    return _rich_line(segments, text=f"{str(bullet)[:1]} {text}")
+
+
+def _known_location_summary_bit_color(bit):
+    label = str(bit or "").strip().lower()
+    if not label:
+        return None
+    if "confirmed" in label:
+        return "property_service"
+    if "owned" in label:
+        return "player"
+    if label.endswith("lead") or "lead" in label:
+        return "objective"
+    if label.startswith("services "):
+        return "property_service"
+    if "vehicle" in label:
+        return "vehicle_player"
+    return "human"
+
+
+def _known_location_summary_line(row):
+    row = row if isinstance(row, dict) else {}
+    confidence = int(round(float(row.get("confidence", 0.0)) * 100.0))
+    summary_bits = [
+        str(bit).strip()
+        for bit in row.get("summary_bits", ())
+        if str(bit).strip()
+    ]
+    bold = getattr(curses, "A_BOLD", 0)
+    segments = [
+        _segment(f"{confidence}% confident", color="player", attrs=bold),
+    ]
+    for bit in summary_bits:
+        segments.append(_segment(" | ", color="building_edge"))
+        segments.append(_segment(bit, color=_known_location_summary_bit_color(bit)))
+    return _rich_line(segments, text=_segments_text(segments))
+
+
+def _known_location_detail_lines(row):
+    row = row if isinstance(row, dict) else {}
+    lines = []
+    legend_line = row.get("legend_line")
+    if isinstance(legend_line, dict):
+        lines.append(legend_line)
+    else:
+        name = str(row.get("name", "location")).strip() or "location"
+        coords = str(row.get("coords", "coords unknown")).strip() or "coords unknown"
+        lines.append(f"{name} @ {coords}")
+    lines.append(_known_location_summary_line(row))
+    for fact in row.get("fact_lines", ()):
+        bullet = _bullet_display_line(fact, bullet="-", bullet_color="building_edge")
+        if bullet:
+            lines.append(bullet)
+    return lines
+
+
+def _known_location_list_line(row, *, ordinal=1, selected=False):
+    row = row if isinstance(row, dict) else {}
+    base_line = row.get("legend_line")
+    if not isinstance(base_line, dict):
+        name = str(row.get("name", "location")).strip() or "location"
+        coords = str(row.get("coords", "coords unknown")).strip() or "coords unknown"
+        base_line = f"{name} @ {coords}"
+
+    confidence = max(0, min(100, int(round(float(row.get("confidence", 0.0)) * 100.0))))
+    marker_color = "player" if selected else "building_edge"
+    marker_attrs = getattr(curses, "A_BOLD", 0) if selected else 0
+    confidence_color = "property_service" if confidence >= 80 else ("property_asset" if confidence >= 50 else "projectile")
+
+    segments = [
+        _segment(">" if selected else " ", color=marker_color, attrs=marker_attrs),
+        _segment(f"{max(1, int(ordinal)):02d} ", color="building_edge", attrs=marker_attrs),
+    ]
+    base_segments = _line_segments(base_line)
+    if base_segments:
+        segments.extend(base_segments)
+    else:
+        segments.append(_segment(_line_text(base_line)))
+    segments.extend([
+        _segment(" | ", color="building_edge"),
+        _segment(f"{confidence}%", color=confidence_color, attrs=marker_attrs),
+    ])
+    return _rich_line(segments, text=f"{'>' if selected else ' '}{max(1, int(ordinal)):02d} {_line_text(base_line)} | {confidence}%")
+
+
+def _overworld_fill_semantic_id(area, district, terrain):
+    area = str(area or "").strip().lower() or "city"
+    district = str(district or "").strip().lower() or "residential"
+    terrain = str(terrain or "").strip().lower()
+    if area == "city":
+        return f"overworld_fill_city_{district}"
+    return f"overworld_fill_terrain_{terrain or area or 'wilds'}"
+
+
+def _overworld_center_semantic_id(cx, cy, area, district, terrain, landmark, interest, loaded_chunks):
+    area = str(area or "").strip().lower() or "city"
+    district = str(district or "").strip().lower() or "residential"
+    terrain = str(terrain or "").strip().lower()
+    landmark = landmark if isinstance(landmark, dict) else {}
+    interest = interest if isinstance(interest, dict) else {}
+    loaded_chunks = loaded_chunks or ()
+
+    if landmark.get("glyph"):
+        return "overworld_landmark"
+    if interest.get("show_on_map") and interest.get("glyph"):
+        return "overworld_interest"
+    if area == "city":
+        if (int(cx), int(cy)) in loaded_chunks:
+            return f"overworld_district_{district}"
+        return "overworld_area_city"
+    if terrain:
+        return f"overworld_terrain_{terrain}"
+    return f"overworld_area_{area or 'wilds'}"
+
+
+def _overworld_hud_lines(
+    sim,
+    cx,
+    cy,
+    *,
+    desc,
+    interest,
+    travel,
+    discovery,
+    markers=(),
+    active_vehicle_prop=None,
+):
+    desc = desc if isinstance(desc, dict) else {}
+    interest = interest if isinstance(interest, dict) else {}
+    travel = travel if isinstance(travel, dict) else {}
+    discovery = discovery if isinstance(discovery, dict) else {}
+    markers = list(markers or ())
+
+    bold = getattr(curses, "A_BOLD", 0)
+    area = str(desc.get("area_type", "city")).strip().lower() or "city"
+    district = str(desc.get("district_type", "residential")).strip().lower() or "residential"
+    terrain = str(desc.get("terrain", "")).strip().lower()
+    path = str(desc.get("path", "")).strip().lower() or "-"
+    region_name = str(desc.get("region_name", "")).strip()
+    settlement_name = str(desc.get("settlement_name", "")).strip()
+    landmark = desc.get("landmark") or desc.get("nearest_landmark") or {}
+    landmark_name = str((landmark or {}).get("name", "")).strip()
+    interest_name = str(interest.get("detail", "")).strip()
+    discovery_name = str(discovery.get("label", "")).strip()
+    risk_name = str(travel.get("risk_label", "low")).strip() or "low"
+    support_name = str(travel.get("support_label", "none")).strip() or "none"
+    travel_tax = _overworld_travel_tax_text(travel)
+
+    glyph, color = _overworld_render_style(sim, int(cx), int(cy))
+    semantic_id = _overworld_center_semantic_id(
+        int(cx),
+        int(cy),
+        area,
+        district,
+        terrain,
+        landmark,
+        interest,
+        getattr(sim.world, "loaded_chunks", {}),
+    )
+
+    def _title(raw):
+        text = str(raw or "").replace("_", " ").strip()
+        return text.title() if text else ""
+
+    nearest_marker_dist = None
+    if markers:
+        try:
+            nearest_marker_dist = min(
+                _manhattan(int(cx), int(cy), int(marker["chunk"][0]), int(marker["chunk"][1]))
+                for marker in markers
+            )
+        except (KeyError, TypeError, ValueError, IndexError):
+            nearest_marker_dist = None
+
+    line_one = [
+        _segment(glyph, color=color, attrs=bold, inline_glyph=True, semantic_id=semantic_id),
+        _segment(" "),
+        _segment(f"Chunk {int(cx)},{int(cy)}", color="player", attrs=bold),
+        _segment("  "),
+        _segment("Area ", color="human", attrs=bold),
+        _segment(_title(area)),
+    ]
+    if area == "city":
+        line_one.extend([
+            _segment("  "),
+            _segment("District ", color="human", attrs=bold),
+            _segment(_title(district)),
+        ])
+    elif terrain:
+        line_one.extend([
+            _segment("  "),
+            _segment("Terrain ", color="human", attrs=bold),
+            _segment(_title(terrain)),
+        ])
+    if region_name:
+        line_one.extend([
+            _segment("  "),
+            _segment("Region ", color="human", attrs=bold),
+            _segment(region_name),
+        ])
+    if settlement_name:
+        line_one.extend([
+            _segment("  "),
+            _segment("City ", color="human", attrs=bold),
+            _segment(settlement_name),
+        ])
+
+    line_two = []
+    def _append_pair(label, value, *, value_color=None):
+        if not value:
+            return
+        if line_two:
+            line_two.append(_segment("  "))
+        line_two.append(_segment(f"{label} ", color="human", attrs=bold))
+        line_two.append(_segment(str(value), color=value_color))
+
+    _append_pair("Path", _title(path) if path != "-" else "-")
+    _append_pair("Risk", _title(risk_name))
+    _append_pair("Support", _title(support_name))
+    _append_pair("Travel", travel_tax, value_color="player")
+    if markers:
+        near_text = f"{len(markers)} near {nearest_marker_dist if nearest_marker_dist is not None else '?'}c"
+    else:
+        near_text = "0"
+    _append_pair("Markers", near_text, value_color="player" if markers else None)
+    if active_vehicle_prop:
+        fuel, fuel_capacity = _vehicle_fuel_values(active_vehicle_prop)
+        _append_pair("Fuel", f"{fuel}/{fuel_capacity}")
+
+    line_three = []
+    facts = []
+    if landmark_name:
+        facts.append(("Landmark", landmark_name))
+    if interest_name:
+        facts.append(("POI", interest_name))
+    if discovery_name:
+        facts.append(("Opportunity", discovery_name))
+    for idx, (label, value) in enumerate(facts):
+        if idx > 0:
+            line_three.append(_segment("  "))
+        line_three.append(_segment(f"{label} ", color="human", attrs=bold))
+        line_three.append(_segment(value))
+
+    lines = [_rich_line(line_one)]
+    if line_two:
+        lines.append(_rich_line(line_two))
+    if line_three:
+        lines.append(_rich_line(line_three))
+    return lines
+
+
+def _overworld_edge_legend_lines(
+    sim,
+    current_chunk,
+    *,
+    desc,
+    interest,
+    markers=(),
+    look_ui=None,
+):
+    desc = desc if isinstance(desc, dict) else {}
+    interest = interest if isinstance(interest, dict) else {}
+    look_ui = look_ui if isinstance(look_ui, dict) else {}
+    markers = list(markers or ())
+    bold = getattr(curses, "A_BOLD", 0)
+
+    cx = int(current_chunk[0])
+    cy = int(current_chunk[1])
+    area = str(desc.get("area_type", "city")).strip().lower() or "city"
+    district = str(desc.get("district_type", "residential")).strip().lower() or "residential"
+    terrain = str(desc.get("terrain", "")).strip().lower()
+    region_name = str(desc.get("region_name", "")).strip()
+    settlement_name = str(desc.get("settlement_name", "")).strip()
+    glyph, color = _overworld_render_style(sim, cx, cy)
+    semantic_id = _overworld_center_semantic_id(
+        cx,
+        cy,
+        area,
+        district,
+        terrain,
+        desc.get("landmark"),
+        interest,
+        getattr(sim.world, "loaded_chunks", {}),
+    )
+
+    def _title(raw):
+        text = str(raw or "").replace("_", " ").strip()
+        return text.title() if text else ""
+
+    header_segments = [
+        _segment(" "),
+        _segment(glyph, color=color, attrs=bold, inline_glyph=True, semantic_id=semantic_id),
+        _segment(" "),
+        _segment("Overworld", color="player", attrs=bold),
+        _segment("  "),
+        _segment(f"Here {cx},{cy}", color="human", attrs=bold),
+    ]
+    place_label = _title(district if area == "city" else terrain or area)
+    if place_label:
+        header_segments.extend([
+            _segment("  "),
+            _segment(place_label),
+        ])
+    if region_name:
+        header_segments.extend([
+            _segment("  "),
+            _segment(region_name),
+        ])
+    if settlement_name:
+        header_segments.extend([
+            _segment("  "),
+            _segment(settlement_name),
+        ])
+    if bool(look_ui.get("active")) and str(look_ui.get("mode", "")).lower() == "overworld":
+        cursor_cx = int(look_ui.get("chunk_x", cx))
+        cursor_cy = int(look_ui.get("chunk_y", cy))
+        if (cursor_cx, cursor_cy) != (cx, cy):
+            header_segments.extend([
+                _segment("  "),
+                _segment(f"Cursor {cursor_cx},{cursor_cy}", color="player", attrs=bold),
+            ])
+    header_segments.append(_segment(" "))
+
+    footer_segments = [
+        _segment("In-vehicle: ", color="human", attrs=bold),
+        _segment("!", color="player", attrs=bold, inline_glyph=True, semantic_id="overworld_marker_nearest"),
+        _segment(" nearest  "),
+        _segment("4", color="human", inline_glyph=True, semantic_id="overworld_marker"),
+        _segment(f" markers:{len(markers)}  "),
+        _segment("X", color="player", attrs=bold, inline_glyph=True, semantic_id="overworld_cursor"),
+        _segment(" cursor  "),
+        _segment("upper=loaded lower=distant  "),
+        _segment("G drive  M mark  l list  N nearest  t exit"),
+    ]
+
+    return (
+        _rich_line(header_segments, text=_segments_text(header_segments)),
+        _rich_line(footer_segments, text=_segments_text(footer_segments)),
+    )
 
 
 def _wrap_text_lines(text, width):
@@ -3397,12 +3827,18 @@ def _segments_to_styled_chars(segments):
             text = str(segment.get("text", ""))
             color = segment.get("color")
             attrs = int(segment.get("attrs", 0) or 0)
+            extras = {
+                key: value
+                for key, value in segment.items()
+                if key not in {"text", "color", "attrs"}
+            }
         else:
             text = str(segment)
             color = None
             attrs = 0
+            extras = {}
         for char in text:
-            chars.append((char, color, attrs))
+            chars.append((char, color, attrs, dict(extras)))
     return chars
 
 
@@ -3414,22 +3850,31 @@ def _styled_chars_to_segments(chars):
     current_text = []
     current_color = None
     current_attrs = 0
+    current_extras = {}
 
-    for char, color, attrs in chars:
-        if current_text and (color != current_color or attrs != current_attrs):
-            grouped.append(_segment("".join(current_text), color=current_color, attrs=current_attrs))
+    for entry in chars:
+        if len(entry) >= 4:
+            char, color, attrs, extras = entry
+        else:
+            char, color, attrs = entry
+            extras = {}
+        extras = dict(extras or {})
+        if current_text and (color != current_color or attrs != current_attrs or extras != current_extras):
+            grouped.append(_segment("".join(current_text), color=current_color, attrs=current_attrs, **current_extras))
             current_text = [char]
             current_color = color
             current_attrs = attrs
+            current_extras = extras
             continue
 
         if not current_text:
             current_color = color
             current_attrs = attrs
+            current_extras = extras
         current_text.append(char)
 
     if current_text:
-        grouped.append(_segment("".join(current_text), color=current_color, attrs=current_attrs))
+        grouped.append(_segment("".join(current_text), color=current_color, attrs=current_attrs, **current_extras))
     return grouped
 
 
@@ -3599,919 +4044,29 @@ def _fit_wrapped_sections(sections, max_rows):
     return normalized
 
 
-def _pressure_report_line(snapshot):
-    snapshot = snapshot if isinstance(snapshot, dict) else {}
-    tier = str(snapshot.get("tier", "low")).strip().lower() or "low"
-    attention = max(0, _int_or_default(snapshot.get("attention"), 0))
-    if tier == "high":
-        return (
-            f"Heat {tier} {attention}. Local defenders escalate faster and "
-            "services get tighter."
-        )
-    if tier == "medium":
-        return (
-            f"Heat {tier} {attention}. Social and trade routes stay tighter "
-            "until attention cools."
-        )
-    return f"Heat {tier} {attention}. Local response is near baseline."
-
-
-def _current_or_nearby_property(sim, player_eid, radius=1):
-    pos = sim.ecs.get(Position).get(player_eid) if sim is not None else None
-    if not pos:
-        return None
-    prop = _property_covering(sim, pos.x, pos.y, pos.z)
-    if prop is not None:
-        return prop
-    return _property_for_action(sim, pos, radius=radius)
-
-
-def _organization_snapshot_line(snapshot):
-    if not isinstance(snapshot, dict):
-        return ""
-    name = str(snapshot.get("name", "Organization")).strip() or "Organization"
-    standing = float(snapshot.get("standing", 0.0))
-    standing_tier = str(snapshot.get("standing_tier", "neutral")).strip().lower() or "neutral"
-    heat = int(snapshot.get("heat", 0))
-    heat_tier = str(snapshot.get("heat_tier", "quiet")).strip().lower() or "quiet"
-    site_count = max(0, int(snapshot.get("site_count", 0)))
-    return (
-        f"{name} | standing {standing_tier} {standing:+.2f} | "
-        f"heat {heat_tier} {heat} | sites {site_count}"
-    )
-
-
-def _organization_summary_rows(sim, *, current_prop=None):
-    rows = []
-
-    current_snapshot = _organization_snapshot(sim, prop=current_prop, ensure=True) if current_prop else None
-    if current_snapshot is not None:
-        rows.append(f"Current: {_organization_snapshot_line(current_snapshot)}")
-
-    hot_rows = [
-        row for row in _top_organization_snapshots(sim, limit=3, sort_by="heat")
-        if int(row.get("heat", 0)) > 0
-    ]
-    if hot_rows:
-        rows.append(
-            "Heat: "
-            + " || ".join(
-                f"{str(row.get('name', 'Organization')).strip() or 'Organization'} "
-                f"{str(row.get('heat_tier', 'quiet')).strip().lower() or 'quiet'} "
-                f"{int(row.get('heat', 0))}"
-                for row in hot_rows
-            )
-        )
-
-    best_rows = _top_organization_snapshots(sim, limit=2, sort_by="positive_standing")
-    if best_rows:
-        rows.append(
-            "Best standing: "
-            + " || ".join(
-                f"{str(row.get('name', 'Organization')).strip() or 'Organization'} "
-                f"{str(row.get('standing_tier', 'neutral')).strip().lower() or 'neutral'} "
-                f"{float(row.get('standing', 0.0)):+.2f}"
-                for row in best_rows
-            )
-        )
-
-    worst_rows = _top_organization_snapshots(sim, limit=2, sort_by="negative_standing")
-    if worst_rows:
-        rows.append(
-            "Worst standing: "
-            + " || ".join(
-                f"{str(row.get('name', 'Organization')).strip() or 'Organization'} "
-                f"{str(row.get('standing_tier', 'neutral')).strip().lower() or 'neutral'} "
-                f"{float(row.get('standing', 0.0)):+.2f}"
-                for row in worst_rows
-            )
-        )
-
-    return rows
-
-
 def _build_progress_report(sim, player_eid, opportunity_limit=8):
-    refresh_dynamic_opportunities(sim, player_eid)
-    objective_eval = evaluate_run_objective(sim, player_eid)
-    final_operation_eval = evaluate_final_operation(sim, player_eid)
-    capped_opp_limit = max(3, int(opportunity_limit))
-    opportunity_rows = evaluate_opportunity_facts(
+    return _report_runtime_build_progress_report(
         sim,
         player_eid,
-        limit=capped_opp_limit,
-        observer_eid=player_eid,
+        opportunity_limit=opportunity_limit,
     )
-    opportunity_count = opportunity_known_count(sim, player_eid, observer_eid=player_eid)
-    pressure = _pressure_snapshot(sim)
-
-    lines = []
-
-    if objective_eval:
-        title = str(objective_eval.get("title", "Run Objective")).strip() or "Run Objective"
-        summary = str(objective_eval.get("summary", "")).strip()
-        status = str(objective_eval.get("summary_line", "")).strip()
-        next_step = str(objective_eval.get("next_step", "")).strip()
-        why_lines = list(objective_eval.get("why_lines", ()) or ())
-        how_lines = list(objective_eval.get("how_lines", ()) or ())
-        activity_lines = list(objective_eval.get("activity_lines", ()) or ())
-        lines.append("OBJECTIVE")
-        lines.append(title)
-        if summary:
-            lines.append(summary)
-        if status:
-            lines.append(f"Status: {status}")
-        if next_step:
-            lines.append(f"Next: {next_step}")
-        if why_lines:
-            lines.append("")
-            lines.append("WHY THIS RUN")
-            lines.extend(str(line).strip() for line in why_lines if str(line).strip())
-        if how_lines:
-            lines.append("")
-            lines.append("HOW IT ADVANCES")
-            lines.extend(str(line).strip() for line in how_lines if str(line).strip())
-        if activity_lines:
-            lines.append("")
-            lines.append("BEST WAYS TO PUSH IT")
-            lines.extend(str(line).strip() for line in activity_lines if str(line).strip())
-
-        recent_history = objective_progress_recent_history(sim, limit=4)
-        if recent_history:
-            recent_lines = []
-            for entry in recent_history:
-                bits = objective_progress_explain_delta(
-                    objective_eval.get("id", ""),
-                    entry,
-                )
-                if not bits:
-                    continue
-                channel = str(entry.get("channel", "action")).strip().replace("_", " ")
-                reason = str(entry.get("reason", "")).strip().replace("_", " ")
-                suffix = f" ({reason})" if reason else ""
-                recent_lines.append(f"{channel}: {', '.join(bits)}{suffix}.")
-            if recent_lines:
-                lines.append("")
-                lines.append("RECENT OBJECTIVE GAINS")
-                lines.extend(recent_lines)
-
-        focus_lines = objective_focus_lines(sim, player_eid, objective_eval.get("id", ""), limit=3)
-        if focus_lines:
-            lines.append("")
-            lines.append("BEST CURRENT FITS")
-            lines.extend(str(line).strip() for line in focus_lines if str(line).strip())
-
-    if final_operation_eval:
-        status = str(final_operation_eval.get("summary_line", "")).strip()
-        next_step = str(final_operation_eval.get("next_step", "")).strip()
-        lines.append("")
-        lines.append("FINAL OPERATION")
-        if status:
-            lines.append(status)
-        if next_step:
-            lines.append(f"Next: {next_step}")
-
-    lines.append("")
-    lines.append("PRESSURE")
-    lines.append(_pressure_report_line(pressure))
-
-    organization_lines = _organization_summary_rows(
-        sim,
-        current_prop=_current_or_nearby_property(sim, player_eid, radius=1),
-    )
-    lines.append("")
-    lines.append("ORGANIZATIONS")
-    if organization_lines:
-        lines.extend(organization_lines)
-    else:
-        lines.append("No organization heat or standing established yet.")
-
-    remaining = max(0, int(opportunity_count) - len(opportunity_rows))
-    if opportunity_rows:
-        nearest = opportunity_rows[0]
-        nearest_dist_text = opportunity_distance_text(
-            int(nearest.get("distance", 0)),
-            str(nearest.get("direction", "HERE")).strip(),
-        )
-        summary = (
-            f"Opp {int(opportunity_count)} known | nearest "
-            f"{str(nearest.get('title', 'Opportunity')).strip()} "
-            f"{nearest_dist_text}"
-        )
-    else:
-        summary = "Opp 0 known"
-
-    opportunity_lines = []
-    for row in opportunity_rows:
-        dist_text = opportunity_distance_text(
-            int(row.get("distance", 0)),
-            str(row.get("direction", "HERE")).strip(),
-        )
-        opportunity_lines.append(
-            f"{str(row.get('title', 'Opportunity')).strip()} | "
-            f"{dist_text} | "
-            f"risk:{str(row.get('risk', 'low')).strip()} | "
-            f"intel:{str(row.get('awareness_state', 'heard')).strip()} "
-            f"{int(round(float(row.get('confidence', 0.0)) * 100.0))}%"
-        )
-    lines.append("")
-    lines.append("OPPORTUNITIES")
-    if summary:
-        lines.append(summary)
-    if opportunity_lines:
-        lines.extend(str(line).strip() for line in opportunity_lines if str(line).strip())
-        if remaining > 0:
-            lines.append(f"... and {remaining} more.")
-    else:
-        lines.append("No active opportunities.")
-
-    return {
-        "title": "Operations Report",
-        "lines": lines,
-    }
-
-
-def _known_location_coords_text(prop):
-    focus = _property_focus_position(prop) or _property_display_position(prop)
-    if focus is None:
-        try:
-            focus = (
-                int(prop.get("x")),
-                int(prop.get("y")),
-                int(prop.get("z", 0)),
-            )
-        except (TypeError, ValueError):
-            focus = None
-    if focus is None:
-        return "coords unknown"
-
-    x, y, z = focus
-    if int(z) != 0:
-        return f"{int(x)},{int(y)},{int(z)}"
-    return f"{int(x)},{int(y)}"
-
-
-def _known_location_summary_bits(prop, known):
-    bits = []
-    if bool((known or {}).get("anchored")):
-        bits.append("confirmed")
-    metadata = _property_metadata(prop)
-    archetype = str(metadata.get("archetype", prop.get("kind", "location"))).strip().replace("_", " ")
-    if archetype:
-        bits.append(archetype)
-
-    lead_kind = str((known or {}).get("lead_kind", "") or "").strip().lower()
-    lead_label = {
-        "owner": "owner lead",
-        "workplace": "work lead",
-        "hours": "hours lead",
-        "access": "access lead",
-        "security": "security lead",
-        "contraband": "contraband lead",
-    }.get(lead_kind, "")
-    if lead_label:
-        bits.append(lead_label)
-
-    services = [
-        str(service).strip().replace("_", " ")
-        for service in _property_services(prop)
-        if str(service).strip()
-    ]
-    if services:
-        bits.append("services " + ", ".join(services[:2]))
-
-    return bits
-
-
-def _known_location_fact_lines(sim, player_eid, prop, known):
-    facts = []
-    known = known if isinstance(known, dict) else {}
-    confidence = max(0.0, min(1.0, float(known.get("confidence", 0.0) or 0.0)))
-    lead_kind = str(known.get("lead_kind", "") or "").strip().lower()
-    source_eid = known.get("source_eid")
-    source_name = _entity_display_name(sim, source_eid, title_case=True) if source_eid is not None else ""
-
-    controller = _property_access_controller(sim, prop)
-    access_level = str(_property_access_level(prop) or "private").strip().lower() or "private"
-    hours_text = _dialogue_hours_text(controller.get("opening_window")) if isinstance(controller, dict) else ""
-    requirement = _controller_access_requirement_text(controller) if isinstance(controller, dict) else "the matching key"
-    security_text = _dialogue_security_tier_text(controller.get("security_tier")) if isinstance(controller, dict) else "security"
-    infrastructure_role = _property_infrastructure_role(prop)
-    kind = str(prop.get("kind", "") or "").strip().lower()
-    metadata = _property_metadata(prop)
-    fixture_label = str(metadata.get("fixture_type", metadata.get("archetype", kind or "property")) or "").strip().replace("_", " ")
-
-    owner_eid = prop.get("owner_eid")
-    owner_tag = str(prop.get("owner_tag", "") or "").strip().lower()
-    owner_name = _entity_display_name(sim, owner_eid, title_case=True) if owner_eid is not None else ""
-    if owner_eid == player_eid:
-        facts.append("You own this location.")
-    elif lead_kind == "owner":
-        if owner_name:
-            facts.append(f"Owner: {owner_name}.")
-        elif owner_tag:
-            facts.append(f"Controlled by {owner_tag.replace('_', ' ')}.")
-
-    if lead_kind == "workplace" and source_name:
-        facts.append(f"{source_name} works here.")
-
-    if lead_kind == "hours" and hours_text:
-        facts.append(f"Public hours: {hours_text}.")
-
-    if lead_kind in {"access", "security"}:
-        if access_level == "public" and hours_text:
-            facts.append(f"Public during {hours_text}; after hours needs {requirement}.")
-        else:
-            facts.append(f"Entry runs {access_level}; needs {requirement}.")
-        facts.append(f"Security reads as {security_text}.")
-
-    if lead_kind == "contraband":
-        signal = _storefront_illegal_goods_signal(sim, prop)
-        examples = tuple(
-            str(label).strip()
-            for label in (signal or {}).get("examples", ())
-            if str(label).strip()
-        )
-        if examples:
-            facts.append(f"Rumored hot goods: {_dialogue_human_join(examples[:2])}.")
-        else:
-            facts.append("Rumored to move illegal goods.")
-
-    if confidence >= 0.82 and not any(line.startswith("Owner:") or line.startswith("Controlled by") for line in facts):
-        if owner_eid is not None and owner_name:
-            facts.append(f"Owner: {owner_name}.")
-        elif owner_tag and not _property_is_public(prop):
-            facts.append(f"Control: {owner_tag.replace('_', ' ')}.")
-
-    if confidence >= 0.8 and not any("Public hours:" in line for line in facts) and hours_text:
-        facts.append(f"Public hours: {hours_text}.")
-
-    if confidence >= 0.76 and not any("Security reads as" in line for line in facts):
-        if access_level == "public":
-            facts.append(f"Access: public-facing, {security_text}.")
-        else:
-            facts.append(f"Access: {access_level}; {security_text}.")
-
-    if not facts:
-        if infrastructure_role:
-            target = _infrastructure_target_property(sim, prop)
-            role_label = _infrastructure_role_label(infrastructure_role)
-            if isinstance(target, dict):
-                target_name = str(target.get("name", target.get("id", "site"))).strip() or "site"
-                facts.append(f"Known {role_label} for {target_name}.")
-            else:
-                facts.append(f"Known {role_label}.")
-        elif kind in {"asset", "fixture"}:
-            facts.append(f"Known {fixture_label or kind}.")
-        elif _property_is_storefront(prop):
-            facts.append("Known storefront.")
-        elif _property_is_public(prop):
-            facts.append("Known public-facing location.")
-        else:
-            facts.append(f"Known {access_level} location.")
-
-    deduped = []
-    seen = set()
-    for line in facts:
-        text = str(line).strip()
-        if not text:
-            continue
-        key = text.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(text)
-    return deduped[:4]
-
-
-def _known_vehicle_report_row(
-    sim,
-    player_eid,
-    prop,
-    *,
-    known=None,
-    hidden=False,
-    confidence=None,
-    tick=None,
-    first_tick=None,
-    anchored=None,
-):
-    if not _property_is_vehicle(prop):
-        return None
-
-    known = known if isinstance(known, dict) else {}
-    vehicle_id = str(prop.get("id", "")).strip() or None
-    assets = sim.ecs.get(PlayerAssets).get(player_eid)
-    owned = bool(
-        prop.get("owner_eid") == player_eid
-        or str(prop.get("owner_tag", "") or "").strip().lower() == "player"
-        or (assets and vehicle_id and vehicle_id in getattr(assets, "owned_property_ids", set()))
-    )
-
-    if confidence is None:
-        try:
-            confidence = float(known.get("confidence", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            confidence = 0.0
-    confidence = max(0.0, min(1.0, float(confidence)))
-
-    if anchored is None:
-        anchored = bool(known.get("anchored"))
-
-    row_tick = _int_or_default(known.get("tick"), _int_or_default(tick, 0))
-    row_first_tick = _int_or_default(known.get("first_tick"), _int_or_default(first_tick, row_tick))
-
-    fuel, fuel_capacity = _vehicle_fuel_values(prop)
-    profile = _vehicle_profile_from_property(prop)
-    vehicle_class = str(profile.get("vehicle_class", "") or "").strip().replace("_", " ")
-    quality = str(profile.get("quality", "") or "").strip().replace("_", " ")
-
-    fact_lines = [
-        "Your owned vehicle." if owned else "Known vehicle.",
-    ]
-    if fuel_capacity > 0 or fuel > 0:
-        fact_lines.append(f"Fuel {fuel}/{fuel_capacity}.")
-    if vehicle_class and quality:
-        fact_lines.append(f"{quality.title()} {vehicle_class}.")
-    elif vehicle_class:
-        fact_lines.append(f"{vehicle_class.title()}.")
-    elif quality:
-        fact_lines.append(f"{quality.title()} condition.")
-
-    summary_bits = []
-    if anchored or owned or confidence >= 0.95:
-        summary_bits.append("confirmed")
-    summary_bits.append("owned vehicle" if owned else "vehicle")
-    if quality:
-        summary_bits.append(quality)
-    if vehicle_class:
-        summary_bits.append(vehicle_class)
-
-    return {
-        "property_id": vehicle_id or str(prop.get("id", "")),
-        "name": _vehicle_label(prop),
-        "coords": _known_location_coords_text(prop),
-        "confidence": confidence,
-        "tick": row_tick,
-        "first_tick": row_first_tick,
-        "anchored": bool(anchored or owned),
-        "hidden": bool(hidden),
-        "summary_bits": summary_bits,
-        "fact_lines": fact_lines,
-    }
 
 
 def _build_known_locations_report(sim, player_eid, limit=None, include_hidden=False):
-    knowledge = sim.ecs.get(PropertyKnowledge).get(player_eid)
-    known_map = knowledge.known if knowledge and isinstance(knowledge.known, dict) else {}
-    hidden_ids = set()
-    if knowledge:
-        hidden_ids = {
-            str(property_id).strip()
-            for property_id in getattr(knowledge, "hidden_property_ids", ()) or ()
-            if str(property_id).strip()
-        }
-    rows = []
-    seen_property_ids = set()
-
-    for property_id, known in known_map.items():
-        prop = sim.properties.get(property_id)
-        if not isinstance(prop, dict):
-            continue
-        property_id = str(prop.get("id", property_id)).strip() or str(property_id).strip()
-        hidden = property_id in hidden_ids
-        if include_hidden != hidden:
-            continue
-        known = known if isinstance(known, dict) else {}
-        anchored = bool(known.get("anchored"))
-        confidence = max(0.0, min(1.0, float(known.get("confidence", 0.0) or 0.0)))
-
-        if _property_is_vehicle(prop):
-            vehicle_row = _known_vehicle_report_row(
-                sim,
-                player_eid,
-                prop,
-                known=known,
-                hidden=hidden,
-                confidence=confidence,
-                tick=_int_or_default(known.get("tick"), 0),
-                first_tick=_int_or_default(known.get("first_tick"), _int_or_default(known.get("tick"), 0)),
-                anchored=anchored,
-            )
-            if vehicle_row:
-                rows.append(vehicle_row)
-                seen_property_ids.add(property_id)
-            continue
-
-        name = str(prop.get("name", prop.get("id", "location"))).strip() or "location"
-        summary_bits = _known_location_summary_bits(prop, known)
-        fact_lines = _known_location_fact_lines(sim, player_eid, prop, known)
-        rows.append({
-            "property_id": str(prop.get("id", property_id)),
-            "name": name,
-            "coords": _known_location_coords_text(prop),
-            "confidence": confidence,
-            "tick": _int_or_default(known.get("tick"), 0),
-            "first_tick": _int_or_default(known.get("first_tick"), _int_or_default(known.get("tick"), 0)),
-            "anchored": anchored,
-            "hidden": hidden,
-            "summary_bits": summary_bits,
-            "fact_lines": fact_lines,
-        })
-        seen_property_ids.add(property_id)
-
-    vehicle_state = sim.ecs.get(VehicleState).get(player_eid)
-    assets = sim.ecs.get(PlayerAssets).get(player_eid)
-    candidate_ids = []
-    if assets:
-        for raw_vehicle_id in sorted(getattr(assets, "owned_property_ids", ()) or ()):
-            vehicle_id = str(raw_vehicle_id or "").strip()
-            if vehicle_id and vehicle_id not in candidate_ids:
-                candidate_ids.append(vehicle_id)
-    if vehicle_state:
-        for raw_vehicle_id in (
-            getattr(vehicle_state, "active_vehicle_id", None),
-            getattr(vehicle_state, "last_vehicle_id", None),
-        ):
-            vehicle_id = str(raw_vehicle_id or "").strip()
-            if vehicle_id and vehicle_id not in candidate_ids:
-                candidate_ids.append(vehicle_id)
-
-    for vehicle_id in candidate_ids:
-        if vehicle_id in seen_property_ids:
-            continue
-        prop = sim.properties.get(vehicle_id)
-        if not _property_is_vehicle(prop):
-            continue
-        hidden = vehicle_id in hidden_ids
-        if include_hidden != hidden:
-            continue
-        owned = bool(
-            prop.get("owner_eid") == player_eid
-            or str(prop.get("owner_tag", "") or "").strip().lower() == "player"
-            or (assets and vehicle_id in assets.owned_property_ids)
-        )
-        if not owned:
-            continue
-        vehicle_tick = int(getattr(vehicle_state, "last_changed_tick", getattr(sim, "tick", 0)) or 0)
-        vehicle_row = _known_vehicle_report_row(
-            sim,
-            player_eid,
-            prop,
-            hidden=hidden,
-            confidence=1.0,
-            tick=vehicle_tick,
-            first_tick=vehicle_tick,
-            anchored=True,
-        )
-        if vehicle_row:
-            rows.append(vehicle_row)
-            seen_property_ids.add(vehicle_id)
-
-    rows.sort(
-        key=lambda row: (
-            -int(row.get("tick", 0)),
-            -float(row.get("confidence", 0.0)),
-            str(row.get("name", "")).lower(),
-            str(row.get("coords", "")).lower(),
-            str(row.get("property_id", "")).lower(),
-        )
-    )
-
-    total_count = len(rows)
-    if limit is not None:
-        rows = rows[: max(1, int(limit))]
-
-    title = "Hidden Locations" if include_hidden else "Known Locations"
-    lines = [
-        "Places you have some solid read on through talk, rumor, ownership, or access leads.",
-        "",
-    ]
-
-    if not rows:
-        empty_label = "hidden locations" if include_hidden else "known locations"
-        lines.extend([
-            f"No {empty_label} right now.",
-            "Talk to people, overhear chatter, or learn access details to start filling this notebook." if not include_hidden else "Press H in the notebook to go back to the active list.",
-        ])
-        return {
-            "title": title,
-            "lines": lines,
-            "rows": [],
-        }
-
-    if include_hidden:
-        lines.append(f"{total_count} location{'s' if total_count != 1 else ''} hidden.")
-    else:
-        lines.append(f"{total_count} location{'s' if total_count != 1 else ''} tracked.")
-    lines.append("")
-    for row in rows:
-        lines.append(f"{row['name']} @ {row['coords']}")
-        summary_bits = [f"{int(round(float(row['confidence']) * 100.0))}% confident"]
-        summary_bits.extend(str(bit).strip() for bit in row.get("summary_bits", ()) if str(bit).strip())
-        lines.append(" | ".join(summary_bits))
-        for fact in row.get("fact_lines", ()):
-            lines.append(f"- {fact}")
-        lines.append("")
-
-    if total_count > len(rows):
-        lines.append(f"... and {total_count - len(rows)} more locations.")
-
-    return {
-        "title": title,
-        "lines": lines,
-        "rows": rows,
-    }
-
-
-def _build_debug_overlay(sim, player_eid):
-    positions = sim.ecs.get(Position)
-    player_pos = positions.get(player_eid)
-    zoom_mode = str(getattr(sim, "zoom_mode", "city")).strip().lower() or "city"
-    active_z = int(player_pos.z) if player_pos else 0
-    tick = int(getattr(sim, "tick", 0))
-    seed = getattr(sim, "seed", "?")
-
-    lighting_state = _lighting_state(sim)
-    if int(lighting_state.get("tick", -1)) != tick:
-        lighting_state = _update_lighting_state(sim, player_pos=player_pos)
-
-    visibility_state = getattr(sim, "visibility_state", {})
-    player_visible = visibility_state.get("player_visible", set()) if isinstance(visibility_state, dict) else set()
-    player_explored = visibility_state.get("player_explored", set()) if isinstance(visibility_state, dict) else set()
-    if not isinstance(player_visible, set):
-        player_visible = set(player_visible or ())
-    if not isinstance(player_explored, set):
-        player_explored = set(player_explored or ())
-    observers = visibility_state.get("observers", {}) if isinstance(visibility_state, dict) else {}
-    if not isinstance(observers, dict):
-        observers = {}
-
-    def _ambient_pct(value, default=1.0):
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            number = float(default)
-        return max(0, min(100, int(round(number * 100.0))))
-
-    outside_pct = _ambient_pct(lighting_state.get("outside_ambient", 1.0))
-    player_pct = _ambient_pct(lighting_state.get("player_ambient", lighting_state.get("outside_ambient", 1.0)))
-
-    world = getattr(sim, "world", None)
-    loaded_chunks = getattr(world, "loaded_chunks", {}) if world is not None else {}
-    if not isinstance(loaded_chunks, dict):
-        loaded_chunks = {}
-    chunk_detail = getattr(sim, "chunk_detail", {})
-    if not isinstance(chunk_detail, dict):
-        chunk_detail = {}
-    active_chunk = getattr(sim, "active_chunk", {})
-    if not isinstance(active_chunk, dict):
-        active_chunk = {}
-    district = active_chunk.get("district", {}) if isinstance(active_chunk, dict) else {}
-    if not isinstance(district, dict):
-        district = {}
-    area_type = str(district.get("area_type", "city")).strip().lower() or "city"
-    district_type = str(district.get("district_type", "unknown")).strip().lower() or "unknown"
-    security = str(district.get("security_level", "?")).strip() or "?"
-
-    pressure = _pressure_snapshot(sim)
-    pressure_effects = pressure.get("effects", {}) if isinstance(pressure, dict) else {}
-    stealth_state = getattr(sim, "player_stealth_state", {})
-    if not isinstance(stealth_state, dict):
-        stealth_state = {}
-    witness_labels = [str(label).strip() for label in stealth_state.get("witness_labels", ()) if str(label).strip()]
-
-    assets = sim.ecs.get(PlayerAssets).get(player_eid)
-    finance = sim.ecs.get(FinancialProfile).get(player_eid)
-    inventory = sim.ecs.get(Inventory).get(player_eid)
-    needs = sim.ecs.get(NPCNeeds).get(player_eid)
-    vehicle_state = sim.ecs.get(VehicleState).get(player_eid)
-    active_vehicle_prop = None
-    if vehicle_state and vehicle_state.active_vehicle_id:
-        maybe_vehicle = sim.properties.get(vehicle_state.active_vehicle_id)
-        if _property_is_vehicle(maybe_vehicle):
-            active_vehicle_prop = maybe_vehicle
-
-    objective_eval = evaluate_run_objective(sim, player_eid)
-    final_operation_eval = evaluate_final_operation(sim, player_eid)
-    opportunity_rows = evaluate_opportunity_facts(
+    return _report_runtime_build_known_locations_report(
         sim,
         player_eid,
-        limit=1,
-        observer_eid=player_eid,
+        limit=limit,
+        include_hidden=include_hidden,
+        entity_display_name_fn=_entity_display_name,
+        hours_text_fn=_dialogue_hours_text,
+        security_tier_text_fn=_dialogue_security_tier_text,
+        human_join_fn=_dialogue_human_join,
+        infrastructure_target_property_fn=_infrastructure_target_property,
+        infrastructure_role_label_fn=_infrastructure_role_label,
+        storefront_illegal_goods_signal_fn=_storefront_illegal_goods_signal,
+        property_legend_line_fn=_property_legend_line,
     )
-    inventory_summary = f"Inventory {inventory.slot_count() if inventory else 0}/{inventory.capacity if inventory else 0}"
-    if needs:
-        needs_summary = f"{inventory_summary} | Needs E{needs.energy:.0f}/S{needs.safety:.0f}/So{needs.social:.0f}"
-    else:
-        needs_summary = f"{inventory_summary} | Needs -"
-
-    lines = [
-        "RUNTIME",
-        (
-            f"Tick {tick} | Seed {seed} | Zoom {zoom_mode} | "
-            f"Layer {'overworld' if zoom_mode == 'overworld' else active_z}"
-        ),
-    ]
-
-    if player_pos:
-        chunk_x, chunk_y = sim.chunk_coords(player_pos.x, player_pos.y)
-        detail = sim.detail_for_xy(player_pos.x, player_pos.y)
-        lines.append(
-            f"Player tile {player_pos.x},{player_pos.y},{player_pos.z} | "
-            f"Chunk {chunk_x},{chunk_y} | Detail {detail}"
-        )
-    else:
-        chunk_x = chunk_y = 0
-        lines.append("Player position unavailable.")
-
-    realized_count = len(getattr(sim, "realized_chunks", ()))
-    saved_chunk_count = len(getattr(sim, "chunk_saved_states", {}))
-    lines.append(
-        f"World loaded {len(loaded_chunks)} | Active {sum(1 for detail in chunk_detail.values() if detail == 'active')} | "
-        f"Realized {realized_count} | Saved {saved_chunk_count}"
-    )
-    lines.append(
-        f"Entities {len(positions)} | Floor {len(sim.tilemap.entities_on_floor(active_z))} | "
-        f"Properties {len(getattr(sim, 'properties', {}))} | Ground {len(getattr(sim, 'ground_items', {}))} | "
-        f"Projectiles {len(getattr(sim, 'projectiles', {}))}"
-    )
-
-    lines.extend([
-        "",
-        "LIGHT / VISIBILITY",
-        (
-            f"Time {str(lighting_state.get('time_label', '--:--')).strip() or '--:--'} | "
-            f"Phase {str(lighting_state.get('phase', 'day')).strip().lower() or 'day'} | "
-            f"Outside {outside_pct}% | Player {'in' if lighting_state.get('player_inside') else 'out'} {player_pct}%"
-        ),
-        (
-            f"Sight radius {int(visibility_state.get('player_radius', 0)) if isinstance(visibility_state, dict) else 0} | "
-            f"Visible {len(player_visible)} | Explored {len(player_explored)} | Observers {len(observers)}"
-        ),
-        (
-            f"Stealth hidden {'yes' if stealth_state.get('hidden') else 'no'} | "
-            f"Witnesses {int(stealth_state.get('witness_count', 0))} | "
-            f"Seen by {', '.join(witness_labels) if witness_labels else '-'}"
-        ),
-    ])
-
-    lines.extend([
-        "",
-        "PLAYER / WORLD",
-        (
-            f"District {area_type}/{district_type} | Security {security} | "
-            f"Credits {assets.credits if assets else 0} | Bank {finance.bank_balance if finance else 0}"
-        ),
-        needs_summary,
-    ])
-
-    if active_vehicle_prop:
-        fuel, fuel_capacity = _vehicle_fuel_values(active_vehicle_prop)
-        lines.append(
-            f"Vehicle {_vehicle_label(active_vehicle_prop)} | Fuel {fuel}/{fuel_capacity} | "
-            f"Mode {'driving' if vehicle_state and vehicle_state.in_vehicle else 'parked'}"
-        )
-
-    prop = _current_or_nearby_property(sim, player_eid, radius=1)
-    prop_scope = "Current" if (player_pos and prop is not None and _property_covering(sim, player_pos.x, player_pos.y, player_pos.z) is prop) else "Nearby"
-    if prop is None:
-        prop_scope = "Current"
-    if prop is not None:
-        prop_name = str(prop.get("name", prop.get("id", "property"))).strip() or "property"
-        prop_archetype = str(
-            _property_metadata(prop).get("archetype", prop.get("kind", "property"))
-        ).strip().replace("_", " ") or "property"
-        access_level = _property_access_level(prop)
-        access_modes = _property_access_summary(sim, prop, viewer_eid=player_eid)
-        controller = _property_access_controller(sim, prop)
-        controller_kind = str(controller.get("kind", "none")).strip().replace("_", " ") or "none"
-        open_now = controller.get("open_now")
-        open_text = "-"
-        if open_now is True:
-            open_text = "open"
-        elif open_now is False:
-            open_text = "closed"
-        lines.append(
-            f"{prop_scope} property {prop_name} | {prop_archetype} | "
-            f"{_property_status_text(sim, prop)} | access {access_level}"
-        )
-        lines.append(
-            f"Modes {access_modes or '-'} | Viewer credential {_viewer_property_credential_status(sim, player_eid, prop) or '-'} | "
-            f"Controller {controller_kind}/{_controller_credential_short_label(controller)} "
-            f"t{max(1, _int_or_default(controller.get('required_credential_tier'), 1))} "
-            f"sec{max(1, _int_or_default(controller.get('security_tier'), 1))} {open_text} "
-            f"auth {len(tuple(controller.get('authorized_holders', ()) or ()))}"
-        )
-        if controller.get("intrusion_active"):
-            intrusion_label = str(controller.get("intrusion_label", "") or "intrusion").strip() or "intrusion"
-            source_item_id = str(controller.get("intrusion_source_item_id", "") or "").strip().lower()
-            source_text = f" via {source_item_id}" if source_item_id else ""
-            lines.append(
-                f"Intrusion {intrusion_label} | t{int(controller.get('intrusion_until_tick', 0) or 0)} "
-                f"({int(controller.get('intrusion_remaining_ticks', 0) or 0)} left){source_text}"
-            )
-        service_bits = list(_finance_services_for_property(prop)) + list(_site_services_for_property(prop))
-        if service_bits:
-            lines.append("Services " + ", ".join(service_bits))
-        org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
-        if org_snapshot is not None:
-            lines.append("Org " + _organization_snapshot_line(org_snapshot))
-    else:
-        lines.append("No current or adjacent property anchor.")
-
-    if zoom_mode == "overworld" and player_pos and world is not None:
-        desc = world.overworld_descriptor(chunk_x, chunk_y)
-        interest = world.overworld_interest(chunk_x, chunk_y, descriptor=desc)
-        travel = _overworld_travel_profile(sim, chunk_x, chunk_y, desc=desc, interest=interest)
-        discovery = _overworld_discovery_profile(sim, chunk_x, chunk_y, desc=desc, interest=interest, travel=travel)
-        landmark = desc.get("landmark") or desc.get("nearest_landmark") or {}
-        lines.extend([
-            "",
-            "OVERWORLD",
-            (
-                f"Region {str(desc.get('region_name', '')).strip() or '-'} | "
-                f"Settlement {str(desc.get('settlement_name', '')).strip() or '-'} | "
-                f"Terrain {str(desc.get('terrain', '')).strip() or '-'} | "
-                f"Path {str(desc.get('path', '')).strip() or '-'}"
-            ),
-            (
-                f"Landmark {str(landmark.get('name', '')).strip() or '-'} | "
-                f"POI {str(interest.get('detail', '')).strip() or '-'} | "
-                f"Discovery {str(discovery.get('label', '')).strip() or '-'} | "
-                f"Risk {str(travel.get('risk_label', 'low')).strip() or 'low'} | "
-                f"Support {str(travel.get('support_label', 'none')).strip() or 'none'}"
-            ),
-        ])
-
-    lines.extend([
-        "",
-        "RUN LOOP",
-        f"Heat {str(pressure.get('tier', 'low')).strip().lower() or 'low'} {int(pressure.get('attention', 0))} | "
-        f"Peak {int(pressure.get('peak_attention', 0))} | "
-        f"Last+ {int(pressure.get('last_raise_tick', -10000))} | "
-        f"Last- {int(pressure.get('last_decay_tick', -10000))} | "
-        f"Mitigations {int(pressure.get('mitigation_count', 0))}",
-        (
-            f"Effects suspicion x{float(pressure_effects.get('suspicion_mult', 1.0)):.2f} | "
-            f"goodwill x{float(pressure_effects.get('goodwill_mult', 1.0)):.2f} | "
-            f"buy x{float(pressure_effects.get('trade_buy_mult', 1.0)):.2f} | "
-            f"sell x{float(pressure_effects.get('trade_sell_mult', 1.0)):.2f} | "
-            f"insurance x{float(pressure_effects.get('insurance_premium_mult', 1.0)):.2f}"
-        ),
-    ])
-
-    organization_lines = _organization_summary_rows(sim, current_prop=prop)
-    lines.extend([
-        "",
-        "ORGANIZATIONS",
-    ])
-    if organization_lines:
-        lines.extend(organization_lines)
-    else:
-        lines.append("No organization heat or standing established yet.")
-
-    if objective_eval:
-        lines.append(
-            f"Objective {str(objective_eval.get('title', 'Run Objective')).strip() or 'Run Objective'}"
-        )
-        objective_status = str(objective_eval.get("summary_line", "")).strip()
-        if objective_status:
-            lines.append(f"Status: {objective_status}")
-        objective_next = str(objective_eval.get("next_step", "")).strip()
-        if objective_next:
-            lines.append(f"Next: {objective_next}")
-    else:
-        lines.append("Objective none seeded.")
-
-    if final_operation_eval:
-        final_status = str(final_operation_eval.get("summary_line", "")).strip()
-        final_next = str(final_operation_eval.get("next_step", "")).strip()
-        lines.append(f"Final op: {final_status or 'ready'}")
-        if final_next:
-            lines.append(f"Final next: {final_next}")
-    else:
-        lines.append("Final op: locked.")
-
-    if opportunity_rows:
-        row = opportunity_rows[0]
-        dist_text = opportunity_distance_text(
-            int(row.get("distance", 0)),
-            str(row.get("direction", "HERE")).strip(),
-        )
-        lines.append(
-            "Opportunity: "
-            f"{str(row.get('title', 'Opportunity')).strip()} "
-            f"{dist_text} "
-            f"risk:{str(row.get('risk', 'low')).strip()} "
-            f"intel:{str(row.get('awareness_state', 'heard')).strip()}"
-        )
-    else:
-        lines.append("Opportunity: no known opportunities.")
-
-    return {
-        "title": "Debug Overlay",
-        "lines": lines,
-    }
 
 
 def _mode_line(mode_state=None, cover=None, look_active=False, aim_active=False, turn_mode=False, stealth_state=None):
@@ -4572,129 +4127,36 @@ def _tile_legend_line(sim, x, y, z, text):
 
 
 def _property_legend_line(prop, text, active_quest_target=None):
-    glyph, color = _property_render_style(prop, active_quest_target=active_quest_target)
-    return _legend_line(text, glyph=glyph, color=color, attrs=getattr(curses, "A_BOLD", 0))
+    appearance = _appearance_property_render_snapshot(
+        prop,
+        active_quest_target=active_quest_target,
+    )
+    return _legend_line(
+        text,
+        glyph=appearance.glyph,
+        color=appearance.color,
+        attrs=getattr(curses, "A_BOLD", 0),
+        semantic_id=appearance.semantic_id,
+    )
 
 
 def _item_reference_line(item_id, text, prefix=""):
     item_def = ITEM_CATALOG.get(item_id, {})
     glyph = _item_display_glyph(item_def)
     color = _ground_item_color(item_def)
+    semantic_id = _item_reference_semantic_id(item_def)
     return _legend_line(
         text,
         glyph=glyph,
         color=color,
         prefix=prefix,
         attrs=getattr(curses, "A_BOLD", 0),
+        semantic_id=semantic_id,
     )
 
 
 def _item_legend_line(item_id, text):
     return _item_reference_line(item_id, text)
-
-
-def _overworld_render_style(sim, cx, cy):
-    desc = sim.world.overworld_descriptor(cx, cy)
-    area_type = str(desc.get("area_type", "city")).strip().lower() or "city"
-    district_type = str(desc.get("district_type", "unknown")).strip().lower() or "unknown"
-    terrain_key = str(desc.get("terrain", "plain")).strip().lower() or "plain"
-    path = str(desc.get("path", "")).strip().lower()
-    landmark_here = desc.get("landmark")
-    interest = sim.world.overworld_interest(cx, cy, descriptor=desc)
-
-    if isinstance(landmark_here, dict) and landmark_here.get("glyph"):
-        glyph = str(landmark_here.get("glyph", "*"))[:1] or "*"
-        color = landmark_here.get("color", "human")
-    elif interest.get("show_on_map") and interest.get("glyph"):
-        glyph = str(interest.get("glyph", "?"))[:1] or "?"
-        color = str(interest.get("color", "human") or "human")
-    elif path:
-        glyph = RenderSystem.OVERWORLD_PATH_GLYPHS.get(path, "=")
-        color = RenderSystem.OVERWORLD_PATH_COLORS.get(path, "human")
-    elif area_type == "city":
-        if (cx, cy) in sim.world.loaded_chunks:
-            glyph = RenderSystem.OVERWORLD_DISTRICT_GLYPHS.get(district_type, "X")
-            color = RenderSystem.OVERWORLD_DISTRICT_COLORS.get(district_type, "human")
-        else:
-            glyph = RenderSystem.OVERWORLD_AREA_GLYPHS.get("city", "X")
-            color = RenderSystem.OVERWORLD_AREA_COLORS.get("city", "human")
-    else:
-        glyph = RenderSystem.OVERWORLD_TERRAIN_GLYPHS.get(
-            terrain_key,
-            RenderSystem.OVERWORLD_AREA_GLYPHS.get(area_type, "?"),
-        )
-        color = RenderSystem.OVERWORLD_TERRAIN_COLORS.get(
-            terrain_key,
-            RenderSystem.OVERWORLD_AREA_COLORS.get(area_type, "human"),
-        )
-
-    if str(glyph).isalpha():
-        glyph = str(glyph).upper() if (cx, cy) in sim.world.loaded_chunks else str(glyph).lower()
-    return glyph, color
-
-
-def _overworld_legend_line(sim, cx, cy, text):
-    glyph, color = _overworld_render_style(sim, cx, cy)
-    return _legend_line(text, glyph=glyph, color=color, attrs=getattr(curses, "A_BOLD", 0))
-
-
-def _overworld_travel_profile(sim, cx, cy, desc=None, interest=None):
-    return sim.world.overworld_travel_profile(cx, cy, descriptor=desc, interest=interest)
-
-
-def _overworld_discovery_profile(sim, cx, cy, desc=None, interest=None, travel=None):
-    return sim.world.overworld_discovery_profile(
-        cx,
-        cy,
-        descriptor=desc,
-        interest=interest,
-        travel=travel,
-    )
-
-
-def _overworld_travel_tax_text(profile):
-    bits = []
-    try:
-        energy_cost = int(profile.get("energy_cost", 0))
-    except (AttributeError, TypeError, ValueError):
-        energy_cost = 0
-    try:
-        safety_cost = int(profile.get("safety_cost", 0))
-    except (AttributeError, TypeError, ValueError):
-        safety_cost = 0
-    try:
-        social_cost = int(profile.get("social_cost", 0))
-    except (AttributeError, TypeError, ValueError):
-        social_cost = 0
-
-    if energy_cost > 0:
-        bits.append(f"E{energy_cost}")
-    if safety_cost > 0:
-        bits.append(f"S{safety_cost}")
-    if social_cost > 0:
-        bits.append(f"So{social_cost}")
-    return "/".join(bits) if bits else "light"
-
-
-def _overworld_travel_summary_bits(profile):
-    if not isinstance(profile, dict):
-        return ()
-    risk = str(profile.get("risk_label", "")).strip() or "low"
-    support = str(profile.get("support_label", "")).strip() or "none"
-    return (
-        f"risk:{risk}",
-        f"support:{support}",
-        f"tax:{_overworld_travel_tax_text(profile)}",
-    )
-
-
-def _overworld_discovery_summary_bits(profile):
-    if not isinstance(profile, dict):
-        return ()
-    label = str(profile.get("label", "")).strip()
-    if not label:
-        return ()
-    return (f"opp:{label}",)
 
 
 def _creature_color_key(identity, *, role="", cat_color_map=None):
@@ -5375,1321 +4837,6 @@ def _ingress_method_from_context(ingress_kind, aperture_kind=""):
         return "deep_breach"
     return ingress_kind
 
-CASINO_CARD_RANKS = "23456789TJQKA"
-CASINO_CARD_SUITS = ("S", "H", "D", "C")
-CASINO_CARD_VALUE_BY_RANK = {
-    "2": 2,
-    "3": 3,
-    "4": 4,
-    "5": 5,
-    "6": 6,
-    "7": 7,
-    "8": 8,
-    "9": 9,
-    "T": 10,
-    "J": 11,
-    "Q": 12,
-    "K": 13,
-    "A": 14,
-}
-CASINO_RANK_NAME_BY_VALUE = {
-    2: "two",
-    3: "three",
-    4: "four",
-    5: "five",
-    6: "six",
-    7: "seven",
-    8: "eight",
-    9: "nine",
-    10: "ten",
-    11: "jack",
-    12: "queen",
-    13: "king",
-    14: "ace",
-}
-CASINO_SLOT_REELS = (
-    ("CHERRY", "LEMON", "BAR", "HORSESHOE", "BELL", "CHERRY", "BAR", "SEVEN", "LEMON", "BAR", "BELL", "SEVEN"),
-    ("BAR", "CHERRY", "BELL", "LEMON", "BAR", "HORSESHOE", "SEVEN", "CHERRY", "BAR", "BELL", "LEMON", "SEVEN"),
-    ("LEMON", "BAR", "CHERRY", "SEVEN", "BAR", "BELL", "CHERRY", "HORSESHOE", "BAR", "SEVEN", "LEMON", "BELL"),
-)
-CASINO_SLOT_SYMBOL_LABELS = {
-    "CHERRY": "Cherry",
-    "LEMON": "Lemon",
-    "BAR": "Bar",
-    "HORSESHOE": "Horseshoe",
-    "BELL": "Bell",
-    "SEVEN": "Seven",
-}
-CASINO_PLINKO_LANE_COUNT = 7
-CASINO_PLINKO_ROWS = 8
-CASINO_PLINKO_BUCKET_MULTIPLIERS = (0.0, 0.4, 0.8, 1.2, 3.0, 1.2, 0.8, 0.4, 0.0)
-CASINO_POKER_CATEGORY_NAMES = {
-    8: "straight flush",
-    7: "four of a kind",
-    6: "full house",
-    5: "flush",
-    4: "straight",
-    3: "three of a kind",
-    2: "two pair",
-    1: "pair",
-    0: "high card",
-}
-CASINO_HOLDEM_ANTE_BONUS_MULTIPLIERS = {
-    "royal_flush": 100,
-    8: 20,
-    7: 10,
-    6: 3,
-    5: 2,
-    4: 1,
-}
-CASINO_GAME_PROFILES = {
-    "slots": {
-        "title": "Slots",
-        "service_label": "slots",
-        "menu_label": "Play slots",
-        "bet_options": (10, 25, 50),
-        "prompt": "Pick a stake and let the reels fly.",
-        "note": "Three reels, classic symbols, and a loud machine when the sevens land.",
-        "social_gain": (1, 3),
-    },
-    "casino_holdem": {
-        "title": "Casino Hold'em",
-        "service_label": "casino hold'em",
-        "menu_label": "Play casino hold'em",
-        "bet_options": (25, 50, 100),
-        "prompt": "Post an ante, read the flop, then decide whether to call or fold.",
-        "note": "You get two hole cards, the flop comes out first, and calling adds a matching stake.",
-        "social_gain": (2, 5),
-    },
-    "plinko": {
-        "title": "Plinko",
-        "service_label": "plinko",
-        "menu_label": "Play plinko",
-        "bet_options": (5, 15, 30),
-        "prompt": "Choose a chip size and a drop lane.",
-        "note": "The center buckets pay best if the pegs break your way.",
-        "social_gain": (1, 3),
-    },
-    "twenty_one": {
-        "title": "21",
-        "service_label": "21",
-        "menu_label": "Play 21",
-        "bet_options": (10, 25, 50),
-        "prompt": "Pick a wager and play a real hand against the dealer.",
-        "note": "Hit, stand, and hope the house runs cold.",
-        "social_gain": (2, 4),
-    },
-}
-CASINO_GAME_SERVICE_IDS = frozenset(CASINO_GAME_PROFILES)
-
-
-def _site_service_state(sim):
-    state = getattr(sim, "site_service_state", None)
-    if not isinstance(state, dict):
-        state = {"cooldowns": {}}
-        sim.site_service_state = state
-    cooldowns = state.get("cooldowns")
-    if not isinstance(cooldowns, dict):
-        cooldowns = {}
-        state["cooldowns"] = cooldowns
-    return state
-
-
-def _vehicle_sale_quality(quality):
-    quality = str(quality or "used").strip().lower()
-    if quality not in {"new", "used"}:
-        return "used"
-    return quality
-
-
-def _vehicle_sale_quality_title(quality):
-    return "New" if _vehicle_sale_quality(quality) == "new" else "Used"
-
-
-def _vehicle_sale_stock_count(quality):
-    quality = _vehicle_sale_quality(quality)
-    return 3 if quality == "new" else 5
-
-
-def _vehicle_sale_inventory(sim):
-    state = _site_service_state(sim)
-    inventory = state.get("vehicle_sale_inventory")
-    if not isinstance(inventory, dict):
-        inventory = {}
-        state["vehicle_sale_inventory"] = inventory
-    return inventory
-
-
-def _vehicle_sale_offer_record(profile, quality, cycle_index, slot_index):
-    quality = _vehicle_sale_quality(quality)
-    vehicle_name = f"{profile.get('make', 'Unknown')} {profile.get('model', 'Vehicle')}"
-    return {
-        "offering_id": f"{quality}-{int(cycle_index)}-{int(slot_index)}",
-        "quality": quality,
-        "vehicle_name": vehicle_name,
-        "make": str(profile.get("make", "Unknown")).strip() or "Unknown",
-        "model": str(profile.get("model", "Vehicle")).strip() or "Vehicle",
-        "vehicle_class": str(profile.get("vehicle_class", "sedan")).strip().lower() or "sedan",
-        "price": int(max(80, _int_or_default(profile.get("price"), 500))),
-        "power": max(1, min(10, _int_or_default(profile.get("power"), 5))),
-        "durability": max(1, min(10, _int_or_default(profile.get("durability"), 5))),
-        "fuel_efficiency": max(1, min(10, _int_or_default(profile.get("fuel_efficiency"), 5))),
-        "fuel": max(0, _int_or_default(profile.get("fuel"), _int_or_default(profile.get("fuel_capacity"), 60))),
-        "fuel_capacity": max(10, _int_or_default(profile.get("fuel_capacity"), 60)),
-        "glyph": str(profile.get("glyph", "&"))[:1] or "&",
-    }
-
-
-def _vehicle_sale_generate_offers(sim, prop_or_id, quality, cycle_index):
-    prop_id = prop_or_id.get("id") if isinstance(prop_or_id, dict) else prop_or_id
-    quality = _vehicle_sale_quality(quality)
-    offers = []
-    for slot_index in range(_vehicle_sale_stock_count(quality)):
-        rng = random.Random(f"{sim.seed}:vehicle_sale_inventory:{prop_id}:{quality}:{int(cycle_index)}:{int(slot_index)}")
-        profile = roll_vehicle_profile(rng, quality=quality)
-        offers.append(_vehicle_sale_offer_record(profile, quality, cycle_index, slot_index))
-    offers.sort(key=lambda offer: (int(offer.get("price", 0)), str(offer.get("vehicle_name", ""))))
-    for slot_index, offer in enumerate(offers):
-        offer["offering_id"] = f"{quality}-{int(cycle_index)}-{int(slot_index)}"
-    return offers
-
-
-def _vehicle_sale_listing(sim, prop_or_id, quality, *, create=True):
-    inventory = _vehicle_sale_inventory(sim)
-    prop_id = prop_or_id.get("id") if isinstance(prop_or_id, dict) else prop_or_id
-    quality = _vehicle_sale_quality(quality)
-    key = (str(prop_id), quality)
-    listing = inventory.get(key)
-    if not isinstance(listing, dict):
-        listing = None
-    if listing is not None:
-        offers = listing.get("offers")
-        if not isinstance(offers, list):
-            offers = []
-            listing["offers"] = offers
-    if create and (listing is None or not list(listing.get("offers", ()) or ())):
-        next_cycle = int(listing.get("cycle", -1)) + 1 if isinstance(listing, dict) else 0
-        listing = {
-            "property_id": str(prop_id),
-            "quality": quality,
-            "cycle": int(next_cycle),
-            "offers": _vehicle_sale_generate_offers(sim, prop_id, quality, next_cycle),
-        }
-        inventory[key] = listing
-    return listing
-
-
-def _vehicle_sale_offers(sim, prop_or_id, quality):
-    listing = _vehicle_sale_listing(sim, prop_or_id, quality, create=True)
-    offers = list(listing.get("offers", ()) or []) if isinstance(listing, dict) else []
-    return [dict(offer) for offer in offers if isinstance(offer, dict)]
-
-
-def _vehicle_sale_lookup_offer(sim, prop_or_id, quality, offering_id=None):
-    listing = _vehicle_sale_listing(sim, prop_or_id, quality, create=True)
-    offers = list(listing.get("offers", ()) or []) if isinstance(listing, dict) else []
-    if not offers:
-        return None
-    offering_id = str(offering_id or "").strip().lower()
-    if offering_id:
-        for offer in offers:
-            if str(offer.get("offering_id", "")).strip().lower() == offering_id:
-                return dict(offer)
-    return dict(offers[0])
-
-
-def _vehicle_sale_remove_offer(sim, prop_or_id, quality, offering_id):
-    listing = _vehicle_sale_listing(sim, prop_or_id, quality, create=False)
-    if not isinstance(listing, dict):
-        return None
-    offers = list(listing.get("offers", ()) or [])
-    offering_id = str(offering_id or "").strip().lower()
-    for idx, offer in enumerate(offers):
-        if str(offer.get("offering_id", "")).strip().lower() != offering_id:
-            continue
-        removed = dict(offer)
-        del offers[idx]
-        listing["offers"] = offers
-        return removed
-    return None
-
-
-def _vehicle_sale_stats_text(data):
-    if not isinstance(data, dict):
-        return ""
-    vehicle_class = str(data.get("vehicle_class", "")).strip().replace("_", " ")
-    power = max(1, min(10, _int_or_default(data.get("power"), 5)))
-    durability = max(1, min(10, _int_or_default(data.get("durability"), 5)))
-    fuel_efficiency = max(1, min(10, _int_or_default(data.get("fuel_efficiency"), 5)))
-    fuel_capacity = max(0, _int_or_default(data.get("fuel_capacity"), 0))
-    fuel = max(0, min(fuel_capacity if fuel_capacity > 0 else 9999, _int_or_default(data.get("fuel"), fuel_capacity)))
-    bits = []
-    if vehicle_class:
-        bits.append(vehicle_class.title())
-    if fuel_capacity > 0:
-        bits.append(f"fuel {fuel}/{fuel_capacity}")
-    bits.append(f"P{power}/D{durability}/E{fuel_efficiency}")
-    return " | ".join(bits)
-
-
-def _vehicle_sale_offer_label(offer):
-    if not isinstance(offer, dict):
-        return "Vehicle"
-    vehicle_name = str(offer.get("vehicle_name", "Vehicle")).strip() or "Vehicle"
-    price = _credit_amount_label(offer.get("price", 0))
-    stats = _vehicle_sale_stats_text(offer)
-    if stats:
-        return f"{vehicle_name} {price} {stats}"
-    return f"{vehicle_name} {price}"
-
-
-def _site_service_roll_index(sim, eid, prop_or_id, service):
-    state = _site_service_state(sim)
-    rolls = state.get("roll_counts")
-    if not isinstance(rolls, dict):
-        rolls = {}
-        state["roll_counts"] = rolls
-    prop_id = prop_or_id.get("id") if isinstance(prop_or_id, dict) else prop_or_id
-    key = (int(eid), str(prop_id), str(service or "").strip().lower())
-    index = int(rolls.get(key, 0))
-    rolls[key] = index + 1
-    return index
-
-
-def _casino_round_seed(sim, eid, prop_or_id, service, wager, round_index):
-    prop_id = prop_or_id.get("id") if isinstance(prop_or_id, dict) else prop_or_id
-    return (
-        f"{sim.seed}:casino:{prop_id}:{int(eid)}:{str(service or '').strip().lower()}:"
-        f"{int(sim.tick)}:{int(round_index)}:{int(wager)}"
-    )
-
-
-def _casino_social_gain(service, seed_token):
-    profile = _casino_game_profile(service)
-    social_lo, social_hi = (1, 3)
-    if profile:
-        social_lo, social_hi = profile.get("social_gain", (1, 3))
-    social_rng = random.Random(f"{seed_token}:social")
-    social_lo = int(social_lo)
-    social_hi = int(max(social_lo, social_hi))
-    return social_rng.randint(social_lo, social_hi)
-
-
-def _casino_card_rank(card):
-    return CASINO_CARD_VALUE_BY_RANK.get(str(card or "??")[0].upper(), 0)
-
-
-def _casino_card_suit(card):
-    text = str(card or "??").strip().upper()
-    return text[1:2] if len(text) >= 2 else "?"
-
-
-def _casino_card_label(card):
-    text = str(card or "??").strip().upper()
-    if len(text) < 2:
-        return "??"
-    rank = text[0]
-    suit = text[1]
-    rank_label = "10" if rank == "T" else rank
-    return f"{rank_label}{suit}"
-
-
-def _casino_cards_text(cards):
-    rendered = [_casino_card_label(card) for card in list(cards or ())]
-    return " ".join(rendered) if rendered else "--"
-
-
-def _casino_shuffled_deck(seed_token):
-    deck = [f"{rank}{suit}" for suit in CASINO_CARD_SUITS for rank in CASINO_CARD_RANKS]
-    rng = random.Random(f"{seed_token}:deck")
-    rng.shuffle(deck)
-    return deck
-
-
-def _casino_blackjack_value(card):
-    rank = str(card or "??").strip().upper()[:1]
-    if rank == "A":
-        return 11
-    if rank in {"T", "J", "Q", "K"}:
-        return 10
-    try:
-        return int(rank)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _casino_blackjack_total(cards):
-    total = 0
-    aces = 0
-    for card in list(cards or ()):
-        total += _casino_blackjack_value(card)
-        if str(card or "??").strip().upper().startswith("A"):
-            aces += 1
-    while total > 21 and aces > 0:
-        total -= 10
-        aces -= 1
-    return total, aces > 0
-
-
-def _casino_blackjack_line(label, cards, *, hide_hole=False):
-    shown = []
-    for idx, card in enumerate(list(cards or ())):
-        if hide_hole and idx == 1:
-            shown.append("??")
-        else:
-            shown.append(_casino_card_label(card))
-    total, soft = _casino_blackjack_total(cards)
-    suffix = ""
-    if not hide_hole:
-        suffix = f" ({total}"
-        if soft and total <= 21:
-            suffix += " soft"
-        suffix += ")"
-    return f"{label}: {' '.join(shown) if shown else '--'}{suffix}"
-
-
-def _casino_straight_high(ranks):
-    unique = sorted({int(rank) for rank in list(ranks or ()) if int(rank) > 0}, reverse=True)
-    if 14 in unique:
-        unique.append(1)
-    streak = 1
-    for idx in range(len(unique) - 1):
-        if unique[idx] - 1 == unique[idx + 1]:
-            streak += 1
-            if streak >= 5:
-                return unique[idx - 3]
-        elif unique[idx] != unique[idx + 1]:
-            streak = 1
-    return 0
-
-
-def _casino_rank_name(rank):
-    return CASINO_RANK_NAME_BY_VALUE.get(int(rank), str(rank))
-
-
-def _casino_poker_hand_name(score):
-    category = int(score[0]) if score else 0
-    primary = int(score[1]) if len(score) > 1 else 0
-    secondary = int(score[2]) if len(score) > 2 else 0
-    if category == 8 and primary == 14:
-        return "royal flush"
-    if category == 8:
-        return f"{_casino_rank_name(primary)}-high straight flush"
-    if category == 7:
-        return f"four {_casino_rank_name(primary)}s"
-    if category == 6:
-        return f"{_casino_rank_name(primary)}s full of {_casino_rank_name(secondary)}s"
-    if category == 5:
-        return f"{_casino_rank_name(primary)}-high flush"
-    if category == 4:
-        return f"{_casino_rank_name(primary)}-high straight"
-    if category == 3:
-        return f"three {_casino_rank_name(primary)}s"
-    if category == 2:
-        return f"{_casino_rank_name(primary)}s and {_casino_rank_name(secondary)}s"
-    if category == 1:
-        return f"pair of {_casino_rank_name(primary)}s"
-    return f"{_casino_rank_name(primary)}-high"
-
-
-def _casino_evaluate_five_card_poker(cards):
-    ranks = sorted((_casino_card_rank(card) for card in list(cards or ())), reverse=True)
-    suits = [_casino_card_suit(card) for card in list(cards or ())]
-    counts = Counter(ranks)
-    ordered_counts = sorted(counts.items(), key=lambda item: (item[1], item[0]), reverse=True)
-    flush = len(set(suits)) == 1 if suits else False
-    straight_high = _casino_straight_high(ranks)
-
-    if flush and straight_high:
-        return (8, straight_high)
-
-    if ordered_counts and ordered_counts[0][1] == 4:
-        quad_rank = ordered_counts[0][0]
-        kicker = max(rank for rank in ranks if rank != quad_rank)
-        return (7, quad_rank, kicker)
-
-    if len(ordered_counts) >= 2 and ordered_counts[0][1] == 3 and ordered_counts[1][1] >= 2:
-        return (6, ordered_counts[0][0], ordered_counts[1][0])
-
-    if flush:
-        return tuple([5] + sorted(ranks, reverse=True))
-
-    if straight_high:
-        return (4, straight_high)
-
-    if ordered_counts and ordered_counts[0][1] == 3:
-        trips = ordered_counts[0][0]
-        kickers = sorted((rank for rank in ranks if rank != trips), reverse=True)
-        return tuple([3, trips] + kickers)
-
-    pair_ranks = [rank for rank, count in ordered_counts if count == 2]
-    if len(pair_ranks) >= 2:
-        high_pair, low_pair = sorted(pair_ranks, reverse=True)[:2]
-        kicker = max(rank for rank in ranks if rank not in {high_pair, low_pair})
-        return (2, high_pair, low_pair, kicker)
-
-    if len(pair_ranks) == 1:
-        pair_rank = pair_ranks[0]
-        kickers = sorted((rank for rank in ranks if rank != pair_rank), reverse=True)
-        return tuple([1, pair_rank] + kickers)
-
-    return tuple([0] + sorted(ranks, reverse=True))
-
-
-def _casino_best_poker_hand(cards):
-    best_score = None
-    best_cards = None
-    for combo in itertools.combinations(list(cards or ()), 5):
-        score = _casino_evaluate_five_card_poker(combo)
-        if best_score is None or score > best_score:
-            best_score = score
-            best_cards = combo
-    if best_score is None:
-        best_score = (0, 0)
-        best_cards = ()
-    return {
-        "score": best_score,
-        "name": _casino_poker_hand_name(best_score),
-        "category": CASINO_POKER_CATEGORY_NAMES.get(int(best_score[0]), "hand"),
-        "cards": tuple(best_cards),
-    }
-
-
-def _casino_slots_resolve(seed_token, wager):
-    reels = []
-    spin_rng = random.Random(f"{seed_token}:slots")
-    for strip in CASINO_SLOT_REELS:
-        reels.append(str(strip[spin_rng.randrange(len(strip))]).strip().upper() or "BAR")
-    counts = Counter(reels)
-    payout_mult = 0.0
-    outcome_key = "blank"
-    headline = "Cold reels."
-    detail = "The machine clacks through a dead spin and the house keeps the bet."
-    if len(counts) == 1:
-        symbol = reels[0]
-        if symbol == "SEVEN":
-            payout_mult = 8.0
-            outcome_key = "jackpot"
-            headline = "Triple sevens."
-            detail = "All three reels land on sevens and the cabinet starts screaming."
-        elif symbol == "BAR":
-            payout_mult = 5.0
-            outcome_key = "triple_bar"
-            headline = "Triple bars."
-            detail = "The bars line up cleanly and the hopper rattles out a chunky win."
-        elif symbol == "BELL":
-            payout_mult = 4.0
-            outcome_key = "triple_bell"
-            headline = "Bell line."
-            detail = "Three bells ring together and the machine pays with gusto."
-        elif symbol == "CHERRY":
-            payout_mult = 3.0
-            outcome_key = "triple_cherry"
-            headline = "Cherry line."
-            detail = "Three cherries roll through and the house coughs up a bright little prize."
-        else:
-            payout_mult = 2.0
-            outcome_key = "triple_match"
-            headline = "Full match."
-            detail = "All three reels match for a tidy line hit."
-    elif counts.get("CHERRY", 0) == 2:
-        payout_mult = 1.4
-        outcome_key = "double_cherry"
-        headline = "Two cherries."
-        detail = "A pair of cherries catches the payline and softens the swing."
-    elif counts.get("CHERRY", 0) == 1 and counts.get("SEVEN", 0) == 1:
-        payout_mult = 1.1
-        outcome_key = "mixed_line"
-        headline = "Mixed line."
-        detail = "A cherry and a seven clip the line for a tiny kickback."
-
-    payout = max(0, int(round(float(payout_mult) * float(wager))))
-    reel_text = " | ".join(CASINO_SLOT_SYMBOL_LABELS.get(symbol, symbol.title()) for symbol in reels)
-    return {
-        "service": "slots",
-        "wager": int(wager),
-        "stake": int(wager),
-        "payout": int(payout),
-        "outcome_key": outcome_key,
-        "headline": headline,
-        "detail": detail,
-        "summary": f"Reels {reel_text}. {headline}",
-        "result_lines": [
-            f"Reels: {reel_text}",
-            detail,
-        ],
-        "reels": tuple(reels),
-        "social_gain": _casino_social_gain("slots", seed_token),
-    }
-
-
-def _casino_plinko_resolve(seed_token, wager, drop_lane):
-    lane = max(0, min(int(drop_lane), CASINO_PLINKO_LANE_COUNT - 1))
-    bounce_rng = random.Random(f"{seed_token}:plinko:{lane}")
-    position = lane + 1
-    path = []
-    for _ in range(CASINO_PLINKO_ROWS):
-        step = -1 if bounce_rng.random() < 0.5 else 1
-        path.append("L" if step < 0 else "R")
-        position = max(0, min(position + step, len(CASINO_PLINKO_BUCKET_MULTIPLIERS) - 1))
-    payout_mult = float(CASINO_PLINKO_BUCKET_MULTIPLIERS[position])
-    payout = max(0, int(round(float(wager) * payout_mult)))
-    if payout_mult <= 0.0:
-        headline = "Edge bucket."
-        detail = "The disc chatters off the pegs and dies in a zero lane."
-        outcome_key = "rim"
-    elif payout_mult < 1.0:
-        headline = "Shallow bucket."
-        detail = "The board gives a little back, but not enough to cover the full drop."
-        outcome_key = "low"
-    elif payout_mult < 2.0:
-        headline = "Middle bucket."
-        detail = "The disc settles into a fair-paying lane and the crowd gives a polite murmur."
-        outcome_key = "mid"
-    else:
-        headline = "Center bucket."
-        detail = "The disc fights through the pegs and snaps into the hot center pocket."
-        outcome_key = "center"
-    return {
-        "service": "plinko",
-        "wager": int(wager),
-        "stake": int(wager),
-        "payout": int(payout),
-        "outcome_key": outcome_key,
-        "headline": headline,
-        "detail": detail,
-        "summary": f"Lane {lane + 1} rides {' '.join(path)} into bucket {position + 1}. {headline}",
-        "result_lines": [
-            f"Drop lane {lane + 1}: {' '.join(path)}",
-            f"Bucket {position + 1} pays x{payout_mult:.1f}.",
-            detail,
-        ],
-        "drop_lane": int(lane),
-        "bucket_index": int(position),
-        "path": tuple(path),
-        "social_gain": _casino_social_gain("plinko", seed_token),
-    }
-
-
-def _casino_blackjack_can_split(cards):
-    cards = list(cards or ())
-    if len(cards) != 2:
-        return False
-    return _casino_blackjack_value(cards[0]) == _casino_blackjack_value(cards[1])
-
-
-def _casino_twenty_one_hand(cards, stake, *, state="pending", doubled=False, natural_eligible=True, split_origin=False):
-    return {
-        "cards": list(cards or ()),
-        "stake": int(stake),
-        "state": str(state or "pending").strip().lower() or "pending",
-        "doubled": bool(doubled),
-        "natural_eligible": bool(natural_eligible),
-        "split_origin": bool(split_origin),
-    }
-
-
-def _casino_twenty_one_normalize_session(session):
-    if not isinstance(session, dict):
-        return None
-    current = {
-        "service": "twenty_one",
-        "seed_token": str(session.get("seed_token", "")).strip(),
-        "wager": int(session.get("wager", 0)),
-        "stake": int(session.get("stake", session.get("wager", 0))),
-        "deck": list(session.get("deck", ()) or ()),
-        "deck_index": int(session.get("deck_index", 0)),
-        "dealer_cards": list(session.get("dealer_cards", ()) or ()),
-        "property_id": session.get("property_id"),
-        "property_name": str(session.get("property_name", "")).strip(),
-        "split_used": bool(session.get("split_used", False)),
-    }
-    raw_hands = list(session.get("hands", ()) or ())
-    hands = []
-    if raw_hands:
-        for idx, raw in enumerate(raw_hands):
-            raw = raw if isinstance(raw, dict) else {}
-            hands.append(_casino_twenty_one_hand(
-                raw.get("cards", ()),
-                raw.get("stake", current["wager"]),
-                state=raw.get("state", "active" if idx == 0 else "pending"),
-                doubled=raw.get("doubled", False),
-                natural_eligible=raw.get("natural_eligible", True),
-                split_origin=raw.get("split_origin", False),
-            ))
-    else:
-        hands.append(_casino_twenty_one_hand(
-            session.get("player_cards", ()),
-            current["stake"],
-            state="active",
-            natural_eligible=True,
-        ))
-    current["hands"] = hands
-    current["split_used"] = bool(current["split_used"] or len(hands) > 1)
-    active_hand_index = int(session.get("active_hand_index", 0))
-    active_found = False
-    for idx, hand in enumerate(current["hands"]):
-        state = str(hand.get("state", "pending")).strip().lower()
-        if state == "active":
-            current["active_hand_index"] = idx
-            active_found = True
-            break
-    if not active_found:
-        if current["hands"]:
-            active_hand_index = max(0, min(active_hand_index, len(current["hands"]) - 1))
-            if str(current["hands"][active_hand_index].get("state", "pending")).strip().lower() == "pending":
-                current["hands"][active_hand_index]["state"] = "active"
-                current["active_hand_index"] = active_hand_index
-                active_found = True
-        if not active_found:
-            for idx, hand in enumerate(current["hands"]):
-                if str(hand.get("state", "pending")).strip().lower() == "pending":
-                    hand["state"] = "active"
-                    current["active_hand_index"] = idx
-                    active_found = True
-                    break
-    if not active_found:
-        current["active_hand_index"] = -1
-    current["stake"] = sum(max(0, int(hand.get("stake", 0))) for hand in current["hands"])
-    return current
-
-
-def _casino_twenty_one_active_hand(session):
-    if not isinstance(session, dict):
-        return None
-    hands = list(session.get("hands", ()) or ())
-    idx = int(session.get("active_hand_index", -1))
-    if 0 <= idx < len(hands):
-        return hands[idx]
-    return None
-
-
-def _casino_twenty_one_draw_card(session):
-    if not isinstance(session, dict):
-        return None
-    deck = list(session.get("deck", ()) or ())
-    deck_index = int(session.get("deck_index", 0))
-    if deck_index >= len(deck):
-        return None
-    card = deck[deck_index]
-    session["deck_index"] = deck_index + 1
-    return card
-
-
-def _casino_twenty_one_activate_next_hand(session):
-    if not isinstance(session, dict):
-        return False
-    for idx, hand in enumerate(list(session.get("hands", ()) or ())):
-        if str(hand.get("state", "pending")).strip().lower() == "pending":
-            hand["state"] = "active"
-            session["active_hand_index"] = idx
-            return True
-    session["active_hand_index"] = -1
-    return False
-
-
-def _casino_twenty_one_auto_progress(session):
-    if not isinstance(session, dict):
-        return False
-    while True:
-        hand = _casino_twenty_one_active_hand(session)
-        if not isinstance(hand, dict):
-            return False
-        total, _soft = _casino_blackjack_total(hand.get("cards", ()))
-        if total > 21:
-            hand["state"] = "bust"
-        elif total == 21:
-            hand["state"] = "stood"
-        else:
-            return True
-        if not _casino_twenty_one_activate_next_hand(session):
-            return False
-
-
-def _casino_twenty_one_action_ids(session, wallet_credits=0):
-    current = _casino_twenty_one_normalize_session(session)
-    hand = _casino_twenty_one_active_hand(current)
-    if not current or not isinstance(hand, dict):
-        return ()
-    action_ids = ["twenty_one:hit", "twenty_one:stand"]
-    wager = int(current.get("wager", 0))
-    if len(list(hand.get("cards", ()) or ())) == 2 and wallet_credits >= wager:
-        action_ids.append("twenty_one:double")
-        if (
-            len(list(current.get("hands", ()) or ())) == 1
-            and not bool(current.get("split_used", False))
-            and _casino_blackjack_can_split(hand.get("cards", ()))
-        ):
-            action_ids.append("twenty_one:split")
-    return tuple(action_ids)
-
-
-def _casino_twenty_one_finalize(session):
-    current = _casino_twenty_one_normalize_session(session)
-    if not current:
-        return None
-    while True:
-        dealer_total, dealer_soft = _casino_blackjack_total(current["dealer_cards"])
-        if dealer_total > 17:
-            break
-        if dealer_total == 17 and not dealer_soft:
-            break
-        card = _casino_twenty_one_draw_card(current)
-        if not card:
-            break
-        current["dealer_cards"].append(card)
-
-    dealer_total, _dealer_soft = _casino_blackjack_total(current["dealer_cards"])
-    hand_results = []
-    payout = 0
-    for idx, hand in enumerate(current["hands"]):
-        cards = list(hand.get("cards", ()) or ())
-        total, _soft = _casino_blackjack_total(cards)
-        hand_stake = int(hand.get("stake", current["wager"]))
-        if total > 21 or str(hand.get("state", "")).strip().lower() == "bust":
-            result_key = "bust"
-            hand_payout = 0
-        elif dealer_total > 21 or total > dealer_total:
-            result_key = "win"
-            hand_payout = hand_stake * 2
-        elif dealer_total == total:
-            result_key = "push"
-            hand_payout = hand_stake
-        else:
-            result_key = "lose"
-            hand_payout = 0
-        hand_results.append({
-            "index": idx,
-            "cards": tuple(cards),
-            "total": int(total),
-            "stake": int(hand_stake),
-            "result": result_key,
-            "doubled": bool(hand.get("doubled", False)),
-            "split_origin": bool(hand.get("split_origin", False)),
-        })
-        payout += int(hand_payout)
-
-    result_counter = Counter(row["result"] for row in hand_results)
-    if result_counter.get("win", 0) > 0 and result_counter.get("lose", 0) == 0 and result_counter.get("bust", 0) == 0:
-        outcome_key = "player_win"
-        headline = "You beat the dealer."
-    elif result_counter.get("win", 0) > 0 and (result_counter.get("lose", 0) > 0 or result_counter.get("bust", 0) > 0):
-        outcome_key = "mixed"
-        headline = "The split goes both ways."
-    elif result_counter.get("push", 0) == len(hand_results):
-        outcome_key = "push"
-        headline = "Push."
-    elif dealer_total > 21 and result_counter.get("bust", 0) == len(hand_results):
-        outcome_key = "player_bust"
-        headline = "Every hand busts."
-    elif dealer_total > 21:
-        outcome_key = "dealer_bust"
-        headline = "Dealer busts."
-    elif result_counter.get("bust", 0) == len(hand_results):
-        outcome_key = "player_bust"
-        headline = "Every hand busts."
-    else:
-        outcome_key = "dealer_win"
-        headline = "Dealer takes it."
-
-    detail_bits = []
-    for row in hand_results:
-        label = f"Hand {row['index'] + 1}"
-        status = row["result"]
-        if status == "win":
-            status_text = "wins"
-        elif status == "push":
-            status_text = "pushes"
-        elif status == "bust":
-            status_text = "busts"
-        else:
-            status_text = "loses"
-        detail_bits.append(f"{label} {status_text}")
-    detail = ", ".join(detail_bits) + "."
-
-    result_lines = [_casino_blackjack_line("Dealer", current["dealer_cards"])]
-    for row in hand_results:
-        tags = []
-        if row["split_origin"]:
-            tags.append("split")
-        if row["doubled"]:
-            tags.append("double")
-        suffix = f" [{', '.join(tags)}]" if tags else ""
-        result_lines.append(
-            f"{_casino_blackjack_line(f'Hand {row['index'] + 1}', row['cards'])}{suffix} -> {row['result']}."
-        )
-    result_lines.append(detail)
-
-    return {
-        "service": "twenty_one",
-        "wager": int(current["wager"]),
-        "stake": int(current["stake"]),
-        "payout": int(payout),
-        "outcome_key": outcome_key,
-        "headline": headline,
-        "detail": detail,
-        "summary": (
-            f"Dealer {_casino_cards_text(current['dealer_cards'])} ({dealer_total}). "
-            f"{detail}"
-        ),
-        "result_lines": result_lines,
-        "player_cards": tuple(hand_results[0]["cards"]) if hand_results else (),
-        "player_hands": tuple(row["cards"] for row in hand_results),
-        "player_total": int(hand_results[0]["total"]) if hand_results else 0,
-        "player_totals": tuple(int(row["total"]) for row in hand_results),
-        "dealer_cards": tuple(current["dealer_cards"]),
-        "dealer_total": int(dealer_total),
-        "hand_results": tuple(
-            {
-                "index": int(row["index"]),
-                "total": int(row["total"]),
-                "stake": int(row["stake"]),
-                "result": str(row["result"]),
-                "doubled": bool(row["doubled"]),
-                "split_origin": bool(row["split_origin"]),
-            }
-            for row in hand_results
-        ),
-        "social_gain": _casino_social_gain("twenty_one", f"{current['seed_token']}:{outcome_key}"),
-        "stake_already_paid": True,
-    }
-
-
-def _casino_twenty_one_start(seed_token, wager):
-    deck = _casino_shuffled_deck(seed_token)
-    return {
-        "service": "twenty_one",
-        "seed_token": str(seed_token),
-        "wager": int(wager),
-        "stake": int(wager),
-        "deck": list(deck),
-        "deck_index": 4,
-        "dealer_cards": [deck[1], deck[3]],
-        "hands": [
-            _casino_twenty_one_hand([deck[0], deck[2]], int(wager), state="active", natural_eligible=True),
-        ],
-        "active_hand_index": 0,
-        "split_used": False,
-    }
-
-
-def _casino_twenty_one_resolve(session, action):
-    current = _casino_twenty_one_normalize_session(session)
-    if not current:
-        return None, None
-    action = str(action or "").strip().lower()
-    active_hand = _casino_twenty_one_active_hand(current)
-    dealer_total, _dealer_soft = _casino_blackjack_total(current["dealer_cards"])
-
-    if action == "start" and isinstance(active_hand, dict):
-        player_total, _player_soft = _casino_blackjack_total(active_hand.get("cards", ()))
-        player_natural = len(list(active_hand.get("cards", ()) or ())) == 2 and player_total == 21 and bool(active_hand.get("natural_eligible", True))
-        dealer_natural = len(current["dealer_cards"]) == 2 and dealer_total == 21
-        if player_natural or dealer_natural:
-            if player_natural and dealer_natural:
-                outcome_key = "push_blackjack"
-                payout = int(active_hand.get("stake", current["wager"]))
-                headline = "Both hands open hot."
-                detail = "You and the dealer both flip blackjack, so the bet pushes."
-            elif player_natural:
-                outcome_key = "player_blackjack"
-                payout = int(round(float(active_hand.get("stake", current["wager"])) * 2.5))
-                headline = "Natural 21."
-                detail = "You peel blackjack off the deal and the table pays 3 to 2."
-            else:
-                outcome_key = "dealer_blackjack"
-                payout = 0
-                headline = "Dealer blackjack."
-                detail = "The dealer turns over a natural and sweeps the felt clean."
-            return None, {
-                "service": "twenty_one",
-                "wager": int(current["wager"]),
-                "stake": int(current["stake"]),
-                "payout": int(payout),
-                "outcome_key": outcome_key,
-                "headline": headline,
-                "detail": detail,
-                "summary": (
-                    f"Dealer {_casino_cards_text(current['dealer_cards'])} against "
-                    f"{_casino_cards_text(active_hand.get('cards', ())) }. {headline}"
-                ).replace("  ", " "),
-                "result_lines": [
-                    _casino_blackjack_line("Dealer", current["dealer_cards"]),
-                    _casino_blackjack_line("You", active_hand.get("cards", ())),
-                    detail,
-                ],
-                "player_cards": tuple(active_hand.get("cards", ()) or ()),
-                "player_hands": (tuple(active_hand.get("cards", ()) or ()),),
-                "player_total": int(player_total),
-                "player_totals": (int(player_total),),
-                "dealer_cards": tuple(current["dealer_cards"]),
-                "dealer_total": int(dealer_total),
-                "social_gain": _casino_social_gain("twenty_one", current["seed_token"]),
-                "stake_already_paid": True,
-            }
-        return current, None
-
-    if not isinstance(active_hand, dict):
-        return None, _casino_twenty_one_finalize(current)
-
-    if action == "split" and _casino_blackjack_can_split(active_hand.get("cards", ())):
-        cards = list(active_hand.get("cards", ()) or ())
-        card_a = _casino_twenty_one_draw_card(current)
-        card_b = _casino_twenty_one_draw_card(current)
-        if card_a:
-            current["hands"][0] = _casino_twenty_one_hand(
-                [cards[0], card_a],
-                current["wager"],
-                state="active",
-                natural_eligible=False,
-                split_origin=True,
-            )
-        if card_b:
-            current["hands"].append(_casino_twenty_one_hand(
-                [cards[1], card_b],
-                current["wager"],
-                state="pending",
-                natural_eligible=False,
-                split_origin=True,
-            ))
-        current["active_hand_index"] = 0
-        current["split_used"] = True
-        current["stake"] = sum(int(hand.get("stake", 0)) for hand in current["hands"])
-        if _casino_twenty_one_auto_progress(current):
-            return current, None
-        return None, _casino_twenty_one_finalize(current)
-
-    if action == "double":
-        active_hand["stake"] = int(active_hand.get("stake", current["wager"])) + int(current["wager"])
-        active_hand["doubled"] = True
-        current["stake"] = sum(int(hand.get("stake", 0)) for hand in current["hands"])
-        card = _casino_twenty_one_draw_card(current)
-        if card:
-            active_hand["cards"].append(card)
-        total, _soft = _casino_blackjack_total(active_hand.get("cards", ()))
-        active_hand["state"] = "bust" if total > 21 else "stood"
-        if _casino_twenty_one_activate_next_hand(current) and _casino_twenty_one_auto_progress(current):
-            return current, None
-        return None, _casino_twenty_one_finalize(current)
-
-    if action == "hit":
-        card = _casino_twenty_one_draw_card(current)
-        if card:
-            active_hand["cards"].append(card)
-        total, _soft = _casino_blackjack_total(active_hand.get("cards", ()))
-        if total > 21:
-            active_hand["state"] = "bust"
-            if _casino_twenty_one_activate_next_hand(current) and _casino_twenty_one_auto_progress(current):
-                return current, None
-            return None, _casino_twenty_one_finalize(current)
-        if total == 21:
-            active_hand["state"] = "stood"
-            if _casino_twenty_one_activate_next_hand(current) and _casino_twenty_one_auto_progress(current):
-                return current, None
-            return None, _casino_twenty_one_finalize(current)
-        return current, None
-
-    if action == "stand":
-        active_hand["state"] = "stood"
-        if _casino_twenty_one_activate_next_hand(current) and _casino_twenty_one_auto_progress(current):
-            return current, None
-        return None, _casino_twenty_one_finalize(current)
-
-    return current, None
-
-
-def _casino_holdem_dealer_qualifies(score):
-    if not score:
-        return False
-    category = int(score[0])
-    if category >= 2:
-        return True
-    if category == 1:
-        return int(score[1]) >= 4
-    return False
-
-
-def _casino_holdem_ante_bonus_multiplier(score):
-    if not score:
-        return 0
-    if int(score[0]) == 8 and len(score) > 1 and int(score[1]) == 14:
-        return int(CASINO_HOLDEM_ANTE_BONUS_MULTIPLIERS.get("royal_flush", 0))
-    return int(CASINO_HOLDEM_ANTE_BONUS_MULTIPLIERS.get(int(score[0]), 0))
-
-
-def _casino_holdem_start(seed_token, wager):
-    deck = _casino_shuffled_deck(seed_token)
-    return {
-        "service": "casino_holdem",
-        "seed_token": str(seed_token),
-        "wager": int(wager),
-        "stake": int(wager),
-        "player_cards": [deck[0], deck[2]],
-        "dealer_cards": [deck[1], deck[3]],
-        "flop": [deck[4], deck[5], deck[6]],
-        "turn": deck[7],
-        "river": deck[8],
-    }
-
-
-def _casino_holdem_resolve(session, action):
-    if not isinstance(session, dict):
-        return None
-    wager = int(session.get("wager", 0))
-    stake = int(session.get("stake", wager))
-    action = str(action or "").strip().lower()
-    player_cards = list(session.get("player_cards", ()) or ())
-    dealer_cards = list(session.get("dealer_cards", ()) or ())
-    flop = list(session.get("flop", ()) or ())
-    turn = str(session.get("turn", "")).strip().upper()
-    river = str(session.get("river", "")).strip().upper()
-    board = flop + ([turn] if turn else []) + ([river] if river else [])
-    board_text = _casino_cards_text(board)
-    if action == "fold":
-        return {
-            "service": "casino_holdem",
-            "wager": int(wager),
-            "stake": int(stake),
-            "payout": 0,
-            "outcome_key": "fold",
-            "headline": "You fold the ante.",
-            "detail": "The flop looks wrong, so you release the hand and leave the ante in the circle.",
-            "summary": f"You fold after the flop and forfeit the {wager}c ante.",
-            "result_lines": [
-                f"Your hand: {_casino_cards_text(player_cards)}",
-                f"Flop: {_casino_cards_text(flop)}",
-                "You fold and let the ante go.",
-            ],
-            "player_cards": tuple(player_cards),
-            "dealer_cards": tuple(dealer_cards),
-            "board": tuple(flop),
-            "social_gain": _casino_social_gain("casino_holdem", f"{session.get('seed_token', '')}:fold"),
-            "stake_already_paid": True,
-        }
-
-    ante_stake = int(wager)
-    call_stake = max(0, int(stake) - int(ante_stake))
-    player_best = _casino_best_poker_hand(player_cards + board)
-    dealer_best = _casino_best_poker_hand(dealer_cards + board)
-    dealer_qualifies = _casino_holdem_dealer_qualifies(dealer_best["score"])
-    ante_bonus_mult = _casino_holdem_ante_bonus_multiplier(player_best["score"])
-    ante_bonus = int(max(0, ante_bonus_mult) * ante_stake)
-
-    if not dealer_qualifies:
-        outcome_key = "dealer_not_qualify"
-        payout = int((ante_stake * 2) + call_stake + ante_bonus)
-        headline = "Dealer doesn't qualify."
-        detail = "The dealer misses pair of fours, so the ante wins and the call pushes."
-    elif player_best["score"] > dealer_best["score"]:
-        outcome_key = "player_win"
-        payout = int((stake * 2) + ante_bonus)
-        headline = "You drag the pot."
-        detail = "Your made hand holds up, so both circles win even money."
-    elif player_best["score"] == dealer_best["score"]:
-        outcome_key = "push"
-        payout = int(stake + ante_bonus)
-        headline = "Split pot."
-        detail = "The board runs out into a tie, so the ante and call both push."
-    else:
-        outcome_key = "dealer_win"
-        payout = int(ante_bonus)
-        headline = "Dealer takes it."
-        detail = "The house makes the better hand and sweeps the ante and call."
-
-    result_lines = [
-        f"Board: {board_text}",
-        f"You: {_casino_cards_text(player_cards)} ({player_best['name']})",
-        f"Dealer: {_casino_cards_text(dealer_cards)} ({dealer_best['name']})",
-        "Dealer qualifies." if dealer_qualifies else "Dealer does not qualify (needs pair of 4s+).",
-    ]
-    if ante_bonus > 0:
-        result_lines.append(f"Ante bonus pays x{ante_bonus_mult} for your {player_best['name']}.")
-    result_lines.append(detail)
-    return {
-        "service": "casino_holdem",
-        "wager": int(wager),
-        "stake": int(stake),
-        "payout": int(payout),
-        "outcome_key": outcome_key,
-        "headline": headline,
-        "detail": detail,
-        "summary": (
-            f"Board {board_text}. You show {player_best['name']}; dealer shows {dealer_best['name']}. {headline}"
-        ),
-        "result_lines": result_lines,
-        "player_cards": tuple(player_cards),
-        "dealer_cards": tuple(dealer_cards),
-        "board": tuple(board),
-        "player_hand_name": str(player_best["name"]),
-        "dealer_hand_name": str(dealer_best["name"]),
-        "dealer_qualifies": bool(dealer_qualifies),
-        "ante_bonus": int(ante_bonus),
-        "ante_bonus_mult": int(ante_bonus_mult),
-        "social_gain": _casino_social_gain("casino_holdem", f"{session.get('seed_token', '')}:{outcome_key}"),
-        "stake_already_paid": True,
-    }
-
-
-def _casino_apply_round_result(sim, eid, prop, service, round_result):
-    service = str(service or "").strip().lower()
-    profile = _casino_game_profile(service)
-    if not profile or not isinstance(round_result, dict):
-        return None, {
-            "eid": eid,
-            "property_id": prop.get("id") if isinstance(prop, dict) else None,
-            "property_name": prop.get("name", prop.get("id")) if isinstance(prop, dict) else str(prop or "Casino"),
-            "service": service,
-            "reason": "invalid_round",
-        }
-
-    wager = max(0, int(round_result.get("wager", 0)))
-    stake = max(0, int(round_result.get("stake", wager)))
-    payout = max(0, int(round_result.get("payout", 0)))
-    stake_already_paid = bool(round_result.get("stake_already_paid", False))
-    assets = sim.ecs.get(PlayerAssets).get(eid)
-    credits_before = int(getattr(assets, "credits", 0)) if assets else 0
-    if not stake_already_paid:
-        if credits_before < stake:
-            return None, {
-                "eid": eid,
-                "property_id": prop.get("id") if isinstance(prop, dict) else None,
-                "property_name": prop.get("name", prop.get("id")) if isinstance(prop, dict) else str(prop or "Casino"),
-                "service": service,
-                "reason": "no_credits",
-                "cost": int(stake),
-                "credits": int(credits_before),
-            }
-        if assets:
-            assets.credits = max(0, int(assets.credits) - int(stake))
-            assets.credits = int(assets.credits) + int(payout)
-            credits_after = int(assets.credits)
-        else:
-            credits_after = max(0, int(credits_before) - int(stake) + int(payout))
-    else:
-        if assets:
-            assets.credits = int(assets.credits) + int(payout)
-            credits_after = int(assets.credits)
-        else:
-            credits_after = int(credits_before) + int(payout)
-
-    social_gain = max(0, int(round_result.get("social_gain", 0)))
-    needs = sim.ecs.get(NPCNeeds).get(eid)
-    if needs and social_gain > 0:
-        needs.social = _clamp(float(needs.social) + float(social_gain))
-
-    payload = dict(round_result)
-    payload.update({
-        "eid": eid,
-        "property_id": prop.get("id") if isinstance(prop, dict) else None,
-        "property_name": (
-            str(prop.get("name", prop.get("id", "Casino"))).strip()
-            if isinstance(prop, dict)
-            else str(prop or "Casino").strip()
-        ) or "Casino",
-        "service": service,
-        "wager": int(wager),
-        "stake": int(stake),
-        "payout": int(payout),
-        "net_credits": int(payout - stake),
-        "credits_after": int(credits_after),
-        "social_gain": int(social_gain),
-    })
-    return payload, None
-
-
-def _casino_game_profile(service):
-    return CASINO_GAME_PROFILES.get(str(service or "").strip().lower())
-
-
-def _casino_game_title(service):
-    profile = _casino_game_profile(service)
-    if profile:
-        return str(profile.get("title", service)).strip() or str(service or "Casino game").strip()
-    return str(service or "Casino game").replace("_", " ").title()
-
-
-def _site_service_label(service):
-    service = str(service or "").strip().lower()
-    casino_profile = CASINO_GAME_PROFILES.get(service)
-    if casino_profile:
-        return str(casino_profile.get("service_label", casino_profile.get("title", service))).strip().lower()
-    mapping = {
-        "intel": "intel",
-        "shelter": "shelter",
-        "rest": "lodging",
-        "fuel": "fuel",
-        "vehicle_sales_new": "new vehicles",
-        "vehicle_sales_used": "used vehicles",
-        "vehicle_fetch": "vehicle retrieval",
-    }
-    return mapping.get(service, service.replace("_", " "))
-
-
-def _service_menu_option_label(option_id):
-    option_id = str(option_id or "").strip().lower()
-    casino_profile = _casino_game_profile(option_id)
-    if casino_profile:
-        return str(casino_profile.get("menu_label", _casino_game_title(option_id))).strip()
-    mapping = {
-        "trade_buy": "Browse goods",
-        "trade_sell": "Sell goods",
-        "banking": "Manage bank funds",
-        "insurance": "Review coverage",
-        "fuel": "Refuel vehicle",
-        "shelter": "Use shelter",
-        "rest": "Rent a room",
-        "intel": "Ask for local intel",
-        "vehicle_sales_new": "Browse new vehicles",
-        "vehicle_sales_used": "Browse used vehicles",
-        "vehicle_fetch": "Have a vehicle delivered",
-    }
-    if option_id in mapping:
-        return mapping[option_id]
-    if option_id.startswith("vehicle_sales_"):
-        return _site_service_label(option_id).title()
-    return option_id.replace("_", " ").title()
-
-
-def _credit_amount_label(amount):
-    try:
-        value = int(amount)
-    except (TypeError, ValueError):
-        value = 0
-    return f"{max(0, value)}c"
-
-
-def _nearest_property_with_finance_service(sim, viewer_eid, pos, service, radius=2):
-    if sim is None or pos is None:
-        return None
-
-    nearby = sim.properties_in_radius(pos.x, pos.y, pos.z, r=radius)
-    if not nearby:
-        return None
-
-    candidates = []
-    for prop in nearby:
-        services = _finance_services_for_property(prop)
-        if service not in services:
-            continue
-        access = _evaluate_property_access(
-            sim,
-            viewer_eid,
-            prop,
-            x=pos.x,
-            y=pos.y,
-            z=pos.z,
-        )
-        if not access.can_use_services:
-            continue
-        dist = _property_distance(pos.x, pos.y, prop)
-        candidates.append((dist, prop))
-
-    if not candidates:
-        return None
-    candidates.sort(key=lambda row: row[0])
-    return candidates[0][1]
-
-
 def _hud_status_label(text, fallback="Unknown"):
     label = str(text or "").strip().replace("_", " ")
     if not label:
@@ -6731,6 +4878,16 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
         f"Tile {tile_text}",
     ])
     return status_chunks
+
+
+def _sentence_from_note(note):
+    text = str(note or "").strip()
+    if not text:
+        return ""
+    text = text[:1].upper() + text[1:]
+    if text[-1] not in ".!?":
+        text += "."
+    return text
 
 
 def _entity_blocks(sim, moving_eid, x, y, z):
@@ -6872,23 +5029,6 @@ def _door_open_attempt(sim, eid, x, y, z, *, allow_override=False):
         lock_state = property_lock_state(prop)
         if not bool(lock_state.get("locked")):
             return (_set_door_open_state(sim, x, y, z, True), "opened_unlocked")
-        if (
-            allow_override
-            and ingress
-            and ingress.ingress_kind == "ordinary_entry"
-            and bool(lock_state.get("locked"))
-        ):
-            success, override_reason = _attempt_locked_property_entry_with_sim(
-                sim,
-                eid,
-                prop,
-                target_x=x,
-                target_y=y,
-                target_z=z,
-            )
-            if success:
-                return (_set_door_open_state(sim, x, y, z, True), override_reason or "override_open")
-            return False, override_reason
 
         if bool(lock_state.get("locked")):
             return False, "locked_property"
@@ -6903,18 +5043,66 @@ def _auto_open_closed_door_for_move(sim, eid, from_x, from_y, to_x, to_y, z, *, 
     state = _operable_door_state_at(sim, to_x, to_y, z)
     if state is None or bool(state.get("open", False)):
         return True, None
-    allow_override = (
-        str(move_reason or "").strip().lower() == "player_move"
-        and int(eid) == int(getattr(sim, "player_eid", -1))
-    )
     return _door_open_attempt(
         sim,
         eid,
         to_x,
         to_y,
         z,
-        allow_override=allow_override,
+        allow_override=False,
     )
+
+
+def _closed_door_move_block_reason(sim, eid, x, y, z):
+    state = _operable_door_state_at(sim, x, y, z)
+    if state is None or bool(state.get("open", False)):
+        return None
+    if _actor_is_animal_or_wildlife(sim, eid):
+        return "blocked_animal_doorway"
+
+    positions = sim.ecs.get(Position)
+    pos = positions.get(eid)
+    if not pos:
+        return "missing_position"
+
+    prop = _property_covering(sim, x, y, z)
+    ingress = None
+    if prop:
+        ingress = _property_ingress_context(
+            prop,
+            from_x=pos.x,
+            from_y=pos.y,
+            from_z=pos.z,
+            to_x=x,
+            to_y=y,
+            to_z=z,
+        )
+    if prop:
+        access = _evaluate_property_access(
+            sim,
+            eid,
+            prop,
+            x=x,
+            y=y,
+            z=z,
+            breach_severity=float(getattr(ingress, "breach_severity", 0.0) or 0.0),
+        )
+        if access.permitted:
+            return "closed_door"
+        lock_state = property_lock_state(prop)
+        if bool(lock_state.get("locked")):
+            return "locked_property"
+        if access.access_level == "public" and access.currently_open is False:
+            return "closed_property"
+        return "door_access_denied"
+    return "closed_door"
+
+
+def _movement_allows_auto_open(sim, eid, *, reason="move"):
+    reason_key = str(reason or "").strip().lower()
+    if reason_key == "player_move":
+        return False
+    return True
 
 
 def _door_close_attempt(sim, eid, x, y, z):
@@ -7015,6 +5203,12 @@ def _door_lock_action_text(reason, *, requirement="the matching key"):
         return "Something is in the doorway."
     if reason_key == "lock_access_denied":
         return f"You need {requirement_text} to work that lock."
+    if reason_key == "locked_property":
+        return f"You need {requirement_text}, a lockpick kit, or exceptional intrusion skill."
+    if reason_key == "lock_override_failed":
+        return "You fail to work the lock."
+    if reason_key == "lock_override_fumble":
+        return "You botch the lock and it stays shut."
     if reason_key == "not_property_door":
         return "That doorway has no lock you can work."
     return "You cannot change that lock."
@@ -7090,18 +5284,23 @@ def try_move_entity(sim, eid, new_x, new_y, new_z, reason="move"):
     if not pos:
         return False, "missing_position"
 
-    opened, open_reason = _auto_open_closed_door_for_move(
-        sim,
-        eid,
-        pos.x,
-        pos.y,
-        new_x,
-        new_y,
-        new_z,
-        move_reason=reason,
-    )
-    if not opened and open_reason is not None:
-        return False, open_reason
+    if _movement_allows_auto_open(sim, eid, reason=reason):
+        opened, open_reason = _auto_open_closed_door_for_move(
+            sim,
+            eid,
+            pos.x,
+            pos.y,
+            new_x,
+            new_y,
+            new_z,
+            move_reason=reason,
+        )
+        if not opened and open_reason is not None:
+            return False, open_reason
+    else:
+        door_block_reason = _closed_door_move_block_reason(sim, eid, new_x, new_y, new_z)
+        if door_block_reason is not None:
+            return False, door_block_reason
 
     step_ok, reason_text = _can_step_transition_for(
         sim,
@@ -7206,6 +5405,10 @@ class InputSystem(System):
             ord("s"): (0, 1),
             ord("a"): (-1, 0),
             ord("d"): (1, 0),
+            ord("q"): (-1, -1),
+            ord("e"): (1, -1),
+            ord("z"): (-1, 1),
+            ord("c"): (1, 1),
             ord("k"): (0, -1),
             ord("j"): (0, 1),
             ord("h"): (-1, 0),
@@ -7234,14 +5437,14 @@ class InputSystem(System):
             if key_code is not None:
                 self.wait_keys.add(key_code)
         self._canonical_movement_key_for_delta = {
-            (-1, -1): ord("7"),
+            (-1, -1): ord("q"),
             (0, -1): ord("w"),
-            (1, -1): ord("9"),
+            (1, -1): ord("e"),
             (-1, 0): ord("a"),
             (1, 0): ord("d"),
-            (-1, 1): ord("1"),
+            (-1, 1): ord("z"),
             (0, 1): ord("s"),
-            (1, 1): ord("3"),
+            (1, 1): ord("c"),
         }
         self._aim_hold_repeat = {
             "delta": None,
@@ -7286,6 +5489,17 @@ class InputSystem(System):
         if not hasattr(self.sim, "help_ui"):
             self.sim.help_ui = {
                 "open": False,
+            }
+        if not hasattr(self.sim, "character_ui"):
+            self.sim.character_ui = {
+                "open": False,
+                "title": "Character Sheet",
+                "pages": [],
+                "page_index": 0,
+                "page_label": "Summary",
+                "page_scrolls": {},
+                "lines": [],
+                "scroll": 0,
             }
         if not hasattr(self.sim, "report_ui"):
             self.sim.report_ui = {
@@ -7429,6 +5643,26 @@ class InputSystem(System):
                 "open": False,
             }
             self.sim.help_ui = state
+        return state
+
+    def _character_state(self):
+        state = getattr(self.sim, "character_ui", None)
+        if state is None:
+            state = {
+                "open": False,
+                "title": "Character Sheet",
+                "pages": [],
+                "page_index": 0,
+                "page_label": "Summary",
+                "page_scrolls": {},
+                "lines": [],
+                "scroll": 0,
+            }
+            self.sim.character_ui = state
+        state.setdefault("pages", [])
+        state.setdefault("page_index", 0)
+        state.setdefault("page_label", "Summary")
+        state.setdefault("page_scrolls", {})
         return state
 
     def _report_state(self):
@@ -7807,6 +6041,7 @@ class InputSystem(System):
         look_state=None,
         help_state=None,
         dialog_state=None,
+        character_state=None,
         report_state=None,
         log_state=None,
         debug_state=None,
@@ -7820,6 +6055,7 @@ class InputSystem(System):
         if (
             (help_state and help_state.get("open"))
             or (dialog_state and dialog_state.get("open"))
+            or (character_state and character_state.get("open"))
             or (report_state and report_state.get("open"))
             or (log_state and log_state.get("open"))
             or (debug_state and debug_state.get("open"))
@@ -7898,6 +6134,7 @@ class InputSystem(System):
         look_state=None,
         help_state=None,
         dialog_state=None,
+        character_state=None,
         report_state=None,
         log_state=None,
         debug_state=None,
@@ -7911,6 +6148,7 @@ class InputSystem(System):
         if (
             (help_state and help_state.get("open"))
             or (dialog_state and dialog_state.get("open"))
+            or (character_state and character_state.get("open"))
             or (report_state and report_state.get("open"))
             or (log_state and log_state.get("open"))
             or (debug_state and debug_state.get("open"))
@@ -8195,7 +6433,7 @@ class InputSystem(System):
 
         display_lines = []
         for raw in raw_lines:
-            wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
+            wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
             display_lines.extend(wrapped)
         return display_lines or ["No report data."]
 
@@ -8231,10 +6469,100 @@ class InputSystem(System):
         state["open"] = False
         state["scroll"] = 0
 
+    def _character_current_page(self):
+        state = self._character_state()
+        pages = list(state.get("pages", ()) or [])
+        if not pages:
+            return None
+        page_index = max(0, min(int(state.get("page_index", 0)), len(pages) - 1))
+        state["page_index"] = page_index
+        return pages[page_index]
+
+    def _set_character_page(self, page_index, *, reset_scroll=False):
+        state = self._character_state()
+        pages = list(state.get("pages", ()) or [])
+        if not pages:
+            state["page_index"] = 0
+            state["page_label"] = "Summary"
+            state["lines"] = ["No character data."]
+            state["scroll"] = 0
+            return False
+
+        current_page = self._character_current_page()
+        current_page_id = str((current_page or {}).get("id", "")).strip().lower()
+        page_scrolls = dict(state.get("page_scrolls", {}) or {})
+        if current_page_id:
+            page_scrolls[current_page_id] = int(state.get("scroll", 0))
+
+        page_index = max(0, min(int(page_index), len(pages) - 1))
+        state["page_index"] = page_index
+        page = pages[page_index]
+        page_id = str(page.get("id", "")).strip().lower()
+        state["page_label"] = str(page.get("label", "Page")).strip() or "Page"
+        state["lines"] = list(page.get("lines", ()) or ()) or ["No character data."]
+        state["page_scrolls"] = page_scrolls
+        if reset_scroll:
+            state["scroll"] = 0
+        else:
+            state["scroll"] = int(page_scrolls.get(page_id, 0))
+        self._clamp_character_scroll()
+        return True
+
+    def _cycle_character_page(self, step=1):
+        state = self._character_state()
+        pages = list(state.get("pages", ()) or [])
+        if len(pages) <= 1:
+            return False
+        next_index = (int(state.get("page_index", 0)) + int(step)) % len(pages)
+        return self._set_character_page(next_index, reset_scroll=False)
+
+    def _refresh_character_ui(self, reset_scroll=False):
+        state = self._character_state()
+        current_page = self._character_current_page()
+        current_page_id = str((current_page or {}).get("id", "")).strip().lower()
+        page_scrolls = {} if reset_scroll else dict(state.get("page_scrolls", {}) or {})
+        if current_page_id and not reset_scroll:
+            page_scrolls[current_page_id] = int(state.get("scroll", 0))
+        state["open"] = True
+        state["title"] = "Character Sheet"
+        state["pages"] = list(
+            _build_character_sheet_pages(
+                self.sim,
+                self.player_eid,
+                duration_label_fn=_tick_duration_label,
+            )
+            or ()
+        )
+        state["page_scrolls"] = page_scrolls
+        target_index = 0
+        if not reset_scroll and current_page_id:
+            for idx, page in enumerate(list(state.get("pages", ()) or ())):
+                if str(page.get("id", "")).strip().lower() == current_page_id:
+                    target_index = idx
+                    break
+        self._set_character_page(target_index, reset_scroll=reset_scroll)
+        return True
+
+    def _close_character_ui(self):
+        state = self._character_state()
+        current_page = self._character_current_page()
+        current_page_id = str((current_page or {}).get("id", "")).strip().lower()
+        if current_page_id:
+            page_scrolls = dict(state.get("page_scrolls", {}) or {})
+            page_scrolls[current_page_id] = int(state.get("scroll", 0))
+            state["page_scrolls"] = page_scrolls
+        state["open"] = False
+        state["scroll"] = 0
+
     def _refresh_debug_ui(self, reset_scroll=False):
         state = self._debug_state()
         previous_scroll = int(state.get("scroll", 0))
-        debug_panel = _build_debug_overlay(self.sim, self.player_eid)
+        debug_panel = _build_debug_overlay(
+            self.sim,
+            self.player_eid,
+            duration_label_fn=_tick_duration_label,
+            property_access_summary_fn=_property_access_summary,
+        )
         state["open"] = True
         state["title"] = str(debug_panel.get("title", "Debug Overlay")).strip() or "Debug Overlay"
         state["lines"] = list(debug_panel.get("lines", ()) or ())
@@ -8261,8 +6589,8 @@ class InputSystem(System):
         body_w, _body_h = self._scroll_panel_body_dimensions()
         display_lines = []
         for raw in raw_lines:
-            prefixed = f"{_log_prefix(raw)}{_line_text(raw)}"
-            wrapped = _wrap_text_lines(prefixed, body_w) if prefixed.strip() else [""]
+            display_line = _log_display_line(raw)
+            wrapped = _wrap_display_lines(display_line, body_w) if _line_text(display_line).strip() else [""]
             display_lines.extend(wrapped)
         return display_lines or [f"No {_log_filter_label(filter_id).lower()} log entries yet."]
 
@@ -8272,6 +6600,33 @@ class InputSystem(System):
         _body_w, body_h = self._scroll_panel_body_dimensions()
         max_scroll = max(0, len(display_lines) - body_h)
         state["scroll"] = max(0, min(int(state.get("scroll", 0)), max_scroll))
+        return state["scroll"]
+
+    def _character_display_lines(self):
+        state = self._character_state()
+        raw_lines = list(state.get("lines", ()) or ())
+        if not raw_lines:
+            raw_lines = ["No character data."]
+
+        body_w, _body_h = self._scroll_panel_body_dimensions()
+        display_lines = []
+        for raw in raw_lines:
+            wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
+            display_lines.extend(wrapped)
+        return display_lines or ["No character data."]
+
+    def _clamp_character_scroll(self):
+        state = self._character_state()
+        display_lines = self._character_display_lines()
+        _body_w, body_h = self._scroll_panel_body_dimensions()
+        max_scroll = max(0, len(display_lines) - body_h)
+        state["scroll"] = max(0, min(int(state.get("scroll", 0)), max_scroll))
+        current_page = self._character_current_page()
+        current_page_id = str((current_page or {}).get("id", "")).strip().lower()
+        if current_page_id:
+            page_scrolls = dict(state.get("page_scrolls", {}) or {})
+            page_scrolls[current_page_id] = int(state.get("scroll", 0))
+            state["page_scrolls"] = page_scrolls
         return state["scroll"]
 
     def _cycle_log_view_filter(self, step=1, reset_scroll=True):
@@ -8297,7 +6652,7 @@ class InputSystem(System):
         body_w, _body_h = self._scroll_panel_body_dimensions()
         display_lines = []
         for raw in raw_lines:
-            wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
+            wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
             display_lines.extend(wrapped)
         return display_lines or ["No debug data."]
 
@@ -8679,6 +7034,100 @@ class InputSystem(System):
 
         return True
 
+    def _handle_character_input(self, key):
+        state = self._character_state()
+        if not state.get("open"):
+            return False
+
+        if key in (ord("?"), ord("/")):
+            self._help_state()["open"] = True
+            return True
+
+        if key in (ord("o"), ord("O")):
+            self._close_character_ui()
+            self._refresh_report_ui(reset_scroll=True)
+            return True
+
+        if key in (ord("y"), ord("Y")):
+            self._close_character_ui()
+            self._refresh_known_locations_ui(reset_scroll=True)
+            return True
+
+        if key == ord("L"):
+            self._close_character_ui()
+            self._refresh_log_ui(reset_scroll=True, focus_end=True)
+            return True
+
+        if key == ord("D"):
+            self._close_character_ui()
+            self._refresh_debug_ui(reset_scroll=True)
+            return True
+
+        if ord("1") <= key <= ord("9"):
+            page_index = key - ord("1")
+            pages = list(state.get("pages", ()) or [])
+            if 0 <= page_index < len(pages) and self._set_character_page(page_index, reset_scroll=False):
+                return True
+
+        key_left = getattr(curses, "KEY_LEFT", None)
+        if key_left is not None and key == key_left:
+            self._cycle_character_page(step=-1)
+            return True
+
+        key_right = getattr(curses, "KEY_RIGHT", None)
+        if key_right is not None and key == key_right:
+            self._cycle_character_page(step=1)
+            return True
+
+        key_back_tab = getattr(curses, "KEY_BTAB", None)
+        if key_back_tab is not None and key == key_back_tab:
+            self._cycle_character_page(step=-1)
+            return True
+
+        if key == ord("\t"):
+            self._cycle_character_page(step=1)
+            return True
+
+        if key in (ord("+"), 27, ord("q"), ord("Q")):
+            self._close_character_ui()
+            return True
+
+        if key in (KEY_UP, ord("k"), ord("K")):
+            state["scroll"] = int(state.get("scroll", 0)) - 1
+            self._clamp_character_scroll()
+            return True
+
+        if key in (KEY_DOWN, ord("j"), ord("J")):
+            state["scroll"] = int(state.get("scroll", 0)) + 1
+            self._clamp_character_scroll()
+            return True
+
+        key_home = getattr(curses, "KEY_HOME", None)
+        if key_home is not None and key == key_home:
+            state["scroll"] = 0
+            return True
+
+        key_end = getattr(curses, "KEY_END", None)
+        if key_end is not None and key == key_end:
+            display_lines = self._character_display_lines()
+            _body_w, body_h = self._scroll_panel_body_dimensions()
+            state["scroll"] = max(0, len(display_lines) - body_h)
+            return True
+
+        key_page_up = getattr(curses, "KEY_PPAGE", None)
+        if key_page_up is not None and key == key_page_up:
+            state["scroll"] = int(state.get("scroll", 0)) - 6
+            self._clamp_character_scroll()
+            return True
+
+        key_page_down = getattr(curses, "KEY_NPAGE", None)
+        if key_page_down is not None and key == key_page_down:
+            state["scroll"] = int(state.get("scroll", 0)) + 6
+            self._clamp_character_scroll()
+            return True
+
+        return True
+
     def _handle_debug_input(self, key):
         state = self._debug_state()
         if not state.get("open"):
@@ -8894,6 +7343,7 @@ class InputSystem(System):
         state["active"] = True
         state["purpose"] = str(purpose or "inspect").lower()
         state["inspect_text"] = ""
+        _set_manual_combat_pacing(self.sim, mode == "city" and str(state.get("purpose", "inspect")).lower() == "aim")
         self.sim.emit(Event(
             "look_mode_toggled",
             eid=self.player_eid,
@@ -8929,9 +7379,12 @@ class InputSystem(System):
         if not state.get("active"):
             return False
 
+        was_aim = str(state.get("purpose", "inspect")).lower() == "aim"
         self._reset_aim_hold_repeat()
         state["active"] = False
         state["inspect_text"] = ""
+        if was_aim:
+            _set_manual_combat_pacing(self.sim, False)
         self.sim.emit(Event(
             "look_mode_toggled",
             eid=self.player_eid,
@@ -8960,7 +7413,7 @@ class InputSystem(System):
             self._help_state()["open"] = True
             return True
 
-        if key in (27, ord(";"), ord("q"), ord("Q")):
+        if key in (27, ord(";"), ord("Q")):
             self._deactivate_look_mode()
             return True
 
@@ -9000,12 +7453,12 @@ class InputSystem(System):
             if key in ENTER_KEYS:
                 self._emit_aimed_fire()
                 return True
-            if key in (ord("e"), ord("E"), ord("x"), ord("X")):
+            if key in (ord("t"), ord("x"), ord("X")):
                 self._emit_cursor_examine(announce=True)
                 return True
             return True
 
-        if key in ENTER_KEYS or key in (ord("e"), ord("E"), ord("x"), ord("X")):
+        if key in ENTER_KEYS or key in (ord("t"), ord("x"), ord("X")):
             self._emit_cursor_examine(announce=True)
             return True
 
@@ -9426,10 +7879,12 @@ class InputSystem(System):
         state["last_repeat_at"] = float(now)
         return key
 
-    def _should_collapse_input_burst(self, *, look_state=None, help_state=None, dialog_state=None, report_state=None, log_state=None, debug_state=None, inventory_state=None, trade_state=None):
+    def _should_collapse_input_burst(self, *, look_state=None, help_state=None, dialog_state=None, character_state=None, report_state=None, log_state=None, debug_state=None, inventory_state=None, trade_state=None):
         if help_state and help_state.get("open"):
             return False
         if dialog_state and dialog_state.get("open"):
+            return False
+        if character_state and character_state.get("open"):
             return False
         if report_state and report_state.get("open"):
             return False
@@ -9493,6 +7948,7 @@ class InputSystem(System):
         dialog_state = self._dialog_state()
         look_state = self._look_state()
         help_state = self._help_state()
+        character_state = self._character_state()
         report_state = self._report_state()
         log_state = self._log_state()
         debug_state = self._debug_state()
@@ -9502,6 +7958,7 @@ class InputSystem(System):
                 look_state=look_state,
                 help_state=help_state,
                 dialog_state=dialog_state,
+                character_state=character_state,
                 report_state=report_state,
                 log_state=log_state,
                 debug_state=debug_state,
@@ -9517,6 +7974,7 @@ class InputSystem(System):
                 look_state=look_state,
                 help_state=help_state,
                 dialog_state=dialog_state,
+                character_state=character_state,
                 report_state=report_state,
                 log_state=log_state,
                 debug_state=debug_state,
@@ -9529,6 +7987,7 @@ class InputSystem(System):
                 look_state=look_state,
                 help_state=help_state,
                 dialog_state=dialog_state,
+                character_state=character_state,
                 report_state=report_state,
                 log_state=log_state,
                 debug_state=debug_state,
@@ -9556,6 +8015,10 @@ class InputSystem(System):
             self._handle_dialog_input(key)
             return
 
+        if character_state.get("open"):
+            self._handle_character_input(key)
+            return
+
         if report_state.get("open"):
             self._handle_report_input(key)
             return
@@ -9576,6 +8039,10 @@ class InputSystem(System):
             state["open"] = True
             self._normalize_inventory_selection()
             self.sim.emit(Event("inventory_panel_toggled", eid=self.player_eid, open=True))
+            return
+
+        if key == ord("+") and not state["open"] and not trade_state.get("open"):
+            self._refresh_character_ui(reset_scroll=True)
             return
 
         if key in (ord("m"), ord("M")) and not state["open"] and not trade_state.get("open") and zoom_mode != "overworld":
@@ -9614,20 +8081,13 @@ class InputSystem(System):
             self._activate_look_mode(zoom_mode=zoom_mode, purpose="inspect")
             return
 
-        if key in (ord("z"), ord("Z")):
-            if zoom_mode == "overworld":
-                self._emit_turn_action("zoom_city_enter")
-            else:
-                self._emit_turn_action("zoom_overworld")
-            return
-
         if zoom_mode == "overworld":
             if key in self.movement_keys:
                 dx, dy = self.movement_keys[key]
                 self._emit_turn_action("overworld_travel", dx=dx, dy=dy)
                 return
 
-            if key in (ord("e"), ord("E")):
+            if key == ord("t"):
                 self._emit_turn_action("zoom_city_enter")
                 return
 
@@ -9665,7 +8125,7 @@ class InputSystem(System):
                 self._emit_turn_action("wait")
                 return
 
-            if key in (ord("q"), ord("Q")):
+            if key == ord("Q"):
                 self.sim.running = False
                 self.sim.emit(Event("quit_requested", eid=self.player_eid))
                 return
@@ -9697,7 +8157,7 @@ class InputSystem(System):
             self._emit_turn_action("toggle_door_lock")
             return
 
-        if key == ord("e"):
+        if key == ord("t"):
             self._emit_turn_action("interact")
             return
 
@@ -9741,7 +8201,7 @@ class InputSystem(System):
             self._emit_turn_action("insurance")
             return
 
-        if key == ord("c"):
+        if key == ord("v"):
             self._emit_turn_action("toggle_cover")
             return
 
@@ -9753,11 +8213,11 @@ class InputSystem(System):
             self._activate_look_mode(zoom_mode=zoom_mode, purpose="aim")
             return
 
-        if key in (ord("v"), ord("V")):
+        if key == ord("V"):
             self._emit_turn_action("cycle_weapon")
             return
 
-        if key in (ord("q"), ord("Q")):
+        if key == ord("Q"):
             self.sim.running = False
             self.sim.emit(Event("quit_requested", eid=self.player_eid))
 
@@ -10085,964 +8545,6 @@ class WorldStreamingSystem(System):
         for cx, cy in report["detail_changed"]:
             detail = self.sim.chunk_detail.get((cx, cy), "coarse")
             self.sim.emit(Event("chunk_detail_changed", cx=cx, cy=cy, detail=detail))
-
-
-class PropertySystem(System):
-
-    def __init__(self, sim, player_eid):
-        super().__init__(sim)
-        self.player_eid = player_eid
-        self.initialized = False
-        self.last_controller_hour = None
-        self.sim.events.subscribe("property_interact", self.on_property_interact)
-        self.sim.events.subscribe("property_owner_changed", self.on_property_owner_changed)
-
-    def _building_needs_access_panel(self, prop, controller):
-        if not isinstance(prop, dict):
-            return False
-        if str(prop.get("kind", "")).strip().lower() != "building":
-            return False
-
-        metadata = _property_metadata(prop)
-        if bool(metadata.get("disable_access_panel")):
-            return False
-
-        access_level = _property_access_level(prop)
-        controller_kind = str(controller.get("kind", "")).strip().lower()
-        credential_mode = str(controller.get("credential_mode", "mechanical_key")).strip().lower()
-        security_tier = max(1, _int_or_default(controller.get("security_tier"), 1))
-        return bool(
-            controller_kind in {"owner_schedule", "auto_timer"}
-            or credential_mode in {"badge", "biometric"}
-            or access_level == "restricted"
-            or security_tier >= 3
-        )
-
-    def _building_service_terminal_profile(self, prop):
-        if not isinstance(prop, dict):
-            return None
-        if str(prop.get("kind", "")).strip().lower() != "building":
-            return None
-
-        metadata = _property_metadata(prop)
-        if bool(metadata.get("disable_service_terminal")):
-            return None
-
-        finance_services = []
-        for service in _finance_services_for_property(prop):
-            label = str(service or "").strip().lower()
-            if label in {"banking", "insurance"} and label not in finance_services:
-                finance_services.append(label)
-
-        site_services = []
-        for service in _site_services_for_property(prop):
-            label = str(service or "").strip().lower()
-            if label in {"intel"} and label not in site_services:
-                site_services.append(label)
-
-        if not finance_services and not site_services:
-            return None
-
-        service_set = set(finance_services) | set(site_services)
-        if service_set == {"banking"}:
-            return {
-                "name": "ATM Kiosk",
-                "fixture_type": "atm_kiosk",
-                "glyph": "$",
-                "cover_value": 0.38,
-                "finance_services": tuple(finance_services),
-                "site_services": tuple(site_services),
-            }
-        if service_set == {"insurance"}:
-            return {
-                "name": "Claim Terminal",
-                "fixture_type": "claim_terminal",
-                "glyph": "c",
-                "cover_value": 0.36,
-                "finance_services": tuple(finance_services),
-                "site_services": tuple(site_services),
-            }
-        if service_set == {"intel"}:
-            return {
-                "name": "Info Terminal",
-                "fixture_type": "service_terminal",
-                "glyph": "i",
-                "cover_value": 0.32,
-                "finance_services": tuple(finance_services),
-                "site_services": tuple(site_services),
-            }
-
-        prop_name = str(prop.get("name", prop.get("id", "Property"))).strip() or "Property"
-        return {
-            "name": f"{prop_name} Service Terminal",
-            "fixture_type": "service_terminal",
-            "glyph": "t",
-            "cover_value": 0.34,
-            "finance_services": tuple(finance_services),
-            "site_services": tuple(site_services),
-        }
-
-    def _service_terminal_anchor(self, prop, existing_terminal=None):
-        focus = _property_focus_position(prop)
-        if focus is None:
-            return None
-
-        ex, ey, ez = focus
-        existing_id = existing_terminal.get("id") if isinstance(existing_terminal, dict) else None
-        candidates = (
-            (ex + 2, ey + 1, ez),
-            (ex - 2, ey + 1, ez),
-            (ex + 2, ey + 2, ez),
-            (ex - 2, ey + 2, ez),
-            (ex, ey + 3, ez),
-            (ex + 1, ey + 3, ez),
-            (ex - 1, ey + 3, ez),
-            (ex + 2, ey, ez),
-            (ex - 2, ey, ez),
-        )
-        for x, y, z in candidates:
-            tile = self.sim.tilemap.tile_at(x, y, z)
-            if not tile or not tile.walkable:
-                continue
-            anchored = self.sim.property_at(x, y, z)
-            if anchored and anchored.get("id") != existing_id:
-                continue
-            covering = self.sim.property_covering(x, y, z)
-            if covering and covering.get("id") != existing_id:
-                continue
-            return int(x), int(y), int(z)
-
-        if existing_terminal is not None:
-            return (
-                int(existing_terminal.get("x", ex)),
-                int(existing_terminal.get("y", ey + 2)),
-                int(existing_terminal.get("z", ez)),
-            )
-        return None
-
-    def _ensure_service_terminal(self, prop):
-        profile = self._building_service_terminal_profile(prop)
-        if profile is None:
-            return None
-
-        metadata = _property_metadata(prop)
-        terminal_id = str(metadata.get("service_terminal_property_id", "") or "").strip()
-        terminal = self.sim.properties.get(terminal_id) if terminal_id else None
-        if terminal and _property_infrastructure_role(terminal) != "service_terminal":
-            terminal = None
-
-        anchor = self._service_terminal_anchor(prop, existing_terminal=terminal)
-        if anchor is None:
-            return terminal
-
-        owner_eid = prop.get("owner_eid")
-        owner_tag = prop.get("owner_tag")
-        terminal_metadata = {
-            "archetype": str(profile.get("fixture_type", "service_terminal")),
-            "fixture_type": str(profile.get("fixture_type", "service_terminal")),
-            "interaction_role": "service_terminal",
-            "linked_property_id": prop.get("id"),
-            "linked_building_id": _building_id_from_property(prop),
-            "finance_services": list(profile.get("finance_services", ())),
-            "site_services": list(profile.get("site_services", ())),
-            "display_glyph": str(profile.get("glyph", "t"))[:1] or "t",
-            "display_color": "property_service",
-            "cover_kind": "low",
-            "cover_value": float(profile.get("cover_value", 0.34) or 0.34),
-            "public": True,
-            "chunk": metadata.get("chunk"),
-        }
-
-        if terminal is not None:
-            self.sim.move_property(terminal["id"], anchor[0], anchor[1], z=anchor[2])
-            terminal["name"] = str(profile.get("name", terminal.get("name", "Service Terminal"))).strip() or "Service Terminal"
-            terminal["owner_eid"] = owner_eid
-            terminal["owner_tag"] = owner_tag
-            terminal["metadata"] = terminal_metadata
-        else:
-            terminal_id = self.sim.register_property(
-                name=str(profile.get("name", "Service Terminal")).strip() or "Service Terminal",
-                kind="asset",
-                x=anchor[0],
-                y=anchor[1],
-                z=anchor[2],
-                owner_eid=owner_eid,
-                owner_tag=owner_tag,
-                metadata=terminal_metadata,
-            )
-            terminal = self.sim.properties.get(terminal_id)
-
-        metadata["service_terminal_property_id"] = terminal["id"]
-        return terminal
-
-    def _access_panel_anchor(self, prop, existing_panel=None):
-        focus = _property_focus_position(prop)
-        if focus is None:
-            return None
-
-        ex, ey, ez = focus
-        existing_id = existing_panel.get("id") if isinstance(existing_panel, dict) else None
-        candidates = (
-            (ex - 1, ey + 1, ez),
-            (ex + 1, ey + 1, ez),
-            (ex, ey + 1, ez),
-            (ex - 2, ey + 1, ez),
-            (ex + 2, ey + 1, ez),
-            (ex - 1, ey + 2, ez),
-            (ex + 1, ey + 2, ez),
-            (ex, ey + 2, ez),
-        )
-        for x, y, z in candidates:
-            tile = self.sim.tilemap.tile_at(x, y, z)
-            if not tile or not tile.walkable:
-                continue
-            anchored = self.sim.property_at(x, y, z)
-            if anchored and anchored.get("id") != existing_id:
-                continue
-            covering = self.sim.property_covering(x, y, z)
-            if covering and covering.get("id") != existing_id:
-                continue
-            return int(x), int(y), int(z)
-
-        if existing_panel is not None:
-            return (
-                int(existing_panel.get("x", ex)),
-                int(existing_panel.get("y", ey + 1)),
-                int(existing_panel.get("z", ez)),
-            )
-        return None
-
-    def _ensure_access_panel(self, prop, controller):
-        if not self._building_needs_access_panel(prop, controller):
-            return None
-
-        metadata = _property_metadata(prop)
-        panel_id = str(metadata.get("access_panel_property_id", "") or "").strip()
-        panel = self.sim.properties.get(panel_id) if panel_id else None
-        if panel and _property_infrastructure_role(panel) != "access_panel":
-            panel = None
-
-        anchor = self._access_panel_anchor(prop, existing_panel=panel)
-        if anchor is None:
-            return panel
-
-        owner_eid = prop.get("owner_eid")
-        owner_tag = prop.get("owner_tag")
-        prop_name = str(prop.get("name", prop.get("id", "Property"))).strip() or "Property"
-        panel_name = f"{prop_name} Access Panel"
-        panel_metadata = {
-            "archetype": "access_panel",
-            "fixture_type": "access_panel",
-            "interaction_role": "access_panel",
-            "linked_property_id": prop.get("id"),
-            "linked_building_id": _building_id_from_property(prop),
-            "controller_kind": str(controller.get("kind", "")),
-            "controller_fixture": str(controller.get("fixture_label", "")),
-            "controller_security_tier": max(1, _int_or_default(controller.get("security_tier"), 1)),
-            "controller_requirement": _controller_access_requirement_text(controller),
-            "display_glyph": "r",
-            "display_color": "property_service" if bool(controller.get("electronic")) else "property_asset",
-            "cover_kind": "low",
-            "cover_value": 0.24,
-            "public": True,
-            "chunk": metadata.get("chunk"),
-        }
-
-        if panel is not None:
-            self.sim.move_property(panel["id"], anchor[0], anchor[1], z=anchor[2])
-            panel["name"] = panel_name
-            panel["owner_eid"] = owner_eid
-            panel["owner_tag"] = owner_tag
-            panel["metadata"] = panel_metadata
-        else:
-            panel_id = self.sim.register_property(
-                name=panel_name,
-                kind="asset",
-                x=anchor[0],
-                y=anchor[1],
-                z=anchor[2],
-                owner_eid=owner_eid,
-                owner_tag=owner_tag,
-                metadata=panel_metadata,
-            )
-            panel = self.sim.properties.get(panel_id)
-
-        metadata["access_panel_property_id"] = panel["id"]
-        return panel
-
-    def _emit_access_panel_event(self, event_type, *, eid, panel_prop, target_prop, controller, **data):
-        panel_name = str(panel_prop.get("name", panel_prop.get("id", "access panel"))).strip() or "access panel"
-        target_name = str(target_prop.get("name", target_prop.get("id", "property"))).strip() or "property"
-        self.sim.emit(Event(
-            event_type,
-            eid=eid,
-            property_id=panel_prop.get("id"),
-            property_name=panel_name,
-            target_property_id=target_prop.get("id"),
-            target_property_name=target_name,
-            requirement=_controller_access_requirement_text(controller),
-            credential_mode=str(controller.get("credential_mode", "mechanical_key")).strip().lower() or "mechanical_key",
-            security_tier=max(1, _int_or_default(controller.get("security_tier"), 1)),
-            open_now=controller.get("open_now"),
-            **data,
-        ))
-
-    def _property_key_entry_for(self, eid, prop):
-        inventory = self.sim.ecs.get(Inventory).get(eid)
-        if not inventory or not isinstance(prop, dict):
-            return None
-        state = property_lock_state(prop)
-        if not state["key_id"]:
-            return None
-        return inventory_matching_property_key(
-            inventory,
-            property_id=prop.get("id"),
-            key_id=state["key_id"],
-        )
-
-    def _property_credential_access_for(self, eid, prop):
-        if not isinstance(prop, dict):
-            return None
-
-        kind = str(prop.get("kind", "")).strip().lower()
-        if kind != "building":
-            entry = self._property_key_entry_for(eid, prop)
-            if not entry:
-                return None
-            return {
-                "mode": "mechanical_key",
-                "entry": entry,
-                "reason": "key",
-            }
-
-        intrusion_access = _controller_intrusion_access_for_actor(self.sim, eid, prop)
-        if intrusion_access:
-            return {
-                "mode": str(intrusion_access.get("mode", "badge")).strip().lower() or "badge",
-                "entry": None,
-                "reason": str(intrusion_access.get("reason", "spoofed_access")).strip().lower() or "spoofed_access",
-            }
-
-        controller = _property_access_controller(self.sim, prop)
-        required_tier = max(1, _int_or_default(controller.get("required_credential_tier"), 1))
-        inventory = self.sim.ecs.get(Inventory).get(eid)
-        if inventory:
-            entry = inventory_matching_property_credential(
-                inventory,
-                property_id=prop.get("id"),
-                key_id=property_lock_state(prop)["key_id"],
-                allowed_kinds=controller.get("accepted_credentials", ()),
-                minimum_tier=required_tier,
-            )
-            if entry:
-                return {
-                    "mode": str(controller.get("credential_mode", "mechanical_key")).strip().lower() or "mechanical_key",
-                    "entry": entry,
-                    "reason": "credential",
-                }
-
-        if str(controller.get("credential_mode", "")).strip().lower() == "biometric":
-            holder = _controller_holder_for_actor(controller, eid)
-            if holder and _int_or_default(holder.get("credential_tier"), 0) >= required_tier:
-                return {
-                    "mode": "biometric",
-                    "entry": None,
-                    "reason": "biometric_authorization",
-                }
-        return None
-
-    def _panel_intrusion_profile(self, controller):
-        mode = str((controller or {}).get("credential_mode", "") or "").strip().lower()
-        if mode == "badge":
-            return {
-                "mode": "badge_spoof",
-                "label": "badge spoof",
-                "method": "badge_reader_spoof",
-                "duration_ticks": 84,
-                "required_delta": -0.85,
-            }
-        if mode == "biometric":
-            return {
-                "mode": "biometric_jam",
-                "label": "biometric jam",
-                "method": "biometric_jam",
-                "duration_ticks": 60,
-                "required_delta": -0.55,
-            }
-
-        controller_kind = str((controller or {}).get("kind", "") or "").strip().lower()
-        if controller_kind == "owner_schedule":
-            return {
-                "mode": "schedule_latch",
-                "label": "schedule latch",
-                "method": "schedule_latch",
-                "duration_ticks": 90,
-                "required_delta": -0.7,
-                "tool_context": "schedule_controller",
-            }
-        if controller_kind == "auto_timer":
-            return {
-                "mode": "relay_latch",
-                "label": "relay latch",
-                "method": "relay_latch",
-                "duration_ticks": 96,
-                "required_delta": -0.8,
-                "tool_context": "relay_controller",
-            }
-        return None
-
-    def _attempt_access_panel_intrusion(self, eid, panel_prop, target_prop, controller):
-        profile = self._panel_intrusion_profile(controller)
-        if profile is None or not isinstance(target_prop, dict) or not isinstance(panel_prop, dict):
-            return None
-
-        entry = _property_focus_position(target_prop)
-        if entry is None:
-            return {
-                "success": False,
-                "reason": "offline",
-                "profile": profile,
-            }
-
-        base_context = _access_tool_context_for(self.sim, target_prop)
-        context = str(profile.get("tool_context", "") or "").strip().lower() or base_context
-        tool_terms = _access_tool_terms_for_actor(self.sim, eid, target_prop, context=context)
-        score = _access_override_score_for_actor(self.sim, eid, tool_terms=tool_terms)
-        required = max(
-            1.0,
-            _lock_override_required_for_prop(self.sim, target_prop, tool_terms=tool_terms)
-            + float(profile.get("required_delta", 0.0)),
-        )
-        if not tool_terms.get("enabled") and score + 1.5 < required:
-            return None
-
-        method = str(profile.get("method", profile["mode"])).strip().lower() or profile["mode"]
-        _emit_property_lock_tamper_event(
-            self.sim,
-            eid,
-            target_prop,
-            x=int(panel_prop.get("x", entry[0])),
-            y=int(panel_prop.get("y", entry[1])),
-            z=int(panel_prop.get("z", entry[2])),
-            method=method,
-        )
-        attempt = _resolve_access_skill_check(
-            self.sim,
-            eid=eid,
-            prop=target_prop,
-            context=context,
-            channel="panel_intrusion",
-            score=score,
-            required=required,
-            tool_terms=tool_terms,
-            allow_fumble=True,
-        )
-        if not attempt["success"]:
-            _maybe_damage_access_tool(
-                self.sim,
-                eid,
-                tool_terms,
-                prop=target_prop,
-                score=attempt["score"],
-                required=attempt["required"],
-                context=context,
-                channel="panel_intrusion",
-                fumbled=attempt["fumbled"],
-            )
-            return {
-                "success": False,
-                "reason": "panel_intrusion_fumble" if attempt["fumbled"] else "panel_intrusion_failed",
-                "profile": profile,
-                "method": method,
-            }
-
-        _apply_controller_intrusion(
-            target_prop,
-            mode=profile["mode"],
-            tick=self.sim.tick,
-            duration=profile["duration_ticks"],
-            actor_eid=eid if profile["mode"] == "badge_spoof" else None,
-            source_item_id=tool_terms.get("selected_item_id", ""),
-            method=method,
-        )
-        metadata = _property_metadata(target_prop)
-        metadata["property_locked"] = False
-        metadata["property_override_tick"] = int(self.sim.tick)
-        metadata["property_override_method"] = method
-        intrusion = _controller_intrusion_state(self.sim, target_prop)
-        return {
-            "success": True,
-            "reason": method,
-            "profile": profile,
-            "method": method,
-            "intrusion": intrusion,
-            "source_item_id": str(tool_terms.get("selected_item_id", "") or "").strip().lower(),
-        }
-
-    def _handle_access_panel_interaction(self, eid, panel_prop):
-        target_prop = _infrastructure_target_property(self.sim, panel_prop)
-        if not target_prop or str(target_prop.get("kind", "")).strip().lower() != "building":
-            self.sim.emit(Event(
-                "access_panel_blocked",
-                eid=eid,
-                property_id=panel_prop.get("id"),
-                property_name=str(panel_prop.get("name", panel_prop.get("id", "access panel"))).strip() or "access panel",
-                reason="offline",
-            ))
-            return
-
-        controller = _property_access_controller(self.sim, target_prop)
-        entry = _property_focus_position(target_prop)
-        lock_state = property_lock_state(target_prop)
-        credential = self._property_credential_access_for(eid, target_prop)
-        intrusion_state = _controller_intrusion_state(self.sim, target_prop)
-
-        if credential:
-            metadata = _property_metadata(target_prop)
-            metadata["property_locked"] = False
-            metadata["property_override_tick"] = int(self.sim.tick)
-            metadata["property_override_method"] = "authorized_panel_access"
-            self._emit_access_panel_event(
-                "access_panel_used",
-                eid=eid,
-                panel_prop=panel_prop,
-                target_prop=target_prop,
-                controller=controller,
-                outcome="authorized_open" if lock_state["locked"] or controller.get("open_now") is False else "status",
-                method=str(credential.get("reason", "credential")).strip().lower() or "credential",
-                intrusion_mode=str(intrusion_state.get("mode", "") or "").strip().lower(),
-                intrusion_label=str(intrusion_state.get("label", "") or "").strip(),
-                intrusion_remaining_ticks=int(intrusion_state.get("remaining_ticks", 0) or 0),
-            )
-            return
-
-        if not lock_state["locked"] and controller.get("open_now") is not False:
-            self._emit_access_panel_event(
-                "access_panel_used",
-                eid=eid,
-                panel_prop=panel_prop,
-                target_prop=target_prop,
-                controller=controller,
-                outcome="status",
-                method="status_check",
-                intrusion_mode=str(intrusion_state.get("mode", "") or "").strip().lower(),
-                intrusion_label=str(intrusion_state.get("label", "") or "").strip(),
-                intrusion_remaining_ticks=int(intrusion_state.get("remaining_ticks", 0) or 0),
-            )
-            return
-
-        if entry is None:
-            self._emit_access_panel_event(
-                "access_panel_blocked",
-                eid=eid,
-                panel_prop=panel_prop,
-                target_prop=target_prop,
-                controller=controller,
-                reason="offline",
-            )
-            return
-
-        intrusion_attempt = self._attempt_access_panel_intrusion(eid, panel_prop, target_prop, controller)
-        if intrusion_attempt is not None:
-            if not intrusion_attempt.get("success"):
-                profile = intrusion_attempt.get("profile") or {}
-                self._emit_access_panel_event(
-                    "access_panel_blocked",
-                    eid=eid,
-                    panel_prop=panel_prop,
-                    target_prop=target_prop,
-                    controller=controller,
-                    reason=str(intrusion_attempt.get("reason", "panel_intrusion_failed")).strip().lower() or "panel_intrusion_failed",
-                    intrusion_mode=str(profile.get("mode", "") or "").strip().lower(),
-                    intrusion_label=str(profile.get("label", "") or "").strip(),
-                    method=str(intrusion_attempt.get("method", profile.get("method", "")) or "").strip().lower(),
-                )
-                return
-
-            intrusion = intrusion_attempt.get("intrusion") or {}
-            controller = _property_access_controller(self.sim, target_prop)
-            self._emit_access_panel_event(
-                "access_panel_used",
-                eid=eid,
-                panel_prop=panel_prop,
-                target_prop=target_prop,
-                controller=controller,
-                outcome="intrusion_open",
-                method=str(intrusion_attempt.get("method", intrusion.get("method", "")) or "").strip().lower(),
-                intrusion_mode=str(intrusion.get("mode", "") or "").strip().lower(),
-                intrusion_label=str(intrusion.get("label", "") or "").strip(),
-                intrusion_remaining_ticks=int(intrusion.get("remaining_ticks", 0) or 0),
-                source_item_id=str(intrusion_attempt.get("source_item_id", "") or "").strip().lower(),
-            )
-            return
-
-        success, reason = _attempt_locked_property_entry_with_sim(
-            self.sim,
-            eid,
-            target_prop,
-            target_x=entry[0],
-            target_y=entry[1],
-            target_z=entry[2],
-        )
-        if not success:
-            self._emit_access_panel_event(
-                "access_panel_blocked",
-                eid=eid,
-                panel_prop=panel_prop,
-                target_prop=target_prop,
-                controller=controller,
-                reason=reason,
-            )
-            return
-
-        self._emit_access_panel_event(
-            "access_panel_used",
-            eid=eid,
-            panel_prop=panel_prop,
-            target_prop=target_prop,
-            controller=controller,
-            outcome="override_open",
-            method=reason,
-        )
-
-    def on_property_interact(self, event):
-        eid = event.data.get("eid")
-        if eid != self.player_eid:
-            return
-        prop = self.sim.properties.get(event.data.get("property_id"))
-        if _property_infrastructure_role(prop) != "access_panel":
-            return
-        event.data["handled"] = True
-        self._handle_access_panel_interaction(eid, prop)
-
-    def _owned_property_lock_tier(self, prop):
-        access_level = _property_access_level(prop)
-        metadata = _property_metadata(prop)
-        security_features = metadata.get("security_features", ())
-        security_bonus = 0
-        if isinstance(security_features, (list, tuple, set)):
-            security_bonus = min(2, len([feature for feature in security_features if str(feature).strip()]))
-        base = 2 if access_level == "protected" else 3
-        return max(1, min(5, base + security_bonus))
-
-    def _sync_access_controllers(self, hour=None):
-        if hour is None:
-            hour = _world_hour(self.sim)
-        for prop in list(self.sim.properties.values()):
-            if str(prop.get("kind", "")).strip().lower() != "building":
-                continue
-            controller = _sync_property_access_controller(self.sim, prop, hour=hour)
-            self._ensure_access_panel(prop, controller)
-            self._ensure_service_terminal(prop)
-            self._sync_property_doors(prop, controller, emit_closing_warning=True)
-
-    def _sync_intrusion_properties(self, hour=None):
-        if hour is None:
-            hour = _world_hour(self.sim)
-        for prop in list(self.sim.properties.values()):
-            if str(prop.get("kind", "")).strip().lower() != "building":
-                continue
-            metadata = _property_metadata(prop)
-            if not isinstance(metadata, dict):
-                continue
-            if "controller_intrusion_mode" not in metadata and "controller_intrusion_until_tick" not in metadata:
-                continue
-
-            previous_holders = tuple(metadata.get("access_authorized_holders", ()))
-            controller = _sync_property_access_controller(self.sim, prop, hour=hour)
-            self._ensure_access_panel(prop, controller)
-            self._ensure_service_terminal(prop)
-
-            owner_eid = prop.get("owner_eid")
-            lock_if_controlled = bool(controller.get("managed_lock") and controller.get("open_now") is not True)
-            if owner_eid is not None and not controller.get("managed_lock"):
-                lock_if_controlled = True
-            ensure_property_lock(
-                prop,
-                locked=lock_if_controlled,
-                lock_tier=self._owned_property_lock_tier(prop),
-                key_label=str(prop.get("name", prop.get("id", "Property"))).strip() or "Property",
-            )
-            credential_state = self._sync_property_credentials(
-                prop,
-                controller,
-                previous_holders=previous_holders,
-            )
-            if lock_if_controlled and owner_eid is not None and not credential_state["authorized_access"]:
-                metadata["property_locked"] = False
-            self._sync_property_doors(prop, controller)
-
-    def _sync_property_credentials(self, prop, controller, *, previous_holders=()):
-        if not isinstance(prop, dict):
-            return {
-                "issued_any": False,
-                "created_any": False,
-                "authorized_access": False,
-            }
-
-        previous_map = {}
-        if isinstance(previous_holders, (list, tuple)):
-            for holder in previous_holders:
-                if not isinstance(holder, dict):
-                    continue
-                holder_eid = holder.get("eid")
-                if holder_eid is None:
-                    continue
-                try:
-                    previous_map[int(holder_eid)] = holder
-                except (TypeError, ValueError):
-                    continue
-
-        current_map = {}
-        for holder in controller.get("authorized_holders", ()):
-            if not isinstance(holder, dict):
-                continue
-            holder_eid = holder.get("eid")
-            if holder_eid is None:
-                continue
-            try:
-                current_map[int(holder_eid)] = holder
-            except (TypeError, ValueError):
-                continue
-
-        for holder_eid, previous in previous_map.items():
-            current = current_map.get(holder_eid)
-            previous_kind = str(previous.get("credential_kind", "mechanical_key")).strip().lower()
-            previous_tier = _int_or_default(previous.get("credential_tier"), 1)
-            if current:
-                current_kind = str(current.get("credential_kind", "mechanical_key")).strip().lower()
-                current_tier = _int_or_default(current.get("credential_tier"), 1)
-                if current_kind == previous_kind and current_tier == previous_tier:
-                    continue
-            remove_actor_property_credentials(self.sim, holder_eid, prop)
-
-        issued_any = False
-        created_any = False
-        direct_authorized = False
-        owner_tag = str(prop.get("owner_tag", "")).strip().lower() or "npc"
-        for holder_eid, holder in current_map.items():
-            credential_kind = str(holder.get("credential_kind", "mechanical_key")).strip().lower() or "mechanical_key"
-            credential_tier = _int_or_default(holder.get("credential_tier"), 1)
-            holder_role = str(holder.get("role", "staff")).strip().lower() or "staff"
-            if credential_kind == "biometric_authorization":
-                direct_authorized = True
-                continue
-            issued, _instance_id, created = ensure_actor_has_property_credential(
-                self.sim,
-                holder_eid,
-                prop,
-                owner_tag=owner_tag,
-                credential_kind=credential_kind,
-                holder_role=holder_role,
-                credential_tier=credential_tier,
-            )
-            issued_any = issued_any or bool(issued)
-            created_any = created_any or bool(created)
-
-        return {
-            "issued_any": bool(issued_any),
-            "created_any": bool(created_any),
-            "authorized_access": bool(issued_any or direct_authorized or not current_map),
-        }
-
-    def _iter_property_doors(self, prop):
-        for aperture in _property_apertures(prop):
-            kind = str(aperture.get("kind", "door") or "door").strip().lower() or "door"
-            if _is_operable_door_aperture(kind):
-                yield aperture
-
-    def _default_door_open_state(self, prop, controller, *, aperture=None):
-        kind = str((aperture or {}).get("kind", "door") or "door").strip().lower() or "door"
-        ordinary = bool((aperture or {}).get("ordinary", kind == "door"))
-        if _property_access_level(prop) == "public" and kind == "door" and ordinary:
-            return controller.get("open_now") is not False
-        return False
-
-    def _closing_warning_speaker(self, prop, controller):
-        if not isinstance(prop, dict):
-            return None
-
-        positions = self.sim.ecs.get(Position)
-        focus = _property_focus_position(prop)
-        focus_x = int(focus[0]) if focus else int(prop.get("x", 0))
-        focus_y = int(focus[1]) if focus else int(prop.get("y", 0))
-        focus_z = int(focus[2]) if focus else int(prop.get("z", 0))
-        prop_id = str(prop.get("id", "")).strip()
-
-        candidates = []
-        for holder in tuple(controller.get("authorized_holders", ()) or ()):
-            if not isinstance(holder, dict):
-                continue
-            holder_eid = holder.get("eid")
-            if holder_eid is None:
-                continue
-            pos = positions.get(holder_eid)
-            if not pos or int(pos.z) != focus_z:
-                continue
-            if _entity_is_downed(self.sim, holder_eid):
-                continue
-
-            holder_cover = _property_covering(self.sim, pos.x, pos.y, pos.z)
-            nearby = _manhattan(int(pos.x), int(pos.y), focus_x, focus_y) <= 6
-            same_property = bool(holder_cover and str(holder_cover.get("id", "")).strip() == prop_id)
-            if not same_property and not nearby:
-                continue
-
-            role = str(holder.get("role", "staff") or "staff").strip().lower() or "staff"
-            role_rank = 0 if role == "owner" else 1 if role == "manager" else 2
-            distance = _manhattan(int(pos.x), int(pos.y), focus_x, focus_y)
-            candidates.append((role_rank, distance, int(holder_eid)))
-
-        if not candidates:
-            return None
-
-        candidates.sort()
-        return candidates[0][2]
-
-    def _sync_property_doors(self, prop, controller, *, emit_closing_warning=False):
-        if not isinstance(prop, dict):
-            return
-
-        auto_managed = _property_access_level(prop) == "public"
-        default_open = bool(self._default_door_open_state(prop, controller))
-        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
-        player_cover = (
-            _property_covering(self.sim, player_pos.x, player_pos.y, player_pos.z)
-            if player_pos
-            else None
-        )
-        player_inside = bool(player_cover and player_cover.get("id") == prop.get("id"))
-        warned = False
-
-        for aperture in self._iter_property_doors(prop):
-            ax = int(aperture.get("x", prop.get("x", 0)))
-            ay = int(aperture.get("y", prop.get("y", 0)))
-            az = int(aperture.get("z", prop.get("z", 0)))
-            kind = str(aperture.get("kind", "door") or "door").strip().lower() or "door"
-            ordinary = bool(aperture.get("ordinary", kind == "door"))
-            existing = self.sim.door_state_at(ax, ay, az)
-            default_open = bool(self._default_door_open_state(prop, controller, aperture=aperture))
-            previous_open = bool(existing.get("open", default_open)) if isinstance(existing, dict) else bool(default_open)
-            previous_auto = bool(existing.get("auto_managed")) if isinstance(existing, dict) else False
-
-            if auto_managed or existing is None or previous_auto != auto_managed or "open" not in existing:
-                desired_open = bool(default_open)
-            else:
-                desired_open = bool(existing.get("open", False))
-
-            if not desired_open and _door_tile_is_occupied(self.sim, ax, ay, az):
-                desired_open = True
-
-            self.sim.set_door_state(
-                ax,
-                ay,
-                az,
-                open=desired_open,
-                kind=kind,
-                ordinary=ordinary,
-                property_id=prop.get("id"),
-                auto_managed=auto_managed,
-            )
-            self.sim.apply_door_state(ax, ay, az)
-
-            if emit_closing_warning and player_inside and previous_open and not desired_open:
-                warned = True
-
-        if warned:
-            self.sim.emit(Event(
-                "property_closing_time_warning",
-                eid=self.player_eid,
-                property_id=prop.get("id"),
-                property_name=str(prop.get("name", prop.get("id", "property"))).strip() or "property",
-                speaker_eid=self._closing_warning_speaker(prop, controller),
-            ))
-
-    def _sync_from_registry(self):
-        portfolios = self.sim.ecs.get(PropertyPortfolio)
-        knowledges = self.sim.ecs.get(PropertyKnowledge)
-        assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
-        current_hour = _world_hour(self.sim)
-
-        for portfolio in portfolios.values():
-            portfolio.owned_property_ids.clear()
-
-        if assets:
-            assets.owned_property_ids.clear()
-
-        for property_id, prop in list(self.sim.properties.items()):
-            owner_eid = prop.get("owner_eid")
-            owner_tag = prop.get("owner_tag")
-            if str(prop.get("kind", "")).strip().lower() == "building":
-                metadata = _property_metadata(prop)
-                previous_holders = tuple(metadata.get("access_authorized_holders", ())) if isinstance(metadata, dict) else ()
-                controller = _sync_property_access_controller(self.sim, prop, hour=current_hour)
-                self._ensure_access_panel(prop, controller)
-                self._ensure_service_terminal(prop)
-                lock_if_controlled = bool(controller.get("managed_lock") and controller.get("open_now") is not True)
-                if owner_eid is not None and not controller.get("managed_lock"):
-                    lock_if_controlled = True
-                ensure_property_lock(
-                    prop,
-                    locked=lock_if_controlled,
-                    lock_tier=self._owned_property_lock_tier(prop),
-                    key_label=str(prop.get("name", prop.get("id", "Property"))).strip() or "Property",
-                )
-                credential_state = self._sync_property_credentials(
-                    prop,
-                    controller,
-                    previous_holders=previous_holders,
-                )
-                if lock_if_controlled and owner_eid is not None and not credential_state["authorized_access"]:
-                    metadata = prop.get("metadata")
-                    if isinstance(metadata, dict):
-                        metadata["property_locked"] = False
-                self._sync_property_doors(prop, controller)
-
-            if owner_eid is not None:
-                owner_portfolio = portfolios.get(owner_eid)
-                if owner_portfolio:
-                    owner_portfolio.owned_property_ids.add(property_id)
-
-                owner_knowledge = knowledges.get(owner_eid)
-                if owner_knowledge:
-                    owner_knowledge.remember(
-                        property_id,
-                        owner_eid=owner_eid,
-                        owner_tag=owner_tag,
-                        confidence=1.0,
-                        tick=self.sim.tick,
-                        anchored=True,
-                        anchor_kind="owned",
-                    )
-
-            if assets and owner_eid == self.player_eid:
-                assets.owned_property_ids.add(property_id)
-
-    def on_property_owner_changed(self, event):
-        old_owner_eid = event.data.get("old_owner_eid")
-        property_id = event.data.get("property_id")
-        prop = self.sim.properties.get(property_id)
-        if old_owner_eid is not None and isinstance(prop, dict):
-            remove_actor_property_credentials(self.sim, old_owner_eid, prop)
-        self._sync_from_registry()
-        self.sim.property_registry_dirty = False
-        self.last_controller_hour = _world_hour(self.sim)
-
-    def update(self):
-        current_hour = _world_hour(self.sim)
-        registry_dirty = bool(getattr(self.sim, "property_registry_dirty", False))
-        if not self.initialized or registry_dirty:
-            self._sync_from_registry()
-            self.sim.property_registry_dirty = False
-            self.last_controller_hour = current_hour
-            self.initialized = True
-            return
-
-        if current_hour != self.last_controller_hour:
-            self._sync_access_controllers(hour=current_hour)
-            self.last_controller_hour = current_hour
-        else:
-            self._sync_intrusion_properties(hour=current_hour)
 
 
 class QuestSystem(System):
@@ -11519,10 +9021,56 @@ class NPCInteractionSystem(System):
         "seeking_social": "looking for company",
         "seeking_safety": "keeping their distance",
     }
-    ROOT_TOPICS = {"name", "job", "local", "opportunities", "attention", "contacts", "trade", "bye", "purpose", "apologize", "leave"}
+    ROOT_TOPICS = {"name", "job", "local", "opportunities", "attention", "contacts", "hire", "fire", "trade", "bye", "purpose", "apologize", "leave"}
     MISSTEP_TOPICS = ("weird", "pry", "insult")
     MENU_REPEAT_ROW_BUDGET = 3
     REPEAT_PRESSURE_SKIP_TOPICS = {"bye", "trade", "purpose", "apologize", "leave"}
+    SERVICE_LOCATOR_TOPICS = {
+        "service_fuel": {
+            "services": ("fuel",),
+            "service_label": "fuel",
+            "offer_label": "fuel",
+            "lead_kind": "service_fuel",
+        },
+        "service_banking": {
+            "services": ("banking",),
+            "service_label": "bank",
+            "offer_label": "banking",
+            "lead_kind": "service_banking",
+        },
+        "service_insurance": {
+            "services": ("insurance",),
+            "service_label": "insurance",
+            "offer_label": "insurance",
+            "lead_kind": "service_insurance",
+        },
+        "service_rest": {
+            "services": ("rest", "shelter"),
+            "service_label": "lodging",
+            "offer_label": "lodging",
+            "lead_kind": "service_rest",
+        },
+        "service_intel": {
+            "services": ("intel",),
+            "service_label": "intel",
+            "offer_label": "intel",
+            "lead_kind": "service_intel",
+        },
+        "service_trade": {
+            "services": (),
+            "service_label": "shopping spot",
+            "offer_label": "shopping",
+            "lead_kind": "service_trade",
+            "storefront": True,
+        },
+        "service_gaming": {
+            "services": tuple(CASINO_GAME_SERVICE_IDS),
+            "service_label": "gaming spot",
+            "offer_label": "gaming",
+            "lead_kind": "service_gaming",
+            "archetypes": ("casino", "gaming_hall"),
+        },
+    }
 
     def __init__(self, sim, player_eid, repeat_cooldown=18):
         super().__init__(sim)
@@ -12182,6 +9730,81 @@ class NPCInteractionSystem(System):
         index = max(0, tone_order.index(tone_key) - severity)
         return tone_order[index]
 
+    def _dialogue_pressure_role(self, context):
+        role_id = str(context.get("role_id", "") or "").strip().lower()
+        career_text = str(context.get("career_text", "") or "").strip().lower()
+        organization_kind = str(context.get("organization_kind", "") or "").strip().lower()
+        service_summary = str(context.get("service_summary", "") or "").strip().lower()
+        trade_available = bool(context.get("trade_available"))
+        workplace_prop = context.get("workplace_prop")
+        home_prop = context.get("home_prop")
+        current_prop = context.get("current_prop")
+
+        if role_id == "guard" or "guard" in career_text or "security" in career_text:
+            return "guard"
+        if bool(context.get("is_rival_operator")):
+            return "chaotic"
+
+        chaotic_terms = (
+            "gang",
+            "gang_member",
+            "criminal",
+            "thug",
+            "raider",
+            "bandit",
+            "outlaw",
+            "smuggler",
+            "runner",
+            "hustler",
+            "scavenger",
+            "thief",
+            "crook",
+        )
+        if (
+            role_id in chaotic_terms
+            or any(term in career_text for term in chaotic_terms)
+            or organization_kind in {"gang", "crew", "criminal"}
+        ):
+            return "chaotic"
+
+        merchant_terms = (
+            "shopkeeper",
+            "clerk",
+            "cashier",
+            "vendor",
+            "merchant",
+            "broker",
+            "dealer",
+            "bartender",
+            "pit boss",
+        )
+        if trade_available or "trade" in service_summary or any(term in career_text for term in merchant_terms):
+            return "merchant"
+
+        if role_id in {"resident", "neighbor"}:
+            return "neighbor"
+
+        home_id = str((home_prop or {}).get("id", "")).strip() if isinstance(home_prop, dict) else ""
+        current_id = str((current_prop or {}).get("id", "")).strip() if isinstance(current_prop, dict) else ""
+        if home_id and current_id and home_id == current_id and not workplace_prop:
+            return "neighbor"
+
+        if workplace_prop:
+            return "worker"
+        if home_prop:
+            return "neighbor"
+        return "local"
+
+    def _pressure_contact_bank(self, base_bank_id, context):
+        role = str(context.get("pressure_role", "") or self._dialogue_pressure_role(context)).strip().lower()
+        if base_bank_id == "trade_yes_caution":
+            if role in {"merchant", "chaotic"}:
+                return f"{base_bank_id}_{role}"
+            return base_bank_id
+        if role in {"guard", "worker", "merchant", "neighbor", "chaotic"}:
+            return f"{base_bank_id}_{role}"
+        return base_bank_id
+
     def _pressure_contact_threshold(self, context, kind):
         kind = str(kind or "contact").strip().lower() or "contact"
         base = {
@@ -12190,6 +9813,7 @@ class NPCInteractionSystem(System):
             "vouch": 0.5,
         }.get(kind, 0.42)
         pressure_tier = str(context.get("pressure_tier", "low")).strip().lower() or "low"
+        pressure_role = str(context.get("pressure_role", "") or self._dialogue_pressure_role(context)).strip().lower() or "local"
         extra = 0.0
         if pressure_tier == "medium":
             extra += {
@@ -12207,6 +9831,15 @@ class NPCInteractionSystem(System):
             extra += 0.05
         if context.get("intro_source_name"):
             extra = max(0.0, extra - 0.04)
+        extra += {
+            "guard": {"contact": 0.08, "introduction": 0.1, "vouch": 0.14},
+            "worker": {"contact": 0.05, "introduction": 0.07, "vouch": 0.1},
+            "merchant": {"contact": 0.03, "introduction": 0.04, "vouch": 0.03},
+            "neighbor": {"contact": -0.04, "introduction": -0.02, "vouch": 0.0},
+            "chaotic": {"contact": -0.08, "introduction": -0.06, "vouch": -0.1},
+        }.get(pressure_role, {}).get(kind, 0.0)
+        if pressure_role == "worker" and context.get("workplace_here"):
+            extra += 0.02
         return max(0.0, min(0.96, base + extra))
 
     def _pressure_contact_blocked(self, context, kind):
@@ -12222,6 +9855,29 @@ class NPCInteractionSystem(System):
         kind = str(kind or "contact").strip().lower() or "contact"
         pressure_tier = str(context.get("pressure_tier", "low")).strip().lower() or "low"
         standing = float(context.get("contact_standing", 0.0))
+        pressure_role = str(context.get("pressure_role", "") or self._dialogue_pressure_role(context)).strip().lower() or "local"
+        if pressure_role == "guard":
+            return pressure_tier in {"medium", "high"}
+        if pressure_role == "worker":
+            if pressure_tier == "high":
+                return True
+            if pressure_tier == "medium" and standing < 0.86:
+                return True
+        elif pressure_role == "merchant":
+            if kind == "trade" and pressure_tier in {"medium", "high"}:
+                return True
+            if pressure_tier == "high":
+                return True
+            if pressure_tier == "medium" and standing < 0.68:
+                return True
+        elif pressure_role == "neighbor":
+            if pressure_tier == "high" and kind in {"vouch", "introduction"}:
+                return True
+            if pressure_tier == "medium" and kind == "vouch" and standing < 0.7:
+                return True
+        elif pressure_role == "chaotic":
+            if pressure_tier == "high" and standing < 0.46 and kind != "contact":
+                return True
         if pressure_tier == "high":
             return True
         if pressure_tier == "medium" and standing < 0.74:
@@ -12377,6 +10033,93 @@ class NPCInteractionSystem(System):
     def _conversation_rapport(self):
         (perception, conversation, streetwise), _ = self._player_social_axes()
         return ((conversation * 0.55) + (streetwise * 0.25) + (perception * 0.2)) / 10.0
+
+    def _dialogue_pressure_intel_quality(self, context, topic_id=""):
+        context = context if isinstance(context, dict) else {}
+        topic_id = str(topic_id or "").strip().lower()
+        pressure_tier = str(context.get("pressure_tier", "low")).strip().lower() or "low"
+        pressure_role = str(
+            context.get("pressure_role", "") or self._dialogue_pressure_role(context)
+        ).strip().lower() or "local"
+        guarded = bool(context.get("guarded"))
+        recent_offense = context.get("recent_offense")
+        social_standing = max(0.0, min(1.0, float(context.get("social_standing", 0.0) or 0.0)))
+        rapport = max(0.0, min(1.0, float(context.get("rapport", 0.0) or 0.0)))
+        (perception, conversation, streetwise), _ = self._player_social_axes()
+        social_score = max(
+            0.0,
+            min(
+                1.0,
+                (
+                    (float(conversation) * 0.42)
+                    + (float(perception) * 0.28)
+                    + (float(streetwise) * 0.30)
+                ) / 10.0,
+            ),
+        )
+        prep_terms = context.get("dialogue_prep_terms") if isinstance(context.get("dialogue_prep_terms"), dict) else {}
+        prep_score = max(0.0, min(1.0, float(prep_terms.get("score", 0.0) or 0.0) / 10.0))
+        base_detail = max(0, _int_or_default(prep_terms.get("detail_level"), 0))
+
+        prep_topics = {"hours", "security", "access", "entry", "keyholder"}
+        opportunity_topics = {"local", "detail", "opportunities", "objective", "angle", "risk"}
+        is_prep = topic_id in prep_topics
+        is_opportunity = topic_id in opportunity_topics
+
+        pressure = {
+            "low": 0.0,
+            "medium": 0.2,
+            "high": 0.38,
+        }.get(pressure_tier, 0.0)
+        pressure += {
+            "guard": 0.1,
+            "worker": 0.06,
+            "merchant": 0.03,
+            "neighbor": 0.01,
+            "chaotic": -0.03,
+        }.get(pressure_role, 0.0)
+        if is_prep and pressure_role in {"guard", "worker"}:
+            pressure += 0.05
+        if is_opportunity:
+            pressure += 0.04
+        if guarded:
+            pressure += 0.18
+        if recent_offense:
+            pressure += min(0.16, float(recent_offense.get("strength", 0.0) or 0.0) * 0.22)
+
+        cutthrough = 0.0
+        cutthrough += social_standing * 0.22
+        cutthrough += rapport * 0.08
+        cutthrough += social_score * 0.22
+        cutthrough += prep_score * (0.18 if is_prep else 0.1)
+        if base_detail >= 2 and is_prep:
+            cutthrough += 0.05
+
+        guard_score = pressure - cutthrough
+        if guard_score <= 0.04:
+            mode = "clear"
+        elif guard_score <= 0.16:
+            mode = "guarded"
+        else:
+            mode = "vague"
+
+        detail_level = base_detail
+        if mode == "guarded":
+            detail_level = min(detail_level, 1)
+        elif mode == "vague":
+            detail_level = 0
+
+        confidence_mult = {
+            "clear": 1.0,
+            "guarded": 0.82,
+            "vague": 0.64,
+        }[mode]
+        return {
+            "mode": mode,
+            "confidence_mult": confidence_mult,
+            "detail_level": detail_level,
+            "base_detail_level": base_detail,
+        }
 
     def _player_current_chunk(self):
         pos = self.sim.ecs.get(Position).get(self.player_eid)
@@ -12706,7 +10449,7 @@ class NPCInteractionSystem(System):
                 pass
         return None
 
-    def _learn_dialogue_opportunity(self, context, *, source="dialogue"):
+    def _learn_dialogue_opportunity(self, context, *, source="dialogue", confidence_mult=1.0):
         if not isinstance(context, dict):
             return
         opportunity_id = int(context.get("primary_opportunity_id", 0) or 0)
@@ -12718,6 +10461,11 @@ class NPCInteractionSystem(System):
             truthful = bool(context.get("rival_dialogue_truthful"))
             confidence = 0.74 if truthful else 0.42
             source_text = f"{source_text}_{'truth' if truthful else 'bluff'}"
+        try:
+            confidence *= float(confidence_mult)
+        except (TypeError, ValueError):
+            pass
+        confidence = max(0.24, min(0.96, confidence))
         reveal_opportunity_to_observer(
             self.sim,
             self.player_eid,
@@ -12893,6 +10641,241 @@ class NPCInteractionSystem(System):
             ordered.append(str(bit).strip())
         return ", ".join(ordered)
 
+    def _service_locator_spec(self, topic_id):
+        return self.SERVICE_LOCATOR_TOPICS.get(str(topic_id or "").strip().lower())
+
+    def _service_locator_service_keys(self, spec):
+        if not isinstance(spec, dict):
+            return set()
+        return {
+            str(service).strip().lower()
+            for service in tuple(spec.get("services", ()) or ())
+            if str(service).strip()
+        }
+
+    def _service_locator_archetypes(self, spec):
+        if not isinstance(spec, dict):
+            return set()
+        return {
+            str(archetype).strip().lower()
+            for archetype in tuple(spec.get("archetypes", ()) or ())
+            if str(archetype).strip()
+        }
+
+    def _service_locator_matches(self, spec, *, services=(), archetype="", storefront=False):
+        service_keys = self._service_locator_service_keys(spec)
+        resolved_services = {
+            str(service).strip().lower()
+            for service in tuple(services or ())
+            if str(service).strip()
+        }
+        if service_keys and (resolved_services & service_keys):
+            return True
+        if bool(spec.get("storefront")) and bool(storefront):
+            return True
+        archetype_key = str(archetype or "").strip().lower()
+        if archetype_key and archetype_key in self._service_locator_archetypes(spec):
+            return True
+        return False
+
+    def _service_locator_rows(self, services, *, radius=6):
+        spec = services if isinstance(services, dict) else {"services": tuple(services or ())}
+        if not self._service_locator_service_keys(spec) and not bool(spec.get("storefront")) and not self._service_locator_archetypes(spec):
+            return ()
+        origin = self._player_current_chunk()
+        if not origin:
+            return ()
+        pos = self.sim.ecs.get(Position).get(self.player_eid)
+        rows = []
+        for prop in self.sim.properties.values():
+            prop_services = tuple(_property_services(prop) or ())
+            archetype = str(_property_metadata(prop).get("archetype", "") or "").strip().lower()
+            if not self._service_locator_matches(
+                spec,
+                services=prop_services,
+                archetype=archetype,
+                storefront=_property_is_storefront(prop),
+            ):
+                continue
+            chunk_coord = self.sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+            chunk_distance = _manhattan(origin[0], origin[1], int(chunk_coord[0]), int(chunk_coord[1]))
+            if chunk_distance > max(0, int(radius)):
+                continue
+            tile_distance = 999
+            if pos and int(prop.get("z", 0)) == pos.z:
+                tile_distance = _manhattan(pos.x, pos.y, int(prop.get("x", 0)), int(prop.get("y", 0)))
+            access = _evaluate_property_access(
+                self.sim,
+                self.player_eid,
+                prop,
+                x=getattr(pos, "x", None),
+                y=getattr(pos, "y", None),
+                z=getattr(pos, "z", None),
+            )
+            rows.append({
+                "prop": prop,
+                "name": str(prop.get("name", prop.get("id", "site"))).strip() or "site",
+                "chunk_coord": (int(chunk_coord[0]), int(chunk_coord[1])),
+                "chunk_distance": int(chunk_distance),
+                "tile_distance": int(tile_distance),
+                "accessible": bool(access.can_use_services),
+                "role_priority": 0 if _property_infrastructure_role(prop) == "service_terminal" else 1,
+            })
+        rows.sort(
+            key=lambda row: (
+                int(row["chunk_distance"]),
+                0 if bool(row["accessible"]) else 1,
+                int(row["tile_distance"]),
+                int(row["role_priority"]),
+                str(row["name"]).lower(),
+            )
+        )
+        return tuple(rows)
+
+    def _service_locator_preview_names(self, services, chunk_coord, *, limit=3):
+        spec = services if isinstance(services, dict) else {"services": tuple(services or ())}
+        if (
+            not self._service_locator_service_keys(spec)
+            and not bool(spec.get("storefront"))
+            and not self._service_locator_archetypes(spec)
+        ) or not chunk_coord:
+            return ()
+        cx, cy = chunk_coord
+        chunk = self.sim.world.get_chunk(int(cx), int(cy))
+        names = []
+
+        for block in chunk.get("blocks", ()):
+            for building in block.get("buildings", ()):
+                archetype = str(building.get("archetype", "")).strip().lower()
+                prop_stub = {"metadata": {"archetype": archetype}} if archetype else {"metadata": {}}
+                services_here = (
+                    list(_finance_services_for_property(prop_stub))
+                    + list(_default_site_services_for_archetype(archetype))
+                    + list(vehicle_services_for_archetype(archetype))
+                )
+                if not self._service_locator_matches(
+                    spec,
+                    services=services_here,
+                    archetype=archetype,
+                    storefront=bool(building.get("is_storefront")),
+                ):
+                    continue
+                label = str(building.get("business_name") or archetype.replace("_", " ").title()).strip()
+                if label:
+                    names.append(label)
+
+        for site in chunk.get("sites", ()):
+            kind = str(site.get("kind", "")).strip().lower()
+            gameplay = site_gameplay_profile(site)
+            prop_stub = {"metadata": {"archetype": kind}} if kind else {"metadata": {}}
+            services_here = (
+                list(_finance_services_for_property(prop_stub))
+                + list(gameplay.get("site_services", ()))
+                + list(vehicle_services_for_archetype(kind))
+            )
+            if not self._service_locator_matches(
+                spec,
+                services=services_here,
+                archetype=kind,
+                storefront=False,
+            ):
+                continue
+            label = str(site.get("name") or kind.replace("_", " ").title()).strip()
+            if label:
+                names.append(label)
+
+        deduped = []
+        seen = set()
+        for name in names:
+            key = str(name).strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(str(name).strip())
+        return tuple(deduped[: max(1, int(limit))])
+
+    def _nearest_service_locator_preview(self, services, *, radius=6, limit=3):
+        origin = self._player_current_chunk()
+        if not origin:
+            return None, ()
+        ox, oy = origin
+        for dist in range(0, max(1, int(radius)) + 1):
+            matches = []
+            for cx in range(int(ox) - dist, int(ox) + dist + 1):
+                for cy in range(int(oy) - dist, int(oy) + dist + 1):
+                    if abs(cx - int(ox)) + abs(cy - int(oy)) != dist:
+                        continue
+                    names = self._service_locator_preview_names(services, (cx, cy), limit=limit)
+                    if names:
+                        matches.append(((int(cx), int(cy)), names))
+            if matches:
+                matches.sort(key=lambda row: (row[0][1], row[0][0]))
+                return matches[0]
+        return None, ()
+
+    def _service_locator_summary(self, context, topic_id):
+        spec = self._service_locator_spec(topic_id)
+        if not isinstance(spec, dict):
+            return {"summary": "", "service_label": "service", "lead_prop": None}
+
+        service_label = str(spec.get("service_label", "service")).strip() or "service"
+        offer_label = str(spec.get("offer_label", service_label)).strip() or service_label
+        rows = list(self._service_locator_rows(spec, radius=6))
+        origin = self._player_current_chunk()
+
+        if rows:
+            best_chunk = tuple(rows[0]["chunk_coord"])
+            names = []
+            seen = set()
+            lead_prop = None
+            for row in rows:
+                if tuple(row["chunk_coord"]) != best_chunk:
+                    continue
+                name = str(row["name"]).strip()
+                key = name.lower()
+                if name and key not in seen:
+                    seen.add(key)
+                    names.append(name)
+                if lead_prop is None:
+                    lead_prop = row["prop"]
+                if len(names) >= 3:
+                    break
+            names_text = _dialogue_human_join(names)
+            if best_chunk == origin:
+                return {
+                    "summary": f"In this chunk, {names_text} can handle {offer_label}.",
+                    "service_label": service_label,
+                    "lead_prop": lead_prop,
+                }
+            distance = _manhattan(origin[0], origin[1], best_chunk[0], best_chunk[1])
+            direction = self._dialogue_chunk_direction(origin, best_chunk)
+            distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
+            return {
+                "summary": f"Nearest {service_label} I know is {distance_phrase} at {names_text}.",
+                "service_label": service_label,
+                "lead_prop": lead_prop,
+            }
+
+        chunk_coord, names = self._nearest_service_locator_preview(spec, radius=6, limit=3)
+        if chunk_coord and names:
+            names_text = _dialogue_human_join(names)
+            if tuple(chunk_coord) == origin:
+                return {
+                    "summary": f"In this chunk, {names_text} can handle {offer_label}.",
+                    "service_label": service_label,
+                    "lead_prop": None,
+                }
+            distance = _manhattan(origin[0], origin[1], int(chunk_coord[0]), int(chunk_coord[1]))
+            direction = self._dialogue_chunk_direction(origin, chunk_coord)
+            distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
+            return {
+                "summary": f"Nearest {service_label} I know is {distance_phrase} at {names_text}.",
+                "service_label": service_label,
+                "lead_prop": None,
+            }
+
+        return {"summary": "", "service_label": service_label, "lead_prop": None}
+
     def _trade_context(self, npc_eid, workplace_prop, current_prop):
         player_pos = self.sim.ecs.get(Position).get(self.player_eid)
         if not player_pos:
@@ -12917,6 +10900,264 @@ class NPCInteractionSystem(System):
                 continue
             return {"property_id": prop["id"], "prop": prop, "service": service}
         return None
+
+    def _player_business_staffing_options(self, context):
+        if not isinstance(context, dict):
+            return {"hire": None, "fire": None}
+        if bool(context.get("guarded")) or not bool(context.get("human", True)):
+            return {"hire": None, "fire": None}
+
+        npc_eid = context.get("npc_eid")
+        if npc_eid in {None, self.player_eid}:
+            return {"hire": None, "fire": None}
+
+        fire_record = actor_player_business_employment(self.sim, npc_eid, owner_eid=self.player_eid)
+        fire_option = None
+        if fire_record:
+            fire_prop = fire_record.get("prop")
+            fire_option = {
+                "property_id": str((fire_prop or {}).get("id", "")).strip(),
+                "prop": fire_prop,
+                "business_name": str((fire_prop or {}).get("metadata", {}).get("business_name", "")).strip()
+                or str((fire_prop or {}).get("name", "Business")).strip()
+                or "Business",
+                "role": str(fire_record.get("role", "staff") or "staff").strip().lower() or "staff",
+            }
+
+        hire_option = None
+        occupation = self.sim.ecs.get(Occupation).get(npc_eid)
+        workplace = getattr(occupation, "workplace", None)
+        employed_elsewhere = bool(
+            isinstance(workplace, dict)
+            and str(workplace.get("property_id", "")).strip()
+            and fire_option is None
+        )
+        if not employed_elsewhere and fire_option is None:
+            targets = list(player_business_staffing_targets(self.sim, self.player_eid))
+            if targets:
+                preferred_ids = []
+                for key in ("current_prop", "owner_place", "workplace_prop"):
+                    prop = context.get(key)
+                    property_id = str((prop or {}).get("id", "")).strip() if isinstance(prop, dict) else ""
+                    if property_id and property_id not in preferred_ids:
+                        preferred_ids.append(property_id)
+
+                player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+                npc_pos = self.sim.ecs.get(Position).get(npc_eid)
+                scored = []
+                for target in targets:
+                    prop = target.get("prop")
+                    property_id = str(target.get("property_id", "")).strip()
+                    score = 0
+                    if property_id in preferred_ids:
+                        score += max(40, 140 - (preferred_ids.index(property_id) * 22))
+                    if player_pos is not None:
+                        score += max(0, 12 - _property_distance(player_pos.x, player_pos.y, prop)) * 5
+                    if npc_pos is not None and int(npc_pos.z) == int((prop or {}).get("z", npc_pos.z)):
+                        score += max(0, 10 - _property_distance(npc_pos.x, npc_pos.y, prop)) * 3
+                    score += int(target.get("shortage", 0) or 0) * 18
+                    if str(target.get("open_role", "")).strip().lower() == "manager":
+                        score += 16
+                    if str((target.get("summary") or {}).get("note", "")).strip().lower() == "no staff":
+                        score += 10
+                    scored.append((-score, str(target.get("business_name", "")).lower(), property_id, target))
+
+                if scored:
+                    scored.sort()
+                    best = scored[0][3]
+                    open_roles = tuple(
+                        str(role).strip().lower()
+                        for role in tuple(best.get("open_roles", ()) or ())
+                        if str(role).strip()
+                    )
+                    primary_role = str(best.get("open_role", "staff") or "staff").strip().lower() or "staff"
+                    if not open_roles:
+                        open_roles = (primary_role,)
+                    hire_option = {
+                        "property_id": str(best.get("property_id", "")).strip(),
+                        "prop": best.get("prop"),
+                        "business_name": str(best.get("business_name", "")).strip() or "Business",
+                        "role": primary_role,
+                        "roles": open_roles,
+                    }
+
+        return {
+            "hire": hire_option,
+            "fire": fire_option,
+        }
+
+    def _player_business_hire_decision(self, context, option):
+        if not isinstance(option, dict):
+            return False, "no_opening"
+        if bool(context.get("guarded")):
+            return False, "guarded"
+
+        role_id = str(context.get("role_id", "") or "").strip().lower()
+        career_text = str(context.get("career_text", "") or "").strip().lower()
+        if role_id == "guard" or "guard" in career_text or "security" in career_text:
+            return False, "career_conflict"
+
+        npc_needs = context.get("npc_needs")
+        tone = str(context.get("tone", "neutral") or "neutral").strip().lower()
+        pressure_tier = str(context.get("pressure_tier", "low") or "low").strip().lower()
+        conversation = float(_actor_skill(self.sim, self.player_eid, "conversation", default=5.0))
+        streetwise = float(_actor_skill(self.sim, self.player_eid, "streetwise", default=5.0))
+        social_standing = float(context.get("social_standing", 0.0) or 0.0)
+
+        score = 0.26
+        score += social_standing * 0.38
+        score += (conversation / 10.0) * 0.18
+        score += (streetwise / 10.0) * 0.08
+        if str(option.get("role", "staff")).strip().lower() == "manager" and (
+            "manager" in career_text or "lead" in career_text or "supervisor" in career_text
+        ):
+            score += 0.08
+        if isinstance(context.get("current_prop"), dict) and str(context["current_prop"].get("id", "")).strip() == str(option.get("property_id", "")).strip():
+            score += 0.08
+        if tone == "friendly":
+            score += 0.06
+        elif tone in {"wary", "guarded"}:
+            score -= 0.08
+        if pressure_tier == "high":
+            score -= 0.05
+        elif pressure_tier == "medium":
+            score -= 0.02
+        if npc_needs:
+            if float(getattr(npc_needs, "safety", 100.0)) < 38.0:
+                score -= 0.06
+            if float(getattr(npc_needs, "energy", 100.0)) < 28.0:
+                score -= 0.04
+
+        threshold = 0.5 if str(option.get("role", "staff")).strip().lower() == "staff" else 0.56
+        return score >= threshold, "accepted" if score >= threshold else "declined"
+
+    def _player_business_hire_option_for_role(self, context, role):
+        option = context.get("player_business_hire_option") if isinstance(context, dict) else None
+        if not isinstance(option, dict):
+            return None
+        role_key = str(role or "").strip().lower()
+        available_roles = tuple(
+            str(entry).strip().lower()
+            for entry in tuple(option.get("roles", ()) or ())
+            if str(entry).strip()
+        )
+        if role_key not in {"manager", "staff"}:
+            return None
+        if available_roles and role_key not in available_roles:
+            return None
+        resolved = dict(option)
+        resolved["role"] = role_key
+        resolved["roles"] = available_roles or (role_key,)
+        return resolved
+
+    def _player_business_skill_text(self, skill_ids, *, limit=2):
+        labels = []
+        for skill_id in tuple(skill_ids or ())[: max(1, int(limit or 0))]:
+            label = str(_skill_label(skill_id)).strip()
+            if label and label not in labels:
+                labels.append(label)
+        return " + ".join(labels)
+
+    def _player_business_hire_preview(self, npc_eid, option):
+        if npc_eid is None or not isinstance(option, dict):
+            return None
+        prop = option.get("prop")
+        if not isinstance(prop, dict):
+            return None
+        role = str(option.get("role", "staff") or "staff").strip().lower() or "staff"
+        fit = player_business_role_fit(self.sim, npc_eid, prop, role)
+        if not isinstance(fit, dict):
+            return None
+
+        label = str(fit.get("label", "solid")).strip().lower() or "solid"
+        strengths_text = self._player_business_skill_text(fit.get("strong_skills", ()))
+        weak_text = self._player_business_skill_text(fit.get("weak_skills", ()))
+
+        topic_hint = f"{label} fit"
+        if label in {"weak", "patchy"} and weak_text:
+            topic_hint = f"{topic_hint}; light on {weak_text}"
+        elif strengths_text:
+            topic_hint = f"{topic_hint}; {strengths_text}"
+
+        if role == "manager":
+            if label in {"excellent", "strong"}:
+                line = f"Running it looks like a {label} fit for me."
+            elif label in {"weak", "patchy"} and weak_text:
+                line = f"Running it looks {label}; I'd be light on {weak_text}."
+            else:
+                line = f"Running it looks like a {label} fit for me."
+        else:
+            if label in {"excellent", "strong"}:
+                line = f"Shift work there looks like a {label} fit for me."
+            elif label in {"weak", "patchy"} and weak_text:
+                line = f"Shift work there looks {label}; I'd be light on {weak_text}."
+            else:
+                line = f"Shift work there looks like a {label} fit for me."
+
+        return {
+            "role": role,
+            "fit": fit,
+            "label": label,
+            "topic_hint": topic_hint,
+            "line": line,
+        }
+
+    def _resolve_player_business_hire(self, context, option, *, npc_eid):
+        if not isinstance(option, dict):
+            return {"npc_lines": ["No. I am not taking work from you right now."]}
+        accepted, reason = self._player_business_hire_decision(context, option)
+        business_name = str(option.get("business_name", "the business")).strip() or "the business"
+        role = str(option.get("role", "staff") or "staff").strip().lower() or "staff"
+        if not accepted:
+            if reason == "guarded":
+                line = "No. Not after this."
+            elif reason == "career_conflict":
+                line = f"No. {business_name} is not my kind of work."
+            elif role == "manager":
+                line = f"Not me. I am not taking point on {business_name}."
+            else:
+                line = f"Maybe another time. I am not taking work at {business_name} right now."
+            return {"npc_lines": [line]}
+        outcome = hire_actor_into_player_business(
+            self.sim,
+            self.player_eid,
+            npc_eid,
+            option.get("prop"),
+            role=role,
+        )
+        if not isinstance(outcome, dict):
+            return {"npc_lines": [f"I cannot commit to {business_name} right now."]}
+        self.sim.emit(Event(
+            "player_business_staff_hired",
+            eid=self.player_eid,
+            npc_eid=npc_eid,
+            property_id=outcome.get("property_id"),
+            business_name=outcome.get("business_name"),
+            role=outcome.get("role"),
+            career=outcome.get("career"),
+            housing_kind=outcome.get("housing_kind"),
+            housing_local=outcome.get("housing_local"),
+            housing_relocated=outcome.get("housing_relocated"),
+            housing_property_id=outcome.get("housing_property_id"),
+            housing_name=outcome.get("housing_name"),
+        ))
+        self._shift_dialogue_bond(
+            npc_eid,
+            trust_delta=0.04 if role == "manager" else 0.03,
+            closeness_delta=0.025 if role == "manager" else 0.02,
+            guarded=False,
+        )
+        housing_kind = str(outcome.get("housing_kind", "") or "").strip().lower()
+        housing_name = str(outcome.get("housing_name", "") or "").strip()
+        if role == "manager":
+            line = f"Yeah. I can run {business_name} for you."
+        else:
+            line = f"Sure. I can take a shift at {business_name}."
+        if housing_kind == "workplace_lodging":
+            line = line[:-1] + " and stay on-site."
+        elif housing_kind in {"nearby_housing", "nearby_lodging"} and housing_name:
+            line = line[:-1] + f" and stay at {housing_name}."
+        return {"npc_lines": [line], "close": True}
 
     def _organization_snapshot(self, npc_eid, occupation, workplace_prop):
         workplace = getattr(occupation, "workplace", None)
@@ -13330,7 +11571,50 @@ class NPCInteractionSystem(System):
                 (contract_kill_offer or {}).get("requirements", {}).get("kill_target_role", "")
             ).strip(),
         }
-        return self._apply_rival_dialogue_context(context)
+        context = self._apply_rival_dialogue_context(context)
+        context["pressure_role"] = self._dialogue_pressure_role(context)
+        context["dialogue_prep_terms"] = _dialogue_prep_skill_terms(self.sim, self.player_eid)
+        staffing = self._player_business_staffing_options(context)
+        hire_option = staffing.get("hire") if isinstance(staffing, dict) else None
+        fire_option = staffing.get("fire") if isinstance(staffing, dict) else None
+        context.update({
+            "player_business_hire_option": hire_option,
+            "player_business_fire_option": fire_option,
+            "player_business_hire_name": str((hire_option or {}).get("business_name", "")).strip(),
+            "player_business_hire_role": str((hire_option or {}).get("role", "")).strip().lower(),
+            "player_business_fire_name": str((fire_option or {}).get("business_name", "")).strip(),
+            "player_business_fire_role": str((fire_option or {}).get("role", "")).strip().lower(),
+        })
+        hire_manager_option = self._player_business_hire_option_for_role(context, "manager")
+        hire_staff_option = self._player_business_hire_option_for_role(context, "staff")
+        hire_preview = self._player_business_hire_preview(npc_eid, hire_option)
+        hire_manager_preview = self._player_business_hire_preview(npc_eid, hire_manager_option)
+        hire_staff_preview = self._player_business_hire_preview(npc_eid, hire_staff_option)
+        hire_roles = tuple(
+            str(role).strip().lower()
+            for role in tuple((hire_option or {}).get("roles", ()) or ())
+            if str(role).strip()
+        )
+        hire_fit_hint = str((hire_preview or {}).get("topic_hint", "")).strip()
+        if len(hire_roles) > 1:
+            hint_bits = []
+            if isinstance(hire_manager_preview, dict):
+                hint_bits.append(f"mgr {str(hire_manager_preview.get('label', '')).strip().lower()}")
+            if isinstance(hire_staff_preview, dict):
+                hint_bits.append(f"staff {str(hire_staff_preview.get('label', '')).strip().lower()}")
+            hire_fit_hint = " | ".join(bit for bit in hint_bits if bit)
+        context.update({
+            "player_business_hire_roles": hire_roles,
+            "player_business_hire_manager_option": hire_manager_option,
+            "player_business_hire_staff_option": hire_staff_option,
+            "player_business_hire_preview": hire_preview,
+            "player_business_hire_manager_preview": hire_manager_preview,
+            "player_business_hire_staff_preview": hire_staff_preview,
+            "player_business_hire_fit_hint": hire_fit_hint,
+            "player_business_hire_manager_fit_hint": str((hire_manager_preview or {}).get("topic_hint", "")).strip(),
+            "player_business_hire_staff_fit_hint": str((hire_staff_preview or {}).get("topic_hint", "")).strip(),
+        })
+        return context
 
     def _history_summary(self, context):
         if context.get("is_rival_operator"):
@@ -13656,13 +11940,15 @@ class NPCInteractionSystem(System):
             return f"You have to make the pickup first, then haul the {item_label} back"
         return ""
 
-    def _opportunity_summary(self, context):
+    def _opportunity_summary(self, context, *, quality=None):
         focus_lines = list(context.get("objective_focus_lines", ()) or ())
         rows = list(context.get("opportunity_rows", ()) or ())
         judgment = context.get("primary_opportunity_judgment", {}) or {}
         urgency = str(judgment.get("urgency", "")).strip().lower()
         invitation = str(judgment.get("invitation", "mention")).strip().lower()
         voice_tone = str(judgment.get("voice_tone", "")).strip().lower()
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "opportunities")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
 
         # If the NPC's judgment is "pass", don't mention the opportunity at all.
         if invitation == "pass" and not focus_lines:
@@ -13679,6 +11965,23 @@ class NPCInteractionSystem(System):
 
             # Humanize distance with directional context (1 chunk = ~200m).
             distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
+
+            if quality_mode == "guarded":
+                base = f"{title} {distance_phrase} is the one I keep hearing about."
+                if risk == "hazardous":
+                    base += " Might pay, but I would verify it yourself before betting on it."
+                else:
+                    base += " Might be worth checking, but verify the timing yourself."
+                if focus_lines:
+                    base = f"{base} {str(focus_lines[0]).strip()}"
+                return base.strip()
+            if quality_mode == "vague":
+                base = f"{title} {distance_phrase} might be moving."
+                if risk in {"exposed", "hazardous"}:
+                    base += " I would double-check it before you lean on it."
+                else:
+                    base += " Check it yourself before you bet on it."
+                return base.strip()
 
             # Build a more conversational summary instead of a board-style line.
             # Deterministically pick a template based on seed + NPC + opportunity.
@@ -13786,7 +12089,9 @@ class NPCInteractionSystem(System):
             return f"It is a two-leg run, and carrying the {item_label} back is the part that can go sideways."
         return ""
 
-    def _opportunity_angle_lines(self, context):
+    def _opportunity_angle_lines(self, context, *, quality=None):
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "angle")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         lines = []
         lines.extend(list(context.get("objective_focus_lines", ()) or ()))
         for row in list(context.get("opportunity_rows", ()) or ()):
@@ -13799,12 +12104,17 @@ class NPCInteractionSystem(System):
             distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
             requirement_line = self._opportunity_requirement_angle_line(row)
             
-            if summary:
-                line = f"Start with {title} {distance_phrase}: {summary}"
+            if quality_mode == "guarded":
+                line = f"Start with {title} {distance_phrase}, then confirm the rest yourself."
+            elif quality_mode == "vague":
+                line = f"{title} {distance_phrase} is the kind you walk first before committing."
             else:
-                line = f"Start with {title} {distance_phrase}."
-            if requirement_line:
-                line = f"{line} {requirement_line}"
+                if summary:
+                    line = f"Start with {title} {distance_phrase}: {summary}"
+                else:
+                    line = f"Start with {title} {distance_phrase}."
+                if requirement_line:
+                    line = f"{line} {requirement_line}"
             lines.append(line)
         lines.extend(list(context.get("objective_activity_lines", ()) or ()))
         return [str(line).strip() for line in lines if str(line).strip()]
@@ -13821,12 +12131,21 @@ class NPCInteractionSystem(System):
         "combat":   ("can get rough", "expect friction", "not a soft job"),
     }
 
-    def _opportunity_risk_lines(self, context):
+    def _opportunity_risk_lines(self, context, *, quality=None):
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "risk")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         lines = []
         for row in list(context.get("opportunity_rows", ()) or ()):
             title = str(row.get("title", "Opportunity")).strip() or "Opportunity"
             risk = str(row.get("risk", "low")).strip() or "low"
             playstyles = [str(style).strip() for style in row.get("playstyles", ()) if str(style).strip()]
+
+            if quality_mode == "guarded":
+                lines.append(f"{title} can still pay, but expect less room to improvise than people say.")
+                continue
+            if quality_mode == "vague":
+                lines.append(f"{title} can go sideways fast. Do a clean read before you commit.")
+                continue
 
             # Humanize risk language.
             if risk == "calm":
@@ -13869,6 +12188,7 @@ class NPCInteractionSystem(System):
     def _attention_lines(self, context):
         lines = []
         pressure_tier = str(context.get("pressure_tier", "low")).strip().lower() or "low"
+        pressure_role = str(context.get("pressure_role", "") or self._dialogue_pressure_role(context)).strip().lower() or "local"
         owner_place_name = str(context.get("owner_place_name", "")).strip()
         access_level = str(context.get("access_level", "")).strip().lower()
         standing = float(context.get("contact_standing", 0.0))
@@ -13880,6 +12200,18 @@ class NPCInteractionSystem(System):
         elif recent_offense:
             action = str(recent_offense.get("data", {}).get("action", "trouble")).replace("_", " ").strip() or "trouble"
             lines.append(f"People still remember your {action}. That keeps attention on you longer than you think.")
+
+        if pressure_tier in {"medium", "high"}:
+            if pressure_role == "guard":
+                lines.append("Patrol types remember faces. Push another secure door right now and someone is going to stop or report you.")
+            elif pressure_role == "worker":
+                lines.append("Workers talk, managers ask questions, and shifts remember who made trouble.")
+            elif pressure_role == "merchant":
+                lines.append("Heat scares off ordinary customers. Anything messy around a counter turns into gossip fast.")
+            elif pressure_role == "neighbor":
+                lines.append("Blocks remember loiterers. Keep it off stoops, hallways, and other people's doors for a while.")
+            elif pressure_role == "chaotic":
+                lines.append("Hot streets do not scare everyone; they just make the smart ones move faster and talk less.")
 
         if pressure_tier == "high":
             lines.append("City attention is high. Keep your head down and stay away from protected places for a while.")
@@ -13952,12 +12284,165 @@ class NPCInteractionSystem(System):
             return f"an {label}"
         return f"a {label}"
 
-    def _access_summary(self, context):
+    def _dialogue_controller_named_holders(self, controller):
+        if not isinstance(controller, dict):
+            return []
+        named_holders = []
+        for holder in tuple(controller.get("authorized_holders", ()) or ()):
+            holder_eid = holder.get("eid")
+            if holder_eid is None:
+                continue
+            holder_name = _entity_display_name(self.sim, holder_eid, title_case=True)
+            if not holder_name:
+                continue
+            named_holders.append({
+                "name": holder_name,
+                "role": str(holder.get("role", "") or "").strip().lower(),
+                "tier": _int_or_default(holder.get("credential_tier"), 1),
+                "eid": int(holder_eid),
+            })
+        return named_holders
+
+    def _dialogue_property_fixture_refs(self, owner_place):
+        if not isinstance(owner_place, dict):
+            return None, None
+        metadata = _property_metadata(owner_place)
+        panel_id = str(metadata.get("access_panel_property_id", "") or "").strip()
+        terminal_id = str(metadata.get("service_terminal_property_id", "") or "").strip()
+        panel_prop = self.sim.properties.get(panel_id) if panel_id else None
+        terminal_prop = self.sim.properties.get(terminal_id) if terminal_id else None
+        return panel_prop, terminal_prop
+
+    def _dialogue_hours_summary(self, context, *, quality=None):
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "hours")
+        mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        hours_text = str(context.get("hours_text", "")).strip()
+        shift_text = str(context.get("shift_text", "")).strip()
+        schedule_source = str((context.get("controller") or {}).get("schedule_source", "") or "").strip().lower()
+        if mode == "clear":
+            return hours_text
+        if mode == "guarded":
+            if schedule_source == "owner_shift" and shift_text:
+                return "mostly while staff are on"
+            if hours_text == "around the clock":
+                return "most of the time"
+            return "mostly during regular open hours"
+        if schedule_source == "owner_shift" and shift_text:
+            return "when staff are moving through"
+        return "when the place is active"
+
+    def _dialogue_prep_detail(self, context, topic_id, *, quality=None):
+        topic_id = str(topic_id or "").strip().lower()
+        terms = context.get("dialogue_prep_terms") if isinstance(context, dict) else {}
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, topic_id)
+        detail_level = max(
+            0,
+            _int_or_default(
+                quality.get("detail_level"),
+                _int_or_default((terms or {}).get("detail_level"), 0),
+            ),
+        )
+        if detail_level <= 0:
+            return ""
+
+        owner_place = context.get("owner_place")
+        controller = context.get("controller")
+        if not isinstance(owner_place, dict) or not isinstance(controller, dict):
+            return ""
+
+        place_name = str(context.get("owner_place_name", "")).strip() or str(owner_place.get("name", owner_place.get("id", "the place"))).strip() or "the place"
+        hours_text = str(context.get("hours_text", "")).strip()
+        shift_text = str(context.get("shift_text", "")).strip()
+        access_level = str(context.get("access_level", "")).strip().lower()
+        requirement = _controller_access_requirement_text(controller)
+        fixture = str(controller.get("fixture_label", "") or "lock").strip() or "lock"
+        schedule_source = str(controller.get("schedule_source", "") or "").strip().lower()
+        panel_prop, terminal_prop = self._dialogue_property_fixture_refs(owner_place)
+
+        apertures = tuple(_property_apertures(owner_place))
+        side_doors = [
+            aperture
+            for aperture in apertures
+            if str(aperture.get("kind", "") or "").strip().lower() in {"service_door", "employee_door", "side_door"}
+        ]
+        windows = [
+            aperture
+            for aperture in apertures
+            if str(aperture.get("kind", "") or "").strip().lower() in {"window", "skylight"}
+        ]
+
+        named_holders = self._dialogue_controller_named_holders(controller)
+        highest = max(
+            named_holders,
+            key=lambda row: (row["tier"], 1 if row["role"] in {"owner", "manager"} else 0),
+            default=None,
+        )
+
+        if topic_id == "hours":
+            if detail_level >= 2 and highest and (hours_text or shift_text):
+                timing = shift_text or hours_text
+                return f"If you are timing it, watch {highest['name']} around {timing}; that is when the real {requirement} tends to move."
+            if schedule_source == "owner_shift" and shift_text:
+                return f"The useful read is staff presence: {shift_text} is what really keeps the front easy."
+            if hours_text:
+                return f"The clean window is {hours_text}; outside that, the {fixture} tightens around {requirement}."
+            return ""
+
+        if topic_id == "security":
+            if detail_level >= 2 and panel_prop is not None:
+                return f"The street-side panel is the seam I would watch first before touching {place_name} blind."
+            if detail_level >= 2 and side_doors:
+                label = self._aperture_summary_label(side_doors[0], article=False)
+                return f"If there is a softer angle, it is usually the {label}, not the front."
+            if panel_prop is not None:
+                return f"There is an exterior access panel tied into the {fixture}, so the hardware is not all on the threshold."
+            if hours_text and access_level in {"public", "restricted", "protected"}:
+                return f"The place changes character hard after {hours_text}; that is when the secure read really matters."
+            return ""
+
+        if topic_id == "access":
+            if detail_level >= 2 and panel_prop is not None:
+                return f"You can work the panel from outside if you know what you are doing, instead of testing the threshold cold."
+            if detail_level >= 2 and highest and highest["role"] in {"owner", "manager"}:
+                return f"{highest['name']} looks like the cleanest carrier for real {requirement}, not just routine access."
+            if schedule_source == "owner_shift" and shift_text:
+                return f"Shift timing matters almost as much as the credential; when staff are really on, the front reads softer."
+            if hours_text:
+                return f"Best clean read is during {hours_text}; outside that, expect the {fixture} to ask for the real thing."
+            return ""
+
+        if topic_id == "entry":
+            if detail_level >= 2 and panel_prop is not None:
+                return "There is also an exterior panel, so you do not have to treat the threshold as the only seam."
+            if detail_level >= 2 and terminal_prop is not None:
+                return "There is a nearby service terminal on the same site, which can matter if you are mapping the place instead of rushing it."
+            if side_doors:
+                label = self._aperture_summary_label(side_doors[0], article=False)
+                return f"The cleaner alternate looks like the {label}, not the front."
+            if windows:
+                label = self._aperture_summary_label(windows[0], article=False)
+                return f"If you are really mapping ingress, the useful alternate is the {label}."
+            return ""
+
+        if topic_id == "keyholder":
+            if detail_level >= 2 and highest and highest["role"] in {"owner", "manager"}:
+                return f"If you are watching for the real carry, {highest['name']} is the one I would track."
+            if highest and highest["tier"] > 1:
+                return f"There is a hierarchy to it. {highest['name']} is carrying stronger clearance than the rest."
+            if shift_text:
+                return f"Shift change is when access tends to move around, especially near {shift_text}."
+            return ""
+
+        return ""
+
+    def _access_summary(self, context, *, quality=None):
         owner_place = context.get("owner_place")
         controller = context.get("controller")
         if not owner_place or not isinstance(controller, dict):
             return ""
 
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "access")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         place_name = str(context.get("owner_place_name", "")).strip() or str(owner_place.get("name", owner_place.get("id", "the place"))).strip() or "the place"
         access_level = str(context.get("access_level", "")).strip().lower()
         hours_text = str(context.get("hours_text", "")).strip()
@@ -13965,6 +12450,17 @@ class NPCInteractionSystem(System):
         requirement = _controller_access_requirement_text(controller)
         security_text = _dialogue_security_tier_text(controller.get("security_tier"))
         schedule_source = str(controller.get("schedule_source", "") or "").strip().lower()
+
+        if quality_mode == "guarded":
+            if access_level == "public" and hours_text:
+                return "The front reads easier while the place is active. After hours it wants real clearance."
+            if access_level in {"restricted", "protected"}:
+                return f"Not a casual door. When it is quiet, the {fixture} wants someone who belongs there."
+            return f"Timing matters almost as much as the {fixture}."
+        if quality_mode == "vague":
+            if access_level == "public":
+                return "Easy enough while it is active. If it looks shut, assume it wants someone who belongs there."
+            return "Not a casual threshold. If you test it blind, expect it to ask for the real thing."
 
         if access_level == "public" and hours_text:
             if schedule_source == "owner_shift":
@@ -13978,11 +12474,13 @@ class NPCInteractionSystem(System):
             return f"{place_name} is usually locked down on the {fixture}. {requirement} gets you through cleanly."
         return f"The {fixture} expects {requirement}."
 
-    def _entry_summary(self, context):
+    def _entry_summary(self, context, *, quality=None):
         owner_place = context.get("owner_place")
         if not owner_place:
             return ""
 
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "entry")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         apertures = tuple(_property_apertures(owner_place))
         if not apertures:
             return ""
@@ -14013,16 +12511,26 @@ class NPCInteractionSystem(System):
 
         if not bits:
             return ""
+        if quality_mode == "guarded":
+            if len(bits) > 1:
+                return "There is more than just the front, but you would want to walk it yourself."
+            return "Mostly the front, though I would still walk the perimeter before trusting that read."
+        if quality_mode == "vague":
+            if len(bits) > 1:
+                return "There are other seams besides the front, but I am not mapping them cleanly for you."
+            return "Front is the obvious read. If there is another seam, you would have to find it yourself."
         if bits == ["the front door"]:
             return "Mostly just the front door."
         return "There is " + _dialogue_human_join(bits) + "."
 
-    def _keyholder_summary(self, context):
+    def _keyholder_summary(self, context, *, quality=None):
         owner_place = context.get("owner_place")
         controller = context.get("controller")
         if not owner_place or not isinstance(controller, dict):
             return ""
 
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "keyholder")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         place_name = str(context.get("owner_place_name", "")).strip() or str(owner_place.get("name", owner_place.get("id", "the place"))).strip() or "the place"
         credential_text = self._credential_access_label(controller)
         holders = tuple(controller.get("authorized_holders", ()) or ())
@@ -14034,23 +12542,15 @@ class NPCInteractionSystem(System):
             return ""
 
         self_holder = _controller_holder_for_actor(controller, context.get("npc_eid"))
-        named_holders = []
-        for holder in holders:
-            holder_eid = holder.get("eid")
-            if holder_eid is None:
-                continue
-            holder_name = _entity_display_name(self.sim, holder_eid, title_case=True)
-            if not holder_name:
-                continue
-            named_holders.append({
-                "name": holder_name,
-                "role": str(holder.get("role", "") or "").strip().lower(),
-                "tier": _int_or_default(holder.get("credential_tier"), 1),
-                "eid": int(holder_eid),
-            })
+        named_holders = self._dialogue_controller_named_holders(controller)
 
         if not named_holders:
             return ""
+
+        if quality_mode == "guarded":
+            return f"Management and trusted staff carry the real {credential_text} around {place_name}."
+        if quality_mode == "vague":
+            return f"Someone above the floor is carrying the real {credential_text} there."
 
         highest = max(named_holders, key=lambda row: (row["tier"], 1 if row["role"] in {"owner", "manager"} else 0))
         others = [row for row in named_holders if row["eid"] != highest["eid"]]
@@ -14087,17 +12587,25 @@ class NPCInteractionSystem(System):
             names_text += f", plus {extra} more"
         return f"{names_text} carry the {credential_text} for {place_name}."
 
-    def _security_summary(self, context):
+    def _security_summary(self, context, *, quality=None):
         owner_place_name = str(context.get("owner_place_name", "")).strip() or "the place"
         controller = context.get("controller")
         if not isinstance(controller, dict) or not context.get("owner_place"):
             return ""
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "security")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         credential_text = _dialogue_credential_mode_text(controller.get("credential_mode"))
         security_text = _dialogue_security_tier_text(controller.get("security_tier"))
         hours_text = str(context.get("hours_text", "")).strip()
         access_level = str(context.get("access_level", "")).strip().lower()
         if context.get("guarded"):
             return f"{owner_place_name} is {credential_text} with {security_text}, and strangers get noticed fast."
+        if quality_mode == "guarded":
+            if access_level == "public" and hours_text:
+                return f"{owner_place_name} reads tighter after hours, and strangers get noticed fast."
+            return f"Strangers get read hard at {owner_place_name}, especially once regular traffic thins out."
+        if quality_mode == "vague":
+            return f"{owner_place_name} is not soft security. I would not test it blind."
         if access_level == "public" and hours_text:
             return f"{owner_place_name} keeps public hours {hours_text}, then turns {credential_text} with {security_text} after that."
         if hours_text:
@@ -14505,6 +13013,8 @@ class NPCInteractionSystem(System):
                     continue
             elif topic_id not in self.ROOT_TOPICS and topic_id not in unlocked:
                 continue
+            if topic_id in self.SERVICE_LOCATOR_TOPICS and (bool(context.get("guarded")) or not bool(context.get("human", True))):
+                continue
             if topic_id in guarded_only and not context.get("guarded"):
                 continue
             if topic_id == "trade" and not context.get("trade_available"):
@@ -14520,6 +13030,16 @@ class NPCInteractionSystem(System):
             if topic_id == "coworkers" and not self._coworker_summary(context):
                 continue
             if topic_id == "people" and not self._people_summary(context):
+                continue
+            if topic_id == "hire" and not context.get("player_business_hire_option"):
+                continue
+            if topic_id == "hire_manager" and not context.get("player_business_hire_manager_option"):
+                continue
+            if topic_id == "hire_staff" and not context.get("player_business_hire_staff_option"):
+                continue
+            if topic_id in {"hire_manager", "hire_staff"} and len(tuple(context.get("player_business_hire_roles", ()) or ())) <= 1:
+                continue
+            if topic_id == "fire" and not context.get("player_business_fire_option"):
                 continue
             if topic_id == "introduction" and not self._introduction_target(context):
                 continue
@@ -14689,7 +13209,7 @@ class NPCInteractionSystem(System):
             bank_id = "contacts_hard_no"
             return self._say(bank_id, context, topic_id=topic_id, count=self._dialogue_topic_count(context["npc_eid"], topic_id), npc_name=context["npc_name"])
         if self._pressure_contact_blocked(context, "vouch" if vouch else "contact"):
-            bank_id = "vouch_caution_no" if vouch else "contacts_caution_no"
+            bank_id = self._pressure_contact_bank("vouch_caution_no" if vouch else "contacts_caution_no", context)
             return self._say(bank_id, context, topic_id=topic_id, count=self._dialogue_topic_count(context["npc_eid"], topic_id), npc_name=context["npc_name"])
         offer = self._offer_contact(
             npc_eid=context["npc_eid"],
@@ -14703,12 +13223,12 @@ class NPCInteractionSystem(System):
             prop_name = str(prop.get("name", prop.get("id", "place"))).strip() if prop else "the place"
             if vouch:
                 if self._pressure_offer_is_cautious(context, "vouch"):
-                    bank_id = "vouch_offer_caution"
+                    bank_id = self._pressure_contact_bank("vouch_offer_caution", context)
                 else:
                     bank_id = "vouch_offer" if self._dialogue_topic_count(context["npc_eid"], "vouch") <= 1 else "vouch_repeat"
             else:
                 if self._pressure_offer_is_cautious(context, "contact"):
-                    bank_id = "contacts_offer_caution"
+                    bank_id = self._pressure_contact_bank("contacts_offer_caution", context)
                 else:
                     bank_id = "contacts_offer" if self._dialogue_topic_count(context["npc_eid"], "contacts") <= 1 else "contacts_repeat"
             return self._say(bank_id, context, topic_id=topic_id, count=self._dialogue_topic_count(context["npc_eid"], topic_id), npc_name=context["npc_name"], contact_place=prop_name)
@@ -14836,6 +13356,72 @@ class NPCInteractionSystem(System):
                     )
                 ]
             }
+        if topic_id == "hire":
+            option = context.get("player_business_hire_option")
+            if not isinstance(option, dict):
+                return {"npc_lines": ["No. I am not taking work from you right now."]}
+            business_name = str(option.get("business_name", "the business")).strip() or "the business"
+            hire_roles = tuple(
+                str(role).strip().lower()
+                for role in tuple(context.get("player_business_hire_roles", ()) or ())
+                if str(role).strip()
+            )
+            if len(hire_roles) > 1:
+                lines = [f"Maybe. Are you asking me to run {business_name} or just take shifts there?"]
+                manager_preview = context.get("player_business_hire_manager_preview")
+                staff_preview = context.get("player_business_hire_staff_preview")
+                for preview in (manager_preview, staff_preview):
+                    if isinstance(preview, dict):
+                        line = str(preview.get("line", "")).strip()
+                        if line and line not in lines:
+                            lines.append(line)
+                return {
+                    "npc_lines": lines
+                }
+            return self._resolve_player_business_hire(context, option, npc_eid=npc_eid)
+        if topic_id == "hire_manager":
+            option = context.get("player_business_hire_manager_option")
+            if not isinstance(option, dict):
+                return {"npc_lines": ["That slot is not open right now."]}
+            return self._resolve_player_business_hire(context, option, npc_eid=npc_eid)
+        if topic_id == "hire_staff":
+            option = context.get("player_business_hire_staff_option")
+            if not isinstance(option, dict):
+                return {"npc_lines": ["That slot is not open right now."]}
+            return self._resolve_player_business_hire(context, option, npc_eid=npc_eid)
+        if topic_id == "fire":
+            option = context.get("player_business_fire_option")
+            if not isinstance(option, dict):
+                return {"npc_lines": ["That is not your call with me."]}
+            business_name = str(option.get("business_name", "the business")).strip() or "the business"
+            role = str(option.get("role", "staff") or "staff").strip().lower() or "staff"
+            outcome = fire_actor_from_player_business(
+                self.sim,
+                self.player_eid,
+                npc_eid,
+                option.get("prop"),
+            )
+            if not isinstance(outcome, dict):
+                return {"npc_lines": [f"That does not land cleanly for {business_name}."]}
+            self.sim.emit(Event(
+                "player_business_staff_fired",
+                eid=self.player_eid,
+                npc_eid=npc_eid,
+                property_id=outcome.get("property_id"),
+                business_name=outcome.get("business_name"),
+                role=outcome.get("role"),
+            ))
+            self._shift_dialogue_bond(
+                npc_eid,
+                trust_delta=-0.14 if role == "manager" else -0.1,
+                closeness_delta=-0.08 if role == "manager" else -0.06,
+                guarded=False,
+            )
+            if role == "manager":
+                line = f"Right. I am done running {business_name}."
+            else:
+                line = f"Understood. I will clear out of {business_name}."
+            return {"npc_lines": [line], "close": True}
         if topic_id == "introduction":
             offer = self._offer_introduction(context)
             if offer:
@@ -14863,9 +13449,49 @@ class NPCInteractionSystem(System):
             if context.get("service_summary"):
                 return {"npc_lines": [self._say("services", context, topic_id=topic_id, count=ask_count, service_summary=context["service_summary"], service_summary_cap=context["service_summary_cap"])]}
             return {"npc_lines": [self._say("services_none", context, topic_id=topic_id, count=ask_count)]}
+        if topic_id in self.SERVICE_LOCATOR_TOPICS:
+            locator = self._service_locator_summary(context, topic_id)
+            lead_prop = locator.get("lead_prop")
+            if lead_prop is not None and not context.get("guarded"):
+                spec = self._service_locator_spec(topic_id) or {}
+                self._remember_player_property_lead(
+                    lead_prop,
+                    source_eid=npc_eid,
+                    lead_kind=str(spec.get("lead_kind", "service")).strip().lower() or "service",
+                    confidence=max(0.56, float(context.get("lead_confidence", 0.6)) - 0.02),
+                )
+            summary = str(locator.get("summary", "")).strip()
+            service_label = str(locator.get("service_label", "service")).strip() or "service"
+            bank_id = "service_locator" if summary else "service_locator_none"
+            return {
+                "npc_lines": [
+                    self._say(
+                        bank_id,
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                        service_label=service_label,
+                        service_locator_summary=summary,
+                        service_locator_summary_lc=_dialogue_lower_start(summary),
+                    )
+                ]
+            }
         if topic_id == "hours":
             if context.get("hours_text"):
-                return {"npc_lines": [self._say("hours", context, topic_id=topic_id, count=ask_count, hours_text=context["hours_text"])]}
+                quality = self._dialogue_pressure_intel_quality(context, topic_id)
+                lines = [
+                    self._say(
+                        "hours",
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                        hours_text=self._dialogue_hours_summary(context, quality=quality),
+                    )
+                ]
+                prep_detail = self._dialogue_prep_detail(context, topic_id, quality=quality)
+                if prep_detail:
+                    lines.append(prep_detail)
+                return {"npc_lines": lines}
             return {"npc_lines": [self._say("hours_none", context, topic_id=topic_id, count=ask_count)]}
         if topic_id == "owner":
             owner_place = context.get("owner_place")
@@ -14881,94 +13507,113 @@ class NPCInteractionSystem(System):
                 bank_id = "owner_none"
             return {"npc_lines": [self._say(bank_id, context, topic_id=topic_id, count=ask_count, owner_name=context.get("owner_name", "nobody"))]}
         if topic_id == "security":
-            summary = self._security_summary(context)
+            quality = self._dialogue_pressure_intel_quality(context, topic_id)
+            summary = self._security_summary(context, quality=quality)
             bank_id = "security" if summary else "security_none"
-            return {
-                "npc_lines": [
-                    self._say(
-                        bank_id,
-                        context,
-                        topic_id=topic_id,
-                        count=ask_count,
-                        security_summary=summary,
-                    )
-                ]
-            }
+            lines = [
+                self._say(
+                    bank_id,
+                    context,
+                    topic_id=topic_id,
+                    count=ask_count,
+                    security_summary=summary,
+                )
+            ]
+            prep_detail = self._dialogue_prep_detail(context, topic_id, quality=quality)
+            if prep_detail:
+                lines.append(prep_detail)
+            return {"npc_lines": lines}
         if topic_id == "access":
+            quality = self._dialogue_pressure_intel_quality(context, topic_id)
             owner_place = context.get("owner_place")
             if owner_place and not context.get("guarded"):
                 self._remember_player_property_lead(
                     owner_place,
                     source_eid=npc_eid,
                     lead_kind="access",
-                    confidence=max(0.64, float(context.get("lead_confidence", 0.6))),
+                    confidence=max(0.28, max(0.64, float(context.get("lead_confidence", 0.6))) * float(quality.get("confidence_mult", 1.0))),
                 )
-            summary = self._access_summary(context)
+            summary = self._access_summary(context, quality=quality)
             bank_id = "access" if summary else "access_none"
-            return {
-                "npc_lines": [
-                    self._say(
-                        bank_id,
-                        context,
-                        topic_id=topic_id,
-                        count=ask_count,
-                        access_summary=summary,
-                    )
-                ]
-            }
+            lines = [
+                self._say(
+                    bank_id,
+                    context,
+                    topic_id=topic_id,
+                    count=ask_count,
+                    access_summary=summary,
+                )
+            ]
+            prep_detail = self._dialogue_prep_detail(context, topic_id, quality=quality)
+            if prep_detail:
+                lines.append(prep_detail)
+            return {"npc_lines": lines}
         if topic_id == "entry":
+            quality = self._dialogue_pressure_intel_quality(context, topic_id)
             owner_place = context.get("owner_place")
             if owner_place and not context.get("guarded"):
                 self._remember_player_property_lead(
                     owner_place,
                     source_eid=npc_eid,
                     lead_kind="entry",
-                    confidence=max(0.62, float(context.get("lead_confidence", 0.6)) - 0.02),
+                    confidence=max(0.28, max(0.62, float(context.get("lead_confidence", 0.6)) - 0.02) * float(quality.get("confidence_mult", 1.0))),
                 )
-            summary = self._entry_summary(context)
+            summary = self._entry_summary(context, quality=quality)
             bank_id = "entry" if summary else "entry_none"
-            return {
-                "npc_lines": [
-                    self._say(
-                        bank_id,
-                        context,
-                        topic_id=topic_id,
-                        count=ask_count,
-                        entry_summary=summary,
-                    )
-                ]
-            }
+            lines = [
+                self._say(
+                    bank_id,
+                    context,
+                    topic_id=topic_id,
+                    count=ask_count,
+                    entry_summary=summary,
+                )
+            ]
+            prep_detail = self._dialogue_prep_detail(context, topic_id, quality=quality)
+            if prep_detail:
+                lines.append(prep_detail)
+            return {"npc_lines": lines}
         if topic_id == "keyholder":
+            quality = self._dialogue_pressure_intel_quality(context, topic_id)
             owner_place = context.get("owner_place")
             if owner_place and not context.get("guarded"):
                 self._remember_player_property_lead(
                     owner_place,
                     source_eid=npc_eid,
                     lead_kind="keyholder",
-                    confidence=max(0.66, float(context.get("lead_confidence", 0.6))),
+                    confidence=max(0.28, max(0.66, float(context.get("lead_confidence", 0.6))) * float(quality.get("confidence_mult", 1.0))),
                 )
-            summary = self._keyholder_summary(context)
+            summary = self._keyholder_summary(context, quality=quality)
             bank_id = "keyholder" if summary else "keyholder_none"
-            return {
-                "npc_lines": [
-                    self._say(
-                        bank_id,
-                        context,
-                        topic_id=topic_id,
-                        count=ask_count,
-                        keyholder_summary=summary,
-                    )
-                ]
-            }
+            lines = [
+                self._say(
+                    bank_id,
+                    context,
+                    topic_id=topic_id,
+                    count=ask_count,
+                    keyholder_summary=summary,
+                )
+            ]
+            prep_detail = self._dialogue_prep_detail(context, topic_id, quality=quality)
+            if prep_detail:
+                lines.append(prep_detail)
+            return {"npc_lines": lines}
         if topic_id in {"purpose", "apologize", "leave"}:
             return self._resolve_guard_dialogue(context, topic_id)
         if topic_id == "local":
             if context.get("local_source") == "rumor":
                 line = self._say("local_rumor", context, topic_id=topic_id, count=ask_count, rumor_line=context["rumor_line"], rumor_line_lc=_dialogue_lower_start(context["rumor_line"]))
             elif context.get("local_source") == "opportunity":
-                self._learn_dialogue_opportunity(context, source="npc_dialogue_local")
-                line = self._say("local_opportunity", context, topic_id=topic_id, count=ask_count, opportunity_summary=context["opportunity_summary"])
-                self.sim.emit(Event("dialogue_opportunity_hint", eid=self.player_eid, npc_eid=npc_eid, summary=context.get("opportunity_summary", ""), detail=context.get("opportunity_detail", "")))
+                quality = self._dialogue_pressure_intel_quality(context, topic_id)
+                summary = self._opportunity_summary(context, quality=quality)
+                detail = self._angle_summary(context, 1) or self._risk_summary(context, 1) or summary
+                self._learn_dialogue_opportunity(
+                    context,
+                    source="npc_dialogue_local",
+                    confidence_mult=float(quality.get("confidence_mult", 1.0)),
+                )
+                line = self._say("local_opportunity", context, topic_id=topic_id, count=ask_count, opportunity_summary=summary)
+                self.sim.emit(Event("dialogue_opportunity_hint", eid=self.player_eid, npc_eid=npc_eid, summary=summary, detail=detail))
             elif context.get("other_name"):
                 line = self._say("local_other_bond", context, topic_id=topic_id, count=ask_count, other_name=context["other_name"])
             else:
@@ -14990,6 +13635,8 @@ class NPCInteractionSystem(System):
             }
         if topic_id == "detail":
             detail_line = context.get("detail_line")
+            if context.get("local_source") == "opportunity":
+                detail_line = self._angle_summary(context, 1) or self._risk_summary(context, 1) or self._opportunity_summary(context)
             if context.get("local_source") == "opportunity" and detail_line:
                 line = self._say("detail_opportunity", context, topic_id=topic_id, count=ask_count, detail_line=detail_line, detail_line_lc=_dialogue_lower_start(detail_line))
             elif detail_line:
@@ -14998,10 +13645,15 @@ class NPCInteractionSystem(System):
                 line = self._say("detail_none", context, topic_id=topic_id, count=ask_count)
             return {"npc_lines": [line]}
         if topic_id == "opportunities":
-            summary = self._opportunity_summary(context)
+            quality = self._dialogue_pressure_intel_quality(context, topic_id)
+            summary = self._opportunity_summary(context, quality=quality)
             bank_id = "opportunities" if summary else "opportunities_none"
             if summary:
-                self._learn_dialogue_opportunity(context, source="npc_dialogue_opportunities")
+                self._learn_dialogue_opportunity(
+                    context,
+                    source="npc_dialogue_opportunities",
+                    confidence_mult=float(quality.get("confidence_mult", 1.0)),
+                )
             if summary and ask_count <= 1:
                 self.sim.emit(Event(
                     "dialogue_opportunity_hint",
@@ -15026,7 +13678,12 @@ class NPCInteractionSystem(System):
             summary = self._objective_summary(context, ask_count)
             bank_id = "objective" if summary else "objective_none"
             if summary:
-                self._learn_dialogue_opportunity(context, source="npc_dialogue_objective")
+                quality = self._dialogue_pressure_intel_quality(context, topic_id)
+                self._learn_dialogue_opportunity(
+                    context,
+                    source="npc_dialogue_objective",
+                    confidence_mult=float(quality.get("confidence_mult", 1.0)),
+                )
             return {
                 "npc_lines": [
                     self._say(
@@ -15040,10 +13697,15 @@ class NPCInteractionSystem(System):
                 ]
             }
         if topic_id == "angle":
+            quality = self._dialogue_pressure_intel_quality(context, topic_id)
             summary = self._angle_summary(context, ask_count)
             bank_id = "angle" if summary else "angle_none"
             if summary:
-                self._learn_dialogue_opportunity(context, source="npc_dialogue_angle")
+                self._learn_dialogue_opportunity(
+                    context,
+                    source="npc_dialogue_angle",
+                    confidence_mult=float(quality.get("confidence_mult", 1.0)),
+                )
             return {
                 "npc_lines": [
                     self._say(
@@ -15057,10 +13719,15 @@ class NPCInteractionSystem(System):
                 ]
             }
         if topic_id == "risk":
+            quality = self._dialogue_pressure_intel_quality(context, topic_id)
             summary = self._risk_summary(context, ask_count)
             bank_id = "risk" if summary else "risk_none"
             if summary:
-                self._learn_dialogue_opportunity(context, source="npc_dialogue_risk")
+                self._learn_dialogue_opportunity(
+                    context,
+                    source="npc_dialogue_risk",
+                    confidence_mult=float(quality.get("confidence_mult", 1.0)),
+                )
             return {
                 "npc_lines": [
                     self._say(
@@ -15096,7 +13763,7 @@ class NPCInteractionSystem(System):
             return {"npc_lines": [self._dialogue_contact_response(context, vouch=True)]}
         if topic_id == "trade":
             if context.get("trade_context"):
-                bank_id = "trade_yes_caution" if self._pressure_offer_is_cautious(context, "trade") else "trade_yes"
+                bank_id = self._pressure_contact_bank("trade_yes_caution", context) if self._pressure_offer_is_cautious(context, "trade") else "trade_yes"
                 line = self._say(bank_id, context, topic_id=topic_id, count=ask_count)
                 return {"npc_lines": [line], "open_trade": True, "trade_property_id": context["trade_context"].get("property_id")}
             return {"npc_lines": [self._say("trade_no", context, topic_id=topic_id, count=ask_count)]}
@@ -15233,20 +13900,21 @@ class NPCInteractionSystem(System):
         topic_id = str(topic_id or "").strip().lower()
         ask_count = max(1, int(ask_count))
         detail_line = str(context.get("detail_line", "")).strip()
+        prep_detail = str(self._dialogue_prep_detail(context, topic_id)).strip()
         if topic_id == "hours":
-            return self._access_summary(context) or self._security_summary(context)
+            return prep_detail or self._access_summary(context) or self._security_summary(context)
         if topic_id == "services":
             return str(context.get("hours_text", "")).strip() or self._access_summary(context)
         if topic_id == "owner":
             return self._security_summary(context) or self._keyholder_summary(context)
         if topic_id == "security":
-            return self._keyholder_summary(context) or self._entry_summary(context) or self._access_summary(context)
+            return prep_detail or self._keyholder_summary(context) or self._entry_summary(context) or self._access_summary(context)
         if topic_id == "access":
-            return self._keyholder_summary(context) or self._entry_summary(context)
+            return prep_detail or self._keyholder_summary(context) or self._entry_summary(context)
         if topic_id == "entry":
-            return self._access_summary(context) or self._keyholder_summary(context)
+            return prep_detail or self._access_summary(context) or self._keyholder_summary(context)
         if topic_id == "keyholder":
-            return self._access_summary(context) or self._security_summary(context)
+            return prep_detail or self._access_summary(context) or self._security_summary(context)
         if topic_id == "local":
             return detail_line or self._concern_summary(context)
         if topic_id == "concern":
@@ -15558,6 +14226,8 @@ class PlayerActionSystem(System):
 
     def __init__(self, sim):
         super().__init__(sim)
+        self.property_actions = PropertyActionRuntime(self)
+        self.property_ingress = PropertyIngressRuntime(self)
         self.sim.events.subscribe("player_action", self.on_player_action)
 
     def _vehicle_state_for(self, eid):
@@ -16153,271 +14823,33 @@ class PlayerActionSystem(System):
         self._clear_cover(eid, reason="moved")
 
     def _player_owns_property(self, eid, prop):
-        if not prop:
-            return False
-
-        if prop.get("owner_eid") == eid:
-            return True
-
-        assets = self.sim.ecs.get(PlayerAssets).get(eid)
-        return bool(assets and prop["id"] in assets.owned_property_ids)
+        return self.property_actions.player_owns_property(eid, prop)
 
     def _property_for_player_action(self, pos, radius=1):
-        return _property_for_action(self.sim, pos, radius=radius)
+        return self.property_actions.property_for_player_action(pos, radius=radius)
 
     def _counts_as_known_location(self, prop):
-        if not isinstance(prop, dict):
-            return False
-        kind = str(prop.get("kind", "") or "").strip().lower()
-        if kind in {"asset", "fixture", "vehicle"}:
-            return False
-        if _property_infrastructure_role(prop) in {"access_panel", "security_post", "service_terminal"}:
-            return False
-        return True
+        return self.property_actions.counts_as_known_location(prop)
 
     def _discovery_property_at(self, x, y, z):
-        try:
-            x = int(x)
-            y = int(y)
-            z = int(z)
-        except (TypeError, ValueError):
-            return None
-
-        if self.sim.detail_for_xy(x, y) == "unloaded":
-            return None
-
-        prop = self.sim.property_at(x, y, z) or _property_covering(self.sim, x, y, z)
-        if self._counts_as_known_location(prop):
-            return prop
-
-        for candidate in self.sim.properties.values():
-            if not self._counts_as_known_location(candidate):
-                continue
-            display_pos = _property_display_position(candidate)
-            if display_pos and (
-                int(display_pos[0]),
-                int(display_pos[1]),
-                int(display_pos[2]),
-            ) == (x, y, z):
-                return candidate
-            focus = _property_focus_position(candidate)
-            if focus and (
-                int(focus[0]),
-                int(focus[1]),
-                int(focus[2]),
-            ) == (x, y, z):
-                return candidate
-        return None
+        return self.property_actions.discovery_property_at(x, y, z)
 
     def _remember_player_property_discovery(self, eid, prop, *, discovery_mode="sight", confidence=None):
-        if eid != getattr(self.sim, "player_eid", None):
-            return False
-        if not self._counts_as_known_location(prop):
-            return False
-
-        knowledge = self.sim.ecs.get(PropertyKnowledge).get(eid)
-        if not knowledge:
-            return False
-
-        existing = knowledge.known.get(prop["id"]) if isinstance(knowledge.known, dict) else None
-        try:
-            prior_confidence = float((existing or {}).get("confidence", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            prior_confidence = 0.0
-
-        if confidence is None:
-            confidence = self.PLAYER_DISCOVERY_CONFIDENCE.get(
-                str(discovery_mode or "sight").strip().lower(),
-                0.58,
-            )
-        try:
-            confidence = float(confidence)
-        except (TypeError, ValueError):
-            confidence = 0.58
-        confidence = max(0.0, min(1.0, confidence))
-        if prior_confidence + 0.01 >= confidence:
-            return False
-
-        _remember_property_lead_for_actor(
-            self.sim,
+        return self.property_actions.remember_player_property_discovery(
             eid,
             prop,
+            discovery_mode=discovery_mode,
             confidence=confidence,
         )
 
-        updated = knowledge.known.get(prop["id"]) if isinstance(knowledge.known, dict) else None
-        if isinstance(updated, dict):
-            updated["anchored"] = True
-            updated["anchor_kind"] = str(discovery_mode or "sight").strip().lower() or "sight"
-            if updated.get("first_tick") is None:
-                updated["first_tick"] = int(getattr(self.sim, "tick", 0))
-        try:
-            new_confidence = float((updated or {}).get("confidence", prior_confidence) or prior_confidence)
-        except (TypeError, ValueError):
-            new_confidence = prior_confidence
-        if prior_confidence < 0.5 <= new_confidence:
-            self.sim.emit(Event(
-                "property_self_discovered",
-                eid=eid,
-                property_id=prop.get("id"),
-                property_name=str(prop.get("name", prop.get("id", "location"))).strip() or "location",
-                discovery_mode=str(discovery_mode or "sight").strip().lower() or "sight",
-                confidence=new_confidence,
-            ))
-        return new_confidence > prior_confidence + 0.01
-
     def _active_interact_property_near(self, pos):
-        for quest in self.sim.quests["active"]:
-            objective = quest.get("objective", {})
-            if objective.get("type") != "interact_property":
-                continue
-
-            property_id = objective.get("property_id")
-            prop = self.sim.properties.get(property_id) if property_id else None
-            if not prop or prop["z"] != pos.z:
-                continue
-
-            focus = _property_focus_position(prop)
-            if focus and _manhattan(pos.x, pos.y, focus[0], focus[1]) <= 1:
-                return prop
-        return None
+        return self.property_actions.active_interact_property_near(pos)
 
     def _handle_door_interaction(self, eid, pos):
-        candidate = _door_interaction_candidate(self.sim, pos)
-        if not candidate:
-            return False
-
-        prop = candidate.get("prop")
-        if prop:
-            self._remember_player_property_discovery(eid, prop, discovery_mode="interact")
-
-        x = int(candidate["x"])
-        y = int(candidate["y"])
-        z = int(candidate["z"])
-        state = candidate.get("state") or {}
-        is_open = bool(state.get("open", False))
-
-        if is_open:
-            success, reason = _door_close_attempt(self.sim, eid, x, y, z)
-            _log_player_feedback(
-                self.sim,
-                _door_action_text(reason, opening=False),
-                kind="interaction",
-            )
-            return bool(success or reason)
-
-        success, reason = _door_open_attempt(
-            self.sim,
-            eid,
-            x,
-            y,
-            z,
-            allow_override=(int(eid) == int(getattr(self.sim, "player_eid", eid))),
-        )
-        _log_player_feedback(
-            self.sim,
-            _door_action_text(reason, opening=True),
-            kind="interaction",
-        )
-        return bool(success or reason)
+        return self.property_actions.handle_door_interaction(eid, pos)
 
     def _handle_door_lock_toggle(self, eid, pos):
-        candidate = _door_interaction_candidate(self.sim, pos)
-        if not candidate:
-            _log_player_feedback(
-                self.sim,
-                "No door nearby to lock.",
-                kind="interaction",
-            )
-            return True
-
-        prop = candidate.get("prop")
-        if prop:
-            self._remember_player_property_discovery(eid, prop, discovery_mode="interact")
-        if not isinstance(prop, dict):
-            _log_player_feedback(
-                self.sim,
-                _door_lock_action_text("not_property_door"),
-                kind="interaction",
-            )
-            return True
-
-        access_entry = self._property_lock_access_for(eid, prop)
-        if not access_entry:
-            controller = _property_access_controller(self.sim, prop)
-            _log_player_feedback(
-                self.sim,
-                _door_lock_action_text(
-                    "lock_access_denied",
-                    requirement=_controller_access_requirement_text(controller),
-                ),
-                kind="interaction",
-            )
-            return True
-
-        x = int(candidate["x"])
-        y = int(candidate["y"])
-        z = int(candidate["z"])
-        state = candidate.get("state") or {}
-        lock_state = property_lock_state(prop)
-        currently_locked = bool(lock_state.get("locked"))
-        access_mode = str(access_entry.get("mode", "authorized")).strip().lower() or "authorized"
-
-        if bool(state.get("open", False)):
-            success, reason = _door_close_attempt(self.sim, eid, x, y, z)
-            if not success:
-                _log_player_feedback(
-                    self.sim,
-                    _door_lock_action_text(reason),
-                    kind="interaction",
-                )
-                return True
-            if currently_locked:
-                _log_player_feedback(
-                    self.sim,
-                    _door_lock_action_text("closed_locked"),
-                    kind="interaction",
-                )
-                return True
-            success = _set_property_locked_override(
-                prop,
-                locked=True,
-                tick=self.sim.tick,
-                method=f"{access_mode}_manual_lock",
-            )
-            _log_player_feedback(
-                self.sim,
-                _door_lock_action_text("closed_then_locked" if success else "not_property_door"),
-                kind="interaction",
-            )
-            return True
-
-        if currently_locked:
-            success = _set_property_locked_override(
-                prop,
-                locked=False,
-                tick=self.sim.tick,
-                method=f"{access_mode}_manual_unlock",
-            )
-            _log_player_feedback(
-                self.sim,
-                _door_lock_action_text("unlocked" if success else "not_property_door"),
-                kind="interaction",
-            )
-            return True
-
-        success = _set_property_locked_override(
-            prop,
-            locked=True,
-            tick=self.sim.tick,
-            method=f"{access_mode}_manual_lock",
-        )
-        _log_player_feedback(
-            self.sim,
-            _door_lock_action_text("locked" if success else "not_property_door"),
-            kind="interaction",
-        )
-        return True
+        return self.property_actions.handle_door_lock_toggle(eid, pos)
 
     def _npc_for_player_action(self, eid, pos, radius=1):
         positions = self.sim.ecs.get(Position)
@@ -16641,6 +15073,7 @@ class PlayerActionSystem(System):
             vz,
             exclude_eid=eid,
         )
+        witnessed = bool(witnesses)
         severity_score = min(100, 22 + (lock_state["lock_tier"] * 8))
         self.sim.emit(Event(
             "property_tamper",
@@ -16650,7 +15083,7 @@ class PlayerActionSystem(System):
             x=vx,
             y=vy,
             z=vz,
-            witnessed=bool(witnesses),
+            witnessed=witnessed,
             witness_count=len(witnesses),
             witnesses=tuple(witnesses[:4]),
             access_level="protected",
@@ -16659,14 +15092,15 @@ class PlayerActionSystem(System):
             standing_reason="none",
             ingress_method=method,
         ))
-        self._emit_action_offense(
-            eid=eid,
-            action="vehicle_theft",
-            context="tamper",
-            x=vx,
-            y=vy,
-            z=vz,
-        )
+        if witnessed:
+            self._emit_action_offense(
+                eid=eid,
+                action="vehicle_theft",
+                context="tamper",
+                x=vx,
+                y=vy,
+                z=vz,
+            )
 
     def _attempt_vehicle_theft(self, eid, pos, vehicle_prop):
         if not isinstance(vehicle_prop, dict):
@@ -16715,32 +15149,16 @@ class PlayerActionSystem(System):
         return True, method, method
 
     def _locked_ordinary_entry_property(self, eid, pos, target_x, target_y, target_z):
-        prop = _property_covering(self.sim, target_x, target_y, target_z)
-        if not prop or str(prop.get("kind", "")).strip().lower() != "building":
-            return None
-
-        ingress = _property_ingress_context(
-            prop,
-            from_x=pos.x,
-            from_y=pos.y,
-            from_z=pos.z,
-            to_x=target_x,
-            to_y=target_y,
-            to_z=target_z,
+        return self.property_ingress.locked_ordinary_entry_property(
+            eid,
+            pos,
+            target_x,
+            target_y,
+            target_z,
         )
-        if ingress.ingress_kind != "ordinary_entry":
-            return None
-
-        lock_state = property_lock_state(prop)
-        if not lock_state["locked"]:
-            return None
-        if self._property_credential_access_for(eid, prop):
-            return None
-        return prop
 
     def _attempt_locked_property_entry(self, eid, prop, *, target_x, target_y, target_z):
-        return _attempt_locked_property_entry_with_sim(
-            self.sim,
+        return self.property_ingress.attempt_locked_property_entry(
             eid,
             prop,
             target_x=target_x,
@@ -16748,748 +15166,14 @@ class PlayerActionSystem(System):
             target_z=target_z,
         )
 
-    def _ingress_method_profile(self, eid, prop, ingress, claim_reason):
-        modes = self._mode_state_for(eid)
-        sneak_active = bool(modes and modes.sneak)
-        ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
-        aperture_kind = str(getattr(ingress, "aperture_kind", "") or "").strip().lower()
-        side_entry_terms = self._access_tool_terms_for(eid, prop, context="side_entry")
-        door_like_ingress = (
-            ingress_kind == "ordinary_entry"
-            or (ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind))
-        )
-
-        if ingress_kind == "deep_breach":
-            return "deep_breach", 10, 12
-        if ingress_kind == "boundary_breach":
-            return "forced_breach", 8, 10
-
-        if ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
-            if side_entry_terms.get("enabled") and sneak_active:
-                return "quiet_window_entry", 2, 4
-            if sneak_active:
-                return "careful_window_entry", 4, 6
-            return "crash_window_entry", 8, 10
-
-        if door_like_ingress:
-            if claim_reason:
-                return "authorized_side_entry", 0, 0
-            if (
-                not side_entry_terms.get("enabled")
-                and self._access_override_score(eid, tool_terms=side_entry_terms)
-                >= self._lock_override_required(prop, tool_terms=side_entry_terms)
-            ):
-                return "manual_side_entry", 2, 4
-            if side_entry_terms.get("enabled"):
-                return "jimmied_side_entry", 1, 2
-            return "forced_side_entry", 6, 8
-
-        if claim_reason:
-            return "authorized_side_entry", 0, 0
-        return "forced_side_entry", 5, 7
-
-    def _ingress_attempt_profile(self, eid, prop, ingress, claim_reason):
-        ingress_method, severity_bonus, offense_bonus = self._ingress_method_profile(
-            eid,
-            prop,
-            ingress,
-            claim_reason,
-        )
-        profile = {
-            "method": ingress_method,
-            "severity_bonus": severity_bonus,
-            "offense_bonus": offense_bonus,
-            "hostile": ingress_method in {
-                "quiet_window_entry",
-                "careful_window_entry",
-                "crash_window_entry",
-                "forced_breach",
-                "deep_breach",
-            },
-            "unauthorized": ingress_method in {
-                "manual_side_entry",
-                "jimmied_side_entry",
-                "forced_side_entry",
-            },
-            "automatic": ingress_method == "authorized_side_entry",
-        }
-        if profile["automatic"]:
-            return profile
-
-        tool_terms = self._access_tool_terms_for(eid, prop, context="side_entry")
-        score = self._access_override_score(eid, tool_terms=tool_terms)
-        required = self._lock_override_required(prop, tool_terms=tool_terms)
-        ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
-        aperture_kind = str(getattr(ingress, "aperture_kind", "") or "").strip().lower()
-        breach_severity = max(0.0, float(getattr(ingress, "breach_severity", 0.0) or 0.0))
-        athletics = _actor_skill(self.sim, eid, "athletics")
-
-        if ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
-            score += max(0.0, athletics - 5.0) * 0.24
-            if ingress_method == "quiet_window_entry":
-                score += 0.35
-            elif ingress_method == "careful_window_entry":
-                score += 0.18
-            required += 0.35 + (breach_severity * 1.2)
-            context = "window_entry"
-            channel = "window_entry"
-        elif ingress_kind in {"boundary_breach", "deep_breach"}:
-            mechanics = _actor_skill(self.sim, eid, "mechanics")
-            score += max(0.0, athletics - 5.0) * 0.36
-            score += max(0.0, mechanics - 5.0) * 0.14
-            required += 0.75 + (breach_severity * 1.9)
-            context = "wall_breach"
-            channel = "wall_breach"
-        else:
-            required += 0.2 + (breach_severity * 0.9)
-            if ingress_method == "manual_side_entry":
-                score += 0.15
-            elif ingress_method == "forced_side_entry":
-                required += 0.2
-            context = "side_entry"
-            channel = "door_breach"
-
-        profile["context"] = context
-        profile["channel"] = channel
-        profile["tool_terms"] = tool_terms
-        profile["attempt"] = _resolve_access_skill_check(
-            self.sim,
-            eid=eid,
-            prop=prop,
-            context=context,
-            channel=channel,
-            score=score,
-            required=required,
-            tool_terms=tool_terms,
-            allow_fumble=True,
-        )
-        return profile
-
-    def _failed_ingress_attempt_text(self, ingress_mode, ingress_method, prop, *, fumbled=False, eid=None):
-        prop_name = str((prop or {}).get("name", (prop or {}).get("id", "property"))).strip() or "property"
-        method = str(ingress_method or "").strip().lower()
-
-        if method in {"quiet_window_entry", "careful_window_entry", "crash_window_entry"}:
-            base = f"You {'botch' if fumbled else 'fail'} the window entry at {prop_name}."
-        elif method in {"forced_breach", "deep_breach"}:
-            base = f"You {'botch' if fumbled else 'fail'} the wall breach at {prop_name}."
-        else:
-            mode_text = _ingress_mode_label(ingress_mode)
-            if fumbled:
-                base = f"You botch the {mode_text} at {prop_name}."
-            else:
-                base = f"You fail to make the {mode_text} at {prop_name}."
-
-        hint = self._ingress_tool_hint(eid, ingress_mode)
-        if hint:
-            return f"{base} {hint}".strip()
-        return base
-
-    def _emit_failed_ingress_attempt(self, eid, candidate, prop, ingress, ingress_method, *, severity_bonus=0, offense_bonus=0):
-        access = _evaluate_property_access(
-            self.sim,
-            eid,
-            prop,
-            x=candidate["x"],
-            y=candidate["y"],
-            z=candidate["z"],
-            breach_severity=ingress.breach_severity,
-        )
-        witnesses = _watchers_for_position(
-            self.sim,
-            candidate["x"],
-            candidate["y"],
-            candidate["z"],
-            exclude_eid=eid,
-        )
-        severity_score = max(
-            18,
-            int(access.severity_score) + int(round(float(ingress.breach_severity) * 10.0)),
-        )
-        severity_score = min(100, severity_score + int(max(0, severity_bonus)))
-        self.sim.emit(Event(
-            "property_tamper",
-            offender_eid=eid,
-            property_id=prop["id"],
-            owner_eid=prop.get("owner_eid"),
-            x=candidate["x"],
-            y=candidate["y"],
-            z=candidate["z"],
-            witnessed=bool(witnesses),
-            witness_count=len(witnesses),
-            witnesses=tuple(witnesses[:4]),
-            access_level=access.access_level,
-            severity_score=severity_score,
-            severity_label=_trespass_label_from_score(severity_score),
-            standing_reason=access.standing_reason,
-            ingress_kind=ingress.ingress_kind,
-            aperture_kind=ingress.aperture_kind,
-            ingress_method=ingress_method,
-            breach_severity=ingress.breach_severity,
-        ))
-        offense_score = min(
-            100,
-            self._offense_score_for("tamper", context="ordinary")
-            + int(round(float(ingress.breach_severity) * 12.0))
-            + int(max(0, offense_bonus)),
-        )
-        self._emit_action_offense(
-            eid=eid,
-            action="tamper",
-            context="ordinary",
-            score=offense_score,
-            x=candidate["x"],
-            y=candidate["y"],
-            z=candidate["z"],
-        )
-
-    def _ingress_mode_matches(self, candidate, ingress_mode):
-        ingress_mode = str(ingress_mode or "").strip().lower()
-        ingress = candidate.get("ingress")
-        aperture_kind = str(getattr(ingress, "aperture_kind", "") or "").strip().lower()
-        ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
-
-        if ingress_mode == "side_entry":
-            return ingress_kind == "ordinary_entry" or (
-                ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind)
-            )
-        if ingress_mode == "window_entry":
-            return ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind)
-        if ingress_mode == "forced_breach":
-            return ingress_kind in {"boundary_breach", "deep_breach"}
-        return True
-
-    def _internal_ingress_candidate(self, pos, prop, target_x, target_y, target_z, *, tile=None, aperture=None):
-        origin_prop = _property_covering(self.sim, pos.x, pos.y, pos.z)
-        if not origin_prop or origin_prop.get("id") != prop.get("id"):
-            return None
-
-        if aperture is None:
-            aperture = _property_aperture_at(prop, target_x, target_y, target_z)
-        if aperture and not bool(aperture.get("ordinary")):
-            kind = str(aperture.get("kind", "") or "").strip().lower()
-            if kind in {"window", "skylight"}:
-                severity = 0.45
-            elif kind in {"side_door", "service_door", "employee_door"}:
-                severity = 0.22
-            else:
-                severity = 0.32
-            return PropertyIngressResult(
-                property_id=prop.get("id") if isinstance(prop, dict) else None,
-                from_inside=True,
-                to_inside=True,
-                entered_bounds=False,
-                ingress_kind="alternate_aperture",
-                aperture_kind=kind,
-                breach_severity=severity,
-            )
-
-        if tile is None:
-            tile = self.sim.tilemap.tile_at(target_x, target_y, target_z)
-        if tile and not tile.walkable and _property_boundary_tile(prop, target_x, target_y, target_z):
-            return PropertyIngressResult(
-                property_id=prop.get("id") if isinstance(prop, dict) else None,
-                from_inside=True,
-                to_inside=True,
-                entered_bounds=False,
-                ingress_kind="boundary_breach",
-                aperture_kind="",
-                breach_severity=0.58,
-            )
-        return None
-
-    def _adjacent_ingress_candidates(self, pos, ingress_mode=None):
-        candidates = []
-        for dx, dy in ((0, -1), (1, 0), (0, 1), (-1, 0)):
-            tx = pos.x + dx
-            ty = pos.y + dy
-            tz = pos.z
-
-            prop = _property_covering(self.sim, tx, ty, tz)
-            if not prop or str(prop.get("kind", "") or "").strip().lower() != "building":
-                continue
-
-            ingress = _property_ingress_context(
-                prop,
-                from_x=pos.x,
-                from_y=pos.y,
-                from_z=pos.z,
-                to_x=tx,
-                to_y=ty,
-                to_z=tz,
-            )
-            tile = self.sim.tilemap.tile_at(tx, ty, tz)
-            aperture = _property_aperture_at(prop, tx, ty, tz)
-            if not ingress.entered_bounds:
-                ingress = self._internal_ingress_candidate(
-                    pos,
-                    prop,
-                    tx,
-                    ty,
-                    tz,
-                    tile=tile,
-                    aperture=aperture,
-                )
-                if not ingress:
-                    continue
-            if ingress.ingress_kind == "ordinary_entry":
-                priority = 0
-            elif ingress.ingress_kind == "alternate_aperture":
-                priority = 0
-            elif tile and not tile.walkable:
-                priority = 1
-            else:
-                continue
-
-            candidates.append({
-                "priority": priority,
-                "prop": prop,
-                "x": tx,
-                "y": ty,
-                "z": tz,
-                "tile": tile,
-                "aperture": aperture,
-                "ingress": ingress,
-            })
-
-        if ingress_mode:
-            candidates = [candidate for candidate in candidates if self._ingress_mode_matches(candidate, ingress_mode)]
-
-        candidates.sort(
-            key=lambda row: (
-                int(row["priority"]),
-                float(row["ingress"].breach_severity),
-                row["prop"].get("id", ""),
-                row["y"],
-                row["x"],
-            )
-        )
-        return candidates
-
-    def _authorized_side_entry_reason(self, eid, candidate):
-        pos = self.sim.ecs.get(Position).get(eid)
-        prop = candidate["prop"]
-        ingress = candidate["ingress"]
-        aperture_kind = str(ingress.aperture_kind or "").strip().lower()
-        if _is_window_aperture(aperture_kind):
-            return ""
-        if not (
-            str(ingress.ingress_kind or "").strip().lower() == "ordinary_entry"
-            or _is_side_aperture(aperture_kind)
-        ):
-            return ""
-
-        access = _evaluate_property_access(
-            self.sim,
-            eid,
-            prop,
-            x=candidate["x"],
-            y=candidate["y"],
-            z=candidate["z"],
-            breach_severity=ingress.breach_severity,
-        )
-        if not access.permitted or not pos:
-            return ""
-
-        _, claim_reason = _property_claim_reason(
-            self.sim,
-            eid,
-            prop,
-            x=pos.x,
-            y=pos.y,
-            z=pos.z,
-            min_standing=0.52,
-        )
-        return claim_reason
-
-    def _open_ingress_tile(self, candidate, hostile=False):
-        tile = candidate.get("tile")
-        if tile and tile.walkable:
-            return
-
-        ingress = candidate["ingress"]
-        aperture_kind = str(ingress.aperture_kind or "").strip().lower()
-        if (
-            str(ingress.ingress_kind or "").strip().lower() == "ordinary_entry"
-            or (ingress.ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind))
-        ):
-            if _set_door_open_state(
-                self.sim,
-                int(candidate["x"]),
-                int(candidate["y"]),
-                int(candidate["z"]),
-                True,
-            ):
-                return
-        if not hostile and ingress.ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
-            glyph = '"'
-        elif not hostile and ingress.ingress_kind == "alternate_aperture":
-            glyph = "+"
-        else:
-            glyph = "/"
-        self.sim.tilemap.set_tile(
-            int(candidate["x"]),
-            int(candidate["y"]),
-            Tile(walkable=True, transparent=True, glyph=glyph),
-            z=int(candidate["z"]),
-        )
-
-    def _ingress_tool_hint(self, eid, ingress_mode):
-        mode = str(ingress_mode or "").strip().lower()
-        if mode not in {"side_entry", "window_entry"}:
-            return ""
-        side_terms = self._access_tool_terms_for(eid, context="side_entry")
-        if side_terms.get("enabled"):
-            return "Sneak plus your current tools improve your odds."
-        return "A lockpick kit or prybar can help with door breaches and window ingress."
-
-    def _missing_ingress_text(self, ingress_mode, *, eid=None):
-        ingress_mode = str(ingress_mode or "").strip().lower()
-        if ingress_mode == "side_entry":
-            base = "No adjacent door to breach."
-            hint = self._ingress_tool_hint(eid, ingress_mode)
-            return f"{base} {hint}".strip()
-        if ingress_mode == "window_entry":
-            base = "No adjacent window to climb through."
-            hint = self._ingress_tool_hint(eid, ingress_mode)
-            return f"{base} {hint}".strip()
-        if ingress_mode == "forced_breach":
-            return "No adjacent wall to breach."
-        return "No adjacent ingress point."
-
-    def _ingress_blocked_text(self, reason, ingress_mode, prop, *, eid=None):
-        mode_text = _ingress_mode_label(ingress_mode)
-        prop_name = str((prop or {}).get("name", (prop or {}).get("id", "property"))).strip() or "property"
-        reason_key = str(reason or "").strip().lower()
-
-        if reason_key.startswith("blocked_entity"):
-            base = f"Your {mode_text} path into {prop_name} is blocked by someone in the way."
-        elif reason_key == "blocked_tile":
-            base = f"That {mode_text} entry into {prop_name} is obstructed."
-        elif reason_key == "out_of_bounds":
-            base = f"That {mode_text} approach is out of bounds."
-        else:
-            base = f"{mode_text.title()} ingress into {prop_name} is blocked."
-
-        hint = self._ingress_tool_hint(eid, ingress_mode)
-        if hint:
-            return f"{base} {hint}".strip()
-        return base
-
     def _handle_ingress_action(self, eid, pos, ingress_mode):
-        cover = self._cover_state_for(eid)
-        had_cover = bool(cover and cover.active)
-        candidates = self._adjacent_ingress_candidates(pos, ingress_mode=ingress_mode)
-        if not candidates:
-            _log_player_feedback(
-                self.sim,
-                self._missing_ingress_text(ingress_mode, eid=eid),
-                kind="movement",
-            )
-            return
+        return self.property_ingress.handle_ingress_action(eid, pos, ingress_mode)
 
-        candidate = candidates[0]
-        prop = candidate["prop"]
-        ingress = candidate["ingress"]
-        claim_reason = self._authorized_side_entry_reason(eid, candidate)
-        ingress_profile = self._ingress_attempt_profile(eid, prop, ingress, claim_reason)
-        ingress_method = ingress_profile["method"]
-        severity_bonus = ingress_profile["severity_bonus"]
-        offense_bonus = ingress_profile["offense_bonus"]
-        hostile = bool(ingress_profile["hostile"])
-        unauthorized_entry = bool(ingress_profile["unauthorized"])
-
-        if not ingress_profile["automatic"]:
-            attempt = ingress_profile.get("attempt") or {}
-            if not bool(attempt.get("success")):
-                self._emit_failed_ingress_attempt(
-                    eid,
-                    candidate,
-                    prop,
-                    ingress,
-                    ingress_method,
-                    severity_bonus=severity_bonus,
-                    offense_bonus=offense_bonus,
-                )
-                _maybe_damage_access_tool(
-                    self.sim,
-                    eid,
-                    ingress_profile.get("tool_terms") or {},
-                    prop=prop,
-                    score=attempt.get("score", 0.0),
-                    required=attempt.get("required", 0.0),
-                    context=ingress_profile.get("context") or "side_entry",
-                    channel=ingress_profile.get("channel") or "ingress_attempt",
-                    fumbled=bool(attempt.get("fumbled")),
-                )
-                _log_player_feedback(
-                    self.sim,
-                    self._failed_ingress_attempt_text(
-                        ingress_mode,
-                        ingress_method,
-                        prop,
-                        fumbled=bool(attempt.get("fumbled")),
-                        eid=eid,
-                    ),
-                    kind="movement",
-                )
-                return
-
-        self._open_ingress_tile(
-            candidate,
-            hostile=bool(hostile or ingress_method == "forced_side_entry"),
-        )
-
-        moved, reason = try_move_entity(
-            self.sim,
-            eid=eid,
-            new_x=candidate["x"],
-            new_y=candidate["y"],
-            new_z=candidate["z"],
-            reason=str(ingress_mode or "ingress"),
-        )
-        if not moved:
-            _log_player_feedback(
-                self.sim,
-                self._ingress_blocked_text(reason, ingress_mode, prop, eid=eid),
-                kind="movement",
-            )
-            return
-
-        new_pos = self.sim.ecs.get(Position).get(eid)
-        access = _evaluate_property_access(
-            self.sim,
-            eid,
-            prop,
-            x=candidate["x"],
-            y=candidate["y"],
-            z=candidate["z"],
-            breach_severity=ingress.breach_severity,
-        )
-        witnesses = _watchers_for_position(
-            self.sim,
-            candidate["x"],
-            candidate["y"],
-            candidate["z"],
-            exclude_eid=eid,
-        )
-
-        if hostile:
-            severity_score = max(
-                24,
-                int(access.severity_score) + int(round(float(ingress.breach_severity) * 12.0)),
-            )
-            severity_score = min(100, severity_score + int(max(0, severity_bonus)))
-            severity_label = _trespass_label_from_score(severity_score)
-            self.sim.emit(Event(
-                "property_tamper",
-                offender_eid=eid,
-                property_id=prop["id"],
-                owner_eid=prop.get("owner_eid"),
-                x=candidate["x"],
-                y=candidate["y"],
-                z=candidate["z"],
-                witnessed=bool(witnesses),
-                witness_count=len(witnesses),
-                witnesses=tuple(witnesses[:4]),
-                access_level=access.access_level,
-                severity_score=severity_score,
-                severity_label=severity_label,
-                standing_reason=access.standing_reason,
-                ingress_kind=ingress.ingress_kind,
-                aperture_kind=ingress.aperture_kind,
-                ingress_method=ingress_method,
-                breach_severity=ingress.breach_severity,
-            ))
-            offense_score = min(
-                100,
-                self._offense_score_for("tamper", context="ordinary")
-                + int(round(float(ingress.breach_severity) * 14.0))
-                + int(max(0, offense_bonus))
-            )
-            self._emit_action_offense(
-                eid=eid,
-                action="tamper",
-                context="ordinary",
-                score=offense_score,
-                x=candidate["x"],
-                y=candidate["y"],
-                z=candidate["z"],
-            )
-        elif unauthorized_entry:
-            severity_score = max(
-                16,
-                int(access.severity_score) + int(round(float(ingress.breach_severity) * 10.0)),
-            )
-            severity_score = min(100, severity_score + int(max(0, severity_bonus)))
-            severity_label = _trespass_label_from_score(severity_score)
-            self.sim.emit(Event(
-                "property_trespass",
-                offender_eid=eid,
-                property_id=prop["id"],
-                owner_eid=prop.get("owner_eid"),
-                x=candidate["x"],
-                y=candidate["y"],
-                z=candidate["z"],
-                witnessed=bool(witnesses),
-                witness_count=len(witnesses),
-                witnesses=tuple(witnesses[:4]),
-                access_level=access.access_level,
-                severity_score=severity_score,
-                severity_label=severity_label,
-                standing_reason=access.standing_reason,
-                currently_open=access.currently_open,
-                current_hour=access.current_hour,
-                ingress_kind=ingress.ingress_kind,
-                aperture_kind=ingress.aperture_kind,
-                ingress_method=ingress_method,
-                breach_severity=ingress.breach_severity,
-            ))
-            offense_score = min(
-                100,
-                max(
-                    self._offense_score_for("move", context="trespass"),
-                    14,
-                )
-                + int(round(float(ingress.breach_severity) * 10.0))
-                + int(max(0, offense_bonus))
-            )
-            self._emit_action_offense(
-                eid=eid,
-                action="move",
-                context="trespass",
-                score=offense_score,
-                x=candidate["x"],
-                y=candidate["y"],
-                z=candidate["z"],
-            )
-        else:
-            name = prop.get("name", prop.get("id", "property"))
-            reason_text = _standing_reason_label(claim_reason)
-            mode_text = _ingress_mode_label(ingress_mode)
-            method_text = _ingress_method_label(ingress_method)
-            if reason_text:
-                if method_text and method_text != "authorized":
-                    _log_player_feedback(
-                        self.sim,
-                        f"Used {mode_text} into {name} ({reason_text}, {method_text}).",
-                        kind="movement",
-                    )
-                else:
-                    _log_player_feedback(
-                        self.sim,
-                        f"Used {mode_text} into {name} ({reason_text}).",
-                        kind="movement",
-                    )
-            else:
-                if method_text and method_text != "authorized":
-                    _log_player_feedback(
-                        self.sim,
-                        f"Used {mode_text} into {name} ({method_text}).",
-                        kind="movement",
-                    )
-                else:
-                    _log_player_feedback(self.sim, f"Used {mode_text} into {name}.", kind="movement")
-
-        self._refresh_cover_after_move(eid, new_pos, had_cover=had_cover)
+    def _handle_interact_action(self, eid, pos):
+        return self.property_actions.handle_interact_action(eid, pos)
 
     def _handle_purchase(self, eid, pos):
-        prop = self._property_for_player_action(pos, radius=1)
-        if not prop:
-            self.sim.emit(Event(
-                "property_purchase_blocked",
-                eid=eid,
-                reason="no_property",
-            ))
-            return
-
-        if str(prop.get("kind", "")).strip().lower() != "building":
-            self.sim.emit(Event(
-                "property_purchase_blocked",
-                eid=eid,
-                reason="not_for_sale",
-                property_id=prop["id"],
-            ))
-            return
-
-        if self._player_owns_property(eid, prop):
-            self.sim.emit(Event(
-                "property_purchase_blocked",
-                eid=eid,
-                reason="already_owner",
-                property_id=prop["id"],
-            ))
-            return
-
-        assets = self.sim.ecs.get(PlayerAssets).get(eid)
-        if not assets:
-            self.sim.emit(Event(
-                "property_purchase_blocked",
-                eid=eid,
-                reason="missing_assets",
-                property_id=prop["id"],
-            ))
-            return
-
-        owner_eid = prop.get("owner_eid")
-        owner_tag = prop.get("owner_tag")
-        for_sale = owner_eid is None or owner_tag in {None, "city"}
-        if not for_sale:
-            self.sim.emit(Event(
-                "property_purchase_blocked",
-                eid=eid,
-                reason="not_for_sale",
-                property_id=prop["id"],
-                owner_eid=owner_eid,
-                owner_tag=owner_tag,
-            ))
-            self._emit_action_offense(
-                eid=eid,
-                action="purchase_property",
-                context="not_for_sale_attempt",
-                x=prop["x"],
-                y=prop["y"],
-                z=prop["z"],
-            )
-            return
-
-        metadata = prop.get("metadata", {})
-        price = max(1, int(metadata.get("purchase_cost", 150)))
-        if assets.credits < price:
-            self.sim.emit(Event(
-                "property_purchase_blocked",
-                eid=eid,
-                reason="insufficient_funds",
-                property_id=prop["id"],
-                price=price,
-                credits=assets.credits,
-            ))
-            return
-
-        old_owner = owner_eid
-        assets.credits -= price
-        self.sim.assign_property_owner(prop["id"], owner_eid=eid, owner_tag="player")
-
-        self.sim.emit(Event(
-            "property_owner_changed",
-            property_id=prop["id"],
-            old_owner_eid=old_owner,
-            new_owner_eid=eid,
-        ))
-        self.sim.emit(Event(
-            "property_purchased",
-            eid=eid,
-            property_id=prop["id"],
-            price=price,
-        ))
-        self._emit_action_offense(
-            eid=eid,
-            action="purchase_property",
-            context="ordinary",
-            x=prop["x"],
-            y=prop["y"],
-            z=prop["z"],
-        )
+        return self.property_actions.handle_purchase(eid, pos)
 
     def _find_walkable_near(self, x, y, z=0, radius=8):
         if self.sim.tilemap.is_walkable(x, y, z):
@@ -18507,6 +16191,14 @@ class PlayerActionSystem(System):
             ))
             return
 
+        scan_terms = _scan_skill_terms(self.sim, eid)
+        radius += max(0, _int_or_default(scan_terms.get("radius_bonus"), 0))
+        detail_level = max(0, _int_or_default(scan_terms.get("detail_level"), 0))
+        display_limit = max(1, min(8, _int_or_default(scan_terms.get("display_limit"), 5)))
+        scan_note = str(scan_terms.get("note", "") or "").strip()
+        access_prep_terms = _access_prep_skill_terms(self.sim, eid)
+        access_prep_reveal_tier = max(0, _int_or_default(access_prep_terms.get("reveal_tier"), 0))
+
         best_property = None
         best_property_dist = radius + 1
         for prop in self.sim.properties.values():
@@ -18590,6 +16282,41 @@ class PlayerActionSystem(System):
                 best_property,
                 property_text,
             ))
+            if detail_level >= 1:
+                detail_bits = []
+                controller = _property_access_controller(self.sim, best_property)
+                controller_kind = str(controller.get("kind", "none")).strip().lower() or "none"
+                if controller_kind != "none":
+                    requirement = _controller_access_requirement_text(controller)
+                    if requirement:
+                        detail_bits.append(f"req:{requirement}")
+                access_modes = _property_access_summary(self.sim, best_property, viewer_eid=eid)
+                if access_modes:
+                    detail_bits.append(f"modes:{access_modes}")
+                services = []
+                for service in list(_finance_services_for_property(best_property)) + list(_site_services_for_property(best_property)):
+                    label = str(service).strip().lower()
+                    if label and label not in services:
+                        services.append(label)
+                if services:
+                    detail_bits.append("services:" + ",".join(services[:4]))
+                if detail_level >= 2:
+                    org_snapshot = _organization_snapshot(self.sim, prop=best_property, ensure=True)
+                    if isinstance(org_snapshot, dict):
+                        org_name = str(org_snapshot.get("organization_name", "") or "").strip()
+                        if org_name:
+                            detail_bits.append(f"org:{org_name}")
+                if detail_bits:
+                    lines.append("Property detail: " + "  ".join(detail_bits))
+                prep_reveal_tier = min(detail_level, access_prep_reveal_tier)
+                if prep_reveal_tier > 0:
+                    lines.extend(_access_prep_detail_lines(
+                        self.sim,
+                        eid,
+                        best_property,
+                        controller=controller,
+                        reveal_tier=prep_reveal_tier,
+                    ))
 
         if best_item:
             item_id = best_item.get("item_id")
@@ -18599,6 +16326,17 @@ class PlayerActionSystem(System):
                 item_id,
                 f"Item {item_name} x{int(best_item.get('quantity', 1))} {best_item_dist}t away",
             ))
+            if detail_level >= 1:
+                item_tags = [
+                    str(tag).strip().lower()
+                    for tag in item_def.get("tags", ())
+                    if str(tag).strip()
+                ]
+                legal_status = str(item_def.get("legal_status", "legal")).strip().lower() or "legal"
+                detail_bits = [f"status:{legal_status}"]
+                if item_tags:
+                    detail_bits.append("tags:" + "/".join(item_tags[:4]))
+                lines.append("Item detail: " + "  ".join(detail_bits))
 
         if best_npc:
             npc_eid, npc_pos, npc_ai, npc_memory, npc_throttle, npc_effects, npc_identity, npc_occupation, npc_routine = best_npc
@@ -18671,6 +16409,9 @@ class PlayerActionSystem(System):
             eid=eid,
             mode="city",
             radius=radius,
+            detail_level=detail_level,
+            note=scan_note,
+            display_limit=display_limit,
             lines=lines,
         ))
 
@@ -18758,32 +16499,6 @@ class PlayerActionSystem(System):
             target_y = pos.y + dy
             cover = self._cover_state_for(eid)
             had_cover = bool(cover and cover.active)
-            locked_prop = self._locked_ordinary_entry_property(
-                eid,
-                pos,
-                target_x,
-                target_y,
-                pos.z,
-            )
-            if locked_prop:
-                entry_ok, reason = self._attempt_locked_property_entry(
-                    eid,
-                    locked_prop,
-                    target_x=target_x,
-                    target_y=target_y,
-                    target_z=pos.z,
-                )
-                if not entry_ok:
-                    self.sim.emit(Event(
-                        "move_blocked",
-                        eid=eid,
-                        x=target_x,
-                        y=target_y,
-                        z=pos.z,
-                        reason=reason,
-                        property_id=locked_prop.get("id"),
-                    ))
-                    return
 
             moved, reason = try_move_entity(
                 self.sim,
@@ -18795,6 +16510,7 @@ class PlayerActionSystem(System):
             )
 
             if not moved:
+                blocked_prop = _property_covering(self.sim, target_x, target_y, pos.z)
                 self.sim.emit(Event(
                     "move_blocked",
                     eid=eid,
@@ -18802,6 +16518,7 @@ class PlayerActionSystem(System):
                     y=target_y,
                     z=pos.z,
                     reason=reason,
+                    property_id=(blocked_prop or {}).get("id"),
                 ))
             else:
                 self._emit_move_access_offense(
@@ -18933,53 +16650,7 @@ class PlayerActionSystem(System):
             return
 
         if action == "interact":
-            prop = self._active_interact_property_near(pos)
-            npc_eid = None if prop else self._npc_for_player_action(eid, pos, radius=1)
-            if npc_eid is not None:
-                self.sim.emit(Event(
-                    "npc_interact",
-                    eid=eid,
-                    npc_eid=npc_eid,
-                    x=pos.x,
-                    y=pos.y,
-                    z=pos.z,
-                ))
-                return
-
-            if self._handle_door_interaction(eid, pos):
-                return
-
-            if not prop:
-                vehicle_prop = self._vehicle_for_player_action(eid=eid, pos=pos, radius=1)
-                if vehicle_prop is not None:
-                    self._enter_vehicle(eid=eid, pos=pos, vehicle_prop=vehicle_prop)
-                    return
-
-            if not prop:
-                prop = self.sim.property_at(pos.x, pos.y, pos.z)
-            if not prop:
-                prop = self._property_for_player_action(pos, radius=1)
-            if not prop:
-                self.sim.emit(Event("interact_empty", eid=eid, x=pos.x, y=pos.y, z=pos.z))
-                return
-
-            self._remember_player_property_discovery(eid, prop, discovery_mode="interact")
-            self.sim.emit(Event(
-                "property_interact",
-                eid=eid,
-                property_id=prop["id"],
-                x=prop["x"],
-                y=prop["y"],
-                z=prop["z"],
-            ))
-            self._emit_action_offense(
-                eid=eid,
-                action=action,
-                context="ordinary",
-                x=prop["x"],
-                y=prop["y"],
-                z=prop["z"],
-            )
+            self._handle_interact_action(eid, pos)
             return
 
         if action == "quest_accept":
@@ -19122,12 +16793,31 @@ class ItemSystem(System):
                 reason=reason,
             ))
 
-    def _equip_weapon_item(self, eid, entry, item_def, reason="manual"):
+    def _toggle_weapon_item(self, eid, entry, item_def, reason="manual"):
         weapon_id = _item_weapon_id(item_def)
         if not weapon_id:
             return False
 
         loadout = self._weapon_loadout_for(eid)
+        item_name = item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=self.catalog)
+        equipped_weapon_id = loadout.current_weapon()
+        if equipped_weapon_id == weapon_id:
+            instance = loadout.weapon_instances.get(weapon_id, {})
+            linked_instance_id = str(instance.get("inventory_instance_id", "")).strip() if isinstance(instance, dict) else ""
+            target_instance_id = str(entry.get("instance_id", "")).strip()
+            if not linked_instance_id or not target_instance_id or linked_instance_id == target_instance_id:
+                loadout.equipped_weapon_id = None
+                self.sim.emit(Event(
+                    "weapon_removed",
+                    eid=eid,
+                    weapon_id=weapon_id,
+                    weapon_name=item_name,
+                    source_item_id=entry.get("item_id"),
+                    source_instance_id=entry.get("instance_id"),
+                    reason=reason,
+                ))
+                return True
+
         previous = loadout.current_weapon()
         instance = self._weapon_item_instance(entry, item_def)
         loadout.add_weapon(weapon_id, instance=instance)
@@ -19143,7 +16833,7 @@ class ItemSystem(System):
             eid=eid,
             previous_weapon_id=previous,
             weapon_id=weapon_id,
-            weapon_name=item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=self.catalog),
+            weapon_name=item_name,
             source_item_id=entry.get("item_id"),
             source_instance_id=entry.get("instance_id"),
             reason=reason,
@@ -19247,6 +16937,7 @@ class ItemSystem(System):
 
     def _apply_item_effects(self, eid, item_def):
         needs = self.sim.ecs.get(NPCNeeds).get(eid)
+        vitality = self.sim.ecs.get(Vitality).get(eid)
         statuses = self._status_for(eid)
         assets = self.sim.ecs.get(PlayerAssets).get(eid)
 
@@ -19270,6 +16961,28 @@ class ItemSystem(System):
                     "type": "modify_need",
                     "need": need,
                     "delta": delta,
+                })
+                continue
+
+            if effect_type == "restore_hp":
+                try:
+                    delta = int(effect.get("delta", 0))
+                except (TypeError, ValueError):
+                    continue
+                if delta <= 0 or not vitality:
+                    continue
+                before = int(getattr(vitality, "hp", 0))
+                max_hp = int(getattr(vitality, "max_hp", 0))
+                if before >= max_hp:
+                    continue
+                after = min(max_hp, before + delta)
+                healed = max(0, after - before)
+                if healed <= 0:
+                    continue
+                vitality.hp = int(after)
+                applied.append({
+                    "type": "restore_hp",
+                    "delta": int(healed),
                 })
                 continue
 
@@ -19396,7 +17109,7 @@ class ItemSystem(System):
 
         item_def = self._item_def(entry["item_id"])
         if _item_weapon_id(item_def):
-            return self._equip_weapon_item(
+            return self._toggle_weapon_item(
                 eid=eid,
                 entry=entry,
                 item_def=item_def,
@@ -20748,7 +18461,9 @@ class TradeSystem(System):
         self.sim.assign_property_owner(vehicle_id, owner_eid=None, owner_tag="public")
         vehicle_meta = _property_metadata(vehicle_prop)
         vehicle_meta["vehicle_owner_tag"] = "public"
-        vehicle_meta["display_color"] = "vehicle_parked"
+        current_display_color = str(vehicle_meta.get("display_color", "")).strip()
+        if not current_display_color.startswith("vehicle_paint_"):
+            vehicle_meta["display_color"] = "vehicle_parked"
         ensure_property_lock(vehicle_prop, locked=True)
         remove_actor_property_credentials(self.sim, eid, vehicle_prop)
 
@@ -21366,2977 +19081,6 @@ class TradeSystem(System):
         state = self._trade_ui_state()
         if state.get("open") and state.get("mode") == "sell":
             self._refresh_trade_ui(mode="sell", keep_selection=True)
-
-
-class FinanceSystem(System):
-
-    ITEM_LOSS_BASE_CHANCE = 0.14
-    ITEM_LOSS_PER_DOWNED = 0.04
-    ITEM_LOSS_MAX_CHANCE = 0.42
-    POLICY_RENEW_NOTICE_TICKS = 600
-
-    BANK_PRODUCTS = (
-        {
-            "policy_key": "money",
-            "tier": "bank_basic",
-            "quality": 1,
-            "name": "Bank Loss Shield",
-            "premium": 26,
-            "duration_ticks": 7200,
-            "coverage_ratio": 0.65,
-            "claim_pool": 180,
-            "max_claim_per_event": 58,
-            "channel": "banking",
-        },
-        {
-            "policy_key": "item",
-            "tier": "bank_locker",
-            "quality": 1,
-            "name": "Locker Rider",
-            "premium": 22,
-            "duration_ticks": 7200,
-            "item_save_charges": 2,
-            "channel": "banking",
-        },
-    )
-
-    INSURANCE_PRODUCTS = (
-        {
-            "policy_key": "money",
-            "tier": "agency_plus",
-            "quality": 2,
-            "name": "Wallet Guard Plus",
-            "premium": 34,
-            "duration_ticks": 8400,
-            "coverage_ratio": 0.82,
-            "claim_pool": 300,
-            "max_claim_per_event": 90,
-            "channel": "insurance",
-        },
-        {
-            "policy_key": "item",
-            "tier": "agency_item",
-            "quality": 2,
-            "name": "Cargo Guard",
-            "premium": 28,
-            "duration_ticks": 8400,
-            "item_save_charges": 4,
-            "channel": "insurance",
-        },
-        {
-            "policy_key": "medical",
-            "tier": "agency_medical",
-            "quality": 2,
-            "name": "Trauma Plan",
-            "premium": 24,
-            "duration_ticks": 4800,
-            "medical_bonus_hp": 14,
-            "channel": "insurance",
-        },
-    )
-
-    def __init__(self, sim, player_eid):
-        super().__init__(sim)
-        self.player_eid = player_eid
-        self.rng = random.Random(f"{sim.seed}:finance")
-        self.sim.events.subscribe("player_action", self.on_player_action)
-        self.sim.events.subscribe("property_interact", self.on_property_interact)
-        self.sim.events.subscribe("finance_service_request", self.on_finance_service_request)
-        self.sim.events.subscribe("player_downed", self.on_player_downed)
-
-    def _assets_for(self, eid):
-        return self.sim.ecs.get(PlayerAssets).get(eid)
-
-    def _profile_for(self, eid):
-        return self.sim.ecs.get(FinancialProfile).get(eid)
-
-    def _position_for(self, eid):
-        return self.sim.ecs.get(Position).get(eid)
-
-    def _insurance_terms(self, eid, prop):
-        return _insurance_contact_terms(self.sim, eid, prop)
-
-    def _active_policy(self, profile, policy_key):
-        if not profile:
-            return None
-        policy = profile.policies.get(policy_key)
-        if not policy:
-            return None
-        if int(policy.get("expires_tick", 0)) <= self.sim.tick:
-            return None
-        return policy
-
-    def _policy_needs_renew(self, policy):
-        if not policy:
-            return True
-
-        expires_tick = int(policy.get("expires_tick", 0))
-        if expires_tick <= self.sim.tick + int(self.POLICY_RENEW_NOTICE_TICKS):
-            return True
-
-        key = policy.get("policy_key")
-        if key == "money":
-            remaining_pool = int(policy.get("remaining_pool", 0))
-            max_claim = int(policy.get("max_claim_per_event", 0))
-            if max_claim > 0 and remaining_pool < max_claim:
-                return True
-        elif key == "item":
-            if int(policy.get("item_save_charges", 0)) <= 0:
-                return True
-        return False
-
-    def _nearest_property_with_service(self, pos, service, radius=2):
-        return _nearest_property_with_finance_service(
-            self.sim,
-            self.player_eid,
-            pos,
-            service,
-            radius=radius,
-        )
-
-    def _preferred_property_service(self, eid, prop):
-        services = set(_finance_services_for_property(prop))
-        if not services:
-            return None
-
-        if "insurance" in services:
-            profile = self._profile_for(eid)
-            offers = self._offer_book_for_property(prop)
-            if offers and self._insurance_attention_needed(profile, offers):
-                return "insurance"
-
-        if "banking" in services:
-            return "banking"
-        if "insurance" in services:
-            return "insurance"
-        return None
-
-    def _offer_book_for_property(self, prop):
-        services = set(_finance_services_for_property(prop))
-        by_policy = {}
-
-        if "banking" in services:
-            for product in self.BANK_PRODUCTS:
-                key = product["policy_key"]
-                current = by_policy.get(key)
-                if not current or product["quality"] > current["quality"]:
-                    by_policy[key] = dict(product)
-
-        if "insurance" in services:
-            for product in self.INSURANCE_PRODUCTS:
-                key = product["policy_key"]
-                current = by_policy.get(key)
-                if not current or product["quality"] > current["quality"]:
-                    by_policy[key] = dict(product)
-
-        ordered = []
-        for key in ("money", "item", "medical"):
-            if key in by_policy:
-                ordered.append(by_policy[key])
-        return ordered
-
-    def _pick_offer(self, profile, offers):
-        by_key = {offer["policy_key"]: offer for offer in offers}
-        for policy_key in ("money", "item", "medical"):
-            offer = by_key.get(policy_key)
-            if not offer:
-                continue
-
-            active = self._active_policy(profile, policy_key)
-            if not active:
-                return offer
-
-            if int(active.get("quality", 0)) < int(offer.get("quality", 0)):
-                return offer
-
-            if self._policy_needs_renew(active):
-                return offer
-
-        if not offers:
-            return None
-        return min(
-            offers,
-            key=lambda offer: int(profile.policies.get(offer["policy_key"], {}).get("expires_tick", 0)),
-        )
-
-    def _insurance_attention_needed(self, profile, offers):
-        if not profile:
-            return bool(offers)
-
-        for offer in offers:
-            policy_key = offer.get("policy_key")
-            if not policy_key:
-                continue
-            active = self._active_policy(profile, policy_key)
-            if not active:
-                return True
-            if int(active.get("quality", 0)) < int(offer.get("quality", 0)):
-                return True
-            if self._policy_needs_renew(active):
-                return True
-        return False
-
-    def _buy_or_renew_policy(self, eid, provider_prop):
-        assets = self._assets_for(eid)
-        profile = self._profile_for(eid)
-        if not assets or not profile:
-            self.sim.emit(Event("insurance_action_blocked", eid=eid, reason="missing_finance_profile"))
-            return
-
-        offers = self._offer_book_for_property(provider_prop)
-        if not offers:
-            self.sim.emit(
-                Event(
-                    "insurance_action_blocked",
-                    eid=eid,
-                    reason="provider_no_products",
-                    property_id=provider_prop["id"],
-                )
-            )
-            return
-
-        offer = self._pick_offer(profile, offers)
-        if not offer:
-            self.sim.emit(Event("insurance_action_blocked", eid=eid, reason="no_offer"))
-            return
-
-        terms = self._insurance_terms(eid, provider_prop)
-        base_premium = int(max(1, offer["premium"]))
-        premium = max(1, int(round(base_premium * float(terms.get("premium_mult", 1.0)))))
-        if assets.credits < premium:
-            self.sim.emit(Event(
-                "insurance_action_blocked",
-                eid=eid,
-                reason="insufficient_funds",
-                premium=premium,
-                credits=assets.credits,
-                policy_name=offer["name"],
-            ))
-            return
-
-        assets.credits -= premium
-        policy_key = offer["policy_key"]
-        policy = {
-            "policy_key": policy_key,
-            "tier": offer["tier"],
-            "quality": int(offer["quality"]),
-            "name": offer["name"],
-            "premium": premium,
-            "channel": offer.get("channel", "insurance"),
-            "provider_property_id": provider_prop["id"],
-            "provider_name": provider_prop.get("name", provider_prop["id"]),
-            "purchased_tick": self.sim.tick,
-            "expires_tick": self.sim.tick + int(max(20, offer.get("duration_ticks", 120))),
-            "remaining_pool": int(max(0, offer.get("claim_pool", 0))),
-            "max_claim_per_event": int(max(0, offer.get("max_claim_per_event", 0))),
-            "coverage_ratio": float(max(0.0, min(1.0, offer.get("coverage_ratio", 0.0)))),
-            "item_save_charges": int(max(0, offer.get("item_save_charges", 0))),
-            "medical_bonus_hp": int(max(0, offer.get("medical_bonus_hp", 0))),
-            "expired_notified": False,
-        }
-
-        replaced = policy_key in profile.policies
-        profile.policies[policy_key] = policy
-
-        self.sim.emit(Event(
-            "insurance_policy_purchased",
-            eid=eid,
-            property_id=provider_prop["id"],
-            provider_name=provider_prop.get("name", provider_prop["id"]),
-            policy_key=policy_key,
-            policy_name=policy["name"],
-            premium=premium,
-            base_premium=base_premium,
-            expires_tick=policy["expires_tick"],
-            duration_ticks=int(max(20, offer.get("duration_ticks", 120))),
-            replaced=replaced,
-            channel=policy["channel"],
-            contact_source_eid=terms.get("source_eid"),
-            contact_note=terms.get("note", ""),
-        ))
-
-    def _bank_transaction(self, eid, provider_prop, *, kind=None, amount=None):
-        assets = self._assets_for(eid)
-        profile = self._profile_for(eid)
-        if not assets or not profile:
-            self.sim.emit(Event("banking_action_blocked", eid=eid, reason="missing_finance_profile"))
-            return
-
-        requested_kind = str(kind or "").strip().lower()
-        try:
-            requested_amount = int(amount)
-        except (TypeError, ValueError):
-            requested_amount = 0
-
-        if requested_kind in {"deposit", "withdraw"}:
-            requested_amount = max(0, requested_amount)
-            if requested_amount <= 0:
-                self.sim.emit(Event(
-                    "banking_action_blocked",
-                    eid=eid,
-                    reason="invalid_amount",
-                    kind=requested_kind,
-                    amount=requested_amount,
-                ))
-                return
-            if requested_kind == "withdraw":
-                if profile.bank_balance < requested_amount:
-                    self.sim.emit(Event(
-                        "banking_action_blocked",
-                        eid=eid,
-                        reason="insufficient_bank_balance",
-                        kind=requested_kind,
-                        amount=requested_amount,
-                        bank_balance=profile.bank_balance,
-                    ))
-                    return
-                profile.bank_balance -= requested_amount
-                assets.credits += requested_amount
-                self.sim.emit(Event(
-                    "bank_transaction",
-                    eid=eid,
-                    property_id=provider_prop["id"],
-                    provider_name=provider_prop.get("name", provider_prop["id"]),
-                    kind="withdraw",
-                    amount=requested_amount,
-                    wallet_credits=assets.credits,
-                    bank_balance=profile.bank_balance,
-                ))
-                return
-
-            if assets.credits < requested_amount:
-                self.sim.emit(Event(
-                    "banking_action_blocked",
-                    eid=eid,
-                    reason="insufficient_wallet_funds",
-                    kind=requested_kind,
-                    amount=requested_amount,
-                    credits=assets.credits,
-                ))
-                return
-            assets.credits -= requested_amount
-            profile.bank_balance += requested_amount
-            self.sim.emit(Event(
-                "bank_transaction",
-                eid=eid,
-                property_id=provider_prop["id"],
-                provider_name=provider_prop.get("name", provider_prop["id"]),
-                kind="deposit",
-                amount=requested_amount,
-                wallet_credits=assets.credits,
-                bank_balance=profile.bank_balance,
-            ))
-            return
-
-        floor_target = max(0, profile.wallet_buffer)
-        low_wallet = assets.credits < max(18, floor_target // 2)
-
-        if low_wallet and profile.bank_balance > 0:
-            amount = min(profile.withdraw_step, profile.bank_balance)
-            if amount <= 0:
-                self.sim.emit(Event("banking_action_blocked", eid=eid, reason="no_bank_balance"))
-                return
-            profile.bank_balance -= amount
-            assets.credits += amount
-            self.sim.emit(Event(
-                "bank_transaction",
-                eid=eid,
-                property_id=provider_prop["id"],
-                provider_name=provider_prop.get("name", provider_prop["id"]),
-                kind="withdraw",
-                amount=amount,
-                wallet_credits=assets.credits,
-                bank_balance=profile.bank_balance,
-            ))
-            return
-
-        if assets.credits > floor_target + 10:
-            amount = min(profile.deposit_step, assets.credits - floor_target)
-            if amount <= 0:
-                self.sim.emit(Event("banking_action_blocked", eid=eid, reason="deposit_not_needed"))
-                return
-            assets.credits -= amount
-            profile.bank_balance += amount
-            self.sim.emit(Event(
-                "bank_transaction",
-                eid=eid,
-                property_id=provider_prop["id"],
-                provider_name=provider_prop.get("name", provider_prop["id"]),
-                kind="deposit",
-                amount=amount,
-                wallet_credits=assets.credits,
-                bank_balance=profile.bank_balance,
-            ))
-            return
-
-        if profile.bank_balance > 0:
-            amount = min(max(1, profile.withdraw_step // 2), profile.bank_balance)
-            profile.bank_balance -= amount
-            assets.credits += amount
-            self.sim.emit(Event(
-                "bank_transaction",
-                eid=eid,
-                property_id=provider_prop["id"],
-                provider_name=provider_prop.get("name", provider_prop["id"]),
-                kind="withdraw",
-                amount=amount,
-                wallet_credits=assets.credits,
-                bank_balance=profile.bank_balance,
-            ))
-            return
-
-        self.sim.emit(Event("banking_action_blocked", eid=eid, reason="no_funds_to_manage"))
-
-    def _try_item_loss_roll(self, eid):
-        profile = self._profile_for(eid)
-        inventory = self.sim.ecs.get(Inventory).get(eid)
-        position = self._position_for(eid)
-        vitalities = self.sim.ecs.get(Vitality)
-        vitality = vitalities.get(eid)
-
-        if not profile or not inventory or not inventory.items or not position:
-            return
-
-        downed_count = max(1, int(vitality.downed_count)) if vitality else 1
-        loss_chance = min(
-            self.ITEM_LOSS_MAX_CHANCE,
-            self.ITEM_LOSS_BASE_CHANCE + (self.ITEM_LOSS_PER_DOWNED * max(0, downed_count - 1)),
-        )
-        if self.rng.random() > loss_chance:
-            return
-
-        item_policy = self._active_policy(profile, "item")
-        if item_policy and int(item_policy.get("item_save_charges", 0)) > 0:
-            item_policy["item_save_charges"] = max(0, int(item_policy["item_save_charges"]) - 1)
-            self.sim.emit(Event(
-                "insurance_item_saved",
-                eid=eid,
-                policy_name=item_policy.get("name", "item policy"),
-                charges_left=int(item_policy.get("item_save_charges", 0)),
-            ))
-            return
-
-        victim_entry = self.rng.choice(list(inventory.items))
-        removed = inventory.remove_item(instance_id=victim_entry["instance_id"], quantity=1)
-        if not removed:
-            return
-
-        item_id = removed["item_id"]
-        item_def = ITEM_CATALOG.get(item_id, {})
-        item_name = item_display_name(item_id, metadata=removed.get("metadata"), item_catalog=ITEM_CATALOG)
-        metadata = dict(removed.get("metadata") or {})
-        metadata["lost_on_downed"] = True
-
-        self.sim.register_ground_item(
-            item_id=item_id,
-            x=position.x,
-            y=position.y,
-            z=position.z,
-            quantity=removed.get("quantity", 1),
-            owner_eid=None,
-            owner_tag="unowned",
-            instance_id=removed.get("instance_id"),
-            metadata=metadata,
-        )
-
-        self.sim.emit(Event(
-            "downed_item_lost",
-            eid=eid,
-            item_id=item_id,
-            item_name=item_name,
-            quantity=removed.get("quantity", 1),
-            x=position.x,
-            y=position.y,
-            z=position.z,
-        ))
-
-    def _apply_money_claim(self, event):
-        eid = event.data.get("target_eid")
-        if eid != self.player_eid:
-            return
-
-        profile = self._profile_for(eid)
-        assets = self._assets_for(eid)
-        if not profile or not assets:
-            return
-
-        penalty = int(max(0, event.data.get("credits_penalty", 0)))
-        if penalty <= 0:
-            return
-
-        policy = self._active_policy(profile, "money")
-        if not policy:
-            return
-
-        coverage = float(max(0.0, min(1.0, policy.get("coverage_ratio", 0.0))))
-        remaining_pool = int(max(0, policy.get("remaining_pool", 0)))
-        max_claim = int(max(0, policy.get("max_claim_per_event", 0)))
-        if coverage <= 0.0 or remaining_pool <= 0:
-            self.sim.emit(Event(
-                "insurance_claim_blocked",
-                eid=eid,
-                policy_key="money",
-                policy_name=policy.get("name", "money policy"),
-                reason="policy_depleted",
-            ))
-            return
-
-        payout = int(round(penalty * coverage))
-        if max_claim > 0:
-            payout = min(payout, max_claim)
-        payout = min(payout, remaining_pool)
-        payout = max(0, payout)
-        if payout <= 0:
-            self.sim.emit(Event(
-                "insurance_claim_blocked",
-                eid=eid,
-                policy_key="money",
-                policy_name=policy.get("name", "money policy"),
-                reason="claim_zero",
-            ))
-            return
-
-        assets.credits += payout
-        policy["remaining_pool"] = max(0, remaining_pool - payout)
-        profile.total_claims_paid += payout
-        profile.claim_count += 1
-
-        self.sim.emit(Event(
-            "insurance_claim_paid",
-            eid=eid,
-            policy_key="money",
-            policy_name=policy.get("name", "money policy"),
-            payout=payout,
-            penalty=penalty,
-            remaining_pool=policy["remaining_pool"],
-        ))
-
-    def _apply_medical_claim(self, event):
-        eid = event.data.get("target_eid")
-        if eid != self.player_eid:
-            return
-
-        profile = self._profile_for(eid)
-        if not profile:
-            return
-
-        policy = self._active_policy(profile, "medical")
-        if not policy:
-            return
-
-        bonus = int(max(0, policy.get("medical_bonus_hp", 0)))
-        if bonus <= 0:
-            return
-
-        vitality = self.sim.ecs.get(Vitality).get(eid)
-        if not vitality:
-            return
-
-        before = vitality.hp
-        after = min(vitality.max_hp, before + bonus)
-        gained = after - before
-        if gained <= 0:
-            return
-
-        vitality.hp = after
-        self.sim.emit(Event(
-            "insurance_medical_boost",
-            eid=eid,
-            policy_key="medical",
-            policy_name=policy.get("name", "medical policy"),
-            hp_bonus=gained,
-            hp=after,
-            max_hp=vitality.max_hp,
-        ))
-
-    def on_player_downed(self, event):
-        if event.data.get("target_eid") != self.player_eid:
-            return
-        self._apply_money_claim(event)
-        self._apply_medical_claim(event)
-        self._try_item_loss_roll(self.player_eid)
-
-    def on_player_action(self, event):
-        eid = event.data.get("eid")
-        if eid != self.player_eid:
-            return
-        if bool(event.data.get("handled")):
-            return
-
-        action = event.data.get("action")
-        if action not in {"banking", "insurance"}:
-            return
-
-        pos = self._position_for(eid)
-        if not pos:
-            return
-
-        if action == "banking":
-            provider = self._nearest_property_with_service(pos, "banking", radius=2)
-            if not provider:
-                self.sim.emit(Event("banking_action_blocked", eid=eid, reason="no_banking_service"))
-                return
-            self._bank_transaction(eid, provider)
-            return
-
-        provider = self._nearest_property_with_service(pos, "insurance", radius=2)
-        if not provider:
-            # Banks can still sell basic policies.
-            provider = self._nearest_property_with_service(pos, "banking", radius=2)
-        if not provider:
-            self.sim.emit(Event("insurance_action_blocked", eid=eid, reason="no_insurance_service"))
-            return
-        self._buy_or_renew_policy(eid, provider)
-
-    def on_property_interact(self, event):
-        eid = event.data.get("eid")
-        if eid != self.player_eid:
-            return
-        if bool(event.data.get("handled")):
-            return
-
-        prop = self.sim.properties.get(event.data.get("property_id"))
-        if not prop or _property_is_storefront(prop):
-            return
-        pos = self._position_for(eid)
-        if pos:
-            access = _evaluate_property_access(
-                self.sim,
-                eid,
-                prop,
-                x=pos.x,
-                y=pos.y,
-                z=pos.z,
-            )
-            if not access.can_use_services:
-                return
-
-        service = self._preferred_property_service(eid, prop)
-        if service == "banking":
-            self._bank_transaction(eid, prop)
-            return
-        if service == "insurance":
-            self._buy_or_renew_policy(eid, prop)
-
-    def on_finance_service_request(self, event):
-        eid = event.data.get("eid")
-        if eid != self.player_eid:
-            return
-
-        service = str(event.data.get("service", "") or "").strip().lower()
-        if service not in {"banking", "insurance"}:
-            return
-
-        prop = self.sim.properties.get(event.data.get("property_id"))
-        event_name = "banking_action_blocked" if service == "banking" else "insurance_action_blocked"
-        blocked_reason = "no_banking_service" if service == "banking" else "no_insurance_service"
-        if not prop:
-            self.sim.emit(Event(event_name, eid=eid, reason=blocked_reason))
-            return
-
-        services = set(_finance_services_for_property(prop))
-        if service not in services:
-            self.sim.emit(Event(event_name, eid=eid, reason=blocked_reason))
-            return
-
-        pos = self._position_for(eid)
-        if pos:
-            access = _evaluate_property_access(
-                self.sim,
-                eid,
-                prop,
-                x=pos.x,
-                y=pos.y,
-                z=pos.z,
-            )
-            if not access.can_use_services:
-                self.sim.emit(Event(event_name, eid=eid, reason=blocked_reason))
-                return
-
-        if service == "banking":
-            self._bank_transaction(
-                eid,
-                prop,
-                kind=event.data.get("kind"),
-                amount=event.data.get("amount"),
-            )
-            return
-        self._buy_or_renew_policy(eid, prop)
-
-    def update(self):
-        profile = self._profile_for(self.player_eid)
-        if not profile:
-            return
-
-        # No passive bank yield. Deposits are for carry-over/safety only.
-        if float(getattr(profile, "interest_rate", 0.0)) != 0.0:
-            profile.interest_rate = 0.0
-        if int(getattr(profile, "next_interest_tick", 0)) != 0:
-            profile.next_interest_tick = 0
-
-        for policy_key, policy in profile.policies.items():
-            if not isinstance(policy, dict):
-                continue
-            expires_tick = int(policy.get("expires_tick", 0))
-            if expires_tick > self.sim.tick:
-                continue
-            if policy.get("expired_notified"):
-                continue
-            policy["expired_notified"] = True
-            self.sim.emit(Event(
-                "insurance_policy_expired",
-                eid=self.player_eid,
-                policy_key=policy_key,
-                policy_name=policy.get("name", policy_key),
-            ))
-
-
-class SiteServiceSystem(System):
-
-    SHELTER_COOLDOWN_TICKS = 180
-    INTEL_COOLDOWN_TICKS = 45
-    INTEL_RADIUS = 2
-    FUEL_UNIT_PRICE = 3
-    REST_COST = 25
-    REST_COOLDOWN_TICKS = 1800
-    REST_WELL_RESTED_TICKS = 900
-    FETCH_BASE_COST = 15
-    FETCH_DISTANCE_MULT = 4
-    FETCH_EMPTY_SURCHARGE = 20
-    FETCH_DELIVERY_TICKS = 600
-
-    def __init__(self, sim, player_eid):
-        super().__init__(sim)
-        self.player_eid = player_eid
-        if not hasattr(self.sim, "site_service_state"):
-            self.sim.site_service_state = {
-                "cooldowns": {},
-            }
-        if not hasattr(self.sim, "pending_vehicle_deliveries"):
-            self.sim.pending_vehicle_deliveries = []
-        self.sim.events.subscribe("property_interact", self.on_property_interact)
-        self.sim.events.subscribe("site_service_request", self.on_site_service_request)
-
-    def _state(self):
-        return _site_service_state(self.sim)
-
-    def _cooldown_key(self, eid, prop, service):
-        return (int(eid), str(prop.get("id")), str(service).strip().lower())
-
-    def _service_ready_in(self, eid, prop, service):
-        cooldowns = self._state()["cooldowns"]
-        ready_tick = int(cooldowns.get(self._cooldown_key(eid, prop, service), 0))
-        return max(0, ready_tick - int(self.sim.tick))
-
-    def _set_service_cooldown(self, eid, prop, service, duration):
-        cooldowns = self._state()["cooldowns"]
-        cooldowns[self._cooldown_key(eid, prop, service)] = int(self.sim.tick) + max(1, int(duration))
-
-    def _next_service_roll_index(self, eid, prop, service):
-        return _site_service_roll_index(self.sim, eid, prop, service)
-
-    def _position_for(self, eid):
-        return self.sim.ecs.get(Position).get(eid)
-
-    def _assets_for(self, eid):
-        return self.sim.ecs.get(PlayerAssets).get(eid)
-
-    def _vehicle_state_for(self, eid):
-        return self.sim.ecs.get(VehicleState).get(eid)
-
-    def _active_vehicle_property(self, eid, pos=None, radius=2):
-        state = self._vehicle_state_for(eid)
-        if state and state.active_vehicle_id:
-            prop = self.sim.properties.get(state.active_vehicle_id)
-            if _property_is_vehicle(prop):
-                return prop
-
-        if pos is None:
-            return None
-
-        best = None
-        best_dist = 999999
-        for prop in self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=radius):
-            if not _property_is_vehicle(prop):
-                continue
-            if prop.get("owner_eid") != eid and str(prop.get("owner_tag", "")).strip().lower() != "player":
-                continue
-            dist = _manhattan(pos.x, pos.y, int(prop.get("x", 0)), int(prop.get("y", 0)))
-            if dist < best_dist:
-                best = prop
-                best_dist = dist
-        if best and state:
-            state.set_active_vehicle(best.get("id"), tick=self.sim.tick)
-        return best
-
-    def _vehicle_spawn_tile_near(self, x, y, z=0, radius=6):
-        x = int(x)
-        y = int(y)
-        z = int(z)
-        if self.sim.tilemap.is_walkable(x, y, z) and not self.sim.property_at(x, y, z):
-            return x, y
-
-        for r in range(1, max(1, int(radius)) + 1):
-            for dy in range(-r, r + 1):
-                for dx in range(-r, r + 1):
-                    if max(abs(dx), abs(dy)) != r:
-                        continue
-                    nx = x + dx
-                    ny = y + dy
-                    if self.sim.detail_for_xy(nx, ny) == "unloaded":
-                        continue
-                    if self.sim.structure_at(nx, ny, z):
-                        continue
-                    if self.sim.property_at(nx, ny, z):
-                        continue
-                    if self.sim.tilemap.is_walkable(nx, ny, z):
-                        return nx, ny
-        return None
-
-    def _apply_fuel_service(self, eid, prop, pos):
-        vehicle_prop = self._active_vehicle_property(eid, pos=pos, radius=2)
-        if not vehicle_prop:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service="fuel",
-                reason="no_vehicle",
-            ))
-            return
-
-        fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
-        missing = max(0, fuel_capacity - fuel)
-        if missing <= 0:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service="fuel",
-                reason="tank_full",
-                vehicle_name=_vehicle_label(vehicle_prop),
-                fuel=int(fuel),
-                fuel_capacity=int(fuel_capacity),
-            ))
-            return
-
-        profile = _vehicle_profile_from_property(vehicle_prop)
-        fuel_efficiency = max(1, min(10, _int_or_default(profile.get("fuel_efficiency"), 5)))
-        unit_price = max(1, int(round(float(self.FUEL_UNIT_PRICE) - (float(fuel_efficiency) * 0.12))))
-        assets = self._assets_for(eid)
-        credits = int(getattr(assets, "credits", 0)) if assets else 0
-        affordable = min(missing, credits // unit_price if unit_price > 0 else 0)
-        if affordable <= 0:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service="fuel",
-                reason="no_credits",
-                cost=unit_price,
-                credits=credits,
-                vehicle_name=_vehicle_label(vehicle_prop),
-                fuel=int(fuel),
-                fuel_capacity=int(fuel_capacity),
-            ))
-            return
-
-        credits_spent = int(affordable * unit_price)
-        if assets:
-            assets.credits = max(0, int(assets.credits) - credits_spent)
-
-        metadata = _property_metadata(vehicle_prop)
-        metadata["fuel"] = int(fuel + affordable)
-        new_fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
-        self.sim.emit(Event(
-            "site_service_used",
-            eid=eid,
-            property_id=prop["id"],
-            property_name=prop.get("name", prop["id"]),
-            service="fuel",
-            fuel_gain=int(affordable),
-            credits_spent=int(credits_spent),
-            fuel=int(new_fuel),
-            fuel_capacity=int(fuel_capacity),
-            vehicle_id=vehicle_prop.get("id"),
-            vehicle_name=_vehicle_label(vehicle_prop),
-        ))
-
-    def _apply_vehicle_sale(self, eid, prop, pos, quality, request=None):
-        quality = _vehicle_sale_quality(quality)
-        request = dict(request or {}) if isinstance(request, dict) else {}
-        requested_offering_id = str(request.get("offering_id", "") or "").strip().lower()
-        selected_offer = _vehicle_sale_lookup_offer(
-            self.sim,
-            prop,
-            quality,
-            offering_id=requested_offering_id,
-        )
-        if (
-            not isinstance(selected_offer, dict)
-            or (
-                requested_offering_id
-                and str(selected_offer.get("offering_id", "")).strip().lower() != requested_offering_id
-            )
-        ):
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service=f"vehicle_sales_{quality}",
-                reason="unavailable",
-            ))
-            return
-
-        price = int(max(80, _int_or_default(selected_offer.get("price"), 500)))
-
-        assets = self._assets_for(eid)
-        credits = int(getattr(assets, "credits", 0)) if assets else 0
-        if credits < price:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service=f"vehicle_sales_{quality}",
-                reason="no_credits",
-                cost=price,
-                credits=credits,
-            ))
-            return
-
-        spawn_tile = self._vehicle_spawn_tile_near(pos.x, pos.y, z=pos.z, radius=6)
-        if not spawn_tile:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service=f"vehicle_sales_{quality}",
-                reason="no_space",
-            ))
-            return
-
-        sx, sy = spawn_tile
-        chunk_coord = self.sim.chunk_coords(sx, sy)
-        vehicle_name = str(selected_offer.get("vehicle_name", "Vehicle")).strip() or "Vehicle"
-        vehicle_token = (
-            f"veh:purchase:{chunk_coord[0]}:{chunk_coord[1]}:{self.sim.tick}:{quality}:"
-            f"{str(selected_offer.get('offering_id', 'offer')).strip() or 'offer'}"
-        )
-        profile = {
-            "quality": quality,
-            "make": str(selected_offer.get("make", "Unknown")).strip() or "Unknown",
-            "model": str(selected_offer.get("model", "Vehicle")).strip() or "Vehicle",
-            "vehicle_class": str(selected_offer.get("vehicle_class", "sedan")).strip().lower() or "sedan",
-            "power": max(1, min(10, _int_or_default(selected_offer.get("power"), 5))),
-            "durability": max(1, min(10, _int_or_default(selected_offer.get("durability"), 5))),
-            "fuel_efficiency": max(1, min(10, _int_or_default(selected_offer.get("fuel_efficiency"), 5))),
-            "fuel_capacity": max(10, _int_or_default(selected_offer.get("fuel_capacity"), 60)),
-            "fuel": max(0, _int_or_default(selected_offer.get("fuel"), _int_or_default(selected_offer.get("fuel_capacity"), 60))),
-            "price": price,
-            "glyph": str(selected_offer.get("glyph", "&"))[:1] or "&",
-        }
-        metadata = vehicle_metadata(
-            profile,
-            chunk=chunk_coord,
-            owner_tag="player",
-            display_color="vehicle_player",
-            locked=True,
-            key_id=vehicle_token,
-            key_label=vehicle_name,
-            lock_tier=3 if quality == "new" else 2,
-        )
-        metadata["vehicle_id"] = vehicle_token
-        preview_prop = {
-            "id": vehicle_token,
-            "name": vehicle_name,
-            "kind": "vehicle",
-            "metadata": metadata,
-        }
-        if not can_receive_property_key(self.sim, eid, preview_prop):
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service=f"vehicle_sales_{quality}",
-                reason="key_storage_full",
-            ))
-            return
-        vehicle_id = self.sim.register_property(
-            name=vehicle_name,
-            kind="vehicle",
-            x=int(sx),
-            y=int(sy),
-            z=int(pos.z),
-            owner_eid=eid,
-            owner_tag="player",
-            metadata=metadata,
-        )
-        self.sim.chunk_property_records.setdefault(chunk_coord, []).append({
-            "id": vehicle_id,
-            "kind": "vehicle",
-            "x": int(sx),
-            "y": int(sy),
-            "z": int(pos.z),
-            "archetype": "vehicle",
-            "building_id": None,
-        })
-        vehicle_prop = self.sim.properties.get(vehicle_id)
-        key_ok, _instance_id, _created = ensure_actor_has_property_key(self.sim, eid, vehicle_prop, owner_tag="player")
-        if not key_ok and vehicle_prop:
-            ensure_property_lock(vehicle_prop, locked=False)
-
-        if assets:
-            assets.credits = max(0, int(assets.credits) - int(price))
-        _vehicle_sale_remove_offer(self.sim, prop, quality, selected_offer.get("offering_id"))
-        vehicle_state = self._vehicle_state_for(eid)
-        if vehicle_state and not vehicle_state.active_vehicle_id:
-            vehicle_state.set_active_vehicle(vehicle_id, tick=self.sim.tick)
-
-        self.sim.emit(Event(
-            "site_service_used",
-            eid=eid,
-            property_id=prop["id"],
-            property_name=prop.get("name", prop["id"]),
-            service=f"vehicle_sales_{quality}",
-            vehicle_id=vehicle_id,
-            vehicle_name=vehicle_name,
-            price=int(price),
-            quality=quality,
-            offering_id=str(selected_offer.get("offering_id", "")).strip(),
-            vehicle_class=str(profile.get("vehicle_class", "sedan")).strip().lower() or "sedan",
-            power=int(profile.get("power", 5)),
-            durability=int(profile.get("durability", 5)),
-            fuel_efficiency=int(profile.get("fuel_efficiency", 5)),
-            fuel=int(profile.get("fuel", 0)),
-            fuel_capacity=int(profile.get("fuel_capacity", 0)),
-            key_issued=bool(key_ok),
-        ))
-
-    def _chunk_direction(self, from_chunk, to_chunk):
-        dx = int(to_chunk[0]) - int(from_chunk[0])
-        dy = int(to_chunk[1]) - int(from_chunk[1])
-        parts = []
-        if dy < 0:
-            parts.append("N")
-        elif dy > 0:
-            parts.append("S")
-        if dx > 0:
-            parts.append("E")
-        elif dx < 0:
-            parts.append("W")
-        return "".join(parts) if parts else "HERE"
-
-    def _choose_site_service(self, eid, prop):
-        services = list(_site_services_for_property(prop))
-        if not services:
-            return None
-
-        pos = self._position_for(eid)
-        vehicle_prop = self._active_vehicle_property(eid, pos=pos, radius=2) if pos else None
-        if "fuel" in services and vehicle_prop:
-            fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
-            if fuel < max(4, int(round(float(fuel_capacity) * 0.92))):
-                return "fuel"
-
-        needs = self.sim.ecs.get(NPCNeeds).get(eid)
-        vitality = self.sim.ecs.get(Vitality).get(eid)
-        wants_shelter = False
-        if needs:
-            wants_shelter = (
-                float(needs.energy) < 82.0
-                or float(needs.safety) < 78.0
-                or float(needs.social) < 52.0
-            )
-        if vitality and int(vitality.hp) < int(vitality.max_hp):
-            wants_shelter = True
-
-        if "vehicle_sales_new" in services:
-            return "vehicle_sales_new"
-        if "vehicle_sales_used" in services:
-            return "vehicle_sales_used"
-        if "rest" in services and wants_shelter:
-            return "rest"
-        if "shelter" in services and wants_shelter:
-            return "shelter"
-        if "vehicle_fetch" in services:
-            return "vehicle_fetch"
-        if "intel" in services:
-            return "intel"
-        if "fuel" in services and vehicle_prop:
-            return "fuel"
-        return services[0]
-
-    def _apply_casino_game(self, eid, prop, service, request=None):
-        service = str(service or "").strip().lower()
-        profile = _casino_game_profile(service)
-        if not profile:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service=service,
-                reason="unavailable",
-            ))
-            return
-
-        raw_wager = 0 if not isinstance(request, dict) else request.get("wager", 0)
-        try:
-            wager = int(raw_wager)
-        except (TypeError, ValueError):
-            wager = 0
-        valid_wagers = {int(amount) for amount in profile.get("bet_options", ())}
-        if wager <= 0 or (valid_wagers and wager not in valid_wagers):
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service=service,
-                reason="invalid_wager",
-                wager=wager,
-            ))
-            return
-        round_result = dict(request.get("round_result", {}) or {}) if isinstance(request, dict) else {}
-        if not round_result:
-            roll_index = self._next_service_roll_index(eid, prop, service)
-            seed_token = _casino_round_seed(self.sim, eid, prop, service, wager, roll_index)
-            if service == "slots":
-                round_result = _casino_slots_resolve(seed_token, wager)
-            elif service == "plinko":
-                drop_lane = CASINO_PLINKO_LANE_COUNT // 2
-                if isinstance(request, dict):
-                    try:
-                        drop_lane = int(request.get("drop_lane", drop_lane))
-                    except (TypeError, ValueError):
-                        drop_lane = CASINO_PLINKO_LANE_COUNT // 2
-                round_result = _casino_plinko_resolve(seed_token, wager, drop_lane)
-            else:
-                self.sim.emit(Event(
-                    "site_service_blocked",
-                    eid=eid,
-                    property_id=prop["id"],
-                    property_name=prop.get("name", prop["id"]),
-                    service=service,
-                    reason="invalid_round",
-                ))
-                return
-
-        payload, blocked = _casino_apply_round_result(self.sim, eid, prop, service, round_result)
-        if blocked:
-            self.sim.emit(Event("site_service_blocked", **blocked))
-            return
-        self.sim.emit(Event("site_service_used", **payload))
-
-    def _run_site_service(self, eid, prop, pos, service, request=None):
-        service = str(service or "").strip().lower()
-        if service == "shelter":
-            self._apply_shelter(eid, prop)
-            return True
-        if service == "rest":
-            self._apply_rest(eid, prop)
-            return True
-        if service == "intel":
-            self._emit_intel(eid, prop, pos)
-            return True
-        if service in CASINO_GAME_SERVICE_IDS:
-            self._apply_casino_game(eid, prop, service, request=request)
-            return True
-        if service == "fuel":
-            self._apply_fuel_service(eid, prop, pos)
-            return True
-        if service == "vehicle_sales_new":
-            self._apply_vehicle_sale(eid, prop, pos, quality="new", request=request)
-            return True
-        if service == "vehicle_sales_used":
-            self._apply_vehicle_sale(eid, prop, pos, quality="used", request=request)
-            return True
-        if service == "vehicle_fetch":
-            self._apply_vehicle_fetch(eid, prop, pos)
-            return True
-        return False
-
-    def _apply_shelter(self, eid, prop):
-        ready_in = self._service_ready_in(eid, prop, "shelter")
-        if ready_in > 0:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service="shelter",
-                reason="cooldown",
-                ready_in=ready_in,
-            ))
-            return
-
-        needs = self.sim.ecs.get(NPCNeeds).get(eid)
-        vitality = self.sim.ecs.get(Vitality).get(eid)
-        energy_gain = safety_gain = social_gain = hp_gain = 0
-
-        if needs:
-            if float(needs.energy) < 95.0:
-                energy_gain = min(18, max(4, int(round((100.0 - float(needs.energy)) * 0.32))))
-                needs.energy = _clamp(float(needs.energy) + energy_gain)
-            if float(needs.safety) < 92.0:
-                safety_gain = min(14, max(3, int(round((100.0 - float(needs.safety)) * 0.24))))
-                needs.safety = _clamp(float(needs.safety) + safety_gain)
-            if float(needs.social) < 70.0:
-                social_gain = min(8, max(2, int(round((72.0 - float(needs.social)) * 0.18))))
-                needs.social = _clamp(float(needs.social) + social_gain)
-
-        if vitality and int(vitality.hp) < int(vitality.max_hp):
-            hp_gain = min(2, int(vitality.max_hp) - int(vitality.hp))
-            vitality.hp = min(int(vitality.max_hp), int(vitality.hp) + hp_gain)
-
-        if energy_gain <= 0 and safety_gain <= 0 and social_gain <= 0 and hp_gain <= 0:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service="shelter",
-                reason="no_need",
-            ))
-            return
-
-        self._set_service_cooldown(eid, prop, "shelter", self.SHELTER_COOLDOWN_TICKS)
-        self.sim.emit(Event(
-            "site_service_used",
-            eid=eid,
-            property_id=prop["id"],
-            property_name=prop.get("name", prop["id"]),
-            service="shelter",
-            energy_gain=energy_gain,
-            safety_gain=safety_gain,
-            social_gain=social_gain,
-            hp_gain=hp_gain,
-            cooldown_ticks=self.SHELTER_COOLDOWN_TICKS,
-        ))
-
-    def _apply_rest(self, eid, prop):
-        ready_in = self._service_ready_in(eid, prop, "rest")
-        if ready_in > 0:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service="rest",
-                reason="cooldown",
-                ready_in=ready_in,
-            ))
-            return
-
-        assets = self._assets_for(eid)
-        credits = int(getattr(assets, "credits", 0)) if assets else 0
-        if credits < self.REST_COST:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service="rest",
-                reason="no_credits",
-                cost=self.REST_COST,
-                credits=credits,
-            ))
-            return
-
-        needs = self.sim.ecs.get(NPCNeeds).get(eid)
-        vitality = self.sim.ecs.get(Vitality).get(eid)
-        energy_gain = safety_gain = social_gain = hp_gain = 0
-
-        if needs:
-            energy_gain = min(40, max(10, int(round((100.0 - float(needs.energy)) * 0.7))))
-            needs.energy = _clamp(float(needs.energy) + energy_gain)
-            safety_gain = min(30, max(8, int(round((100.0 - float(needs.safety)) * 0.55))))
-            needs.safety = _clamp(float(needs.safety) + safety_gain)
-            social_gain = min(12, max(3, int(round((75.0 - float(needs.social)) * 0.25))))
-            needs.social = _clamp(float(needs.social) + social_gain)
-
-        if vitality:
-            missing_hp = max(0, int(vitality.max_hp) - int(vitality.hp))
-            hp_gain = min(missing_hp, max(5, int(round(missing_hp * 0.6))))
-            vitality.hp = min(int(vitality.max_hp), int(vitality.hp) + hp_gain)
-
-        effects = self.sim.ecs.get(StatusEffects).get(eid)
-        if effects:
-            effects.add(
-                "well_rested",
-                self.REST_WELL_RESTED_TICKS,
-                modifiers={
-                    "perception_buff": 0.8,
-                    "athletics_buff": 0.5,
-                    "energy_tick_delta": 0.01,
-                },
-            )
-
-        if assets:
-            assets.credits = max(0, int(assets.credits) - int(self.REST_COST))
-
-        self._set_service_cooldown(eid, prop, "rest", self.REST_COOLDOWN_TICKS)
-        self.sim.emit(Event(
-            "site_service_used",
-            eid=eid,
-            property_id=prop["id"],
-            property_name=prop.get("name", prop["id"]),
-            service="rest",
-            energy_gain=energy_gain,
-            safety_gain=safety_gain,
-            social_gain=social_gain,
-            hp_gain=hp_gain,
-            credits_spent=self.REST_COST,
-            well_rested_ticks=self.REST_WELL_RESTED_TICKS,
-            cooldown_ticks=self.REST_COOLDOWN_TICKS,
-        ))
-
-    def _player_vehicle_properties(self, eid):
-        assets = self._assets_for(eid)
-        if not assets:
-            return []
-        vehicles = []
-        for pid in assets.owned_property_ids:
-            prop = self.sim.properties.get(pid)
-            if prop and _property_is_vehicle(prop):
-                vehicles.append(prop)
-        return vehicles
-
-    def _apply_vehicle_fetch(self, eid, prop, pos):
-        vehicles = self._player_vehicle_properties(eid)
-        if not vehicles:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service="vehicle_fetch",
-                reason="no_vehicle",
-            ))
-            return
-
-        player_chunk = self.sim.chunk_coords(pos.x, pos.y)
-        best = None
-        best_dist = -1
-        for vp in vehicles:
-            vx = int(vp.get("x", 0))
-            vy = int(vp.get("y", 0))
-            vc = self.sim.chunk_coords(vx, vy)
-            dist = abs(vc[0] - player_chunk[0]) + abs(vc[1] - player_chunk[1])
-            if dist > best_dist:
-                best = vp
-                best_dist = dist
-
-        if best is None:
-            return
-
-        fuel, fuel_capacity = _vehicle_fuel_values(best)
-        distance_cost = max(0, best_dist) * self.FETCH_DISTANCE_MULT
-        empty_surcharge = self.FETCH_EMPTY_SURCHARGE if fuel <= 0 else 0
-        total_cost = self.FETCH_BASE_COST + distance_cost + empty_surcharge
-
-        assets = self._assets_for(eid)
-        credits = int(getattr(assets, "credits", 0)) if assets else 0
-        if credits < total_cost:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service="vehicle_fetch",
-                reason="no_credits",
-                cost=total_cost,
-                credits=credits,
-                vehicle_name=_vehicle_label(best),
-            ))
-            return
-
-        if assets:
-            assets.credits = max(0, int(assets.credits) - int(total_cost))
-
-        delivery_tick = int(self.sim.tick) + self.FETCH_DELIVERY_TICKS
-        delivery = {
-            "vehicle_id": best.get("id"),
-            "vehicle_name": _vehicle_label(best),
-            "eid": eid,
-            "site_prop_id": prop.get("id"),
-            "site_prop_name": prop.get("name", prop["id"]),
-            "target_x": int(pos.x),
-            "target_y": int(pos.y),
-            "target_z": int(pos.z),
-            "ready_at_tick": delivery_tick,
-        }
-        self.sim.pending_vehicle_deliveries.append(delivery)
-
-        self.sim.emit(Event(
-            "site_service_used",
-            eid=eid,
-            property_id=prop["id"],
-            property_name=prop.get("name", prop["id"]),
-            service="vehicle_fetch",
-            vehicle_id=best.get("id"),
-            vehicle_name=_vehicle_label(best),
-            credits_spent=total_cost,
-            distance=best_dist,
-            empty_surcharge=empty_surcharge,
-            delivery_ticks=self.FETCH_DELIVERY_TICKS,
-        ))
-
-    def update(self):
-        deliveries = getattr(self.sim, "pending_vehicle_deliveries", None)
-        if not deliveries:
-            return
-        completed = []
-        for idx, delivery in enumerate(deliveries):
-            if int(self.sim.tick) < int(delivery.get("ready_at_tick", 0)):
-                continue
-            vehicle_prop = self.sim.properties.get(delivery.get("vehicle_id"))
-            if not vehicle_prop:
-                completed.append(idx)
-                continue
-            tx = int(delivery.get("target_x", 0))
-            ty = int(delivery.get("target_y", 0))
-            tz = int(delivery.get("target_z", 0))
-            spawn = self._vehicle_spawn_tile_near(tx, ty, z=tz, radius=8)
-            if not spawn:
-                spawn = (tx, ty)
-            sx, sy = spawn
-            vehicle_prop["x"] = sx
-            vehicle_prop["y"] = sy
-            vehicle_prop["z"] = tz
-            self.sim.property_anchor_index[(sx, sy, tz)] = vehicle_prop.get("id")
-            eid = delivery.get("eid")
-            vehicle_state = self._vehicle_state_for(eid) if eid else None
-            if vehicle_state and not vehicle_state.active_vehicle_id:
-                vehicle_state.set_active_vehicle(vehicle_prop.get("id"), tick=self.sim.tick)
-            self.sim.emit(Event(
-                "vehicle_delivered",
-                eid=eid,
-                vehicle_id=vehicle_prop.get("id"),
-                vehicle_name=delivery.get("vehicle_name", "vehicle"),
-                site_prop_name=delivery.get("site_prop_name", "site"),
-                x=sx,
-                y=sy,
-                z=tz,
-            ))
-            completed.append(idx)
-        for idx in reversed(completed):
-            deliveries.pop(idx)
-
-    def _intel_lines(self, origin_chunk):
-        candidates = []
-        ox, oy = origin_chunk
-        for dy in range(-self.INTEL_RADIUS, self.INTEL_RADIUS + 1):
-            for dx in range(-self.INTEL_RADIUS, self.INTEL_RADIUS + 1):
-                if dx == 0 and dy == 0:
-                    continue
-                dist = _manhattan(0, 0, dx, dy)
-                if dist > self.INTEL_RADIUS:
-                    continue
-
-                cx = ox + dx
-                cy = oy + dy
-                desc = self.sim.world.overworld_descriptor(cx, cy)
-                interest = self.sim.world.overworld_interest(cx, cy, descriptor=desc)
-                landmark = desc.get("landmark") or {}
-                landmark_name = str(landmark.get("name", "")).strip()
-                interest_detail = str(interest.get("detail", "")).strip()
-                path = str(desc.get("path", "")).strip()
-
-                if not landmark_name and not interest_detail and not path:
-                    continue
-
-                area_type = str(desc.get("area_type", "city")).strip().lower() or "city"
-                terrain = str(desc.get("terrain", area_type)).replace("_", " ").strip()
-                score = int(interest.get("prominence", 0)) * 3
-                if landmark_name:
-                    score += 4
-                if path:
-                    score += 1
-
-                bits = [
-                    f"{self._chunk_direction(origin_chunk, (cx, cy))} {dist}c",
-                    f"{area_type}/{terrain}",
-                ]
-                if path:
-                    bits.append(f"path:{path}")
-                if landmark_name:
-                    bits.append(f"landmark:{landmark_name}")
-                if interest_detail:
-                    bits.append(f"poi:{interest_detail}")
-
-                text = " ".join(bit for bit in bits if bit)
-                candidates.append((
-                    -score,
-                    dist,
-                    cx,
-                    cy,
-                    _overworld_legend_line(self.sim, cx, cy, text),
-                ))
-
-        candidates.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
-        return [row[4] for row in candidates[:4]]
-
-    def _emit_intel(self, eid, prop, pos):
-        ready_in = self._service_ready_in(eid, prop, "intel")
-        if ready_in > 0:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service="intel",
-                reason="cooldown",
-                ready_in=ready_in,
-            ))
-            return
-
-        origin_chunk = self.sim.chunk_coords(pos.x, pos.y)
-        lines = self._intel_lines(origin_chunk)
-        if not lines:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service="intel",
-                reason="no_leads",
-            ))
-            return
-
-        self._set_service_cooldown(eid, prop, "intel", self.INTEL_COOLDOWN_TICKS)
-        self.sim.emit(Event(
-            "site_intel_report",
-            eid=eid,
-            property_id=prop["id"],
-            property_name=prop.get("name", prop["id"]),
-            lines=lines,
-        ))
-
-    def on_property_interact(self, event):
-        eid = event.data.get("eid")
-        if eid != self.player_eid:
-            return
-        if bool(event.data.get("handled")):
-            return
-
-        prop = self.sim.properties.get(event.data.get("property_id"))
-        if not prop:
-            return
-
-        services = _site_services_for_property(prop)
-        if not services:
-            return
-
-        pos = self._position_for(eid)
-        if not pos:
-            return
-
-        access = _evaluate_property_access(
-            self.sim,
-            eid,
-            prop,
-            x=pos.x,
-            y=pos.y,
-            z=pos.z,
-        )
-        if not access.can_use_services:
-            return
-
-        service = self._choose_site_service(eid, prop)
-        self._run_site_service(eid, prop, pos, service, request=event.data)
-
-    def on_site_service_request(self, event):
-        eid = event.data.get("eid")
-        if eid != self.player_eid:
-            return
-
-        prop = self.sim.properties.get(event.data.get("property_id"))
-        service = str(event.data.get("service", "") or "").strip().lower()
-        if not prop or service not in set(_site_services_for_property(prop)):
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=event.data.get("property_id"),
-                property_name=str(event.data.get("property_name", "site") or "site"),
-                service=service,
-                reason="unavailable",
-            ))
-            return
-
-        pos = self._position_for(eid)
-        if not pos:
-            return
-
-        access = _evaluate_property_access(
-            self.sim,
-            eid,
-            prop,
-            x=pos.x,
-            y=pos.y,
-            z=pos.z,
-        )
-        if not access.can_use_services:
-            self.sim.emit(Event(
-                "site_service_blocked",
-                eid=eid,
-                property_id=prop["id"],
-                property_name=prop.get("name", prop["id"]),
-                service=service,
-                reason="unavailable",
-            ))
-            return
-
-        self._run_site_service(eid, prop, pos, service, request=event.data)
-
-
-class ServiceMenuSystem(System):
-
-    def __init__(self, sim, player_eid):
-        super().__init__(sim)
-        self.player_eid = player_eid
-        self.pending_service_result = None
-        self.sim.events.subscribe("property_interact", self.on_property_interact)
-        self.sim.events.subscribe("player_action", self.on_player_action)
-        self.sim.events.subscribe("dialog_close_request", self.on_dialog_close_request)
-        self.sim.events.subscribe("service_menu_execute_request", self.on_service_menu_execute_request)
-        self.sim.events.subscribe("site_service_used", self.on_site_service_used)
-        self.sim.events.subscribe("site_service_blocked", self.on_site_service_blocked)
-        self.sim.events.subscribe("site_intel_report", self.on_site_intel_report)
-        self.sim.events.subscribe("bank_transaction", self.on_bank_transaction)
-        self.sim.events.subscribe("banking_action_blocked", self.on_banking_action_blocked)
-        self.sim.events.subscribe("insurance_policy_purchased", self.on_insurance_policy_purchased)
-        self.sim.events.subscribe("insurance_action_blocked", self.on_insurance_action_blocked)
-
-    def _dialog_ui_state(self):
-        state = getattr(self.sim, "dialog_ui", None)
-        if state is None:
-            state = {
-                "open": False,
-                "npc_eid": None,
-                "title": "Conversation",
-                "subtitle": "",
-                "transcript": [],
-                "topics": [],
-                "selected_index": 0,
-                "scroll": 0,
-                "hint": "",
-                "new_topic_ids": [],
-                "close_pending": False,
-            }
-            self.sim.dialog_ui = state
-        state.setdefault("kind", "conversation")
-        state.setdefault("property_id", None)
-        state.setdefault("close_pending", False)
-        state.setdefault("machine_action", None)
-        state.setdefault("service_menu_mode", "root")
-        state.setdefault("casino_session", None)
-        return state
-
-    def _position_for(self, eid):
-        return self.sim.ecs.get(Position).get(eid)
-
-    def _assets_for(self, eid):
-        return self.sim.ecs.get(PlayerAssets).get(eid)
-
-    def _profile_for(self, eid):
-        return self.sim.ecs.get(FinancialProfile).get(eid)
-
-    def _nearest_property_with_service(self, pos, service, radius=2):
-        return _nearest_property_with_finance_service(
-            self.sim,
-            self.player_eid,
-            pos,
-            service,
-            radius=radius,
-        )
-
-    def _clear_pending_service_result(self):
-        self.pending_service_result = None
-
-    def _pending_property_name(self, fallback="Service"):
-        pending = self.pending_service_result if isinstance(self.pending_service_result, dict) else {}
-        property_id = pending.get("property_id")
-        prop = self.sim.properties.get(property_id) if property_id is not None else None
-        if isinstance(prop, dict):
-            name = str(prop.get("name", prop.get("id", fallback))).strip()
-            if name:
-                return name
-        name = str(pending.get("property_name", fallback)).strip()
-        return name or fallback
-
-    def _wallet_credits(self):
-        assets = self._assets_for(self.player_eid)
-        return int(getattr(assets, "credits", 0)) if assets else 0
-
-    def _casino_session(self):
-        state = self._dialog_ui_state()
-        session = state.get("casino_session")
-        return session if isinstance(session, dict) else None
-
-    def _set_casino_session(self, session):
-        state = self._dialog_ui_state()
-        state["casino_session"] = dict(session) if isinstance(session, dict) else None
-
-    def _clear_casino_session(self):
-        state = self._dialog_ui_state()
-        state["casino_session"] = None
-
-    def _casino_prop_name(self, prop):
-        if isinstance(prop, dict):
-            name = str(prop.get("name", prop.get("id", "Casino"))).strip()
-            if name:
-                return name
-        return "Casino"
-
-    def _casino_round_seed(self, prop, service, wager):
-        round_index = _site_service_roll_index(self.sim, self.player_eid, prop, service)
-        return _casino_round_seed(self.sim, self.player_eid, prop, service, wager, round_index)
-
-    def _casino_commit_stake(self, amount):
-        amount = max(0, int(amount))
-        assets = self._assets_for(self.player_eid)
-        credits = int(getattr(assets, "credits", 0)) if assets else 0
-        if credits < amount:
-            return False, credits
-        if assets and amount > 0:
-            assets.credits = max(0, int(assets.credits) - amount)
-            credits = int(assets.credits)
-        return True, credits
-
-    def _open_casino_modal(self, prop, service, *, subtitle="", transcript=None, topics=None, hint="", mode="root", session=None):
-        state = self._dialog_ui_state()
-        prop_name = self._casino_prop_name(prop)
-        self.sim.set_time_paused(True, reason="dialog")
-        state.update({
-            "open": True,
-            "kind": "service_menu",
-            "npc_eid": None,
-            "property_id": prop.get("id") if isinstance(prop, dict) else None,
-            "title": f"{_casino_game_title(service)}: {prop_name}",
-            "subtitle": str(subtitle or "").strip(),
-            "transcript": list(transcript or ()),
-            "topics": list(topics or ()),
-            "selected_index": 0,
-            "scroll": 0,
-            "hint": str(hint or "").strip(),
-            "new_topic_ids": [],
-            "close_pending": False,
-            "machine_action": None,
-            "service_menu_mode": str(mode or "root").strip() or "root",
-            "casino_session": dict(session) if isinstance(session, dict) else None,
-        })
-
-    def _emit_casino_blocked(self, prop, service, reason, **data):
-        prop_name = self._casino_prop_name(prop)
-        self._begin_pending_service_result(
-            channel="site",
-            property_id=prop.get("id") if isinstance(prop, dict) else None,
-            property_name=prop_name,
-            service=service,
-        )
-        payload = {
-            "eid": self.player_eid,
-            "property_id": prop.get("id") if isinstance(prop, dict) else None,
-            "property_name": prop_name,
-            "service": str(service or "").strip().lower(),
-            "reason": str(reason or "blocked").strip().lower(),
-        }
-        payload.update(data)
-        self.sim.emit(Event("site_service_blocked", **payload))
-
-    def _emit_casino_round(self, prop, service, round_result, *, show_result=True):
-        payload, blocked = _casino_apply_round_result(self.sim, self.player_eid, prop, service, round_result)
-        if blocked:
-            if show_result:
-                self._begin_pending_service_result(
-                    channel="site",
-                    property_id=blocked.get("property_id"),
-                    property_name=blocked.get("property_name", self._casino_prop_name(prop)),
-                    service=service,
-                )
-            self.sim.emit(Event("site_service_blocked", **blocked))
-            return False
-        self._clear_casino_session()
-        if show_result:
-            self._begin_pending_service_result(
-                channel="site",
-                property_id=payload.get("property_id"),
-                property_name=payload.get("property_name", self._casino_prop_name(prop)),
-                service=service,
-            )
-        self.sim.emit(Event("site_service_used", **payload))
-        return True
-
-    def _open_plinko_lane_menu(self, prop, service, wager):
-        session = {
-            "service": service,
-            "property_id": prop.get("id"),
-            "property_name": self._casino_prop_name(prop),
-            "wager": int(wager),
-            "stake": int(wager),
-            "seed_token": self._casino_round_seed(prop, service, wager),
-        }
-        topics = [
-            {"id": f"plinko:lane:{lane}", "label": f"Drop lane {lane + 1}"}
-            for lane in range(CASINO_PLINKO_LANE_COUNT)
-        ]
-        transcript = [
-            f"Choose a lane for {_credit_amount_label(wager)}.",
-            "Center buckets pay best if the pegs keep the disc alive.",
-            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
-        ]
-        self._open_casino_modal(
-            prop,
-            service,
-            subtitle="Choose a drop lane",
-            transcript=transcript,
-            topics=topics,
-            hint="Pick a lane to drop the disc. Esc walks away and forfeits the posted chip.",
-            mode="casino:plinko:lane",
-            session=session,
-        )
-
-    def _open_twenty_one_table(self, prop, session):
-        session = _casino_twenty_one_normalize_session(session)
-        dealer_cards = list(session.get("dealer_cards", ()) or ()) if isinstance(session, dict) else []
-        hands = list(session.get("hands", ()) or ()) if isinstance(session, dict) else []
-        active_idx = int(session.get("active_hand_index", -1)) if isinstance(session, dict) else -1
-        transcript = [
-            f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is on the felt.",
-            _casino_blackjack_line("Dealer", dealer_cards, hide_hole=True),
-        ]
-        for idx, hand in enumerate(hands):
-            label = f"Hand {idx + 1}"
-            if idx == active_idx:
-                label += " *"
-            line = _casino_blackjack_line(label, hand.get("cards", ()))
-            tags = []
-            if bool(hand.get("split_origin", False)):
-                tags.append("split")
-            if bool(hand.get("doubled", False)):
-                tags.append("double")
-            state = str(hand.get("state", "")).strip().lower()
-            if state in {"stood", "bust"} and idx != active_idx:
-                tags.append(state)
-            if tags:
-                line = f"{line} [{', '.join(tags)}]"
-            transcript.append(line)
-        transcript.append(f"Wallet {_credit_amount_label(self._wallet_credits())}.")
-        topics = []
-        action_ids = _casino_twenty_one_action_ids(session, self._wallet_credits())
-        label_by_action = {
-            "twenty_one:hit": "Hit",
-            "twenty_one:stand": "Stand",
-            "twenty_one:double": f"Double Down (+{_credit_amount_label(int(session.get('wager', 0)))})",
-            "twenty_one:split": f"Split Pair (+{_credit_amount_label(int(session.get('wager', 0)))})",
-        }
-        for action_id in action_ids:
-            topics.append({"id": action_id, "label": label_by_action.get(action_id, action_id)})
-        self._open_casino_modal(
-            prop,
-            "twenty_one",
-            subtitle="Play the hand",
-            transcript=transcript,
-            topics=topics,
-            hint="Hit, stand, double, or split when the table allows it. Esc forfeits the full posted stake.",
-            mode="casino:twenty_one:hand",
-            session=session,
-        )
-
-    def _open_holdem_table(self, prop, session):
-        wager = int(session.get("wager", 0))
-        transcript = [
-            f"Ante {_credit_amount_label(wager)} is posted.",
-            f"Your hand: {_casino_cards_text(session.get('player_cards', ())) }".rstrip(),
-            f"Flop: {_casino_cards_text(session.get('flop', ())) }".rstrip(),
-            "Dealer: ?? ??",
-            f"Call adds {_credit_amount_label(wager)} more; fold surrenders the ante.",
-            "Dealer qualifies with pair of 4s or better. Straight or better pays an ante bonus.",
-            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
-        ]
-        topics = [
-            {"id": "casino_holdem:call", "label": f"Call {_credit_amount_label(wager)}"},
-            {"id": "casino_holdem:fold", "label": "Fold"},
-        ]
-        self._open_casino_modal(
-            prop,
-            "casino_holdem",
-            subtitle="Read the flop",
-            transcript=transcript,
-            topics=topics,
-            hint="Call or fold. Esc walks away and forfeits the ante.",
-            mode="casino:holdem:hand",
-            session=session,
-        )
-
-    def _start_casino_round(self, prop, service, wager):
-        wager = int(wager)
-        prop_name = self._casino_prop_name(prop)
-        profile = _casino_game_profile(service)
-        valid_wagers = {int(amount) for amount in profile.get("bet_options", ())} if profile else set()
-        if wager <= 0 or (valid_wagers and wager not in valid_wagers):
-            self._emit_casino_blocked(prop, service, "invalid_wager", wager=wager)
-            return
-
-        if service == "slots":
-            seed_token = self._casino_round_seed(prop, service, wager)
-            self._emit_casino_round(prop, service, _casino_slots_resolve(seed_token, wager))
-            return
-
-        if service == "plinko":
-            ok, credits = self._casino_commit_stake(wager)
-            if not ok:
-                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
-                return
-            self._open_plinko_lane_menu(prop, service, wager)
-            return
-
-        if service == "twenty_one":
-            ok, credits = self._casino_commit_stake(wager)
-            if not ok:
-                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
-                return
-            session = _casino_twenty_one_start(self._casino_round_seed(prop, service, wager), wager)
-            session.update({
-                "property_id": prop.get("id"),
-                "property_name": prop_name,
-            })
-            next_session, round_result = _casino_twenty_one_resolve(session, "start")
-            if round_result:
-                self._emit_casino_round(prop, service, round_result)
-                return
-            self._open_twenty_one_table(prop, next_session or session)
-            return
-
-        if service == "casino_holdem":
-            needed = int(wager) * 2
-            if self._wallet_credits() < needed:
-                self._emit_casino_blocked(prop, service, "no_credits", cost=needed, credits=self._wallet_credits(), wager=wager)
-                return
-            ok, credits = self._casino_commit_stake(wager)
-            if not ok:
-                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
-                return
-            session = _casino_holdem_start(self._casino_round_seed(prop, service, wager), wager)
-            session.update({
-                "property_id": prop.get("id"),
-                "property_name": prop_name,
-            })
-            self._open_holdem_table(prop, session)
-            return
-
-        self._present_service_result("Casino", ["That game is not available right now."], property_id=prop.get("id"))
-
-    def _handle_active_casino_option(self, prop, option_id):
-        session = self._casino_session()
-        if not session:
-            return False
-        if not isinstance(prop, dict):
-            self._present_service_result("Casino", ["That table is not available right now."], property_id=prop.get("id") if isinstance(prop, dict) else None)
-            return True
-
-        service = str(session.get("service", "")).strip().lower()
-        if service == "plinko" and option_id.startswith("plinko:lane:"):
-            try:
-                lane = int(option_id.rsplit(":", 1)[-1])
-            except (TypeError, ValueError):
-                lane = -1
-            if lane < 0:
-                self._present_service_result("Plinko", ["That drop lane is not valid."], property_id=prop.get("id"))
-                return True
-            seed_token = str(session.get("seed_token", "")).strip() or self._casino_round_seed(prop, service, session.get("wager", 0))
-            round_result = _casino_plinko_resolve(seed_token, int(session.get("wager", 0)), lane)
-            round_result["stake_already_paid"] = True
-            self._emit_casino_round(prop, service, round_result)
-            return True
-
-        if service == "twenty_one" and option_id in {"twenty_one:hit", "twenty_one:stand"}:
-            action = "hit" if option_id.endswith(":hit") else "stand"
-            next_session, round_result = _casino_twenty_one_resolve(session, action)
-            if round_result:
-                self._emit_casino_round(prop, service, round_result)
-            elif next_session:
-                self._open_twenty_one_table(prop, next_session)
-            return True
-
-        if service == "twenty_one" and option_id in {"twenty_one:double", "twenty_one:split"}:
-            wager = int(session.get("wager", 0))
-            ok, credits = self._casino_commit_stake(wager)
-            if not ok:
-                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
-                return True
-            action = "double" if option_id.endswith(":double") else "split"
-            next_session, round_result = _casino_twenty_one_resolve(session, action)
-            if round_result:
-                self._emit_casino_round(prop, service, round_result)
-            elif next_session:
-                self._open_twenty_one_table(prop, next_session)
-            return True
-
-        if service == "casino_holdem" and option_id in {"casino_holdem:call", "casino_holdem:fold"}:
-            if option_id.endswith(":call"):
-                ok, credits = self._casino_commit_stake(int(session.get("wager", 0)))
-                if not ok:
-                    self._emit_casino_blocked(prop, service, "no_credits", cost=int(session.get("wager", 0)), credits=credits)
-                    return True
-                session = dict(session)
-                session["stake"] = int(session.get("stake", session.get("wager", 0))) + int(session.get("wager", 0))
-                round_result = _casino_holdem_resolve(session, "call")
-            else:
-                round_result = _casino_holdem_resolve(session, "fold")
-            self._emit_casino_round(prop, service, round_result)
-            return True
-
-        return False
-
-    def _forfeit_active_casino_session(self):
-        session = self._casino_session()
-        if not isinstance(session, dict):
-            return
-        service = str(session.get("service", "")).strip().lower()
-        if service not in {"plinko", "twenty_one", "casino_holdem"}:
-            self._clear_casino_session()
-            return
-        prop = self.sim.properties.get(session.get("property_id"))
-        if not isinstance(prop, dict):
-            prop = {
-                "id": session.get("property_id"),
-                "name": session.get("property_name", "Casino"),
-            }
-        wager = int(session.get("wager", 0))
-        stake = int(session.get("stake", wager))
-        if service == "plinko":
-            round_result = {
-                "service": service,
-                "wager": wager,
-                "stake": stake,
-                "payout": 0,
-                "outcome_key": "forfeit",
-                "headline": "You pull the chip back too late.",
-                "detail": "The board keeps the wager when you walk away after posting the drop.",
-                "summary": f"You back out of plinko and forfeit {_credit_amount_label(stake)}.",
-                "result_lines": [
-                    f"Drop not taken. Posted wager: {_credit_amount_label(stake)}.",
-                    "The attendant sweeps the chip off the rail.",
-                ],
-                "drop_lane": None,
-                "social_gain": 0,
-                "stake_already_paid": True,
-            }
-        elif service == "twenty_one":
-            current = _casino_twenty_one_normalize_session(session)
-            hand_results = []
-            if isinstance(current, dict):
-                for idx, hand in enumerate(list(current.get("hands", ()) or ())):
-                    cards = tuple(hand.get("cards", ()) or ())
-                    total, _soft = _casino_blackjack_total(cards)
-                    hand_results.append({
-                        "index": idx,
-                        "cards": cards,
-                        "total": int(total),
-                        "stake": int(hand.get("stake", wager)),
-                        "doubled": bool(hand.get("doubled", False)),
-                        "split_origin": bool(hand.get("split_origin", False)),
-                    })
-            round_result = {
-                "service": service,
-                "wager": wager,
-                "stake": stake,
-                "payout": 0,
-                "outcome_key": "forfeit",
-                "headline": "You abandon the hand.",
-                "detail": "You step away from the table and the dealer pulls in the chips.",
-                "summary": f"You walk away from 21 and forfeit {_credit_amount_label(stake)}.",
-                "result_lines": [
-                    _casino_blackjack_line("Dealer", session.get("dealer_cards", ())),
-                    *[
-                        (
-                            f"{_casino_blackjack_line(f'Hand {row['index'] + 1}', row['cards'])}"
-                            f"{' [split]' if row['split_origin'] else ''}"
-                            f"{' [double]' if row['doubled'] else ''}"
-                        )
-                        for row in hand_results
-                    ],
-                    "You leave the hand unfinished and the bet is gone.",
-                ],
-                "player_cards": tuple(hand_results[0]["cards"]) if hand_results else (),
-                "player_hands": tuple(row["cards"] for row in hand_results),
-                "dealer_cards": tuple(session.get("dealer_cards", ()) or ()),
-                "player_total": int(hand_results[0]["total"]) if hand_results else 0,
-                "player_totals": tuple(int(row["total"]) for row in hand_results),
-                "dealer_total": _casino_blackjack_total(session.get("dealer_cards", ()))[0],
-                "hand_results": tuple(
-                    {
-                        "index": int(row["index"]),
-                        "total": int(row["total"]),
-                        "stake": int(row["stake"]),
-                        "result": "forfeit",
-                        "doubled": bool(row["doubled"]),
-                        "split_origin": bool(row["split_origin"]),
-                    }
-                    for row in hand_results
-                ),
-                "social_gain": 0,
-                "stake_already_paid": True,
-            }
-        else:
-            round_result = {
-                "service": service,
-                "wager": wager,
-                "stake": stake,
-                "payout": 0,
-                "outcome_key": "forfeit",
-                "headline": "You leave the table.",
-                "detail": "The dealer rakes in the ante while you push back from the felt.",
-                "summary": f"You walk away from the hold'em table and forfeit {_credit_amount_label(stake)}.",
-                "result_lines": [
-                    f"Your hand: {_casino_cards_text(session.get('player_cards', ())) }".rstrip(),
-                    f"Flop: {_casino_cards_text(session.get('flop', ())) }".rstrip(),
-                    "You leave the hand before showdown and the ante stays behind.",
-                ],
-                "player_cards": tuple(session.get("player_cards", ()) or ()),
-                "dealer_cards": tuple(session.get("dealer_cards", ()) or ()),
-                "board": tuple(session.get("flop", ()) or ()),
-                "social_gain": 0,
-                "stake_already_paid": True,
-            }
-        self._emit_casino_round(prop, service, round_result, show_result=False)
-
-    def _bank_amount_choices(self, available, step):
-        try:
-            available_amount = int(available)
-        except (TypeError, ValueError):
-            available_amount = 0
-        try:
-            step_amount = int(step)
-        except (TypeError, ValueError):
-            step_amount = 1
-        available_amount = max(0, available_amount)
-        step_amount = max(1, step_amount)
-        if available_amount <= 0:
-            return []
-
-        choices = []
-        seen = set()
-        for raw in (step_amount, step_amount * 2, step_amount * 4, available_amount):
-            amount = max(1, min(available_amount, int(raw)))
-            if amount in seen:
-                continue
-            seen.add(amount)
-            choices.append(amount)
-        return choices
-
-    def _bank_menu_options(self, eid):
-        assets = self._assets_for(eid)
-        profile = self._profile_for(eid)
-        if not assets or not profile:
-            return []
-
-        options = []
-        for amount in self._bank_amount_choices(profile.bank_balance, profile.withdraw_step):
-            options.append({
-                "id": f"banking:withdraw:{int(amount)}",
-                "label": f"Withdraw {_credit_amount_label(amount)}",
-            })
-        for amount in self._bank_amount_choices(assets.credits, profile.deposit_step):
-            options.append({
-                "id": f"banking:deposit:{int(amount)}",
-                "label": f"Deposit {_credit_amount_label(amount)}",
-            })
-        return options
-
-    def _open_vehicle_sale_menu(self, prop, quality):
-        quality = _vehicle_sale_quality(quality)
-        self._clear_pending_service_result()
-        self._clear_casino_session()
-        prop_name = str(prop.get("name", prop.get("id", "Vehicle Sales"))).strip() or "Vehicle Sales"
-        offers = _vehicle_sale_offers(self.sim, prop, quality)
-        if not offers:
-            self._present_service_result(
-                f"{_vehicle_sale_quality_title(quality)} Vehicles: {prop_name}",
-                [f"No {_site_service_label(f'vehicle_sales_{quality}')} are posted right now."],
-                property_id=prop.get("id"),
-            )
-            return
-
-        topics = []
-        for offer in offers:
-            topic = dict(offer)
-            topic["id"] = f"vehicle_sales_{quality}:offer:{str(offer.get('offering_id', '')).strip()}"
-            topic["label"] = _vehicle_sale_offer_label(offer)
-            topics.append(topic)
-
-        state = self._dialog_ui_state()
-        transcript = [
-            f"Choose a {quality} vehicle at {prop_name}.",
-            "Each listing shows price, class, fuel, and drive stats.",
-            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
-        ]
-        self.sim.set_time_paused(True, reason="dialog")
-        state.update({
-            "open": True,
-            "kind": "service_menu",
-            "npc_eid": None,
-            "property_id": prop.get("id"),
-            "title": f"{_vehicle_sale_quality_title(quality)} Vehicles: {prop_name}",
-            "subtitle": "Available offerings",
-            "transcript": transcript,
-            "topics": topics,
-            "selected_index": 0,
-            "scroll": 0,
-            "hint": "Choose the exact vehicle you want. Esc closes; Space clears result messages.",
-            "new_topic_ids": [],
-            "close_pending": False,
-            "machine_action": None,
-            "service_menu_mode": f"vehicles:{quality}",
-            "casino_session": None,
-        })
-
-    def _present_service_result(self, title, lines, *, subtitle="", property_id=None):
-        state = self._dialog_ui_state()
-        transcript = [str(line).strip() for line in list(lines or ()) if str(line).strip()]
-        if not transcript:
-            transcript = ["Done."]
-        self.sim.set_time_paused(True, reason="dialog")
-        state.update({
-            "open": True,
-            "kind": "service_menu",
-            "npc_eid": None,
-            "property_id": property_id,
-            "title": str(title or "Service").strip() or "Service",
-            "subtitle": str(subtitle or "").strip(),
-            "transcript": transcript,
-            "topics": [],
-            "selected_index": 0,
-            "scroll": max(0, len(transcript) - 1),
-            "hint": "Service result. Press Space to close.",
-            "new_topic_ids": [],
-            "close_pending": True,
-            "machine_action": None,
-            "service_menu_mode": "result",
-        })
-        self._clear_pending_service_result()
-
-    def _machine_service_profile(self, prop):
-        if not _property_is_storefront(prop):
-            return None
-        service = _storefront_service_profile(self.sim, prop)
-        mode = str(service.get("mode", "")).strip().lower()
-        if mode == "automated" or bool(service.get("fallback_self_serve")):
-            return service
-        return None
-
-    def _service_menu_options(self, eid, prop, pos):
-        access = _evaluate_property_access(
-            self.sim,
-            eid,
-            prop,
-            x=pos.x,
-            y=pos.y,
-            z=pos.z,
-        )
-        if not access.can_use_services:
-            return [], None
-
-        options = []
-        storefront_service = None
-        if _property_is_storefront(prop):
-            storefront_service = _storefront_service_profile(self.sim, prop)
-            if storefront_service.get("available") and not self._machine_service_profile(prop):
-                options.append({"id": "trade_buy", "label": _service_menu_option_label("trade_buy")})
-                options.append({"id": "trade_sell", "label": _service_menu_option_label("trade_sell")})
-
-        finance_services = set(_finance_services_for_property(prop))
-        if "banking" in finance_services:
-            options.append({"id": "banking", "label": _service_menu_option_label("banking")})
-        if "insurance" in finance_services:
-            options.append({"id": "insurance", "label": _service_menu_option_label("insurance")})
-
-        for site_service in _site_services_for_property(prop):
-            options.append({"id": site_service, "label": _service_menu_option_label(site_service)})
-
-        deduped = []
-        seen = set()
-        for option in options:
-            option_id = str(option.get("id", "")).strip().lower()
-            if not option_id or option_id in seen:
-                continue
-            seen.add(option_id)
-            deduped.append(option)
-        return deduped, storefront_service
-
-    def _open_banking_menu(self, prop):
-        state = self._dialog_ui_state()
-        self._clear_pending_service_result()
-        self._clear_casino_session()
-        prop_name = str(prop.get("name", prop.get("id", "Banking"))).strip() or "Banking"
-        assets = self._assets_for(self.player_eid)
-        profile = self._profile_for(self.player_eid)
-        wallet_credits = int(getattr(assets, "credits", 0)) if assets else 0
-        bank_balance = int(getattr(profile, "bank_balance", 0)) if profile else 0
-        options = self._bank_menu_options(self.player_eid)
-        transcript = [
-            f"Choose how much to move at {prop_name}.",
-            f"Wallet {_credit_amount_label(wallet_credits)} | Bank {_credit_amount_label(bank_balance)}.",
-        ]
-        if not profile:
-            self._present_service_result(
-                f"Banking: {prop_name}",
-                ["No finance profile available."],
-                property_id=prop.get("id"),
-            )
-            return
-        if not options:
-            self._present_service_result(
-                f"Banking: {prop_name}",
-                [
-                    "No funds are available to move right now.",
-                    f"Wallet {_credit_amount_label(wallet_credits)} | Bank {_credit_amount_label(bank_balance)}.",
-                ],
-                property_id=prop.get("id"),
-            )
-            return
-
-        self.sim.set_time_paused(True, reason="dialog")
-        state.update({
-            "open": True,
-            "kind": "service_menu",
-            "npc_eid": None,
-            "property_id": prop.get("id"),
-            "title": f"Banking: {prop_name}",
-            "subtitle": "",
-            "transcript": transcript,
-            "topics": options,
-            "selected_index": 0,
-            "scroll": 0,
-            "hint": "Choose a transfer amount. Esc closes; Space closes result messages.",
-            "new_topic_ids": [],
-            "close_pending": False,
-            "machine_action": None,
-            "service_menu_mode": "banking",
-            "casino_session": None,
-        })
-
-    def _open_casino_game_menu(self, prop, service):
-        state = self._dialog_ui_state()
-        self._clear_pending_service_result()
-        self._clear_casino_session()
-        profile = _casino_game_profile(service)
-        if not profile:
-            self._present_service_result("Casino", ["That game is not available right now."], property_id=prop.get("id"))
-            return
-
-        prop_name = str(prop.get("name", prop.get("id", "Casino"))).strip() or "Casino"
-        assets = self._assets_for(self.player_eid)
-        wallet_credits = int(getattr(assets, "credits", 0)) if assets else 0
-        wager_options = [
-            {
-                "id": f"{str(service).strip().lower()}:bet:{int(amount)}",
-                "label": f"Bet {_credit_amount_label(amount)}",
-            }
-            for amount in profile.get("bet_options", ())
-        ]
-        transcript = [
-            str(profile.get("prompt", "Choose a wager.")).strip() or "Choose a wager.",
-            str(profile.get("note", "")).strip() or "Pick a stake and play a round.",
-            f"Wallet {_credit_amount_label(wallet_credits)}.",
-        ]
-
-        self.sim.set_time_paused(True, reason="dialog")
-        state.update({
-            "open": True,
-            "kind": "service_menu",
-            "npc_eid": None,
-            "property_id": prop.get("id"),
-            "title": f"{_casino_game_title(service)}: {prop_name}",
-            "subtitle": "Choose a wager",
-            "transcript": transcript,
-            "topics": wager_options,
-            "selected_index": 0,
-            "scroll": 0,
-            "hint": "Pick a stake to play one round. Esc closes; Space clears result messages.",
-            "new_topic_ids": [],
-            "close_pending": False,
-            "machine_action": None,
-            "service_menu_mode": f"casino:{str(service).strip().lower()}",
-            "casino_session": None,
-        })
-
-    def _open_service_menu(self, prop, options, storefront_service=None):
-        state = self._dialog_ui_state()
-        self._clear_pending_service_result()
-        self._clear_casino_session()
-        prop_name = str(prop.get("name", prop.get("id", "Service"))).strip() or "Service"
-        transcript = [f"Choose a service at {prop_name}."]
-        subtitle_bits = []
-        if isinstance(storefront_service, dict):
-            note = str(storefront_service.get("service_note", "")).strip()
-            if note:
-                subtitle_bits.append(note)
-        machine_profile = self._machine_service_profile(prop)
-        machine_action = None
-        if machine_profile:
-            transcript.append("M opens the unattended machine directly.")
-            machine_action = {
-                "property_id": prop.get("id"),
-                "mode": "buy",
-                "automated_only": True,
-            }
-
-        self.sim.set_time_paused(True, reason="dialog")
-        state.update({
-            "open": True,
-            "kind": "service_menu",
-            "npc_eid": None,
-            "property_id": prop.get("id"),
-            "title": f"Services: {prop_name}",
-            "subtitle": " | ".join(bit for bit in subtitle_bits if bit),
-            "transcript": transcript,
-            "topics": list(options),
-            "selected_index": 0,
-            "scroll": 0,
-            "hint": "Pick a service. Staffed counters are routed here; M is for machines.",
-            "new_topic_ids": [],
-            "close_pending": False,
-            "machine_action": machine_action,
-            "service_menu_mode": "root",
-            "casino_session": None,
-        })
-
-    def _close_service_menu(self):
-        self._clear_pending_service_result()
-        self._clear_casino_session()
-        state = self._dialog_ui_state()
-        self.sim.set_time_paused(False, reason="dialog")
-        state.update({
-            "open": False,
-            "kind": "conversation",
-            "npc_eid": None,
-            "property_id": None,
-            "title": "Conversation",
-            "subtitle": "",
-            "transcript": [],
-            "topics": [],
-            "selected_index": 0,
-            "scroll": 0,
-            "hint": "",
-            "new_topic_ids": [],
-            "close_pending": False,
-            "machine_action": None,
-            "service_menu_mode": "root",
-            "casino_session": None,
-        })
-
-    def _begin_pending_service_result(self, *, channel, property_id, property_name, service=""):
-        self.pending_service_result = {
-            "channel": str(channel or "").strip().lower(),
-            "eid": self.player_eid,
-            "property_id": property_id,
-            "property_name": str(property_name or "").strip(),
-            "service": str(service or "").strip().lower(),
-        }
-
-    def _event_matches_pending(self, event, *, channel, service=None):
-        pending = self.pending_service_result
-        if not isinstance(pending, dict):
-            return False
-        if str(pending.get("channel", "")).strip().lower() != str(channel or "").strip().lower():
-            return False
-        if event.data.get("eid") != pending.get("eid"):
-            return False
-
-        pending_property_id = pending.get("property_id")
-        event_property_id = event.data.get("property_id")
-        if pending_property_id is not None and event_property_id is not None and event_property_id != pending_property_id:
-            return False
-
-        expected_service = str(service if service is not None else pending.get("service", "")).strip().lower()
-        if expected_service:
-            event_service = str(event.data.get("service", "") or "").strip().lower()
-            if event_service and event_service != expected_service:
-                return False
-        return True
-
-    def _site_service_result_lines(self, event):
-        service = str(event.data.get("service", "")).strip().lower()
-        prop_name = str(event.data.get("property_name", self._pending_property_name("Service"))).strip() or self._pending_property_name("Service")
-        if service in CASINO_GAME_SERVICE_IDS:
-            wager = int(event.data.get("wager", 0))
-            stake = int(event.data.get("stake", wager))
-            payout = int(event.data.get("payout", 0))
-            net_credits = int(event.data.get("net_credits", payout - stake))
-            credits_after = int(event.data.get("credits_after", 0))
-            social_gain = int(event.data.get("social_gain", 0))
-            detail = str(event.data.get("detail", "")).strip()
-            headline = str(event.data.get("headline", "")).strip() or f"You play {_site_service_label(service)}."
-            lines = [
-                str(line).strip()
-                for line in list(event.data.get("result_lines", ()) or ())
-                if str(line).strip()
-            ]
-            if not lines:
-                lines = [detail or headline]
-            lines.append(
-                f"Stake {_credit_amount_label(stake)} | payout {_credit_amount_label(payout)} | "
-                f"net {net_credits:+d}c | wallet {_credit_amount_label(credits_after)}."
-            )
-            if social_gain > 0:
-                lines.append(f"The room livens you up a bit (So +{social_gain}).")
-            return f"{_casino_game_title(service)}: {prop_name}", lines
-        if service == "fuel":
-            fuel_gain = int(event.data.get("fuel_gain", 0))
-            credits_spent = int(event.data.get("credits_spent", 0))
-            fuel = int(event.data.get("fuel", 0))
-            fuel_capacity = int(event.data.get("fuel_capacity", 0))
-            vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
-            lines = [
-                f"{prop_name} refuels {vehicle_name}.",
-                f"+{fuel_gain} fuel for {_credit_amount_label(credits_spent)}.",
-            ]
-            if fuel_capacity > 0:
-                lines.append(f"Tank {fuel}/{fuel_capacity}.")
-            return f"Fuel: {prop_name}", lines
-        if service in {"vehicle_sales_new", "vehicle_sales_used"}:
-            vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
-            price = int(event.data.get("price", 0))
-            quality = "new" if service == "vehicle_sales_new" else "used"
-            lines = [
-                f"Purchased {vehicle_name}.",
-                f"{quality.title()} unit for {_credit_amount_label(price)}.",
-            ]
-            stats = _vehicle_sale_stats_text(event.data)
-            if stats:
-                lines.append(stats + ".")
-            if bool(event.data.get("key_issued", False)):
-                lines.append("A key was issued with the vehicle.")
-            return f"Vehicles: {prop_name}", lines
-        if service == "shelter":
-            hp_gain = int(event.data.get("hp_gain", 0))
-            energy_gain = int(event.data.get("energy_gain", 0))
-            safety_gain = int(event.data.get("safety_gain", 0))
-            social_gain = int(event.data.get("social_gain", 0))
-            gain_bits = []
-            if hp_gain > 0:
-                gain_bits.append(f"HP +{hp_gain}")
-            if energy_gain > 0:
-                gain_bits.append(f"E +{energy_gain}")
-            if safety_gain > 0:
-                gain_bits.append(f"S +{safety_gain}")
-            if social_gain > 0:
-                gain_bits.append(f"So +{social_gain}")
-            return f"Shelter: {prop_name}", [
-                f"{prop_name} gives you a safe place to steady up.",
-                " ".join(gain_bits) if gain_bits else "You settle yourself and recover a little.",
-            ]
-        if service == "rest":
-            hp_gain = int(event.data.get("hp_gain", 0))
-            energy_gain = int(event.data.get("energy_gain", 0))
-            safety_gain = int(event.data.get("safety_gain", 0))
-            social_gain = int(event.data.get("social_gain", 0))
-            credits_spent = int(event.data.get("credits_spent", 0))
-            gain_bits = []
-            if hp_gain > 0:
-                gain_bits.append(f"HP +{hp_gain}")
-            if energy_gain > 0:
-                gain_bits.append(f"E +{energy_gain}")
-            if safety_gain > 0:
-                gain_bits.append(f"S +{safety_gain}")
-            if social_gain > 0:
-                gain_bits.append(f"So +{social_gain}")
-            lines = [f"Room rented for {_credit_amount_label(credits_spent)}."]
-            lines.append(" ".join(gain_bits) if gain_bits else "You come away better rested.")
-            return f"Rest: {prop_name}", lines
-        if service == "vehicle_fetch":
-            vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
-            credits_spent = int(event.data.get("credits_spent", 0))
-            return f"Fetch: {prop_name}", [
-                f"{prop_name} sends a runner for your {vehicle_name}.",
-                f"Fee: {_credit_amount_label(credits_spent)}.",
-            ]
-        return f"Service: {prop_name}", [f"{prop_name} provides {_site_service_label(service)}."]
-
-    def _site_service_blocked_lines(self, event):
-        service = str(event.data.get("service", "")).strip().lower()
-        prop_name = str(event.data.get("property_name", self._pending_property_name("Service"))).strip() or self._pending_property_name("Service")
-        reason = str(event.data.get("reason", "blocked")).strip().lower()
-        title = f"{_casino_game_title(service)}: {prop_name}" if service in CASINO_GAME_SERVICE_IDS else f"Service: {prop_name}"
-        if reason == "invalid_wager" and service in CASINO_GAME_SERVICE_IDS:
-            return f"{_casino_game_title(service)}: {prop_name}", ["The house refuses that stake.", "Choose one of the posted wager sizes."]
-        if reason == "invalid_round" and service in CASINO_GAME_SERVICE_IDS:
-            return title, ["That hand cannot be resolved cleanly right now.", "Step away and try a fresh round."]
-        if reason == "cooldown":
-            ready_in = int(event.data.get("ready_in", 0))
-            return title, [f"{_site_service_label(service).title()} is not available again yet.", f"Ready in {ready_in}t."]
-        if reason == "no_need" and service == "shelter":
-            return title, [f"You do not need shelter at {prop_name} right now."]
-        if reason == "no_leads" and service == "intel":
-            return f"Intel: {prop_name}", [f"{prop_name} has no fresh routes or leads right now."]
-        if reason == "no_vehicle" and service == "fuel":
-            return f"Fuel: {prop_name}", [f"{prop_name} can only refuel a vehicle you own or have set active."]
-        if reason == "tank_full" and service == "fuel":
-            vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
-            fuel = int(event.data.get("fuel", 0))
-            fuel_capacity = int(event.data.get("fuel_capacity", 0))
-            if fuel_capacity > 0:
-                return f"Fuel: {prop_name}", [f"{vehicle_name} is already topped off.", f"Tank {fuel}/{fuel_capacity}."]
-            return f"Fuel: {prop_name}", [f"{vehicle_name} is already topped off."]
-        if reason == "no_credits" and service == "fuel":
-            cost = int(event.data.get("cost", 0))
-            credits = int(event.data.get("credits", 0))
-            vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
-            return f"Fuel: {prop_name}", [
-                f"{prop_name} charges {_credit_amount_label(cost)} per unit for {vehicle_name}.",
-                f"You have {_credit_amount_label(credits)} on hand.",
-            ]
-        if reason == "no_credits":
-            cost = int(event.data.get("cost", 0))
-            credits = int(event.data.get("credits", 0))
-            return title, [f"Need {_credit_amount_label(cost)} for this service.", f"You have {_credit_amount_label(credits)} on hand."]
-        if reason == "no_space" and service in {"vehicle_sales_new", "vehicle_sales_used"}:
-            return f"Vehicles: {prop_name}", ["There is no clear space nearby to place a vehicle."]
-        if reason == "key_storage_full" and service in {"vehicle_sales_new", "vehicle_sales_used"}:
-            return f"Vehicles: {prop_name}", ["You need a free inventory slot for the vehicle key."]
-        if reason == "no_vehicle" and service == "vehicle_fetch":
-            return f"Fetch: {prop_name}", [f"You do not own a vehicle for {prop_name} to retrieve."]
-        return title, [f"{prop_name} cannot provide {_site_service_label(service)} right now."]
-
-    def _bank_transaction_lines(self, event):
-        provider_name = str(event.data.get("provider_name", self._pending_property_name("Banking"))).strip() or self._pending_property_name("Banking")
-        kind = str(event.data.get("kind", "deposit")).strip().lower()
-        amount = int(event.data.get("amount", 0))
-        wallet = int(event.data.get("wallet_credits", 0))
-        bank = int(event.data.get("bank_balance", 0))
-        verb = "Withdrew" if kind == "withdraw" else "Deposited"
-        return f"Banking: {provider_name}", [
-            f"{verb} {_credit_amount_label(amount)}.",
-            f"Wallet {_credit_amount_label(wallet)} | Bank {_credit_amount_label(bank)}.",
-        ]
-
-    def _bank_blocked_lines(self, event):
-        reason = str(event.data.get("reason", "")).strip().lower()
-        title = f"Banking: {self._pending_property_name('Banking')}"
-        if reason == "no_banking_service":
-            return title, ["No banking service is nearby."]
-        if reason == "no_bank_balance":
-            return title, ["Bank account is empty."]
-        if reason == "missing_finance_profile":
-            return title, ["No finance profile is available."]
-        if reason == "deposit_not_needed":
-            return title, ["Wallet reserve is already above the current bank target."]
-        if reason == "no_funds_to_manage":
-            return title, ["No funds are available to move right now."]
-        if reason == "insufficient_bank_balance":
-            amount = int(event.data.get("amount", 0))
-            bank_balance = int(event.data.get("bank_balance", 0))
-            return title, [f"Cannot withdraw {_credit_amount_label(amount)}.", f"Bank holds {_credit_amount_label(bank_balance)}."]
-        if reason == "insufficient_wallet_funds":
-            amount = int(event.data.get("amount", 0))
-            credits = int(event.data.get("credits", 0))
-            return title, [f"Cannot deposit {_credit_amount_label(amount)}.", f"Wallet holds {_credit_amount_label(credits)}."]
-        if reason == "invalid_amount":
-            return title, ["Choose a non-zero banking amount."]
-        return title, ["Banking action blocked."]
-
-    def _insurance_purchased_lines(self, event):
-        provider_name = str(event.data.get("provider_name", self._pending_property_name("Insurance"))).strip() or self._pending_property_name("Insurance")
-        policy_name = str(event.data.get("policy_name", "policy")).strip() or "policy"
-        premium = int(event.data.get("premium", 0))
-        expires_tick = int(event.data.get("expires_tick", 0))
-        duration_ticks = int(event.data.get("duration_ticks", max(0, expires_tick - int(self.sim.tick))))
-        duration_text = _tick_duration_label(self.sim, duration_ticks)
-        lines = [
-            f"Purchased {policy_name}.",
-            f"Premium {_credit_amount_label(premium)}. Covers {duration_text}; expires t{expires_tick}.",
-        ]
-        contact_note = str(event.data.get("contact_note", "")).strip()
-        if contact_note:
-            lines.append(contact_note)
-        return f"Insurance: {provider_name}", lines
-
-    def _insurance_blocked_lines(self, event):
-        reason = str(event.data.get("reason", "")).strip().lower()
-        title = f"Insurance: {self._pending_property_name('Insurance')}"
-        if reason == "no_insurance_service":
-            return title, ["No insurance provider is nearby."]
-        if reason == "insufficient_funds":
-            premium = int(event.data.get("premium", 0))
-            credits = int(event.data.get("credits", 0))
-            policy_name = str(event.data.get("policy_name", "policy")).strip() or "policy"
-            return title, [f"Need {_credit_amount_label(premium)} for {policy_name}.", f"You have {_credit_amount_label(credits)} on hand."]
-        if reason == "provider_no_products":
-            return title, ["This provider has no policies to offer right now."]
-        if reason == "no_offer":
-            return title, ["No policy offer is available right now."]
-        if reason == "missing_finance_profile":
-            return title, ["No finance profile is available."]
-        return title, ["Insurance action blocked."]
-
-    def on_property_interact(self, event):
-        eid = event.data.get("eid")
-        if eid != self.player_eid:
-            return
-        if bool(event.data.get("handled")):
-            return
-
-        prop = self.sim.properties.get(event.data.get("property_id"))
-        if not isinstance(prop, dict):
-            return
-        if _property_infrastructure_role(prop) in {"access_panel", "security_post", "service_terminal"}:
-            return
-
-        pos = self._position_for(eid)
-        if not pos:
-            return
-
-        options, storefront_service = self._service_menu_options(eid, prop, pos)
-        if not options:
-            return
-
-        event.data["handled"] = True
-        self._open_service_menu(prop, options, storefront_service=storefront_service)
-
-    def on_player_action(self, event):
-        eid = event.data.get("eid")
-        if eid != self.player_eid:
-            return
-        if bool(event.data.get("handled")):
-            return
-        if str(event.data.get("action", "")).strip().lower() != "banking":
-            return
-
-        pos = self._position_for(eid)
-        if not pos:
-            return
-
-        prop = self._nearest_property_with_service(pos, "banking", radius=2)
-        event.data["handled"] = True
-        if not prop:
-            self._present_service_result("Banking", ["No banking service is nearby."])
-            return
-        self._open_banking_menu(prop)
-
-    def on_dialog_close_request(self, event):
-        if event.data.get("eid") != self.player_eid:
-            return
-        state = self._dialog_ui_state()
-        if str(state.get("kind", "")).strip().lower() == "service_menu":
-            if self._casino_session() and not bool(state.get("close_pending")):
-                self._forfeit_active_casino_session()
-            self._close_service_menu()
-            return
-        self._clear_pending_service_result()
-
-    def on_service_menu_execute_request(self, event):
-        if event.data.get("eid") != self.player_eid:
-            return
-
-        state = self._dialog_ui_state()
-        if not state.get("open") or str(state.get("kind", "")).strip().lower() != "service_menu":
-            return
-
-        option_id = str(event.data.get("option_id", "") or "").strip().lower()
-        property_id = event.data.get("property_id") or state.get("property_id")
-        if not option_id or not property_id:
-            return
-
-        prop = self.sim.properties.get(property_id)
-        if option_id == "trade_buy":
-            self._close_service_menu()
-            self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="buy", property_id=property_id))
-            return
-        if option_id == "trade_sell":
-            self._close_service_menu()
-            self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="sell", property_id=property_id))
-            return
-        if option_id == "banking":
-            if isinstance(prop, dict):
-                self._open_banking_menu(prop)
-            else:
-                self._present_service_result("Banking", ["No banking service is available right now."])
-            return
-        if option_id in {"vehicle_sales_new", "vehicle_sales_used"}:
-            if isinstance(prop, dict):
-                self._open_vehicle_sale_menu(prop, "new" if option_id == "vehicle_sales_new" else "used")
-            else:
-                self._present_service_result("Vehicles", ["That vehicle service is not available right now."])
-            return
-        if option_id.startswith("vehicle_sales_new:offer:") or option_id.startswith("vehicle_sales_used:offer:"):
-            service, _sep, offering_id = option_id.partition(":offer:")
-            service = str(service or "").strip().lower()
-            if service not in {"vehicle_sales_new", "vehicle_sales_used"} or not isinstance(prop, dict):
-                self._present_service_result("Vehicles", ["That vehicle offering is not available right now."])
-                return
-            offering_id = str(offering_id or "").strip().lower()
-            if not offering_id:
-                self._present_service_result("Vehicles", ["That vehicle offering is not valid."])
-                return
-            prop_name = prop.get("name", property_id)
-            self._begin_pending_service_result(
-                channel="site",
-                property_id=property_id,
-                property_name=prop_name,
-                service=service,
-            )
-            self.sim.emit(Event(
-                "site_service_request",
-                eid=self.player_eid,
-                property_id=property_id,
-                service=service,
-                property_name=prop_name,
-                offering_id=offering_id,
-            ))
-            return
-        if option_id.startswith("banking:"):
-            parts = option_id.split(":")
-            if len(parts) != 3:
-                self._present_service_result("Banking", ["That banking option is invalid."])
-                return
-            if not isinstance(prop, dict):
-                self._present_service_result("Banking", ["No banking service is available right now."])
-                return
-            transfer_kind = str(parts[1]).strip().lower()
-            try:
-                amount = int(parts[2])
-            except (TypeError, ValueError):
-                amount = 0
-            if transfer_kind not in {"deposit", "withdraw"} or amount <= 0:
-                self._present_service_result("Banking", ["That banking option is invalid."])
-                return
-            self._begin_pending_service_result(
-                channel="banking",
-                property_id=property_id,
-                property_name=prop.get("name", property_id),
-                service="banking",
-            )
-            self.sim.emit(Event(
-                "finance_service_request",
-                eid=self.player_eid,
-                property_id=property_id,
-                service="banking",
-                kind=transfer_kind,
-                amount=amount,
-            ))
-            return
-        if option_id == "insurance":
-            prop_name = prop.get("name", property_id) if isinstance(prop, dict) else property_id
-            self._begin_pending_service_result(
-                channel="insurance",
-                property_id=property_id,
-                property_name=prop_name,
-                service="insurance",
-            )
-            self.sim.emit(Event(
-                "finance_service_request",
-                eid=self.player_eid,
-                property_id=property_id,
-                service="insurance",
-            ))
-            return
-        if self._handle_active_casino_option(prop, option_id):
-            return
-        if option_id in CASINO_GAME_SERVICE_IDS:
-            if isinstance(prop, dict):
-                self._open_casino_game_menu(prop, option_id)
-            else:
-                self._present_service_result("Casino", ["That table is not available right now."])
-            return
-        for service in CASINO_GAME_SERVICE_IDS:
-            prefix = f"{service}:bet:"
-            if not option_id.startswith(prefix):
-                continue
-            if not isinstance(prop, dict):
-                self._present_service_result(_casino_game_title(service), ["That table is not available right now."])
-                return
-            try:
-                wager = int(option_id.rsplit(":", 1)[-1])
-            except (TypeError, ValueError):
-                wager = 0
-            if wager <= 0:
-                self._present_service_result(_casino_game_title(service), ["That wager is not valid."])
-                return
-            self._start_casino_round(prop, service, wager)
-            return
-        prop_name = prop.get("name", property_id) if isinstance(prop, dict) else event.data.get("property_name", "site")
-        self._begin_pending_service_result(
-            channel="site",
-            property_id=property_id,
-            property_name=prop_name,
-            service=option_id,
-        )
-        self.sim.emit(Event(
-            "site_service_request",
-            eid=self.player_eid,
-            property_id=property_id,
-            service=option_id,
-            property_name=prop_name,
-        ))
-
-    def on_site_service_used(self, event):
-        if not self._event_matches_pending(event, channel="site"):
-            return
-        title, lines = self._site_service_result_lines(event)
-        self._present_service_result(title, lines, property_id=event.data.get("property_id"))
-
-    def on_site_service_blocked(self, event):
-        if not self._event_matches_pending(event, channel="site"):
-            return
-        title, lines = self._site_service_blocked_lines(event)
-        self._present_service_result(title, lines, property_id=event.data.get("property_id"))
-
-    def on_site_intel_report(self, event):
-        if not self._event_matches_pending(event, channel="site", service="intel"):
-            return
-        prop_name = str(event.data.get("property_name", self._pending_property_name("Intel"))).strip() or self._pending_property_name("Intel")
-        raw_lines = event.data.get("lines") or []
-        lines = []
-        for raw in raw_lines[:4]:
-            text = _line_text(raw).strip()
-            if text:
-                lines.append(text)
-        if not lines:
-            lines = [f"{prop_name} has nothing useful right now."]
-        self._present_service_result(f"Intel: {prop_name}", lines, property_id=event.data.get("property_id"))
-
-    def on_bank_transaction(self, event):
-        if not self._event_matches_pending(event, channel="banking"):
-            return
-        title, lines = self._bank_transaction_lines(event)
-        self._present_service_result(title, lines, property_id=event.data.get("property_id"))
-
-    def on_banking_action_blocked(self, event):
-        if not self._event_matches_pending(event, channel="banking"):
-            return
-        title, lines = self._bank_blocked_lines(event)
-        property_id = event.data.get("property_id")
-        if property_id is None and isinstance(self.pending_service_result, dict):
-            property_id = self.pending_service_result.get("property_id")
-        self._present_service_result(title, lines, property_id=property_id)
-
-    def on_insurance_policy_purchased(self, event):
-        if not self._event_matches_pending(event, channel="insurance"):
-            return
-        title, lines = self._insurance_purchased_lines(event)
-        property_id = event.data.get("property_id")
-        if property_id is None and isinstance(self.pending_service_result, dict):
-            property_id = self.pending_service_result.get("property_id")
-        self._present_service_result(title, lines, property_id=property_id)
-
-    def on_insurance_action_blocked(self, event):
-        if not self._event_matches_pending(event, channel="insurance"):
-            return
-        title, lines = self._insurance_blocked_lines(event)
-        property_id = event.data.get("property_id")
-        if property_id is None and isinstance(self.pending_service_result, dict):
-            property_id = self.pending_service_result.get("property_id")
-        self._present_service_result(title, lines, property_id=property_id)
 
 
 class WeaponSystem(System):
@@ -25713,13 +20457,7 @@ class CombatPacingSystem(System):
         self.calm_frames = 0
         self.runs_without_turn = True
 
-        if not hasattr(self.sim, "combat_overlay"):
-            self.sim.combat_overlay = {
-                "active": False,
-                "threat_count": 0,
-                "nearest_threat_dist": None,
-                "player_exposure": 1.0,
-            }
+        _combat_overlay_state(self.sim)
 
     def _threat_snapshot(self):
         positions = self.sim.ecs.get(Position)
@@ -25763,9 +20501,10 @@ class CombatPacingSystem(System):
         threat_count = snapshot["count"]
         nearest = snapshot["nearest_dist"]
 
-        overlay = self.sim.combat_overlay
+        overlay = _combat_overlay_state(self.sim)
         overlay["threat_count"] = threat_count
         overlay["nearest_threat_dist"] = nearest
+        manual_pacing = bool(overlay.get("manual_pacing"))
         player_cover = self.sim.ecs.get(CoverState).get(self.player_eid)
         player_exposure = float(player_cover.exposure) if player_cover else 1.0
         overlay["player_exposure"] = round(max(0.0, min(1.0, player_exposure)), 2)
@@ -25799,12 +20538,17 @@ class CombatPacingSystem(System):
             self.calm_frames += 1
             if self.calm_frames >= self.calm_frames_to_exit:
                 overlay["active"] = False
-                self.sim.turn_based = False
                 self.calm_frames = 0
                 self.sim.emit(Event(
                     "combat_overlay_exited",
                     player_eid=self.player_eid,
                 ))
+            if overlay["active"] or manual_pacing:
+                self.sim.turn_based = True
+                return
+
+        if manual_pacing:
+            self.sim.turn_based = True
             return
 
         self.sim.turn_based = False
@@ -26233,6 +20977,11 @@ class RivalOperatorSystem(System):
         "professional",
         "dangerous",
     )
+    RIVAL_FOLLOWUP_LABELS = (
+        "Rival Aftermath:",
+        "Burned Trail:",
+        "Last Trace:",
+    )
 
     def __init__(self, sim, player_eid):
         super().__init__(sim)
@@ -26372,6 +21121,53 @@ class RivalOperatorSystem(System):
         opp_state = traits.get("opportunities", {}) if isinstance(traits, dict) else {}
         active = opp_state.get("active", ()) if isinstance(opp_state, dict) else ()
         return [entry for entry in active if isinstance(entry, dict)]
+
+    def _is_rival_followup_entry(self, entry):
+        if not isinstance(entry, dict):
+            return False
+        kind = str(entry.get("kind", "")).strip().lower()
+        if kind == "rival_followup":
+            return True
+        requirements = entry.get("requirements", {}) if isinstance(entry.get("requirements", {}), dict) else {}
+        return bool(requirements.get("rival_followup"))
+
+    def _collapse_repeated_rival_followup_labels(self, text):
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return ""
+        for label in self.RIVAL_FOLLOWUP_LABELS:
+            pattern = rf"(?:{re.escape(label)}\s*){{2,}}"
+            cleaned = re.sub(pattern, f"{label} ", cleaned, flags=re.IGNORECASE).strip()
+        return cleaned
+
+    def _normalize_rival_followup_entry(self, entry):
+        if not self._is_rival_followup_entry(entry):
+            return False
+        changed = False
+        title = self._collapse_repeated_rival_followup_labels(entry.get("title", ""))
+        summary = self._collapse_repeated_rival_followup_labels(entry.get("summary", ""))
+        if title and title != str(entry.get("title", "")).strip():
+            entry["title"] = title
+            changed = True
+        if summary and summary != str(entry.get("summary", "")).strip():
+            entry["summary"] = summary
+            changed = True
+        return changed
+
+    def _normalize_rival_followup_opportunities(self):
+        traits = getattr(self.sim, "world_traits", {})
+        opp_state = traits.get("opportunities", {}) if isinstance(traits, dict) else {}
+        if not isinstance(opp_state, dict):
+            return False
+        changed = False
+        for bucket in ("active", "completed"):
+            entries = opp_state.get(bucket, ())
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if isinstance(entry, dict):
+                    changed = self._normalize_rival_followup_entry(entry) or changed
+        return changed
 
     def _target_entry(self, rival):
         target_id = int(rival.get("target_opportunity_id", 0) or 0)
@@ -26685,6 +21481,8 @@ class RivalOperatorSystem(System):
 
     def _entry_score_for_rival(self, rival, entry):
         if not isinstance(entry, dict):
+            return -999.0
+        if self._is_rival_followup_entry(entry):
             return -999.0
         if self._player_is_committed_to_opportunity(entry):
             return -999.0
@@ -27396,9 +22194,11 @@ class RivalOperatorSystem(System):
     def _spawn_rival_followup(self, rival, resolved, *, resolution, casualty=""):
         if not isinstance(resolved, dict):
             return None
+        if self._is_rival_followup_entry(resolved):
+            return None
         chunk = self._normalize_chunk(resolved.get("chunk"), fallback=rival.get("current_chunk"))
         rival_name = str(rival.get("name", "rival")).strip() or "rival"
-        title = str(resolved.get("title", "Opportunity")).strip() or "Opportunity"
+        title = self._collapse_repeated_rival_followup_labels(resolved.get("title", "Opportunity")) or "Opportunity"
         risk = str(resolved.get("risk", "low")).strip().lower() or "low"
 
         if casualty == "dead":
@@ -27708,6 +22508,7 @@ class RivalOperatorSystem(System):
         ))
 
     def update(self):
+        self._normalize_rival_followup_opportunities()
         rivals = self._seed_rivals()
         if not rivals:
             return
@@ -27898,7 +22699,9 @@ class ObjectiveProgressSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         lines = list(event.data.get("lines", ()) or ())
-        intel_marks = max(1, min(3, (len(lines) // 2) + 1))
+        base_intel_marks = max(1, min(3, (len(lines) // 2) + 1))
+        detail_level = max(0, _int_or_default(event.data.get("detail_level"), 0))
+        intel_marks = min(3, base_intel_marks + (1 if detail_level >= 1 else 0))
         self._emit_award(
             channel="site_intel",
             intel_marks=intel_marks,
@@ -27966,6 +22769,8 @@ class RunPressureSystem(System):
     PRESSURE_EVENT_COOLDOWN = 2
     PRESSURE_REPEAT_WINDOW = 10
     PRESSURE_REPEAT_SCALARS = (1.0, 0.75, 0.55, 0.4)
+    BANKING_MITIGATION_COOLDOWN = 90
+    BANKING_MITIGATION_MIN_AMOUNT = 20
 
     def __init__(self, sim, player_eid):
         super().__init__(sim)
@@ -27973,6 +22778,7 @@ class RunPressureSystem(System):
         self.last_wait_decay_tick = -10_000
         self.last_pressure_event_tick = {}
         self.pressure_event_streak = {}
+        self.last_banking_mitigation_tick = {}
         self.sim.events.subscribe("action_offense", self.on_action_offense)
         self.sim.events.subscribe("property_trespass", self.on_property_trespass)
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
@@ -28133,6 +22939,46 @@ class RunPressureSystem(System):
             tier_bonus = 1
         return max(0, min(16, base + context_bonus + tier_bonus))
 
+    def _banking_mitigation_key(self, event):
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        if property_id:
+            prop = self.sim.properties.get(property_id)
+            if isinstance(prop, dict):
+                snapshot = _organization_snapshot(self.sim, prop=prop, ensure=True)
+                org_key = str((snapshot or {}).get("organization_key", "") or "").strip().lower()
+                if org_key:
+                    return f"org:{org_key}"
+            return f"prop:{property_id}"
+
+        provider = str(event.data.get("provider_name", "") or "").strip().lower()
+        if provider:
+            return f"provider:{provider}"
+        return "banking"
+
+    def _banking_mitigation_ready(self, event):
+        try:
+            amount = int(event.data.get("amount", 0))
+        except (TypeError, ValueError):
+            amount = 0
+        if amount < int(self.BANKING_MITIGATION_MIN_AMOUNT):
+            return False
+
+        key = self._banking_mitigation_key(event)
+        tick = int(getattr(self.sim, "tick", 0))
+        last_tick = int(self.last_banking_mitigation_tick.get(key, -10_000))
+        if tick - last_tick < int(self.BANKING_MITIGATION_COOLDOWN):
+            return False
+
+        self.last_banking_mitigation_tick[key] = tick
+        if len(self.last_banking_mitigation_tick) > 256:
+            stale_before = tick - (int(self.BANKING_MITIGATION_COOLDOWN) * 4)
+            self.last_banking_mitigation_tick = {
+                bank_key: int(bank_tick)
+                for bank_key, bank_tick in self.last_banking_mitigation_tick.items()
+                if int(bank_tick) >= stale_before
+            }
+        return True
+
     def on_action_offense(self, event):
         if event.data.get("offender_eid") != self.player_eid:
             return
@@ -28195,14 +23041,31 @@ class RunPressureSystem(System):
     def on_property_tamper(self, event):
         if event.data.get("offender_eid") != self.player_eid:
             return
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        prop = self.sim.properties.get(property_id) if property_id else None
         severity_score = max(0, int(event.data.get("severity_score", 0)))
+        witnessed = bool(event.data.get("witnessed", True))
         ingress_kind = str(event.data.get("ingress_kind", "")).strip().lower()
         ingress_method = str(event.data.get("ingress_method", "")).strip().lower()
-        delta = 7 + max(0, severity_score // 16)
-        if ingress_kind in {"boundary_breach", "deep_breach"}:
-            delta += 2
-        if ingress_method in {"forced_breach", "deep_breach", "crash_window_entry"}:
-            delta += 2
+        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
+        prop_kind = str((prop or {}).get("kind", "") or "").strip().lower()
+        if _quiet_unwitnessed_tamper(
+            prop,
+            witnessed=witnessed,
+            ingress_kind=ingress_kind,
+            ingress_method=ingress_method,
+            breach_severity=breach_severity,
+        ):
+            if prop_kind in {"fixture", "vehicle"}:
+                delta = 1 + max(0, severity_score // 64)
+            else:
+                delta = 2 + max(0, severity_score // 40)
+        else:
+            delta = 7 + max(0, severity_score // 16)
+            if ingress_kind in {"boundary_breach", "deep_breach"}:
+                delta += 2
+            if ingress_method in {"forced_breach", "deep_breach", "crash_window_entry"}:
+                delta += 2
         self._emit_pressure(
             delta=min(20, delta),
             source="tamper",
@@ -28279,6 +23142,8 @@ class RunPressureSystem(System):
 
     def on_bank_transaction(self, event):
         if event.data.get("eid") != self.player_eid:
+            return
+        if not self._banking_mitigation_ready(event):
             return
         snapshot = _pressure_snapshot(self.sim)
         if int(snapshot.get("attention", 0)) < 12:
@@ -28372,10 +23237,13 @@ class OrganizationReputationSystem(System):
 
     HEAT_DECAY_INTERVAL = 60
     HEAT_DECAY_IDLE_TICKS = 90
+    BANKING_STANDING_COOLDOWN = 120
+    BANKING_STANDING_MIN_AMOUNT = 20
 
     def __init__(self, sim, player_eid):
         super().__init__(sim)
         self.player_eid = player_eid
+        self.last_banking_standing_tick = {}
         self.sim.events.subscribe("property_trespass", self.on_property_trespass)
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
@@ -28444,6 +23312,40 @@ class OrganizationReputationSystem(System):
                 after_tier=str(change.get("after_standing_tier", "neutral")).strip().lower() or "neutral",
             ))
 
+    def _banking_standing_key(self, prop):
+        snapshot = _organization_snapshot(self.sim, prop=prop, ensure=True)
+        org_key = str((snapshot or {}).get("organization_key", "") or "").strip().lower()
+        if org_key:
+            return f"org:{org_key}"
+        property_id = str(prop.get("id", "") or "").strip()
+        if property_id:
+            return f"prop:{property_id}"
+        return "banking"
+
+    def _banking_standing_ready(self, prop, event):
+        try:
+            amount = int(event.data.get("amount", 0))
+        except (TypeError, ValueError):
+            amount = 0
+        if amount < int(self.BANKING_STANDING_MIN_AMOUNT):
+            return False
+
+        key = self._banking_standing_key(prop)
+        tick = int(getattr(self.sim, "tick", 0))
+        last_tick = int(self.last_banking_standing_tick.get(key, -10_000))
+        if tick - last_tick < int(self.BANKING_STANDING_COOLDOWN):
+            return False
+
+        self.last_banking_standing_tick[key] = tick
+        if len(self.last_banking_standing_tick) > 256:
+            stale_before = tick - (int(self.BANKING_STANDING_COOLDOWN) * 4)
+            self.last_banking_standing_tick = {
+                bank_key: int(bank_tick)
+                for bank_key, bank_tick in self.last_banking_standing_tick.items()
+                if int(bank_tick) >= stale_before
+            }
+        return True
+
     def _apply_org_delta(
         self,
         prop,
@@ -28507,11 +23409,30 @@ class OrganizationReputationSystem(System):
             return
         access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
         severity_score = max(0, int(event.data.get("severity_score", 0)))
-        heat_delta = 6 + max(0, severity_score // 30)
-        standing_delta = -0.1
-        if access_level == "restricted":
-            heat_delta += 2
-            standing_delta -= 0.03
+        witnessed = bool(event.data.get("witnessed", True))
+        ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
+        ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
+        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
+        prop_kind = str(prop.get("kind", "") or "").strip().lower()
+        if _quiet_unwitnessed_tamper(
+            prop,
+            witnessed=witnessed,
+            ingress_kind=ingress_kind,
+            ingress_method=ingress_method,
+            breach_severity=breach_severity,
+        ):
+            if prop_kind in {"fixture", "vehicle"}:
+                heat_delta = 1
+                standing_delta = -0.01
+            else:
+                heat_delta = 2 + max(0, severity_score // 60)
+                standing_delta = -0.03
+        else:
+            heat_delta = 6 + max(0, severity_score // 30)
+            standing_delta = -0.1
+            if access_level == "restricted":
+                heat_delta += 2
+                standing_delta -= 0.03
         self._apply_org_delta(
             prop,
             heat_delta=min(20, heat_delta),
@@ -28569,6 +23490,8 @@ class OrganizationReputationSystem(System):
             return
         prop = self._property_from_event(event)
         if not isinstance(prop, dict):
+            return
+        if not self._banking_standing_ready(prop, event):
             return
         self._apply_org_delta(
             prop,
@@ -28973,6 +23896,14 @@ class PropertyDefenseSystem(System):
             return
 
         if threat_type == "property_trespass" and not witnessed:
+            return
+        if threat_type == "property_tamper" and _quiet_unwitnessed_tamper(
+            prop,
+            witnessed=witnessed,
+            ingress_kind=ingress_kind,
+            ingress_method=ingress_method,
+            breach_severity=float(event.data.get("breach_severity", 0.0) or 0.0),
+        ):
             return
         if threat_type == "property_trespass" and severity_score < 10:
             return
@@ -30617,6 +25548,61 @@ def _pick_wildlife_escape_target(sim, pos, threat, routine, behavior):
     return best_tile or home
 
 
+def _relocate_indoor_wildlife_outdoors(sim, eid, pos, routine):
+    if pos is None:
+        return False
+    covered = _property_covering(sim, pos.x, pos.y, pos.z)
+    if not (covered and str(covered.get("kind", "building")).strip().lower() == "building"):
+        return False
+
+    search_origins = [
+        (int(pos.x), int(pos.y), int(pos.z)),
+        _wildlife_home_position(pos, routine),
+    ]
+    candidates = []
+    seen = set()
+    for origin in search_origins:
+        for radius in (4, 6, 8):
+            for tile in _wildlife_walkable_tiles(
+                sim,
+                origin,
+                radius=radius,
+                outside_only=True,
+                include_origin=False,
+            ):
+                if tile in seen:
+                    continue
+                seen.add(tile)
+                candidates.append(tile)
+            if candidates:
+                break
+        if candidates:
+            break
+
+    if not candidates:
+        return False
+
+    candidates.sort(key=lambda tile: (_manhattan(pos.x, pos.y, tile[0], tile[1]), abs(int(tile[2]) - int(pos.z))))
+    new_x, new_y, new_z = candidates[0]
+    sim.tilemap.move_entity(
+        eid,
+        oldx=pos.x,
+        oldy=pos.y,
+        oldz=pos.z,
+        newx=new_x,
+        newy=new_y,
+        newz=new_z,
+    )
+    pos.x = int(new_x)
+    pos.y = int(new_y)
+    pos.z = int(new_z)
+    if routine and isinstance(getattr(routine, "home", None), (list, tuple)) and len(routine.home) >= 3:
+        home_prop = _property_covering(sim, routine.home[0], routine.home[1], routine.home[2])
+        if home_prop and str(home_prop.get("kind", "building")).strip().lower() == "building":
+            routine.home = (int(new_x), int(new_y), int(new_z))
+    return True
+
+
 class NPCWillSystem(System):
 
     def _set_intent(self, eid, ai, will, intent, score, target=None, target_eid=None):
@@ -30693,6 +25679,7 @@ class NPCWillSystem(System):
 
             wildlife = wildlife_behaviors.get(eid)
             if str(getattr(ai, "role", "") or "").strip().lower() == "wildlife" and wildlife:
+                _relocate_indoor_wildlife_outdoors(self.sim, eid, pos, routine)
                 home = _wildlife_home_position(pos, routine)
                 if ai.state == "seeking_safety" and ai.target:
                     self._set_intent(eid, ai, will, "seeking_safety", 86.0, ai.target, None)
@@ -33313,6 +28300,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("quest_none_available", self.on_quest_none)
         self.sim.events.subscribe("property_owner_changed", self.on_property_owner_changed)
         self.sim.events.subscribe("property_purchased", self.on_property_purchased)
+        self.sim.events.subscribe("player_business_acquired", self.on_player_business_acquired)
+        self.sim.events.subscribe("player_business_staff_hired", self.on_player_business_staff_hired)
+        self.sim.events.subscribe("player_business_staff_fired", self.on_player_business_staff_fired)
         self.sim.events.subscribe("property_purchase_blocked", self.on_property_purchase_blocked)
         self.sim.events.subscribe("trade_bought", self.on_trade_bought)
         self.sim.events.subscribe("trade_buy_blocked", self.on_trade_buy_blocked)
@@ -33362,6 +28352,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("run_pressure_mitigated", self.on_run_pressure_mitigated)
         self.sim.events.subscribe("organization_heat_tier_changed", self.on_organization_heat_tier_changed)
         self.sim.events.subscribe("organization_standing_tier_changed", self.on_organization_standing_tier_changed)
+        self.sim.events.subscribe("skill_rating_changed", self.on_skill_rating_changed)
         self.sim.events.subscribe("lighting_phase_changed", self.on_lighting_phase_changed)
         self.sim.events.subscribe("chunk_focus_changed", self.on_chunk_focus_changed)
         self.sim.events.subscribe("npc_suppressed", self.on_npc_suppressed)
@@ -34216,12 +29207,20 @@ class EventLogSystem(System):
             return
 
         lines = event.data.get("lines") or []
+        note = _sentence_from_note(event.data.get("note", ""))
+        radius_used = _int_or_default(event.data.get("radius"), 0)
+        display_limit = max(1, min(8, _int_or_default(event.data.get("display_limit"), 5)))
+        if note:
+            if radius_used > 0:
+                self.sim.log.add(f"Scan sweep {radius_used}t: {note}")
+            else:
+                self.sim.log.add(f"Scan: {note}")
         if not lines:
             self.sim.log.add("Scan finds nothing useful.")
             return
 
         first = True
-        for raw in lines[:5]:
+        for raw in lines[:display_limit]:
             text = _line_text(raw).strip()
             if not text:
                 continue
@@ -34621,6 +29620,7 @@ class EventLogSystem(System):
 
         service = str(event.data.get("service", "")).strip().lower()
         prop_name = str(event.data.get("property_name", "site")).strip() or "site"
+        skill_note = _sentence_from_note(event.data.get("skill_note", ""))
         if service in CASINO_GAME_SERVICE_IDS:
             stake = int(event.data.get("stake", event.data.get("wager", 0)))
             payout = int(event.data.get("payout", 0))
@@ -34637,22 +29637,34 @@ class EventLogSystem(System):
         if service == "fuel":
             fuel_gain = int(event.data.get("fuel_gain", 0))
             credits_spent = int(event.data.get("credits_spent", 0))
+            base_credits_spent = int(event.data.get("base_credits_spent", credits_spent))
             fuel = int(event.data.get("fuel", 0))
             fuel_capacity = int(event.data.get("fuel_capacity", 0))
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
-            self.sim.log.add(
-                f"Fuel: {prop_name} refuels {vehicle_name} (+{fuel_gain}, -{credits_spent}c, {fuel}/{fuel_capacity})."
-            )
+            text = f"Fuel: {prop_name} refuels {vehicle_name} (+{fuel_gain}, -{credits_spent}c, {fuel}/{fuel_capacity})."
+            if base_credits_spent > credits_spent:
+                text += f" Quoted down from {base_credits_spent}c."
+            if skill_note:
+                text += f" {skill_note}"
+            self.sim.log.add(text)
+            return
+        if service == "vending":
+            item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
+            credits_spent = int(event.data.get("credits_spent", 0))
+            self.sim.log.add(f"Vending: {prop_name} drops {item_name} into your bag (-{credits_spent}c).")
             return
         if service in {"vehicle_sales_new", "vehicle_sales_used"}:
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             price = int(event.data.get("price", 0))
+            base_price = int(event.data.get("base_price", price))
             quality = "new" if service == "vehicle_sales_new" else "used"
             key_note = " Key issued." if bool(event.data.get("key_issued", False)) else ""
             stats = _vehicle_sale_stats_text(event.data)
             stats_note = f" {stats}." if stats else ""
+            price_note = f" Quoted down from {base_price}c." if base_price > price else ""
+            skill_suffix = f" {skill_note}" if skill_note else ""
             self.sim.log.add(
-                f"Vehicle purchase: {vehicle_name} ({quality}) for {price} credits at {prop_name}.{stats_note}{key_note}"
+                f"Vehicle purchase: {vehicle_name} ({quality}) for {price} credits at {prop_name}.{stats_note}{price_note}{key_note}{skill_suffix}"
             )
             return
         if service == "shelter":
@@ -34693,7 +29705,13 @@ class EventLogSystem(System):
         if service == "vehicle_fetch":
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             credits_spent = int(event.data.get("credits_spent", 0))
-            self.sim.log.add(f"Fetch: {prop_name} dispatches a runner to retrieve your {vehicle_name} (-{credits_spent}c).")
+            base_credits_spent = int(event.data.get("base_credits_spent", credits_spent))
+            text = f"Fetch: {prop_name} dispatches a runner to retrieve your {vehicle_name} (-{credits_spent}c)."
+            if base_credits_spent > credits_spent:
+                text += f" Quoted down from {base_credits_spent}c."
+            if skill_note:
+                text += f" {skill_note}"
+            self.sim.log.add(text)
             return
 
         self.sim.log.add(f"{prop_name} provides {_site_service_label(service)}.")
@@ -34746,6 +29764,16 @@ class EventLogSystem(System):
             else:
                 self.sim.log.add(f"Fuel: {prop_name} charges {cost}c per unit for {vehicle_name}; you have {credits}c.")
             return
+        if reason == "no_credits" and service == "vending":
+            cost = int(event.data.get("cost", 0))
+            credits = int(event.data.get("credits", 0))
+            item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
+            self.sim.log.add(f"Vending: {item_name} costs {cost}c at {prop_name}; you only have {credits}c.")
+            return
+        if reason == "inventory_full" and service == "vending":
+            item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
+            self.sim.log.add(f"Vending: no room for {item_name}. Free an inventory slot first.")
+            return
         if reason == "no_credits":
             cost = int(event.data.get("cost", 0))
             credits = int(event.data.get("credits", 0))
@@ -34768,12 +29796,16 @@ class EventLogSystem(System):
 
         prop_name = str(event.data.get("property_name", "site")).strip() or "site"
         lines = event.data.get("lines") or []
+        display_limit = max(1, min(8, _int_or_default(event.data.get("display_limit"), 4)))
+        note = _sentence_from_note(event.data.get("skill_note", ""))
         if not lines:
             self.sim.log.add(f"Intel: {prop_name} has nothing useful right now.")
             return
 
+        if note:
+            self.sim.log.add(f"Intel @{prop_name}: {note}")
         first = True
-        for raw in lines[:4]:
+        for raw in lines[:display_limit]:
             text = _line_text(raw).strip()
             if not text:
                 continue
@@ -34949,6 +29981,23 @@ class EventLogSystem(System):
             label = f"{label} {ingress_text}"
         if method_text and method_text not in {"authorized", "door breach", "window entry", "alternate entry"}:
             label = f"{label} ({method_text})"
+        witnessed = bool(event.data.get("witnessed", True))
+        ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
+        ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
+        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
+        if _quiet_unwitnessed_tamper(
+            prop,
+            witnessed=witnessed,
+            ingress_kind=ingress_kind,
+            ingress_method=ingress_method,
+            breach_severity=breach_severity,
+        ):
+            self._log(f"Quiet tamper (unseen): {label}.", channel="alerts", priority="high", dedupe_window=4)
+            self._warn_once(
+                "quiet_tamper",
+                "Warning: quiet tampering still carries some risk, but it stays much lower if nobody sees it.",
+            )
+            return
         self._log(f"Tampering: {label}.", channel="alerts", priority="high", dedupe_window=4)
         self._warn_once(
             "tamper",
@@ -35067,7 +30116,37 @@ class EventLogSystem(System):
         eid = event.data.get("eid")
         item_name = event.data.get("item_name", event.data.get("item_id", "item"))
         if eid == self.player_eid:
-            _log_player_feedback(self.sim, f"Used {item_name}.", kind="interaction")
+            applied = list(event.data.get("applied", ()) or ())
+            bits = []
+            for entry in applied:
+                if not isinstance(entry, dict):
+                    continue
+                effect_type = str(entry.get("type", "")).strip().lower()
+                if effect_type == "restore_hp":
+                    delta = int(entry.get("delta", 0))
+                    if delta > 0:
+                        bits.append(f"HP +{delta}")
+                    continue
+                if effect_type == "modify_need":
+                    need = str(entry.get("need", "")).strip().lower()
+                    try:
+                        delta = int(round(float(entry.get("delta", 0))))
+                    except (TypeError, ValueError):
+                        delta = 0
+                    if delta == 0:
+                        continue
+                    label = {"energy": "E", "safety": "S", "social": "So"}.get(need, need[:2].upper() or "N")
+                    sign = "+" if delta > 0 else ""
+                    bits.append(f"{label} {sign}{delta}")
+                    continue
+                if effect_type == "status":
+                    status = str(entry.get("status", "")).strip().replace("_", " ")
+                    if status:
+                        bits.append(status)
+            if bits:
+                _log_player_feedback(self.sim, f"Used {item_name} ({', '.join(bits[:4])}).", kind="interaction")
+            else:
+                _log_player_feedback(self.sim, f"Used {item_name}.", kind="interaction")
             return
 
         if (self.sim.tick + eid) % 17 == 0:
@@ -35802,6 +30881,44 @@ class EventLogSystem(System):
         price = event.data.get("price", 0)
         self.sim.log.add(f"Purchased property {prop} for {price} credits.")
 
+    def on_player_business_acquired(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        business_name = str(event.data.get("business_name", "Business")).strip() or "Business"
+        staff_total = int(event.data.get("staff_total", 0))
+        required_staff = int(event.data.get("required_staff", 1))
+        self.sim.log.add(f"{business_name} now has a business account. Staff {staff_total}/{required_staff}.")
+
+    def on_player_business_staff_hired(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        business_name = str(event.data.get("business_name", "Business")).strip() or "Business"
+        npc_name = self._npc_label(event.data.get("npc_eid"))
+        role = str(event.data.get("role", "staff") or "staff").strip().lower() or "staff"
+        housing_kind = str(event.data.get("housing_kind", "") or "").strip().lower()
+        housing_name = str(event.data.get("housing_name", "") or "").strip()
+        if role == "manager":
+            line = f"{npc_name} now manages {business_name}."
+            if housing_kind == "workplace_lodging":
+                line = line[:-1] + " They will stay on-site."
+            elif housing_kind in {"nearby_housing", "nearby_lodging"} and housing_name:
+                line = line[:-1] + f" They will stay at {housing_name}."
+            self.sim.log.add(line)
+            return
+        line = f"{npc_name} is now on staff at {business_name}."
+        if housing_kind == "workplace_lodging":
+            line = line[:-1] + " They will stay on-site."
+        elif housing_kind in {"nearby_housing", "nearby_lodging"} and housing_name:
+            line = line[:-1] + f" They will stay at {housing_name}."
+        self.sim.log.add(line)
+
+    def on_player_business_staff_fired(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        business_name = str(event.data.get("business_name", "Business")).strip() or "Business"
+        npc_name = self._npc_label(event.data.get("npc_eid"))
+        self.sim.log.add(f"{npc_name} is no longer employed at {business_name}.")
+
     def on_property_purchase_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -35894,9 +31011,22 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         kind = event.data.get("kind", "deposit")
+        account_kind = str(event.data.get("account_kind", "personal")).strip().lower() or "personal"
         amount = int(event.data.get("amount", 0))
         wallet = int(event.data.get("wallet_credits", 0))
         bank = int(event.data.get("bank_balance", 0))
+        if account_kind == "business":
+            business_name = str(event.data.get("business_name", "Business")).strip() or "Business"
+            business_balance = int(event.data.get("business_balance", 0))
+            if kind == "withdraw":
+                self.sim.log.add(
+                    f"Withdrew {amount} credits from {business_name}. Wallet {wallet} | {business_name} {business_balance}."
+                )
+                return
+            self.sim.log.add(
+                f"Deposited {amount} credits into {business_name}. Wallet {wallet} | {business_name} {business_balance}."
+            )
+            return
         if kind == "withdraw":
             self.sim.log.add(f"Withdrew {amount} credits. Wallet {wallet} | Bank {bank}.")
             return
@@ -35909,6 +31039,9 @@ class EventLogSystem(System):
         if reason == "no_banking_service":
             self.sim.log.add("No banking service nearby.")
             return
+        if reason == "no_business_account":
+            self.sim.log.add("No owned business account is available from here.")
+            return
         if reason == "no_bank_balance":
             self.sim.log.add("Bank account is empty.")
             return
@@ -35920,6 +31053,12 @@ class EventLogSystem(System):
             return
         if reason == "no_funds_to_manage":
             self.sim.log.add("No funds are available to move right now.")
+            return
+        if reason == "insufficient_business_balance":
+            amount = int(event.data.get("amount", 0))
+            business_balance = int(event.data.get("business_balance", 0))
+            business_name = str(event.data.get("business_name", "Business")).strip() or "Business"
+            self.sim.log.add(f"Cannot withdraw {amount}c ({business_name} holds {business_balance}c).")
             return
         if reason == "insufficient_bank_balance":
             amount = int(event.data.get("amount", 0))
@@ -36800,6 +31939,54 @@ class EventLogSystem(System):
             dedupe_key=f"org-standing:{str(event.data.get('organization_key', name)).strip().lower()}:{after_tier}",
         )
 
+    def on_skill_rating_changed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+
+        skill_id = str(event.data.get("skill_id", "") or "").strip().lower()
+        if not skill_id:
+            return
+        label = _skill_label(skill_id)
+        delta = float(event.data.get("delta", 0.0) or 0.0)
+        if abs(delta) <= 1e-9:
+            return
+        value = float(event.data.get("value", _actor_skill(self.sim, self.player_eid, skill_id)) or 0.0)
+        floor = float(event.data.get("floor", value) or value)
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        reason_label = _skill_change_reason_label(reason)
+
+        if delta > 0.0:
+            suffix = ""
+            if reason_label and reason_label != "practice":
+                suffix = f" from {reason_label}"
+            self._log(
+                f"{label} improves to {value:.1f}{suffix}.",
+                channel="general",
+                priority="high",
+                dedupe_window=6,
+                dedupe_key=f"skill-up:{skill_id}:{value:.1f}",
+            )
+            return
+
+        if reason == "neglect_decay":
+            suffix = " and settles at its floor" if value <= floor + 1e-6 else f" (floor {floor:.1f})"
+            self._log(
+                f"{label} slips to {value:.1f} from neglect{suffix}.",
+                channel="general",
+                priority="high",
+                dedupe_window=6,
+                dedupe_key=f"skill-down:{skill_id}:{value:.1f}",
+            )
+            return
+
+        self._log(
+            f"{label} shifts to {value:.1f}.",
+            channel="general",
+            priority="high",
+            dedupe_window=6,
+            dedupe_key=f"skill-shift:{skill_id}:{value:.1f}",
+        )
+
     def on_lighting_phase_changed(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -37180,29 +32367,32 @@ class RenderSystem(System):
 
     def _help_overlay_lines(self, zoom_mode, overlay_active=False):
         zoom_mode = str(zoom_mode).lower()
+        aim_open = _aim_open_label(self.sim, self.player_eid)
+        aim_confirm = _aim_confirm_label(self.sim, self.player_eid)
         lines = [
             "Help",
             "? or Esc closes this panel.",
             "",
             f"World seed: {self.sim.seed}",
-            "Move: arrows, WASD, HJKL, or numpad 1-9. Wait with . space or 5.",
-            "Observe: e interact/use/talk, Shift+E lock or unlock a nearby door, x scan, X or ; look cursor, Z map (vehicle only).",
+            "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with . space or 5.",
+            "Observe: t interact/use/talk, Shift+E lock or unlock a nearby door, x scan, X or ; look cursor. Vehicle interact enters or exits overworld.",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
             "Ingress: Shift+J door breach, Shift+W window entry, Shift+K wall breach.",
             'Features: + closed door, \' open door, " window, / breach opening, > higher stairs, < lower stairs, : stair landing, E elevator.',
             "Infrastructure: typed markers (l lamp, p pole, h hydrant, u stop, j/t utility, $ ATM, c claim terminal, r access panel).",
             "Local terrain: = road, : trail, , brush, ^ rock, ~ water, _ shore flats.",
             "Remote sites: relay/lookout/survey sites provide intel; camps and huts can offer shelter.",
-            "Aim/Combat: F aim, move cursor, F cycle target, Enter fire, c cover, C cover hop, Shift+S sneak, V cycle weapon.",
-            "Items: I inventory, G pick up nearby, U use, R drop.",
+            f"Aim/Combat: {aim_open}, move cursor, F cycle target, {aim_confirm}, v cover, C cover hop, Shift+S sneak, V cycle weapon.",
+            "Items: I inventory, G pick up nearby, U use/equip/stow, R drop.",
             "Visual classes: vehicles use '&' symbol colors only; properties use letters; items are bright symbols; humans use colored @ symbols and wildlife uses taxonomy letters.",
             "Progress: O operations report, Y known locations, L event log history.",
             "Log modal: T cycles filters; H sets the current modal filter as the live HUD filter.",
             "Debug: D live telemetry for lighting, stealth, pressure, property access, and objective state.",
             "Services: M trade panel, B bank, N insurance, P buy property.",
+            "Character: + opens the character sheet. Tab or Left/Right switch pages.",
         ]
         if zoom_mode == "overworld":
-            lines.append("In-vehicle map: E exit to on-foot, G drive to last marker, M add marker, l list markers, N nearest marker, O ops, Y locations, L log.")
+            lines.append("In-vehicle map: t exit to on-foot, G drive to last marker, M add marker, l list markers, N nearest marker, O ops, Y locations, L log.")
             lines.append("Overworld POIs: stronger non-city chunks can replace the center glyph with a site initial.")
             lines.append("Overworld centers: every chunk has a center icon; uppercase means loaded and lowercase means distant.")
             lines.append("Overworld regions: soft boundary lines separate major outside regions.")
@@ -37222,7 +32412,10 @@ class RenderSystem(System):
         self.view.clear()
         begin_frame = getattr(self.view, "begin_frame", None)
         if callable(begin_frame):
-            begin_frame(animation_tick=int(getattr(self.sim, "tick", 0)))
+            animation_tick = None
+            if not bool(getattr(self.view, "uses_realtime_animation", False)):
+                animation_tick = int(getattr(self.sim, "tick", 0))
+            begin_frame(animation_tick=animation_tick)
 
         positions = self.sim.ecs.get(Position)
         renders = self.sim.ecs.get(Render)
@@ -37280,6 +32473,16 @@ class RenderSystem(System):
         help_ui = getattr(self.sim, "help_ui", {
             "open": False,
         })
+        character_ui = getattr(self.sim, "character_ui", {
+            "open": False,
+            "title": "Character Sheet",
+            "pages": [],
+            "page_index": 0,
+            "page_label": "Summary",
+            "page_scrolls": {},
+            "lines": [],
+            "scroll": 0,
+        })
         report_ui = getattr(self.sim, "report_ui", {
             "open": False,
             "kind": "progress",
@@ -37327,7 +32530,12 @@ class RenderSystem(System):
         if int(lighting_state.get("tick", -1)) != int(getattr(self.sim, "tick", 0)):
             lighting_state = _update_lighting_state(self.sim, player_pos=player_pos)
         if debug_ui.get("open"):
-            debug_panel = _build_debug_overlay(self.sim, self.player_eid)
+            debug_panel = _build_debug_overlay(
+                self.sim,
+                self.player_eid,
+                duration_label_fn=_tick_duration_label,
+                property_access_summary_fn=_property_access_summary,
+            )
             debug_ui["title"] = str(debug_panel.get("title", "Debug Overlay")).strip() or "Debug Overlay"
             debug_ui["lines"] = list(debug_panel.get("lines", ()) or ())
         ambient_cache = {}
@@ -37360,12 +32568,15 @@ class RenderSystem(System):
             else:
                 center_cx, center_cy = 0, 0
 
+            legend_top_rows = 1 if map_h >= 4 else 0
+            legend_bottom_rows = 1 if map_h >= 4 else 0
+            usable_map_h = max(1, map_h - legend_top_rows - legend_bottom_rows)
             cell_w = max(2, int(self.OVERWORLD_CELL_W))
             cell_h = max(1, int(self.OVERWORLD_CELL_H))
             grid_w = max(1, map_w // cell_w)
-            grid_h = max(1, map_h // cell_h)
+            grid_h = max(1, usable_map_h // cell_h)
             origin_x = max(0, (map_w - (grid_w * cell_w)) // 2)
-            origin_y = max(0, (map_h - (grid_h * cell_h)) // 2)
+            origin_y = legend_top_rows + max(0, (usable_map_h - (grid_h * cell_h)) // 2)
             half_w = grid_w // 2
             half_h = grid_h // 2
             loaded = set(self.sim.world.loaded_chunks.keys())
@@ -37431,15 +32642,25 @@ class RenderSystem(System):
                     glyph, color = _overworld_render_style(self.sim, cx, cy)
                     cell_origin_x = origin_x + (gx * cell_w)
                     cell_origin_y = origin_y + (gy * cell_h)
+                    fill_semantic = _overworld_fill_semantic_id(area, district, terrain)
                     for dy in range(cell_h):
                         for dx in range(cell_w):
                             screen_x = cell_origin_x + dx
                             screen_y = cell_origin_y + dy
                             if 0 <= screen_x < map_w and 0 <= screen_y < map_h:
-                                self._draw(screen_x, screen_y, fill_glyph, color=fill_color)
+                                self._draw(
+                                    screen_x,
+                                    screen_y,
+                                    fill_glyph,
+                                    color=fill_color,
+                                    semantic_id=fill_semantic,
+                                    layer="terrain",
+                                    priority=-600,
+                                )
 
                     if path:
                         mid_y = cell_origin_y + (cell_h // 2)
+                        path_semantic = f"overworld_path_{path}"
                         for dx in range(cell_w):
                             screen_x = cell_origin_x + dx
                             if 0 <= screen_x < map_w and 0 <= mid_y < map_h:
@@ -37448,6 +32669,9 @@ class RenderSystem(System):
                                     mid_y,
                                     self.OVERWORLD_PATH_GLYPHS.get(path, "="),
                                     color=self.OVERWORLD_PATH_COLORS.get(path, "human"),
+                                    semantic_id=path_semantic,
+                                    layer="ground_overlay",
+                                    priority=-420,
                                 )
 
                     # Draw soft region boundaries so outside areas read as larger landmasses.
@@ -37459,7 +32683,16 @@ class RenderSystem(System):
                                 screen_y = cell_origin_y + dy
                                 if 0 <= border_x < map_w and 0 <= screen_y < map_h:
                                     ch = "│"
-                                    self._draw(border_x, screen_y, ch, color="terrain_block", attrs=region_dim_attr)
+                                    self._draw(
+                                        border_x,
+                                        screen_y,
+                                        ch,
+                                        color="terrain_block",
+                                        attrs=region_dim_attr,
+                                        semantic_id="overworld_boundary_vertical",
+                                        layer="ground_overlay",
+                                        priority=-320,
+                                    )
                     if gy + 1 < grid_h:
                         below = cell_data[(gx, gy + 1)]
                         if data["region_key"] != below.get("region_key"):
@@ -37468,7 +32701,16 @@ class RenderSystem(System):
                                 screen_x = cell_origin_x + dx
                                 if 0 <= screen_x < map_w and 0 <= border_y < map_h:
                                     ch = "─"
-                                    self._draw(screen_x, border_y, ch, color="terrain_block", attrs=region_dim_attr)
+                                    self._draw(
+                                        screen_x,
+                                        border_y,
+                                        ch,
+                                        color="terrain_block",
+                                        attrs=region_dim_attr,
+                                        semantic_id="overworld_boundary_horizontal",
+                                        layer="ground_overlay",
+                                        priority=-320,
+                                    )
 
                     if (cx, cy) == (center_cx, center_cy):
                         focus_attr = getattr(curses, "A_BOLD", 0)
@@ -37479,24 +32721,96 @@ class RenderSystem(System):
                         for dx in range(cell_w):
                             sx = cell_origin_x + dx
                             if 0 <= sx < map_w and 0 <= top_y < map_h:
-                                self._draw(sx, top_y, "─", color="player", attrs=focus_attr)
+                                self._draw(
+                                    sx,
+                                    top_y,
+                                    "─",
+                                    color="player",
+                                    attrs=focus_attr,
+                                    semantic_id="overworld_focus_horizontal",
+                                    layer="ui_overlay",
+                                    priority=-60,
+                                )
                             if 0 <= sx < map_w and 0 <= bottom_y < map_h:
-                                self._draw(sx, bottom_y, "─", color="player", attrs=focus_attr)
+                                self._draw(
+                                    sx,
+                                    bottom_y,
+                                    "─",
+                                    color="player",
+                                    attrs=focus_attr,
+                                    semantic_id="overworld_focus_horizontal",
+                                    layer="ui_overlay",
+                                    priority=-60,
+                                )
                         for dy in range(cell_h):
                             sy = cell_origin_y + dy
                             if 0 <= left_x < map_w and 0 <= sy < map_h:
-                                self._draw(left_x, sy, "│", color="player", attrs=focus_attr)
+                                self._draw(
+                                    left_x,
+                                    sy,
+                                    "│",
+                                    color="player",
+                                    attrs=focus_attr,
+                                    semantic_id="overworld_focus_vertical",
+                                    layer="ui_overlay",
+                                    priority=-60,
+                                )
                             if 0 <= right_x < map_w and 0 <= sy < map_h:
-                                self._draw(right_x, sy, "│", color="player", attrs=focus_attr)
+                                self._draw(
+                                    right_x,
+                                    sy,
+                                    "│",
+                                    color="player",
+                                    attrs=focus_attr,
+                                    semantic_id="overworld_focus_vertical",
+                                    layer="ui_overlay",
+                                    priority=-60,
+                                )
                         # Draw corner pieces for a clean box.
                         if 0 <= left_x < map_w and 0 <= top_y < map_h:
-                            self._draw(left_x, top_y, "┌", color="player", attrs=focus_attr)
+                            self._draw(
+                                left_x,
+                                top_y,
+                                "┌",
+                                color="player",
+                                attrs=focus_attr,
+                                semantic_id="overworld_focus_corner_nw",
+                                layer="ui_overlay",
+                                priority=-58,
+                            )
                         if 0 <= right_x < map_w and 0 <= top_y < map_h:
-                            self._draw(right_x, top_y, "┐", color="player", attrs=focus_attr)
+                            self._draw(
+                                right_x,
+                                top_y,
+                                "┐",
+                                color="player",
+                                attrs=focus_attr,
+                                semantic_id="overworld_focus_corner_ne",
+                                layer="ui_overlay",
+                                priority=-58,
+                            )
                         if 0 <= left_x < map_w and 0 <= bottom_y < map_h:
-                            self._draw(left_x, bottom_y, "└", color="player", attrs=focus_attr)
+                            self._draw(
+                                left_x,
+                                bottom_y,
+                                "└",
+                                color="player",
+                                attrs=focus_attr,
+                                semantic_id="overworld_focus_corner_sw",
+                                layer="ui_overlay",
+                                priority=-58,
+                            )
                         if 0 <= right_x < map_w and 0 <= bottom_y < map_h:
-                            self._draw(right_x, bottom_y, "┘", color="player", attrs=focus_attr)
+                            self._draw(
+                                right_x,
+                                bottom_y,
+                                "┘",
+                                color="player",
+                                attrs=focus_attr,
+                                semantic_id="overworld_focus_corner_se",
+                                layer="ui_overlay",
+                                priority=-58,
+                            )
 
                     if glyph:
                         screen_x = cell_origin_x + (cell_w // 2)
@@ -37507,7 +32821,26 @@ class RenderSystem(System):
                                 glyph_attrs |= getattr(curses, "A_BOLD", 0)
                             else:
                                 glyph_attrs |= getattr(curses, "A_DIM", 0)
-                            self._draw(screen_x, screen_y, glyph, color=color, attrs=glyph_attrs)
+                            glyph_semantic = _overworld_center_semantic_id(
+                                cx,
+                                cy,
+                                area,
+                                district,
+                                terrain,
+                                landmark,
+                                interest,
+                                loaded,
+                            )
+                            self._draw(
+                                screen_x,
+                                screen_y,
+                                glyph,
+                                color=color,
+                                attrs=glyph_attrs,
+                                semantic_id=glyph_semantic or None,
+                                layer="actor",
+                                priority=-120,
+                            )
 
             markers = self._player_overworld_markers()
             nearest_marker_id = None
@@ -37539,12 +32872,28 @@ class RenderSystem(System):
                 is_nearest = marker["id"] == nearest_marker_id
                 glyph = "!" if is_nearest else str(int(marker["id"]) % 10)
                 color = "player" if is_nearest else "human"
-                self._draw(screen_x, screen_y, glyph, color=color)
+                self._draw(
+                    screen_x,
+                    screen_y,
+                    glyph,
+                    color=color,
+                    semantic_id="overworld_marker_nearest" if is_nearest else "overworld_marker",
+                    layer="ui_overlay",
+                    priority=40 if is_nearest else 30,
+                )
 
             player_screen_x = origin_x + (half_w * cell_w) + (cell_w // 2)
             player_screen_y = origin_y + (half_h * cell_h) + (cell_h // 2)
             if 0 <= player_screen_x < map_w and 0 <= player_screen_y < map_h:
-                self._draw(player_screen_x, player_screen_y, "@", color="player")
+                self._draw(
+                    player_screen_x,
+                    player_screen_y,
+                    "@",
+                    color="player",
+                    semantic_id="overworld_player",
+                    layer="ui_overlay",
+                    priority=50,
+                )
 
             if look_ui.get("active") and str(look_ui.get("mode", "")).lower() == "overworld":
                 cursor_cx = int(look_ui.get("chunk_x", center_cx))
@@ -37562,7 +32911,35 @@ class RenderSystem(System):
                             glyph,
                             color="player",
                             attrs=getattr(curses, "A_REVERSE", 0),
+                            semantic_id="overworld_cursor",
+                            layer="ui_overlay",
+                            priority=60,
                         )
+
+            if legend_top_rows or legend_bottom_rows:
+                current_desc = self.sim.world.overworld_descriptor(center_cx, center_cy)
+                current_interest = self.sim.world.overworld_interest(center_cx, center_cy, descriptor=current_desc)
+                edge_header, edge_footer = _overworld_edge_legend_lines(
+                    self.sim,
+                    (center_cx, center_cy),
+                    desc=current_desc,
+                    interest=current_interest,
+                    markers=markers,
+                    look_ui=look_ui,
+                )
+                if legend_top_rows:
+                    edge_segments = _line_segments(edge_header)
+                    if edge_segments:
+                        self.view.draw_segments(0, 0, edge_segments, max_width=map_w, layer="ui_overlay", priority=90)
+                    else:
+                        self.view.draw_text(0, 0, _line_text(edge_header), layer="ui_overlay", priority=90)
+                if legend_bottom_rows:
+                    footer_y = max(0, map_h - 1)
+                    edge_segments = _line_segments(edge_footer)
+                    if edge_segments:
+                        self.view.draw_segments(0, footer_y, edge_segments, max_width=map_w, layer="ui_overlay", priority=90)
+                    else:
+                        self.view.draw_text(0, footer_y, _line_text(edge_footer), layer="ui_overlay", priority=90)
         else:
             revealed_building_id = _viewer_revealed_building_id(self.sim, self.player_eid, z=active_z)
             for sy in range(map_h):
@@ -37591,7 +32968,7 @@ class RenderSystem(System):
                         attrs = _ambient_attr(wx, wy, active_z)
                     else:
                         attrs = getattr(curses, "A_DIM", 0)
-                    if str(getattr(appearance, "semantic_id", "") or "").strip().lower() == "feature_window":
+                    if _appearance_prefers_floor_underlay(appearance):
                         floor_glyph = _district_floor_glyph(self.sim, wx, wy)
                         floor_color = _district_floor_color(self.sim, wx, wy)
                         self._draw(
@@ -37709,6 +33086,7 @@ class RenderSystem(System):
                         screen_y,
                         player_cover_source["glyph"],
                         color=player_cover_source["color"],
+                        semantic_id=player_cover_source.get("semantic_id"),
                         attrs=attrs,
                         layer="ground_overlay",
                         priority=30,
@@ -37731,6 +33109,8 @@ class RenderSystem(System):
 
             for _, eid, _pos, render, screen_x, screen_y in sorted(drawables, key=lambda item: (item[0], item[1])):
                 appearance = _entity_render_style(self.sim, eid, player_eid=self.player_eid)
+                if _entity_should_blink_in_combat(self.sim, eid, player_eid=self.player_eid):
+                    appearance = _appearance_with_effect(appearance, "blink")
                 self._draw_appearance(
                     screen_x,
                     screen_y,
@@ -37891,10 +33271,14 @@ class RenderSystem(System):
                 f"Combat threats {threat_count} near {nearest_text} exp {exposure}%"
             )
         if insight:
-            skill_bits = []
-            for skill_id in _HUD_SKILL_IDS:
-                skill_bits.append(f"{_skill_short_label(skill_id)}{_actor_skill(self.sim, self.player_eid, skill_id):.0f}")
-            status_chunks.append("Skills " + " ".join(skill_bits))
+            status_chunks.extend(
+                _skill_hud_status_chunks(
+                    self.sim,
+                    self.player_eid,
+                    insight,
+                    duration_label_fn=_tick_duration_label,
+                )
+            )
         if active_vehicle_prop:
             vehicle_name = _vehicle_label(active_vehicle_prop)
             fuel, fuel_capacity = _vehicle_fuel_values(active_vehicle_prop)
@@ -37943,56 +33327,31 @@ class RenderSystem(System):
             f"Active {sum(1 for detail in self.sim.chunk_detail.values() if detail == 'active')}",
             f"Entities {len(self.sim.tilemap.entities_on_floor(active_z))}",
         ]
+        streamed_lines = []
         if zoom_mode == "overworld" and player_pos:
             current_chunk = self.sim.chunk_coords(player_pos.x, player_pos.y)
             desc = self.sim.world.overworld_descriptor(current_chunk[0], current_chunk[1])
             interest = self.sim.world.overworld_interest(current_chunk[0], current_chunk[1], descriptor=desc)
             travel = _overworld_travel_profile(self.sim, current_chunk[0], current_chunk[1], desc=desc, interest=interest)
             discovery = _overworld_discovery_profile(self.sim, current_chunk[0], current_chunk[1], desc=desc, interest=interest, travel=travel)
-            terrain = str(desc.get("terrain", "plain")).replace("_", " ").strip()
-            path = str(desc.get("path", "")).strip() or "-"
-            region_name = str(desc.get("region_name", "")).strip() or "-"
-            settlement_name = str(desc.get("settlement_name", "")).strip() or "-"
-            landmark = desc.get("landmark") or desc.get("nearest_landmark") or {}
-            landmark_name = str(landmark.get("name", "")).strip() or "-"
-            interest_name = str(interest.get("detail", "")).strip() or "-"
-            discovery_name = str(discovery.get("label", "")).strip() or "-"
-            risk_name = str(travel.get("risk_label", "low")).strip() or "low"
-            support_name = str(travel.get("support_label", "none")).strip() or "none"
-            travel_tax = _overworld_travel_tax_text(travel)
             markers = self._player_overworld_markers()
-            nearest_marker_dist = "-"
-            if markers:
-                nearest_marker_dist = str(min(
-                    _manhattan(
-                        current_chunk[0],
-                        current_chunk[1],
-                        marker["chunk"][0],
-                        marker["chunk"][1],
-                    )
-                    for marker in markers
-                ))
-            streamed_chunks.extend([
-                f"Region {region_name}",
-                f"City {settlement_name}",
-                f"Terrain {terrain}",
-                f"Path {path}",
-                f"Landmark {landmark_name}",
-                f"POI {interest_name}",
-                f"Opportunity {discovery_name}",
-                f"Risk {risk_name}",
-                f"Support {support_name}",
-                f"Travel {travel_tax}",
-                f"Markers {len(markers)} near {nearest_marker_dist}c",
-            ])
-            if active_vehicle_prop:
-                fuel, fuel_capacity = _vehicle_fuel_values(active_vehicle_prop)
-                streamed_chunks.append(f"Fuel {fuel}/{fuel_capacity}")
-        streamed_lines = _flow_text_chunks(
-            streamed_chunks,
-            hud_text_w,
-            max_lines=2 if zoom_mode == "overworld" else 1,
-        )
+            streamed_lines = _overworld_hud_lines(
+                self.sim,
+                current_chunk[0],
+                current_chunk[1],
+                desc=desc,
+                interest=interest,
+                travel=travel,
+                discovery=discovery,
+                markers=markers,
+                active_vehicle_prop=active_vehicle_prop,
+            )
+        else:
+            streamed_lines = _flow_text_chunks(
+                streamed_chunks,
+                hud_text_w,
+                max_lines=1,
+            )
 
         economy_chunks = [
             f"Cr {credits}",
@@ -38130,17 +33489,19 @@ class RenderSystem(System):
         if look_ui.get("active"):
             if look_purpose == "aim":
                 if _entity_uses_melee_aim(self.sim, self.player_eid):
-                    controls = "Aim (Melee): reticle adjacent-only, F cycle target, Enter strike, X inspect, Esc close, ? help"
+                    controls = "Aim (Melee): reticle adjacent-only, F cycle target, Enter strike, X/T inspect, Esc close, ? help"
                 else:
-                    controls = "Aim: move cursor, F cycle target, Enter fire, X inspect, Esc close, ? help"
+                    controls = "Aim: move cursor, F cycle target, Enter fire, X/T inspect, Esc close, ? help"
             else:
-                controls = "Look: move cursor, X/E inspect, Esc close, ? help"
+                controls = "Look: move cursor, X/T inspect, Esc close, ? help"
         elif inventory_ui.get("open"):
-            controls = "Inventory: browse, U use/equip, R drop, E inspect, O ops, Y locations, L log, D debug, I/Esc close, ? help"
+            controls = "Inventory: browse, U use/equip/stow, R drop, E inspect, O ops, Y locations, L log, D debug, I/Esc close, ? help"
         elif trade_ui.get("open"):
             controls = "Trade: browse, B/S mode, E trade, X inspect, O ops, Y locations, L log, D debug, M close, ? help"
         elif dialog_ui.get("open"):
             controls = "Dialog: Up/Down choose, E ask, PgUp/PgDn scroll, M trade, O ops, Y locations, L log, D debug, Esc close, ? help"
+        elif character_ui.get("open"):
+            controls = "Sheet: Left/Right or Tab pages, 1-3 jump, Up/Down browse, PgUp/PgDn jump, +/Esc close, O ops, Y locations, L log, D debug, ? help"
         elif report_ui.get("open"):
             report_kind = str(report_ui.get("kind", "progress")).strip().lower() or "progress"
             if report_kind == "known_locations":
@@ -38152,18 +33513,18 @@ class RenderSystem(System):
         elif debug_ui.get("open"):
             controls = "Debug: Up/Down browse, O ops, Y locations, L log, D/Esc close, ? help"
         elif overlay.get("active"):
-            controls = "Combat: move or act, F aim, c cover, C hop, Shift+S sneak, ? help, q quit"
+            controls = f"Combat: move or act, {_aim_open_label(self.sim, self.player_eid)}, v cover, C hop, Shift+S sneak, ? help, Q quit"
         elif zoom_mode == "overworld":
-            controls = "In-vehicle: move, G drive marker, M/l/N markers, O ops, Y locations, L log, E exit on-foot, center icons UPPER=loaded lower=distant, ? help"
+            controls = "In-vehicle: move, G drive marker, M/l/N markers, O ops, Y locations, L log, + sheet, t exit on-foot, center icons UPPER=loaded lower=distant, ? help"
         else:
-            controls = "Move: arrows/WASD/HJKL, e interact, Shift+E lock door, Shift+J breach door, O ops, Y locations, L log, D debug, M trade, or ? for help"
+            controls = f"Move: arrows/WASD/HJKL/QEZC, {_aim_open_label(self.sim, self.player_eid)}, t interact, + sheet, Shift+E lock door, Shift+J breach door, O ops, Y locations, L log, D debug, M trade, or ? for help"
 
         mode_line = _mode_line(
             mode_state=player_modes,
             cover=player_cover,
             look_active=bool(look_ui.get("active")) and look_purpose != "aim",
             aim_active=bool(look_ui.get("active")) and look_purpose == "aim",
-            turn_mode=overlay.get("active"),
+            turn_mode=_combat_turn_pacing_active(self.sim),
             stealth_state=getattr(self.sim, "player_stealth_state", None),
         )
         wrapped_sections = _fit_wrapped_sections([
@@ -38318,7 +33679,7 @@ class RenderSystem(System):
                 _clip_display_line(inspect_text, panel_w - 4),
                 panel_w - 4,
             )
-            hint = "U use/equip  R drop  E inspect  O ops  Y locations  L log  D debug  I close"
+            hint = "U use/equip/stow  R drop  E inspect  O ops  Y locations  L log  D debug  I close"
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, panel_w - 4))
         elif trade_ui.get("open"):
             panel_w = min(max(40, map_w // 2), map_w)
@@ -38542,6 +33903,83 @@ class RenderSystem(System):
                 else:
                     footer = "E ask | Esc close | M trade | O ops | Y locations | L log | D debug | ? help"
             self.view.draw_text(panel_x + 2, footer_y, _clip(footer, body_w))
+        elif character_ui.get("open"):
+            panel_w = min(max(60, screen_w - 4), screen_w)
+            panel_w = max(32, panel_w)
+            panel_h = min(max(14, map_h - 1), map_h)
+            panel_h = max(10, panel_h)
+            panel_x = max(0, (screen_w - panel_w) // 2)
+            panel_y = max(0, (map_h - panel_h) // 2)
+
+            def _clip(text, width):
+                if width <= 0:
+                    return ""
+                if len(text) <= width:
+                    return text
+                if width <= 3:
+                    return text[:width]
+                return text[: width - 3] + "..."
+
+            if panel_w >= 2 and panel_h >= 2:
+                top = "+" + ("-" * (panel_w - 2)) + "+"
+                mid = "|" + (" " * (panel_w - 2)) + "|"
+                bot = "+" + ("-" * (panel_w - 2)) + "+"
+
+                self.view.draw_text(panel_x, panel_y, top)
+                for row in range(1, panel_h - 1):
+                    self.view.draw_text(panel_x, panel_y + row, mid)
+                self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
+
+            pages = list(character_ui.get("pages", ()) or [])
+            if pages:
+                page_index = max(0, min(int(character_ui.get("page_index", 0)), len(pages) - 1))
+                character_ui["page_index"] = page_index
+                current_page = pages[page_index]
+            else:
+                page_index = 0
+                current_page = {"label": "Summary"}
+            page_label = str(character_ui.get("page_label", current_page.get("label", "Summary"))).strip() or "Summary"
+            title = str(character_ui.get("title", "Character Sheet")).strip() or "Character Sheet"
+            title_text = f" {title} | {page_label} {page_index + 1}/{max(1, len(pages) or 1)} "
+            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(title_text, panel_w - 4))
+
+            nav_bits = []
+            for idx, page in enumerate(pages[:9]):
+                label = str(page.get("label", f"Page {idx + 1}")).strip() or f"Page {idx + 1}"
+                bit = f"{idx + 1} {label}"
+                if idx == page_index:
+                    bit = f"[{bit}]"
+                nav_bits.append(bit)
+            nav_line = " | ".join(nav_bits) if nav_bits else "[1 Summary]"
+            self.view.draw_text(panel_x + 2, panel_y + 2, _clip(nav_line, panel_w - 4))
+
+            body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
+            body_h = max(1, panel_h - 5)
+            display_lines = []
+            for raw in list(character_ui.get("lines", ()) or ()) or ["No character data."]:
+                wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
+                display_lines.extend(wrapped)
+            display_lines = display_lines or ["No character data."]
+            max_scroll = max(0, len(display_lines) - body_h)
+            scroll = max(0, min(int(character_ui.get("scroll", 0)), max_scroll))
+            character_ui["scroll"] = scroll
+            visible_lines = display_lines[scroll: scroll + body_h]
+
+            for idx, line in enumerate(visible_lines[:body_h]):
+                self.view.draw_text(panel_x + 2, panel_y + 3 + idx, _clip(line, body_w))
+
+            footer_bits = []
+            if scroll > 0:
+                footer_bits.append("more above")
+            if scroll + body_h < len(display_lines):
+                footer_bits.append("more below")
+            footer = " | ".join(footer_bits) if footer_bits else ""
+            action_tail = "Tab/Left/Right pages | 1-3 jump | + close | O ops | Y locations | L log | D debug | Up/Down scroll | ? help"
+            if footer:
+                footer = f"{footer} | {action_tail}"
+            else:
+                footer = action_tail
+            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, panel_w - 4))
         elif report_ui.get("open"):
             panel_w = min(max(56, screen_w - 4), screen_w)
             panel_w = max(28, panel_w)
@@ -38580,7 +34018,9 @@ class RenderSystem(System):
                 filter_mode = str(report_ui.get("filter_mode", "visible")).strip().lower() or "visible"
                 selected_index = max(0, min(int(report_ui.get("selected_index", 0)), len(rows) - 1)) if rows else 0
                 report_ui["selected_index"] = selected_index
-                list_h = max(1, body_h - 5)
+                row_count = len(rows)
+                detail_reserve = 8 if rows else 4
+                list_h = max(1, min(max(1, row_count), max(1, body_h - detail_reserve)))
                 max_scroll = max(0, len(rows) - list_h)
                 scroll = max(0, min(int(report_ui.get("scroll", 0)), max_scroll))
                 if rows:
@@ -38601,11 +34041,17 @@ class RenderSystem(System):
                 visible_rows = rows[scroll: scroll + list_h]
                 for idx, row in enumerate(visible_rows):
                     absolute = scroll + idx
-                    marker = ">" if absolute == selected_index else " "
-                    name = str(row.get("name", "location")).strip() or "location"
-                    coords = str(row.get("coords", "coords unknown")).strip() or "coords unknown"
-                    label = f"{marker}{absolute + 1:02d} {name} @ {coords}"
-                    self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2))
+                    entry_line = _known_location_list_line(
+                        row,
+                        ordinal=absolute + 1,
+                        selected=(absolute == selected_index),
+                    )
+                    self._draw_display_line(
+                        panel_x + 1,
+                        list_y + idx,
+                        _clip_display_line(entry_line, panel_w - 2),
+                        panel_w - 2,
+                    )
 
                 if not rows:
                     empty_text = "(no hidden locations)" if filter_mode == "hidden" else "(no known locations)"
@@ -38616,19 +34062,23 @@ class RenderSystem(System):
                 detail_lines = []
                 if rows:
                     row = rows[selected_index]
-                    summary_bits = [f"{int(round(float(row.get('confidence', 0.0)) * 100.0))}% confident"]
-                    summary_bits.extend(str(bit).strip() for bit in row.get("summary_bits", ()) if str(bit).strip())
-                    detail_lines.append(f"{row.get('name', 'location')} @ {row.get('coords', 'coords unknown')}")
-                    detail_lines.append(" | ".join(summary_bits))
-                    for fact in row.get("fact_lines", ()):
-                        detail_lines.append(f"- {fact}")
+                    detail_lines.extend(_known_location_detail_lines(row))
                 else:
                     detail_lines.append("Nothing selected.")
                     detail_lines.append("Press H to switch between active and hidden notebook entries.")
 
-                visible_detail_lines = detail_lines[:detail_h]
+                display_detail_lines = []
+                for raw in detail_lines:
+                    wrapped = _wrap_display_lines(raw, panel_w - 4) if _line_text(raw).strip() else [""]
+                    display_detail_lines.extend(wrapped)
+                visible_detail_lines = display_detail_lines[:detail_h]
                 for idx, line in enumerate(visible_detail_lines):
-                    self.view.draw_text(panel_x + 2, detail_y + idx, _clip(line, panel_w - 4))
+                    self._draw_display_line(
+                        panel_x + 2,
+                        detail_y + idx,
+                        _clip_display_line(line, panel_w - 4),
+                        panel_w - 4,
+                    )
 
                 footer_bits = []
                 if scroll > 0:
@@ -38645,7 +34095,7 @@ class RenderSystem(System):
             else:
                 display_lines = []
                 for raw in list(report_ui.get("lines", ()) or ()) or ["No report data."]:
-                    wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
+                    wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
                     display_lines.extend(wrapped)
                 display_lines = display_lines or ["No report data."]
                 scroll = max(0, min(int(report_ui.get("scroll", 0)), len(display_lines) - 1))
@@ -38653,7 +34103,12 @@ class RenderSystem(System):
                 visible_lines = display_lines[scroll: scroll + body_h]
 
                 for idx, line in enumerate(visible_lines[:body_h]):
-                    self.view.draw_text(panel_x + 2, panel_y + 2 + idx, _clip(line, body_w))
+                    self._draw_display_line(
+                        panel_x + 2,
+                        panel_y + 2 + idx,
+                        _clip_display_line(line, body_w),
+                        body_w,
+                    )
 
                 footer_bits = []
                 if scroll > 0:
@@ -38707,8 +34162,8 @@ class RenderSystem(System):
             body_h = max(1, panel_h - 4)
             display_lines = []
             for raw in filtered_lines or [f"No {filter_label.lower()} log entries yet."]:
-                prefixed = f"{_log_prefix(raw)}{_line_text(raw)}"
-                wrapped = _wrap_text_lines(prefixed, body_w) if prefixed.strip() else [""]
+                display_line = _log_display_line(raw)
+                wrapped = _wrap_display_lines(display_line, body_w) if _line_text(display_line).strip() else [""]
                 display_lines.extend(wrapped)
             display_lines = display_lines or [f"No {filter_label.lower()} log entries yet."]
             max_scroll = max(0, len(display_lines) - body_h)
@@ -38717,7 +34172,12 @@ class RenderSystem(System):
             visible_lines = display_lines[scroll: scroll + body_h]
 
             for idx, line in enumerate(visible_lines[:body_h]):
-                self.view.draw_text(panel_x + 2, panel_y + 2 + idx, _clip(line, body_w))
+                self._draw_display_line(
+                    panel_x + 2,
+                    panel_y + 2 + idx,
+                    _clip_display_line(line, body_w),
+                    body_w,
+                )
 
             footer_bits = []
             if scroll > 0:
@@ -38764,7 +34224,7 @@ class RenderSystem(System):
             body_h = max(1, panel_h - 4)
             display_lines = []
             for raw in list(debug_ui.get("lines", ()) or ()) or ["No debug data."]:
-                wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
+                wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
                 display_lines.extend(wrapped)
             display_lines = display_lines or ["No debug data."]
             max_scroll = max(0, len(display_lines) - body_h)
@@ -38773,7 +34233,12 @@ class RenderSystem(System):
             visible_lines = display_lines[scroll: scroll + body_h]
 
             for idx, line in enumerate(visible_lines[:body_h]):
-                self.view.draw_text(panel_x + 2, panel_y + 2 + idx, _clip(line, body_w))
+                self._draw_display_line(
+                    panel_x + 2,
+                    panel_y + 2 + idx,
+                    _clip_display_line(line, body_w),
+                    body_w,
+                )
 
             footer_bits = []
             if scroll > 0:
@@ -38791,7 +34256,7 @@ class RenderSystem(System):
             panel_w = min(max(48, map_w - 2), map_w)
             panel_w = max(24, panel_w)
             panel_x = max(0, (map_w - panel_w) // 2)
-            raw_lines = self._help_overlay_lines(zoom_mode, overlay_active=bool(overlay.get("active")))
+            raw_lines = self._help_overlay_lines(zoom_mode, overlay_active=_combat_turn_pacing_active(self.sim))
             body_lines = []
             for line in raw_lines:
                 body_lines.extend(_wrap_text_lines(line, max(8, panel_w - 4)))

@@ -540,13 +540,13 @@
   },
   "stats": {
     "required_count": 82,
-    "available_count": 736,
+    "available_count": 721,
     "assigned_count": 82,
     "unassigned_count": 0,
     "metadata_matched_count": 27,
-    "glyph_fallback_matched_count": 46,
-    "metadata_unmatched_count": 412,
-    "metadata_duplicate_match_count": 295
+    "glyph_fallback_matched_count": 44,
+    "metadata_unmatched_count": 402,
+    "metadata_duplicate_match_count": 291
   },
   "assignments": {
     "cat_black": "F__aqua",
@@ -560,7 +560,7 @@
     "cat_white": "F__aqua",
     "elevator": "E__aqua",
     "entity_player": "at__aqua",
-    "feature_breach": "slash__brown",
+    "feature_breach": "u0000__unk",
     "feature_door": "plus__aqua",
     "feature_window": "quote__aqua",
     "floor_building_fill": "equals__aqua",
@@ -589,16 +589,16 @@
     "item_illegal": "x__red",
     "item_medical": "bang__aqua",
     "item_objective": "o__aqua",
-    "item_restricted": "u0000__unk",
+    "item_restricted": "d__amber",
     "item_token": "i__aqua",
-    "item_tool": "d__amber",
+    "item_tool": "d__brown",
     "npc_avian": "d__aqua",
     "npc_canine": "d__blue",
     "npc_civilian": "H__aqua",
     "npc_guard": "d__red",
     "npc_insect": "d__green",
     "npc_scout": "H__aqua",
-    "projectile": "d__brown",
+    "projectile": "d__darkgray",
     "prop_asset": "A__darkgray",
     "prop_building_generic": "B__darkgray",
     "prop_civic": "O__darkgray",
@@ -612,20 +612,20 @@
     "prop_secure": "G__red",
     "prop_vehicle_service": "V__darkgray",
     "property_service_zone": "S__aqua",
-    "stair_down": "d__darkgray",
+    "stair_down": "d__orange",
     "stair_up": "gt__aqua",
     "terrain_block": "hash__aqua",
-    "terrain_brush": "comma__aqua",
+    "terrain_brush": "d__pink",
     "terrain_road": "equals__aqua",
     "terrain_rock": "caret__darkgray",
     "terrain_trail": "colon__aqua",
     "terrain_water": "tilde__aqua",
     "transit_stair_landing": "colon__aqua",
-    "ui_cursor": "d__orange",
-    "ui_look_cursor": "d__pink",
-    "ui_objective_marker": "d__purple",
-    "ui_overworld_marker": "e__amber",
-    "ui_overworld_marker_nearest": "e__aqua",
+    "ui_cursor": "d__purple",
+    "ui_look_cursor": "e__amber",
+    "ui_objective_marker": "e__aqua",
+    "ui_overworld_marker": "e__blue",
+    "ui_overworld_marker_nearest": "e__brown",
     "vehicle_new": "amp__red",
     "vehicle_parked": "amp__aqua",
     "vehicle_player": "amp__aqua",
@@ -2742,15 +2742,6 @@
       ]
     },
     {
-      "id": "pipe__brown",
-      "source": "124-brown.png",
-      "glyph": "|",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "tilde__amber",
       "source": "126-amber.png",
       "glyph": "~",
@@ -2760,12 +2751,23 @@
       ]
     },
     {
-      "id": "tilde__pastel_purple",
-      "source": "126-pastel_purple.png",
+      "id": "tilde__purple",
+      "source": "126-purple.png",
       "glyph": "~",
-      "color": "pastel_purple",
+      "color": "purple",
       "candidate_colors": [
-        "pastel_purple"
+        "purple",
+        "scout",
+        "feline",
+        "cat_purple",
+        "item_restricted",
+        "item_tool",
+        "property_service_zone"
+      ],
+      "candidate_semantic_ids": [
+        "npc_scout",
+        "cat_generic",
+        "cat_purple"
       ]
     },
     {
@@ -2775,15 +2777,6 @@
       "color": "amber",
       "candidate_colors": [
         "amber"
-      ]
-    },
-    {
-      "id": "bang__brown",
-      "source": "33-brown.png",
-      "glyph": "!",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -3104,15 +3097,6 @@
       ]
     },
     {
-      "id": "apostrophe__brown",
-      "source": "39-brown.png",
-      "glyph": "'",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
       "id": "plus__amber",
       "source": "43-amber.png",
       "glyph": "+",
@@ -3148,79 +3132,6 @@
         "npc_scout",
         "cat_generic",
         "cat_purple"
-      ]
-    },
-    {
-      "id": "comma__amber",
-      "source": "44-amber.png",
-      "glyph": ",",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "comma__brown",
-      "source": "44-brown.png",
-      "glyph": ",",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "dash__brown",
-      "source": "45-brown.png",
-      "glyph": "-",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
-      ]
-    },
-    {
-      "id": "dot__amber",
-      "source": "46-amber.png",
-      "glyph": ".",
-      "color": "amber",
-      "candidate_colors": [
-        "amber"
-      ]
-    },
-    {
-      "id": "dot__orange",
-      "source": "46-orange.png",
-      "glyph": ".",
-      "color": "orange",
-      "candidate_colors": [
-        "orange"
-      ]
-    },
-    {
-      "id": "dot__pink",
-      "source": "46-pink.png",
-      "glyph": ".",
-      "color": "pink",
-      "candidate_colors": [
-        "pink",
-        "human",
-        "item_medical",
-        "building_roof_entertainment",
-        "cat_calico",
-        "cat_white"
-      ],
-      "candidate_semantic_ids": [
-        "npc_civilian",
-        "cat_calico",
-        "cat_white"
-      ]
-    },
-    {
-      "id": "slash__brown",
-      "source": "47-brown.png",
-      "glyph": "/",
-      "color": "brown",
-      "candidate_colors": [
-        "brown"
       ]
     },
     {
@@ -6716,7 +6627,6 @@
       "dollar__aqua",
       "percent__aqua",
       "plus__aqua",
-      "comma__aqua",
       "dot__aqua",
       "0__aqua",
       "1__aqua",
@@ -6791,7 +6701,6 @@
       "percent__blue",
       "amp__blue",
       "plus__blue",
-      "dot__blue",
       "0__blue",
       "1__blue",
       "2__blue",
@@ -6869,7 +6778,6 @@
       "percent__green",
       "amp__green",
       "plus__green",
-      "dot__green",
       "0__green",
       "1__green",
       "2__green",
@@ -6945,7 +6853,6 @@
       "dollar__red",
       "percent__red",
       "plus__red",
-      "dot__red",
       "0__red",
       "1__red",
       "2__red",
@@ -7073,15 +6980,6 @@
       "source_key": "feline",
       "asset_color": "aqua",
       "source": "70-aqua.png"
-    },
-    {
-      "semantic_id": "feature_breach",
-      "tile_id": "slash__brown",
-      "glyph": "/",
-      "category": "features",
-      "source_key": "/",
-      "asset_color": "brown",
-      "source": "47-brown.png"
     },
     {
       "semantic_id": "feature_door",
@@ -7363,15 +7261,6 @@
       "source": "35-aqua.png"
     },
     {
-      "semantic_id": "terrain_brush",
-      "tile_id": "comma__aqua",
-      "glyph": ",",
-      "category": "terrain",
-      "source_key": ",",
-      "asset_color": "aqua",
-      "source": "44-aqua.png"
-    },
-    {
       "semantic_id": "terrain_road",
       "tile_id": "equals__aqua",
       "glyph": "=",
@@ -7638,17 +7527,15 @@
     "z__pink",
     "z__purple",
     "z__red",
-    "pipe__brown",
     "tilde__amber",
     "tilde__aqua",
     "tilde__blue",
     "tilde__green",
-    "tilde__pastel_purple",
+    "tilde__purple",
     "tilde__red",
     "bang__amber",
     "bang__aqua",
     "bang__blue",
-    "bang__brown",
     "bang__darkgray",
     "bang__darkgrey",
     "bang__green",
@@ -7695,7 +7582,6 @@
     "amp__orange",
     "amp__pink",
     "amp__red",
-    "apostrophe__brown",
     "plus__amber",
     "plus__aqua",
     "plus__blue",
@@ -7703,18 +7589,7 @@
     "plus__green",
     "plus__purple",
     "plus__red",
-    "comma__amber",
-    "comma__aqua",
-    "comma__brown",
-    "dash__brown",
-    "dot__amber",
     "dot__aqua",
-    "dot__blue",
-    "dot__green",
-    "dot__orange",
-    "dot__pink",
-    "dot__red",
-    "slash__brown",
     "0__amber",
     "0__aqua",
     "0__blue",
@@ -8143,7 +8018,6 @@
     "c__pink",
     "c__purple",
     "c__red",
-    "panel-0",
     "tricky-0"
   ]
 }

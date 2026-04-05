@@ -544,7 +544,7 @@
       ]
     },
     "feature_breach": {
-      "atlas_id": "slash__brown",
+      "atlas_id": "u0000__unk",
       "render": {
         "layer": "ground_overlay",
         "priority": 0
@@ -921,7 +921,7 @@
       ]
     },
     "item_restricted": {
-      "atlas_id": "u0000__unk",
+      "atlas_id": "d__amber",
       "render": {
         "layer": "item",
         "priority": 0
@@ -947,7 +947,7 @@
       ]
     },
     "item_tool": {
-      "atlas_id": "d__amber",
+      "atlas_id": "d__brown",
       "render": {
         "layer": "item",
         "priority": 0
@@ -1038,7 +1038,7 @@
       ]
     },
     "projectile": {
-      "atlas_id": "d__brown",
+      "atlas_id": "d__darkgray",
       "render": {
         "layer": "fx",
         "priority": 0
@@ -1220,7 +1220,7 @@
       ]
     },
     "stair_down": {
-      "atlas_id": "d__darkgray",
+      "atlas_id": "d__orange",
       "render": {
         "layer": "ground_overlay",
         "priority": 0
@@ -1259,7 +1259,7 @@
       ]
     },
     "terrain_brush": {
-      "atlas_id": "comma__aqua",
+      "atlas_id": "d__pink",
       "render": {
         "layer": "terrain",
         "priority": 0
@@ -1337,7 +1337,7 @@
       ]
     },
     "ui_cursor": {
-      "atlas_id": "d__orange",
+      "atlas_id": "d__purple",
       "render": {
         "layer": "ui_overlay",
         "priority": 100
@@ -1350,7 +1350,7 @@
       ]
     },
     "ui_look_cursor": {
-      "atlas_id": "d__pink",
+      "atlas_id": "e__amber",
       "render": {
         "layer": "ui_overlay",
         "priority": 110
@@ -1363,7 +1363,7 @@
       ]
     },
     "ui_objective_marker": {
-      "atlas_id": "d__purple",
+      "atlas_id": "e__aqua",
       "render": {
         "layer": "ui_overlay",
         "priority": 90
@@ -1376,7 +1376,7 @@
       ]
     },
     "ui_overworld_marker": {
-      "atlas_id": "e__amber",
+      "atlas_id": "e__blue",
       "render": {
         "layer": "ui_overlay",
         "priority": 80
@@ -1389,7 +1389,7 @@
       ]
     },
     "ui_overworld_marker_nearest": {
-      "atlas_id": "e__aqua",
+      "atlas_id": "e__brown",
       "render": {
         "layer": "ui_overlay",
         "priority": 85

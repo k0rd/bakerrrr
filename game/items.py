@@ -2,6 +2,8 @@ import json
 import random
 from pathlib import Path
 
+from game.content_warnings import warn_content_fallback
+
 
 ITEMS_PATH = Path(__file__).resolve().parent / "items.json"
 LOOT_TABLES_PATH = Path(__file__).resolve().parent / "loot_tables.json"
@@ -184,8 +186,8 @@ DEFAULT_ITEM_CATALOG = {
         "tags": ["consumable", "medical", "safety", "legal"],
         "legal_status": "legal",
         "effects": [
+            {"type": "restore_hp", "delta": 14},
             {"type": "modify_need", "need": "safety", "delta": 24},
-            {"type": "modify_need", "need": "energy", "delta": 6},
         ],
     },
     "focus_inhaler": {
@@ -251,8 +253,8 @@ DEFAULT_ITEM_CATALOG = {
         "tags": ["consumable", "medical", "safety", "legal"],
         "legal_status": "legal",
         "effects": [
+            {"type": "restore_hp", "delta": 22},
             {"type": "modify_need", "need": "safety", "delta": 18},
-            {"type": "modify_need", "need": "energy", "delta": 4},
         ],
     },
     "trauma_foam": {
@@ -262,6 +264,7 @@ DEFAULT_ITEM_CATALOG = {
         "tags": ["consumable", "medical", "safety", "restricted"],
         "legal_status": "restricted",
         "effects": [
+            {"type": "restore_hp", "delta": 30},
             {"type": "modify_need", "need": "safety", "delta": 24},
             {"type": "status", "status": "patched_up", "duration": 18, "modifiers": {"safety_tick_delta": 0.08, "move_speed_mult": -0.08}},
         ],
@@ -676,15 +679,19 @@ DEFAULT_LOOT_TABLES = {
 }
 
 
-def _read_json(path):
+def _read_json(path, fallback_desc=None):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+        if fallback_desc:
+            warn_content_fallback(path, fallback_desc, exc=exc)
         return None
 
 
 def load_item_catalog(path=ITEMS_PATH):
-    raw = _read_json(path)
+    raw = _read_json(path, fallback_desc="built-in item catalog defaults")
+    if raw is not None and not isinstance(raw, dict):
+        warn_content_fallback(path, "built-in item catalog defaults", problem="top-level JSON must be an object")
     source = raw if isinstance(raw, dict) else DEFAULT_ITEM_CATALOG
     parsed = {}
 
@@ -738,7 +745,9 @@ def load_item_catalog(path=ITEMS_PATH):
 
 def load_loot_tables(path=LOOT_TABLES_PATH, item_catalog=None):
     item_catalog = item_catalog or ITEM_CATALOG
-    raw = _read_json(path)
+    raw = _read_json(path, fallback_desc="built-in loot table defaults")
+    if raw is not None and not isinstance(raw, dict):
+        warn_content_fallback(path, "built-in loot table defaults", problem="top-level JSON must be an object")
     source = raw if isinstance(raw, dict) else DEFAULT_LOOT_TABLES
 
     parsed = {}
