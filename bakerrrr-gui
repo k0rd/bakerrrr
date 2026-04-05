@@ -1,0 +1,4 @@
+#!/bin/bash
+export BAKERRRR_TILE_SIZE_PX=26
+export BAKERRRR_PYGAME_DISABLE_ATLAS=1
+python main.py --ui pygame
