@@ -2975,6 +2975,7 @@ def _cover_source_render(sim, cover_state, active_quest_target=None):
                 "glyph": appearance.glyph,
                 "color": appearance.color,
                 "semantic_id": appearance.semantic_id,
+                "overlays": appearance.overlays,
                 "attrs": getattr(curses, "A_BOLD", 0),
             }
 
@@ -33087,6 +33088,7 @@ class RenderSystem(System):
                         player_cover_source["glyph"],
                         color=player_cover_source["color"],
                         semantic_id=player_cover_source.get("semantic_id"),
+                        overlays=player_cover_source.get("overlays"),
                         attrs=attrs,
                         layer="ground_overlay",
                         priority=30,

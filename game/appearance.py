@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from engine.buildings import building_exterior_profile
-from game.components import AI, CreatureIdentity, Render
+from game.components import AI, CreatureIdentity, Render, Vitality
 from game.property_runtime import (
     building_id_from_structure,
     finance_services_for_property,
@@ -126,6 +126,7 @@ PROPERTY_ARCHETYPE_DISPLAY = {
 PROPERTY_FIXTURE_SEMANTICS = {
     "bench": "prop_cover_bench",
     "bus_stop": "prop_cover_shelter",
+    "junction_box": "prop_cover_junction",
     "planter_box": "prop_cover_planter",
     "drift_fence": "prop_cover_fence",
     "transformer": "prop_cover_transformer",
@@ -166,6 +167,20 @@ CAT_COAT_COLOR = {
     "gray": "cat_gray",
     "grey": "cat_gray",
     "purple": "cat_purple",
+}
+
+ENTITY_TAXONOMY_SEMANTICS = {
+    "feline": "entity_feline",
+    "canine": "entity_canine",
+    "avian": "entity_avian",
+    "insect": "entity_insect",
+    "arachnid": "entity_arachnid",
+    "rodent": "entity_rodent",
+    "reptile": "entity_reptile",
+    "amphibian": "entity_amphibian",
+    "fish": "entity_fish",
+    "ungulate": "entity_ungulate",
+    "other": "entity_other",
 }
 
 
@@ -276,6 +291,40 @@ def _semantic_snapshot(
     )
 
 
+def _property_cover_overlays(prop):
+    if not isinstance(prop, dict):
+        return ()
+    kind = str(prop.get("kind", "") or "").strip().lower()
+    if kind not in {"fixture", "asset"}:
+        return ()
+
+    metadata = property_metadata(prop)
+    if not isinstance(metadata, dict):
+        return ()
+
+    cover_kind = str(metadata.get("cover_kind", "") or "").strip().lower()
+    try:
+        cover_value = float(metadata.get("cover_value", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        cover_value = 0.0
+    cover_value = max(0.0, min(0.95, cover_value))
+    cover_intended = bool(metadata.get("cover_intended"))
+
+    if cover_kind == "full" or cover_value >= 0.5:
+        semantic_id = "cover_rating_full"
+    elif cover_intended or cover_value >= 0.4:
+        semantic_id = "cover_rating_low"
+    else:
+        return ()
+
+    return (
+        {
+            "glyph": " ",
+            "semantic_id": semantic_id,
+        },
+    )
+
+
 def _owner_appearance(owner, fallback_glyph="?"):
     if owner is None:
         return _snapshot(fallback_glyph)
@@ -360,6 +409,31 @@ def creature_color_key(identity, *, role=""):
     return taxonomy_colors.get(taxonomy)
 
 
+def _entity_state_semantic(identity, vitality):
+    if vitality is None:
+        return None
+    if bool(getattr(vitality, "downed", False)):
+        return None
+    try:
+        hp = int(getattr(vitality, "hp", 0) or 0)
+    except (TypeError, ValueError):
+        hp = 0
+    if hp > 0:
+        return None
+    taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower() or "other"
+    if taxonomy == "hominid":
+        return "entity_corpse_hominid"
+    return "entity_corpse_nonhuman"
+
+
+def _entity_state_overlays(vitality):
+    if vitality is None:
+        return ()
+    if not bool(getattr(vitality, "downed", False)):
+        return ()
+    return ({"glyph": " ", "semantic_id": "entity_state_downed"},)
+
+
 def entity_default_snapshot(identity, *, role="", player=False, catalog=None):
     catalog = catalog or get_runtime_semantic_catalog()
 
@@ -384,9 +458,9 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None):
         glyph = "@"
         color = color or "human"
         semantic_id = catalog.semantic_id_for_key("entities", "hominid", color, allow_defaults=True)
-    elif taxonomy in {"feline", "canine", "avian", "insect"}:
+    elif taxonomy in ENTITY_TAXONOMY_SEMANTICS:
         color = color or taxonomy
-        semantic_id = catalog.semantic_id_for_key("entities", taxonomy, color, allow_defaults=True)
+        semantic_id = ENTITY_TAXONOMY_SEMANTICS.get(taxonomy)
     else:
         color = color or taxonomy
         semantic_id = catalog.semantic_id_for(glyph, color, preferred_categories=("entities",))
@@ -618,6 +692,7 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None):
     glyph = str(explicit_glyph or default_glyph)[:1] or "P"
     color = str(explicit_color or default_color or "property_building")
     semantic_id = None
+    overlays = _property_cover_overlays(prop)
     if kind == "vehicle":
         quality = str(metadata.get("vehicle_quality", "used")).strip().lower()
         paint_color = str(metadata.get("vehicle_paint", "")).strip()
@@ -644,6 +719,7 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None):
         semantic_id=semantic_id,
         catalog=catalog,
         preferred_categories=preferred_categories,
+        overlays=overlays,
     )
 
 
@@ -755,6 +831,7 @@ class AppearanceManager:
         render = self.sim.ecs.get(Render).get(eid)
         identity = self.sim.ecs.get(CreatureIdentity).get(eid)
         ai = self.sim.ecs.get(AI).get(eid)
+        vitality = self.sim.ecs.get(Vitality).get(eid)
 
         player_controlled = player_eid is not None and eid == player_eid
         defaults = entity_default_snapshot(
@@ -763,6 +840,22 @@ class AppearanceManager:
             player=player_controlled,
             catalog=self.catalog,
         )
+        state_semantic = _entity_state_semantic(identity, vitality)
+        if state_semantic:
+            defaults = _semantic_snapshot(
+                defaults.glyph,
+                color=defaults.color,
+                semantic_id=state_semantic,
+                catalog=self.catalog,
+                preferred_categories=("entities",),
+                layer=defaults.layer,
+                priority=defaults.priority,
+                attrs=defaults.attrs,
+                effects=defaults.effects,
+                visible=defaults.visible,
+                overlays=defaults.overlays,
+            )
+        state_overlays = _entity_state_overlays(vitality)
         owned = _owner_appearance(render, fallback_glyph=defaults.glyph)
         taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower()
         uses_legacy_hominid_placeholder = (
@@ -789,7 +882,7 @@ class AppearanceManager:
             attrs=int(defaults.attrs or 0) | int(owned.attrs or 0),
             effects=tuple(dict.fromkeys(tuple(defaults.effects or ()) + tuple(owned.effects or ()))),
             visible=bool(defaults.visible) and bool(owned.visible),
-            overlays=tuple(defaults.overlays or ()) + tuple(owned.overlays or ()),
+            overlays=tuple(defaults.overlays or ()) + tuple(state_overlays or ()) + tuple(owned.overlays or ()),
         )
 
     def tile(self, tile, x, y, z=0, *, revealed_building_id=""):

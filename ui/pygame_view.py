@@ -1644,6 +1644,249 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_creature_overlay(self, x, y, color=None, attrs=0, *, kind="other"):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.05)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        inset = max(1, self.cell_px // 10)
+        mid_x = self.cell_px // 2
+        mid_y = self.cell_px // 2
+        stroke_w = max(1, self.cell_px // 18)
+        fill = (frame[0], frame[1], frame[2], 164)
+        stroke = (
+            min(255, int(frame[0] * 1.1) + 10),
+            min(255, int(frame[1] * 1.08) + 10),
+            min(255, int(frame[2] * 1.08) + 10),
+            228,
+        )
+        shadow = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 128)
+        accent = (
+            min(255, int(frame[0] * 1.04) + 18),
+            min(255, int(frame[1] * 1.04) + 18),
+            min(255, int(frame[2] * 1.04) + 18),
+            168,
+        )
+
+        if kind == "feline":
+            body = self.pygame.Rect(inset + max(2, self.cell_px // 8), mid_y - max(1, self.cell_px // 12), max(6, self.cell_px - max(6, self.cell_px // 2)), max(5, self.cell_px // 3))
+            head = self.pygame.Rect(body.left - max(1, self.cell_px // 10), body.top - max(1, self.cell_px // 10), max(4, self.cell_px // 3), max(4, self.cell_px // 3))
+            ears = [
+                [(head.left + max(2, self.cell_px // 10), head.top + max(2, self.cell_px // 10)), (head.left + max(3, self.cell_px // 8), head.top - max(2, self.cell_px // 10)), (head.left + max(4, self.cell_px // 6), head.top + max(2, self.cell_px // 10))],
+                [(head.right - max(4, self.cell_px // 6), head.top + max(2, self.cell_px // 10)), (head.right - max(3, self.cell_px // 8), head.top - max(2, self.cell_px // 10)), (head.right - max(2, self.cell_px // 10), head.top + max(2, self.cell_px // 10))],
+            ]
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
+            self.pygame.draw.ellipse(overlay, fill, head)
+            self.pygame.draw.ellipse(overlay, stroke, head, stroke_w)
+            for ear in ears:
+                self.pygame.draw.polygon(overlay, fill, ear)
+                self.pygame.draw.polygon(overlay, stroke, ear, stroke_w)
+            self.pygame.draw.line(
+                overlay,
+                accent,
+                (body.right - max(1, self.cell_px // 10), body.centery),
+                (self.cell_px - inset, body.top - max(3, self.cell_px // 8)),
+                max(1, stroke_w),
+            )
+        elif kind == "canine":
+            body = self.pygame.Rect(inset + max(2, self.cell_px // 10), mid_y - max(1, self.cell_px // 10), max(7, self.cell_px - max(6, self.cell_px // 2)), max(5, self.cell_px // 3))
+            head = self.pygame.Rect(body.left - max(2, self.cell_px // 8), body.top - max(1, self.cell_px // 10), max(5, self.cell_px // 3), max(4, self.cell_px // 3))
+            snout = [(head.right - max(2, self.cell_px // 8), head.centery - max(1, self.cell_px // 10)), (head.right + max(2, self.cell_px // 10), head.centery), (head.right - max(2, self.cell_px // 8), head.centery + max(1, self.cell_px // 10))]
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
+            self.pygame.draw.ellipse(overlay, fill, head)
+            self.pygame.draw.ellipse(overlay, stroke, head, stroke_w)
+            self.pygame.draw.polygon(overlay, fill, snout)
+            self.pygame.draw.polygon(overlay, stroke, snout, stroke_w)
+            for leg_x in (body.left + max(2, self.cell_px // 7), body.centerx, body.right - max(2, self.cell_px // 7)):
+                self.pygame.draw.line(
+                    overlay,
+                    shadow,
+                    (leg_x, body.bottom - max(1, self.cell_px // 14)),
+                    (leg_x, self.cell_px - inset - max(1, self.cell_px // 10)),
+                    max(1, stroke_w),
+                )
+        elif kind == "avian":
+            body = self.pygame.Rect(mid_x - max(3, self.cell_px // 5), mid_y - max(3, self.cell_px // 6), max(6, self.cell_px // 2), max(7, self.cell_px // 2))
+            wing = [
+                (body.left + max(2, self.cell_px // 10), body.top + max(2, self.cell_px // 10)),
+                (body.right - max(2, self.cell_px // 10), body.centery),
+                (body.left + max(3, self.cell_px // 8), body.bottom - max(2, self.cell_px // 10)),
+            ]
+            beak = [
+                (body.right - max(1, self.cell_px // 12), body.top + max(3, self.cell_px // 8)),
+                (body.right + max(2, self.cell_px // 10), body.top + max(1, self.cell_px // 3)),
+                (body.right - max(1, self.cell_px // 12), body.top + max(1, self.cell_px // 2)),
+            ]
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
+            self.pygame.draw.polygon(overlay, accent, wing)
+            self.pygame.draw.polygon(overlay, stroke, wing, stroke_w)
+            self.pygame.draw.polygon(overlay, accent, beak)
+            self.pygame.draw.polygon(overlay, stroke, beak, stroke_w)
+        elif kind in {"insect", "arachnid"}:
+            abdomen = self.pygame.Rect(mid_x - max(2, self.cell_px // 8), mid_y, max(4, self.cell_px // 4), max(4, self.cell_px // 4))
+            thorax = self.pygame.Rect(mid_x - max(2, self.cell_px // 8), mid_y - max(2, self.cell_px // 6), max(4, self.cell_px // 4), max(4, self.cell_px // 4))
+            head = self.pygame.Rect(mid_x - max(1, self.cell_px // 10), thorax.top - max(2, self.cell_px // 8), max(3, self.cell_px // 5), max(3, self.cell_px // 5))
+            for segment in (abdomen, thorax, head):
+                self.pygame.draw.ellipse(overlay, fill, segment)
+                self.pygame.draw.ellipse(overlay, stroke, segment, stroke_w)
+            leg_delta = max(2, self.cell_px // 5)
+            for idx, py in enumerate((thorax.centery - max(1, self.cell_px // 10), thorax.centery, thorax.centery + max(1, self.cell_px // 10))):
+                spread = leg_delta + idx
+                self.pygame.draw.line(overlay, shadow, (thorax.left + max(1, self.cell_px // 20), py), (thorax.left - spread, py - max(2, self.cell_px // 8)), max(1, stroke_w))
+                self.pygame.draw.line(overlay, shadow, (thorax.right - max(1, self.cell_px // 20), py), (thorax.right + spread, py - max(2, self.cell_px // 8)), max(1, stroke_w))
+        elif kind == "rodent":
+            body = self.pygame.Rect(mid_x - max(3, self.cell_px // 6), mid_y - max(1, self.cell_px // 10), max(7, self.cell_px // 2), max(5, self.cell_px // 3))
+            head = self.pygame.Rect(body.left - max(2, self.cell_px // 8), body.top, max(4, self.cell_px // 3), max(4, self.cell_px // 3))
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
+            self.pygame.draw.ellipse(overlay, fill, head)
+            self.pygame.draw.ellipse(overlay, stroke, head, stroke_w)
+            self.pygame.draw.circle(overlay, accent, (head.left + max(2, self.cell_px // 8), head.top + max(2, self.cell_px // 8)), max(1, self.cell_px // 12))
+            self.pygame.draw.line(
+                overlay,
+                accent,
+                (body.right - max(1, self.cell_px // 10), body.centery),
+                (self.cell_px - inset, body.bottom + max(1, self.cell_px // 8)),
+                max(1, stroke_w),
+            )
+        elif kind == "ungulate":
+            body = self.pygame.Rect(inset + max(2, self.cell_px // 8), mid_y - max(2, self.cell_px // 10), max(7, self.cell_px - max(6, self.cell_px // 2)), max(5, self.cell_px // 3))
+            neck = self.pygame.Rect(body.left + max(1, self.cell_px // 12), body.top - max(3, self.cell_px // 8), max(3, self.cell_px // 6), max(4, self.cell_px // 3))
+            head = self.pygame.Rect(neck.left - max(1, self.cell_px // 12), neck.top - max(1, self.cell_px // 10), max(4, self.cell_px // 3), max(3, self.cell_px // 5))
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
+            self.pygame.draw.rect(overlay, fill, neck, border_radius=max(1, self.cell_px // 14))
+            self.pygame.draw.rect(overlay, stroke, neck, stroke_w, border_radius=max(1, self.cell_px // 14))
+            self.pygame.draw.ellipse(overlay, fill, head)
+            self.pygame.draw.ellipse(overlay, stroke, head, stroke_w)
+            for leg_x in (body.left + max(2, self.cell_px // 8), body.centerx - max(1, self.cell_px // 10), body.centerx + max(1, self.cell_px // 10), body.right - max(2, self.cell_px // 8)):
+                self.pygame.draw.line(overlay, shadow, (leg_x, body.bottom - max(1, self.cell_px // 14)), (leg_x, self.cell_px - inset - max(1, self.cell_px // 12)), max(1, stroke_w))
+        elif kind == "fish":
+            body = self.pygame.Rect(mid_x - max(3, self.cell_px // 6), mid_y - max(2, self.cell_px // 8), max(7, self.cell_px // 2), max(5, self.cell_px // 3))
+            tail = [
+                (body.left + max(1, self.cell_px // 16), body.centery),
+                (body.left - max(3, self.cell_px // 8), body.top + max(1, self.cell_px // 10)),
+                (body.left - max(3, self.cell_px // 8), body.bottom - max(1, self.cell_px // 10)),
+            ]
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
+            self.pygame.draw.polygon(overlay, accent, tail)
+            self.pygame.draw.polygon(overlay, stroke, tail, stroke_w)
+            self.pygame.draw.circle(overlay, shadow, (body.right - max(2, self.cell_px // 8), body.centery - max(1, self.cell_px // 12)), max(1, self.cell_px // 20))
+        elif kind in {"reptile", "amphibian"}:
+            body = self.pygame.Rect(mid_x - max(4, self.cell_px // 5), mid_y - max(2, self.cell_px // 10), max(8, self.cell_px - max(6, self.cell_px // 3)), max(4, self.cell_px // 3))
+            head = self.pygame.Rect(body.right - max(3, self.cell_px // 8), body.top - max(1, self.cell_px // 12), max(4, self.cell_px // 3), max(4, self.cell_px // 3))
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
+            self.pygame.draw.ellipse(overlay, fill, head)
+            self.pygame.draw.ellipse(overlay, stroke, head, stroke_w)
+            tail_end_y = body.centery + (max(2, self.cell_px // 8) if kind == "amphibian" else 0)
+            self.pygame.draw.line(overlay, accent, (body.left + max(1, self.cell_px // 20), body.centery), (body.left - max(4, self.cell_px // 8), tail_end_y), max(1, stroke_w))
+        else:
+            body = self.pygame.Rect(mid_x - max(3, self.cell_px // 6), mid_y - max(3, self.cell_px // 8), max(6, self.cell_px // 2), max(6, self.cell_px // 2))
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
+            self.pygame.draw.arc(
+                overlay,
+                accent,
+                (body.left, body.top + max(1, self.cell_px // 10), body.w, max(4, body.h - max(2, self.cell_px // 6))),
+                0.45,
+                2.6,
+                max(1, stroke_w),
+            )
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
+    def _draw_entity_state_overlay(self, x, y, color=None, attrs=0, *, kind="downed"):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.02)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        inset = max(1, self.cell_px // 10)
+        stroke_w = max(1, self.cell_px // 18)
+        shadow = (frame[0] // 3, frame[1] // 3, frame[2] // 3, 128)
+        accent = (
+            min(255, int(frame[0] * 1.08) + 18),
+            min(255, int(frame[1] * 0.96) + 14),
+            min(255, int(frame[2] * 0.96) + 14),
+            196,
+        )
+
+        if kind == "downed":
+            plate = self.pygame.Rect(inset, self.cell_px - inset - max(3, self.cell_px // 5), max(6, self.cell_px - (inset * 2)), max(3, self.cell_px // 5))
+            self.pygame.draw.rect(overlay, shadow, plate, border_radius=max(1, self.cell_px // 16))
+            self.pygame.draw.line(
+                overlay,
+                accent,
+                (plate.left + max(2, self.cell_px // 8), plate.top + max(1, self.cell_px // 10)),
+                (plate.right - max(2, self.cell_px // 8), plate.bottom - max(1, self.cell_px // 10)),
+                max(1, stroke_w),
+            )
+            self.pygame.draw.line(
+                overlay,
+                accent,
+                (plate.left + max(2, self.cell_px // 8), plate.bottom - max(1, self.cell_px // 10)),
+                (plate.right - max(2, self.cell_px // 8), plate.top + max(1, self.cell_px // 10)),
+                max(1, stroke_w),
+            )
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
+    def _draw_remains_overlay(self, x, y, color=None, attrs=0, *, kind="nonhuman"):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=0.96)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        inset = max(1, self.cell_px // 9)
+        stroke_w = max(1, self.cell_px // 18)
+        fill = (frame[0], frame[1], frame[2], 118)
+        stroke = (
+            min(255, int(frame[0] * 0.92) + 12),
+            min(255, int(frame[1] * 0.92) + 12),
+            min(255, int(frame[2] * 0.92) + 12),
+            172,
+        )
+        shadow = (frame[0] // 3, frame[1] // 3, frame[2] // 3, 104)
+
+        if kind == "hominid":
+            body = self.pygame.Rect(inset + max(1, self.cell_px // 10), self.cell_px - inset - max(4, self.cell_px // 3), max(6, self.cell_px - max(6, self.cell_px // 2)), max(4, self.cell_px // 3))
+            head_center = (body.left + max(2, self.cell_px // 8), body.top + max(1, self.cell_px // 10))
+            self.pygame.draw.line(
+                overlay,
+                shadow,
+                (body.left + max(1, self.cell_px // 12), body.centery),
+                (body.right - max(1, self.cell_px // 12), body.centery + max(1, self.cell_px // 12)),
+                max(2, stroke_w),
+            )
+            self.pygame.draw.line(
+                overlay,
+                fill,
+                (body.left + max(2, self.cell_px // 8), body.top + max(1, self.cell_px // 10)),
+                (body.right - max(2, self.cell_px // 8), body.bottom - max(1, self.cell_px // 10)),
+                max(2, stroke_w + 1),
+            )
+            self.pygame.draw.circle(overlay, fill, head_center, max(2, self.cell_px // 9))
+            self.pygame.draw.circle(overlay, stroke, head_center, max(2, self.cell_px // 9), stroke_w)
+        else:
+            body = self.pygame.Rect(inset + max(2, self.cell_px // 8), self.cell_px - inset - max(4, self.cell_px // 3), max(7, self.cell_px - max(6, self.cell_px // 2)), max(4, self.cell_px // 3))
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
+            self.pygame.draw.line(
+                overlay,
+                shadow,
+                (body.left + max(1, self.cell_px // 10), body.centery),
+                (body.left - max(3, self.cell_px // 8), body.centery + max(2, self.cell_px // 8)),
+                max(1, stroke_w),
+            )
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
     def _draw_service_security_fixture_overlay(self, x, y, color=None, attrs=0, *, kind="terminal"):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.06)
         cell_x = int(x) * self.cell_px
@@ -1946,6 +2189,31 @@ class PygameView:
                     (px + max(2, self.cell_px // 8), box.bottom - max(1, self.cell_px // 8)),
                     max(1, stroke_w),
                 )
+        elif kind == "junction":
+            box = self.pygame.Rect(
+                inset + max(1, self.cell_px // 10),
+                mid_y - max(2, self.cell_px // 7),
+                max(7, self.cell_px - (inset * 2) - max(2, self.cell_px // 8)),
+                max(5, self.cell_px // 3),
+            )
+            self.pygame.draw.rect(overlay, fill, box, border_radius=max(2, self.cell_px // 12))
+            self.pygame.draw.rect(overlay, stroke, box, stroke_w, border_radius=max(2, self.cell_px // 12))
+            lid_y = box.top + max(2, self.cell_px // 10)
+            self.pygame.draw.line(
+                overlay,
+                bright,
+                (box.left + max(2, self.cell_px // 8), lid_y),
+                (box.right - max(2, self.cell_px // 8), lid_y),
+                max(1, stroke_w),
+            )
+            for px in (box.left + max(2, self.cell_px // 6), box.right - max(3, self.cell_px // 5)):
+                self.pygame.draw.line(
+                    overlay,
+                    shadow,
+                    (px, box.bottom - max(2, self.cell_px // 8)),
+                    (px, self.cell_px - inset - max(1, self.cell_px // 12)),
+                    max(1, stroke_w),
+                )
         elif kind == "cache":
             crate = self.pygame.Rect(
                 inset + max(1, self.cell_px // 10),
@@ -1992,6 +2260,41 @@ class PygameView:
                 (mid_x, tank.bottom - max(1, self.cell_px // 10)),
                 max(1, stroke_w),
             )
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
+    def _draw_cover_rating_overlay(self, x, y, color=None, attrs=0, *, kind="low"):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.05)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        inset = max(1, self.cell_px // 10)
+        chip_w = max(5, self.cell_px // 2)
+        chip_h = max(2, self.cell_px // 8)
+        chip_x = self.cell_px - inset - chip_w
+        chip_y = self.cell_px - inset - chip_h
+        shadow = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 108)
+        fill = (frame[0], frame[1], frame[2], 184)
+        stroke = (
+            min(255, int(frame[0] * 1.08) + 10),
+            min(255, int(frame[1] * 1.08) + 10),
+            min(255, int(frame[2] * 1.08) + 10),
+            228,
+        )
+        plate = self.pygame.Rect(chip_x - max(1, self.cell_px // 20), chip_y - max(1, self.cell_px // 20), chip_w + max(2, self.cell_px // 10), chip_h + max(2, self.cell_px // 10))
+        self.pygame.draw.rect(overlay, shadow, plate, border_radius=max(1, self.cell_px // 16))
+
+        if kind == "full":
+            top = self.pygame.Rect(chip_x, chip_y - max(2, self.cell_px // 7), chip_w, chip_h)
+            bottom = self.pygame.Rect(chip_x, chip_y + max(1, self.cell_px // 10), chip_w, chip_h)
+            for rect in (top, bottom):
+                self.pygame.draw.rect(overlay, fill, rect, border_radius=max(1, self.cell_px // 16))
+                self.pygame.draw.rect(overlay, stroke, rect, max(1, self.cell_px // 24), border_radius=max(1, self.cell_px // 16))
+        else:
+            bar = self.pygame.Rect(chip_x, chip_y, chip_w, chip_h)
+            self.pygame.draw.rect(overlay, fill, bar, border_radius=max(1, self.cell_px // 16))
+            self.pygame.draw.rect(overlay, stroke, bar, max(1, self.cell_px // 24), border_radius=max(1, self.cell_px // 16))
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
@@ -3019,6 +3322,28 @@ class PygameView:
         if infra_kind:
             self._draw_infrastructure_overlay(x, y, color=color, attrs=attrs, kind=infra_kind)
             return f"infra_{infra_kind}"
+        if semantic_key == "entity_corpse_hominid":
+            self._draw_remains_overlay(x, y, color=color, attrs=attrs, kind="hominid")
+            return "entity_corpse_hominid"
+        if semantic_key == "entity_corpse_nonhuman":
+            self._draw_remains_overlay(x, y, color=color, attrs=attrs, kind="nonhuman")
+            return "entity_corpse_nonhuman"
+        creature_kind = {
+            "entity_feline": "feline",
+            "entity_canine": "canine",
+            "entity_avian": "avian",
+            "entity_insect": "insect",
+            "entity_arachnid": "arachnid",
+            "entity_rodent": "rodent",
+            "entity_reptile": "reptile",
+            "entity_amphibian": "amphibian",
+            "entity_fish": "fish",
+            "entity_ungulate": "ungulate",
+            "entity_other": "other",
+        }.get(semantic_key)
+        if creature_kind:
+            self._draw_creature_overlay(x, y, color=color, attrs=attrs, kind=creature_kind)
+            return f"entity_{creature_kind}"
         actor_kind = None
         if glyph == "@":
             if semantic_key == "entity_player" or color_key == "player":
@@ -3032,6 +3357,9 @@ class PygameView:
         if actor_kind:
             self._draw_actor_token_overlay(x, y, glyph, color=color, attrs=attrs, kind=actor_kind)
             return f"entity_{actor_kind}"
+        if semantic_key == "entity_state_downed":
+            self._draw_entity_state_overlay(x, y, color=color, attrs=attrs, kind="downed")
+            return "entity_state_downed"
         if color_key == "property_service":
             service_fixture_kind = {
                 "v": "vending",
@@ -3054,6 +3382,7 @@ class PygameView:
         cover_fixture_kind = {
             "prop_cover_bench": "bench",
             "prop_cover_shelter": "shelter",
+            "prop_cover_junction": "junction",
             "prop_cover_planter": "planter",
             "prop_cover_fence": "fence",
             "prop_cover_transformer": "transformer",
@@ -3069,6 +3398,12 @@ class PygameView:
                 kind=cover_fixture_kind,
             )
             return f"cover_{cover_fixture_kind}"
+        if semantic_key == "cover_rating_low":
+            self._draw_cover_rating_overlay(x, y, color=color, attrs=attrs, kind="low")
+            return "cover_rating_low"
+        if semantic_key == "cover_rating_full":
+            self._draw_cover_rating_overlay(x, y, color=color, attrs=attrs, kind="full")
+            return "cover_rating_full"
         item_kind_map = {
             "item_ground": "ground",
             "item_medical": "medical",
