@@ -812,5 +812,51 @@
     "tags": ["token", "social", "legal"],
     "legal_status": "legal",
     "effects": []
+  },
+  "worker_coverall": {
+    "name": "Worker Coverall",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["clothing", "disguise", "legal"],
+    "legal_status": "legal",
+    "effects": [],
+    "disguise": {
+      "role_id": "worker",
+      "strength": 1.0
+    }
+  },
+  "security_jacket": {
+    "name": "Security Jacket",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["clothing", "disguise", "restricted"],
+    "legal_status": "restricted",
+    "effects": [],
+    "disguise": {
+      "role_id": "guard",
+      "strength": 1.0
+    }
+  },
+  "canvas_sack": {
+    "name": "Canvas Sack",
+    "glyph": "{",
+    "stack_max": 1,
+    "tags": ["container", "gear", "legal"],
+    "legal_status": "legal",
+    "effects": [],
+    "container": {
+      "bonus_slots": 3
+    }
+  },
+  "backpack": {
+    "name": "Backpack",
+    "glyph": "{",
+    "stack_max": 1,
+    "tags": ["container", "gear", "legal"],
+    "legal_status": "legal",
+    "effects": [],
+    "container": {
+      "bonus_slots": 6
+    }
   }
 }

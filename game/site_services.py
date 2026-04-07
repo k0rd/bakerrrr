@@ -40,6 +40,35 @@ from game.skills import intel_skill_terms as _intel_skill_terms, mobility_servic
 from game.vehicles import vehicle_metadata
 
 
+def _property_power_is_cut(sim, prop):
+    """Return True when the property's electrical supply is currently cut."""
+    if not isinstance(prop, dict):
+        return False
+    power_cuts = getattr(sim, "fixture_power_cuts", {})
+    if not power_cuts:
+        return False
+    tick = int(getattr(sim, "tick", 0))
+    prop_id = str(prop.get("id", "")).strip()
+    if prop_id and power_cuts.get(prop_id, 0) > tick:
+        return True
+    # Also check all properties that cover this prop's position.
+    cover_index = getattr(sim, "property_cover_index", {})
+    px = int(prop.get("x", 0))
+    py = int(prop.get("y", 0))
+    pz = int(prop.get("z", 0))
+    for pid in cover_index.get((px, py, pz), ()):
+        if power_cuts.get(pid, 0) > tick:
+            return True
+    return False
+
+
+def _fixture_is_electronic(prop):
+    """Return True when this property is an electronic fixture."""
+    metadata = prop.get("metadata") or {} if isinstance(prop, dict) else {}
+    fixture_kind = str(metadata.get("fixture_kind", "") or "").strip().lower()
+    return fixture_kind in {"electronic", "electrical", "camera", "alarm"}
+
+
 def _build_vending_item_pool():
     pool = []
     for item_id, item_def in ITEM_CATALOG.items():
@@ -631,6 +660,23 @@ class SiteServiceSystem(System):
 
     def _run_site_service(self, eid, prop, pos, service, request=None):
         service = str(service or "").strip().lower()
+        # Electronic fixtures are offline when their power supply is cut.
+        if _fixture_is_electronic(prop) and _property_power_is_cut(self.sim, prop):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                reason="power_cut",
+            ))
+            from game.systems import _log_player_feedback
+            _log_player_feedback(
+                self.sim,
+                f"The {prop.get('name', 'terminal')} is offline — power is out.",
+                kind="interaction",
+            )
+            return True
         if service == "shelter":
             self._apply_shelter(eid, prop)
             return True

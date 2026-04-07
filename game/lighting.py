@@ -505,6 +505,26 @@ def _world_event_fixture_light_mult(sim, x, y):
         except (TypeError, ValueError):
             factor = 1.0
         mult *= max(0.0, min(1.0, factor))
+
+    # Per-property power cuts from player sabotage.
+    power_cuts = getattr(sim, "fixture_power_cuts", None)
+    if power_cuts:
+        try:
+            tick = int(getattr(sim, "tick", 0))
+            cover_index = getattr(sim, "property_cover_index", {})
+            for z_check in (0, 1):
+                key = (int(x), int(y), z_check)
+                for pid in cover_index.get(key, ()):
+                    cut_until = power_cuts.get(pid, 0)
+                    if isinstance(cut_until, (int, float)) and int(cut_until) > tick:
+                        mult *= 0.18
+                        break
+                else:
+                    continue
+                break
+        except (TypeError, ValueError, AttributeError):
+            pass
+
     return max(0.0, min(1.0, mult))
 
 

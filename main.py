@@ -81,6 +81,7 @@ from game.site_services import SiteServiceSystem
 from game.skill_progression import SkillProgressionSystem
 from game.skills import seed_skill_profile
 from game.systems import (
+    CameraSystem,
     CoverSystem,
     CombatPacingSystem,
     CreatureHazardSystem,
@@ -250,6 +251,7 @@ def _register_runtime_systems(sim, view, player):
     input_system = InputSystem(sim, view, player)
     cover_system = CoverSystem(sim)
     player_action_system = PlayerActionSystem(sim)
+    camera_system = CameraSystem(sim, player)
     skill_progression_system = SkillProgressionSystem(sim, player)
     item_system = ItemSystem(sim, player)
     service_menu_system = ServiceMenuSystem(sim, player)
@@ -300,6 +302,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(cover_system)
     sim.register_system(combat_pacing_system)
     sim.register_system(player_action_system)
+    sim.register_system(camera_system)
     sim.register_system(skill_progression_system)
     sim.register_system(item_system)
     sim.register_system(service_menu_system)

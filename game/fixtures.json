@@ -72,7 +72,8 @@
       "cover": {"kind": "low", "value": 0.42},
       "placement": {"weight": 2, "priorities": ["edge", "street_side", "entry_side", "open"]},
       "public": false,
-      "services": []
+      "services": [],
+      "metadata": {"interaction_role": "sabotage_target", "fixture_kind": "electrical"}
     },
     {
       "id": "transformer",
@@ -82,7 +83,19 @@
       "cover": {"kind": "full", "value": 0.55},
       "placement": {"weight": 1, "priorities": ["edge", "street_side", "open"]},
       "public": false,
-      "services": []
+      "services": [],
+      "metadata": {"interaction_role": "sabotage_target", "fixture_kind": "electrical"}
+    },
+    {
+      "id": "wall_camera",
+      "name": "Wall Camera",
+      "kind": "asset",
+      "display": {"glyph": "c", "color": "property_asset"},
+      "cover": {"kind": "low", "value": 0.12},
+      "placement": {"weight": 2, "priorities": ["entry_side", "edge", "street_side", "open"]},
+      "public": false,
+      "services": [],
+      "metadata": {"interaction_role": "camera_target", "fixture_kind": "camera", "detection_radius": 5}
     },
     {
       "id": "atm_kiosk",
@@ -93,7 +106,8 @@
       "placement": {"weight": 1, "priorities": ["path_side", "street_side", "open"]},
       "public": true,
       "services": ["banking"],
-      "light": {"enabled": true, "radius": 3, "intensity": 0.32, "phases": ["dawn", "dusk", "night"]}
+      "light": {"enabled": true, "radius": 3, "intensity": 0.32, "phases": ["dawn", "dusk", "night"]},
+      "metadata": {"fixture_kind": "electronic"}
     },
     {
       "id": "claim_terminal",
@@ -104,7 +118,8 @@
       "placement": {"weight": 1, "priorities": ["path_side", "entry_side", "open"]},
       "public": true,
       "services": ["insurance"],
-      "light": {"enabled": true, "radius": 3, "intensity": 0.28, "phases": ["dawn", "dusk", "night"]}
+      "light": {"enabled": true, "radius": 3, "intensity": 0.28, "phases": ["dawn", "dusk", "night"]},
+      "metadata": {"fixture_kind": "electronic"}
     },
     {
       "id": "vending_machine",
@@ -115,7 +130,8 @@
       "placement": {"weight": 2, "priorities": ["path_side", "entry_side", "open"]},
       "public": true,
       "services": ["vending"],
-      "light": {"enabled": true, "radius": 2, "intensity": 0.18, "phases": ["dawn", "dusk", "night"]}
+      "light": {"enabled": true, "radius": 2, "intensity": 0.18, "phases": ["dawn", "dusk", "night"]},
+      "metadata": {"fixture_kind": "electronic"}
     },
     {
       "id": "news_rack",
@@ -139,6 +155,17 @@
       "light": {"enabled": true, "radius": 2, "intensity": 0.22, "phases": ["dawn", "dusk", "night"]}
     },
     {
+      "id": "alarm_panel",
+      "name": "Alarm Panel",
+      "kind": "asset",
+      "display": {"glyph": "!", "color": "property_asset"},
+      "cover": {"kind": "low", "value": 0.08},
+      "placement": {"weight": 2, "priorities": ["entry_side", "edge", "open"]},
+      "public": false,
+      "services": [],
+      "metadata": {"interaction_role": "alarm_target", "fixture_kind": "alarm"}
+    },
+    {
       "id": "charging_pillar",
       "name": "Charging Pillar",
       "kind": "asset",
@@ -147,7 +174,8 @@
       "placement": {"weight": 1, "priorities": ["street_side", "path_side", "open"]},
       "public": true,
       "services": ["fuel"],
-      "light": {"enabled": true, "radius": 3, "intensity": 0.26, "phases": ["dawn", "dusk", "night"]}
+      "light": {"enabled": true, "radius": 3, "intensity": 0.26, "phases": ["dawn", "dusk", "night"]},
+      "metadata": {"fixture_kind": "electronic"}
     },
     {
       "id": "planter_box",
@@ -201,7 +229,8 @@
       "cover": {"kind": "low", "value": 0.4},
       "placement": {"weight": 1, "priorities": ["edge", "open", "path_side"]},
       "public": false,
-      "services": []
+      "services": [],
+      "metadata": {"interaction_role": "cache_target", "fixture_kind": "cache"}
     },
     {
       "id": "water_tank",

@@ -48,6 +48,10 @@ class Simulation:
         self.property_order = {}
         self.next_property_order = 0
         self.door_states = {}
+        self.fixture_power_cuts = {}
+        self.camera_disabled = {}
+        self.contractors = {}
+        self.disguise_state = None
         self.structure_cells = {}
         self.next_property_id = 1
         self.ground_items = {}
@@ -117,6 +121,18 @@ class Simulation:
             self.log.default_tick_source = self._log_tick
         if not isinstance(getattr(self, "door_states", None), dict):
             self.door_states = {}
+        if not isinstance(getattr(self, "fixture_power_cuts", None), dict):
+            self.fixture_power_cuts = {}
+        if not isinstance(getattr(self, "camera_disabled", None), dict):
+            self.camera_disabled = {}
+        if not isinstance(getattr(self, "contractors", None), dict):
+            self.contractors = {}
+        if not hasattr(self, "disguise_state"):
+            self.disguise_state = None
+        if not hasattr(self, "equipped_container"):
+            self.equipped_container = None
+        if not isinstance(getattr(self, "cache_inventories", None), dict):
+            self.cache_inventories = {}
 
     def door_state_at(self, x, y, z=0):
         key = self._coord_key(x, y, z)

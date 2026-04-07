@@ -53,6 +53,9 @@ TOPIC_ORDER = (
     "vouch",
     "trade",
     "bye",
+    "payoff",
+    "fence",
+    "hire_runner",
 )
 
 
@@ -252,6 +255,11 @@ TOPIC_DEFS = {
         "root": False,
         "unlocks": (),
     },
+    "hire_runner": {
+        "label": "I need someone discreet for a few hours. Interested?",
+        "root": False,
+        "unlocks": (),
+    },
     "objective": {
         "label": "What would help me right now?",
         "root": False,
@@ -310,6 +318,16 @@ TOPIC_DEFS = {
     "bye": {
         "label": "Goodbye.",
         "root": True,
+        "unlocks": (),
+    },
+    "payoff": {
+        "label": "I can make it worth your while to forget you saw me.",
+        "root": False,
+        "unlocks": (),
+    },
+    "fence": {
+        "label": "I have some things I need to move quietly.",
+        "root": False,
         "unlocks": (),
     },
 }
@@ -797,6 +815,18 @@ STYLE_ADDRESS_BANKS = {
     "trade_yes_caution_merchant",
     "trade_yes_caution_chaotic",
     "farewell",
+    "payoff_accept",
+    "payoff_refuse_broke",
+    "payoff_refuse_clean",
+    "payoff_cooldown",
+    "fence_accept",
+    "fence_decline_corrupt",
+    "fence_decline_clean",
+    "fence_cooldown",
+    "hire_runner_accept",
+    "hire_runner_decline_clean",
+    "hire_runner_decline_broke",
+    "hire_runner_already_hired",
 }
 
 
@@ -1580,6 +1610,84 @@ DIALOGUE_BANKS = {
         "Watch yourself.",
         "Good luck out there.",
         "Careful out there.",
+    ),
+    "payoff_accept": (
+        "Fine. {payoff_cost} and I did not see anything.",
+        "That works. {payoff_cost} and we are done here.",
+        "Hand it over. {payoff_cost} and I forget your face.",
+        "Alright. {payoff_cost} and this conversation did not happen.",
+        "Fair enough. {payoff_cost} and you were never here.",
+        "{payoff_cost}. And stay out of my sight for a while.",
+    ),
+    "payoff_refuse_broke": (
+        "That is not enough. Come back when you are serious.",
+        "You call that a payoff? Walk away.",
+        "Not with that. Try again when you have something real.",
+        "That does not cover it. Walk.",
+        "I am worth more than that. Come back with more.",
+    ),
+    "payoff_refuse_clean": (
+        "I am not that kind of person.",
+        "Keep your money.",
+        "That is not how I do things.",
+        "No. Take your credits and go.",
+        "I don't work that way.",
+    ),
+    "payoff_cooldown": (
+        "We already handled this. Do not push it.",
+        "You already paid. That window is closed.",
+        "That deal was made. Don't come looking for another one.",
+        "I said we were done. Stay out of trouble.",
+    ),
+    "fence_accept": (
+        "{fence_payout} and that stock does not exist. Leave the bag.",
+        "I can do {fence_payout}. No names, no receipts.",
+        "Alright. {fence_payout} and I forget I ever saw what you were carrying.",
+        "Done. {fence_payout}. You were never here with those.",
+        "{fence_payout} is what I can move. Take it or walk.",
+    ),
+    "fence_decline_corrupt": (
+        "Not today. I am already running too much heat right now.",
+        "Wrong time. Come back when things have cooled down.",
+        "I can't take anything right now. The block is too hot.",
+        "Not this week. You're going to have to sit on it.",
+    ),
+    "fence_decline_clean": (
+        "That's not a conversation I have. Move on.",
+        "Wrong person. I don't move product.",
+        "I don't know what you're implying, but no.",
+        "Keep that away from me.",
+    ),
+    "fence_cooldown": (
+        "We just did this. Give it time.",
+        "I haven't moved the last batch yet. Not yet.",
+        "Come back in a few days.",
+        "Too soon. You're making me nervous.",
+    ),
+    "hire_runner_accept": (
+        "{hire_runner_cost} and I don't see anything for {hire_runner_hours}.",
+        "Alright. {hire_runner_cost}. I'm busy with something else tonight.",
+        "{hire_runner_cost} to have bad memory. I can do that.",
+        "Fine. {hire_runner_cost}. You were never here.",
+        "I've got things to do. {hire_runner_cost} buys you some quiet.",
+    ),
+    "hire_runner_decline_clean": (
+        "I don't do that kind of arrangement. Move along.",
+        "That's not something I get involved in.",
+        "Wrong person for that conversation.",
+        "I keep my head down. You should too.",
+    ),
+    "hire_runner_decline_broke": (
+        "I've got a memory like a trap, but not that cheap.",
+        "That's not enough for me to forget anything.",
+        "Come back when you've got real money.",
+        "Not worth the risk for that amount.",
+    ),
+    "hire_runner_already_hired": (
+        "We already have an arrangement. Relax.",
+        "You're covered. Stay low.",
+        "I haven't forgotten. Go do what you need to.",
+        "Still watching the other way. Give me some space.",
     ),
 }
 

@@ -1739,6 +1739,14 @@ def _access_tool_context_for(sim, prop=None, *, ignition=False, context=None):
     if ignition:
         return "vehicle_ignition"
     if isinstance(prop, dict) and str(prop.get("kind", "")).strip().lower() == "building":
+        # If power is cut to this building, electronic access controls are offline.
+        power_cuts = getattr(sim, "fixture_power_cuts", {})
+        if power_cuts:
+            prop_id = str(prop.get("id", "")).strip()
+            cut_until = power_cuts.get(prop_id, 0)
+            tick = int(getattr(sim, "tick", 0))
+            if isinstance(cut_until, (int, float)) and int(cut_until) > tick:
+                return "mechanical_lock"
         controller = _property_access_controller(sim, prop)
         credential_mode = str(controller.get("credential_mode", "mechanical_key")).strip().lower()
         if credential_mode == "badge":
@@ -2183,8 +2191,19 @@ def _emit_move_access_events(
     emit_clear_offense=True,
 ):
     prop = _property_covering(sim, target_x, target_y, target_z)
-    if prop and action in {"move", "cover_hop"} and _property_cover_intended(prop):
+    if prop and _property_cover_intended(prop):
+        # Cover-intended fixtures (benches, bus stops, etc.) are street
+        # furniture — they should never source trespass events themselves.
+        # If the fixture sits inside a building's footprint, charge that
+        # building instead.
+        key = (int(target_x), int(target_y), int(target_z))
+        cover_index = getattr(sim, "property_cover_index", {})
         prop = None
+        for _pid in cover_index.get(key, ()):
+            _enc = sim.properties.get(_pid)
+            if _enc is not None:
+                prop = _enc
+                break
     trespass_triggered = False
     if prop:
         ingress = _property_ingress_context(
@@ -8562,6 +8581,7 @@ class QuestSystem(System):
         self.sim.events.subscribe("quest_turn_in_requested", self.on_quest_turn_in_requested)
         self.sim.events.subscribe("entity_moved", self.on_entity_moved)
         self.sim.events.subscribe("property_interact", self.on_property_interact)
+        self.sim.events.subscribe("cache_withdraw", self.on_cache_withdraw)
 
     def _next_id(self):
         quest_id = f"Q-{self.sim.next_quest_id}"
@@ -8767,6 +8787,60 @@ class QuestSystem(System):
             "reward": self._reward(35, 70, difficulty=2),
         }
 
+    CACHE_SEED_ITEMS = (
+        "credstick_chip", "scrap_circuit", "battery_pack",
+        "signal_jammer", "lockpick_kit", "med_gel",
+        "micro_medkit", "focus_inhaler", "energy_bar",
+    )
+
+    def _pick_cache_property(self):
+        props = self._properties_for_templates()
+        for prop in props:
+            metadata = prop.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            if str(metadata.get("interaction_role", "")).strip().lower() == "cache_target":
+                return prop
+        return None
+
+    def _build_cache_pickup(self):
+        cache_prop = self._pick_cache_property()
+        if not cache_prop:
+            return None
+        seed_item_id = self.rng.choice(self.CACHE_SEED_ITEMS)
+        seed_item_def = ITEM_CATALOG.get(seed_item_id, {})
+        seed_name = seed_item_def.get("name", seed_item_id.replace("_", " "))
+        # Seed the item into the cache inventory.
+        inventories = getattr(self.sim, "cache_inventories", None)
+        if not isinstance(inventories, dict):
+            self.sim.cache_inventories = {}
+            inventories = self.sim.cache_inventories
+        cache_items = inventories.setdefault(cache_prop["id"], [])
+        cache_items.append({
+            "item_id": seed_item_id,
+            "quantity": 1,
+            "name": seed_name,
+            "metadata": None,
+            "owner_eid": None,
+            "owner_tag": "quest",
+        })
+        return {
+            "id": self._next_id(),
+            "template": "cache_pickup",
+            "difficulty": 2,
+            "status": "available",
+            "title": f"Retrieve {seed_name}",
+            "description": f"Pick up a {seed_name} from the cache box near {cache_prop['name']}.",
+            "objective": {
+                "type": "cache_pickup",
+                "property_id": cache_prop["id"],
+                "item_id": seed_item_id,
+                "target": 1,
+            },
+            "progress": 0,
+            "reward": self._reward(30, 55, difficulty=2),
+        }
+
     def _template_builders(self):
         return {
             "visit_property": self._build_visit_property,
@@ -8775,6 +8849,7 @@ class QuestSystem(System):
             "claim_property": self._build_claim_property,
             "inspection_route": self._build_inspection_route,
             "reach_floor": self._build_reach_floor,
+            "cache_pickup": self._build_cache_pickup,
         }
 
     def _generate_quest(self, existing_signatures=None):
@@ -8992,6 +9067,25 @@ class QuestSystem(System):
             quest["progress"] = objective.get("target", 1)
             self._complete_quest(quest, reason="property_interacted")
 
+    def on_cache_withdraw(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        property_id = event.data.get("property_id")
+        withdrawn_item_id = event.data.get("item_id")
+        if not property_id or not withdrawn_item_id:
+            return
+        active = list(self.sim.quests["active"])
+        for quest in active:
+            objective = quest["objective"]
+            if objective.get("type") != "cache_pickup":
+                continue
+            if objective.get("property_id") != property_id:
+                continue
+            if objective.get("item_id") != withdrawn_item_id:
+                continue
+            quest["progress"] = objective.get("target", 1)
+            self._complete_quest(quest, reason="cache_item_collected")
+
     def update(self):
         available = self.sim.quests["available"]
         existing_signatures = self._existing_signatures()
@@ -9025,7 +9119,16 @@ class NPCInteractionSystem(System):
     ROOT_TOPICS = {"name", "job", "local", "opportunities", "attention", "contacts", "hire", "fire", "trade", "bye", "purpose", "apologize", "leave"}
     MISSTEP_TOPICS = ("weird", "pry", "insult")
     MENU_REPEAT_ROW_BUDGET = 3
-    REPEAT_PRESSURE_SKIP_TOPICS = {"bye", "trade", "purpose", "apologize", "leave"}
+    REPEAT_PRESSURE_SKIP_TOPICS = {"bye", "trade", "purpose", "apologize", "leave", "payoff", "fence", "hire_runner"}
+    PAYOFF_BASE_COST = 40
+    PAYOFF_COOLDOWN_TICKS = 800
+    FENCE_COOLDOWN_TICKS = 600
+    FENCE_MIN_STANDING = 0.42
+    FENCE_MIN_CORRUPTION = 0.45
+    CONTRACTOR_COST = 60
+    CONTRACTOR_DURATION = 240   # ticks of bought silence
+    CONTRACTOR_MIN_STANDING = 0.35
+    CONTRACTOR_MIN_CORRUPTION = 0.30
     SERVICE_LOCATOR_TOPICS = {
         "service_fuel": {
             "services": ("fuel",),
@@ -9096,9 +9199,14 @@ class NPCInteractionSystem(System):
             self.sim.dialogue_history = {}
         if not hasattr(self.sim, "dialogue_guard_grace"):
             self.sim.dialogue_guard_grace = {}
+        if not hasattr(self, "payoff_cooldown_ticks"):
+            self.payoff_cooldown_ticks = {}
+        if not hasattr(self, "fence_cooldown_ticks"):
+            self.fence_cooldown_ticks = {}
         self.sim.events.subscribe("npc_interact", self.on_npc_interact)
         self.sim.events.subscribe("dialog_topic_request", self.on_dialog_topic_request)
         self.sim.events.subscribe("dialog_close_request", self.on_dialog_close_request)
+        self.sim.events.subscribe("contractor_hired", self.on_contractor_hired)
 
     def _dialog_ui_state(self):
         state = getattr(self.sim, "dialog_ui", None)
@@ -10877,6 +10985,78 @@ class NPCInteractionSystem(System):
 
         return {"summary": "", "service_label": service_label, "lead_prop": None}
 
+    # ── Fence helpers ────────────────────────────────────────────────────────
+
+    _FENCE_ITEM_VALUE = {
+        "weapon": 50, "firearm": 50, "gear": 32, "armor": 32,
+        "tool": 24, "access": 28, "stimulant": 18, "drug": 18,
+    }
+    _FENCE_DEFAULT_VALUE = 14
+
+    def _fence_illegal_items(self, player_eid):
+        inventory = self.sim.ecs.get(Inventory).get(player_eid)
+        if not inventory:
+            return []
+        result = []
+        for entry in inventory.items:
+            item_id = entry.get("item_id") or ""
+            item_def = ITEM_CATALOG.get(item_id, {})
+            if str(item_def.get("legal_status", "legal")).strip().lower() != "illegal":
+                continue
+            result.append(entry)
+        return result
+
+    def _fence_item_value(self, item_id):
+        item_def = ITEM_CATALOG.get(item_id, {})
+        tags = set(str(t).strip().lower() for t in item_def.get("tags", ()))
+        for tag, val in self._FENCE_ITEM_VALUE.items():
+            if tag in tags:
+                return val
+        return self._FENCE_DEFAULT_VALUE
+
+    def _fence_payout_preview(self, player_eid):
+        items = self._fence_illegal_items(player_eid)
+        if not items:
+            return 0
+        total = sum(self._fence_item_value(e.get("item_id", "")) for e in items)
+        return max(10, int(total * 0.55))
+
+    def _fence_available_for(self, npc_eid, contact_standing, guarded):
+        if guarded:
+            return False
+        if float(contact_standing) < self.FENCE_MIN_STANDING:
+            return False
+        if self.sim.tick < self.fence_cooldown_ticks.get(npc_eid, 0):
+            return False
+        justice_profile = self.sim.ecs.get(JusticeProfile).get(npc_eid)
+        corruption = float(getattr(justice_profile, "corruption", 0.0))
+        if corruption < self.FENCE_MIN_CORRUPTION:
+            return False
+        return bool(self._fence_illegal_items(self.player_eid))
+
+    def _hire_runner_available_for(self, npc_eid, contact_standing, guarded):
+        if guarded:
+            return False
+        if float(contact_standing) < self.CONTRACTOR_MIN_STANDING:
+            return False
+        # Guard/scout NPCs won't accept — they're already on payroll.
+        ai = self.sim.ecs.get(AI).get(npc_eid)
+        if ai and str(getattr(ai, "role", "")).strip().lower() in {"guard", "scout"}:
+            return False
+        # Needs enough moral flexibility.
+        justice_profile = self.sim.ecs.get(JusticeProfile).get(npc_eid)
+        corruption = float(getattr(justice_profile, "corruption", 0.0))
+        enforce_all = bool(getattr(justice_profile, "enforce_all", False))
+        if enforce_all or corruption < self.CONTRACTOR_MIN_CORRUPTION:
+            return False
+        # Player must be able to afford it.
+        assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+        if not assets or int(getattr(assets, "credits", 0)) < self.CONTRACTOR_COST:
+            return False
+        return True
+
+    # ── End fence helpers ────────────────────────────────────────────────────
+
     def _trade_context(self, npc_eid, workplace_prop, current_prop):
         player_pos = self.sim.ecs.get(Position).get(self.player_eid)
         if not player_pos:
@@ -11505,6 +11685,19 @@ class NPCInteractionSystem(System):
             "pressure_tier": pressure_tier,
             "pressure_goodwill_mult": float(pressure_effects.get("goodwill_mult", 1.0)),
             "pressure_suspicion_mult": float(pressure_effects.get("suspicion_mult", 1.0)),
+            "payoff_available": (
+                pressure_tier in {"medium", "high"}
+                and not guarded
+                and self.sim.ecs.get(PlayerAssets).get(self.player_eid) is not None
+                and self.sim.tick >= self.payoff_cooldown_ticks.get(npc_eid, 0)
+            ),
+            "payoff_cost_amount": max(self.PAYOFF_BASE_COST, int(pressure.get("attention", 0)) * 2),
+            "payoff_cost": f"{max(self.PAYOFF_BASE_COST, int(pressure.get('attention', 0)) * 2)} credits",
+            "fence_available": self._fence_available_for(npc_eid, contact_standing, guarded),
+            "fence_payout_preview": self._fence_payout_preview(self.player_eid),
+            "hire_runner_available": self._hire_runner_available_for(npc_eid, contact_standing, guarded),
+            "hire_runner_cost": self.CONTRACTOR_COST,
+            "hire_runner_hours": f"{max(1, self.CONTRACTOR_DURATION // 60)} hours",
             "contact_standing": contact_standing,
             "intro_standing": intro_standing,
             "social_standing": social_standing,
@@ -13064,6 +13257,12 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "contract" and not context.get("contract_kill_offer"):
                 continue
+            if topic_id == "payoff" and not context.get("payoff_available"):
+                continue
+            if topic_id == "fence" and not context.get("fence_available"):
+                continue
+            if topic_id == "hire_runner" and not context.get("hire_runner_available"):
+                continue
             if topic_id == "objective" and not self._objective_summary(context, 1):
                 continue
             if topic_id == "angle" and not self._angle_summary(context, 1):
@@ -13768,6 +13967,87 @@ class NPCInteractionSystem(System):
                 line = self._say(bank_id, context, topic_id=topic_id, count=ask_count)
                 return {"npc_lines": [line], "open_trade": True, "trade_property_id": context["trade_context"].get("property_id")}
             return {"npc_lines": [self._say("trade_no", context, topic_id=topic_id, count=ask_count)]}
+        if topic_id == "payoff":
+            npc_eid = context.get("npc_eid")
+            cost_amount = int(context.get("payoff_cost_amount", self.PAYOFF_BASE_COST))
+            assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+            # Cooldown check — if we somehow got here despite the gate, refuse politely.
+            if npc_eid and self.sim.tick < self.payoff_cooldown_ticks.get(npc_eid, 0):
+                return {"npc_lines": [self._say("payoff_cooldown", context, topic_id=topic_id, count=ask_count)]}
+            # Corruptibility check.
+            npc_traits = context.get("npc_traits") or NPCTraits()
+            justice_profile = self.sim.ecs.get(JusticeProfile).get(npc_eid) if npc_eid else None
+            enforce_all = bool(getattr(justice_profile, "enforce_all", False))
+            corruption = float(getattr(justice_profile, "corruption", 0.0))
+            discipline = float(getattr(npc_traits, "discipline", 0.5))
+            tone = str(context.get("tone", "neutral")).strip().lower() or "neutral"
+            incorruptible = enforce_all or (corruption < 0.25 and discipline > 0.72 and tone in {"guarded", "hostile"})
+            if incorruptible:
+                return {"npc_lines": [self._say("payoff_refuse_clean", context, topic_id=topic_id, count=ask_count)]}
+            # Insufficient funds check.
+            if assets is None or assets.credits < cost_amount:
+                return {"npc_lines": [self._say("payoff_refuse_broke", context, topic_id=topic_id, count=ask_count)]}
+            # Payoff accepted — deduct credits, reduce heat, set cooldown.
+            assets.credits -= cost_amount
+            pressure_tier = str(context.get("pressure_tier", "medium")).strip().lower()
+            heat_delta = -12 if pressure_tier == "high" else -7
+            _apply_pressure_delta(
+                self.sim,
+                delta=heat_delta,
+                source="payoff",
+                reason="npc_payoff",
+                source_event="dialogue_payoff",
+            )
+            if npc_eid:
+                self.payoff_cooldown_ticks[npc_eid] = self.sim.tick + self.PAYOFF_COOLDOWN_TICKS
+                memory = self.sim.ecs.get(NPCMemory).get(npc_eid)
+                if memory is not None:
+                    memory.remember(
+                        self.sim.tick,
+                        "recognized",
+                        strength=0.55,
+                        player_eid=self.player_eid,
+                        source="payoff",
+                    )
+            return {"npc_lines": [self._say("payoff_accept", context, topic_id=topic_id, count=ask_count, payoff_cost=context.get("payoff_cost", f"{cost_amount} credits"))]}
+        if topic_id == "fence":
+            npc_eid = context.get("npc_eid")
+            # Cooldown check.
+            if npc_eid and self.sim.tick < self.fence_cooldown_ticks.get(npc_eid, 0):
+                return {"npc_lines": [self._say("fence_cooldown", context, topic_id=topic_id, count=ask_count)]}
+            # Corruptibility check.
+            justice_profile = self.sim.ecs.get(JusticeProfile).get(npc_eid) if npc_eid else None
+            corruption = float(getattr(justice_profile, "corruption", 0.0))
+            enforce_all = bool(getattr(justice_profile, "enforce_all", False))
+            if enforce_all or corruption < self.FENCE_MIN_CORRUPTION:
+                return {"npc_lines": [self._say("fence_decline_clean", context, topic_id=topic_id, count=ask_count)]}
+            # Check inventory for illegal items.
+            illegal_items = self._fence_illegal_items(self.player_eid)
+            if not illegal_items:
+                return {"npc_lines": [self._say("fence_decline_corrupt", context, topic_id=topic_id, count=ask_count)]}
+            # Execute the fence transaction.
+            payout = int(context.get("fence_payout_preview") or self._fence_payout_preview(self.player_eid))
+            if payout <= 0:
+                return {"npc_lines": [self._say("fence_decline_corrupt", context, topic_id=topic_id, count=ask_count)]}
+            inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
+            if inventory:
+                for entry in list(illegal_items):
+                    inventory.remove_item(instance_id=entry.get("instance_id"), quantity=int(entry.get("quantity", 1)))
+            assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+            if assets:
+                assets.credits += payout
+            if npc_eid:
+                self.fence_cooldown_ticks[npc_eid] = self.sim.tick + self.FENCE_COOLDOWN_TICKS
+                self._shift_dialogue_bond(npc_eid, trust_delta=0.06, closeness_delta=0.03, guarded=False)
+            self.sim.emit(Event(
+                "fence_transaction",
+                eid=self.player_eid,
+                npc_eid=npc_eid,
+                payout=payout,
+                item_count=len(illegal_items),
+                credits=int(getattr(assets, "credits", 0)) if assets else 0,
+            ))
+            return {"npc_lines": [self._say("fence_accept", context, topic_id=topic_id, count=ask_count, fence_payout=f"{payout} credits")]}
         if topic_id == "bye":
             return {"npc_lines": [self._say("farewell", context, topic_id=topic_id, count=ask_count)], "close": True}
         if topic_id == "contract":
@@ -13792,6 +14072,50 @@ class NPCInteractionSystem(System):
             if ask_count <= 1:
                 lines.append(self._say("contract_accepted", context, topic_id=topic_id, count=ask_count))
             return {"npc_lines": lines}
+        if topic_id == "hire_runner":
+            npc_eid = context.get("npc_eid")
+            cost = int(self.CONTRACTOR_COST)
+            cost_str = f"{cost} credits"
+            hours_str = str(context.get("hire_runner_hours", f"{max(1, self.CONTRACTOR_DURATION // 60)} hours"))
+            # If already hired for current run, just confirm.
+            contractors = getattr(self.sim, "contractors", {})
+            if npc_eid and contractors.get(npc_eid, {}).get("until", 0) > self.sim.tick:
+                return {"npc_lines": [self._say("hire_runner_already_hired", context, topic_id=topic_id, count=ask_count)]}
+            # Verify at resolution time — context may be stale.
+            if not context.get("hire_runner_available"):
+                justice_profile = self.sim.ecs.get(JusticeProfile).get(npc_eid) if npc_eid else None
+                corruption = float(getattr(justice_profile, "corruption", 0.0))
+                enforce_all = bool(getattr(justice_profile, "enforce_all", False))
+                if enforce_all or corruption < self.CONTRACTOR_MIN_CORRUPTION:
+                    return {"npc_lines": [self._say("hire_runner_decline_clean", context, topic_id=topic_id, count=ask_count)]}
+                return {"npc_lines": [self._say("hire_runner_decline_clean", context, topic_id=topic_id, count=ask_count)]}
+            # Check player funds.
+            assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+            if not assets or int(getattr(assets, "credits", 0)) < cost:
+                return {"npc_lines": [self._say("hire_runner_decline_broke", context, topic_id=topic_id, count=ask_count)]}
+            # Complete the hire.
+            assets.credits -= cost
+            now = self.sim.tick
+            if not isinstance(contractors, dict):
+                self.sim.contractors = {}
+                contractors = self.sim.contractors
+            contractors[npc_eid] = {
+                "hired_tick": now,
+                "until": now + self.CONTRACTOR_DURATION,
+                "cost": cost,
+                "job": "distraction",
+            }
+            if npc_eid:
+                self._shift_dialogue_bond(npc_eid, trust_delta=0.08, closeness_delta=0.04, guarded=False)
+            self.sim.emit(Event(
+                "contractor_hired",
+                eid=self.player_eid,
+                npc_eid=npc_eid,
+                cost=cost,
+                duration=self.CONTRACTOR_DURATION,
+                credits=int(getattr(assets, "credits", 0)),
+            ))
+            return {"npc_lines": [self._say("hire_runner_accept", context, topic_id=topic_id, count=ask_count, hire_runner_cost=cost_str, hire_runner_hours=hours_str)]}
         return {"npc_lines": []}
 
     def _apply_dialogue_repeat_friction(self, context, topic_id, response):
@@ -14180,6 +14504,74 @@ class NPCInteractionSystem(System):
             return
         self._close_dialog()
 
+    # ── Contractor task system ───────────────────────────────────────────────
+
+    CONTRACTOR_TICK_INTERVAL = 20
+
+    def update(self):
+        tick = self.sim.tick
+        if tick % self.CONTRACTOR_TICK_INTERVAL != 0:
+            return
+        self._tick_contractors()
+
+    def _tick_contractors(self):
+        contractors = getattr(self.sim, "contractors", {})
+        if not contractors:
+            return
+        tick = self.sim.tick
+        expired = [eid for eid, rec in list(contractors.items()) if rec.get("until", 0) <= tick]
+        for npc_eid in expired:
+            rec = contractors.pop(npc_eid)
+            self.sim.emit(Event(
+                "contractor_task_complete",
+                npc_eid=npc_eid,
+                job=rec.get("job", "distraction"),
+                hired_tick=rec.get("hired_tick", 0),
+            ))
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        for npc_eid, rec in list(contractors.items()):
+            if rec.get("job") == "distraction":
+                self._assign_contractor_distraction(npc_eid, player_pos)
+
+    def on_contractor_hired(self, event):
+        npc_eid = event.data.get("npc_eid")
+        if not npc_eid:
+            return
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        self._assign_contractor_distraction(npc_eid, player_pos)
+
+    def _assign_contractor_distraction(self, npc_eid, player_pos):
+        ai = self.sim.ecs.get(AI).get(npc_eid)
+        will = self.sim.ecs.get(NPCWill).get(npc_eid)
+        npc_pos = self.sim.ecs.get(Position).get(npc_eid)
+        if not ai or not npc_pos:
+            return
+        # Don't interrupt if already investigating toward the distraction target.
+        if getattr(ai, "state", "") == "investigating" and getattr(ai, "target", None):
+            return
+        target = self._distraction_waypoint(npc_pos, player_pos)
+        _sync_ai_intent(ai, will, self.sim.tick, "investigating", score=65.0, target=target)
+
+    def _distraction_waypoint(self, npc_pos, player_pos):
+        nx, ny = int(npc_pos.x), int(npc_pos.y)
+        nz = int(getattr(npc_pos, "z", 0))
+        if player_pos:
+            dx = nx - int(player_pos.x)
+            dy = ny - int(player_pos.y)
+            mag = max(1.0, (dx ** 2 + dy ** 2) ** 0.5)
+            tx = nx + int(round(dx / mag * 10))
+            ty = ny + int(round(dy / mag * 10))
+        else:
+            tx, ty = nx + 10, ny
+        if self.sim.tilemap.is_walkable(tx, ty, nz):
+            return (tx, ty, nz)
+        for r in range(1, 6):
+            for ddx, ddy in ((r, 0), (-r, 0), (0, r), (0, -r), (r, r), (-r, r), (r, -r), (-r, -r)):
+                cx, cy = tx + ddx, ty + ddy
+                if self.sim.tilemap.is_walkable(cx, cy, nz):
+                    return (cx, cy, nz)
+        return (tx, ty, nz)
+
 
 class PlayerActionSystem(System):
 
@@ -14230,6 +14622,66 @@ class PlayerActionSystem(System):
         self.property_actions = PropertyActionRuntime(self)
         self.property_ingress = PropertyIngressRuntime(self)
         self.sim.events.subscribe("player_action", self.on_player_action)
+
+    def _nearest_sabotage_fixture(self, pos):
+        nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=1)
+        for prop in sorted(nearby, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"])):
+            if _property_infrastructure_role(prop) == "sabotage_target":
+                return prop
+        return None
+
+    def _player_sabotage_fixture(self, eid, pos, prop):
+        now = self.sim.tick
+        prop_id = prop["id"]
+        fixture_name = prop.get("name", prop_id)
+        power_cuts = getattr(self.sim, "fixture_power_cuts", {})
+        if not isinstance(power_cuts, dict):
+            self.sim.fixture_power_cuts = {}
+            power_cuts = self.sim.fixture_power_cuts
+        # Already active — give feedback.
+        if power_cuts.get(prop_id, 0) > now:
+            _log_player_feedback(
+                self.sim,
+                f"The {fixture_name} is already offline.",
+                kind="interaction",
+            )
+            return
+        # Emit tamper offense.
+        _emit_action_offense_event(
+            self.sim,
+            eid=eid,
+            action="tamper",
+            context="ordinary",
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        )
+        # Find the enclosing building to propagate the cut.
+        cover_index = getattr(self.sim, "property_cover_index", {})
+        key = (int(prop["x"]), int(prop["y"]), int(prop.get("z", 0)))
+        building_id = None
+        for pid in cover_index.get(key, ()):
+            candidate = self.sim.properties.get(pid)
+            if candidate and str(candidate.get("kind", "")).strip().lower() == "building":
+                building_id = pid
+                break
+        duration = 180 + (int(self.sim.seed or 0) % 40)
+        cut_until = now + duration
+        power_cuts[prop_id] = cut_until
+        if building_id:
+            power_cuts[building_id] = cut_until
+        _log_player_feedback(
+            self.sim,
+            f"You disable the {fixture_name}. Lights dim.",
+            kind="interaction",
+        )
+        self.sim.emit(Event(
+            "fixture_sabotaged",
+            eid=eid,
+            property_id=prop_id,
+            building_id=building_id,
+            cut_until=cut_until,
+        ))
 
     def _vehicle_state_for(self, eid):
         return self.sim.ecs.get(VehicleState).get(eid)
@@ -15170,7 +15622,302 @@ class PlayerActionSystem(System):
     def _handle_ingress_action(self, eid, pos, ingress_mode):
         return self.property_ingress.handle_ingress_action(eid, pos, ingress_mode)
 
+    def _nearest_camera_fixture(self, pos):
+        nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=1)
+        for prop in sorted(nearby, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"])):
+            if _property_infrastructure_role(prop) == "camera_target":
+                return prop
+        return None
+
+    def _player_disable_camera(self, eid, pos, prop):
+        now = self.sim.tick
+        prop_id = prop["id"]
+        cam_name = prop.get("name", "camera")
+        cam_disabled = getattr(self.sim, "camera_disabled", None)
+        if not isinstance(cam_disabled, dict):
+            self.sim.camera_disabled = {}
+            cam_disabled = self.sim.camera_disabled
+        if cam_disabled.get(prop_id, 0) > now:
+            _log_player_feedback(
+                self.sim,
+                f"The {cam_name} is already blind.",
+                kind="interaction",
+            )
+            return
+        _emit_action_offense_event(
+            self.sim,
+            eid=eid,
+            action="interact",
+            context="tamper",
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        )
+        duration = 120 + (int(self.sim.seed or 0) % 30)
+        cam_disabled[prop_id] = now + duration
+        _log_player_feedback(
+            self.sim,
+            f"You blind the {cam_name}.",
+            kind="interaction",
+        )
+        self.sim.emit(Event(
+            "camera_disabled",
+            eid=eid,
+            property_id=prop_id,
+            disabled_until=now + duration,
+        ))
+
+    def _nearest_alarm_fixture(self, pos):
+        nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=1)
+        for prop in sorted(nearby, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"])):
+            if _property_infrastructure_role(prop) == "alarm_target":
+                return prop
+        return None
+
+    def _player_disable_alarm(self, eid, pos, prop):
+        now = self.sim.tick
+        prop_id = prop["id"]
+        alarm_name = prop.get("name", "alarm panel")
+        cam_disabled = getattr(self.sim, "camera_disabled", None)
+        if not isinstance(cam_disabled, dict):
+            self.sim.camera_disabled = {}
+            cam_disabled = self.sim.camera_disabled
+        if cam_disabled.get(prop_id, 0) > now:
+            _log_player_feedback(
+                self.sim,
+                f"The {alarm_name} is already offline.",
+                kind="interaction",
+            )
+            return
+        _emit_action_offense_event(
+            self.sim,
+            eid=eid,
+            action="interact",
+            context="tamper",
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        )
+        duration = 150 + (int(self.sim.seed or 0) % 40)
+        cam_disabled[prop_id] = now + duration
+        _log_player_feedback(
+            self.sim,
+            f"You cut the {alarm_name}.",
+            kind="interaction",
+        )
+        self.sim.emit(Event(
+            "alarm_disabled",
+            eid=eid,
+            property_id=prop_id,
+            disabled_until=now + duration,
+        ))
+
+    CACHE_MAX_STACKS = 8
+
+    def _nearest_cache_fixture(self, pos):
+        nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=1)
+        for prop in sorted(nearby, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"])):
+            if _property_infrastructure_role(prop) == "cache_target":
+                return prop
+        return None
+
+    def _player_interact_cache(self, eid, pos, prop):
+        prop_id = prop["id"]
+        cache_name = prop.get("name", "cache")
+        inventories = getattr(self.sim, "cache_inventories", None)
+        if not isinstance(inventories, dict):
+            self.sim.cache_inventories = {}
+            inventories = self.sim.cache_inventories
+        cache_items = inventories.setdefault(prop_id, [])
+        inventory = self.sim.ecs.get(Inventory).get(eid)
+        if not inventory:
+            return
+        # If cache has items, withdraw the first stack.
+        if cache_items:
+            entry = cache_items[0]
+            item_id = entry.get("item_id", "")
+            quantity = int(entry.get("quantity", 1))
+            stack_max = 1
+            item_def = ITEM_CATALOG.get(item_id, {})
+            if item_def:
+                stack_max = int(item_def.get("stack_max", 1))
+            success, instance_id = inventory.add_item(
+                item_id,
+                quantity=quantity,
+                stack_max=max(1, stack_max),
+                owner_eid=eid,
+                owner_tag="player",
+                metadata=entry.get("metadata"),
+            )
+            if not success:
+                _log_player_feedback(self.sim, "Inventory full — can't take from cache.", kind="interaction")
+                return
+            cache_items.pop(0)
+            name = entry.get("name", item_id.replace("_", " "))
+            _log_player_feedback(self.sim, f"Took {name} from {cache_name}.", kind="interaction")
+            self.sim.emit(Event(
+                "cache_withdraw",
+                eid=eid,
+                property_id=prop_id,
+                item_id=item_id,
+                quantity=quantity,
+            ))
+            return
+        # Otherwise, deposit the last inventory item into cache.
+        if not inventory.items:
+            _log_player_feedback(self.sim, f"The {cache_name} is empty.", kind="interaction")
+            return
+        if len(cache_items) >= self.CACHE_MAX_STACKS:
+            _log_player_feedback(self.sim, f"The {cache_name} is full.", kind="interaction")
+            return
+        last_entry = inventory.items[-1]
+        removed = inventory.remove_item(instance_id=last_entry["instance_id"], quantity=last_entry["quantity"])
+        if not removed:
+            return
+        cache_items.append({
+            "item_id": removed["item_id"],
+            "quantity": removed["quantity"],
+            "name": removed["item_id"].replace("_", " "),
+            "metadata": removed.get("metadata"),
+            "owner_eid": removed.get("owner_eid"),
+            "owner_tag": removed.get("owner_tag"),
+        })
+        name = removed["item_id"].replace("_", " ")
+        _log_player_feedback(self.sim, f"Stashed {name} in {cache_name}.", kind="interaction")
+        self.sim.emit(Event(
+            "cache_deposit",
+            eid=eid,
+            property_id=prop_id,
+            item_id=removed["item_id"],
+            quantity=removed["quantity"],
+        ))
+
+    def _nearest_stakeable_property(self, pos):
+        nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=3)
+        opp_state = getattr(self.sim, "world_traits", {}).get("opportunities", {})
+        prop_ids_with_opps = {
+            str(e.get("requirements", {}).get("property_id", "")).strip()
+            for e in opp_state.get("active", ())
+            if isinstance(e, dict) and str(e.get("requirements", {}).get("property_id", "")).strip()
+        }
+        candidates = [
+            p for p in nearby
+            if str(p.get("kind", "")).strip().lower() == "building"
+            and str(p.get("id", "")).strip() in prop_ids_with_opps
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"]))
+
+    def _stakeout_reveal_intel(self, eid, prop_id):
+        opp_state = getattr(self.sim, "world_traits", {}).get("opportunities", {})
+        active_opps = [
+            e for e in opp_state.get("active", ())
+            if isinstance(e, dict)
+            and str(e.get("requirements", {}).get("property_id", "")).strip() == str(prop_id).strip()
+        ]
+        if not active_opps:
+            return False
+        player_eid = getattr(self.sim, "player_eid", eid)
+        best_opp = None
+        best_conf = 2.0
+        for opp in active_opps:
+            oid = int(opp.get("id", 0))
+            if oid <= 0:
+                continue
+            intel = opportunity_intel_for_observer(self.sim, player_eid, oid)
+            if intel is None:
+                best_opp = opp
+                break
+            conf = float(intel.get("confidence", 0.0))
+            if conf < best_conf:
+                best_conf = conf
+                best_opp = opp
+        if not best_opp:
+            return False
+        oid = int(best_opp.get("id", 0))
+        intel = opportunity_intel_for_observer(self.sim, player_eid, oid)
+        current_conf = float((intel or {}).get("confidence", 0.0))
+        new_conf = min(0.88, current_conf + 0.08)
+        if new_conf <= current_conf + 0.01:
+            return False
+        reveal_opportunity_to_observer(
+            self.sim,
+            player_eid,
+            oid,
+            awareness_state="confirmed" if new_conf >= 0.75 else "heard",
+            confidence=new_conf,
+            source="stakeout",
+        )
+        return True
+
+    def _try_advance_stakeout(self, eid, pos):
+        stealth_state = getattr(self.sim, "player_stealth_state", {})
+        if not isinstance(stealth_state, dict) or not bool(stealth_state.get("hidden")):
+            self.sim.stakeout_state = None
+            return
+        target_prop = self._nearest_stakeable_property(pos)
+        if not target_prop:
+            self.sim.stakeout_state = None
+            return
+        prop_id = target_prop["id"]
+        state = getattr(self.sim, "stakeout_state", None)
+        if not isinstance(state, dict) or state.get("prop_id") != prop_id:
+            state = {
+                "prop_id": prop_id,
+                "start_tick": self.sim.tick,
+                "ticks": 0,
+                "reveals_done": 0,
+            }
+            self.sim.stakeout_state = state
+        MAX_REVEALS = 4
+        if int(state.get("reveals_done", 0)) >= MAX_REVEALS:
+            return
+        state["ticks"] = int(state.get("ticks", 0)) + 1
+        REVEAL_INTERVAL = 8
+        if state["ticks"] % REVEAL_INTERVAL != 0:
+            return
+        revealed = self._stakeout_reveal_intel(eid, prop_id)
+        if revealed:
+            state["reveals_done"] = int(state.get("reveals_done", 0)) + 1
+            prop_name = target_prop.get("name", "the area")
+            if state["reveals_done"] >= MAX_REVEALS:
+                _log_player_feedback(
+                    self.sim,
+                    f"You've thoroughly cased {prop_name}. Every angle mapped.",
+                    kind="interaction",
+                )
+            else:
+                _log_player_feedback(
+                    self.sim,
+                    f"Watching {prop_name}. Patterns are taking shape.",
+                    kind="interaction",
+                )
+            self.sim.emit(Event(
+                "stakeout_intel_gained",
+                eid=eid,
+                property_id=prop_id,
+                ticks=state["ticks"],
+                reveals_done=state["reveals_done"],
+            ))
+
     def _handle_interact_action(self, eid, pos):
+        sabotage_prop = self._nearest_sabotage_fixture(pos)
+        if sabotage_prop is not None:
+            self._player_sabotage_fixture(eid, pos, sabotage_prop)
+            return
+        camera_prop = self._nearest_camera_fixture(pos)
+        if camera_prop is not None:
+            self._player_disable_camera(eid, pos, camera_prop)
+            return
+        alarm_prop = self._nearest_alarm_fixture(pos)
+        if alarm_prop is not None:
+            self._player_disable_alarm(eid, pos, alarm_prop)
+            return
+        cache_prop = self._nearest_cache_fixture(pos)
+        if cache_prop is not None:
+            self._player_interact_cache(eid, pos, cache_prop)
+            return
         return self.property_actions.handle_interact_action(eid, pos)
 
     def _handle_purchase(self, eid, pos):
@@ -16489,6 +17236,7 @@ class PlayerActionSystem(System):
             return
 
         if action == "move":
+            self.sim.stakeout_state = None
             if zoom_mode == "overworld":
                 return
             dx = event.data.get("dx", 0)
@@ -16629,6 +17377,7 @@ class PlayerActionSystem(System):
 
         if action == "wait":
             self.sim.emit(Event("entity_waited", eid=eid, x=pos.x, y=pos.y, z=pos.z))
+            self._try_advance_stakeout(eid, pos)
             return
 
         if action == "toggle_sneak":
@@ -16893,6 +17642,113 @@ class ItemSystem(System):
         ))
         return True
 
+    def _toggle_disguise_item(self, eid, entry, item_def, reason="manual"):
+        """Equip or remove a disguise item (does not consume it from inventory)."""
+        disguise_profile = item_def.get("disguise", {})
+        if not disguise_profile:
+            return False
+        item_id = item_def.get("id") or entry.get("item_id")
+        instance_id = entry.get("instance_id")
+        item_name = item_display_name(item_id, metadata=entry.get("metadata"), item_catalog=self.catalog)
+        current = getattr(self.sim, "disguise_state", None)
+        # Toggle off if same item is already equipped.
+        if isinstance(current, dict) and current.get("instance_id") == instance_id:
+            self.sim.disguise_state = None
+            self.sim.emit(Event(
+                "disguise_removed",
+                eid=eid,
+                item_id=item_id,
+                item_name=item_name,
+                reason=reason,
+            ))
+            return True
+        # Replace any existing disguise (swap without consuming).
+        if isinstance(current, dict):
+            self.sim.emit(Event(
+                "disguise_removed",
+                eid=eid,
+                item_id=current.get("item_id"),
+                item_name=current.get("item_name", ""),
+                reason="replaced",
+            ))
+        role_id = str(disguise_profile.get("role_id", "worker")).strip()
+        strength = float(disguise_profile.get("strength", 1.0))
+        self.sim.disguise_state = {
+            "item_id": item_id,
+            "instance_id": instance_id,
+            "item_name": item_name,
+            "role_id": role_id,
+            "strength": strength,
+            "equipped_tick": int(getattr(self.sim, "tick", 0)),
+        }
+        self.sim.emit(Event(
+            "disguise_equipped",
+            eid=eid,
+            item_id=item_id,
+            item_name=item_name,
+            role_id=role_id,
+            reason=reason,
+        ))
+        return True
+
+    def _toggle_container_item(self, eid, entry, item_def, reason="manual"):
+        """Equip or remove a container item — adjusts inventory capacity."""
+        container_profile = item_def.get("container", {})
+        if not container_profile:
+            return False
+        bonus_slots = int(container_profile.get("bonus_slots", 0))
+        if bonus_slots <= 0:
+            return False
+        item_id = item_def.get("id") or entry.get("item_id")
+        instance_id = entry.get("instance_id")
+        item_name = item_display_name(item_id, metadata=entry.get("metadata"), item_catalog=self.catalog)
+        inventory = self._inventory_for(eid)
+        current = getattr(self.sim, "equipped_container", None)
+        # Toggle off if same container already equipped.
+        if isinstance(current, dict) and current.get("instance_id") == instance_id:
+            self.sim.equipped_container = None
+            if inventory:
+                inventory.capacity = max(1, inventory.capacity - bonus_slots)
+            self.sim.emit(Event(
+                "container_removed",
+                eid=eid,
+                item_id=item_id,
+                item_name=item_name,
+                reason=reason,
+            ))
+            _log_player_feedback(self.sim, f"You put away the {item_name}.", kind="interaction")
+            return True
+        # If swapping, restore old capacity first.
+        old_bonus = 0
+        if isinstance(current, dict):
+            old_bonus = int(current.get("bonus_slots", 0))
+            self.sim.emit(Event(
+                "container_removed",
+                eid=eid,
+                item_id=current.get("item_id"),
+                item_name=current.get("item_name", ""),
+                reason="replaced",
+            ))
+        self.sim.equipped_container = {
+            "item_id": item_id,
+            "instance_id": instance_id,
+            "item_name": item_name,
+            "bonus_slots": bonus_slots,
+            "equipped_tick": int(getattr(self.sim, "tick", 0)),
+        }
+        if inventory:
+            inventory.capacity = max(1, inventory.capacity - old_bonus + bonus_slots)
+        self.sim.emit(Event(
+            "container_equipped",
+            eid=eid,
+            item_id=item_id,
+            item_name=item_name,
+            bonus_slots=bonus_slots,
+            reason=reason,
+        ))
+        _log_player_feedback(self.sim, f"You equip the {item_name} (+{bonus_slots} slots).", kind="interaction")
+        return True
+
     def _nearest_ground_item(self, x, y, z, radius=1):
         nearby = self.sim.ground_items_in_radius(x, y, z=z, r=radius)
         if not nearby:
@@ -17119,6 +17975,22 @@ class ItemSystem(System):
 
         if _item_armor_profile(item_def):
             return self._toggle_armor_item(
+                eid=eid,
+                entry=entry,
+                item_def=item_def,
+                reason=reason,
+            )
+
+        if item_def.get("disguise"):
+            return self._toggle_disguise_item(
+                eid=eid,
+                entry=entry,
+                item_def=item_def,
+                reason=reason,
+            )
+
+        if item_def.get("container"):
+            return self._toggle_container_item(
                 eid=eid,
                 entry=entry,
                 item_def=item_def,
@@ -23940,6 +24812,23 @@ class PropertyDefenseSystem(System):
                 threat_type=threat_type,
             ))
 
+        # If the property's power is cut, alarms are offline — suppress protect escalation.
+        power_cuts = getattr(self.sim, "fixture_power_cuts", {})
+        if power_cuts and response_mode == "protect":
+            tick = int(getattr(self.sim, "tick", 0))
+            pid = str(property_id or "").strip()
+            prop_power_cut = power_cuts.get(pid, 0) > tick
+            if not prop_power_cut:
+                cover_index = getattr(self.sim, "property_cover_index", {})
+                for covered_pid in cover_index.get(
+                    (int(prop.get("x", 0)), int(prop.get("y", 0)), int(prop.get("z", 0))), ()
+                ):
+                    if power_cuts.get(covered_pid, 0) > tick:
+                        prop_power_cut = True
+                        break
+            if prop_power_cut:
+                response_mode = "warn"
+
         self._dispatch_defenders(
             prop,
             offender_eid,
@@ -24116,6 +25005,145 @@ class PropertyDefenseSystem(System):
                 ))
 
 
+def _npc_recognizes_player(memory, player_eid):
+    """Return the strength of a live `recognized` memory entry for player_eid."""
+    if memory is None:
+        return 0.0
+    best = 0.0
+    for entry in memory.entries:
+        if entry.get("kind") != "recognized":
+            continue
+        data = entry.get("data") or {}
+        if data.get("player_eid") == player_eid:
+            best = max(best, float(entry.get("strength", 0.0)))
+    return best
+
+
+def _degrade_player_disguise(sim, player_eid, amount=0.35):
+    """Reduce active disguise strength; clear it if it hits zero."""
+    disguise = getattr(sim, "disguise_state", None)
+    if not isinstance(disguise, dict):
+        return
+    new_strength = float(disguise.get("strength", 0.0)) - float(amount)
+    if new_strength <= 0.0:
+        sim.disguise_state = None
+        sim.emit(Event(
+            "disguise_blown",
+            eid=player_eid,
+            item_id=disguise.get("item_id"),
+            item_name=disguise.get("item_name", ""),
+        ))
+    else:
+        disguise["strength"] = round(new_strength, 3)
+
+
+class CameraSystem(System):
+    """Detects the player in camera sightlines and raises offense events.
+
+    Cameras are fixtures with interaction_role == "camera_target". They are
+    disabled by power cuts (via fixture_power_cuts) or by direct player
+    interaction (via camera_disabled). When active, if the player is within
+    detection radius and camera has LOS, an offense is raised *only* if the
+    player lacks legitimate access to that area.
+    """
+
+    DETECTION_COOLDOWN = 14   # ticks between repeat detections per camera
+    CAMERA_OFFENSE_SCORE = 26  # medium offense; between trespass and tamper
+
+    def __init__(self, sim, player_eid):
+        super().__init__(sim)
+        self.player_eid = player_eid
+        self._last_detect = {}   # {cam_prop_id: last_tick_detected}
+        self.sim.events.subscribe("player_action", self.on_player_action)
+
+    def on_player_action(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        action = event.data.get("action")
+        if action not in {"move", "wait", "interact", "pickup_item", "use_item"}:
+            return
+        self._check_cameras()
+
+    def _camera_is_online(self, cam_id, cam_prop):
+        tick = int(getattr(self.sim, "tick", 0))
+        power_cuts = getattr(self.sim, "fixture_power_cuts", {})
+        if power_cuts.get(cam_id, 0) > tick:
+            return False
+        # Also check if the enclosing building's power is cut.
+        cover_index = getattr(self.sim, "property_cover_index", {})
+        cam_x = int(cam_prop.get("x", 0))
+        cam_y = int(cam_prop.get("y", 0))
+        cam_z = int(cam_prop.get("z", 0))
+        for pid in cover_index.get((cam_x, cam_y, cam_z), ()):
+            if power_cuts.get(pid, 0) > tick:
+                return False
+        cam_disabled = getattr(self.sim, "camera_disabled", {})
+        if cam_disabled.get(cam_id, 0) > tick:
+            return False
+        return True
+
+    def _check_cameras(self):
+        positions = self.sim.ecs.get(Position)
+        player_pos = positions.get(self.player_eid)
+        if not player_pos:
+            return
+        px = int(player_pos.x)
+        py = int(player_pos.y)
+        pz = int(player_pos.z)
+        tick = int(getattr(self.sim, "tick", 0))
+
+        for cam_id, cam_prop in self.sim.properties.items():
+            if _property_infrastructure_role(cam_prop) != "camera_target":
+                continue
+            if not self._camera_is_online(cam_id, cam_prop):
+                continue
+            cam_x = int(cam_prop.get("x", 0))
+            cam_y = int(cam_prop.get("y", 0))
+            cam_z = int(cam_prop.get("z", 0))
+            if cam_z != pz:
+                continue
+            metadata = cam_prop.get("metadata") or {}
+            radius = int(metadata.get("detection_radius", 5))
+            if _manhattan(cam_x, cam_y, px, py) > radius:
+                continue
+            # Throttle per-camera detections.
+            if self._last_detect.get(cam_id, -999) + self.DETECTION_COOLDOWN > tick:
+                continue
+            # LOS check from camera to player.
+            if not _shared_has_line_of_sight(self.sim, cam_x, cam_y, cam_z, px, py, pz):
+                continue
+            # Only trigger offense when the player has no legitimate access.
+            covering_prop = _property_covering(self.sim, px, py, pz)
+            if covering_prop:
+                access = _evaluate_property_access(
+                    self.sim,
+                    self.player_eid,
+                    covering_prop,
+                    x=px,
+                    y=py,
+                    z=pz,
+                )
+                if access.permitted:
+                    continue
+            self._last_detect[cam_id] = tick
+            _emit_action_offense_event(
+                self.sim,
+                eid=self.player_eid,
+                action="interact",
+                context="trespass",
+                x=px,
+                y=py,
+                z=pz,
+                score=self.CAMERA_OFFENSE_SCORE,
+            )
+            _log_player_feedback(
+                self.sim,
+                "A security camera has eyes on you.",
+                kind="warning",
+            )
+
+
 class NPCMemorySystem(System):
 
     def __init__(self, sim):
@@ -24123,6 +25151,8 @@ class NPCMemorySystem(System):
         self.sim.events.subscribe("noise", self.on_noise)
         self.sim.events.subscribe("action_offense", self.on_action_offense)
         self.sim.events.subscribe("npc_protect_ally", self.on_npc_protect_ally)
+        self.sim.events.subscribe("npc_warn_property", self.on_npc_warn_property)
+        self.sim.events.subscribe("npc_defend_property", self.on_npc_defend_property)
         self.sim.events.subscribe("property_threatened", self.on_property_threatened)
         self.sim.events.subscribe("creature_hazard_triggered", self.on_creature_hazard_triggered)
         self.sim.events.subscribe("world_condition_triggered", self.on_world_condition_triggered)
@@ -24249,6 +25279,14 @@ class NPCMemorySystem(System):
             perceived *= justice_modifier * sensitivity_modifier * trait_modifier
             if offender_eid == getattr(self.sim, "player_eid", None):
                 perceived *= float(_pressure_effects(self.sim).get("suspicion_mult", 1.0))
+                # NPCs who have previously warned or confronted the player
+                # recognize them faster and read their actions more harshly.
+                # A strong disguise suppresses this recognition bonus entirely.
+                disguise = getattr(self.sim, "disguise_state", None)
+                disguise_strength = float(disguise.get("strength", 0.0)) if isinstance(disguise, dict) else 0.0
+                recognition = _npc_recognizes_player(memory, offender_eid)
+                if recognition > 0.0 and disguise_strength < 0.35:
+                    perceived = min(1.0, perceived + recognition * 0.28)
             perceived = _clamp(perceived, lo=0.0, hi=1.0)
             if perceived < 0.08:
                 continue
@@ -24314,6 +25352,47 @@ class NPCMemorySystem(System):
                     offense_tier=offense_tier,
                     perceived=round(perceived, 3),
                 ))
+
+    def on_npc_warn_property(self, event):
+        npc_eid = event.data.get("npc_eid")
+        offender_eid = event.data.get("offender_eid")
+        player_eid = getattr(self.sim, "player_eid", None)
+        if offender_eid != player_eid or npc_eid is None:
+            return
+        memory = self.sim.ecs.get(NPCMemory).get(npc_eid)
+        if memory is None:
+            return
+        # Warn escalates recognition strength gently.
+        current = _npc_recognizes_player(memory, player_eid)
+        memory.remember(
+            tick=self.sim.tick,
+            kind="recognized",
+            strength=min(1.0, current + 0.35),
+            player_eid=player_eid,
+            source="warn",
+        )
+        # Being warned degrades an active disguise — the NPC saw through it.
+        _degrade_player_disguise(self.sim, player_eid, amount=0.35)
+
+    def on_npc_defend_property(self, event):
+        npc_eid = event.data.get("npc_eid")
+        offender_eid = event.data.get("offender_eid")
+        player_eid = getattr(self.sim, "player_eid", None)
+        if offender_eid != player_eid or npc_eid is None:
+            return
+        memory = self.sim.ecs.get(NPCMemory).get(npc_eid)
+        if memory is None:
+            return
+        # Active defense burns the face in at full strength.
+        memory.remember(
+            tick=self.sim.tick,
+            kind="recognized",
+            strength=0.85,
+            player_eid=player_eid,
+            source="defend",
+        )
+        # Active confrontation blows the disguise completely.
+        _degrade_player_disguise(self.sim, player_eid, amount=1.0)
 
     def on_npc_protect_ally(self, event):
         protector = event.data.get("npc_eid")
