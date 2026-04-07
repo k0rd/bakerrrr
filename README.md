@@ -66,3 +66,11 @@ Some internal methodology and state-tracking notes are maintained privately and 
 Normal use of the public code and content does not require access to private methodology.
 
 Internal materials may be shared separately at maintainer discretion.
+
+
+here are some screenshots of the gui mode 
+
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/2841c4f4-629f-481b-8f6f-507e62dd6a9e" />
+<img width="1920" height="1080" alt="Screenshot_20260406_105855" src="https://github.com/user-attachments/assets/48041845-9915-466b-b56c-b51a10ace7ce" />
+<img width="1920" height="1080" alt="Screenshot_20260406_181110" src="https://github.com/user-attachments/assets/3e206938-f894-482e-822a-27eb60bd0910" />
