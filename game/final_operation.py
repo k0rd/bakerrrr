@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import random
 
-from game.components import Inventory, Position
+from game.components import Inventory, Position, PropertyKnowledge
 from game.items import item_display_name
-from game.property_access import property_access_controller
+from game.opportunities import opportunity_intel_for_observer
+from game.property_access import property_access_controller, property_apertures
 from game.property_keys import property_credential_item_metadata
 from game.property_runtime import property_access_level, property_entry_position
 from game.run_objectives import evaluate_run_objective
@@ -97,6 +98,13 @@ def _safe_int(value, default=0):
         return int(default)
 
 
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _text(value):
     return str(value or "").strip()
 
@@ -116,9 +124,29 @@ def _manhattan(a, b):
     return abs(int(a[0]) - int(b[0])) + abs(int(a[1]) - int(b[1]))
 
 
+def _same_actor_id(left, right):
+    try:
+        return int(left) == int(right)
+    except (TypeError, ValueError):
+        return left == right
+
+
 def _risk_score(label):
     label = str(label or "").strip().lower()
     return {"low": 1, "exposed": 2, "hazardous": 3}.get(label, 1)
+
+
+def _opening_window_text(opening):
+    if not isinstance(opening, (list, tuple)) or len(opening) < 2:
+        return ""
+    try:
+        start = int(opening[0]) % 24
+        end = int(opening[1]) % 24
+    except (TypeError, ValueError):
+        return ""
+    if start == end:
+        return "24h"
+    return f"{start:02d}:00-{end:02d}:00"
 
 
 def _state(sim):
@@ -153,6 +181,12 @@ def _state(sim):
     state["target_recovered"] = bool(state.get("target_recovered", False))
     state["target_identified_tick"] = _safe_int(state.get("target_identified_tick"), default=-1)
     state["target_recovered_tick"] = _safe_int(state.get("target_recovered_tick"), default=-1)
+    state["target_reason"] = _text(state.get("target_reason"))
+    state["target_quality_label"] = _text(state.get("target_quality_label"))
+    state["target_value_bonus"] = max(0, min(3, _safe_int(state.get("target_value_bonus"), default=0)))
+    state["target_intel_score"] = max(0, _safe_int(state.get("target_intel_score"), default=0))
+    state["target_entry_label"] = _text(state.get("target_entry_label"))
+    state["target_entry_detail"] = _text(state.get("target_entry_detail"))
     summary = state.get("summary")
     if not isinstance(summary, dict):
         summary = {}
@@ -323,7 +357,500 @@ def _target_property_score(sim, prop):
     return score
 
 
-def _pick_target_property(sim, target_chunk, rng):
+def _player_property_knowledge(sim, player_eid, property_id):
+    if sim is None or player_eid is None:
+        return None
+    knowledge = sim.ecs.get(PropertyKnowledge).get(player_eid)
+    if not knowledge:
+        return None
+    known = getattr(knowledge, "known", {})
+    if not isinstance(known, dict):
+        return None
+    record = known.get(_text(property_id))
+    return record if isinstance(record, dict) else None
+
+
+def _active_property_opportunities(sim, prop_id):
+    prop_id = _text(prop_id)
+    if sim is None or not prop_id:
+        return []
+    traits = getattr(sim, "world_traits", {})
+    opportunities = traits.get("opportunities", {}) if isinstance(traits, dict) else {}
+    active = opportunities.get("active", ()) if isinstance(opportunities, dict) else ()
+    rows = []
+    for entry in active if isinstance(active, list) else ():
+        if not isinstance(entry, dict):
+            continue
+        requirements = entry.get("requirements", {}) if isinstance(entry.get("requirements"), dict) else {}
+        if _text(requirements.get("property_id")) != prop_id:
+            continue
+        rows.append(entry)
+    return rows
+
+
+def _chunk_opportunities(sim, chunk):
+    chunk = _chunk_tuple(chunk)
+    if sim is None or not chunk:
+        return []
+    traits = getattr(sim, "world_traits", {})
+    opportunities = traits.get("opportunities", {}) if isinstance(traits, dict) else {}
+    active = opportunities.get("active", ()) if isinstance(opportunities, dict) else ()
+    rows = []
+    for entry in active if isinstance(active, list) else ():
+        if not isinstance(entry, dict):
+            continue
+        if _chunk_tuple(entry.get("chunk")) != chunk:
+            continue
+        rows.append(entry)
+    return rows
+
+
+def _opportunity_kind_reason(kind):
+    return {
+        "service_friction": "service gap",
+        "property_dispute": "ownership dispute",
+        "missing_person": "staff trail",
+        "lead_followup": "follow-up lead",
+        "intel_scout": "field scouting",
+        "landmark_survey": "survey lead",
+    }.get(_text(kind).lower(), "")
+
+
+def _lead_kind_reason(kind):
+    return {
+        "security": "security lead",
+        "access": "access lead",
+        "hours": "hours lead",
+        "workplace": "inside routine lead",
+        "owner": "ownership lead",
+        "contraband": "contraband lead",
+    }.get(_text(kind).lower(), "")
+
+
+def _controller_reason(prop):
+    metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+    controller = metadata.get("access_controller") if isinstance(metadata.get("access_controller"), dict) else {}
+    access_level = property_access_level(prop)
+    mode = _text(controller.get("credential_mode")).lower()
+    if not mode:
+        mode = _text(metadata.get("access_controller_credential_mode")).lower()
+    if mode == "badge":
+        return "credential chain"
+    if mode == "biometric":
+        return "biometric trail"
+    if access_level == "restricted":
+        return "restricted key route"
+    return "site lead"
+
+
+def _property_intel_profile(sim, player_eid, prop):
+    prop_id = _text(prop.get("id")) if isinstance(prop, dict) else ""
+    profile = {
+        "known_confidence": 0.0,
+        "anchored": False,
+        "lead_kind": "",
+        "opp_count": 0,
+        "opp_known_count": 0,
+        "opp_confirmed_count": 0,
+        "opp_best_confidence": 0.0,
+        "opp_best_kind": "",
+        "score_bonus": 0,
+        "value_bonus": 0,
+        "quality_label": "",
+        "reason": "",
+    }
+    if not prop_id or sim is None or player_eid is None:
+        profile["reason"] = _controller_reason(prop if isinstance(prop, dict) else {})
+        return profile
+
+    known = _player_property_knowledge(sim, player_eid, prop_id)
+    known_confidence = 0.0
+    anchored = False
+    lead_kind = ""
+    if isinstance(known, dict):
+        known_confidence = max(0.0, min(1.0, float(known.get("confidence", 0.0) or 0.0)))
+        anchored = bool(known.get("anchored"))
+        lead_kind = _text(known.get("lead_kind")).lower()
+
+    opp_rows = _active_property_opportunities(sim, prop_id)
+    opp_known_count = 0
+    opp_confirmed_count = 0
+    opp_best_confidence = 0.0
+    opp_best_kind = ""
+    for entry in opp_rows:
+        opportunity_id = _safe_int(entry.get("id"), default=0)
+        intel = opportunity_intel_for_observer(sim, player_eid, opportunity_id) if opportunity_id > 0 else None
+        if not isinstance(intel, dict):
+            continue
+        opp_known_count += 1
+        confidence = max(0.0, min(1.0, float(intel.get("confidence", 0.0) or 0.0)))
+        if confidence >= 0.75:
+            opp_confirmed_count += 1
+        if confidence >= opp_best_confidence:
+            opp_best_confidence = confidence
+            opp_best_kind = _text(entry.get("kind")).lower()
+
+    score = int(round(known_confidence * 5.0))
+    if anchored:
+        score += 2
+    if lead_kind:
+        score += {
+            "security": 4,
+            "access": 4,
+            "hours": 3,
+            "workplace": 3,
+            "owner": 2,
+            "contraband": 2,
+        }.get(lead_kind, 1)
+    score += min(4, opp_known_count * 2)
+    score += min(3, opp_confirmed_count)
+    score += min(4, int(round(opp_best_confidence * 4.0)))
+    score = max(0, min(16, score))
+    value_bonus = min(3, score // 5)
+    quality_label = ""
+    reason = ""
+    if score > 0:
+        if score >= 13:
+            quality_label = "dialed-in"
+        elif score >= 9:
+            quality_label = "strong"
+        elif score >= 5:
+            quality_label = "working"
+        else:
+            quality_label = "fresh"
+        reason = (
+            _opportunity_kind_reason(opp_best_kind)
+            or _lead_kind_reason(lead_kind)
+            or _controller_reason(prop)
+        )
+
+    profile.update({
+        "known_confidence": known_confidence,
+        "anchored": anchored,
+        "lead_kind": lead_kind,
+        "opp_count": len(opp_rows),
+        "opp_known_count": opp_known_count,
+        "opp_confirmed_count": opp_confirmed_count,
+        "opp_best_confidence": opp_best_confidence,
+        "opp_best_kind": opp_best_kind,
+        "score_bonus": min(10, score),
+        "value_bonus": value_bonus,
+        "quality_label": quality_label,
+        "reason": reason,
+    })
+    return profile
+
+
+def _chunk_intel_bonus(sim, player_eid, chunk):
+    rows = _chunk_opportunities(sim, chunk)
+    if sim is None or player_eid is None or not rows:
+        return 0
+    known_count = 0
+    confirmed_count = 0
+    best_confidence = 0.0
+    for entry in rows:
+        opportunity_id = _safe_int(entry.get("id"), default=0)
+        intel = opportunity_intel_for_observer(sim, player_eid, opportunity_id) if opportunity_id > 0 else None
+        if not isinstance(intel, dict):
+            continue
+        known_count += 1
+        confidence = max(0.0, min(1.0, float(intel.get("confidence", 0.0) or 0.0)))
+        if confidence >= 0.75:
+            confirmed_count += 1
+        best_confidence = max(best_confidence, confidence)
+    return min(8, known_count + (confirmed_count * 2) + int(round(best_confidence * 2.0)))
+
+
+def _property_power_cut_active(sim, prop):
+    if sim is None or not isinstance(prop, dict):
+        return False
+    prop_id = _text(prop.get("id"))
+    if not prop_id:
+        return False
+    power_cuts = getattr(sim, "fixture_power_cuts", {})
+    if not isinstance(power_cuts, dict):
+        return False
+    return _safe_int(power_cuts.get(prop_id), default=0) > _safe_int(getattr(sim, "tick", 0), default=0)
+
+
+def _linked_security_snapshot(sim, prop):
+    prop_id = _text(prop.get("id")) if isinstance(prop, dict) else ""
+    if sim is None or not prop_id:
+        return {
+            "power_cut_active": False,
+            "cameras_total": 0,
+            "cameras_offline": 0,
+            "alarms_total": 0,
+            "alarms_offline": 0,
+        }
+
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    disabled_map = getattr(sim, "camera_disabled", {})
+    disabled_map = disabled_map if isinstance(disabled_map, dict) else {}
+    power_cut_active = _property_power_cut_active(sim, prop)
+    cameras_total = 0
+    cameras_offline = 0
+    alarms_total = 0
+    alarms_offline = 0
+    for candidate in getattr(sim, "properties", {}).values():
+        if not isinstance(candidate, dict):
+            continue
+        metadata = candidate.get("metadata") if isinstance(candidate.get("metadata"), dict) else {}
+        if _text(metadata.get("linked_property_id")) != prop_id:
+            continue
+        role = _text(metadata.get("interaction_role")).lower()
+        temporarily_disabled = _safe_int(disabled_map.get(candidate.get("id")), default=0) > tick
+        offline = power_cut_active or temporarily_disabled
+        if role == "camera_target":
+            cameras_total += 1
+            if offline:
+                cameras_offline += 1
+        elif role == "alarm_target":
+            alarms_total += 1
+            if offline:
+                alarms_offline += 1
+    return {
+        "power_cut_active": power_cut_active,
+        "cameras_total": cameras_total,
+        "cameras_offline": cameras_offline,
+        "alarms_total": alarms_total,
+        "alarms_offline": alarms_offline,
+    }
+
+
+def _aperture_route_profile(prop):
+    profile = {
+        "side_label": "",
+        "window_label": "",
+    }
+    side_priority = {
+        "service_door": "service door",
+        "employee_door": "employee door",
+        "side_door": "side door",
+    }
+    for aperture in property_apertures(prop):
+        kind = _text(aperture.get("kind")).lower()
+        if not profile["side_label"] and kind in side_priority:
+            profile["side_label"] = side_priority[kind]
+        if not profile["window_label"] and kind in {"window", "skylight"}:
+            profile["window_label"] = "skylight" if kind == "skylight" else "window"
+    return profile
+
+
+def _active_disguise_profile(sim):
+    disguise = getattr(sim, "disguise_state", None)
+    if not isinstance(disguise, dict):
+        return {
+            "active": False,
+            "role_id": "",
+            "item_name": "",
+            "strength": 0.0,
+        }
+    role_id = _text(disguise.get("role_id")).lower()
+    if role_id not in {"worker", "guard"}:
+        role_id = ""
+    item_name = _text(disguise.get("item_name")) or _text(disguise.get("item_id")) or "cover"
+    strength = max(0.0, min(1.0, _safe_float(disguise.get("strength"), default=0.0)))
+    return {
+        "active": bool(role_id),
+        "role_id": role_id,
+        "item_name": item_name,
+        "strength": strength,
+    }
+
+
+def _active_backup_profile(sim, player_eid):
+    if sim is None or player_eid is None:
+        return {
+            "active": False,
+            "count": 0,
+        }
+    contractors = getattr(sim, "contractors", {})
+    if not isinstance(contractors, dict):
+        return {
+            "active": False,
+            "count": 0,
+        }
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    count = 0
+    for rec in contractors.values():
+        if not isinstance(rec, dict):
+            continue
+        if _safe_int(rec.get("until"), default=0) <= tick:
+            continue
+        if _text(rec.get("job")).lower() not in {"backup", "party"}:
+            continue
+        ally_eid = rec.get("ally_eid", getattr(sim, "player_eid", None))
+        if not _same_actor_id(ally_eid, player_eid):
+            continue
+        count += 1
+    return {
+        "active": count > 0,
+        "count": count,
+    }
+
+
+def _target_entry_base_plan(sim, prop, *, intel_profile=None):
+    if sim is None or not isinstance(prop, dict):
+        return {
+            "label": "",
+            "detail": "",
+        }
+
+    intel_profile = intel_profile if isinstance(intel_profile, dict) else {}
+    score_bonus = max(0, _safe_int(intel_profile.get("score_bonus"), default=0))
+    reason = _text(intel_profile.get("reason")).lower()
+    controller = property_access_controller(sim, prop)
+    mode = _text(controller.get("credential_mode")).lower() or "mechanical_key"
+    opening_text = _opening_window_text(controller.get("opening_window"))
+    security = _linked_security_snapshot(sim, prop)
+    apertures = _aperture_route_profile(prop)
+    side_label = apertures.get("side_label", "")
+    window_label = apertures.get("window_label", "")
+    prop_name = _text(prop.get("name")) or "the site"
+
+    if security.get("power_cut_active"):
+        if side_label:
+            return {
+                "label": "blackout side door",
+                "detail": f"Hit the {side_label} while the blackout holds; cameras, alarms, and night glow are down.",
+            }
+        if window_label:
+            return {
+                "label": "blackout window",
+                "detail": f"Use the {window_label} while the blackout holds; the whole site is running dark.",
+            }
+        return {
+            "label": "blackout push",
+            "detail": "Move during the blackout; cameras, alarms, and night glow are down.",
+        }
+
+    if (security.get("cameras_offline", 0) > 0 or security.get("alarms_offline", 0) > 0) and side_label:
+        bits = []
+        if security.get("cameras_offline", 0) > 0:
+            bits.append("camera coverage is thinner")
+        if security.get("alarms_offline", 0) > 0:
+            bits.append("alarm response is degraded")
+        return {
+            "label": "softened side door",
+            "detail": f"Take the {side_label}; " + " and ".join(bits) + ".",
+        }
+
+    if reason in {"service gap", "inside routine lead"} and side_label:
+        return {
+            "label": "service side",
+            "detail": f"The {side_label} should be the cleanest way in.",
+        }
+
+    if reason == "hours lead" and opening_text and opening_text != "24h":
+        return {
+            "label": "shift window",
+            "detail": f"Work the live access window around {opening_text}; the ordinary door read should stay softer.",
+        }
+
+    if reason in {"access lead", "credential chain", "restricted key route", "biometric trail"} and score_bonus >= 5:
+        if mode == "badge":
+            return {
+                "label": "badge chain",
+                "detail": "Badge-controlled access is the cleanest outer-layer route if you can keep your cover straight.",
+            }
+        if mode == "biometric":
+            return {
+                "label": "biometric route",
+                "detail": "The biometric gate is the real choke point; a clean auth route should read better than a noisy breach.",
+            }
+        if side_label:
+            return {
+                "label": "key side door",
+                "detail": f"The matching key plus the {side_label} should keep the entry read light.",
+            }
+        return {
+            "label": "key route",
+            "detail": "The matching key should keep the front entry from turning noisy.",
+        }
+
+    if side_label and score_bonus >= 5:
+        return {
+            "label": "side door",
+            "detail": f"The {side_label} should draw less attention than the front door.",
+        }
+
+    if opening_text and opening_text != "24h" and score_bonus >= 7:
+        return {
+            "label": "live window",
+            "detail": f"{prop_name} runs a visible {opening_text} access window; timing the approach should keep the door read lighter.",
+        }
+
+    if window_label and score_bonus >= 10:
+        return {
+            "label": "quiet window",
+            "detail": f"A quiet {window_label} entry should be the lowest-signature breach if the doors go hot.",
+        }
+
+    return {
+        "label": "",
+        "detail": "",
+    }
+
+
+def _target_entry_plan(sim, prop, *, intel_profile=None, player_eid=None):
+    base_plan = _target_entry_base_plan(sim, prop, intel_profile=intel_profile)
+    if sim is None or not isinstance(prop, dict):
+        return base_plan
+
+    controller = property_access_controller(sim, prop)
+    mode = _text(controller.get("credential_mode")).lower() or "mechanical_key"
+    security = _linked_security_snapshot(sim, prop)
+    apertures = _aperture_route_profile(prop)
+    side_label = apertures.get("side_label", "")
+    label = _text(base_plan.get("label"))
+    detail = _text(base_plan.get("detail"))
+    label_key = label.lower()
+    disguise = _active_disguise_profile(sim)
+    backup = _active_backup_profile(sim, player_eid)
+
+    lead_bits = []
+    tail_bits = []
+
+    if disguise.get("role_id") == "worker" and side_label and label_key not in {"badge chain", "biometric route", "quiet window"}:
+        lead_bits.append(f"Your worker cover makes the {side_label} approach look routine right now.")
+        if not detail:
+            label = label or "worker cover side"
+            detail = f"Work the {side_label} and stay with the staff flow."
+
+    if disguise.get("role_id") == "guard" and (
+        mode in {"badge", "biometric"}
+        or label_key in {"badge chain", "biometric route", "key route", "shift window", "live window"}
+        or security.get("cameras_total", 0) > 0
+        or security.get("alarms_total", 0) > 0
+    ):
+        checkpoint = "badge check" if mode == "badge" else "biometric screen" if mode == "biometric" else "checkpoint read"
+        lead_bits.append(f"Your guard cover should soften the first {checkpoint} on approach.")
+        if not detail:
+            label = label or "guard cover front"
+            detail = "Keep the outer-layer approach clean and act like you belong."
+
+    if backup.get("active"):
+        if side_label:
+            tail_bits.append(f"Your hired backup can pull eyes to the frontage while you slip the {side_label}.")
+        else:
+            tail_bits.append("Your hired backup can keep the frontage busy if you need the outer layer to look away.")
+        if not label and not detail:
+            label = "backup distraction"
+            detail = tail_bits[-1]
+            tail_bits = []
+
+    detail_bits = [bit for bit in lead_bits if bit]
+    if detail:
+        detail_bits.append(detail)
+    detail_bits.extend(bit for bit in tail_bits if bit)
+    return {
+        "label": label,
+        "detail": " ".join(detail_bits).strip(),
+    }
+
+
+def _pick_target_property(sim, target_chunk, rng, *, player_eid=None):
     if sim is None or not target_chunk:
         return None
 
@@ -334,45 +861,58 @@ def _pick_target_property(sim, target_chunk, rng):
         score = _target_property_score(sim, prop)
         if score is None:
             continue
-        matching.append((score, _text(prop.get("id")), prop))
+        intel_profile = _property_intel_profile(sim, player_eid, prop) if player_eid is not None else {}
+        total = int(score) + int(intel_profile.get("score_bonus", 0))
+        matching.append((total, int(score), _text(prop.get("id")), prop))
 
     if not matching:
         return None
 
-    building_rows = [row for row in matching if _text(row[2].get("kind")).lower() == "building"]
+    building_rows = [row for row in matching if _text(row[3].get("kind")).lower() == "building"]
     rows = building_rows or matching
-    rows.sort(key=lambda row: (row[0], row[1]), reverse=True)
-    top = rows[: min(3, len(rows))]
-    return rng.choice(top)[2] if top else None
+    rows.sort(key=lambda row: (row[0], row[1], row[2]), reverse=True)
+    best_total = rows[0][0]
+    finalists = [row for row in rows if row[0] == best_total]
+    best_base = max(row[1] for row in finalists)
+    finalists = [row for row in finalists if row[1] == best_base]
+    return rng.choice(finalists)[3] if finalists else None
 
 
-def _target_item_profile(sim, prop):
+def _target_item_profile(sim, prop, *, intel_profile=None):
     controller = property_access_controller(sim, prop)
     mode = _text(controller.get("credential_mode")).lower() or "mechanical_key"
     label = _text(prop.get("name")) or "Target Site"
+    intel_profile = intel_profile if isinstance(intel_profile, dict) else {}
+    value_bonus = max(0, min(3, _safe_int(intel_profile.get("value_bonus"), default=0)))
+    quality_label = _text(intel_profile.get("quality_label")).lower()
 
     if mode == "badge":
         item_id = "manager_badge"
+        badge_label = "Executive Badge" if value_bonus >= 2 else "Manager Badge"
+        if quality_label == "thin":
+            badge_label = "Manager Badge"
         metadata = property_credential_item_metadata(
             prop,
             credential_kind="manager_badge",
             holder_role="manager",
-            display_name=f"{label} Manager Badge",
+            display_name=f"{label} {badge_label}",
         )
     elif mode == "biometric":
         item_id = "cloned_thumb"
+        thumb_label = "Director Clone" if value_bonus >= 2 else "Cloned Thumb"
         metadata = {
-            "display_name": f"{label} Cloned Thumb",
+            "display_name": f"{label} {thumb_label}",
             "property_id": prop.get("id"),
             "property_name": label,
         }
     else:
         item_id = "property_key"
+        key_label = "Control Key" if value_bonus >= 2 else "Master Key"
         metadata = property_credential_item_metadata(
             prop,
             credential_kind="mechanical_key",
             holder_role="manager",
-            display_name=f"{label} Master Key",
+            display_name=f"{label} {key_label}",
         )
     return {
         "item_id": item_id,
@@ -381,7 +921,7 @@ def _target_item_profile(sim, prop):
     }
 
 
-def _seed_retrieval_target(sim, state, prop):
+def _seed_retrieval_target(sim, state, prop, *, intel_profile=None):
     if sim is None or not isinstance(prop, dict):
         return None
 
@@ -392,7 +932,7 @@ def _seed_retrieval_target(sim, state, prop):
     if tile is None:
         return None
 
-    profile = _target_item_profile(sim, prop)
+    profile = _target_item_profile(sim, prop, intel_profile=intel_profile)
     instance_id = state.get("target_item_instance_id") or sim.new_item_instance_id()
     metadata = dict(profile["metadata"])
     metadata.update({
@@ -452,13 +992,15 @@ def _pick_target_chunk(sim, player_eid, rng):
         risk = _risk_score(entry.get("risk", "low"))
         source = str(entry.get("source", "unknown")).strip().lower()
         source_bonus = 2 if source in {"overworld_tag", "intel"} else 1
-        score = (dist * 4) + (risk * 3) + source_bonus
+        intel_bonus = _chunk_intel_bonus(sim, player_eid, chunk)
+        score = (dist * 4) + (risk * 3) + source_bonus + intel_bonus
         scored.append((score, dist, risk, chunk))
 
     if scored:
         scored.sort(key=lambda row: (row[0], row[1], row[2]), reverse=True)
-        top = scored[:3]
-        return rng.choice(top)[3]
+        best_score = scored[0][0]
+        finalists = [row for row in scored if row[0] == best_score]
+        return rng.choice(finalists)[3]
 
     fallback = []
     for radius in range(4, 10):
@@ -515,6 +1057,12 @@ def ensure_final_operation_unlocked(sim, player_eid, objective_eval=None):
     state["target_recovered"] = False
     state["target_identified_tick"] = -1
     state["target_recovered_tick"] = -1
+    state["target_reason"] = ""
+    state["target_quality_label"] = ""
+    state["target_value_bonus"] = 0
+    state["target_intel_score"] = 0
+    state["target_entry_label"] = ""
+    state["target_entry_detail"] = ""
     return {
         "objective_id": objective_id,
         "objective_title": objective_title,
@@ -560,7 +1108,7 @@ def sync_final_operation_runtime(sim, player_eid):
         rng = random.Random(
             f"{getattr(sim, 'seed', 'seed')}:final_op_site:{state.get('objective_id', '')}:{target_chunk[0]}:{target_chunk[1]}"
         )
-        target_prop = _pick_target_property(sim, target_chunk, rng=rng)
+        target_prop = _pick_target_property(sim, target_chunk, rng=rng, player_eid=player_eid)
         if not isinstance(target_prop, dict):
             return None
         state["target_property_id"] = _text(target_prop.get("id"))
@@ -570,6 +1118,15 @@ def sync_final_operation_runtime(sim, player_eid):
             identified = True
     else:
         state["target_property_name"] = _text(target_prop.get("name")) or state.get("target_property_name") or state.get("target_property_id") or "target site"
+
+    intel_profile = _property_intel_profile(sim, player_eid, target_prop)
+    entry_plan = _target_entry_plan(sim, target_prop, intel_profile=intel_profile, player_eid=player_eid)
+    state["target_reason"] = _text(intel_profile.get("reason"))
+    state["target_quality_label"] = _text(intel_profile.get("quality_label"))
+    state["target_value_bonus"] = max(0, min(3, _safe_int(intel_profile.get("value_bonus"), default=0)))
+    state["target_intel_score"] = max(0, _safe_int(intel_profile.get("score_bonus"), default=0))
+    state["target_entry_label"] = _text(entry_plan.get("label"))
+    state["target_entry_detail"] = _text(entry_plan.get("detail"))
 
     ground = None
     if state.get("target_ground_item_id"):
@@ -583,7 +1140,7 @@ def sync_final_operation_runtime(sim, player_eid):
         state["target_item_id"] = _text(ground.get("item_id")).lower()
         state["target_item_name"] = item_display_name(ground.get("item_id"), metadata=metadata)
     elif not state.get("target_recovered"):
-        seeded = _seed_retrieval_target(sim, state, target_prop)
+        seeded = _seed_retrieval_target(sim, state, target_prop, intel_profile=intel_profile)
         if seeded is None:
             return None
 
@@ -597,6 +1154,12 @@ def sync_final_operation_runtime(sim, player_eid):
             "target_property_name": state.get("target_property_name", ""),
             "target_item_id": state.get("target_item_id", ""),
             "target_item_name": state.get("target_item_name", ""),
+            "target_reason": state.get("target_reason", ""),
+            "target_quality_label": state.get("target_quality_label", ""),
+            "target_value_bonus": int(state.get("target_value_bonus", 0)),
+            "target_intel_score": int(state.get("target_intel_score", 0)),
+            "target_entry_label": state.get("target_entry_label", ""),
+            "target_entry_detail": state.get("target_entry_detail", ""),
         }
     return None
 
@@ -650,6 +1213,22 @@ def evaluate_final_operation(sim, player_eid):
     target_property_id = _text(state.get("target_property_id"))
     target_property_name = _text(state.get("target_property_name"))
     target_item_name = _text(state.get("target_item_name"))
+    target_reason = _text(state.get("target_reason"))
+    target_quality_label = _text(state.get("target_quality_label"))
+    target_value_bonus = max(0, _safe_int(state.get("target_value_bonus"), default=0))
+    target_intel_score = max(0, _safe_int(state.get("target_intel_score"), default=0))
+    target_entry_label = _text(state.get("target_entry_label"))
+    target_entry_detail = _text(state.get("target_entry_detail"))
+    if target_property_id:
+        target_prop = getattr(sim, "properties", {}).get(target_property_id) if sim is not None else None
+        if isinstance(target_prop, dict):
+            intel_profile = _property_intel_profile(sim, player_eid, target_prop)
+            entry_plan = _target_entry_plan(sim, target_prop, intel_profile=intel_profile, player_eid=player_eid)
+            refreshed_label = _text(entry_plan.get("label"))
+            refreshed_detail = _text(entry_plan.get("detail"))
+            if refreshed_label or refreshed_detail:
+                target_entry_label = refreshed_label
+                target_entry_detail = refreshed_detail
 
     if completed:
         summary_line = "Final operation complete."
@@ -681,6 +1260,15 @@ def evaluate_final_operation(sim, player_eid):
                 else:
                     next_step = f"Enter {label} and recover {item_label}."
                 summary_line = f"Final operation: recover {item_label} from {label}."
+            guidance_bits = []
+            if target_reason:
+                guidance_bits.append(f"Why this site: {target_reason}.")
+            if target_entry_detail:
+                guidance_bits.append(f"Best angle: {target_entry_detail}")
+            elif target_entry_label:
+                guidance_bits.append(f"Best angle: {target_entry_label}.")
+            if guidance_bits:
+                next_step = " ".join([next_step] + guidance_bits)
         else:
             summary_line = (
                 f"Final operation: reach chunk ({target[0]},{target[1]}) "
@@ -703,6 +1291,12 @@ def evaluate_final_operation(sim, player_eid):
         "target_property_name": target_property_name,
         "target_item_name": target_item_name,
         "target_recovered": bool(state.get("target_recovered")),
+        "target_reason": target_reason,
+        "target_quality_label": target_quality_label,
+        "target_value_bonus": target_value_bonus,
+        "target_intel_score": target_intel_score,
+        "target_entry_label": target_entry_label,
+        "target_entry_detail": target_entry_detail,
         "distance": distance,
         "summary_line": summary_line,
         "next_step": next_step,
@@ -732,6 +1326,20 @@ def _summary_lines(sim, player_eid, state):
         item_name = _text(state.get("target_item_name")) or "target asset"
         property_name = _text(state.get("target_property_name")) or _text(state.get("target_label")) or "target site"
         lines.append(f"Recovered target: {item_name} from {property_name}.")
+        quality_label = _text(state.get("target_quality_label"))
+        target_reason = _text(state.get("target_reason"))
+        value_bonus = max(0, _safe_int(state.get("target_value_bonus"), default=0))
+        intel_score = max(0, _safe_int(state.get("target_intel_score"), default=0))
+        if intel_score > 0:
+            reason_text = target_reason or "site lead"
+            quality_text = quality_label or "working"
+            richer_text = "richer" if value_bonus >= 2 else "cleaner" if value_bonus >= 1 else "right"
+            lines.append(
+                f"Selection edge: {quality_text} intel via {reason_text} steered the hit toward the {richer_text} mark."
+            )
+        entry_detail = _text(state.get("target_entry_detail"))
+        if entry_detail:
+            lines.append(f"Entry angle: {entry_detail}")
     lines.extend([
         f"Run ticks: {_safe_int(getattr(sim, 'tick', 0), default=0)}.",
         f"Travel footprint: {len(visited)} chunks visited.",
@@ -793,6 +1401,13 @@ def try_complete_final_operation(sim, player_eid):
         if str(getattr(sim, "zoom_mode", "city")).strip().lower() == "overworld":
             return None
     target = _chunk_tuple(state.get("target_chunk")) or _current_chunk(sim, player_eid)
+    target_property_id = _text(state.get("target_property_id"))
+    target_prop = getattr(sim, "properties", {}).get(target_property_id) if sim is not None and target_property_id else None
+    if isinstance(target_prop, dict):
+        intel_profile = _property_intel_profile(sim, player_eid, target_prop)
+        entry_plan = _target_entry_plan(sim, target_prop, intel_profile=intel_profile, player_eid=player_eid)
+        state["target_entry_label"] = _text(entry_plan.get("label"))
+        state["target_entry_detail"] = _text(entry_plan.get("detail"))
 
     state["completed"] = True
     state["complete_tick"] = _safe_int(getattr(sim, "tick", 0), default=0)

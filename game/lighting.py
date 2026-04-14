@@ -276,6 +276,73 @@ def _property_in_loaded_bounds(prop, bounds, margin=0):
     )
 
 
+def _active_power_cut_cache_key(sim, *, tick=None):
+    power_cuts = getattr(sim, "fixture_power_cuts", None)
+    if not isinstance(power_cuts, dict) or not power_cuts:
+        return ()
+    if tick is None:
+        tick = int(getattr(sim, "tick", 0))
+
+    active = []
+    for prop_id, cut_until in power_cuts.items():
+        try:
+            until = int(cut_until)
+        except (TypeError, ValueError):
+            continue
+        if until <= int(tick):
+            continue
+        pid = str(prop_id or "").strip()
+        if not pid:
+            continue
+        active.append((pid, until))
+    active.sort()
+    return tuple(active)
+
+
+def _power_cut_active_at(sim, x, y, z=0, *, tick=None):
+    power_cuts = getattr(sim, "fixture_power_cuts", None)
+    if not isinstance(power_cuts, dict) or not power_cuts:
+        return False
+    if tick is None:
+        tick = int(getattr(sim, "tick", 0))
+
+    try:
+        key = (int(x), int(y), int(z))
+    except (TypeError, ValueError):
+        return False
+
+    anchor_index = getattr(sim, "property_anchor_index", {})
+    cover_index = getattr(sim, "property_cover_index", {})
+    for bucket in (anchor_index.get(key, ()), cover_index.get(key, ())):
+        for prop_id in bucket:
+            try:
+                if int(power_cuts.get(prop_id, 0) or 0) > int(tick):
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
+
+
+def _property_power_cut_active(sim, prop, *, tick=None):
+    if not isinstance(prop, dict):
+        return False
+    power_cuts = getattr(sim, "fixture_power_cuts", None)
+    if not isinstance(power_cuts, dict) or not power_cuts:
+        return False
+    if tick is None:
+        tick = int(getattr(sim, "tick", 0))
+
+    prop_id = str(prop.get("id", "") or "").strip()
+    if prop_id:
+        try:
+            if int(power_cuts.get(prop_id, 0) or 0) > int(tick):
+                return True
+        except (TypeError, ValueError):
+            pass
+
+    return _power_cut_active_at(sim, prop.get("x"), prop.get("y"), prop.get("z", 0), tick=tick)
+
+
 def _light_active_for_phase(metadata, phase):
     if str(phase or "").strip().lower() not in _LIGHT_PHASES:
         return False
@@ -305,6 +372,8 @@ def _building_light_profile(sim, prop, clock):
 
     phase = str(clock.get("phase", "day")).strip().lower() or "day"
     if phase not in _LIGHT_PHASES:
+        return None
+    if _property_power_cut_active(sim, prop, tick=clock.get("tick")):
         return None
 
     if property_is_open(sim, prop, hour=clock.get("hour")) is not True:
@@ -351,6 +420,8 @@ def _authored_fixture_light_sources(sim, clock):
             continue
         metadata = _property_metadata(prop)
         if not _light_active_for_phase(metadata, phase):
+            continue
+        if _property_power_cut_active(sim, prop, tick=clock.get("tick")):
             continue
         if not _property_in_loaded_bounds(prop, bounds, margin=int(metadata.get("light_radius", 0) or 0)):
             continue
@@ -435,6 +506,7 @@ def _local_light_sources(sim, clock=None):
         str(clock.get("phase", "day")),
         int(clock.get("hour", 0)),
         int(len(getattr(sim, "properties", {}))),
+        _active_power_cut_cache_key(sim, tick=clock.get("tick", getattr(sim, "tick", 0))),
     )
     if tuple(state.get("source_cache_key", ())) == cache_key:
         cached = state.get("local_light_sources", ())

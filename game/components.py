@@ -629,6 +629,8 @@ class MovementThrottle:
     DEFAULT_STATE_COOLDOWNS = {
         "investigating": 2,
         "protecting": 1,
+        "following": 1,
+        "holding": 1,
         "seeking_social": 2,
         "seeking_safety": 1,
         "patrolling": 3,
@@ -1204,14 +1206,14 @@ class Inventory:
             return removed
         return None
 
-    def update_item_metadata(self, instance_id, metadata=None):
+    def update_item_metadata(self, instance_id, metadata=None, *, replace=False):
         target = self.find(instance_id=instance_id)
         if not target:
             return None
-        merged = dict(target.get("metadata") or {})
+        updated = {} if replace else dict(target.get("metadata") or {})
         if metadata is not None:
-            merged.update(dict(metadata))
-        target["metadata"] = normalize_item_instance_metadata(target["item_id"], metadata=merged)
+            updated.update(dict(metadata))
+        target["metadata"] = normalize_item_instance_metadata(target["item_id"], metadata=updated)
         return target["metadata"]
 
     def first_usable(self, catalog):

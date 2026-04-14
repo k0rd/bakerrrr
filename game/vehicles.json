@@ -162,6 +162,15 @@
       "truck_stop",
       "drydock_yard"
     ],
+    "repair": [
+      "auto_garage",
+      "motor_pool",
+      "breaker_yard",
+      "drydock_yard",
+      "truck_stop",
+      "work_shed",
+      "salvage_camp"
+    ],
     "new_sales": [
       "auto_garage",
       "motor_pool",

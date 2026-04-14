@@ -54,6 +54,7 @@ from game.components import (
     WeaponLoadout,
     WeaponUseProfile,
 )
+from game.bones import maybe_seed_bones_for_chunk, prime_bones_runtime
 from game.economy import chunk_economy_profile, pick_career_for_workplace, workplace_archetype_weight
 from game.finance_services import FinanceSystem
 from game.items import ITEM_CATALOG
@@ -1072,6 +1073,7 @@ def _run_new_game(view, character_name):
     sim.world_traits["rules"] = {
         "final_op_downed_fails_run": bool(final_op_downed_fails_run),
     }
+    prime_bones_runtime(sim)
     run_nonce = random.SystemRandom().randrange(1, 1_000_000_000)
     run_rng = random.Random(run_nonce)
     start_chunk_cx, start_chunk_cy = _pick_playtest_start_chunk(sim, run_rng)
@@ -1084,6 +1086,7 @@ def _run_new_game(view, character_name):
     property_records = _register_chunk_properties(sim, sim.active_chunk)
     sim.chunk_property_records[(sim.active_chunk["cx"], sim.active_chunk["cy"])] = list(property_records)
     world_item_count = _seed_world_items(sim, property_records)
+    maybe_seed_bones_for_chunk(sim, sim.active_chunk)
     sim.world_traits["local_economy"] = chunk_economy_profile(sim, sim.active_chunk)
     sim.world_traits["playtest_start"] = {
         "nonce": run_nonce,
@@ -2045,6 +2048,7 @@ def _run_new_game(view, character_name):
 def _run_loaded_game(view, character_name):
     sim = load_character_run(character_name, delete_on_load=False)
     sim.character_name = normalize_character_name(character_name) or getattr(sim, "character_name", None)
+    prime_bones_runtime(sim)
     if not isinstance(getattr(sim, "world_traits", None), dict):
         sim.world_traits = {}
     if sim.character_name:

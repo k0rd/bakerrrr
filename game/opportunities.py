@@ -15,6 +15,7 @@ from game.components import (
 )
 from game.economy import chunk_economy_profile
 from game.items import ITEM_CATALOG, item_display_name
+from game.organization_reputation import apply_organization_reputation_delta
 
 
 MIN_ACTIVE_OPPORTUNITIES = 6
@@ -96,6 +97,13 @@ def _safe_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def _clamp(value, lo=0.0, hi=100.0):
@@ -1755,7 +1763,92 @@ def _consume_required_item(sim, player_eid, opportunity):
     }
 
 
-def _apply_reward(sim, player_eid, reward):
+def _apply_contact_favor(sim, player_eid, opportunity):
+    if sim is None or player_eid is None or not isinstance(opportunity, dict):
+        return {}
+
+    issuer = opportunity.get("issuer")
+    if not isinstance(issuer, dict):
+        return {}
+
+    ledger = sim.ecs.get(ContactLedger).get(player_eid)
+    if not ledger:
+        return {}
+
+    person_eid = _safe_int(issuer.get("npc_eid"), default=0)
+    person_delta = max(0.0, _safe_float(issuer.get("person_standing_delta"), default=0.0))
+    property_id = str(issuer.get("property_id", "")).strip() or None
+    relation_kind = str(issuer.get("relation_kind", "job_issuer")).strip().lower() or "job_issuer"
+    benefits = tuple(
+        str(bit).strip().lower()
+        for bit in tuple(issuer.get("benefits", ("known_name",))) or ("known_name",)
+        if str(bit).strip()
+    )
+
+    applied = {}
+    if person_eid > 0 and person_delta > 0.0:
+        existing = ledger.person_entry(person_eid) or {}
+        existing_standing = _safe_float(existing.get("standing"), default=0.0)
+        target_standing = _clamp(max(existing_standing, 0.22) + person_delta, 0.0, 1.0)
+        ledger.remember_person(
+            person_eid,
+            source_eid=person_eid,
+            relation_kind=relation_kind,
+            standing=target_standing,
+            tick=int(getattr(sim, "tick", 0)),
+            property_id=property_id,
+            benefits=benefits,
+            introduced=True,
+        )
+        applied["contact_favor"] = round(max(0.0, target_standing - existing_standing), 3)
+
+    property_delta = max(0.0, _safe_float(issuer.get("property_standing_delta"), default=0.0))
+    if property_id and property_delta > 0.0:
+        existing = ledger.property_entry(property_id) or {}
+        existing_standing = _safe_float(existing.get("standing"), default=0.0)
+        target_standing = _clamp(max(existing_standing, 0.22) + property_delta, 0.0, 1.0)
+        ledger.remember(
+            property_id,
+            source_eid=person_eid or None,
+            contact_kind=relation_kind,
+            standing=target_standing,
+            tick=int(getattr(sim, "tick", 0)),
+            benefits=benefits,
+        )
+        applied["property_favor"] = round(max(0.0, target_standing - existing_standing), 3)
+
+    return applied
+
+
+def _apply_organization_favor(sim, opportunity):
+    if sim is None or not isinstance(opportunity, dict):
+        return {}
+
+    issuer = opportunity.get("issuer")
+    if not isinstance(issuer, dict):
+        return {}
+
+    organization_eid = _safe_int(issuer.get("organization_eid"), default=0)
+    standing_delta = _safe_float(issuer.get("organization_standing_delta"), default=0.0)
+    if organization_eid <= 0 or abs(standing_delta) < 1e-9:
+        return {}
+
+    change = apply_organization_reputation_delta(
+        sim,
+        organization_eid=organization_eid,
+        standing_delta=standing_delta,
+        source="opportunity_reward",
+        reason=f"{str(opportunity.get('kind', 'opportunity')).strip().lower() or 'opportunity'}_completed",
+        source_event="opportunity_completed",
+    )
+    if not isinstance(change, dict):
+        return {}
+    return {
+        "organization_favor": round(_safe_float(change.get("standing_delta"), default=0.0), 3),
+    }
+
+
+def _apply_reward(sim, player_eid, reward, *, opportunity=None):
     reward = dict(reward or {})
     applied = {
         "credits": 0,
@@ -1796,6 +1889,10 @@ def _apply_reward(sim, player_eid, reward):
     if standing > 0:
         traits["opportunity_standing"] = _safe_int(traits.get("opportunity_standing"), default=0) + standing
         applied["standing"] = standing
+
+    if isinstance(opportunity, dict):
+        applied.update(_apply_contact_favor(sim, player_eid, opportunity))
+        applied.update(_apply_organization_favor(sim, opportunity))
 
     return applied
 
@@ -1845,7 +1942,7 @@ def resolve_opportunities(sim, player_eid):
             continue
 
         reward = dict(entry.get("reward", {}))
-        applied = _apply_reward(sim, player_eid, reward)
+        applied = _apply_reward(sim, player_eid, reward, opportunity=entry)
         done = dict(entry)
         done["status"] = "completed"
         done["completed_tick"] = int(getattr(sim, "tick", 0))

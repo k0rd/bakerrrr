@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import pickle
 import re
 from pathlib import Path
@@ -12,6 +13,7 @@ from game.components import Position
 
 SAVE_VERSION = 1
 SAVE_DIR = Path(__file__).resolve().parents[1] / "saves"
+BONES_ARCHIVE_PATH = SAVE_DIR / "bones.json"
 _EXCLUDED_SIM_STATE_KEYS = {
     "events",
     "systems",
@@ -57,6 +59,72 @@ def delete_character_save(name, save_dir=SAVE_DIR):
         return False
     path.unlink()
     return True
+
+
+def _json_safe(value):
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe(inner)
+            for key, inner in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(inner) for inner in value]
+    return str(value)
+
+
+def load_bones_archive(archive_path=BONES_ARCHIVE_PATH):
+    if archive_path is None:
+        archive_path = BONES_ARCHIVE_PATH
+    path = Path(archive_path)
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    if isinstance(payload, dict):
+        payload = payload.get("records", [])
+    if not isinstance(payload, list):
+        return []
+    return [entry for entry in payload if isinstance(entry, dict)]
+
+
+def save_bones_archive(records, archive_path=BONES_ARCHIVE_PATH, max_records=64):
+    if archive_path is None:
+        archive_path = BONES_ARCHIVE_PATH
+    path = Path(archive_path)
+    clean_records = [_json_safe(entry) for entry in records if isinstance(entry, dict)]
+    if max_records is not None and int(max_records) > 0:
+        clean_records = clean_records[-int(max_records):]
+    payload = {
+        "version": 1,
+        "records": clean_records,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(path)
+    return path
+
+
+def append_bones_record(record, archive_path=BONES_ARCHIVE_PATH, max_records=64):
+    if not isinstance(record, dict):
+        return None
+    if archive_path is None:
+        archive_path = BONES_ARCHIVE_PATH
+    records = load_bones_archive(archive_path=archive_path)
+    record_id = str(record.get("record_id", "") or "").strip()
+    if record_id:
+        records = [
+            entry
+            for entry in records
+            if str(entry.get("record_id", "") or "").strip() != record_id
+        ]
+    records.append(record)
+    return save_bones_archive(records, archive_path=archive_path, max_records=max_records)
 
 
 def _chunk_key(value):

@@ -208,6 +208,29 @@ def _property_metadata(prop):
     return metadata if isinstance(metadata, dict) else {}
 
 
+def _party_rep_proxy_actor(sim, actor_eid):
+    if sim is None or actor_eid is None:
+        return actor_eid
+    contractors = getattr(sim, "contractors", {})
+    if not isinstance(contractors, dict):
+        return actor_eid
+    tick = int(getattr(sim, "tick", 0))
+    for key, rec in contractors.items():
+        try:
+            same_actor = int(key) == int(actor_eid)
+        except (TypeError, ValueError):
+            same_actor = key == actor_eid
+        if not same_actor or not isinstance(rec, dict):
+            continue
+        if int(rec.get("until", 0) or 0) <= tick:
+            continue
+        job = str(rec.get("job", "") or "").strip().lower()
+        if job not in {"backup", "party"}:
+            continue
+        return rec.get("ally_eid", getattr(sim, "player_eid", actor_eid))
+    return actor_eid
+
+
 def _property_archetype(prop):
     return str(_property_metadata(prop).get("archetype", "") or "").strip().lower()
 
@@ -1298,8 +1321,11 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
     standing = 0.0
     standing_reason = "none"
     social_cover = 0.0
+    social_actor_eid = _party_rep_proxy_actor(sim, actor_eid)
 
-    if _player_owns_property(sim, actor_eid, prop):
+    if _player_owns_property(sim, actor_eid, prop) or (
+        social_actor_eid != actor_eid and _player_owns_property(sim, social_actor_eid, prop)
+    ):
         standing, standing_reason = 1.0, "owner"
     else:
         key_score, key_reason = _credential_holder_standing(sim, actor_eid, prop)
@@ -1325,10 +1351,19 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
         )
 
         owner_eid = prop.get("owner_eid")
-        contact_cover, contact_reason = _contact_cover(sim, actor_eid, prop)
-        bond_cover, bond_reason = _bond_cover(sim, actor_eid, owner_eid)
-        social_cover = max(contact_cover, bond_cover)
-        social_reason = contact_reason if contact_cover >= bond_cover else bond_reason
+        social_reason = standing_reason
+        social_candidates = []
+        for candidate_eid in dict.fromkeys(eid for eid in (actor_eid, social_actor_eid) if eid is not None):
+            contact_cover, contact_reason = _contact_cover(sim, candidate_eid, prop)
+            bond_cover, bond_reason = _bond_cover(sim, candidate_eid, owner_eid)
+            candidate_cover = max(contact_cover, bond_cover)
+            candidate_reason = contact_reason if contact_cover >= bond_cover else bond_reason
+            social_candidates.append((candidate_cover, candidate_reason))
+        if social_candidates:
+            social_cover, social_reason = max(
+                social_candidates,
+                key=lambda row: (float(row[0]), str(row[1] or "")),
+            )
         standing, standing_reason = _standing_candidate(
             standing,
             standing_reason,

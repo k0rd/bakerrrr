@@ -60,6 +60,15 @@ DEFAULT_CATALOG = {
             "tide_station",
             "beacon_house",
         ),
+        "repair": (
+            "auto_garage",
+            "motor_pool",
+            "breaker_yard",
+            "drydock_yard",
+            "truck_stop",
+            "work_shed",
+            "salvage_camp",
+        ),
         "new_sales": (
             "auto_garage",
             "motor_pool",
@@ -177,6 +186,7 @@ def load_vehicle_catalog(path=VEHICLE_DATA_PATH):
     services = raw.get("service_archetypes") if isinstance(raw.get("service_archetypes"), dict) else {}
     service_archetypes = {
         "fuel": _string_list(services.get("fuel"), DEFAULT_CATALOG["service_archetypes"]["fuel"]),
+        "repair": _string_list(services.get("repair"), DEFAULT_CATALOG["service_archetypes"]["repair"]),
         "new_sales": _string_list(services.get("new_sales"), DEFAULT_CATALOG["service_archetypes"]["new_sales"]),
         "used_sales": _string_list(services.get("used_sales"), DEFAULT_CATALOG["service_archetypes"]["used_sales"]),
         "fetch": _string_list(services.get("fetch"), DEFAULT_CATALOG["service_archetypes"]["fetch"]),
@@ -236,6 +246,7 @@ def vehicle_services_for_archetype(archetype, catalog=None):
         return ()
 
     fuel_set = set(str(item).strip().lower() for item in profile.get("fuel", ()) if str(item).strip())
+    repair_set = set(str(item).strip().lower() for item in profile.get("repair", ()) if str(item).strip())
     new_set = set(str(item).strip().lower() for item in profile.get("new_sales", ()) if str(item).strip())
     used_set = set(str(item).strip().lower() for item in profile.get("used_sales", ()) if str(item).strip())
 
@@ -244,6 +255,8 @@ def vehicle_services_for_archetype(archetype, catalog=None):
     services = []
     if archetype in fuel_set:
         services.append("fuel")
+    if archetype in repair_set:
+        services.append("repair")
     if archetype in new_set:
         services.append("vehicle_sales_new")
     if archetype in used_set:

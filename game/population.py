@@ -1503,6 +1503,15 @@ def _item_use_profile_for(role, workplace_prop=None):
     )
 
 
+def _uniform_item_for_npc(role, workplace_prop=None, home_prop=None):
+    archetype = _property_archetype(workplace_prop or home_prop)
+    if role == "guard" or archetype in SECURITY_ARCHETYPES:
+        return "security_jacket"
+    if role == "worker" and (archetype in INDUSTRIAL_ARCHETYPES or archetype in SALVAGE_ARCHETYPES):
+        return "worker_coverall"
+    return None
+
+
 def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
     archetype = _property_archetype(workplace_prop or home_prop)
     if role == "guard" or archetype in SECURITY_ARCHETYPES:
@@ -1702,6 +1711,9 @@ def _seed_npc_gear(sim, eid, rng, role, workplace_prop=None, home_prop=None):
 
 
 def _seed_npc_inventory(sim, eid, rng, role, workplace_prop=None, home_prop=None):
+    uniform_item_id = _uniform_item_for_npc(role, workplace_prop=workplace_prop, home_prop=home_prop)
+    if uniform_item_id in ITEM_CATALOG:
+        _give_item(sim, eid, uniform_item_id, quantity=1)
     pool = [item_id for item_id in _inventory_pool_for(role, workplace_prop=workplace_prop, home_prop=home_prop) if item_id in ITEM_CATALOG]
     if not pool:
         return

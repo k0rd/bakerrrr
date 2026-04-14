@@ -290,6 +290,10 @@ class SkillProgressionSystem(System):
         if service == "fuel":
             self._apply_practice(eid, "mechanics", 0.16, reason="site_service", cooldown_key=key, cooldown=self.SITE_SERVICE_COOLDOWN)
             return
+        if service == "repair":
+            self._apply_practice(eid, "mechanics", 0.22, reason="site_service", cooldown_key=key, cooldown=self.SITE_SERVICE_COOLDOWN)
+            self._apply_practice(eid, "streetwise", 0.06, reason="site_service", cooldown_key=key, cooldown=self.SITE_SERVICE_COOLDOWN)
+            return
         if service == "intel":
             self._apply_practice(eid, "streetwise", 0.14, reason="site_service", cooldown_key=key, cooldown=self.SITE_SERVICE_COOLDOWN)
             self._apply_practice(eid, "perception", 0.14, reason="site_service", cooldown_key=key, cooldown=self.SITE_SERVICE_COOLDOWN)

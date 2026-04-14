@@ -96,6 +96,7 @@ class SiteServiceSystem(System):
     INTEL_COOLDOWN_TICKS = 45
     INTEL_RADIUS = 2
     FUEL_UNIT_PRICE = 3
+    REPAIR_POINT_PRICE = 18
     VENDING_BASE_COST = 6
     REST_COST = 25
     REST_COOLDOWN_TICKS = 1800
@@ -295,6 +296,88 @@ class SiteServiceSystem(System):
             credits_spent=int(credits_spent),
             fuel=int(new_fuel),
             fuel_capacity=int(fuel_capacity),
+            vehicle_id=vehicle_prop.get("id"),
+            vehicle_name=_vehicle_label(vehicle_prop),
+            skill_note=skill_note,
+        ))
+
+    def _apply_repair_service(self, eid, prop, pos):
+        vehicle_prop = self._active_vehicle_property(eid, pos=pos, radius=2)
+        if not vehicle_prop:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="repair",
+                reason="no_vehicle",
+            ))
+            return
+
+        profile = _vehicle_profile_from_property(vehicle_prop)
+        durability = max(1, min(10, _int_or_default(profile.get("durability"), 5)))
+        max_durability = 10
+        missing = max(0, max_durability - durability)
+        if missing <= 0:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="repair",
+                reason="fully_repaired",
+                vehicle_name=_vehicle_label(vehicle_prop),
+                durability=int(durability),
+                durability_max=int(max_durability),
+            ))
+            return
+
+        power = max(1, min(10, _int_or_default(profile.get("power"), 5)))
+        base_unit_price = max(8, int(self.REPAIR_POINT_PRICE) + max(0, int(power) - 4))
+        skill_terms = _mobility_service_skill_terms(self.sim, eid)
+        unit_price = max(1, int(round(float(base_unit_price) * float(skill_terms.get("price_mult", 1.0)))))
+        skill_note = str(skill_terms.get("note", "") or "").strip() if unit_price < base_unit_price else ""
+        assets = self._assets_for(eid)
+        credits = int(getattr(assets, "credits", 0)) if assets else 0
+        affordable = min(missing, credits // unit_price if unit_price > 0 else 0)
+        if affordable <= 0:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="repair",
+                reason="no_credits",
+                cost=unit_price,
+                credits=credits,
+                vehicle_name=_vehicle_label(vehicle_prop),
+                durability=int(durability),
+                durability_max=int(max_durability),
+            ))
+            return
+
+        credits_spent = int(affordable * unit_price)
+        if assets:
+            assets.credits = max(0, int(assets.credits) - credits_spent)
+
+        metadata = _property_metadata(vehicle_prop)
+        metadata["durability"] = int(min(max_durability, durability + affordable))
+        metadata["vehicle_usable"] = True
+        new_durability = max(1, min(max_durability, _int_or_default(metadata.get("durability"), durability)))
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service="repair",
+            durability_gain=int(affordable),
+            durability_before=int(durability),
+            durability=int(new_durability),
+            durability_max=int(max_durability),
+            base_unit_price=int(base_unit_price),
+            unit_price=int(unit_price),
+            base_credits_spent=int(affordable * base_unit_price),
+            credits_spent=int(credits_spent),
             vehicle_id=vehicle_prop.get("id"),
             vehicle_name=_vehicle_label(vehicle_prop),
             skill_note=skill_note,
@@ -567,6 +650,10 @@ class SiteServiceSystem(System):
             fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
             if fuel < max(4, int(round(float(fuel_capacity) * 0.92))):
                 return "fuel"
+        if "repair" in services and vehicle_prop:
+            durability = max(1, min(10, _int_or_default(_vehicle_profile_from_property(vehicle_prop).get("durability"), 5)))
+            if durability < 9:
+                return "repair"
 
         needs = self.sim.ecs.get(NPCNeeds).get(eid)
         vitality = self.sim.ecs.get(Vitality).get(eid)
@@ -694,6 +781,9 @@ class SiteServiceSystem(System):
             return True
         if service == "fuel":
             self._apply_fuel_service(eid, prop, pos)
+            return True
+        if service == "repair":
+            self._apply_repair_service(eid, prop, pos)
             return True
         if service == "vehicle_sales_new":
             self._apply_vehicle_sale(eid, prop, pos, quality="new", request=request)

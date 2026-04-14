@@ -19,7 +19,7 @@ VEHICLES_PATH = GAME_DIR / "vehicles.json"
 NPC_NAMES_PATH = GAME_DIR / "npc_names.json"
 TILE_MAP_PATH = REPO_ROOT / "assets" / "tiles" / "tile_map.json"
 
-ALLOWED_ITEM_EFFECTS = {"modify_need", "status", "credits", "add_ammo"}
+ALLOWED_ITEM_EFFECTS = {"modify_need", "restore_hp", "status", "credits", "add_ammo"}
 ALLOWED_ITEM_NEEDS = {"energy", "safety", "social"}
 ALLOWED_LEGAL_STATUS = {"legal", "restricted", "illegal"}
 ALLOWED_WEAPON_TRAJECTORIES = {"ballistic", "lobbed", "beam"}
@@ -384,6 +384,18 @@ def _validate_items(path, report):
                             report.error(source, effect_path, "modify_need effect requires delta")
                         else:
                             _validate_number(report, source, effect_path + ["delta"], effect["delta"], field_name="delta")
+                    elif effect_type == "restore_hp":
+                        if "delta" not in effect:
+                            report.error(source, effect_path, "restore_hp effect requires delta")
+                        else:
+                            _validate_int(
+                                report,
+                                source,
+                                effect_path + ["delta"],
+                                effect["delta"],
+                                minimum=1,
+                                field_name="delta",
+                            )
                     elif effect_type == "status":
                         _validate_non_empty_string(report, source, effect_path + ["status"], effect.get("status"), field_name="status")
                         if "duration" not in effect:
@@ -473,6 +485,48 @@ def _validate_items(path, report):
                     for key in ("intrusion_bonus", "mechanics_bonus", "perception_bonus", "score_bonus", "requirement_delta"):
                         if key in profile:
                             _validate_number(report, source, profile_path + [key], profile[key], field_name=key)
+
+        if "disguise" in item:
+            disguise = item["disguise"]
+            if not _expect_type(report, source, item_path + ["disguise"], disguise, dict, "an object"):
+                continue
+            if "role_id" not in disguise:
+                report.error(source, item_path + ["disguise"], "disguise profile requires role_id")
+            else:
+                _validate_non_empty_string(
+                    report,
+                    source,
+                    item_path + ["disguise", "role_id"],
+                    disguise["role_id"],
+                    field_name="role_id",
+                )
+            if "strength" not in disguise:
+                report.error(source, item_path + ["disguise"], "disguise profile requires strength")
+            else:
+                _validate_number(
+                    report,
+                    source,
+                    item_path + ["disguise", "strength"],
+                    disguise["strength"],
+                    minimum=0.01,
+                    field_name="strength",
+                )
+
+        if "container" in item:
+            container = item["container"]
+            if not _expect_type(report, source, item_path + ["container"], container, dict, "an object"):
+                continue
+            if "bonus_slots" not in container:
+                report.error(source, item_path + ["container"], "container profile requires bonus_slots")
+            else:
+                _validate_int(
+                    report,
+                    source,
+                    item_path + ["container", "bonus_slots"],
+                    container["bonus_slots"],
+                    minimum=1,
+                    field_name="bonus_slots",
+                )
 
     if not item_ids:
         report.error(source, [], "item catalog must contain at least one valid item")
@@ -839,7 +893,7 @@ def _validate_vehicles(path, report):
     if not isinstance(service_archetypes, dict):
         report.error(source, ["service_archetypes"], "service_archetypes must be an object")
     else:
-        for key in ("fuel", "new_sales", "used_sales", "fetch"):
+        for key in ("fuel", "repair", "new_sales", "used_sales", "fetch"):
             values = service_archetypes.get(key)
             if values is None:
                 report.error(source, ["service_archetypes"], f"missing service_archetypes key {key!r}")

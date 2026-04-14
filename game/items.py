@@ -91,6 +91,30 @@ def _normalize_armor_profile(value):
     }
 
 
+def _normalize_disguise_profile(value):
+    if not isinstance(value, dict):
+        return None
+    role_id = str(value.get("role_id", "")).strip().lower()
+    strength = _float_or_default(value.get("strength"), 0.0)
+    if not role_id or strength <= 0.0:
+        return None
+    return {
+        "role_id": role_id,
+        "strength": float(strength),
+    }
+
+
+def _normalize_container_profile(value):
+    if not isinstance(value, dict):
+        return None
+    bonus_slots = max(0, _int_or_default(value.get("bonus_slots"), 0))
+    if bonus_slots <= 0:
+        return None
+    return {
+        "bonus_slots": int(bonus_slots),
+    }
+
+
 def normalize_item_quality(value, default="standard"):
     token = str(value or "").strip().lower()
     if token not in ITEM_QUALITY_TIERS:
@@ -726,6 +750,8 @@ def load_item_catalog(path=ITEMS_PATH):
             "tool_profiles": _normalize_tool_profiles(item.get("tool_profiles")),
             "weapon_id": str(item.get("weapon_id", "")).strip() or None,
             "armor": _normalize_armor_profile(item.get("armor")),
+            "disguise": _normalize_disguise_profile(item.get("disguise")),
+            "container": _normalize_container_profile(item.get("container")),
             "condition_profile": _normalize_condition_profile(
                 item.get("condition_profile"),
                 tool_profiles=item.get("tool_profiles"),

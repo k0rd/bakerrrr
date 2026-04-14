@@ -7,8 +7,6 @@
     "pickup_item": 1,
     "drop_item": 0,
     "use_item": 6,
-    "quest_accept": 0,
-    "quest_turn_in": 0,
     "purchase_property": 4,
     "fire_weapon": 18,
     "cycle_weapon": 0,

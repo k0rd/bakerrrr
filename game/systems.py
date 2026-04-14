@@ -38,6 +38,7 @@ from game.appearance import (
     property_render_snapshot as _appearance_property_render_snapshot,
     CAT_COAT_COLOR as APPEARANCE_CAT_COAT_COLOR,
 )
+from game.bones import archive_failed_run_bones, maybe_seed_bones_for_chunk
 from game.components import (
     AI,
     ArmorLoadout,
@@ -123,6 +124,7 @@ from game.report_runtime import (
     build_known_locations_report as _report_runtime_build_known_locations_report,
     build_progress_report as _report_runtime_build_progress_report,
 )
+import game.report_debug_ui as _report_debug_ui
 from game.semantic_catalog import get_runtime_semantic_catalog
 from game.skill_progression import SkillProgressionSystem
 from game.objective_progress import (
@@ -130,6 +132,7 @@ from game.objective_progress import (
     objective_progress_explain_delta,
 )
 from game.npc_judgment import evaluate_opportunity_judgment
+from game.npc_names import generate_human_personal_name
 from game.opportunities import (
     append_external_opportunity,
     evaluate_opportunity_board,
@@ -153,7 +156,15 @@ from game.organizations import (
     property_organization_eid,
     seed_property_organization_defaults,
 )
-from game.population import _spawn_human, seed_chunk_items, spawn_chunk_npcs, work_shift_active
+from game.population import (
+    INDUSTRIAL_ARCHETYPES,
+    SALVAGE_ARCHETYPES,
+    SECURITY_ARCHETYPES,
+    _spawn_human,
+    seed_chunk_items,
+    spawn_chunk_npcs,
+    work_shift_active,
+)
 from game.property_keys import (
     can_receive_property_key,
     ensure_actor_has_property_credential,
@@ -172,6 +183,7 @@ from game.property_access import (
     controller_intrusion_access_for_actor as _controller_intrusion_access_for_actor,
     controller_intrusion_state as _controller_intrusion_state,
     default_site_services_for_archetype as _default_site_services_for_archetype,
+    _property_archetype,
     property_access_controller as _property_access_controller,
     evaluate_property_access as _evaluate_property_access,
     sync_property_access_controller as _sync_property_access_controller,
@@ -398,8 +410,6 @@ DEFAULT_ACTION_OFFENSE_BASE = {
     "pickup_item": 1,
     "drop_item": 0,
     "use_item": 6,
-    "quest_accept": 0,
-    "quest_turn_in": 0,
     "purchase_property": 4,
     "toggle_cover": 0,
     "toggle_sneak": 0,
@@ -1126,6 +1136,58 @@ def _ensure_armor_loadout(sim, eid):
     return loadout
 
 
+ITEM_STOWED_CONTAINER_METADATA_KEY = "stowed_in_container"
+
+
+def _entry_stowed_container_instance(entry):
+    if not isinstance(entry, dict):
+        return None
+    metadata = entry.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return None
+    token = str(metadata.get(ITEM_STOWED_CONTAINER_METADATA_KEY, "") or "").strip()
+    return token or None
+
+
+def _inventory_entries_stowed_in_container(inventory, container_instance_id):
+    container_instance_id = str(container_instance_id or "").strip()
+    if not inventory or not container_instance_id:
+        return []
+    return [
+        entry
+        for entry in list(getattr(inventory, "items", ()) or ())
+        if str(entry.get("instance_id", "")).strip() != container_instance_id
+        and _entry_stowed_container_instance(entry) == container_instance_id
+    ]
+
+
+def _inventory_entries_loose_for_container(inventory, container_instance_id):
+    container_instance_id = str(container_instance_id or "").strip()
+    if not inventory:
+        return []
+    return [
+        entry
+        for entry in list(getattr(inventory, "items", ()) or ())
+        if str(entry.get("instance_id", "")).strip() != container_instance_id
+        and _entry_stowed_container_instance(entry) != container_instance_id
+    ]
+
+
+def _clear_inventory_container_assignments(inventory, container_instance_id):
+    container_instance_id = str(container_instance_id or "").strip()
+    if not inventory or not container_instance_id:
+        return 0
+    cleared = 0
+    for entry in list(getattr(inventory, "items", ()) or ()):
+        if _entry_stowed_container_instance(entry) != container_instance_id:
+            continue
+        metadata = dict(entry.get("metadata") or {})
+        metadata.pop(ITEM_STOWED_CONTAINER_METADATA_KEY, None)
+        inventory.update_item_metadata(entry["instance_id"], metadata=metadata, replace=True)
+        cleared += 1
+    return cleared
+
+
 def _unlink_removed_item_from_gear(sim, eid, removed_entry, item_catalog=None):
     if eid is None or not isinstance(removed_entry, dict):
         return {}
@@ -1158,6 +1220,31 @@ def _unlink_removed_item_from_gear(sim, eid, removed_entry, item_catalog=None):
             changes["weapon_id"] = weapon_id
             changes["weapon_name"] = weapon_name
             break
+
+    disguise_state = getattr(sim, "disguise_state", None)
+    if isinstance(disguise_state, dict) and str(disguise_state.get("instance_id", "")).strip() == instance_id:
+        changes["disguise_name"] = disguise_state.get("item_name") or item_display_name(
+            removed_entry.get("item_id"),
+            metadata=removed_entry.get("metadata"),
+            item_catalog=item_catalog,
+        )
+        changes["disguise_item_id"] = disguise_state.get("item_id") or removed_entry.get("item_id")
+        sim.disguise_state = None
+
+    equipped_container = getattr(sim, "equipped_container", None)
+    if isinstance(equipped_container, dict) and str(equipped_container.get("instance_id", "")).strip() == instance_id:
+        changes["container_name"] = equipped_container.get("item_name") or item_display_name(
+            removed_entry.get("item_id"),
+            metadata=removed_entry.get("metadata"),
+            item_catalog=item_catalog,
+        )
+        changes["container_item_id"] = equipped_container.get("item_id") or removed_entry.get("item_id")
+        changes["container_bonus_slots"] = int(max(0, _int_or_default(equipped_container.get("bonus_slots"), 0)))
+        sim.equipped_container = None
+        inventory = sim.ecs.get(Inventory).get(eid)
+        if inventory:
+            inventory.capacity = max(1, inventory.capacity - changes["container_bonus_slots"])
+            changes["released_container_items"] = _clear_inventory_container_assignments(inventory, instance_id)
 
     return changes
 
@@ -1548,18 +1635,107 @@ def _observer_can_notice_position(sim, observer_eid, x, y, z):
     )
 
 
-def _watchers_for_position(sim, x, y, z, exclude_eid=None):
+def _watchers_for_position(sim, x, y, z, exclude_eid=None, offender_eid=None):
     positions = sim.ecs.get(Position)
 
     watchers = []
     for observer_eid, observer_pos in positions.items():
         if observer_eid == exclude_eid:
             continue
+        if offender_eid is not None and _observer_is_active_contractor_ally(sim, observer_eid, offender_eid):
+            continue
         if int(observer_pos.z) != int(z):
             continue
         if _observer_can_notice_position(sim, observer_eid, x, y, z):
             watchers.append(observer_eid)
     return watchers
+
+
+def _active_contractor_record(sim, npc_eid, *, ally_eid=None, jobs=None):
+    if sim is None or npc_eid is None:
+        return None
+    contractors = getattr(sim, "contractors", {})
+    if not isinstance(contractors, dict):
+        return None
+    tick = int(getattr(sim, "tick", 0))
+    job_keys = None
+    if jobs is not None:
+        job_keys = {
+            str(job).strip().lower()
+            for job in (jobs if isinstance(jobs, (set, tuple, list)) else (jobs,))
+            if str(job).strip()
+        }
+    for key, rec in contractors.items():
+        try:
+            same_npc = int(key) == int(npc_eid)
+        except (TypeError, ValueError):
+            same_npc = key == npc_eid
+        if not same_npc or not isinstance(rec, dict):
+            continue
+        if int(rec.get("until", 0) or 0) <= tick:
+            continue
+        job = str(rec.get("job", "") or "").strip().lower()
+        if job_keys is not None and job not in job_keys:
+            continue
+        if ally_eid is not None:
+            rec_ally = rec.get("ally_eid", getattr(sim, "player_eid", None))
+            try:
+                same_ally = int(rec_ally) == int(ally_eid)
+            except (TypeError, ValueError):
+                same_ally = rec_ally == ally_eid
+            if not same_ally:
+                continue
+        return rec
+    return None
+
+
+def _observer_is_active_contractor_ally(sim, observer_eid, offender_eid):
+    return _active_contractor_record(
+        sim,
+        observer_eid,
+        ally_eid=offender_eid,
+        jobs={"backup", "party"},
+    ) is not None
+
+
+def _observer_turns_blind_eye_to_offense(sim, observer_eid, offender_eid, *, action="", context="ordinary", offense_score=0):
+    if sim is None or observer_eid is None or offender_eid is None:
+        return False
+    if observer_eid == offender_eid:
+        return True
+    if _observer_is_active_contractor_ally(sim, observer_eid, offender_eid):
+        return True
+    if offender_eid != getattr(sim, "player_eid", None):
+        return False
+
+    context_key = str(context or "ordinary").strip().lower() or "ordinary"
+    action_key = str(action or "").strip().lower()
+    if context_key in {"armed_assault", "explosive_discharge", "tamper", "item_theft", "contraband_use"}:
+        return False
+    if action_key in {"fire_weapon", "vehicle_theft", "tamper"}:
+        return False
+
+    social = sim.ecs.get(NPCSocial).get(observer_eid)
+    if not social:
+        return False
+    bond = social.bonds.get(offender_eid)
+    if not isinstance(bond, dict):
+        return False
+
+    trust = float(bond.get("trust", 0.0) or 0.0)
+    closeness = float(bond.get("closeness", 0.0) or 0.0)
+    protectiveness = float(bond.get("protectiveness", 0.0) or 0.0)
+    relation = str(bond.get("kind", "") or "").strip().lower()
+    rapport = (trust * 0.5) + (closeness * 0.35) + (protectiveness * 0.15)
+    if relation in {"family", "partner"}:
+        rapport = max(rapport, 0.82)
+    if trust < 0.58 or closeness < 0.44:
+        return False
+
+    max_score = 12 + int(round(rapport * 14.0))
+    if relation in {"family", "partner", "friend"}:
+        max_score += 2
+    return int(offense_score or 0) <= max_score
 
 
 def _player_hidden_status(sim, eid, x, y, z):
@@ -1575,6 +1751,8 @@ def _player_hidden_status(sim, eid, x, y, z):
 
 def _noise_merits_attention(sim, observer_eid, source_eid, x, y, z, cause):
     cause = str(cause or "").strip().lower()
+    if source_eid is not None and _observer_is_active_contractor_ally(sim, observer_eid, source_eid):
+        return False
     if cause not in QUIET_NOISE_CAUSES:
         return True
 
@@ -2083,6 +2261,7 @@ def _emit_property_lock_tamper_event(sim, eid, prop, *, x, y, z, method):
         int(y),
         int(z),
         exclude_eid=eid,
+        offender_eid=eid,
     )
     method_key = str(method or "").strip().lower()
     severity_score = min(
@@ -2231,6 +2410,7 @@ def _emit_move_access_events(
                 target_y,
                 target_z,
                 exclude_eid=eid,
+                offender_eid=eid,
             )
             offense_score = max(
                 _offense_score_for_action(action, context="ordinary"),
@@ -2577,6 +2757,7 @@ def _infrastructure_role_label(role):
     role_key = str(role or "").strip().lower()
     return {
         "access_panel": "access panel",
+        "bones_stash": "stash",
         "security_post": "security post",
         "service_terminal": "service terminal",
     }.get(role_key, role_key.replace("_", " "))
@@ -4089,6 +4270,106 @@ def _build_known_locations_report(sim, player_eid, limit=None, include_hidden=Fa
     )
 
 
+STAKEOUT_RADIUS = 3
+STAKEOUT_REVEAL_INTERVAL = 8
+STAKEOUT_MAX_REVEALS = 4
+STAKEOUT_CONFIDENCE_CAP = 0.88
+
+
+def _active_property_opportunities(sim, prop_id):
+    prop_key = str(prop_id or "").strip()
+    if not prop_key:
+        return ()
+    opp_state = getattr(sim, "world_traits", {}).get("opportunities", {})
+    active = []
+    for entry in opp_state.get("active", ()):
+        if not isinstance(entry, dict):
+            continue
+        requirements = entry.get("requirements", {}) if isinstance(entry.get("requirements", {}), dict) else {}
+        if str(requirements.get("property_id", "")).strip() != prop_key:
+            continue
+        active.append(entry)
+    return tuple(active)
+
+
+def _nearest_stakeable_property(sim, pos):
+    if pos is None:
+        return None
+    nearby = sim.properties_in_radius(pos.x, pos.y, pos.z, r=STAKEOUT_RADIUS)
+    candidates = [
+        prop for prop in nearby
+        if str(prop.get("kind", "")).strip().lower() == "building"
+        and _active_property_opportunities(sim, prop.get("id"))
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"]))
+
+
+def _stakeout_property_opportunity_stats(sim, observer_eid, prop_id):
+    active = list(_active_property_opportunities(sim, prop_id))
+    if not active:
+        return None
+
+    least_confidence = 2.0
+    unknown_count = 0
+    for entry in active:
+        oid = int(entry.get("id", 0) or 0)
+        if oid <= 0:
+            continue
+        intel = opportunity_intel_for_observer(sim, observer_eid, oid)
+        if intel is None:
+            unknown_count += 1
+            least_confidence = min(least_confidence, 0.0)
+            continue
+        least_confidence = min(least_confidence, max(0.0, float(intel.get("confidence", 0.0) or 0.0)))
+
+    if least_confidence > 1.0:
+        least_confidence = 0.0
+
+    return {
+        "count": len(active),
+        "unknown_count": unknown_count,
+        "least_confidence": max(0.0, min(1.0, float(least_confidence))),
+        "mapped": unknown_count <= 0 and least_confidence >= (STAKEOUT_CONFIDENCE_CAP - 0.01),
+    }
+
+
+def _stakeout_progress_snapshot(sim, observer_eid, pos, *, require_hidden=False):
+    if pos is None:
+        return None
+    stealth_state = getattr(sim, "player_stealth_state", {})
+    hidden = bool(stealth_state.get("hidden")) if isinstance(stealth_state, dict) else False
+    if require_hidden and not hidden:
+        return None
+    target_prop = _nearest_stakeable_property(sim, pos)
+    if not isinstance(target_prop, dict):
+        return None
+    prop_id = str(target_prop.get("id", "")).strip()
+    stats = _stakeout_property_opportunity_stats(sim, observer_eid, prop_id)
+    if not isinstance(stats, dict):
+        return None
+
+    state = getattr(sim, "stakeout_state", None)
+    active = isinstance(state, dict) and str(state.get("prop_id", "")).strip() == prop_id
+    ticks = _int_or_default((state or {}).get("ticks", 0), 0) if active else 0
+    reveals_done = _int_or_default((state or {}).get("reveals_done", 0), 0) if active else 0
+    progress_mod = ticks % STAKEOUT_REVEAL_INTERVAL
+    next_reveal_in = STAKEOUT_REVEAL_INTERVAL if progress_mod == 0 else (STAKEOUT_REVEAL_INTERVAL - progress_mod)
+    return {
+        "property_id": prop_id,
+        "property_name": str(target_prop.get("name", prop_id or "target site")).strip() or "target site",
+        "hidden": hidden,
+        "active": active,
+        "ready": hidden,
+        "ticks": max(0, ticks),
+        "reveals_done": max(0, reveals_done),
+        "max_reveals": STAKEOUT_MAX_REVEALS,
+        "next_reveal_in": max(1, next_reveal_in),
+        **stats,
+    }
+
+
 def _mode_line(mode_state=None, cover=None, look_active=False, aim_active=False, turn_mode=False, stealth_state=None):
     bold = getattr(curses, "A_BOLD", 0)
     segments = [_segment("Modes: ")]
@@ -4408,6 +4689,7 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
     lock_source = infrastructure_target if infrastructure_role == "access_panel" and infrastructure_target else prop
     lock_state = property_lock_state(lock_source)
     controller = None
+    credential_status = ""
     if str(lock_source.get("kind", "")).strip().lower() == "building":
         controller = _property_access_controller(sim, lock_source)
     if lock_state["key_id"]:
@@ -4415,7 +4697,7 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
         if controller:
             bits.append("req:" + _controller_credential_short_label(controller))
         credential_status = _viewer_property_credential_status(sim, viewer_eid, lock_source)
-        if credential_status:
+        if credential_status and kind != "vehicle":
             bits.append("cred:" + credential_status)
     if str(lock_source.get("kind", "")).strip().lower() == "building":
         controller_kind = str(controller.get("kind", "") or "").strip().lower()
@@ -4424,6 +4706,17 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
 
     if kind == "vehicle":
         profile = _vehicle_profile_from_property(prop)
+        owned_vehicle = (
+            prop.get("owner_eid") == viewer_eid
+            or str(prop.get("owner_tag", "") or "").strip().lower() == "player"
+        )
+        if owned_vehicle:
+            bits.append("owned")
+        if lock_state["key_id"]:
+            if credential_status == "held":
+                bits.append("key:held")
+            elif owned_vehicle:
+                bits.append("key:missing")
         if profile:
             fuel, fuel_capacity = _vehicle_fuel_values(prop)
             bits.append(f"class:{profile['vehicle_class']}")
@@ -4709,6 +5002,13 @@ def _career_label(occupation, title_case=False):
     label = str(getattr(occupation, "career", "") or "").replace("_", " ").strip()
     if not label:
         return ""
+    return label.title() if title_case else label
+
+
+def _disguise_role_label(role_id, *, title_case=False):
+    label = str(role_id or "").replace("_", " ").strip()
+    if not label:
+        return "unknown" if not title_case else "Unknown"
     return label.title() if title_case else label
 
 
@@ -5376,13 +5676,6 @@ def _resolve_ai_target(sim, ai):
     return ai.target
 
 
-def _quest_progress_label(quest):
-    objective = quest.get("objective", {})
-    progress = quest.get("progress", 0)
-    target = max(1, objective.get("target", 1))
-    return f"{progress}/{target}"
-
-
 def _entity_status_move_speed_multiplier(sim, eid, *, base=1.0, minimum=0.2, maximum=3.0):
     try:
         speed = float(base)
@@ -5474,7 +5767,17 @@ class InputSystem(System):
 
         if not hasattr(self.sim, "inventory_ui"):
             self.sim.inventory_ui = {
+                "panel_kind": "inventory",
+                "title": "Inventory",
                 "open": False,
+                "property_id": None,
+                "container_kind": None,
+                "container_label": "Container",
+                "container_instance_id": None,
+                "container_capacity": None,
+                "container_view": "pack",
+                "cache_view": "pack",
+                "note_text": "",
                 "selected_index": 0,
                 "inspect_text": "",
             }
@@ -5522,12 +5825,7 @@ class InputSystem(System):
                 "scroll": 0,
             }
         if not hasattr(self.sim, "report_ui"):
-            self.sim.report_ui = {
-                "open": False,
-                "title": "Operations Report",
-                "lines": [],
-                "scroll": 0,
-            }
+            self.sim.report_ui = _report_debug_ui.default_report_ui_state()
         if not hasattr(self.sim, "log_ui"):
             self.sim.log_ui = {
                 "open": False,
@@ -5538,14 +5836,7 @@ class InputSystem(System):
                 "hud_filter": "priority",
             }
         if not hasattr(self.sim, "debug_ui"):
-            self.sim.debug_ui = {
-                "open": False,
-                "kind": "conversation",
-                "title": "Debug Overlay",
-                "property_id": None,
-                "lines": [],
-                "scroll": 0,
-            }
+            self.sim.debug_ui = _report_debug_ui.default_debug_ui_state()
         if not hasattr(self.sim, "auto_walk_ui"):
             self.sim.auto_walk_ui = {
                 "active": False,
@@ -5576,12 +5867,40 @@ class InputSystem(System):
         state = getattr(self.sim, "inventory_ui", None)
         if state is None:
             state = {
-                "machine_action": None,
+                "panel_kind": "inventory",
+                "title": "Inventory",
                 "open": False,
+                "property_id": None,
+                "container_kind": None,
+                "container_label": "Container",
+                "container_instance_id": None,
+                "container_capacity": None,
+                "container_view": "pack",
+                "cache_view": "pack",
+                "note_text": "",
                 "selected_index": 0,
                 "inspect_text": "",
             }
             self.sim.inventory_ui = state
+        if str(state.get("panel_kind", "")).strip().lower() == "cache":
+            state["panel_kind"] = "container"
+            state.setdefault("container_kind", "cache")
+            state.setdefault("container_label", "Cache")
+        if "container_view" not in state and "cache_view" in state:
+            legacy_view = str(state.get("cache_view", "pack")).strip().lower() or "pack"
+            state["container_view"] = "pack" if legacy_view == "pack" else "container"
+        state.setdefault("panel_kind", "inventory")
+        state.setdefault("title", "Inventory")
+        state.setdefault("property_id", None)
+        state.setdefault("container_kind", None)
+        state.setdefault("container_instance_id", None)
+        state.setdefault("container_capacity", None)
+        if not str(state.get("container_label", "")).strip():
+            container_kind = str(state.get("container_kind", "")).strip().lower()
+            state["container_label"] = "Cache" if container_kind == "cache" else "Container"
+        state.setdefault("container_view", "pack")
+        state["cache_view"] = "pack" if str(state.get("container_view", "pack")).strip().lower() == "pack" else "cache"
+        state.setdefault("note_text", "")
         return state
 
     def _trade_state(self):
@@ -5686,27 +6005,7 @@ class InputSystem(System):
         return state
 
     def _report_state(self):
-        state = getattr(self.sim, "report_ui", None)
-        if state is None:
-            state = {
-                "open": False,
-                "kind": "progress",
-                "title": "Operations Report",
-                "lines": [],
-                "scroll": 0,
-                "rows": [],
-                "selected_index": 0,
-                "selected_property_id": None,
-                "filter_mode": "visible",
-            }
-            self.sim.report_ui = state
-        else:
-            state.setdefault("kind", "progress")
-            state.setdefault("rows", [])
-            state.setdefault("selected_index", 0)
-            state.setdefault("selected_property_id", None)
-            state.setdefault("filter_mode", "visible")
-        return state
+        return _report_debug_ui.ensure_report_ui_state(self.sim)
 
     def _log_state(self):
         state = getattr(self.sim, "log_ui", None)
@@ -5726,16 +6025,7 @@ class InputSystem(System):
         return state
 
     def _debug_state(self):
-        state = getattr(self.sim, "debug_ui", None)
-        if state is None:
-            state = {
-                "open": False,
-                "title": "Debug Overlay",
-                "lines": [],
-                "scroll": 0,
-            }
-            self.sim.debug_ui = state
-        return state
+        return _report_debug_ui.ensure_debug_ui_state(self.sim)
 
     def _auto_walk_state(self):
         state = getattr(self.sim, "auto_walk_ui", None)
@@ -6220,111 +6510,51 @@ class InputSystem(System):
         return True
 
     def _scroll_panel_body_dimensions(self):
-        screen_w, screen_h = self.view.size()
-        hud_lines = max(1, _int_or_default(getattr(self.sim, "hud_lines", 10), 10))
-        map_h = max(1, min(self.sim.tilemap.height, screen_h - hud_lines))
-        panel_w = min(max(56, screen_w - 4), screen_w)
-        panel_w = max(28, panel_w)
-        panel_h = min(max(12, map_h - 1), map_h)
-        panel_h = max(8, panel_h)
-        body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
-        body_h = max(1, panel_h - 4)
-        return body_w, body_h
+        return _report_debug_ui.scroll_panel_body_dimensions(self.view, self.sim)
 
     def _refresh_report_ui(self, reset_scroll=False, kind=None):
-        state = self._report_state()
-        previous_scroll = int(state.get("scroll", 0))
-        previous_index = int(state.get("selected_index", 0))
-        previous_property_id = str(state.get("selected_property_id", "") or "").strip()
-        next_kind = str(kind or state.get("kind", "progress")).strip().lower() or "progress"
-        kind_changed = next_kind != str(state.get("kind", "progress")).strip().lower()
-        if next_kind == "known_locations":
-            filter_mode = str(state.get("filter_mode", "visible")).strip().lower() or "visible"
-            if filter_mode not in {"visible", "hidden"}:
-                filter_mode = "visible"
-            state["filter_mode"] = filter_mode
-            report = _build_known_locations_report(
+        return _report_debug_ui.refresh_report_ui(
+            self,
+            reset_scroll=reset_scroll,
+            kind=kind,
+            build_known_locations_report_fn=lambda include_hidden: _build_known_locations_report(
                 self.sim,
                 self.player_eid,
                 limit=None,
-                include_hidden=(filter_mode == "hidden"),
-            )
-        else:
-            next_kind = "progress"
-            report = _build_progress_report(self.sim, self.player_eid, opportunity_limit=8)
-        state["open"] = True
-        state["kind"] = next_kind
-        state["title"] = str(report.get("title", "Operations Report")).strip() or "Operations Report"
-        state["lines"] = list(report.get("lines", ()) or ())
-        state["rows"] = list(report.get("rows", ()) or ())
-        if next_kind == "known_locations":
-            rows = state["rows"]
-            if reset_scroll or kind_changed:
-                selected_index = 0
-                state["scroll"] = 0
-            else:
-                selected_index = max(0, min(previous_index, len(rows) - 1)) if rows else 0
-                if previous_property_id:
-                    for idx, row in enumerate(rows):
-                        if str(row.get("property_id", "")).strip() == previous_property_id:
-                            selected_index = idx
-                            break
-            state["selected_index"] = selected_index
-            self._clamp_known_locations_selection()
-        else:
-            state["selected_index"] = 0
-            state["selected_property_id"] = None
-            if reset_scroll or kind_changed:
-                state["scroll"] = 0
-            else:
-                state["scroll"] = previous_scroll
-            self._clamp_report_scroll()
-        return True
+                include_hidden=include_hidden,
+            ),
+            build_progress_report_fn=lambda: _build_progress_report(
+                self.sim,
+                self.player_eid,
+                opportunity_limit=8,
+            ),
+            line_text_fn=_line_text,
+            wrap_display_lines_fn=_wrap_display_lines,
+        )
 
     def _refresh_known_locations_ui(self, reset_scroll=False):
         return self._refresh_report_ui(reset_scroll=reset_scroll, kind="known_locations")
 
     def _close_report_ui(self):
-        state = self._report_state()
-        state["open"] = False
-        state["scroll"] = 0
+        _report_debug_ui.close_report_ui(self._report_state())
 
     def _known_locations_list_height(self):
         _body_w, body_h = self._scroll_panel_body_dimensions()
-        return max(1, body_h - 5)
+        return _report_debug_ui.known_locations_list_height(body_h=body_h)
 
     def _clamp_known_locations_selection(self):
-        state = self._report_state()
-        rows = list(state.get("rows", ()) or [])
-        if not rows:
-            state["selected_index"] = 0
-            state["selected_property_id"] = None
-            state["scroll"] = 0
-            return 0
-
-        selected_index = max(0, min(int(state.get("selected_index", 0)), len(rows) - 1))
-        list_h = max(1, min(self._known_locations_list_height(), len(rows)))
-        max_scroll = max(0, len(rows) - list_h)
-        scroll = max(0, min(int(state.get("scroll", 0)), max_scroll))
-        if selected_index < scroll:
-            scroll = selected_index
-        elif selected_index >= scroll + list_h:
-            scroll = selected_index - list_h + 1
-
-        state["selected_index"] = selected_index
-        state["selected_property_id"] = str(rows[selected_index].get("property_id", "")).strip() or None
-        state["scroll"] = scroll
-        return selected_index
+        _body_w, body_h = self._scroll_panel_body_dimensions()
+        return _report_debug_ui.clamp_known_locations_selection(
+            self._report_state(),
+            body_h=body_h,
+        )
 
     def _selected_known_location_row(self):
-        state = self._report_state()
-        rows = list(state.get("rows", ()) or [])
-        if not rows:
-            return None
-        selected_index = self._clamp_known_locations_selection()
-        if 0 <= selected_index < len(rows):
-            return rows[selected_index]
-        return None
+        _body_w, body_h = self._scroll_panel_body_dimensions()
+        return _report_debug_ui.selected_known_location_row(
+            self._report_state(),
+            body_h=body_h,
+        )
 
     def _toggle_known_location_hidden_view(self):
         state = self._report_state()
@@ -6444,26 +6674,23 @@ class InputSystem(System):
         return True
 
     def _report_display_lines(self):
-        state = self._report_state()
-        raw_lines = list(state.get("lines", ()) or ())
-        if not raw_lines:
-            raw_lines = ["No report data."]
-
         body_w, _body_h = self._scroll_panel_body_dimensions()
-
-        display_lines = []
-        for raw in raw_lines:
-            wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
-            display_lines.extend(wrapped)
-        return display_lines or ["No report data."]
+        return _report_debug_ui.report_display_lines(
+            self._report_state(),
+            body_w=body_w,
+            line_text_fn=_line_text,
+            wrap_display_lines_fn=_wrap_display_lines,
+        )
 
     def _clamp_report_scroll(self):
-        state = self._report_state()
-        display_lines = self._report_display_lines()
-        _body_w, body_h = self._scroll_panel_body_dimensions()
-        max_scroll = max(0, len(display_lines) - body_h)
-        state["scroll"] = max(0, min(int(state.get("scroll", 0)), max_scroll))
-        return state["scroll"]
+        body_w, body_h = self._scroll_panel_body_dimensions()
+        return _report_debug_ui.clamp_report_scroll(
+            self._report_state(),
+            body_w=body_w,
+            body_h=body_h,
+            line_text_fn=_line_text,
+            wrap_display_lines_fn=_wrap_display_lines,
+        )
 
     def _refresh_log_ui(self, reset_scroll=False, focus_end=True):
         state = self._log_state()
@@ -6575,28 +6802,21 @@ class InputSystem(System):
         state["scroll"] = 0
 
     def _refresh_debug_ui(self, reset_scroll=False):
-        state = self._debug_state()
-        previous_scroll = int(state.get("scroll", 0))
-        debug_panel = _build_debug_overlay(
-            self.sim,
-            self.player_eid,
-            duration_label_fn=_tick_duration_label,
-            property_access_summary_fn=_property_access_summary,
+        return _report_debug_ui.refresh_debug_ui(
+            self,
+            reset_scroll=reset_scroll,
+            build_debug_overlay_fn=lambda: _build_debug_overlay(
+                self.sim,
+                self.player_eid,
+                duration_label_fn=_tick_duration_label,
+                property_access_summary_fn=_property_access_summary,
+            ),
+            line_text_fn=_line_text,
+            wrap_display_lines_fn=_wrap_display_lines,
         )
-        state["open"] = True
-        state["title"] = str(debug_panel.get("title", "Debug Overlay")).strip() or "Debug Overlay"
-        state["lines"] = list(debug_panel.get("lines", ()) or ())
-        if reset_scroll:
-            state["scroll"] = 0
-        else:
-            state["scroll"] = previous_scroll
-        self._clamp_debug_scroll()
-        return True
 
     def _close_debug_ui(self):
-        state = self._debug_state()
-        state["open"] = False
-        state["scroll"] = 0
+        _report_debug_ui.close_debug_ui(self._debug_state())
 
     def _log_display_lines(self):
         state = self._log_state()
@@ -6664,25 +6884,23 @@ class InputSystem(System):
         return state["hud_filter"]
 
     def _debug_display_lines(self):
-        state = self._debug_state()
-        raw_lines = list(state.get("lines", ()) or ())
-        if not raw_lines:
-            raw_lines = ["No debug data."]
-
         body_w, _body_h = self._scroll_panel_body_dimensions()
-        display_lines = []
-        for raw in raw_lines:
-            wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
-            display_lines.extend(wrapped)
-        return display_lines or ["No debug data."]
+        return _report_debug_ui.debug_display_lines(
+            self._debug_state(),
+            body_w=body_w,
+            line_text_fn=_line_text,
+            wrap_display_lines_fn=_wrap_display_lines,
+        )
 
     def _clamp_debug_scroll(self):
-        state = self._debug_state()
-        display_lines = self._debug_display_lines()
-        _body_w, body_h = self._scroll_panel_body_dimensions()
-        max_scroll = max(0, len(display_lines) - body_h)
-        state["scroll"] = max(0, min(int(state.get("scroll", 0)), max_scroll))
-        return state["scroll"]
+        body_w, body_h = self._scroll_panel_body_dimensions()
+        return _report_debug_ui.clamp_debug_scroll(
+            self._debug_state(),
+            body_w=body_w,
+            body_h=body_h,
+            line_text_fn=_line_text,
+            wrap_display_lines_fn=_wrap_display_lines,
+        )
 
     def _dialog_body_dimensions(self):
         body_w, body_h = self._scroll_panel_body_dimensions()
@@ -6857,130 +7075,12 @@ class InputSystem(System):
         return True
 
     def _handle_report_input(self, key):
-        state = self._report_state()
-        if not state.get("open"):
-            return False
-        report_kind = str(state.get("kind", "progress")).strip().lower() or "progress"
-
-        if key in (ord("?"), ord("/")):
-            self._help_state()["open"] = True
-            return True
-
-        if key in (ord("o"), ord("O")):
-            if report_kind == "progress":
-                self._close_report_ui()
-            else:
-                self._refresh_report_ui(reset_scroll=True, kind="progress")
-            return True
-
-        if key in (ord("y"), ord("Y")):
-            if report_kind == "known_locations":
-                self._close_report_ui()
-            else:
-                self._refresh_known_locations_ui(reset_scroll=True)
-            return True
-
-        if key == ord("L"):
-            self._close_report_ui()
-            self._refresh_log_ui(reset_scroll=True, focus_end=True)
-            return True
-
-        if key == ord("D"):
-            self._close_report_ui()
-            self._refresh_debug_ui(reset_scroll=True)
-            return True
-
-        if key in (27, ord("q"), ord("Q")):
-            self._close_report_ui()
-            return True
-
-        key_home = getattr(curses, "KEY_HOME", None)
-        key_end = getattr(curses, "KEY_END", None)
-        key_page_up = getattr(curses, "KEY_PPAGE", None)
-        key_page_down = getattr(curses, "KEY_NPAGE", None)
-
-        if report_kind == "known_locations":
-            if key in ENTER_KEYS or key in (ord("e"), ord("E"), ord("x"), ord("X")):
-                self._inspect_selected_known_location()
-                return True
-
-            if key in (ord("g"), ord("G")):
-                self._start_selected_known_location_walk()
-                return True
-
-            if key in (ord("m"), ord("M")):
-                self._mark_selected_known_location()
-                return True
-
-            if key in (ord("h"), ord("H")):
-                self._toggle_known_location_hidden_view()
-                return True
-
-            if key in (ord("r"), ord("R")):
-                self._toggle_selected_known_location_hidden()
-                return True
-
-            if key in (KEY_UP, ord("k"), ord("K")):
-                state["selected_index"] = int(state.get("selected_index", 0)) - 1
-                self._clamp_known_locations_selection()
-                return True
-
-            if key in (KEY_DOWN, ord("j"), ord("J")):
-                state["selected_index"] = int(state.get("selected_index", 0)) + 1
-                self._clamp_known_locations_selection()
-                return True
-
-            if key_home is not None and key == key_home:
-                state["selected_index"] = 0
-                self._clamp_known_locations_selection()
-                return True
-
-            if key_end is not None and key == key_end:
-                state["selected_index"] = max(0, len(list(state.get("rows", ()) or ())) - 1)
-                self._clamp_known_locations_selection()
-                return True
-
-            step = max(1, self._known_locations_list_height() - 1)
-            if key_page_up is not None and key == key_page_up:
-                state["selected_index"] = int(state.get("selected_index", 0)) - step
-                self._clamp_known_locations_selection()
-                return True
-
-            if key_page_down is not None and key == key_page_down:
-                state["selected_index"] = int(state.get("selected_index", 0)) + step
-                self._clamp_known_locations_selection()
-                return True
-            return True
-
-        if key in (KEY_UP, ord("k"), ord("K")):
-            state["scroll"] = int(state.get("scroll", 0)) - 1
-            self._clamp_report_scroll()
-            return True
-
-        if key in (KEY_DOWN, ord("j"), ord("J")):
-            state["scroll"] = int(state.get("scroll", 0)) + 1
-            self._clamp_report_scroll()
-            return True
-
-        if key_home is not None and key == key_home:
-            state["scroll"] = 0
-            return True
-
-        if key_end is not None and key == key_end:
-            state["scroll"] = max(0, len(self._report_display_lines()) - 1)
-            return True
-
-        if key_page_up is not None and key == key_page_up:
-            state["scroll"] = int(state.get("scroll", 0)) - 6
-            self._clamp_report_scroll()
-            return True
-
-        if key_page_down is not None and key == key_page_down:
-            state["scroll"] = int(state.get("scroll", 0)) + 6
-            self._clamp_report_scroll()
-            return True
-
-        return True
+        return _report_debug_ui.handle_report_input(
+            self,
+            key,
+            line_text_fn=_line_text,
+            wrap_display_lines_fn=_wrap_display_lines,
+        )
 
     def _handle_log_input(self, key):
         state = self._log_state()
@@ -7149,68 +7249,12 @@ class InputSystem(System):
         return True
 
     def _handle_debug_input(self, key):
-        state = self._debug_state()
-        if not state.get("open"):
-            return False
-
-        if key in (ord("?"), ord("/")):
-            self._help_state()["open"] = True
-            return True
-
-        if key in (ord("o"), ord("O")):
-            self._close_debug_ui()
-            self._refresh_report_ui(reset_scroll=True)
-            return True
-
-        if key in (ord("y"), ord("Y")):
-            self._close_debug_ui()
-            self._refresh_known_locations_ui(reset_scroll=True)
-            return True
-
-        if key == ord("L"):
-            self._close_debug_ui()
-            self._refresh_log_ui(reset_scroll=True, focus_end=True)
-            return True
-
-        if key in (27, ord("d"), ord("D"), ord("q"), ord("Q")):
-            self._close_debug_ui()
-            return True
-
-        if key in (KEY_UP, ord("k"), ord("K")):
-            state["scroll"] = int(state.get("scroll", 0)) - 1
-            self._clamp_debug_scroll()
-            return True
-
-        if key in (KEY_DOWN, ord("j"), ord("J")):
-            state["scroll"] = int(state.get("scroll", 0)) + 1
-            self._clamp_debug_scroll()
-            return True
-
-        key_home = getattr(curses, "KEY_HOME", None)
-        if key_home is not None and key == key_home:
-            state["scroll"] = 0
-            return True
-
-        key_end = getattr(curses, "KEY_END", None)
-        if key_end is not None and key == key_end:
-            display_lines = self._debug_display_lines()
-            _body_w, body_h = self._scroll_panel_body_dimensions()
-            state["scroll"] = max(0, len(display_lines) - body_h)
-            return True
-
-        key_page_up = getattr(curses, "KEY_PPAGE", None)
-        if key_page_up is not None and key == key_page_up:
-            state["scroll"] = int(state.get("scroll", 0)) - 6
-            self._clamp_debug_scroll()
-            return True
-
-        key_page_down = getattr(curses, "KEY_NPAGE", None)
-        if key_page_down is not None and key == key_page_down:
-            state["scroll"] = int(state.get("scroll", 0)) + 6
-            self._clamp_debug_scroll()
-            return True
-
-        return True
+        return _report_debug_ui.handle_debug_input(
+            self,
+            key,
+            line_text_fn=_line_text,
+            wrap_display_lines_fn=_wrap_display_lines,
+        )
 
     def _sync_look_cursor_to_player(self, zoom_mode):
         positions = self.sim.ecs.get(Position)
@@ -7503,25 +7547,380 @@ class InputSystem(System):
     def _player_modes(self):
         return self.sim.ecs.get(PlayerModeState).get(self.player_eid)
 
+    def _inventory_panel_kind(self):
+        state = self._inventory_state()
+        return str(state.get("panel_kind", "inventory")).strip().lower() or "inventory"
+
+    def _inventory_container_kind(self):
+        state = self._inventory_state()
+        kind = str(state.get("container_kind", "")).strip().lower()
+        if kind:
+            return kind
+        if self._inventory_panel_kind() == "container":
+            return "container"
+        return None
+
+    def _inventory_container_label(self):
+        state = self._inventory_state()
+        label = str(state.get("container_label", "")).strip()
+        if label:
+            return label
+        if self._inventory_container_kind() == "cache":
+            return "Cache"
+        if self._inventory_container_kind() == "bones":
+            return "Stash"
+        return "Container"
+
+    def _inventory_container_view(self):
+        state = self._inventory_state()
+        view = str(state.get("container_view", state.get("cache_view", "pack"))).strip().lower() or "pack"
+        return "pack" if view == "pack" else "container"
+
+    def _inventory_container_instance_id(self):
+        state = self._inventory_state()
+        token = str(state.get("container_instance_id", "") or "").strip()
+        return token or None
+
+    def _inventory_container_capacity(self):
+        state = self._inventory_state()
+        try:
+            return int(max(0, _int_or_default(state.get("container_capacity"), 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    def _inventory_container_property(self):
+        state = self._inventory_state()
+        property_id = str(state.get("property_id", "") or "").strip()
+        if not property_id:
+            return None
+        return self.sim.properties.get(property_id)
+
+    def _equipped_container_entry(self, container_instance_id=None):
+        current = getattr(self.sim, "equipped_container", None)
+        if not isinstance(current, dict):
+            return None
+        active_instance_id = str(current.get("instance_id", "") or "").strip()
+        target_instance_id = str(container_instance_id or active_instance_id or "").strip()
+        if not target_instance_id or target_instance_id != active_instance_id:
+            return None
+        inventory = self._player_inventory()
+        if not inventory:
+            return None
+        entry = inventory.find(instance_id=target_instance_id)
+        if not entry:
+            return None
+        item_def = self.catalog.get(entry["item_id"], {})
+        container_profile = item_def.get("container", {})
+        if not isinstance(container_profile, dict) or _int_or_default(container_profile.get("bonus_slots"), 0) <= 0:
+            return None
+        return entry
+
+    def _worn_container_entries(self, container_instance_id=None):
+        entry = self._equipped_container_entry(container_instance_id)
+        inventory = self._player_inventory()
+        if not entry or not inventory:
+            return []
+        return list(_inventory_entries_stowed_in_container(inventory, entry.get("instance_id")))
+
+    def _worn_container_pack_entries(self, container_instance_id=None):
+        inventory = self._player_inventory()
+        if not inventory:
+            return []
+        entry = self._equipped_container_entry(container_instance_id)
+        if not entry:
+            return list(inventory.items)
+        return list(_inventory_entries_loose_for_container(inventory, entry.get("instance_id")))
+
+    def _equipped_container_panel_note(self, entry):
+        if not isinstance(entry, dict):
+            return ""
+        item_def = self.catalog.get(entry.get("item_id"), {})
+        container_profile = item_def.get("container", {}) if isinstance(item_def.get("container"), dict) else {}
+        bonus_slots = max(0, _int_or_default(container_profile.get("bonus_slots"), 0))
+        if bonus_slots <= 0:
+            return ""
+        return f"Equipped +{bonus_slots} slots"
+
+    def _container_inventory_entries(self, property_id=None, *, container_kind=None):
+        property_id = str(property_id or "").strip()
+        if not property_id:
+            return []
+        container_kind = str(container_kind or self._inventory_container_kind() or "container").strip().lower() or "container"
+        if container_kind == "cache":
+            inventories = getattr(self.sim, "cache_inventories", None)
+            if not isinstance(inventories, dict):
+                self.sim.cache_inventories = {}
+                inventories = self.sim.cache_inventories
+            items = inventories.setdefault(property_id, [])
+            return items
+        inventories_by_kind = getattr(self.sim, "container_inventories", None)
+        if not isinstance(inventories_by_kind, dict):
+            self.sim.container_inventories = {}
+            inventories_by_kind = self.sim.container_inventories
+        inventories = inventories_by_kind.setdefault(container_kind, {})
+        if not isinstance(inventories, dict):
+            inventories = {}
+            inventories_by_kind[container_kind] = inventories
+        items = inventories.setdefault(property_id, [])
+        return items
+
+    def _inventory_panel_entries(self):
+        if self._inventory_panel_kind() == "container":
+            if self._inventory_container_kind() == "worn":
+                if self._inventory_container_view() == "pack":
+                    return self._worn_container_pack_entries(self._inventory_container_instance_id())
+                return self._worn_container_entries(self._inventory_container_instance_id())
+            if self._inventory_container_view() == "pack":
+                inventory = self._player_inventory()
+                return list(inventory.items) if inventory else []
+            container_prop = self._inventory_container_property()
+            if not container_prop:
+                return []
+            return list(self._container_inventory_entries(
+                container_prop.get("id"),
+                container_kind=self._inventory_container_kind(),
+            ))
+        inventory = self._player_inventory()
+        return list(inventory.items) if inventory else []
+
+    def _cache_panel_mission_note(self, prop):
+        if not isinstance(prop, dict):
+            return ""
+        property_id = str(prop.get("id", "") or "").strip()
+        if not property_id:
+            return ""
+        for quest in list(getattr(self.sim, "quests", {}).get("active", ()) or ()):
+            if not isinstance(quest, dict):
+                continue
+            objective = quest.get("objective", {}) if isinstance(quest.get("objective"), dict) else {}
+            if str(objective.get("type", "")).strip().lower() != "cache_pickup":
+                continue
+            if str(objective.get("property_id", "") or "").strip() != property_id:
+                continue
+            title = str(quest.get("title", "")).strip()
+            if title:
+                return f"Mission: {title}"
+            item_id = str(objective.get("item_id", "")).strip().lower()
+            if item_id:
+                return f"Mission: retrieve {_item_label(item_id)}"
+            return "Mission: retrieve cache item"
+        cache_items = self._container_inventory_entries(property_id, container_kind="cache")
+        for entry in cache_items:
+            if not isinstance(entry, dict):
+                continue
+            metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
+            if str(entry.get("owner_tag", "")).strip().lower() == "quest":
+                return "Mission cache: retrieve assigned package"
+            quest_kind = str(metadata.get("quest_kind", "")).strip().lower()
+            if quest_kind:
+                return f"Mission cache: {quest_kind.replace('_', ' ')}"
+        return ""
+
+    def _container_panel_note(self, prop, *, container_kind=None):
+        container_kind = str(container_kind or self._inventory_container_kind() or "").strip().lower()
+        if container_kind == "cache":
+            return self._cache_panel_mission_note(prop)
+        if container_kind == "bones":
+            metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), dict) else {}
+            note = str(metadata.get("bones_note", "") or "").strip()
+            if note:
+                return note
+        return ""
+
+    def _set_inventory_panel_mode(
+        self,
+        *,
+        panel_kind="inventory",
+        title="Inventory",
+        property_id=None,
+        container_kind=None,
+        container_label=None,
+        container_instance_id=None,
+        container_capacity=None,
+        container_view=None,
+        cache_view=None,
+        note_text="",
+        reset_selection=True,
+        reset_inspect=True,
+    ):
+        state = self._inventory_state()
+        state["panel_kind"] = str(panel_kind or "inventory").strip().lower() or "inventory"
+        state["title"] = str(title or "Inventory").strip() or "Inventory"
+        state["property_id"] = str(property_id or "").strip() or None
+        normalized_kind = str(container_kind or "").strip().lower() or None
+        state["container_kind"] = normalized_kind
+        if container_view is None and cache_view is not None:
+            container_view = "pack" if str(cache_view or "pack").strip().lower() == "pack" else "container"
+        if container_label is None:
+            container_label = "Cache" if normalized_kind == "cache" else "Container"
+        state["container_label"] = str(container_label or "Container").strip() or "Container"
+        state["container_instance_id"] = str(container_instance_id or "").strip() or None
+        state["container_capacity"] = (
+            int(max(0, _int_or_default(container_capacity, 0)))
+            if container_capacity is not None
+            else None
+        )
+        if container_view is not None:
+            normalized_view = str(container_view or "pack").strip().lower() or "pack"
+            state["container_view"] = "pack" if normalized_view == "pack" else "container"
+        state["cache_view"] = "pack" if str(state.get("container_view", "pack")).strip().lower() == "pack" else "cache"
+        state["note_text"] = str(note_text or "").strip()
+        if reset_selection:
+            state["selected_index"] = 0
+        if reset_inspect:
+            state["inspect_text"] = ""
+
+    def _emit_inventory_panel_toggled(self, *, open_state):
+        state = self._inventory_state()
+        self.sim.emit(Event(
+            "inventory_panel_toggled",
+            eid=self.player_eid,
+            open=bool(open_state),
+            panel_kind=str(state.get("panel_kind", "inventory")).strip().lower() or "inventory",
+            title=str(state.get("title", "Inventory")).strip() or "Inventory",
+            property_id=state.get("property_id"),
+            container_kind=self._inventory_container_kind(),
+            container_label=self._inventory_container_label(),
+            container_instance_id=self._inventory_container_instance_id(),
+        ))
+
+    def _open_player_inventory_ui(self):
+        self._set_inventory_panel_mode(
+            panel_kind="inventory",
+            title="Inventory",
+            property_id=None,
+            container_kind=None,
+            container_label="Container",
+            container_instance_id=None,
+            container_capacity=None,
+            container_view="pack",
+            note_text="",
+        )
+        state = self._inventory_state()
+        state["open"] = True
+        self._normalize_inventory_selection()
+        self._emit_inventory_panel_toggled(open_state=True)
+
+    def _open_container_inventory_ui(
+        self,
+        prop,
+        *,
+        container_kind="container",
+        container_label=None,
+        container_instance_id=None,
+        container_capacity=None,
+        note_text="",
+    ):
+        if not isinstance(prop, dict):
+            return False
+        container_kind = str(container_kind or "container").strip().lower() or "container"
+        if container_label is None:
+            container_label = "Cache" if container_kind == "cache" else "Container"
+        container_name = str(prop.get("name", prop.get("id", container_label))).strip() or str(container_label)
+        self._set_inventory_panel_mode(
+            panel_kind="container",
+            title=container_name,
+            property_id=prop.get("id"),
+            container_kind=container_kind,
+            container_label=container_label,
+            container_instance_id=container_instance_id,
+            container_capacity=container_capacity,
+            container_view="container",
+            note_text=str(note_text or self._container_panel_note(prop, container_kind=container_kind)).strip(),
+        )
+        state = self._inventory_state()
+        state["open"] = True
+        self._normalize_inventory_selection()
+        self._emit_inventory_panel_toggled(open_state=True)
+        return True
+
+    def _open_cache_inventory_ui(self, prop):
+        return self._open_container_inventory_ui(
+            prop,
+            container_kind="cache",
+            container_label="Cache",
+            container_capacity=PlayerActionSystem.CACHE_MAX_STACKS,
+        )
+
+    def _open_equipped_container_item_ui(self, entry=None):
+        entry = entry or self._selected_inventory_entry()
+        if not isinstance(entry, dict):
+            return False
+        entry = self._equipped_container_entry(entry.get("instance_id"))
+        if not entry:
+            return False
+        item_def = self.catalog.get(entry["item_id"], {})
+        container_profile = item_def.get("container", {}) if isinstance(item_def.get("container"), dict) else {}
+        bonus_slots = max(0, _int_or_default(container_profile.get("bonus_slots"), 0))
+        if bonus_slots <= 0:
+            return False
+        item_name = item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=self.catalog)
+        return self._open_container_inventory_ui(
+            {
+                "id": entry.get("instance_id"),
+                "name": item_name,
+            },
+            container_kind="worn",
+            container_label=item_name,
+            container_instance_id=entry.get("instance_id"),
+            container_capacity=bonus_slots,
+            note_text=self._equipped_container_panel_note(entry),
+        )
+
+    def _close_inventory_ui(self):
+        state = self._inventory_state()
+        was_open = bool(state.get("open"))
+        state["open"] = False
+        if was_open:
+            self._emit_inventory_panel_toggled(open_state=False)
+        self._set_inventory_panel_mode(
+            panel_kind="inventory",
+            title="Inventory",
+            property_id=None,
+            container_kind=None,
+            container_label="Container",
+            container_instance_id=None,
+            container_capacity=None,
+            container_view="pack",
+            note_text="",
+            reset_selection=False,
+            reset_inspect=True,
+        )
+
+    def _toggle_container_inventory_view(self):
+        if self._inventory_panel_kind() != "container":
+            return False
+        state = self._inventory_state()
+        current = self._inventory_container_view()
+        state["container_view"] = "pack" if current == "container" else "container"
+        state["cache_view"] = "pack" if state["container_view"] == "pack" else "cache"
+        state["selected_index"] = 0
+        state["inspect_text"] = ""
+        self._normalize_inventory_selection()
+        return True
+
+    def _toggle_cache_inventory_view(self):
+        return self._toggle_container_inventory_view()
+
     def _normalize_inventory_selection(self):
         state = self._inventory_state()
-        inventory = self._player_inventory()
-        if not inventory or not inventory.items:
+        entries = self._inventory_panel_entries()
+        if not entries:
             state["selected_index"] = 0
             return
-        state["selected_index"] = max(0, min(state["selected_index"], len(inventory.items) - 1))
+        state["selected_index"] = max(0, min(int(state.get("selected_index", 0)), len(entries) - 1))
 
     def _selected_inventory_entry(self):
         self._normalize_inventory_selection()
         state = self._inventory_state()
-        inventory = self._player_inventory()
-        if not inventory or not inventory.items:
+        entries = self._inventory_panel_entries()
+        if not entries:
             return None
 
-        idx = state["selected_index"]
-        if idx < 0 or idx >= len(inventory.items):
+        idx = int(state.get("selected_index", 0))
+        if idx < 0 or idx >= len(entries):
             return None
-        return inventory.items[idx]
+        return entries[idx]
 
     def _normalize_trade_selection(self):
         state = self._trade_state()
@@ -7575,11 +7974,23 @@ class InputSystem(System):
         state = self._inventory_state()
         entry = self._selected_inventory_entry()
         if not entry:
-            state["inspect_text"] = "Inventory empty."
+            if self._inventory_panel_kind() == "container":
+                view = self._inventory_container_view()
+                note = str(state.get("note_text", "")).strip()
+                if view == "container":
+                    state["inspect_text"] = note or f"{self._inventory_container_label()} empty."
+                else:
+                    state["inspect_text"] = note or "Pack empty."
+            else:
+                state["inspect_text"] = "Inventory empty."
             self.sim.emit(Event(
                 "inventory_inspected",
                 eid=self.player_eid,
                 empty=True,
+                panel_kind=str(state.get("panel_kind", "inventory")).strip().lower() or "inventory",
+                title=str(state.get("title", "Inventory")).strip() or "Inventory",
+                container_kind=self._inventory_container_kind(),
+                container_label=self._inventory_container_label(),
             ))
             return
 
@@ -7598,6 +8009,9 @@ class InputSystem(System):
                 need = effect.get("need")
                 delta = effect.get("delta", 0)
                 effect_labels.append(f"{need}:{delta:+}")
+            elif etype == "restore_hp":
+                delta = effect.get("delta", 0)
+                effect_labels.append(f"hp:+{delta}")
             elif etype == "status":
                 status = effect.get("status", "status")
                 duration = effect.get("duration", 0)
@@ -7645,6 +8059,42 @@ class InputSystem(System):
                 armor_label += " equipped"
             effect_labels.append(armor_label)
 
+        disguise_profile = item_def.get("disguise", {}) if isinstance(item_def.get("disguise"), dict) else {}
+        disguise_role_id = str(disguise_profile.get("role_id", "")).strip().lower()
+        if disguise_role_id:
+            disguise_bits = [f"disguise {_disguise_role_label(disguise_role_id)}"]
+            active_disguise = getattr(self.sim, "disguise_state", None)
+            if (
+                isinstance(active_disguise, dict)
+                and str(active_disguise.get("instance_id", "")).strip() == str(entry.get("instance_id", "")).strip()
+            ):
+                disguise_bits.append("equipped")
+                strength_pct = int(round(max(0.0, float(active_disguise.get("strength", 0.0))) * 100.0))
+                disguise_bits.append(f"{strength_pct}%")
+            effect_labels.extend(disguise_bits)
+
+        container_profile = item_def.get("container", {}) if isinstance(item_def.get("container"), dict) else {}
+        bonus_slots = max(0, _int_or_default(container_profile.get("bonus_slots"), 0))
+        if bonus_slots > 0:
+            container_bits = [f"container +{bonus_slots}"]
+            current_container = getattr(self.sim, "equipped_container", None)
+            if isinstance(current_container, dict) and str(current_container.get("instance_id", "")).strip() == str(entry.get("instance_id", "")).strip():
+                container_bits.append("equipped")
+                stowed_count = len(self._worn_container_entries(entry.get("instance_id")))
+                if stowed_count > 0:
+                    container_bits.append(f"holds {stowed_count}")
+            effect_labels.extend(container_bits)
+
+        stowed_container_instance = _entry_stowed_container_instance(entry)
+        current_container = getattr(self.sim, "equipped_container", None)
+        if (
+            stowed_container_instance
+            and isinstance(current_container, dict)
+            and str(current_container.get("instance_id", "")).strip() == stowed_container_instance
+        ):
+            container_name = str(current_container.get("item_name", "container") or "container").strip().lower() or "container"
+            effect_labels.append(f"in {container_name}")
+
         effect_text = ", ".join(effect_labels) if effect_labels else "no active effect"
         state["inspect_text"] = _item_legend_line(
             entry["item_id"],
@@ -7662,38 +8112,42 @@ class InputSystem(System):
             effects=effects,
             instance_id=entry["instance_id"],
             inspect_text=state["inspect_text"],
+            panel_kind=str(state.get("panel_kind", "inventory")).strip().lower() or "inventory",
+            title=str(state.get("title", "Inventory")).strip() or "Inventory",
+            container_kind=self._inventory_container_kind(),
+            container_label=self._inventory_container_label(),
         ))
 
     def _handle_inventory_input(self, key):
         state = self._inventory_state()
+        panel_kind = self._inventory_panel_kind()
 
         if key in (27, ord("i"), ord("I")):
-            state["open"] = False
-            self.sim.emit(Event("inventory_panel_toggled", eid=self.player_eid, open=False))
+            self._close_inventory_ui()
             return True
 
         if key in (ord("o"), ord("O")):
-            state["open"] = False
-            self.sim.emit(Event("inventory_panel_toggled", eid=self.player_eid, open=False))
+            self._close_inventory_ui()
             self._refresh_report_ui(reset_scroll=True)
             return True
 
         if key in (ord("y"), ord("Y")):
-            state["open"] = False
-            self.sim.emit(Event("inventory_panel_toggled", eid=self.player_eid, open=False))
+            self._close_inventory_ui()
             self._refresh_known_locations_ui(reset_scroll=True)
             return True
 
         if key == ord("L"):
-            state["open"] = False
-            self.sim.emit(Event("inventory_panel_toggled", eid=self.player_eid, open=False))
+            self._close_inventory_ui()
             self._refresh_log_ui(reset_scroll=True, focus_end=True)
             return True
 
         if key == ord("D"):
-            state["open"] = False
-            self.sim.emit(Event("inventory_panel_toggled", eid=self.player_eid, open=False))
+            self._close_inventory_ui()
             self._refresh_debug_ui(reset_scroll=True)
+            return True
+
+        if panel_kind == "container" and key in (KEY_LEFT, KEY_RIGHT, ord("\t"), ord("["), ord("]")):
+            self._toggle_container_inventory_view()
             return True
 
         if key in (KEY_UP, ord("k"), ord("K")):
@@ -7716,6 +8170,23 @@ class InputSystem(System):
             return True
 
         selected = self._selected_inventory_entry()
+        if panel_kind == "container" and key in (ord("u"), ord("U")):
+            self.sim.turn_advance_requested = True
+            self.sim.emit(Event(
+                "container_transfer_request",
+                eid=self.player_eid,
+                property_id=state.get("property_id"),
+                container_kind=self._inventory_container_kind(),
+                container_instance_id=self._inventory_container_instance_id(),
+                container_view=self._inventory_container_view(),
+                selected_index=int(state.get("selected_index", 0)),
+                item_id=selected.get("item_id") if selected else None,
+                instance_id=selected.get("instance_id") if selected else None,
+            ))
+            return True
+        if panel_kind == "container" and key in (ord("r"), ord("R")):
+            return True
+
         if key in (ord("u"), ord("U")):
             self.sim.turn_advance_requested = True
             if selected:
@@ -7743,6 +8214,8 @@ class InputSystem(System):
             return True
 
         if key in ENTER_KEYS or key in (ord("e"), ord("E"), ord("x"), ord("X")):
+            if panel_kind != "container" and self._open_equipped_container_item_ui(selected):
+                return True
             self._inspect_selected_item()
             return True
 
@@ -8056,9 +8529,7 @@ class InputSystem(System):
             return
 
         if key in (ord("i"), ord("I")) and not state["open"] and not trade_state.get("open"):
-            state["open"] = True
-            self._normalize_inventory_selection()
-            self.sim.emit(Event("inventory_panel_toggled", eid=self.player_eid, open=True))
+            self._open_player_inventory_ui()
             return
 
         if key == ord("+") and not state["open"] and not trade_state.get("open"):
@@ -8512,6 +8983,7 @@ class WorldStreamingSystem(System):
             })
 
         self.sim.chunk_property_records[key] = records
+        maybe_seed_bones_for_chunk(self.sim, chunk)
 
     def _ensure_chunk_population(self, cx, cy):
         key = (int(cx), int(cy))
@@ -9113,22 +9585,52 @@ class NPCInteractionSystem(System):
         "resting": "taking it easy",
         "investigating": "watching the area",
         "protecting": "covering someone",
+        "following": "watching your back",
+        "holding": "holding position",
         "seeking_social": "looking for company",
         "seeking_safety": "keeping their distance",
     }
     ROOT_TOPICS = {"name", "job", "local", "opportunities", "attention", "contacts", "hire", "fire", "trade", "bye", "purpose", "apologize", "leave"}
     MISSTEP_TOPICS = ("weird", "pry", "insult")
     MENU_REPEAT_ROW_BUDGET = 3
-    REPEAT_PRESSURE_SKIP_TOPICS = {"bye", "trade", "purpose", "apologize", "leave", "payoff", "fence", "hire_runner"}
+    REPEAT_PRESSURE_SKIP_TOPICS = {
+        "bye",
+        "trade",
+        "purpose",
+        "apologize",
+        "leave",
+        "payoff",
+        "fence",
+        "hire_runner",
+        "backup_orders",
+        "backup_follow",
+        "backup_hold",
+        "backup_distract",
+        "backup_goto_wait",
+        "backup_wait_return",
+        "backup_kill",
+    }
     PAYOFF_BASE_COST = 40
     PAYOFF_COOLDOWN_TICKS = 800
     FENCE_COOLDOWN_TICKS = 600
     FENCE_MIN_STANDING = 0.42
     FENCE_MIN_CORRUPTION = 0.45
     CONTRACTOR_COST = 60
-    CONTRACTOR_DURATION = 240   # ticks of bought silence
+    CONTRACTOR_DURATION = 240   # ticks of bought backup
     CONTRACTOR_MIN_STANDING = 0.35
     CONTRACTOR_MIN_CORRUPTION = 0.30
+    SIDE_JOB_MIN_STANDING = 0.44
+    SIDE_JOB_COOLDOWN_TICKS = 240
+    SIDE_JOB_ITEM_POOL = (
+        "credstick_chip",
+        "street_ration",
+        "med_gel",
+        "transit_daypass",
+        "access_badge",
+    )
+    CONTRACTOR_DISTRACTION_TICKS = 24
+    CONTRACTOR_RETURN_WAIT_TICKS = 20
+    CONTRACTOR_KILL_SURCHARGE = 90
     SERVICE_LOCATOR_TOPICS = {
         "service_fuel": {
             "services": ("fuel",),
@@ -9136,16 +9638,22 @@ class NPCInteractionSystem(System):
             "offer_label": "fuel",
             "lead_kind": "service_fuel",
         },
+        "service_repair": {
+            "services": ("repair",),
+            "service_label": "repair shop",
+            "offer_label": "vehicle repair",
+            "lead_kind": "service_repair",
+        },
         "service_banking": {
             "services": ("banking",),
-            "service_label": "bank",
-            "offer_label": "banking",
+            "service_label": "bank or broker",
+            "offer_label": "banking or brokerage",
             "lead_kind": "service_banking",
         },
         "service_insurance": {
             "services": ("insurance",),
-            "service_label": "insurance",
-            "offer_label": "insurance",
+            "service_label": "insurer",
+            "offer_label": "coverage or claims",
             "lead_kind": "service_insurance",
         },
         "service_rest": {
@@ -9166,6 +9674,18 @@ class NPCInteractionSystem(System):
             "offer_label": "shopping",
             "lead_kind": "service_trade",
             "storefront": True,
+        },
+        "service_used_cars": {
+            "services": ("vehicle_sales_used",),
+            "service_label": "used-car spot",
+            "offer_label": "used vehicles",
+            "lead_kind": "service_used_cars",
+        },
+        "service_vehicle_fetch": {
+            "services": ("vehicle_fetch",),
+            "service_label": "vehicle retrieval service",
+            "offer_label": "vehicle retrieval",
+            "lead_kind": "service_vehicle_fetch",
         },
         "service_gaming": {
             "services": tuple(CASINO_GAME_SERVICE_IDS),
@@ -9207,6 +9727,8 @@ class NPCInteractionSystem(System):
         self.sim.events.subscribe("dialog_topic_request", self.on_dialog_topic_request)
         self.sim.events.subscribe("dialog_close_request", self.on_dialog_close_request)
         self.sim.events.subscribe("contractor_hired", self.on_contractor_hired)
+        self.sim.events.subscribe("entity_moved", self.on_entity_moved)
+        self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
 
     def _dialog_ui_state(self):
         state = getattr(self.sim, "dialog_ui", None)
@@ -10170,7 +10692,7 @@ class NPCInteractionSystem(System):
         prep_score = max(0.0, min(1.0, float(prep_terms.get("score", 0.0) or 0.0) / 10.0))
         base_detail = max(0, _int_or_default(prep_terms.get("detail_level"), 0))
 
-        prep_topics = {"hours", "security", "access", "entry", "keyholder"}
+        prep_topics = {"routine", "hours", "security", "access", "entry", "keyholder", "weak_point"}
         opportunity_topics = {"local", "detail", "opportunities", "objective", "angle", "risk"}
         is_prep = topic_id in prep_topics
         is_opportunity = topic_id in opportunity_topics
@@ -10521,7 +11043,11 @@ class NPCInteractionSystem(System):
             context["primary_opportunity_title"] = str(chosen_row.get("title", "")).strip()
             context["primary_opportunity_id"] = int(chosen_row.get("id", 0) or 0)
             summary = self._opportunity_summary(context)
-            detail = summary or self._angle_summary(context, 1) or self._risk_summary(context, 1)
+            detail = (
+                summary
+                or self._cycled_dialogue_line(self._opportunity_angle_lines(context, include_final_operation=False), 1)
+                or self._cycled_dialogue_line(self._opportunity_risk_lines(context, include_final_operation=False), 1)
+            )
             context["opportunity_summary"] = summary
             context["opportunity_detail"] = summary
             context["local_source"] = "opportunity"
@@ -10557,6 +11083,203 @@ class NPCInteractionSystem(System):
             except (TypeError, ValueError):
                 pass
         return None
+
+    def _side_job_for_npc(self, npc_eid):
+        if npc_eid is None:
+            return None
+        try:
+            npc_int = int(npc_eid)
+        except (TypeError, ValueError):
+            return None
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            return None
+        opp_state = traits.get("opportunities")
+        if not isinstance(opp_state, dict):
+            return None
+        for entry in opp_state.get("active", ()):
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("kind", "")).strip().lower() != "issuer_delivery":
+                continue
+            issuer = entry.get("issuer", {}) if isinstance(entry.get("issuer"), dict) else {}
+            if _int_or_default(issuer.get("npc_eid"), 0) == npc_int:
+                return entry
+        return None
+
+    def _recent_side_job_completion_for_npc(self, npc_eid):
+        if npc_eid is None:
+            return None
+        try:
+            npc_int = int(npc_eid)
+        except (TypeError, ValueError):
+            return None
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            return None
+        opp_state = traits.get("opportunities")
+        if not isinstance(opp_state, dict):
+            return None
+        for entry in reversed(list(opp_state.get("completed", ()))):
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("kind", "")).strip().lower() != "issuer_delivery":
+                continue
+            issuer = entry.get("issuer", {}) if isinstance(entry.get("issuer"), dict) else {}
+            if _int_or_default(issuer.get("npc_eid"), 0) != npc_int:
+                continue
+            completed_tick = _int_or_default(entry.get("completed_tick"), -10_000)
+            if self.sim.tick - completed_tick < self.SIDE_JOB_COOLDOWN_TICKS:
+                return entry
+            break
+        return None
+
+    def _build_side_job_offer(self, context):
+        if not isinstance(context, dict):
+            return None
+        npc_eid = context.get("npc_eid")
+        if npc_eid is None or bool(context.get("guarded")):
+            return None
+        if float(context.get("contact_standing", 0.0) or 0.0) < self.SIDE_JOB_MIN_STANDING:
+            return None
+        if self._recent_side_job_completion_for_npc(npc_eid):
+            return None
+
+        issuer_prop = (
+            context.get("workplace_prop")
+            or context.get("owner_place")
+            or context.get("current_prop")
+            or context.get("owned_prop")
+        )
+        if not isinstance(issuer_prop, dict):
+            return None
+
+        issuer_property_id = str(issuer_prop.get("id", "") or "").strip()
+        if not issuer_property_id:
+            return None
+
+        rng = random.Random(
+            f"{self.sim.seed}:issuer-side-job:{int(npc_eid)}:{issuer_property_id}:{self.sim.tick // self.SIDE_JOB_COOLDOWN_TICKS}"
+        )
+        item_pool = [item_id for item_id in self.SIDE_JOB_ITEM_POOL if item_id in ITEM_CATALOG]
+        if not item_pool:
+            return None
+        item_id = str(rng.choice(item_pool)).strip().lower()
+        item_label = item_display_name(item_id, item_catalog=ITEM_CATALOG)
+
+        origin_chunk = self.sim.chunk_coords(
+            _int_or_default(issuer_prop.get("x"), 0),
+            _int_or_default(issuer_prop.get("y"), 0),
+        )
+        offsets = (
+            (1, 0),
+            (-1, 0),
+            (0, 1),
+            (0, -1),
+            (1, 1),
+            (-1, 1),
+            (1, -1),
+            (-1, -1),
+        )
+        step_x, step_y = rng.choice(offsets)
+        distance = rng.randint(1, 3)
+        target_chunk = (
+            int(origin_chunk[0]) + (step_x * distance),
+            int(origin_chunk[1]) + (step_y * distance),
+        )
+        if target_chunk == origin_chunk:
+            target_chunk = (int(origin_chunk[0]) + 1, int(origin_chunk[1]))
+
+        direction_bits = []
+        if target_chunk[1] < origin_chunk[1]:
+            direction_bits.append("N")
+        elif target_chunk[1] > origin_chunk[1]:
+            direction_bits.append("S")
+        if target_chunk[0] > origin_chunk[0]:
+            direction_bits.append("E")
+        elif target_chunk[0] < origin_chunk[0]:
+            direction_bits.append("W")
+        direction = "".join(direction_bits) if direction_bits else "HERE"
+        distance_text = opportunity_distance_text(
+            abs(int(target_chunk[0]) - int(origin_chunk[0])) + abs(int(target_chunk[1]) - int(origin_chunk[1])),
+            direction,
+        )
+
+        issuer_name = _entity_display_name(self.sim, npc_eid, title_case=True) or str(context.get("npc_name", "")).strip() or "your contact"
+        issuer_place_name = str(issuer_prop.get("name", issuer_property_id)).strip() or "the handoff point"
+        org_eid = property_organization_eid(self.sim, issuer_prop, ensure=True)
+        org_name = organization_name(
+            self.sim,
+            org_eid,
+            fallback=str(context.get("organization_name", "")).strip() or issuer_place_name,
+        )
+        base_reward = 16 + int(round(float(context.get("contact_standing", 0.0) or 0.0) * 18.0))
+        reward_credits = max(18, min(42, base_reward + (distance * 3)))
+
+        return {
+            "key": f"issuer_delivery:{int(npc_eid)}:{issuer_property_id}:{target_chunk[0]}:{target_chunk[1]}:{item_id}:{self.sim.tick // self.SIDE_JOB_COOLDOWN_TICKS}",
+            "title": "Quiet Delivery",
+            "summary": f"Carry {item_label} from {issuer_place_name} to a trusted hand {distance_text}.",
+            "kind": "issuer_delivery",
+            "source": "contact",
+            "chunk": target_chunk,
+            "location": "issued_job",
+            "playstyles": ("social", "stealth", "economic"),
+            "reward": {"credits": reward_credits, "standing": 1},
+            "risk": "low" if distance <= 1 else "exposed",
+            "pressure": "low" if distance <= 1 else "medium",
+            "requirements": {
+                "pickup_chunk": origin_chunk,
+                "delivery_chunk": target_chunk,
+                "visit_chunk": target_chunk,
+                "require_item_id": item_id,
+                "require_item_qty": 1,
+                "consume_item": True,
+                "provide_item": True,
+                "item_label": item_label,
+                "acquisition_hint": "provided",
+                "player_accepted": True,
+            },
+            "issuer": {
+                "npc_eid": int(npc_eid),
+                "npc_name": issuer_name,
+                "property_id": issuer_property_id,
+                "organization_eid": int(org_eid) if org_eid is not None else None,
+                "organization_name": org_name,
+                "relation_kind": "job_issuer",
+                "person_standing_delta": 0.08,
+                "property_standing_delta": 0.05,
+                "organization_standing_delta": 0.06 if org_eid is not None else 0.0,
+                "benefits": ("known_name",),
+            },
+            "status": "active",
+            "seed_tick": int(getattr(self.sim, "tick", 0)),
+        }
+
+    def _ensure_side_job_offer(self, context):
+        existing = self._side_job_for_npc(context.get("npc_eid"))
+        if isinstance(existing, dict):
+            reveal_opportunity_to_observer(
+                self.sim,
+                self.player_eid,
+                int(existing.get("id", 0)),
+                awareness_state="confirmed",
+                confidence=0.95,
+                source="npc_dialogue_side_job",
+            )
+            return existing
+
+        opportunity = self._build_side_job_offer(context)
+        if not isinstance(opportunity, dict):
+            return None
+        return append_external_opportunity(
+            self.sim,
+            opportunity,
+            observer_eid=self.player_eid,
+            awareness_state="confirmed",
+            confidence=0.95,
+            source="npc_dialogue_side_job",
+        )
 
     def _learn_dialogue_opportunity(self, context, *, source="dialogue", confidence_mult=1.0):
         if not isinstance(context, dict):
@@ -11054,6 +11777,151 @@ class NPCInteractionSystem(System):
         if not assets or int(getattr(assets, "credits", 0)) < self.CONTRACTOR_COST:
             return False
         return True
+
+    def _active_backup_contract(self, npc_eid):
+        rec = _active_contractor_record(
+            self.sim,
+            npc_eid,
+            ally_eid=self.player_eid,
+            jobs={"backup", "party"},
+        )
+        return rec if isinstance(rec, dict) else None
+
+    def _contractor_order_mode(self, rec):
+        if not isinstance(rec, dict):
+            return "passive"
+        mode = str(rec.get("order", "passive") or "passive").strip().lower()
+        return mode or "passive"
+
+    def _contractor_order_target(self, rec):
+        if not isinstance(rec, dict):
+            return None
+        target = rec.get("order_target")
+        if not isinstance(target, (tuple, list)) or len(target) < 3:
+            return None
+        try:
+            return (int(target[0]), int(target[1]), int(target[2]))
+        except (TypeError, ValueError):
+            return None
+
+    def _set_contractor_order(self, rec, mode, *, target=None, target_eid=None, wait_ticks=0, kill_surcharge=0):
+        if not isinstance(rec, dict):
+            return None
+        rec["order"] = str(mode or "passive").strip().lower() or "passive"
+        rec.pop("focus_threat_eid", None)
+        rec.pop("focus_threat_until", None)
+        rec.pop("order_target", None)
+        rec.pop("order_target_eid", None)
+        rec.pop("order_wait_ticks", None)
+        rec.pop("order_wait_started", None)
+        rec.pop("kill_surcharge_paid", None)
+        if target is not None:
+            rec["order_target"] = (
+                int(target[0]),
+                int(target[1]),
+                int(target[2]),
+            )
+        if target_eid is not None:
+            rec["order_target_eid"] = int(target_eid)
+        if wait_ticks > 0:
+            rec["order_wait_ticks"] = int(wait_ticks)
+        if kill_surcharge > 0:
+            rec["kill_surcharge_paid"] = int(kill_surcharge)
+        return rec
+
+    def _format_dialog_map_marker(self, x, y, z):
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if player_pos and int(player_pos.z) == int(z):
+            return f"{int(x)},{int(y)}"
+        return f"{int(x)},{int(y)},z{int(z)}"
+
+    def _dialogue_backup_cursor_data(self, npc_eid):
+        state = getattr(self.sim, "look_ui", None)
+        if not isinstance(state, dict) or not bool(state.get("active")):
+            return {}
+        if str(state.get("mode", "city")).strip().lower() != "city":
+            return {}
+        try:
+            x = int(state.get("x", 0))
+            y = int(state.get("y", 0))
+            z = int(state.get("z", 0))
+        except (TypeError, ValueError):
+            return {}
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if not player_pos or int(player_pos.z) != int(z):
+            return {}
+
+        target_eid = _first_blocking_entity_at(
+            self.sim,
+            x,
+            y,
+            z,
+            exclude_eid=self.player_eid,
+        )
+        if target_eid in {None, npc_eid}:
+            target_eid = None
+        elif _active_contractor_record(
+            self.sim,
+            target_eid,
+            ally_eid=self.player_eid,
+            jobs={"backup", "party"},
+        ) is not None:
+            target_eid = None
+
+        target_name = _entity_display_name(self.sim, target_eid, title_case=True) if target_eid is not None else ""
+        return {
+            "x": x,
+            "y": y,
+            "z": z,
+            "label": self._format_dialog_map_marker(x, y, z),
+            "target_eid": target_eid,
+            "target_name": target_name,
+        }
+
+    def _contractor_kill_terms(self, npc_eid, *, bond=None):
+        bond = bond if isinstance(bond, dict) else self._bond_snapshot(npc_eid) or {}
+        trust = float(bond.get("trust", 0.0) or 0.0)
+        closeness = float(bond.get("closeness", 0.0) or 0.0)
+        protectiveness = float(bond.get("protectiveness", 0.0) or 0.0)
+        relation = str(bond.get("kind", "") or "").strip().lower()
+
+        trust_score = (trust * 0.45) + (closeness * 0.3) + (protectiveness * 0.25)
+        trusted = relation in {"family", "partner"} or (
+            trust >= 0.72 and closeness >= 0.62 and trust_score >= 0.76
+        )
+        surcharge = 0 if trusted else int(self.CONTRACTOR_KILL_SURCHARGE)
+        assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+        credits = int(getattr(assets, "credits", 0)) if assets else 0
+        return {
+            "trusted": bool(trusted),
+            "surcharge": surcharge,
+            "can_pay": surcharge <= 0 or credits >= surcharge,
+            "credits": credits,
+        }
+
+    def _contractor_order_status(self, rec):
+        mode = self._contractor_order_mode(rec)
+        if mode == "hold":
+            return "holding here"
+        if mode == "goto_wait":
+            target = self._contractor_order_target(rec)
+            if target:
+                return f"posted at {self._format_dialog_map_marker(*target)}"
+            return "posted up"
+        if mode == "wait_return":
+            target = self._contractor_order_target(rec)
+            if target:
+                return f"posted at {self._format_dialog_map_marker(*target)}, then back"
+            return "posted up, then back"
+        if mode == "distraction":
+            return "running a distraction"
+        if mode == "kill":
+            target_eid = rec.get("order_target_eid")
+            target_name = _entity_display_name(self.sim, target_eid, title_case=True) if target_eid is not None else ""
+            if target_name:
+                return f"hunting {target_name}"
+            return "on a hard job"
+        return "passive cover"
 
     # ── End fence helpers ────────────────────────────────────────────────────
 
@@ -11580,6 +12448,7 @@ class NPCInteractionSystem(System):
                 else:
                     focus_lines.append(f"{title} {distance_phrase}.")
             objective_focus = tuple(line for line in focus_lines if line)
+        final_operation_eval = evaluate_final_operation(self.sim, self.player_eid)
         opportunity_rows = self._dialogue_opportunity_rows(limit=3, observer_eid=npc_eid)
 
         # Dialogue should use structured opportunity facts rather than the
@@ -11626,6 +12495,17 @@ class NPCInteractionSystem(System):
             local_source = "other"
             detail_line = f"Try {other_name}. They hear more than I do."
         trade_context = self._trade_context(npc_eid, workplace_prop, current_prop)
+        contractor = self._active_backup_contract(npc_eid)
+        contractor_status = self._contractor_order_status(contractor) if contractor else ""
+        backup_cursor = self._dialogue_backup_cursor_data(npc_eid) if contractor else {}
+        kill_terms = self._contractor_kill_terms(npc_eid, bond=bond) if contractor else {
+            "trusted": False,
+            "surcharge": int(self.CONTRACTOR_KILL_SURCHARGE),
+            "can_pay": False,
+            "credits": 0,
+        }
+        backup_kill_target_eid = backup_cursor.get("target_eid")
+        backup_kill_target_name = str(backup_cursor.get("target_name", "")).strip()
         contract_kill_offer = self._contract_kill_for_npc(npc_eid)
         workplace_here = bool(workplace_prop and current_prop and workplace_prop["id"] == current_prop["id"])
         subtitle_bits = []
@@ -11634,6 +12514,8 @@ class NPCInteractionSystem(System):
         elif role_text:
             subtitle_bits.append(role_text)
         subtitle_bits.append(state_text)
+        if contractor_status and contractor_status != "passive cover":
+            subtitle_bits.append(contractor_status)
         subtitle_bits.append(tone)
         if pressure_tier in {"medium", "high"}:
             subtitle_bits.append(f"heat {pressure_tier}")
@@ -11739,6 +12621,7 @@ class NPCInteractionSystem(System):
             "other_name": other_name,
             "other_relation": other_relation,
             "rumor_line": rumor_line,
+            "objective_id": str((objective_eval or {}).get("id", "")).strip().lower(),
             "objective_title": objective_title,
             "objective_next_step": objective_next_step,
             "objective_summary_line": objective_summary_line,
@@ -11746,6 +12629,14 @@ class NPCInteractionSystem(System):
             "objective_how_lines": objective_how_lines,
             "objective_activity_lines": objective_activity_lines,
             "objective_focus_lines": objective_focus,
+            "final_operation_summary_line": str((final_operation_eval or {}).get("summary_line", "")).strip(),
+            "final_operation_next_step": str((final_operation_eval or {}).get("next_step", "")).strip(),
+            "final_operation_target_property_id": str((final_operation_eval or {}).get("target_property_id", "")).strip(),
+            "final_operation_target_property_name": str((final_operation_eval or {}).get("target_property_name", "")).strip(),
+            "final_operation_target_reason": str((final_operation_eval or {}).get("target_reason", "")).strip(),
+            "final_operation_target_quality_label": str((final_operation_eval or {}).get("target_quality_label", "")).strip(),
+            "final_operation_target_entry_label": str((final_operation_eval or {}).get("target_entry_label", "")).strip(),
+            "final_operation_target_entry_detail": str((final_operation_eval or {}).get("target_entry_detail", "")).strip(),
             "opportunity_rows": opportunity_rows,
             "opportunity_judgments": tuple(opportunity_judgments),
             "primary_opportunity_judgment": primary_opportunity_judgment,
@@ -11760,12 +12651,33 @@ class NPCInteractionSystem(System):
             "trade_available": bool(trade_context),
             "trade_context": trade_context,
             "vouch_place": workplace_prop or owned_prop,
+            "backup_orders_available": bool(contractor),
+            "backup_status_hint": contractor_status,
+            "backup_cursor_hint": str(backup_cursor.get("label", "")).strip(),
+            "backup_cursor_x": backup_cursor.get("x"),
+            "backup_cursor_y": backup_cursor.get("y"),
+            "backup_cursor_z": backup_cursor.get("z"),
+            "backup_cursor_ready": bool(backup_cursor),
+            "backup_kill_target_eid": backup_kill_target_eid,
+            "backup_kill_target_name": backup_kill_target_name,
+            "backup_kill_cost_hint": "trusted" if kill_terms.get("trusted") else (
+                f"{int(kill_terms.get('surcharge', 0))} credits" if contractor and backup_kill_target_eid is not None else ""
+            ),
+            "backup_kill_surcharge": int(kill_terms.get("surcharge", 0)),
+            "backup_kill_trusted": bool(kill_terms.get("trusted")),
+            "backup_kill_available": bool(
+                contractor
+                and backup_kill_target_eid is not None
+                and (bool(kill_terms.get("trusted")) or bool(kill_terms.get("can_pay")))
+            ),
             "contract_kill_offer": contract_kill_offer,
             "contract_target_role": str(
                 (contract_kill_offer or {}).get("requirements", {}).get("kill_target_role", "")
             ).strip(),
         }
         context = self._apply_rival_dialogue_context(context)
+        context["side_job_offer"] = self._side_job_for_npc(npc_eid)
+        context["side_job_available"] = bool(context["side_job_offer"] or self._build_side_job_offer(context))
         context["pressure_role"] = self._dialogue_pressure_role(context)
         context["dialogue_prep_terms"] = _dialogue_prep_skill_terms(self.sim, self.player_eid)
         staffing = self._player_business_staffing_options(context)
@@ -11841,7 +12753,9 @@ class NPCInteractionSystem(System):
             return f"I have been around long enough to know {other_name} and a few other faces."
         return "I have been around long enough to recognize the regulars."
 
-    def _routine_summary(self, context):
+    def _routine_summary(self, context, *, quality=None):
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "routine")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         if context.get("is_rival_operator"):
             hustle = str(context.get("rival_hustle", "")).strip().lower()
             target_title = str(context.get("primary_opportunity_title", "")).strip()
@@ -11867,6 +12781,28 @@ class NPCInteractionSystem(System):
         state_text = str(context.get("state_text", "")).strip().lower()
         if context.get("guarded") and owner_place_name:
             return f"I keep an eye on {owner_place_name} and on who drifts through it."
+        if quality_mode == "vague":
+            if workplace_name and home_name and workplace_name.lower() != home_name.lower():
+                return f"I drift between {workplace_name} and {home_name} depending on who is moving."
+            if workplace_name:
+                return f"I show around {workplace_name} when the place is moving."
+            if home_name:
+                return f"I stay around {home_name} until something pulls me out."
+            if state_text:
+                return f"I have been keeping {state_text} and mobile."
+            return ""
+        if quality_mode == "guarded":
+            if workplace_name and home_name and workplace_name.lower() != home_name.lower():
+                return f"I am usually around {workplace_name} while the shift is moving, then back to {home_name} after."
+            if workplace_name and shift_text:
+                return f"I am usually around {workplace_name} while staff are on."
+            if workplace_name:
+                return f"I drift through {workplace_name} when the day needs me."
+            if home_name:
+                return f"I mostly stay around {home_name} unless work pulls me out."
+            if state_text:
+                return f"Lately I have been {state_text} and staying flexible."
+            return ""
         if workplace_name and shift_text and home_name and workplace_name.lower() != home_name.lower():
             return f"I am usually at {workplace_name} {shift_text}, then back to {home_name} when I am off."
         if workplace_name and shift_text:
@@ -12134,6 +13070,109 @@ class NPCInteractionSystem(System):
             return f"You have to make the pickup first, then haul the {item_label} back"
         return ""
 
+    def _opportunity_anchor_property(self, row):
+        if not isinstance(row, dict):
+            return None
+        requirements = dict(row.get("requirements", {}) or {})
+        property_id = str(requirements.get("property_id", "")).strip()
+        if not property_id:
+            return None
+        prop = self.sim.properties.get(property_id)
+        return prop if isinstance(prop, dict) else None
+
+    def _opportunity_anchor_name(self, row):
+        prop = self._opportunity_anchor_property(row)
+        if isinstance(prop, dict):
+            return str(prop.get("name", prop.get("id", "site"))).strip() or "the site"
+        requirements = dict(row.get("requirements", {}) or {}) if isinstance(row, dict) else {}
+        return str(requirements.get("property_name", "")).strip()
+
+    def _opportunity_anchor_clause(self, row, context, *, preposition="around"):
+        place_name = self._opportunity_anchor_name(row)
+        distance = int((row or {}).get("distance", 0) or 0) if isinstance(row, dict) else 0
+        direction = str((row or {}).get("direction", "HERE")).strip() if isinstance(row, dict) else "HERE"
+        distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
+        if place_name and distance_phrase and distance_phrase != "here":
+            return f"{preposition} {place_name}, {distance_phrase}"
+        if place_name:
+            return f"{preposition} {place_name}"
+        if distance_phrase and distance_phrase != "here":
+            return distance_phrase
+        return "nearby"
+
+    def _retrieval_opportunity_summary(self, row, context, *, quality=None):
+        if str(context.get("objective_id", "")).strip().lower() != "high_value_retrieval":
+            return ""
+        if not isinstance(row, dict):
+            return ""
+
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "opportunities")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        kind = str(row.get("kind", "")).strip().lower()
+        summary = str(row.get("summary", "")).strip()
+        anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+
+        clear_base = ""
+        fallback_tail = ""
+        guarded_base = ""
+        guarded_tail = ""
+        vague_base = ""
+
+        if kind == "service_friction":
+            clear_base = f"For the retrieval, the service trouble {anchor} is the strongest live lead."
+            fallback_tail = "Dragged-out staff and complaint traffic there are exposing timings, access habits, and weak points."
+            guarded_base = f"For the retrieval, I would check the service trouble {anchor} first."
+            guarded_tail = "People under that kind of drag get sloppy, but verify it yourself."
+            vague_base = f"If you are building the retrieval chain, start with the service trouble {anchor}."
+        elif kind == "missing_person":
+            clear_base = f"For the retrieval, the missing-person trail {anchor} is the strongest live lead."
+            fallback_tail = "Search traffic there is exposing who comes and goes, and who acts like they belong."
+            guarded_base = f"For the retrieval, I would check the missing-person trail {anchor} first."
+            guarded_tail = "Searches shake routine loose, but I would still confirm it yourself."
+            vague_base = f"If you are building the retrieval chain, start with the missing-person trail {anchor}."
+        elif kind == "property_dispute":
+            clear_base = f"For the retrieval, the dispute {anchor} is the strongest live lead."
+            fallback_tail = "Split loyalties there make people talk, and routine starts to leak around the edges."
+            guarded_base = f"For the retrieval, I would lean on the dispute {anchor} first."
+            guarded_tail = "When loyalties split, somebody usually talks, but make them prove it."
+            vague_base = f"If you are building the retrieval chain, start with the dispute {anchor}."
+        elif kind == "lead_followup":
+            clear_base = f"For the retrieval, the follow-up lead {anchor} is still warm."
+            fallback_tail = "Walk it before the trail cools and turns back into rumor."
+            guarded_base = f"For the retrieval, I would walk the follow-up lead {anchor} first."
+            guarded_tail = "Fresh trails cool fast."
+            vague_base = f"If you are building the retrieval chain, walk the follow-up lead {anchor}."
+        elif kind == "intel_scout":
+            clear_base = f"For the retrieval, the scout read {anchor} is worth the walk."
+            fallback_tail = "A clean pass there should tell you who belongs, who lingers, and when the site breathes."
+            guarded_base = f"For the retrieval, I would scout {anchor} before committing."
+            guarded_tail = "Do the read yourself before you trust the timing."
+            vague_base = f"If you are building the retrieval chain, scout {anchor} first."
+        elif kind == "landmark_survey":
+            clear_base = f"For the retrieval, the survey lead {anchor} is worth your time."
+            fallback_tail = "Watching who treats that place like background can tell you what it is hiding."
+            guarded_base = f"For the retrieval, I would survey {anchor} before pushing deeper."
+            guarded_tail = "You want the place to look ordinary before it starts giving anything away."
+            vague_base = f"If you are building the retrieval chain, survey {anchor} first."
+        elif kind == "district_contract":
+            clear_base = f"For the retrieval, the contract traffic {anchor} is the live lead."
+            fallback_tail = "Side work there can put you on the right block without looking like you are casing it."
+            guarded_base = f"For the retrieval, I would ride the contract traffic {anchor} first."
+            guarded_tail = "It can cover you, but only if you still look like you belong in the lane."
+            vague_base = f"If you are building the retrieval chain, use the contract traffic {anchor} first."
+        else:
+            return ""
+
+        if quality_mode == "guarded":
+            return f"{guarded_base} {guarded_tail}".strip()
+        if quality_mode == "vague":
+            return vague_base.strip()
+
+        detail = summary or fallback_tail
+        if detail:
+            return f"{clear_base} {detail}".strip()
+        return clear_base.strip()
+
     def _opportunity_summary(self, context, *, quality=None):
         focus_lines = list(context.get("objective_focus_lines", ()) or ())
         rows = list(context.get("opportunity_rows", ()) or ())
@@ -12150,6 +13189,9 @@ class NPCInteractionSystem(System):
 
         if rows:
             row = rows[0]
+            retrieval_summary = self._retrieval_opportunity_summary(row, context, quality=quality)
+            if retrieval_summary:
+                return retrieval_summary
             title = str(row.get("title", "Opportunity")).strip() or "Opportunity"
             summary = str(row.get("summary", "")).strip()
             distance = int(row.get("distance", 0))
@@ -12237,13 +13279,100 @@ class NPCInteractionSystem(System):
             return str(focus_lines[0]).strip()
         return str(context.get("opportunity_summary", "")).strip()
 
-    def _objective_lines(self, context):
+    def _final_operation_lead_reason_line(self, context, *, quality=None):
+        target_property_name = str(context.get("final_operation_target_property_name", "")).strip() or "the target site"
+        target_property_id = str(context.get("final_operation_target_property_id", "")).strip()
+        target_reason = str(context.get("final_operation_target_reason", "")).strip()
+        target_quality = str(context.get("final_operation_target_quality_label", "")).strip()
+        if not target_property_id:
+            return ""
+
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "objective")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        if quality_mode == "vague":
+            return f"The retrieval trail keeps bending toward {target_property_name}; there is enough there to justify a harder look."
+        if quality_mode == "guarded":
+            if target_reason:
+                return f"{target_property_name} still reads like the right site off that {target_reason}, but I would walk the chain again myself before committing."
+            return f"{target_property_name} still reads like the right site, but I would walk the chain again myself before committing."
+        if target_reason and target_quality:
+            return f"The {target_quality} {target_reason} around {target_property_name} is what keeps putting it at the center of the retrieval chain."
+        if target_reason:
+            return f"The {target_reason} around {target_property_name} is what keeps putting it at the center of the retrieval chain."
+        return f"{target_property_name} is where the retrieval chain keeps collapsing."
+
+    def _retrieval_objective_support_line(self, row, context, *, quality=None):
+        if str(context.get("objective_id", "")).strip().lower() != "high_value_retrieval":
+            return ""
+        if not isinstance(row, dict):
+            return ""
+
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "objective")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        kind = str(row.get("kind", "")).strip().lower()
+        anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+
+        if kind == "service_friction":
+            if quality_mode == "vague":
+                return f"Build the retrieval chain through the service trouble {anchor}."
+            if quality_mode == "guarded":
+                return f"Lean on the service trouble {anchor}, but make it prove itself before you bet the run on it."
+            return f"Build the retrieval chain through the service trouble {anchor}; dragged-out staff leak timings and weak points."
+        if kind == "missing_person":
+            if quality_mode == "vague":
+                return f"Build the retrieval chain through the missing-person trail {anchor}."
+            if quality_mode == "guarded":
+                return f"Lean on the missing-person trail {anchor}, but confirm who is really searching and who is only listening."
+            return f"Build the retrieval chain through the missing-person trail {anchor}; search traffic exposes who comes and goes."
+        if kind == "property_dispute":
+            if quality_mode == "vague":
+                return f"Build the retrieval chain through the dispute {anchor}."
+            if quality_mode == "guarded":
+                return f"Lean on the dispute {anchor}, but do not mistake noise for a real seam."
+            return f"Build the retrieval chain through the dispute {anchor}; split loyalties make people talk."
+        if kind == "lead_followup":
+            return (
+                f"Push the follow-up lead {anchor} before it cools."
+                if quality_mode != "guarded"
+                else f"Push the follow-up lead {anchor}, but walk it yourself before it turns back into rumor."
+            )
+        if kind == "intel_scout":
+            return (
+                f"Scout {anchor} until routine stops looking ordinary."
+                if quality_mode != "guarded"
+                else f"Scout {anchor}, but do the read yourself before you trust it."
+            )
+        if kind == "landmark_survey":
+            return (
+                f"Survey {anchor} until you know who treats the place like scenery."
+                if quality_mode != "guarded"
+                else f"Survey {anchor}, but do not force a pattern before the place gives you one."
+            )
+        if kind == "district_contract":
+            return (
+                f"Use the contract traffic {anchor} to get on the block without looking like a casing pass."
+                if quality_mode != "guarded"
+                else f"Use the contract traffic {anchor}, but only if you still look like you belong in that lane."
+            )
+        return ""
+
+    def _objective_lines(self, context, *, quality=None):
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "objective")
         if context.get("is_rival_operator"):
             lines = self._opportunity_angle_lines(context)
             if not lines:
                 lines = self._opportunity_risk_lines(context)
             return [str(line).strip() for line in lines if str(line).strip()]
         lines = []
+        objective_id = str(context.get("objective_id", "")).strip().lower()
+        if objective_id == "high_value_retrieval":
+            final_reason_line = self._final_operation_lead_reason_line(context, quality=quality)
+            if final_reason_line:
+                lines.append(final_reason_line)
+            for row in list(context.get("opportunity_rows", ()) or ())[:2]:
+                support_line = self._retrieval_objective_support_line(row, context, quality=quality)
+                if support_line and support_line not in lines:
+                    lines.append(support_line)
         objective_title = str(context.get("objective_title", "")).strip() or "the run"
         next_step = str(context.get("objective_next_step", "")).strip()
         if next_step:
@@ -12253,7 +13382,8 @@ class NPCInteractionSystem(System):
         return [str(line).strip() for line in lines if str(line).strip()]
 
     def _objective_summary(self, context, ask_count):
-        return self._cycled_dialogue_line(self._objective_lines(context), ask_count)
+        quality = self._dialogue_pressure_intel_quality(context, "objective")
+        return self._cycled_dialogue_line(self._objective_lines(context, quality=quality), ask_count)
 
     def _opportunity_requirement_angle_line(self, row):
         requirements = dict(row.get("requirements", {}) or {}) if isinstance(row, dict) else {}
@@ -12283,12 +13413,162 @@ class NPCInteractionSystem(System):
             return f"It is a two-leg run, and carrying the {item_label} back is the part that can go sideways."
         return ""
 
-    def _opportunity_angle_lines(self, context, *, quality=None):
+    _ANGLE_PLAYSTYLE_PHRASES = {
+        "social": (
+            "People are the opening on it.",
+            "The first seam is usually a person, not a lock.",
+            "It starts with somebody talking.",
+        ),
+        "economic": (
+            "Money is the lever on it.",
+            "Follow the payout trail, not just the route.",
+            "The credits are part of the route, not just the reward.",
+        ),
+        "stealth": (
+            "Quiet setup matters more than speed.",
+            "It wants softer feet than the room expects.",
+            "You win it by staying cleaner than the site expects.",
+        ),
+        "combat": (
+            "Go in ready for friction.",
+            "Do not assume it stays soft once you touch it.",
+            "Force is an option, not a guarantee.",
+        ),
+    }
+
+    def _opportunity_angle_style_line(self, row, context):
+        if not isinstance(row, dict):
+            return ""
+        playstyles = [
+            str(style).strip().lower()
+            for style in tuple(row.get("playstyles", ()) or ())
+            if str(style).strip()
+        ]
+        if not playstyles:
+            return ""
+        variants = self._ANGLE_PLAYSTYLE_PHRASES.get(playstyles[0])
+        if not variants:
+            return ""
+        seed = f"{getattr(self.sim, 'seed', 0)}:angle-style:{context.get('npc_eid', 0)}:{row.get('id', 0)}"
+        return str(random.Random(seed).choice(variants)).strip()
+
+    def _final_operation_angle_line(self, context, *, quality=None):
+        target_property_id = str(context.get("final_operation_target_property_id", "") or "").strip()
+        target_property_name = str(context.get("final_operation_target_property_name", "") or "").strip() or "the target site"
+        entry_detail = str(context.get("final_operation_target_entry_detail", "") or "").strip()
+        if not target_property_id or not entry_detail:
+            return ""
+
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "angle")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        if quality_mode == "vague":
+            return f"For the retrieval itself, do not hit {target_property_name} from the front. Walk it and find the softer seam first."
+        if quality_mode == "guarded":
+            return f"For the retrieval itself, there is a cleaner angle into {target_property_name}, but I would confirm it on-site before betting on it."
+        return f"For the retrieval itself, {entry_detail}"
+
+    def _retrieval_opportunity_angle_line(self, row, context, *, quality=None):
+        if str(context.get("objective_id", "")).strip().lower() != "high_value_retrieval":
+            return ""
+        if not isinstance(row, dict):
+            return ""
+
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "angle")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        kind = str(row.get("kind", "")).strip().lower()
+        anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+
+        if kind == "service_friction":
+            if quality_mode == "vague":
+                return f"Start with the service trouble {anchor} before you touch anything else."
+            if quality_mode == "guarded":
+                return f"Start with the service trouble {anchor}, then confirm the timing yourself."
+            return f"Start with the complaint-heavy side {anchor}; delayed service is exposing timings and access habits."
+        if kind == "missing_person":
+            if quality_mode == "vague":
+                return f"Start with the missing-person trail {anchor}."
+            if quality_mode == "guarded":
+                return f"Start with the missing-person trail {anchor}, then verify who is really moving because of it."
+            return f"Start with the people asking after the missing person {anchor}; search traffic shakes routine loose."
+        if kind == "property_dispute":
+            if quality_mode == "vague":
+                return f"Start with the dispute {anchor}."
+            if quality_mode == "guarded":
+                return f"Start with the dispute {anchor}, then make somebody prove which side is actually talking."
+            return f"Start with the split {anchor}; the side that feels squeezed is the side that talks."
+        if kind == "lead_followup":
+            return (
+                f"Start by walking the follow-up lead {anchor} before it cools."
+                if quality_mode != "guarded"
+                else f"Start by walking the follow-up lead {anchor}, then confirm it before it turns back into rumor."
+            )
+        if kind == "intel_scout":
+            return (
+                f"Start by scouting {anchor} until you know who belongs and who lingers."
+                if quality_mode != "guarded"
+                else f"Start by scouting {anchor}, but make the read yourself before you trust it."
+            )
+        if kind == "landmark_survey":
+            return (
+                f"Start by watching {anchor} long enough to see who treats it like background."
+                if quality_mode != "guarded"
+                else f"Start by surveying {anchor}, but do not force the pattern before the place gives it to you."
+            )
+        if kind == "district_contract":
+            return (
+                f"Start with the contract traffic {anchor}; it gives you a reason to be on the block."
+                if quality_mode != "guarded"
+                else f"Start with the contract traffic {anchor}, but make sure you still look like you belong in that lane."
+            )
+        return ""
+
+    def _final_operation_risk_line(self, context, *, quality=None):
+        target_property_id = str(context.get("final_operation_target_property_id", "") or "").strip()
+        target_property_name = str(context.get("final_operation_target_property_name", "") or "").strip() or "the target site"
+        entry_detail = str(context.get("final_operation_target_entry_detail", "") or "").strip().lower()
+        if not target_property_id:
+            return ""
+
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "risk")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+
+        prop = self.sim.properties.get(target_property_id)
+        controller = _property_access_controller(self.sim, prop) if isinstance(prop, dict) else {}
+        requirement = _controller_access_requirement_text(controller) if isinstance(controller, dict) else "real clearance"
+        security_text = _dialogue_security_tier_text((controller or {}).get("security_tier"))
+
+        if quality_mode == "vague":
+            return f"On the retrieval, do not count on the first soft read holding once you show your face at {target_property_name}."
+        if quality_mode == "guarded":
+            return f"On the retrieval, if the clean angle is gone, {target_property_name} goes back to real {requirement} fast."
+
+        bits = [f"If that entry window closes, {target_property_name} falls back to {requirement}"]
+        if security_text:
+            bits[-1] = f"{bits[-1]} and {security_text}"
+        bits[-1] = f"{bits[-1]}."
+        if "blackout" in entry_detail:
+            bits.append("That blackout edge will not hold forever.")
+        elif "worker cover" in entry_detail or "shift" in entry_detail:
+            bits.append("Once the routine settles, the clean window gets thinner.")
+        elif "hired backup" in entry_detail:
+            bits.append("Miss the timing and the easy support edge goes away with it.")
+        return " ".join(bit for bit in bits if bit)
+
+    def _opportunity_angle_lines(self, context, *, quality=None, include_final_operation=True):
         quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "angle")
         quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         lines = []
-        lines.extend(list(context.get("objective_focus_lines", ()) or ()))
+        retrieval_objective = str(context.get("objective_id", "")).strip().lower() == "high_value_retrieval"
+        final_operation_line = self._final_operation_angle_line(context, quality=quality)
+        if include_final_operation and final_operation_line:
+            lines.append(final_operation_line)
+        if not retrieval_objective:
+            lines.extend(list(context.get("objective_focus_lines", ()) or ()))
         for row in list(context.get("opportunity_rows", ()) or ()):
+            retrieval_line = self._retrieval_opportunity_angle_line(row, context, quality=quality)
+            if retrieval_line:
+                lines.append(retrieval_line)
+                continue
             title = str(row.get("title", "Opportunity")).strip() or "Opportunity"
             summary = str(row.get("summary", "")).strip()
             distance = int(row.get("distance", 0))
@@ -12297,6 +13577,7 @@ class NPCInteractionSystem(System):
             # Humanize distance with directional context (1 chunk = ~200m).
             distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
             requirement_line = self._opportunity_requirement_angle_line(row)
+            style_line = self._opportunity_angle_style_line(row, context)
             
             if quality_mode == "guarded":
                 line = f"Start with {title} {distance_phrase}, then confirm the rest yourself."
@@ -12309,12 +13590,16 @@ class NPCInteractionSystem(System):
                     line = f"Start with {title} {distance_phrase}."
                 if requirement_line:
                     line = f"{line} {requirement_line}"
+                if style_line:
+                    line = f"{line} {style_line}"
             lines.append(line)
+        if retrieval_objective:
+            lines.extend(list(context.get("objective_focus_lines", ()) or ()))
         lines.extend(list(context.get("objective_activity_lines", ()) or ()))
         return [str(line).strip() for line in lines if str(line).strip()]
 
     def _angle_summary(self, context, ask_count):
-        return self._cycled_dialogue_line(self._opportunity_angle_lines(context), ask_count)
+        return self._cycled_dialogue_line(self._opportunity_angle_lines(context, include_final_operation=True), ask_count)
 
     # Human-readable playstyle descriptors, keyed by the internal tag.
     # Multiple variants are chosen deterministically per NPC + opportunity.
@@ -12325,11 +13610,73 @@ class NPCInteractionSystem(System):
         "combat":   ("can get rough", "expect friction", "not a soft job"),
     }
 
-    def _opportunity_risk_lines(self, context, *, quality=None):
+    def _retrieval_opportunity_risk_line(self, row, context, *, quality=None):
+        if str(context.get("objective_id", "")).strip().lower() != "high_value_retrieval":
+            return ""
+        if not isinstance(row, dict):
+            return ""
+
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "risk")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        kind = str(row.get("kind", "")).strip().lower()
+        anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+
+        if kind == "service_friction":
+            if quality_mode == "vague":
+                return f"Service trouble {anchor} also means extra eyes if you handle it badly."
+            if quality_mode == "guarded":
+                return f"Service trouble {anchor} can still pay, but irritated staff remember the wrong face."
+            return f"Service trouble {anchor} means more irritated staff, more complaints, and more people remembering the wrong face."
+        if kind == "missing_person":
+            if quality_mode == "vague":
+                return f"A missing-person trail {anchor} brings extra eyes with it."
+            if quality_mode == "guarded":
+                return f"A missing-person trail {anchor} means anxious people comparing notes about strangers."
+            return f"A missing-person trail {anchor} means anxious people comparing notes about strangers."
+        if kind == "property_dispute":
+            if quality_mode == "vague":
+                return f"A dispute {anchor} can turn everybody jumpy fast."
+            if quality_mode == "guarded":
+                return f"A dispute {anchor} means everybody is already expecting somebody to lie."
+            return f"A dispute {anchor} means everybody is already expecting somebody to lie."
+        if kind == "lead_followup":
+            if quality_mode == "vague":
+                return f"That follow-up lead {anchor} will cool if you let the block settle."
+            if quality_mode == "guarded":
+                return f"That follow-up lead {anchor} cools fast, and if you loiter without purpose you become the memorable part."
+            return f"That follow-up lead {anchor} cools fast, and if you loiter without purpose you become the memorable part."
+        if kind == "intel_scout":
+            if quality_mode == "vague":
+                return f"A scout pass {anchor} is only clean if you keep moving."
+            if quality_mode == "guarded":
+                return f"A scout pass {anchor} pays in sightlines, but it still tags you if you overstay it."
+            return f"A scout pass {anchor} pays in sightlines, but it still tags you if you overstay it."
+        if kind == "landmark_survey":
+            if quality_mode == "vague":
+                return f"The risk {anchor} is becoming the person who watches a little too carefully."
+            if quality_mode == "guarded":
+                return f"The risk {anchor} is becoming the person who watches a little too carefully."
+            return f"The risk {anchor} is becoming the person who watches a little too carefully."
+        if kind == "district_contract":
+            if quality_mode == "vague":
+                return f"Contract traffic {anchor} can cover you or expose you."
+            if quality_mode == "guarded":
+                return f"Contract traffic {anchor} can cover you, but somebody will notice if you do not fit the lane."
+            return f"Contract traffic {anchor} can cover you, but somebody will notice if you do not fit the lane."
+        return ""
+
+    def _opportunity_risk_lines(self, context, *, quality=None, include_final_operation=True):
         quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "risk")
         quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         lines = []
+        final_operation_line = self._final_operation_risk_line(context, quality=quality)
+        if include_final_operation and final_operation_line:
+            lines.append(final_operation_line)
         for row in list(context.get("opportunity_rows", ()) or ()):
+            retrieval_line = self._retrieval_opportunity_risk_line(row, context, quality=quality)
+            if retrieval_line:
+                lines.append(retrieval_line)
+                continue
             title = str(row.get("title", "Opportunity")).strip() or "Opportunity"
             risk = str(row.get("risk", "low")).strip() or "low"
             playstyles = [str(style).strip() for style in row.get("playstyles", ()) if str(style).strip()]
@@ -12582,6 +13929,20 @@ class NPCInteractionSystem(System):
                 return f"The clean window is {hours_text}; outside that, the {fixture} tightens around {requirement}."
             return ""
 
+        if topic_id == "routine":
+            timing = shift_text or hours_text
+            if detail_level >= 2 and highest and side_doors and timing:
+                label = self._aperture_summary_label(side_doors[0], article=False)
+                return f"Shift turn is the part worth watching. {highest['name']} and the {label} tell you when real access starts moving."
+            if detail_level >= 2 and highest and timing:
+                return f"If you are reading the place for prep, watch {highest['name']} around {timing}; that is when the real clearance starts moving."
+            if side_doors and timing:
+                label = self._aperture_summary_label(side_doors[0], article=False)
+                return f"Routine traffic usually leaks through the {label} around {timing}, not the front."
+            if schedule_source == "owner_shift" and shift_text:
+                return "The real rhythm is the staff shift, not the posted hours."
+            return ""
+
         if topic_id == "security":
             if detail_level >= 2 and panel_prop is not None:
                 return f"The street-side panel is the seam I would watch first before touching {place_name} blind."
@@ -12627,6 +13988,101 @@ class NPCInteractionSystem(System):
                 return f"Shift change is when access tends to move around, especially near {shift_text}."
             return ""
 
+        if topic_id == "weak_point":
+            final_target_property_id = str(context.get("final_operation_target_property_id", "") or "").strip()
+            final_entry_detail = str(context.get("final_operation_target_entry_detail", "") or "").strip()
+            if final_entry_detail and final_target_property_id and final_target_property_id == str(owner_place.get("id", "")).strip():
+                return final_entry_detail
+            timing = shift_text or hours_text
+            if detail_level >= 2 and panel_prop is not None and side_doors:
+                label = self._aperture_summary_label(side_doors[0], article=False)
+                return f"If you are forcing a choice, start with the panel or the {label}; the front is for people who belong there."
+            if detail_level >= 2 and highest and timing:
+                return f"Best timing is when {highest['name']} moves around {timing}; access is shifting and attention splits."
+            if side_doors and timing:
+                label = self._aperture_summary_label(side_doors[0], article=False)
+                return f"The {label} is softest around {timing}, when routine traffic covers movement."
+            if panel_prop is not None:
+                return "The exterior panel matters more than the front if you can work it without being seen."
+            return ""
+
+        return ""
+
+    def _weak_point_summary(self, context, *, quality=None):
+        owner_place = context.get("owner_place")
+        controller = context.get("controller")
+        if not isinstance(owner_place, dict) or not isinstance(controller, dict):
+            return ""
+
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "weak_point")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        detail_level = max(0, _int_or_default(quality.get("detail_level"), 0))
+        place_name = str(context.get("owner_place_name", "")).strip() or str(owner_place.get("name", owner_place.get("id", "the place"))).strip() or "the place"
+        hours_text = str(context.get("hours_text", "")).strip()
+        shift_text = str(context.get("shift_text", "")).strip()
+        access_level = str(context.get("access_level", "")).strip().lower()
+        panel_prop, _terminal_prop = self._dialogue_property_fixture_refs(owner_place)
+        apertures = tuple(_property_apertures(owner_place))
+        side_doors = [
+            aperture
+            for aperture in apertures
+            if str(aperture.get("kind", "") or "").strip().lower() in {"service_door", "employee_door", "side_door"}
+        ]
+        windows = [
+            aperture
+            for aperture in apertures
+            if str(aperture.get("kind", "") or "").strip().lower() in {"window", "skylight"}
+        ]
+
+        final_target_property_id = str(context.get("final_operation_target_property_id", "") or "").strip()
+        final_entry_detail = str(context.get("final_operation_target_entry_detail", "") or "").strip()
+        if final_entry_detail and final_target_property_id == str(owner_place.get("id", "")).strip():
+            if quality_mode == "vague":
+                return f"Do not hit {place_name} from the front. Find the softer seam first."
+            if quality_mode == "guarded":
+                return f"There is a cleaner seam into {place_name}, but I would verify it before you lean on it."
+            if detail_level <= 0:
+                return f"There is a cleaner seam into {place_name}, but you still need to walk it instead of trusting the front."
+            return final_entry_detail
+
+        if quality_mode == "vague":
+            if hours_text or shift_text:
+                return "The soft part is timing, not the front."
+            return f"Places like {place_name} only soften when routine beats posture."
+
+        if quality_mode == "guarded":
+            if panel_prop is not None or side_doors:
+                return "The weak point is where routine traffic and hardware meet, not the front."
+            if access_level == "public" and hours_text:
+                return "The soft spot is the handoff between open doors and real clearance."
+            return "Watch timing more than the front door."
+
+        timing = shift_text or hours_text
+        if detail_level <= 0:
+            if timing:
+                return f"The soft part is around {timing}, when routine matters more than posture."
+            if access_level == "public" and hours_text:
+                return "The soft spot is the handoff between open doors and real clearance."
+            return "The weak point is usually timing and side movement, not the front."
+        if panel_prop is not None and side_doors:
+            label = self._aperture_summary_label(side_doors[0], article=False)
+            if timing:
+                return f"The seam is between the exterior panel and the {label} around {timing}, when staff traffic splits attention."
+            return f"The exterior panel and the {label} are both softer than the front if you stay quiet."
+        if panel_prop is not None:
+            return f"The exterior panel is the weak seam at {place_name}; the front is where they expect strangers."
+        if side_doors:
+            label = self._aperture_summary_label(side_doors[0], article=False)
+            if timing:
+                return f"The {label} softens most around {timing}, when routine traffic covers movement."
+            return f"The {label} is the softer seam, not the front."
+        if windows:
+            label = self._aperture_summary_label(windows[0], article=False)
+            return f"The {label} is quieter than the front if you can keep it contained."
+        if shift_text:
+            return f"Shift change around {shift_text} is the weak point; attention splits and access starts moving."
+        if access_level == "public" and hours_text:
+            return f"The easy front only holds during {hours_text}; after that, routine is the real seam."
         return ""
 
     def _access_summary(self, context, *, quality=None):
@@ -13247,6 +14703,8 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "keyholder" and not self._keyholder_summary(context):
                 continue
+            if topic_id == "weak_point" and not self._weak_point_summary(context):
+                continue
             if topic_id == "history" and not self._history_summary(context):
                 continue
             if topic_id == "concern" and not self._concern_summary(context):
@@ -13257,11 +14715,21 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "contract" and not context.get("contract_kill_offer"):
                 continue
+            if topic_id == "side_job" and not context.get("side_job_available"):
+                continue
             if topic_id == "payoff" and not context.get("payoff_available"):
                 continue
             if topic_id == "fence" and not context.get("fence_available"):
                 continue
             if topic_id == "hire_runner" and not context.get("hire_runner_available"):
+                continue
+            if topic_id == "backup_orders" and not context.get("backup_orders_available"):
+                continue
+            if topic_id in {"backup_follow", "backup_hold", "backup_distract"} and not context.get("backup_orders_available"):
+                continue
+            if topic_id in {"backup_goto_wait", "backup_wait_return"} and not context.get("backup_cursor_ready"):
+                continue
+            if topic_id == "backup_kill" and not context.get("backup_kill_available"):
                 continue
             if topic_id == "objective" and not self._objective_summary(context, 1):
                 continue
@@ -13480,19 +14948,22 @@ class NPCInteractionSystem(System):
                 return {"npc_lines": [self._say(bank_id, context, topic_id=topic_id, count=ask_count, career_text=context["career_text"])]}
             return {"npc_lines": [self._say("job_none", context, topic_id=topic_id, count=ask_count)]}
         if topic_id == "routine":
-            summary = self._routine_summary(context)
+            quality = self._dialogue_pressure_intel_quality(context, topic_id)
+            summary = self._routine_summary(context, quality=quality)
             bank_id = "routine" if summary else "routine_none"
-            return {
-                "npc_lines": [
-                    self._say(
-                        bank_id,
-                        context,
-                        topic_id=topic_id,
-                        count=ask_count,
-                        routine_summary=summary,
-                    )
-                ]
-            }
+            lines = [
+                self._say(
+                    bank_id,
+                    context,
+                    topic_id=topic_id,
+                    count=ask_count,
+                    routine_summary=summary,
+                )
+            ]
+            prep_detail = self._dialogue_prep_detail(context, topic_id, quality=quality)
+            if prep_detail:
+                lines.append(prep_detail)
+            return {"npc_lines": lines}
         if topic_id == "workplace":
             workplace_prop = context.get("workplace_prop")
             if workplace_prop:
@@ -13798,6 +15269,32 @@ class NPCInteractionSystem(System):
             if prep_detail:
                 lines.append(prep_detail)
             return {"npc_lines": lines}
+        if topic_id == "weak_point":
+            quality = self._dialogue_pressure_intel_quality(context, topic_id)
+            owner_place = context.get("owner_place")
+            if owner_place and not context.get("guarded"):
+                self._remember_player_property_lead(
+                    owner_place,
+                    source_eid=npc_eid,
+                    lead_kind="security",
+                    confidence=max(0.28, max(0.64, float(context.get("lead_confidence", 0.6)) - 0.01) * float(quality.get("confidence_mult", 1.0))),
+                )
+            summary = self._weak_point_summary(context, quality=quality)
+            bank_id = "weak_point" if summary else "weak_point_none"
+            lines = [
+                self._say(
+                    bank_id,
+                    context,
+                    topic_id=topic_id,
+                    count=ask_count,
+                    weak_point_summary=summary,
+                    weak_point_summary_lc=_dialogue_lower_start(summary),
+                )
+            ]
+            prep_detail = self._dialogue_prep_detail(context, topic_id, quality=quality)
+            if prep_detail and prep_detail != summary:
+                lines.append(prep_detail)
+            return {"npc_lines": lines}
         if topic_id in {"purpose", "apologize", "leave"}:
             return self._resolve_guard_dialogue(context, topic_id)
         if topic_id == "local":
@@ -13806,7 +15303,11 @@ class NPCInteractionSystem(System):
             elif context.get("local_source") == "opportunity":
                 quality = self._dialogue_pressure_intel_quality(context, topic_id)
                 summary = self._opportunity_summary(context, quality=quality)
-                detail = self._angle_summary(context, 1) or self._risk_summary(context, 1) or summary
+                detail = (
+                    self._cycled_dialogue_line(self._opportunity_angle_lines(context, quality=quality, include_final_operation=False), 1)
+                    or self._cycled_dialogue_line(self._opportunity_risk_lines(context, quality=quality, include_final_operation=False), 1)
+                    or summary
+                )
                 self._learn_dialogue_opportunity(
                     context,
                     source="npc_dialogue_local",
@@ -13836,7 +15337,11 @@ class NPCInteractionSystem(System):
         if topic_id == "detail":
             detail_line = context.get("detail_line")
             if context.get("local_source") == "opportunity":
-                detail_line = self._angle_summary(context, 1) or self._risk_summary(context, 1) or self._opportunity_summary(context)
+                detail_line = (
+                    self._cycled_dialogue_line(self._opportunity_angle_lines(context, include_final_operation=False), 1)
+                    or self._cycled_dialogue_line(self._opportunity_risk_lines(context, include_final_operation=False), 1)
+                    or self._opportunity_summary(context)
+                )
             if context.get("local_source") == "opportunity" and detail_line:
                 line = self._say("detail_opportunity", context, topic_id=topic_id, count=ask_count, detail_line=detail_line, detail_line_lc=_dialogue_lower_start(detail_line))
             elif detail_line:
@@ -13860,7 +15365,10 @@ class NPCInteractionSystem(System):
                     eid=self.player_eid,
                     npc_eid=npc_eid,
                     summary=summary,
-                    detail=self._angle_summary(context, 1) or self._risk_summary(context, 1),
+                    detail=(
+                        self._cycled_dialogue_line(self._opportunity_angle_lines(context, quality=quality, include_final_operation=False), 1)
+                        or self._cycled_dialogue_line(self._opportunity_risk_lines(context, quality=quality, include_final_operation=False), 1)
+                    ),
                 ))
             return {
                 "npc_lines": [
@@ -14072,6 +15580,29 @@ class NPCInteractionSystem(System):
             if ask_count <= 1:
                 lines.append(self._say("contract_accepted", context, topic_id=topic_id, count=ask_count))
             return {"npc_lines": lines}
+        if topic_id == "side_job":
+            offer = context.get("side_job_offer") or self._ensure_side_job_offer(context)
+            if not offer:
+                return {"npc_lines": [self._say("side_job_none", context, topic_id=topic_id, count=ask_count)]}
+            issuer = offer.get("issuer", {}) if isinstance(offer.get("issuer"), dict) else {}
+            favor_target = str(issuer.get("organization_name", "")).strip() or str(issuer.get("npc_name", "")).strip() or "me"
+            reward_hint = format_reward_text(offer.get("reward", {}))
+            side_job_summary = str(offer.get("summary", "")).strip() or "Handle the drop quietly."
+            bank_id = "side_job_offer" if ask_count <= 1 else "side_job_repeat"
+            lines = [
+                self._say(
+                    bank_id,
+                    context,
+                    topic_id=topic_id,
+                    count=ask_count,
+                    side_job_summary=side_job_summary,
+                    reward_hint=reward_hint,
+                    favor_target=favor_target,
+                )
+            ]
+            if ask_count <= 1:
+                lines.append(self._say("side_job_accepted", context, topic_id=topic_id, count=ask_count))
+            return {"npc_lines": lines}
         if topic_id == "hire_runner":
             npc_eid = context.get("npc_eid")
             cost = int(self.CONTRACTOR_COST)
@@ -14103,19 +15634,125 @@ class NPCInteractionSystem(System):
                 "hired_tick": now,
                 "until": now + self.CONTRACTOR_DURATION,
                 "cost": cost,
-                "job": "distraction",
+                "job": "backup",
+                "ally_eid": self.player_eid,
+                "order": "passive",
             }
             if npc_eid:
                 self._shift_dialogue_bond(npc_eid, trust_delta=0.08, closeness_delta=0.04, guarded=False)
+                self._prime_backup_bond(npc_eid)
+                self._clear_contractor_player_heat(npc_eid, self.player_eid)
             self.sim.emit(Event(
                 "contractor_hired",
                 eid=self.player_eid,
                 npc_eid=npc_eid,
                 cost=cost,
                 duration=self.CONTRACTOR_DURATION,
+                job="backup",
+                ally_eid=self.player_eid,
                 credits=int(getattr(assets, "credits", 0)),
             ))
             return {"npc_lines": [self._say("hire_runner_accept", context, topic_id=topic_id, count=ask_count, hire_runner_cost=cost_str, hire_runner_hours=hours_str)]}
+        if topic_id == "backup_orders":
+            return {"npc_lines": [self._say("backup_orders", context, topic_id=topic_id, count=ask_count)]}
+        if topic_id in {
+            "backup_follow",
+            "backup_hold",
+            "backup_distract",
+            "backup_goto_wait",
+            "backup_wait_return",
+            "backup_kill",
+        }:
+            contractor = self._active_backup_contract(npc_eid)
+            if not contractor:
+                return {"npc_lines": ["Our arrangement is over."]}
+            positions = self.sim.ecs.get(Position)
+            player_pos = positions.get(self.player_eid)
+            npc_pos = positions.get(npc_eid)
+            if not npc_pos:
+                return {"npc_lines": []}
+            if topic_id == "backup_follow":
+                self._set_contractor_order(contractor, "passive")
+                self._assign_contractor_backup(npc_eid, self.player_eid, player_pos, contractor)
+                return {"npc_lines": [self._say("backup_follow", context, topic_id=topic_id, count=ask_count)]}
+            if topic_id == "backup_hold":
+                self._set_contractor_order(
+                    contractor,
+                    "hold",
+                    target=(int(npc_pos.x), int(npc_pos.y), int(npc_pos.z)),
+                )
+                self._assign_contractor_hold(npc_eid, self.player_eid, player_pos, contractor)
+                return {"npc_lines": [self._say("backup_hold", context, topic_id=topic_id, count=ask_count)]}
+            if topic_id == "backup_distract":
+                distraction_target = self._distraction_waypoint(npc_pos, player_pos)
+                self._set_contractor_order(
+                    contractor,
+                    "distraction",
+                    target=distraction_target,
+                    wait_ticks=int(self.CONTRACTOR_DISTRACTION_TICKS),
+                )
+                self._assign_contractor_distraction(npc_eid, player_pos, contractor)
+                return {"npc_lines": [self._say("backup_distract", context, topic_id=topic_id, count=ask_count)]}
+            if topic_id in {"backup_goto_wait", "backup_wait_return"}:
+                try:
+                    target = (
+                        int(context.get("backup_cursor_x")),
+                        int(context.get("backup_cursor_y")),
+                        int(context.get("backup_cursor_z")),
+                    )
+                except (TypeError, ValueError):
+                    return {"npc_lines": ["Mark a spot for me first."]}
+                wait_ticks = int(self.CONTRACTOR_RETURN_WAIT_TICKS) if topic_id == "backup_wait_return" else 0
+                self._set_contractor_order(
+                    contractor,
+                    "wait_return" if topic_id == "backup_wait_return" else "goto_wait",
+                    target=target,
+                    wait_ticks=wait_ticks,
+                )
+                self._assign_contractor_hold(npc_eid, self.player_eid, player_pos, contractor)
+                return {
+                    "npc_lines": [
+                        self._say(
+                            "backup_wait_return" if topic_id == "backup_wait_return" else "backup_goto_wait",
+                            context,
+                            topic_id=topic_id,
+                            count=ask_count,
+                            backup_marked_spot=context.get("backup_cursor_hint", "the mark"),
+                        )
+                    ]
+                }
+            target_eid = context.get("backup_kill_target_eid")
+            if target_eid is None:
+                return {"npc_lines": [self._say("backup_kill_refuse", context, topic_id=topic_id, count=ask_count)]}
+            target_pos = positions.get(target_eid)
+            if not target_pos or _entity_is_downed(self.sim, target_eid):
+                return {"npc_lines": [self._say("backup_kill_refuse", context, topic_id=topic_id, count=ask_count)]}
+            kill_terms = self._contractor_kill_terms(npc_eid, bond=context.get("bond"))
+            surcharge = 0 if kill_terms.get("trusted") else int(kill_terms.get("surcharge", 0))
+            if surcharge > 0:
+                assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+                if not assets or int(getattr(assets, "credits", 0)) < surcharge:
+                    return {"npc_lines": [self._say("hire_runner_decline_broke", context, topic_id=topic_id, count=ask_count)]}
+                assets.credits -= surcharge
+            self._set_contractor_order(
+                contractor,
+                "kill",
+                target_eid=target_eid,
+                kill_surcharge=surcharge,
+            )
+            self._assign_contractor_kill(npc_eid, self.player_eid, player_pos, contractor)
+            return {
+                "npc_lines": [
+                    self._say(
+                        "backup_kill_trusted" if kill_terms.get("trusted") else "backup_kill_paid",
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                        backup_kill_target=context.get("backup_kill_target_name", "the mark"),
+                        backup_kill_cost=f"{surcharge} credits" if surcharge > 0 else "",
+                    )
+                ]
+            }
         return {"npc_lines": []}
 
     def _apply_dialogue_repeat_friction(self, context, topic_id, response):
@@ -14226,6 +15863,8 @@ class NPCInteractionSystem(System):
         ask_count = max(1, int(ask_count))
         detail_line = str(context.get("detail_line", "")).strip()
         prep_detail = str(self._dialogue_prep_detail(context, topic_id)).strip()
+        if topic_id == "routine":
+            return prep_detail or self._weak_point_summary(context) or self._access_summary(context)
         if topic_id == "hours":
             return prep_detail or self._access_summary(context) or self._security_summary(context)
         if topic_id == "services":
@@ -14240,6 +15879,8 @@ class NPCInteractionSystem(System):
             return prep_detail or self._access_summary(context) or self._keyholder_summary(context)
         if topic_id == "keyholder":
             return prep_detail or self._access_summary(context) or self._security_summary(context)
+        if topic_id == "weak_point":
+            return prep_detail or self._entry_summary(context) or self._security_summary(context)
         if topic_id == "local":
             return detail_line or self._concern_summary(context)
         if topic_id == "concern":
@@ -14504,9 +16145,126 @@ class NPCInteractionSystem(System):
             return
         self._close_dialog()
 
+    def _clear_contractor_player_heat(self, npc_eid, ally_eid):
+        ai = self.sim.ecs.get(AI).get(npc_eid)
+        if ai and ai.target_eid == ally_eid and ai.state in THREAT_STATES:
+            ai.state = "idle"
+            ai.target = None
+            ai.target_eid = None
+        will = self.sim.ecs.get(NPCWill).get(npc_eid)
+        if will and will.target_eid == ally_eid and str(will.intent or "").strip().lower() in THREAT_STATES:
+            will.intent = "idle"
+            will.score = 0.0
+            will.target = None
+            will.target_eid = None
+            will.last_tick = self.sim.tick
+        memory = self.sim.ecs.get(NPCMemory).get(npc_eid)
+        if memory:
+            keep = []
+            for entry in list(memory.entries):
+                kind = str(entry.get("kind", "") or "").strip().lower()
+                data = entry.get("data", {}) if isinstance(entry.get("data", {}), dict) else {}
+                offender_eid = data.get("offender_eid", data.get("source_eid"))
+                property_offender = data.get("offender_eid")
+                if kind in {"offense", "threat"} and offender_eid == ally_eid:
+                    continue
+                if kind == "property_threat" and property_offender == ally_eid:
+                    continue
+                keep.append(entry)
+            memory.entries = keep
+
+    def _prime_backup_bond(self, npc_eid):
+        bond = self._ensure_dialogue_bond(npc_eid, guarded=False)
+        if not bond:
+            return None
+        bond["trust"] = max(float(bond.get("trust", 0.0) or 0.0), 0.72)
+        bond["closeness"] = max(float(bond.get("closeness", 0.0) or 0.0), 0.64)
+        bond["protectiveness"] = max(float(bond.get("protectiveness", 0.0) or 0.0), 0.88)
+        return bond
+
+    def _contractor_follow_target(self, npc_eid, npc_pos, ally_pos):
+        if not npc_pos or not ally_pos:
+            return None
+        if int(npc_pos.z) != int(ally_pos.z):
+            return (int(npc_pos.x), int(npc_pos.y), int(npc_pos.z))
+        if _manhattan(npc_pos.x, npc_pos.y, ally_pos.x, ally_pos.y) <= 1:
+            return (int(npc_pos.x), int(npc_pos.y), int(npc_pos.z))
+
+        candidates = []
+        offsets = (
+            (0, 1), (1, 0), (0, -1), (-1, 0),
+            (1, 1), (1, -1), (-1, 1), (-1, -1),
+            (0, 2), (2, 0), (0, -2), (-2, 0),
+        )
+        for dx, dy in offsets:
+            tx = int(ally_pos.x) + int(dx)
+            ty = int(ally_pos.y) + int(dy)
+            tz = int(ally_pos.z)
+            if not self.sim.tilemap.is_walkable(tx, ty, tz):
+                continue
+            blocker = _first_blocking_entity_at(self.sim, tx, ty, tz, exclude_eid=npc_eid)
+            if blocker is not None:
+                continue
+            dist_to_ally = _manhattan(tx, ty, ally_pos.x, ally_pos.y)
+            dist_to_npc = _manhattan(tx, ty, npc_pos.x, npc_pos.y)
+            candidates.append((dist_to_ally, dist_to_npc, tx, ty, tz))
+        if candidates:
+            candidates.sort()
+            best = candidates[0]
+            return (best[2], best[3], best[4])
+        return (int(npc_pos.x), int(npc_pos.y), int(npc_pos.z))
+
+    def _contractor_focus_threat(self, rec, ally_pos):
+        threat_eid = rec.get("focus_threat_eid")
+        if threat_eid is None or int(rec.get("focus_threat_until", 0) or 0) <= int(self.sim.tick):
+            rec.pop("focus_threat_eid", None)
+            rec.pop("focus_threat_until", None)
+            return None
+        threat_pos = self.sim.ecs.get(Position).get(threat_eid)
+        if not threat_pos or not ally_pos or int(threat_pos.z) != int(ally_pos.z):
+            return None
+        if _entity_is_downed(self.sim, threat_eid):
+            return None
+        return threat_eid
+
+    def _contractor_backup_threat(self, npc_eid, npc_pos, ally_eid, ally_pos, rec, *, protect_ally=True):
+        focused = self._contractor_focus_threat(rec, ally_pos) if protect_ally else None
+        if focused is not None:
+            return focused
+
+        ais = self.sim.ecs.get(AI)
+        positions = self.sim.ecs.get(Position)
+        best = None
+        for other_eid, other_ai in ais.items():
+            if other_eid in {npc_eid, ally_eid}:
+                continue
+            if str(getattr(other_ai, "state", "") or "").strip().lower() not in THREAT_STATES:
+                continue
+            target_eid = getattr(other_ai, "target_eid", None)
+            if protect_ally:
+                if target_eid not in {ally_eid, npc_eid}:
+                    continue
+            elif target_eid != npc_eid:
+                continue
+            other_pos = positions.get(other_eid)
+            if not other_pos or not ally_pos or int(other_pos.z) != int(ally_pos.z):
+                continue
+            if _entity_is_downed(self.sim, other_eid):
+                continue
+            player_dist = _manhattan(other_pos.x, other_pos.y, ally_pos.x, ally_pos.y)
+            npc_dist = _manhattan(other_pos.x, other_pos.y, npc_pos.x, npc_pos.y)
+            if min(player_dist, npc_dist) > 12:
+                continue
+            score = 120 - (player_dist * 5) - npc_dist
+            if protect_ally and target_eid == ally_eid:
+                score += 12
+            if best is None or score > best[0]:
+                best = (score, other_eid)
+        return best[1] if best else None
+
     # ── Contractor task system ───────────────────────────────────────────────
 
-    CONTRACTOR_TICK_INTERVAL = 20
+    CONTRACTOR_TICK_INTERVAL = 5
 
     def update(self):
         tick = self.sim.tick
@@ -14522,35 +16280,267 @@ class NPCInteractionSystem(System):
         expired = [eid for eid, rec in list(contractors.items()) if rec.get("until", 0) <= tick]
         for npc_eid in expired:
             rec = contractors.pop(npc_eid)
+            self._clear_contractor_player_heat(
+                npc_eid,
+                rec.get("ally_eid", self.player_eid),
+            )
             self.sim.emit(Event(
                 "contractor_task_complete",
                 npc_eid=npc_eid,
                 job=rec.get("job", "distraction"),
                 hired_tick=rec.get("hired_tick", 0),
             ))
-        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        positions = self.sim.ecs.get(Position)
         for npc_eid, rec in list(contractors.items()):
-            if rec.get("job") == "distraction":
-                self._assign_contractor_distraction(npc_eid, player_pos)
+            job = str(rec.get("job", "distraction") or "distraction").strip().lower()
+            ally_eid = rec.get("ally_eid", self.player_eid)
+            ally_pos = positions.get(ally_eid)
+            if job == "distraction":
+                self._assign_contractor_distraction(npc_eid, ally_pos)
+            elif job in {"backup", "party"}:
+                order = self._contractor_order_mode(rec)
+                if order == "distraction":
+                    issued = int(rec.get("order_wait_started", 0) or 0)
+                    duration = int(rec.get("order_wait_ticks", self.CONTRACTOR_DISTRACTION_TICKS) or self.CONTRACTOR_DISTRACTION_TICKS)
+                    if issued <= 0:
+                        rec["order_wait_started"] = tick
+                    elif tick - issued >= duration:
+                        self._set_contractor_order(rec, "passive")
+                        self._assign_contractor_backup(npc_eid, ally_eid, ally_pos, rec)
+                        continue
+                    self._assign_contractor_distraction(npc_eid, ally_pos, rec)
+                elif order in {"hold", "goto_wait"}:
+                    self._assign_contractor_hold(npc_eid, ally_eid, ally_pos, rec)
+                elif order == "wait_return":
+                    self._assign_contractor_hold(npc_eid, ally_eid, ally_pos, rec)
+                    target = self._contractor_order_target(rec)
+                    npc_pos = positions.get(npc_eid)
+                    if target and npc_pos and _manhattan(npc_pos.x, npc_pos.y, target[0], target[1]) <= 0:
+                        wait_started = int(rec.get("order_wait_started", 0) or 0)
+                        if wait_started <= 0:
+                            rec["order_wait_started"] = tick
+                        elif tick - wait_started >= int(rec.get("order_wait_ticks", self.CONTRACTOR_RETURN_WAIT_TICKS) or self.CONTRACTOR_RETURN_WAIT_TICKS):
+                            self._set_contractor_order(rec, "passive")
+                            self._assign_contractor_backup(npc_eid, ally_eid, ally_pos, rec)
+                elif order == "kill":
+                    if not self._assign_contractor_kill(npc_eid, ally_eid, ally_pos, rec):
+                        self._set_contractor_order(rec, "passive")
+                        self._assign_contractor_backup(npc_eid, ally_eid, ally_pos, rec)
+                else:
+                    self._assign_contractor_backup(npc_eid, ally_eid, ally_pos, rec)
 
     def on_contractor_hired(self, event):
         npc_eid = event.data.get("npc_eid")
         if not npc_eid:
             return
-        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
-        self._assign_contractor_distraction(npc_eid, player_pos)
+        contractors = getattr(self.sim, "contractors", {})
+        rec = contractors.get(npc_eid, {}) if isinstance(contractors, dict) else {}
+        job = str(event.data.get("job", rec.get("job", "distraction")) or "distraction").strip().lower()
+        ally_eid = event.data.get("ally_eid", rec.get("ally_eid", self.player_eid))
+        ally_pos = self.sim.ecs.get(Position).get(ally_eid)
+        if job in {"backup", "party"}:
+            self._assign_contractor_backup(npc_eid, ally_eid, ally_pos, rec if isinstance(rec, dict) else {})
+        else:
+            self._assign_contractor_distraction(npc_eid, ally_pos)
 
-    def _assign_contractor_distraction(self, npc_eid, player_pos):
+    def on_entity_moved(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        contractors = getattr(self.sim, "contractors", {})
+        if not isinstance(contractors, dict) or not contractors:
+            return
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        for npc_eid, rec in list(contractors.items()):
+            if str(rec.get("job", "") or "").strip().lower() not in {"backup", "party"}:
+                continue
+            if self._contractor_order_mode(rec) != "passive":
+                continue
+            self._assign_contractor_backup(npc_eid, self.player_eid, player_pos, rec)
+
+    def on_entity_damaged(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+        source_eid = event.data.get("source_eid")
+        if source_eid is None:
+            return
+        contractors = getattr(self.sim, "contractors", {})
+        if not isinstance(contractors, dict) or not contractors:
+            return
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        for npc_eid, rec in list(contractors.items()):
+            if str(rec.get("job", "") or "").strip().lower() not in {"backup", "party"}:
+                continue
+            if self._contractor_order_mode(rec) != "passive":
+                continue
+            rec["focus_threat_eid"] = source_eid
+            rec["focus_threat_until"] = int(self.sim.tick) + 45
+            self._assign_contractor_backup(npc_eid, self.player_eid, player_pos, rec)
+
+    def _assign_contractor_distraction(self, npc_eid, player_pos, rec=None):
         ai = self.sim.ecs.get(AI).get(npc_eid)
         will = self.sim.ecs.get(NPCWill).get(npc_eid)
         npc_pos = self.sim.ecs.get(Position).get(npc_eid)
         if not ai or not npc_pos:
             return
+        if _entity_is_downed(self.sim, npc_eid):
+            _apply_downed_actor_state(self.sim, npc_eid, tick=self.sim.tick)
+            return
+        target_eid = None
+        if isinstance(rec, dict):
+            target_eid = self._contractor_backup_threat(
+                npc_eid,
+                npc_pos,
+                self.player_eid,
+                player_pos,
+                rec,
+                protect_ally=False,
+            )
+        if target_eid is not None:
+            target_pos = self.sim.ecs.get(Position).get(target_eid)
+            if target_pos and int(target_pos.z) == int(npc_pos.z):
+                target = (int(target_pos.x), int(target_pos.y), int(target_pos.z))
+                _sync_ai_intent(
+                    ai,
+                    will,
+                    self.sim.tick,
+                    "protecting",
+                    score=84.0,
+                    target=target,
+                    target_eid=target_eid,
+                )
+                return
         # Don't interrupt if already investigating toward the distraction target.
         if getattr(ai, "state", "") == "investigating" and getattr(ai, "target", None):
             return
-        target = self._distraction_waypoint(npc_pos, player_pos)
+        target = self._contractor_order_target(rec) if isinstance(rec, dict) else None
+        if target is None:
+            target = self._distraction_waypoint(npc_pos, player_pos)
         _sync_ai_intent(ai, will, self.sim.tick, "investigating", score=65.0, target=target)
+
+    def _assign_contractor_hold(self, npc_eid, ally_eid, ally_pos, rec):
+        ai = self.sim.ecs.get(AI).get(npc_eid)
+        will = self.sim.ecs.get(NPCWill).get(npc_eid)
+        npc_pos = self.sim.ecs.get(Position).get(npc_eid)
+        if not ai or not npc_pos:
+            return
+        if _entity_is_downed(self.sim, npc_eid):
+            _apply_downed_actor_state(self.sim, npc_eid, tick=self.sim.tick)
+            return
+
+        self._clear_contractor_player_heat(npc_eid, ally_eid)
+        threat_eid = self._contractor_backup_threat(
+            npc_eid,
+            npc_pos,
+            ally_eid,
+            ally_pos or npc_pos,
+            rec,
+            protect_ally=False,
+        )
+        if threat_eid is not None:
+            threat_pos = self.sim.ecs.get(Position).get(threat_eid)
+            if threat_pos and int(threat_pos.z) == int(npc_pos.z):
+                target = (int(threat_pos.x), int(threat_pos.y), int(threat_pos.z))
+                _sync_ai_intent(
+                    ai,
+                    will,
+                    self.sim.tick,
+                    "protecting",
+                    score=86.0,
+                    target=target,
+                    target_eid=threat_eid,
+                )
+                return
+
+        hold_target = self._contractor_order_target(rec) or (int(npc_pos.x), int(npc_pos.y), int(npc_pos.z))
+        _sync_ai_intent(
+            ai,
+            will,
+            self.sim.tick,
+            "holding",
+            score=80.0,
+            target=hold_target,
+            target_eid=None,
+        )
+
+    def _assign_contractor_kill(self, npc_eid, ally_eid, ally_pos, rec):
+        ai = self.sim.ecs.get(AI).get(npc_eid)
+        will = self.sim.ecs.get(NPCWill).get(npc_eid)
+        npc_pos = self.sim.ecs.get(Position).get(npc_eid)
+        target_eid = rec.get("order_target_eid") if isinstance(rec, dict) else None
+        if not ai or not npc_pos or target_eid in {None, npc_eid, ally_eid}:
+            return False
+        if _entity_is_downed(self.sim, npc_eid):
+            _apply_downed_actor_state(self.sim, npc_eid, tick=self.sim.tick)
+            return False
+
+        target_pos = self.sim.ecs.get(Position).get(target_eid)
+        if not target_pos or _entity_is_downed(self.sim, target_eid):
+            return False
+        if ally_pos and int(target_pos.z) != int(ally_pos.z):
+            return False
+
+        self._clear_contractor_player_heat(npc_eid, ally_eid)
+        _sync_ai_intent(
+            ai,
+            will,
+            self.sim.tick,
+            "protecting",
+            score=92.0,
+            target=(int(target_pos.x), int(target_pos.y), int(target_pos.z)),
+            target_eid=target_eid,
+        )
+        return True
+
+    def _assign_contractor_backup(self, npc_eid, ally_eid, ally_pos, rec):
+        ai = self.sim.ecs.get(AI).get(npc_eid)
+        will = self.sim.ecs.get(NPCWill).get(npc_eid)
+        npc_pos = self.sim.ecs.get(Position).get(npc_eid)
+        if not ai or not npc_pos or not ally_pos:
+            return
+        if _entity_is_downed(self.sim, npc_eid):
+            _apply_downed_actor_state(self.sim, npc_eid, tick=self.sim.tick)
+            return
+
+        self._clear_contractor_player_heat(npc_eid, ally_eid)
+        threat_eid = self._contractor_backup_threat(npc_eid, npc_pos, ally_eid, ally_pos, rec)
+        if threat_eid is not None:
+            threat_pos = self.sim.ecs.get(Position).get(threat_eid)
+            if threat_pos and int(threat_pos.z) == int(npc_pos.z):
+                target = (int(threat_pos.x), int(threat_pos.y), int(threat_pos.z))
+            else:
+                target = (int(ally_pos.x), int(ally_pos.y), int(ally_pos.z))
+            switched = not (ai.state == "protecting" and ai.target_eid == threat_eid)
+            _sync_ai_intent(
+                ai,
+                will,
+                self.sim.tick,
+                "protecting",
+                score=88.0,
+                target=target,
+                target_eid=threat_eid,
+            )
+            if switched:
+                self.sim.emit(Event(
+                    "npc_protect_ally",
+                    npc_eid=npc_eid,
+                    ally_eid=ally_eid,
+                    against_eid=threat_eid,
+                    relation="ally",
+                ))
+            return
+
+        follow_target = self._contractor_follow_target(npc_eid, npc_pos, ally_pos)
+        if follow_target is None:
+            return
+        _sync_ai_intent(
+            ai,
+            will,
+            self.sim.tick,
+            "following",
+            score=82.0,
+            target=follow_target,
+            target_eid=None,
+        )
 
     def _distraction_waypoint(self, npc_pos, player_pos):
         nx, ny = int(npc_pos.x), int(npc_pos.y)
@@ -14622,6 +16612,17 @@ class PlayerActionSystem(System):
         self.property_actions = PropertyActionRuntime(self)
         self.property_ingress = PropertyIngressRuntime(self)
         self.sim.events.subscribe("player_action", self.on_player_action)
+        self.sim.events.subscribe("player_hidden_changed", self.on_player_hidden_changed)
+        self.sim.events.subscribe("container_transfer_request", self.on_container_transfer_request)
+        self.sim.events.subscribe("cache_transfer_request", self.on_cache_transfer_request)
+
+    def on_player_hidden_changed(self, event):
+        if bool(event.data.get("active")):
+            return
+        self._clear_stakeout(
+            eid=event.data.get("eid"),
+            reason=str(event.data.get("reason", "")).strip().lower() or "lost_hidden",
+        )
 
     def _nearest_sabotage_fixture(self, pos):
         nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=1)
@@ -14629,6 +16630,45 @@ class PlayerActionSystem(System):
             if _property_infrastructure_role(prop) == "sabotage_target":
                 return prop
         return None
+
+    def _security_fixture_target_property(self, prop):
+        if not isinstance(prop, dict):
+            return None
+
+        target = _infrastructure_target_property(self.sim, prop)
+        if isinstance(target, dict):
+            return target
+
+        try:
+            px = int(prop.get("x", 0))
+            py = int(prop.get("y", 0))
+            pz = int(prop.get("z", 0))
+        except (TypeError, ValueError):
+            return None
+
+        covered = _property_covering(self.sim, px, py, pz)
+        if isinstance(covered, dict) and covered.get("id") != prop.get("id"):
+            return covered
+
+        candidates = []
+        for candidate in self.sim.properties_in_radius(px, py, pz, r=3):
+            if candidate.get("id") == prop.get("id"):
+                continue
+            if str(candidate.get("kind", "")).strip().lower() != "building":
+                continue
+            controller = _property_access_controller(self.sim, candidate)
+            access_level = _property_access_level(candidate)
+            security_tier = max(1, _int_or_default(controller.get("security_tier"), 1))
+            candidates.append((
+                0 if access_level != "public" else 1,
+                -security_tier,
+                _manhattan(px, py, int(candidate.get("x", px)), int(candidate.get("y", py))),
+                candidate,
+            ))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda row: (row[0], row[1], row[2]))
+        return candidates[0][3]
 
     def _player_sabotage_fixture(self, eid, pos, prop):
         now = self.sim.tick
@@ -14670,9 +16710,16 @@ class PlayerActionSystem(System):
         power_cuts[prop_id] = cut_until
         if building_id:
             power_cuts[building_id] = cut_until
+        target_prop = self.sim.properties.get(building_id) if building_id else self._security_fixture_target_property(prop)
+        target_name = str((target_prop or {}).get("name", "")).strip()
         _log_player_feedback(
             self.sim,
-            f"You disable the {fixture_name}. Lights dim.",
+            (
+                f"You disable the {fixture_name}. {target_name} goes dark; "
+                "cameras and alarms cut out, and the night glow goes with them."
+            )
+            if target_name
+            else f"You disable the {fixture_name}. Nearby power and security cut out.",
             kind="interaction",
         )
         self.sim.emit(Event(
@@ -14932,6 +16979,72 @@ class PlayerActionSystem(System):
 
     def _inventory_for(self, eid):
         return self.sim.ecs.get(Inventory).get(eid)
+
+    def _equipped_worn_container(self, eid, container_instance_id=None):
+        inventory = self._inventory_for(eid)
+        if not inventory:
+            return None
+        current = getattr(self.sim, "equipped_container", None)
+        if not isinstance(current, dict):
+            return None
+        active_instance_id = str(current.get("instance_id", "") or "").strip()
+        target_instance_id = str(container_instance_id or active_instance_id or "").strip()
+        if not target_instance_id or target_instance_id != active_instance_id:
+            return None
+        entry = inventory.find(instance_id=target_instance_id)
+        if not entry:
+            return None
+        item_def = ITEM_CATALOG.get(entry["item_id"], {})
+        container_profile = item_def.get("container", {}) if isinstance(item_def.get("container"), dict) else {}
+        bonus_slots = max(0, _int_or_default(container_profile.get("bonus_slots"), 0))
+        if bonus_slots <= 0:
+            return None
+        item_name = str(current.get("item_name", "") or "").strip() or item_display_name(
+            entry["item_id"],
+            metadata=entry.get("metadata"),
+            item_catalog=ITEM_CATALOG,
+        )
+        return {
+            "inventory": inventory,
+            "entry": entry,
+            "item_def": item_def,
+            "instance_id": target_instance_id,
+            "item_name": item_name,
+            "bonus_slots": bonus_slots,
+        }
+
+    def _worn_container_panel_note(self, runtime):
+        if not isinstance(runtime, dict):
+            return ""
+        bonus_slots = max(0, _int_or_default(runtime.get("bonus_slots"), 0))
+        if bonus_slots <= 0:
+            return ""
+        return f"Equipped +{bonus_slots} slots"
+
+    def _refresh_worn_container_panel_state(self, eid, container_instance_id):
+        inventory_ui = getattr(self.sim, "inventory_ui", None)
+        if not isinstance(inventory_ui, dict):
+            return
+        runtime = self._equipped_worn_container(eid, container_instance_id)
+        inventory_ui["inspect_text"] = ""
+        inventory_ui["note_text"] = self._worn_container_panel_note(runtime)
+        if not runtime:
+            inventory_ui["selected_index"] = 0
+            return
+        view = str(
+            inventory_ui.get("container_view", inventory_ui.get("cache_view", "pack"))
+        ).strip().lower() or "pack"
+        if view == "pack":
+            entries = _inventory_entries_loose_for_container(runtime["inventory"], runtime["instance_id"])
+        else:
+            entries = _inventory_entries_stowed_in_container(runtime["inventory"], runtime["instance_id"])
+        if not entries:
+            inventory_ui["selected_index"] = 0
+            return
+        inventory_ui["selected_index"] = max(
+            0,
+            min(int(inventory_ui.get("selected_index", 0)), len(entries) - 1),
+        )
 
     def _set_sneak_mode(self, eid, active, reason="manual"):
         modes = self._mode_state_for(eid)
@@ -15295,9 +17408,6 @@ class PlayerActionSystem(System):
             confidence=confidence,
         )
 
-    def _active_interact_property_near(self, pos):
-        return self.property_actions.active_interact_property_near(pos)
-
     def _handle_door_interaction(self, eid, pos):
         return self.property_actions.handle_door_interaction(eid, pos)
 
@@ -15525,6 +17635,7 @@ class PlayerActionSystem(System):
             vy,
             vz,
             exclude_eid=eid,
+            offender_eid=eid,
         )
         witnessed = bool(witnesses)
         severity_score = min(100, 22 + (lock_state["lock_tier"] * 8))
@@ -15655,9 +17766,15 @@ class PlayerActionSystem(System):
         )
         duration = 120 + (int(self.sim.seed or 0) % 30)
         cam_disabled[prop_id] = now + duration
+        target_prop = self._security_fixture_target_property(prop)
+        target_name = str((target_prop or {}).get("name", "")).strip()
         _log_player_feedback(
             self.sim,
-            f"You blind the {cam_name}.",
+            (
+                f"You blind the {cam_name}. Surveillance at {target_name} is thinner."
+            )
+            if target_name
+            else f"You blind the {cam_name}. Nearby surveillance is thinner.",
             kind="interaction",
         )
         self.sim.emit(Event(
@@ -15700,9 +17817,15 @@ class PlayerActionSystem(System):
         )
         duration = 150 + (int(self.sim.seed or 0) % 40)
         cam_disabled[prop_id] = now + duration
+        target_prop = self._security_fixture_target_property(prop)
+        target_name = str((target_prop or {}).get("name", "")).strip()
         _log_player_feedback(
             self.sim,
-            f"You cut the {alarm_name}.",
+            (
+                f"You cut the {alarm_name}. Alarm response at {target_name} is degraded."
+            )
+            if target_name
+            else f"You cut the {alarm_name}. Nearby alarm response is degraded.",
             kind="interaction",
         )
         self.sim.emit(Event(
@@ -15714,47 +17837,209 @@ class PlayerActionSystem(System):
 
     CACHE_MAX_STACKS = 8
 
+    def _container_inventory_entries(self, prop_id, *, container_kind="container"):
+        prop_id = str(prop_id or "").strip()
+        if not prop_id:
+            return []
+        container_kind = str(container_kind or "container").strip().lower() or "container"
+        if container_kind == "cache":
+            inventories = getattr(self.sim, "cache_inventories", None)
+            if not isinstance(inventories, dict):
+                self.sim.cache_inventories = {}
+                inventories = self.sim.cache_inventories
+            return inventories.setdefault(prop_id, [])
+        inventories_by_kind = getattr(self.sim, "container_inventories", None)
+        if not isinstance(inventories_by_kind, dict):
+            self.sim.container_inventories = {}
+            inventories_by_kind = self.sim.container_inventories
+        inventories = inventories_by_kind.setdefault(container_kind, {})
+        if not isinstance(inventories, dict):
+            inventories = {}
+            inventories_by_kind[container_kind] = inventories
+        return inventories.setdefault(prop_id, [])
+
+    def _cache_panel_mission_note(self, prop):
+        if not isinstance(prop, dict):
+            return ""
+        property_id = str(prop.get("id", "") or "").strip()
+        if not property_id:
+            return ""
+        for quest in list(getattr(self.sim, "quests", {}).get("active", ()) or ()):
+            if not isinstance(quest, dict):
+                continue
+            objective = quest.get("objective", {}) if isinstance(quest.get("objective"), dict) else {}
+            if str(objective.get("type", "")).strip().lower() != "cache_pickup":
+                continue
+            if str(objective.get("property_id", "") or "").strip() != property_id:
+                continue
+            title = str(quest.get("title", "")).strip()
+            if title:
+                return f"Mission: {title}"
+            item_id = str(objective.get("item_id", "")).strip().lower()
+            if item_id:
+                return f"Mission: retrieve {_item_label(item_id)}"
+            return "Mission: retrieve cache item"
+        cache_items = self._container_inventory_entries(property_id, container_kind="cache")
+        for entry in cache_items:
+            if not isinstance(entry, dict):
+                continue
+            metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
+            if str(entry.get("owner_tag", "")).strip().lower() == "quest":
+                return "Mission cache: retrieve assigned package"
+            quest_kind = str(metadata.get("quest_kind", "")).strip().lower()
+            if quest_kind:
+                return f"Mission cache: {quest_kind.replace('_', ' ')}"
+        return ""
+
+    def _container_panel_note(self, prop, *, container_kind=None):
+        container_kind = str(container_kind or "container").strip().lower() or "container"
+        if container_kind == "cache":
+            return self._cache_panel_mission_note(prop)
+        if container_kind == "bones":
+            metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), dict) else {}
+            note = str(metadata.get("bones_note", "") or "").strip()
+            if note:
+                return note
+        return ""
+
+    def _container_label(self, container_kind=None):
+        container_kind = str(container_kind or "container").strip().lower() or "container"
+        if container_kind == "cache":
+            return "Cache"
+        if container_kind == "bones":
+            return "Stash"
+        return "Container"
+
     def _nearest_cache_fixture(self, pos):
         nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=1)
         for prop in sorted(nearby, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"])):
-            if _property_infrastructure_role(prop) == "cache_target":
+            if _property_infrastructure_role(prop) in {"cache_target", "bones_stash"}:
                 return prop
         return None
 
+    def _open_property_container_ui(self, eid, prop, *, container_kind="container", container_label=None):
+        inventory_ui = getattr(self.sim, "inventory_ui", None)
+        if not isinstance(inventory_ui, dict):
+            self.sim.inventory_ui = {}
+            inventory_ui = self.sim.inventory_ui
+        container_kind = str(container_kind or "container").strip().lower() or "container"
+        container_label = str(container_label or self._container_label(container_kind)).strip() or self._container_label(container_kind)
+        container_capacity = self.CACHE_MAX_STACKS if container_kind in {"cache", "bones"} else None
+        inventory_ui.update({
+            "panel_kind": "container",
+            "title": str(prop.get("name", prop.get("id", container_label))).strip() or container_label,
+            "open": True,
+            "property_id": prop.get("id"),
+            "container_kind": container_kind,
+            "container_label": container_label,
+            "container_instance_id": None,
+            "container_capacity": container_capacity,
+            "container_view": "container",
+            "cache_view": "cache",
+            "selected_index": 0,
+            "inspect_text": "",
+            "note_text": self._container_panel_note(prop, container_kind=container_kind),
+        })
+        self.sim.emit(Event(
+            "inventory_panel_toggled",
+            eid=eid,
+            open=True,
+            panel_kind="container",
+            title=inventory_ui["title"],
+            property_id=prop.get("id"),
+            container_kind=container_kind,
+            container_label=container_label,
+            container_instance_id=None,
+        ))
+
     def _player_interact_cache(self, eid, pos, prop):
-        prop_id = prop["id"]
-        cache_name = prop.get("name", "cache")
-        inventories = getattr(self.sim, "cache_inventories", None)
-        if not isinstance(inventories, dict):
-            self.sim.cache_inventories = {}
-            inventories = self.sim.cache_inventories
-        cache_items = inventories.setdefault(prop_id, [])
+        infrastructure_role = _property_infrastructure_role(prop)
+        if infrastructure_role == "bones_stash":
+            self._open_property_container_ui(
+                eid,
+                prop,
+                container_kind="bones",
+                container_label="Stash",
+            )
+            return
+        self._open_property_container_ui(
+            eid,
+            prop,
+            container_kind="cache",
+            container_label="Cache",
+        )
+
+    def _withdraw_from_worn_container(self, eid, container_instance_id, *, selected_index=0):
+        runtime = self._equipped_worn_container(eid, container_instance_id)
+        if not runtime:
+            _log_player_feedback(self.sim, "No equipped container is ready.", kind="interaction")
+            return False
+        container_items = _inventory_entries_stowed_in_container(runtime["inventory"], runtime["instance_id"])
+        if not container_items:
+            _log_player_feedback(self.sim, f"The {runtime['item_name']} is empty.", kind="interaction")
+            return False
+        index = max(0, min(int(selected_index), len(container_items) - 1))
+        entry = container_items[index]
+        metadata = dict(entry.get("metadata") or {})
+        metadata.pop(ITEM_STOWED_CONTAINER_METADATA_KEY, None)
+        runtime["inventory"].update_item_metadata(entry["instance_id"], metadata=metadata, replace=True)
+        name = item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG)
+        _log_player_feedback(self.sim, f"Took {name} from {runtime['item_name']}.", kind="interaction")
+        self.sim.emit(Event(
+            "container_withdraw",
+            eid=eid,
+            container_kind="worn",
+            container_instance_id=runtime["instance_id"],
+            item_id=entry["item_id"],
+            quantity=max(1, _int_or_default(entry.get("quantity"), 1)),
+        ))
+        self._refresh_worn_container_panel_state(eid, runtime["instance_id"])
+        return True
+
+    def _withdraw_from_container(self, eid, prop_id, *, selected_index=0, container_kind="container"):
+        prop = self.sim.properties.get(prop_id)
+        container_kind = str(container_kind or "container").strip().lower() or "container"
+        container_name = str((prop or {}).get("name", self._container_label(container_kind).lower())).strip() or self._container_label(container_kind).lower()
+        container_items = self._container_inventory_entries(prop_id, container_kind=container_kind)
         inventory = self.sim.ecs.get(Inventory).get(eid)
         if not inventory:
-            return
-        # If cache has items, withdraw the first stack.
-        if cache_items:
-            entry = cache_items[0]
-            item_id = entry.get("item_id", "")
-            quantity = int(entry.get("quantity", 1))
-            stack_max = 1
-            item_def = ITEM_CATALOG.get(item_id, {})
-            if item_def:
-                stack_max = int(item_def.get("stack_max", 1))
-            success, instance_id = inventory.add_item(
-                item_id,
-                quantity=quantity,
-                stack_max=max(1, stack_max),
-                owner_eid=eid,
-                owner_tag="player",
-                metadata=entry.get("metadata"),
+            return False
+        if not container_items:
+            _log_player_feedback(self.sim, f"The {container_name} is empty.", kind="interaction")
+            return False
+        index = max(0, min(int(selected_index), len(container_items) - 1))
+        entry = container_items[index]
+        item_id = str(entry.get("item_id", "")).strip().lower()
+        quantity = max(1, _int_or_default(entry.get("quantity"), 1))
+        item_def = ITEM_CATALOG.get(item_id, {})
+        stack_max = max(1, int(item_def.get("stack_max", 1) or 1))
+        success, _instance_id = inventory.add_item(
+            item_id,
+            quantity=quantity,
+            stack_max=stack_max,
+            owner_eid=eid,
+            owner_tag="player",
+            metadata=entry.get("metadata"),
+        )
+        if not success:
+            _log_player_feedback(
+                self.sim,
+                f"Inventory full — can't take from {self._container_label(container_kind).lower()}.",
+                kind="interaction",
             )
-            if not success:
-                _log_player_feedback(self.sim, "Inventory full — can't take from cache.", kind="interaction")
-                return
-            cache_items.pop(0)
-            name = entry.get("name", item_id.replace("_", " "))
-            _log_player_feedback(self.sim, f"Took {name} from {cache_name}.", kind="interaction")
+            return False
+        removed = container_items.pop(index)
+        name = item_display_name(item_id, metadata=removed.get("metadata"), item_catalog=ITEM_CATALOG)
+        _log_player_feedback(self.sim, f"Took {name} from {container_name}.", kind="interaction")
+        self.sim.emit(Event(
+            "container_withdraw",
+            eid=eid,
+            property_id=prop_id,
+            container_kind=container_kind,
+            item_id=item_id,
+            quantity=quantity,
+        ))
+        if container_kind == "cache":
             self.sim.emit(Event(
                 "cache_withdraw",
                 eid=eid,
@@ -15762,60 +18047,230 @@ class PlayerActionSystem(System):
                 item_id=item_id,
                 quantity=quantity,
             ))
-            return
-        # Otherwise, deposit the last inventory item into cache.
+        inventory_ui = getattr(self.sim, "inventory_ui", None)
+        if isinstance(inventory_ui, dict):
+            inventory_ui["inspect_text"] = ""
+            inventory_ui["selected_index"] = max(0, min(int(inventory_ui.get("selected_index", 0)), max(0, len(container_items) - 1)))
+            inventory_ui["note_text"] = self._container_panel_note(prop, container_kind=container_kind)
+        return True
+
+    def _withdraw_from_cache(self, eid, prop_id, *, selected_index=0):
+        return self._withdraw_from_container(
+            eid,
+            prop_id,
+            selected_index=selected_index,
+            container_kind="cache",
+        )
+
+    def _deposit_to_worn_container(self, eid, container_instance_id, *, instance_id=None):
+        runtime = self._equipped_worn_container(eid, container_instance_id)
+        if not runtime:
+            _log_player_feedback(self.sim, "No equipped container is ready.", kind="interaction")
+            return False
+        bag_entries = _inventory_entries_stowed_in_container(runtime["inventory"], runtime["instance_id"])
+        if len(bag_entries) >= int(runtime["bonus_slots"]):
+            _log_player_feedback(self.sim, f"The {runtime['item_name']} is full.", kind="interaction")
+            return False
+        pack_entries = _inventory_entries_loose_for_container(runtime["inventory"], runtime["instance_id"])
+        if not pack_entries:
+            _log_player_feedback(self.sim, "Pack empty — nothing to stash.", kind="interaction")
+            return False
+        target_entry = runtime["inventory"].find(instance_id=instance_id) if instance_id else None
+        if target_entry is None:
+            _log_player_feedback(self.sim, "No pack item selected to stash.", kind="interaction")
+            return False
+        target_instance_id = str(target_entry.get("instance_id", "")).strip()
+        if target_instance_id == runtime["instance_id"]:
+            _log_player_feedback(self.sim, "You can't stash the active container inside itself.", kind="interaction")
+            return False
+        if _entry_stowed_container_instance(target_entry) == runtime["instance_id"]:
+            _log_player_feedback(self.sim, f"{runtime['item_name']} already holds that item.", kind="interaction")
+            return False
+        metadata = dict(target_entry.get("metadata") or {})
+        metadata[ITEM_STOWED_CONTAINER_METADATA_KEY] = runtime["instance_id"]
+        runtime["inventory"].update_item_metadata(target_entry["instance_id"], metadata=metadata)
+        name = item_display_name(target_entry["item_id"], metadata=target_entry.get("metadata"), item_catalog=ITEM_CATALOG)
+        _log_player_feedback(self.sim, f"Stashed {name} in {runtime['item_name']}.", kind="interaction")
+        self.sim.emit(Event(
+            "container_deposit",
+            eid=eid,
+            container_kind="worn",
+            container_instance_id=runtime["instance_id"],
+            item_id=target_entry["item_id"],
+            quantity=max(1, _int_or_default(target_entry.get("quantity"), 1)),
+        ))
+        self._refresh_worn_container_panel_state(eid, runtime["instance_id"])
+        return True
+
+    def _deposit_to_container(self, eid, prop_id, *, instance_id=None, container_kind="container"):
+        prop = self.sim.properties.get(prop_id)
+        container_kind = str(container_kind or "container").strip().lower() or "container"
+        container_name = str((prop or {}).get("name", self._container_label(container_kind).lower())).strip() or self._container_label(container_kind).lower()
+        container_items = self._container_inventory_entries(prop_id, container_kind=container_kind)
+        inventory = self.sim.ecs.get(Inventory).get(eid)
+        if not inventory:
+            return False
+        max_stacks = self.CACHE_MAX_STACKS if container_kind in {"cache", "bones"} else max(8, len(container_items) + 1)
+        if len(container_items) >= max_stacks:
+            _log_player_feedback(self.sim, f"The {container_name} is full.", kind="interaction")
+            return False
         if not inventory.items:
-            _log_player_feedback(self.sim, f"The {cache_name} is empty.", kind="interaction")
-            return
-        if len(cache_items) >= self.CACHE_MAX_STACKS:
-            _log_player_feedback(self.sim, f"The {cache_name} is full.", kind="interaction")
-            return
-        last_entry = inventory.items[-1]
-        removed = inventory.remove_item(instance_id=last_entry["instance_id"], quantity=last_entry["quantity"])
+            _log_player_feedback(self.sim, "Pack empty — nothing to stash.", kind="interaction")
+            return False
+        target_entry = inventory.find(instance_id=instance_id) if instance_id else None
+        if target_entry is None:
+            _log_player_feedback(self.sim, "No pack item selected to stash.", kind="interaction")
+            return False
+        target_instance_id = str(target_entry.get("instance_id", "")).strip()
+        disguise = getattr(self.sim, "disguise_state", None)
+        if isinstance(disguise, dict) and str(disguise.get("instance_id", "")).strip() == target_instance_id:
+            _log_player_feedback(self.sim, "Remove the active disguise before stashing it.", kind="interaction")
+            return False
+        container = getattr(self.sim, "equipped_container", None)
+        if isinstance(container, dict) and str(container.get("instance_id", "")).strip() == target_instance_id:
+            _log_player_feedback(self.sim, "Take off the active container before stashing it.", kind="interaction")
+            return False
+        removed = inventory.remove_item(instance_id=target_entry["instance_id"], quantity=target_entry["quantity"])
         if not removed:
-            return
-        cache_items.append({
+            return False
+        removed_changes = _unlink_removed_item_from_gear(self.sim, eid, removed, item_catalog=ITEM_CATALOG)
+        if removed_changes.get("armor_name"):
+            self.sim.emit(Event(
+                "armor_removed",
+                eid=eid,
+                item_id=removed_changes.get("armor_item_id"),
+                armor_name=removed_changes["armor_name"],
+                reason="stashed",
+            ))
+        if removed_changes.get("weapon_id"):
+            self.sim.emit(Event(
+                "weapon_removed",
+                eid=eid,
+                weapon_id=removed_changes["weapon_id"],
+                weapon_name=removed_changes["weapon_name"],
+                reason="stashed",
+            ))
+        container_items.append({
+            "instance_id": removed.get("instance_id"),
             "item_id": removed["item_id"],
             "quantity": removed["quantity"],
-            "name": removed["item_id"].replace("_", " "),
+            "name": item_display_name(removed["item_id"], metadata=removed.get("metadata"), item_catalog=ITEM_CATALOG),
             "metadata": removed.get("metadata"),
             "owner_eid": removed.get("owner_eid"),
             "owner_tag": removed.get("owner_tag"),
         })
-        name = removed["item_id"].replace("_", " ")
-        _log_player_feedback(self.sim, f"Stashed {name} in {cache_name}.", kind="interaction")
+        name = item_display_name(removed["item_id"], metadata=removed.get("metadata"), item_catalog=ITEM_CATALOG)
+        _log_player_feedback(self.sim, f"Stashed {name} in {container_name}.", kind="interaction")
         self.sim.emit(Event(
-            "cache_deposit",
+            "container_deposit",
             eid=eid,
             property_id=prop_id,
+            container_kind=container_kind,
             item_id=removed["item_id"],
             quantity=removed["quantity"],
         ))
+        if container_kind == "cache":
+            self.sim.emit(Event(
+                "cache_deposit",
+                eid=eid,
+                property_id=prop_id,
+                item_id=removed["item_id"],
+                quantity=removed["quantity"],
+            ))
+        inventory_ui = getattr(self.sim, "inventory_ui", None)
+        if isinstance(inventory_ui, dict):
+            inventory_ui["inspect_text"] = ""
+            inventory_ui["selected_index"] = max(0, int(inventory_ui.get("selected_index", 0)))
+            inventory_ui["note_text"] = self._container_panel_note(prop, container_kind=container_kind)
+        return True
 
-    def _nearest_stakeable_property(self, pos):
-        nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=3)
-        opp_state = getattr(self.sim, "world_traits", {}).get("opportunities", {})
-        prop_ids_with_opps = {
-            str(e.get("requirements", {}).get("property_id", "")).strip()
-            for e in opp_state.get("active", ())
-            if isinstance(e, dict) and str(e.get("requirements", {}).get("property_id", "")).strip()
-        }
-        candidates = [
-            p for p in nearby
-            if str(p.get("kind", "")).strip().lower() == "building"
-            and str(p.get("id", "")).strip() in prop_ids_with_opps
-        ]
-        if not candidates:
-            return None
-        return min(candidates, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"]))
+    def _deposit_to_cache(self, eid, prop_id, *, instance_id=None):
+        return self._deposit_to_container(
+            eid,
+            prop_id,
+            instance_id=instance_id,
+            container_kind="cache",
+        )
+
+    def on_container_transfer_request(self, event):
+        eid = event.data.get("eid")
+        if eid is None:
+            return
+        if _entity_is_downed(self.sim, eid):
+            _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+            return
+        container_kind = str(event.data.get("container_kind", "") or "").strip().lower() or "container"
+        container_instance_id = str(event.data.get("container_instance_id", "") or "").strip()
+        container_view = str(
+            event.data.get("container_view", event.data.get("cache_view", "container"))
+        ).strip().lower() or "container"
+        container_view = "pack" if container_view == "pack" else "container"
+        selected_index = int(event.data.get("selected_index", 0) or 0)
+        if container_kind == "worn":
+            if not container_instance_id:
+                return
+            if container_view == "pack":
+                self._deposit_to_worn_container(
+                    eid,
+                    container_instance_id,
+                    instance_id=event.data.get("instance_id"),
+                )
+                return
+            self._withdraw_from_worn_container(
+                eid,
+                container_instance_id,
+                selected_index=selected_index,
+            )
+            return
+        prop_id = str(event.data.get("property_id", "") or "").strip()
+        if not prop_id:
+            return
+        if container_view == "pack":
+            self._deposit_to_container(
+                eid,
+                prop_id,
+                instance_id=event.data.get("instance_id"),
+                container_kind=container_kind,
+            )
+            return
+        self._withdraw_from_container(
+            eid,
+            prop_id,
+            selected_index=selected_index,
+            container_kind=container_kind,
+        )
+
+    def on_cache_transfer_request(self, event):
+        data = dict(getattr(event, "data", {}) or {})
+        data.setdefault("container_kind", "cache")
+        cache_view = str(data.get("cache_view", "cache")).strip().lower() or "cache"
+        data.setdefault("container_view", "pack" if cache_view == "pack" else "container")
+        self.on_container_transfer_request(Event(event.type, **data))
+
+    def _clear_stakeout(self, eid=None, *, reason=""):
+        state = getattr(self.sim, "stakeout_state", None)
+        if not isinstance(state, dict):
+            self.sim.stakeout_state = None
+            return
+        prop_id = str(state.get("prop_id", "")).strip()
+        prop = self.sim.properties.get(prop_id) if prop_id else None
+        prop_name = str((prop or {}).get("name", prop_id or "target site")).strip() or "target site"
+        had_progress = (
+            _int_or_default(state.get("ticks", 0), 0) > 0
+            or _int_or_default(state.get("reveals_done", 0), 0) > 0
+        )
+        self.sim.stakeout_state = None
+        if had_progress and eid is not None:
+            self.sim.emit(Event(
+                "stakeout_ended",
+                eid=eid,
+                property_id=prop_id,
+                property_name=prop_name,
+                reason=str(reason or "").strip().lower() or "ended",
+            ))
 
     def _stakeout_reveal_intel(self, eid, prop_id):
-        opp_state = getattr(self.sim, "world_traits", {}).get("opportunities", {})
-        active_opps = [
-            e for e in opp_state.get("active", ())
-            if isinstance(e, dict)
-            and str(e.get("requirements", {}).get("property_id", "")).strip() == str(prop_id).strip()
-        ]
+        active_opps = list(_active_property_opportunities(self.sim, prop_id))
         if not active_opps:
             return False
         player_eid = getattr(self.sim, "player_eid", eid)
@@ -15852,15 +18307,14 @@ class PlayerActionSystem(System):
         return True
 
     def _try_advance_stakeout(self, eid, pos):
-        stealth_state = getattr(self.sim, "player_stealth_state", {})
-        if not isinstance(stealth_state, dict) or not bool(stealth_state.get("hidden")):
-            self.sim.stakeout_state = None
+        snapshot = _stakeout_progress_snapshot(self.sim, eid, pos, require_hidden=True)
+        if not isinstance(snapshot, dict):
+            stealth_state = getattr(self.sim, "player_stealth_state", {})
+            hidden = bool(stealth_state.get("hidden")) if isinstance(stealth_state, dict) else False
+            self._clear_stakeout(eid=eid, reason="left_site" if hidden else "observed")
             return
-        target_prop = self._nearest_stakeable_property(pos)
-        if not target_prop:
-            self.sim.stakeout_state = None
-            return
-        prop_id = target_prop["id"]
+        prop_id = snapshot["property_id"]
+        prop_name = snapshot["property_name"]
         state = getattr(self.sim, "stakeout_state", None)
         if not isinstance(state, dict) or state.get("prop_id") != prop_id:
             state = {
@@ -15870,18 +18324,21 @@ class PlayerActionSystem(System):
                 "reveals_done": 0,
             }
             self.sim.stakeout_state = state
-        MAX_REVEALS = 4
-        if int(state.get("reveals_done", 0)) >= MAX_REVEALS:
+            self.sim.emit(Event(
+                "stakeout_started",
+                eid=eid,
+                property_id=prop_id,
+                property_name=prop_name,
+            ))
+        if int(state.get("reveals_done", 0)) >= STAKEOUT_MAX_REVEALS:
             return
         state["ticks"] = int(state.get("ticks", 0)) + 1
-        REVEAL_INTERVAL = 8
-        if state["ticks"] % REVEAL_INTERVAL != 0:
+        if state["ticks"] % STAKEOUT_REVEAL_INTERVAL != 0:
             return
         revealed = self._stakeout_reveal_intel(eid, prop_id)
         if revealed:
             state["reveals_done"] = int(state.get("reveals_done", 0)) + 1
-            prop_name = target_prop.get("name", "the area")
-            if state["reveals_done"] >= MAX_REVEALS:
+            if state["reveals_done"] >= STAKEOUT_MAX_REVEALS:
                 _log_player_feedback(
                     self.sim,
                     f"You've thoroughly cased {prop_name}. Every angle mapped.",
@@ -15890,13 +18347,17 @@ class PlayerActionSystem(System):
             else:
                 _log_player_feedback(
                     self.sim,
-                    f"Watching {prop_name}. Patterns are taking shape.",
+                    (
+                        f"Watching {prop_name}. Patterns are taking shape "
+                        f"({int(state['reveals_done'])}/{STAKEOUT_MAX_REVEALS})."
+                    ),
                     kind="interaction",
                 )
             self.sim.emit(Event(
                 "stakeout_intel_gained",
                 eid=eid,
                 property_id=prop_id,
+                property_name=prop_name,
                 ticks=state["ticks"],
                 reveals_done=state["reveals_done"],
             ))
@@ -17048,6 +19509,26 @@ class PlayerActionSystem(System):
                         services.append(label)
                 if services:
                     detail_bits.append("services:" + ",".join(services[:4]))
+                infrastructure_role = _property_infrastructure_role(best_property)
+                stakeout_stats = _stakeout_property_opportunity_stats(
+                    self.sim,
+                    getattr(self.sim, "player_eid", eid),
+                    best_property.get("id"),
+                )
+                if infrastructure_role == "camera_target":
+                    radius = max(1, _int_or_default(_property_metadata(best_property).get("detection_radius"), 5))
+                    state_text = "online" if _security_fixture_is_online(self.sim, best_property) else "offline"
+                    detail_bits.append(f"camera:{state_text} r{radius}")
+                elif infrastructure_role == "alarm_target":
+                    state_text = "online" if _security_fixture_is_online(self.sim, best_property) else "offline"
+                    detail_bits.append(f"alarm:{state_text}")
+                if isinstance(stakeout_stats, dict):
+                    detail_bits.append(f"ops:{int(stakeout_stats.get('count', 0))}")
+                    if bool(stakeout_stats.get("mapped")):
+                        detail_bits.append("stakeout:mapped")
+                    else:
+                        confidence_pct = int(round(float(stakeout_stats.get("least_confidence", 0.0) or 0.0) * 100.0))
+                        detail_bits.append(f"stakeout:{max(0, confidence_pct)}%")
                 if detail_level >= 2:
                     org_snapshot = _organization_snapshot(self.sim, prop=best_property, ensure=True)
                     if isinstance(org_snapshot, dict):
@@ -17236,7 +19717,6 @@ class PlayerActionSystem(System):
             return
 
         if action == "move":
-            self.sim.stakeout_state = None
             if zoom_mode == "overworld":
                 return
             dx = event.data.get("dx", 0)
@@ -17270,6 +19750,7 @@ class PlayerActionSystem(System):
                     property_id=(blocked_prop or {}).get("id"),
                 ))
             else:
+                self._clear_stakeout(eid=eid, reason="move")
                 self._emit_move_access_offense(
                     eid=eid,
                     action=action,
@@ -17403,14 +19884,6 @@ class PlayerActionSystem(System):
             self._handle_interact_action(eid, pos)
             return
 
-        if action == "quest_accept":
-            self.sim.emit(Event("quest_accept_requested", eid=eid))
-            return
-
-        if action == "quest_turn_in":
-            self.sim.emit(Event("quest_turn_in_requested", eid=eid))
-            return
-
         if action == "purchase_property":
             self._handle_purchase(eid, pos)
             return
@@ -17540,6 +20013,22 @@ class ItemSystem(System):
                 eid=eid,
                 weapon_id=changes["weapon_id"],
                 weapon_name=changes["weapon_name"],
+                reason=reason,
+            ))
+        if changes.get("disguise_name"):
+            self.sim.emit(Event(
+                "disguise_removed",
+                eid=eid,
+                item_id=changes.get("disguise_item_id"),
+                item_name=changes["disguise_name"],
+                reason=reason,
+            ))
+        if changes.get("container_name"):
+            self.sim.emit(Event(
+                "container_removed",
+                eid=eid,
+                item_id=changes.get("container_item_id"),
+                item_name=changes["container_name"],
                 reason=reason,
             ))
 
@@ -17687,6 +20176,7 @@ class ItemSystem(System):
             item_id=item_id,
             item_name=item_name,
             role_id=role_id,
+            strength=strength,
             reason=reason,
         ))
         return True
@@ -17706,6 +20196,8 @@ class ItemSystem(System):
         current = getattr(self.sim, "equipped_container", None)
         # Toggle off if same container already equipped.
         if isinstance(current, dict) and current.get("instance_id") == instance_id:
+            if inventory:
+                _clear_inventory_container_assignments(inventory, instance_id)
             self.sim.equipped_container = None
             if inventory:
                 inventory.capacity = max(1, inventory.capacity - bonus_slots)
@@ -17721,7 +20213,10 @@ class ItemSystem(System):
         # If swapping, restore old capacity first.
         old_bonus = 0
         if isinstance(current, dict):
+            old_instance_id = str(current.get("instance_id", "")).strip()
             old_bonus = int(current.get("bonus_slots", 0))
+            if inventory and old_instance_id:
+                _clear_inventory_container_assignments(inventory, old_instance_id)
             self.sim.emit(Event(
                 "container_removed",
                 eid=eid,
@@ -19797,6 +22292,22 @@ class TradeSystem(System):
                 weapon_name=gear_changes["weapon_name"],
                 reason="sold",
             ))
+        if gear_changes.get("disguise_name"):
+            self.sim.emit(Event(
+                "disguise_removed",
+                eid=eid,
+                item_id=gear_changes.get("disguise_item_id"),
+                item_name=gear_changes["disguise_name"],
+                reason="sold",
+            ))
+        if gear_changes.get("container_name"):
+            self.sim.emit(Event(
+                "container_removed",
+                eid=eid,
+                item_id=gear_changes.get("container_item_id"),
+                item_name=gear_changes["container_name"],
+                reason="sold",
+            ))
 
         item_id = removed["item_id"]
         item_def = ITEM_CATALOG.get(item_id, {"name": item_id})
@@ -21800,34 +24311,6 @@ class RivalOperatorSystem(System):
     LOCAL_SPOTTED_COOLDOWN = 60
     SPAWN_MIN_PLAYER_DISTANCE = 5
 
-    FIRST_NAMES = (
-        "Ari",
-        "Mara",
-        "Nell",
-        "Voss",
-        "Ivo",
-        "Kade",
-        "Rin",
-        "Leda",
-        "Sable",
-        "Corin",
-        "Vera",
-        "Dax",
-    )
-    LAST_NAMES = (
-        "Slate",
-        "Vale",
-        "Rook",
-        "Morrow",
-        "Pike",
-        "Drift",
-        "Mercer",
-        "Knox",
-        "Quill",
-        "Wren",
-        "Locke",
-        "Thorn",
-    )
     PUBLIC_MASKS = (
         "clean",
         "rough",
@@ -22283,13 +24766,12 @@ class RivalOperatorSystem(System):
         used_names = set()
         for idx in range(self.RIVAL_COUNT):
             rng = random.Random(f"{self.sim.seed}:rival-seed:{idx}")
-            name = ""
-            for _attempt in range(16):
-                candidate = f"{rng.choice(self.FIRST_NAMES)} {rng.choice(self.LAST_NAMES)}"
-                if candidate not in used_names:
-                    name = candidate
-                    break
-            if not name:
+            name = generate_human_personal_name(
+                self.sim,
+                rng,
+                avoid_names=used_names,
+            )
+            if not str(name).strip():
                 name = f"Operator {idx + 1}"
             used_names.add(name)
 
@@ -24396,7 +26878,7 @@ class OrganizationReputationSystem(System):
             return
         service = str(event.data.get("service", "")).strip().lower()
         standing_delta = 0.015
-        if service in {"rest", "fuel", "vehicle_fetch"}:
+        if service in {"rest", "fuel", "repair", "vehicle_fetch"}:
             standing_delta = 0.02
         elif service.startswith("vehicle_sales_"):
             standing_delta = 0.04
@@ -24430,6 +26912,14 @@ class FinalOperationSystem(System):
         self.sim.events.subscribe("item_picked_up", self.on_item_picked_up)
 
     def _conclude_run(self, *, outcome, reason, objective_title, summary_lines):
+        archive_failed_run_bones(
+            self.sim,
+            self.player_eid,
+            outcome=outcome,
+            reason=reason,
+            objective_title=objective_title,
+            summary_lines=summary_lines,
+        )
         traits = getattr(self.sim, "world_traits", None)
         if not isinstance(traits, dict):
             self.sim.world_traits = {}
@@ -24603,6 +27093,12 @@ class FinalOperationSystem(System):
                 target_property_name=str(target_identified.get("target_property_name", "")),
                 target_item_id=str(target_identified.get("target_item_id", "")),
                 target_item_name=str(target_identified.get("target_item_name", "")),
+                target_reason=str(target_identified.get("target_reason", "")),
+                target_quality_label=str(target_identified.get("target_quality_label", "")),
+                target_value_bonus=int(target_identified.get("target_value_bonus", 0) or 0),
+                target_intel_score=int(target_identified.get("target_intel_score", 0) or 0),
+                target_entry_label=str(target_identified.get("target_entry_label", "")),
+                target_entry_detail=str(target_identified.get("target_entry_detail", "")),
             ))
         completed = try_complete_final_operation(self.sim, self.player_eid)
         if not completed:
@@ -24930,6 +27426,8 @@ class PropertyDefenseSystem(System):
         for defender_eid, defender_reason in defenders.items():
             if defender_eid == offender_eid:
                 continue
+            if _observer_is_active_contractor_ally(self.sim, defender_eid, offender_eid):
+                continue
 
             ai = ais.get(defender_eid)
             pos = positions.get(defender_eid)
@@ -24954,17 +27452,64 @@ class PropertyDefenseSystem(System):
             if response_mode == "warn" and ai.state == "protecting" and ai.target_eid == offender_eid:
                 continue
 
-            if response_mode == "warn":
+            defender_response_mode = response_mode
+            if (
+                offender_eid == getattr(self.sim, "player_eid", None)
+                and threat_type == "property_trespass"
+            ):
+                disguise_profile = _npc_disguise_scrutiny_profile(
+                    self.sim,
+                    defender_eid,
+                    prop,
+                    offender_eid=offender_eid,
+                )
+                if disguise_profile:
+                    hard_entry = bool(
+                        severity_label == "serious_trespass"
+                        or ingress_kind in {"boundary_breach", "deep_breach"}
+                        or ingress_method in {
+                            "forced_side_entry",
+                            "jimmied_side_entry",
+                            "quiet_window_entry",
+                            "careful_window_entry",
+                            "crash_window_entry",
+                            "forced_breach",
+                            "deep_breach",
+                        }
+                        or _is_window_aperture(aperture_kind)
+                    )
+                    if (
+                        defender_response_mode == "warn"
+                        and disguise_profile.get("allow_pass")
+                        and severity_score <= 18
+                        and not hard_entry
+                    ):
+                        continue
+                    if (
+                        defender_response_mode == "protect"
+                        and disguise_profile.get("downgrade_protect")
+                        and severity_score <= 24
+                        and not hard_entry
+                    ):
+                        defender_response_mode = "warn"
+                    elif (
+                        defender_response_mode == "warn"
+                        and disguise_profile.get("escalate_warn")
+                        and severity_score >= 12
+                    ):
+                        defender_response_mode = "protect"
+
+            if defender_response_mode == "warn":
                 ai.state = "investigating"
             else:
                 ai.state = "protecting"
             ai.target = target
-            ai.target_eid = offender_eid if response_mode == "protect" else None
+            ai.target_eid = offender_eid if defender_response_mode == "protect" else None
 
             will = wills.get(defender_eid)
             traits = traits_map.get(defender_eid) or NPCTraits()
             if will:
-                if response_mode == "warn":
+                if defender_response_mode == "warn":
                     will.intent = "investigating"
                     will.score = 42.0 + (traits.discipline * 18.0)
                     will.target_eid = None
@@ -24975,7 +27520,7 @@ class PropertyDefenseSystem(System):
                 will.target = target
                 will.last_tick = self.sim.tick
 
-            if response_mode == "warn":
+            if defender_response_mode == "warn":
                 self.sim.emit(Event(
                     "npc_warn_property",
                     npc_eid=defender_eid,
@@ -25037,6 +27582,196 @@ def _degrade_player_disguise(sim, player_eid, amount=0.35):
         disguise["strength"] = round(new_strength, 3)
 
 
+def _observer_primary_role(sim, observer_eid):
+    if sim is None or observer_eid is None:
+        return ""
+    ai = sim.ecs.get(AI).get(observer_eid)
+    role = str(getattr(ai, "role", "") or "").strip().lower()
+    if role and role != "civilian":
+        return role
+
+    occupation = sim.ecs.get(Occupation).get(observer_eid)
+    career = str(getattr(occupation, "career", "") or "").strip().lower()
+    if any(token in career for token in ("guard", "security", "patrol", "watch")):
+        return "guard"
+    if any(token in career for token in ("worker", "labor", "loader", "mechanic", "salvage", "operator", "janitor", "tech")):
+        return "worker"
+    return role
+
+
+def _npc_disguise_scrutiny_profile(sim, observer_eid, prop, *, offender_eid=None):
+    if sim is None or observer_eid is None or not isinstance(prop, dict):
+        return None
+    if offender_eid != getattr(sim, "player_eid", None):
+        return None
+    disguise = getattr(sim, "disguise_state", None)
+    if not isinstance(disguise, dict):
+        return None
+
+    role_id = str(disguise.get("role_id", "") or "").strip().lower()
+    strength = max(0.0, float(disguise.get("strength", 0.0) or 0.0))
+    if role_id not in {"guard", "worker"} or strength <= 0.0:
+        return None
+
+    archetype = _property_archetype(prop)
+    access_level = _property_access_level(prop)
+    security_site = archetype in SECURITY_ARCHETYPES or access_level == "restricted"
+    worker_site = archetype in INDUSTRIAL_ARCHETYPES or archetype in SALVAGE_ARCHETYPES
+    observer_role = _observer_primary_role(sim, observer_eid)
+    observer_access, observer_claim = _property_claim_reason(
+        sim,
+        observer_eid,
+        prop,
+        x=prop.get("x"),
+        y=prop.get("y"),
+        z=prop.get("z", 0),
+        min_standing=0.58,
+    )
+    embedded_observer = observer_claim in {"owner", "employee", "credential_holder", "resident"}
+
+    fit_score = 0
+    if role_id == "guard":
+        fit_score += 2 if security_site else -2 if worker_site else -1
+        if observer_role == "guard":
+            fit_score += 2
+        elif observer_role == "worker":
+            fit_score -= 2
+        if embedded_observer and security_site:
+            fit_score += 1
+    elif role_id == "worker":
+        fit_score += 2 if worker_site else -2 if security_site else -1
+        if observer_role == "worker":
+            fit_score += 2
+        elif observer_role == "guard":
+            fit_score -= 2
+        if embedded_observer and worker_site:
+            fit_score += 1
+
+    if fit_score >= 5:
+        fit_label = "strong_fit"
+        suspicion_mult = 0.52
+        recognition_floor = 0.18
+    elif fit_score >= 3:
+        fit_label = "good_fit"
+        suspicion_mult = 0.68
+        recognition_floor = 0.24
+    elif fit_score >= 1:
+        fit_label = "partial_fit"
+        suspicion_mult = 0.86
+        recognition_floor = 0.32
+    elif fit_score <= -3:
+        fit_label = "hard_mismatch"
+        suspicion_mult = 1.38
+        recognition_floor = 0.62
+    else:
+        fit_label = "soft_mismatch"
+        suspicion_mult = 1.18
+        recognition_floor = 0.48
+
+    if fit_score >= 1:
+        suspicion_mult += max(0.0, (1.0 - strength) * 0.28)
+    else:
+        suspicion_mult += max(0.0, (1.0 - strength) * 0.12)
+
+    return {
+        "role_id": role_id,
+        "strength": round(strength, 3),
+        "observer_role": observer_role,
+        "observer_claim": observer_claim,
+        "observer_standing": round(float(observer_access.standing), 3) if observer_access else 0.0,
+        "fit_score": int(fit_score),
+        "fit_label": fit_label,
+        "suspicion_mult": round(float(suspicion_mult), 3),
+        "recognition_floor": round(float(recognition_floor), 3),
+        "allow_pass": bool(fit_label == "strong_fit" and strength >= 0.72),
+        "downgrade_protect": bool(fit_label in {"strong_fit", "good_fit"} and strength >= 0.62),
+        "escalate_warn": bool(fit_label == "hard_mismatch"),
+    }
+
+
+def _security_fixture_temporarily_disabled_until(sim, prop):
+    if not isinstance(prop, dict):
+        return 0
+    disabled_map = getattr(sim, "camera_disabled", {})
+    if not isinstance(disabled_map, dict):
+        return 0
+    return _int_or_default(disabled_map.get(prop.get("id"), 0), 0)
+
+
+def _security_fixture_power_cut_active(sim, prop, *, tick=None):
+    if not isinstance(prop, dict):
+        return False
+    if tick is None:
+        tick = int(getattr(sim, "tick", 0))
+    power_cuts = getattr(sim, "fixture_power_cuts", {})
+    if not isinstance(power_cuts, dict):
+        return False
+    prop_id = str(prop.get("id", "")).strip()
+    if prop_id and _int_or_default(power_cuts.get(prop_id), 0) > int(tick):
+        return True
+    cover_index = getattr(sim, "property_cover_index", {})
+    if not isinstance(cover_index, dict):
+        return False
+    prop_x = int(prop.get("x", 0))
+    prop_y = int(prop.get("y", 0))
+    prop_z = int(prop.get("z", 0))
+    for covered_pid in cover_index.get((prop_x, prop_y, prop_z), ()):
+        if _int_or_default(power_cuts.get(covered_pid), 0) > int(tick):
+            return True
+    return False
+
+
+def _security_fixture_is_online(sim, prop, *, tick=None):
+    if not isinstance(prop, dict):
+        return False
+    if tick is None:
+        tick = int(getattr(sim, "tick", 0))
+    if _security_fixture_power_cut_active(sim, prop, tick=tick):
+        return False
+    if _security_fixture_temporarily_disabled_until(sim, prop) > int(tick):
+        return False
+    return True
+
+
+def _camera_disguise_scrutiny_profile(sim, prop):
+    disguise = getattr(sim, "disguise_state", None)
+    if not isinstance(disguise, dict):
+        return None
+    role_id = str(disguise.get("role_id", "") or "").strip().lower()
+    strength = max(0.0, float(disguise.get("strength", 0.0) or 0.0))
+    if not role_id or strength <= 0.0:
+        return None
+    archetype = _property_archetype(prop) if isinstance(prop, dict) else ""
+    access_level = _property_access_level(prop) if isinstance(prop, dict) else "public"
+    protected_site = access_level != "public"
+    security_site = archetype in SECURITY_ARCHETYPES or protected_site
+    worker_site = archetype in INDUSTRIAL_ARCHETYPES or archetype in SALVAGE_ARCHETYPES
+    if role_id == "guard":
+        threshold = 1.12 if security_site else 0.78
+        increment = 0.34 if security_site else 0.58
+    elif role_id == "worker":
+        if worker_site:
+            threshold = 0.96
+            increment = 0.41
+        elif security_site:
+            threshold = 0.52
+            increment = 0.78
+        else:
+            threshold = 0.4
+            increment = 0.9
+    else:
+        return None
+
+    threshold *= max(0.75, min(1.1, 0.7 + (strength * 0.35)))
+    increment *= max(0.72, min(1.08, 1.04 - (strength * 0.16)))
+    return {
+        "role_id": role_id,
+        "strength": strength,
+        "threshold": round(float(threshold), 3),
+        "increment": round(float(increment), 3),
+    }
+
+
 class CameraSystem(System):
     """Detects the player in camera sightlines and raises offense events.
 
@@ -25048,12 +27783,14 @@ class CameraSystem(System):
     """
 
     DETECTION_COOLDOWN = 14   # ticks between repeat detections per camera
+    SCRUTINY_RESET_TICKS = 42
     CAMERA_OFFENSE_SCORE = 26  # medium offense; between trespass and tamper
 
     def __init__(self, sim, player_eid):
         super().__init__(sim)
         self.player_eid = player_eid
         self._last_detect = {}   # {cam_prop_id: last_tick_detected}
+        self._scrutiny = {}      # {cam_prop_id: {"value": float, "tick": int}}
         self.sim.events.subscribe("player_action", self.on_player_action)
 
     def on_player_action(self, event):
@@ -25066,22 +27803,27 @@ class CameraSystem(System):
         self._check_cameras()
 
     def _camera_is_online(self, cam_id, cam_prop):
-        tick = int(getattr(self.sim, "tick", 0))
-        power_cuts = getattr(self.sim, "fixture_power_cuts", {})
-        if power_cuts.get(cam_id, 0) > tick:
-            return False
-        # Also check if the enclosing building's power is cut.
-        cover_index = getattr(self.sim, "property_cover_index", {})
-        cam_x = int(cam_prop.get("x", 0))
-        cam_y = int(cam_prop.get("y", 0))
-        cam_z = int(cam_prop.get("z", 0))
-        for pid in cover_index.get((cam_x, cam_y, cam_z), ()):
-            if power_cuts.get(pid, 0) > tick:
-                return False
-        cam_disabled = getattr(self.sim, "camera_disabled", {})
-        if cam_disabled.get(cam_id, 0) > tick:
-            return False
-        return True
+        return _security_fixture_is_online(self.sim, cam_prop, tick=int(getattr(self.sim, "tick", 0)))
+
+    def _camera_scrutiny_value(self, cam_id, *, tick):
+        state = self._scrutiny.get(cam_id)
+        if not isinstance(state, dict):
+            return 0.0
+        last_tick = int(state.get("tick", -9999))
+        if int(tick) - last_tick > self.SCRUTINY_RESET_TICKS:
+            self._scrutiny.pop(cam_id, None)
+            return 0.0
+        return max(0.0, float(state.get("value", 0.0)))
+
+    def _set_camera_scrutiny(self, cam_id, value, *, tick):
+        value = max(0.0, float(value))
+        if value <= 0.0:
+            self._scrutiny.pop(cam_id, None)
+            return
+        self._scrutiny[cam_id] = {
+            "value": round(value, 3),
+            "tick": int(tick),
+        }
 
     def _check_cameras(self):
         positions = self.sim.ecs.get(Position)
@@ -25126,7 +27868,41 @@ class CameraSystem(System):
                 )
                 if access.permitted:
                     continue
+            disguise_profile = _camera_disguise_scrutiny_profile(self.sim, covering_prop)
+            camera_name = str(cam_prop.get("name", "camera") or "camera").strip() or "camera"
+            if disguise_profile:
+                scrutiny = self._camera_scrutiny_value(cam_id, tick=tick)
+                new_scrutiny = scrutiny + float(disguise_profile.get("increment", 0.0))
+                threshold = max(0.1, float(disguise_profile.get("threshold", 0.1)))
+                confidence = max(0.0, min(1.0, new_scrutiny / threshold))
+                if new_scrutiny + 1e-6 < threshold:
+                    self._last_detect[cam_id] = tick
+                    self._set_camera_scrutiny(cam_id, new_scrutiny, tick=tick)
+                    self.sim.emit(Event(
+                        "camera_scrutiny",
+                        eid=self.player_eid,
+                        camera_property_id=cam_id,
+                        camera_name=camera_name,
+                        property_id=covering_prop.get("id") if isinstance(covering_prop, dict) else None,
+                        disguise_role=disguise_profile.get("role_id"),
+                        scrutiny=round(new_scrutiny, 3),
+                        threshold=round(threshold, 3),
+                        confidence=round(confidence, 3),
+                    ))
+                    continue
             self._last_detect[cam_id] = tick
+            self._set_camera_scrutiny(cam_id, 0.0, tick=tick)
+            if disguise_profile:
+                _degrade_player_disguise(self.sim, self.player_eid, amount=0.22)
+            self.sim.emit(Event(
+                "camera_alerted",
+                eid=self.player_eid,
+                camera_property_id=cam_id,
+                camera_name=camera_name,
+                property_id=covering_prop.get("id") if isinstance(covering_prop, dict) else None,
+                disguise_role=disguise_profile.get("role_id") if disguise_profile else None,
+                disguise_failed=bool(disguise_profile),
+            ))
             _emit_action_offense_event(
                 self.sim,
                 eid=self.player_eid,
@@ -25214,6 +27990,8 @@ class NPCMemorySystem(System):
         context = event.data.get("context", "ordinary")
         offense_score = int(event.data.get("offense_score", 0))
         offense_tier = event.data.get("offense_tier", _offense_tier(offense_score))
+        context_key = str(context or "ordinary").strip().lower() or "ordinary"
+        action_key = str(action or "").strip().lower()
         ox = event.data.get("x")
         oy = event.data.get("y")
         oz = event.data.get("z")
@@ -25239,6 +28017,15 @@ class NPCMemorySystem(System):
 
             pos = positions.get(eid)
             if not pos or pos.z != oz:
+                continue
+            if _observer_turns_blind_eye_to_offense(
+                self.sim,
+                eid,
+                offender_eid,
+                action=action,
+                context=context_key,
+                offense_score=offense_score,
+            ):
                 continue
             if not _observer_can_notice_position(self.sim, eid, ox, oy, oz):
                 continue
@@ -25278,14 +28065,30 @@ class NPCMemorySystem(System):
             perceived = (offense_score / 100.0) * distance_modifier * relation_modifier
             perceived *= justice_modifier * sensitivity_modifier * trait_modifier
             if offender_eid == getattr(self.sim, "player_eid", None):
+                disguise_profile = None
+                if (
+                    offense_prop
+                    and context_key in {"ordinary", "trespass"}
+                    and action_key not in {"fire_weapon", "tamper", "vehicle_theft"}
+                    and offense_score <= 24
+                ):
+                    disguise_profile = _npc_disguise_scrutiny_profile(
+                        self.sim,
+                        eid,
+                        offense_prop,
+                        offender_eid=offender_eid,
+                    )
+                    if disguise_profile:
+                        perceived *= float(disguise_profile.get("suspicion_mult", 1.0))
                 perceived *= float(_pressure_effects(self.sim).get("suspicion_mult", 1.0))
                 # NPCs who have previously warned or confronted the player
                 # recognize them faster and read their actions more harshly.
-                # A strong disguise suppresses this recognition bonus entirely.
+                # Matching cover suppresses this longer; bad cover lets it cut through faster.
                 disguise = getattr(self.sim, "disguise_state", None)
                 disguise_strength = float(disguise.get("strength", 0.0)) if isinstance(disguise, dict) else 0.0
                 recognition = _npc_recognizes_player(memory, offender_eid)
-                if recognition > 0.0 and disguise_strength < 0.35:
+                recognition_floor = float(disguise_profile.get("recognition_floor", 0.35)) if disguise_profile else 0.35
+                if recognition > 0.0 and disguise_strength < recognition_floor:
                     perceived = min(1.0, perceived + recognition * 0.28)
             perceived = _clamp(perceived, lo=0.0, hi=1.0)
             if perceived < 0.08:
@@ -25736,6 +28539,15 @@ class RumorSystem(System):
                 continue
 
             offender_eid = nearest["offender_eid"]
+            if _observer_turns_blind_eye_to_offense(
+                self.sim,
+                eid,
+                offender_eid,
+                action=nearest["action"],
+                context=nearest["context"],
+                offense_score=nearest["offense_score"],
+            ):
+                continue
             existing = self._recent_offense_strength(memory, offender_eid, max_age=35)
             base = (nearest["offense_score"] / 100.0) * max(0.15, 0.48 - (nearest_dist * 0.045))
             rumor_strength = max(0.08, min(0.65, base))
@@ -25804,6 +28616,15 @@ class RumorSystem(System):
                 source_strength = float(strongest["strength"])
                 shared_strength = source_strength * (0.52 + (bond["trust"] * 0.32))
                 shared_strength = max(0.08, min(0.9, shared_strength))
+                if _observer_turns_blind_eye_to_offense(
+                    self.sim,
+                    to_eid,
+                    offender_eid,
+                    action=data.get("action"),
+                    context=data.get("context", "ordinary"),
+                    offense_score=int(data.get("offense_score", 0) or 0),
+                ):
+                    continue
 
                 existing = self._recent_offense_strength(target_memory, offender_eid, max_age=35)
                 if existing >= shared_strength - 0.03:
@@ -26860,6 +29681,20 @@ class NPCWillSystem(System):
                 will.last_tick = self.sim.tick
                 continue
 
+            if ai.state == "following" and ai.target:
+                will.intent = "following"
+                will.target = ai.target
+                will.target_eid = ai.target_eid
+                will.last_tick = self.sim.tick
+                continue
+
+            if ai.state == "holding" and ai.target:
+                will.intent = "holding"
+                will.target = ai.target
+                will.target_eid = ai.target_eid
+                will.last_tick = self.sim.tick
+                continue
+
             if ai.state == "protecting" and ai.target:
                 recent_threat = memory.strongest("ally_threatened") if memory else None
                 recent_property = _strongest_memory_entry(
@@ -27896,6 +30731,8 @@ class NPCInvestigateSystem(System):
     DEFAULT_MOVE_COOLDOWNS = {
         "investigating": 2,
         "protecting": 1,
+        "following": 1,
+        "holding": 1,
         "seeking_social": 2,
         "seeking_safety": 1,
         "patrolling": 3,
@@ -27994,6 +30831,8 @@ class NPCInvestigateSystem(System):
         moving_states = {
             "investigating",
             "protecting",
+            "following",
+            "holding",
             "seeking_social",
             "seeking_safety",
             "patrolling",
@@ -28054,7 +30893,7 @@ class NPCInvestigateSystem(System):
                 if ai.state in {"working", "lounging", "socializing"}:
                     # Arrived at roam tile; clear target so will system picks a new one.
                     ai.target = None
-                elif ai.state not in {"protecting", "resting"}:
+                elif ai.state not in {"protecting", "resting", "following", "holding"}:
                     ai.state = "idle"
                     ai.target = None
                     ai.target_eid = None
@@ -28134,8 +30973,10 @@ class NPCInvestigateSystem(System):
                     ai.state = "idle"
                     ai.target = None
                     ai.target_eid = None
-                else:
+                elif ai.state == "protecting":
                     self.sim.emit(Event("npc_guarding_target", npc_eid=eid, target_eid=ai.target_eid, x=pos.x, y=pos.y, z=tz))
+                else:
+                    ai.target = (pos.x, pos.y, pos.z)
                 if throttle:
                     throttle.next_move_tick = self.sim.tick + 1
                 else:
@@ -29341,6 +32182,8 @@ class EventLogSystem(System):
         self.sim.events.subscribe("item_used", self.on_item_used)
         self.sim.events.subscribe("item_use_blocked", self.on_item_use_blocked)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
+        self.sim.events.subscribe("camera_scrutiny", self.on_camera_scrutiny)
+        self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
         self.sim.events.subscribe("status_applied", self.on_status_applied)
         self.sim.events.subscribe("status_expired", self.on_status_expired)
         self.sim.events.subscribe("inventory_panel_toggled", self.on_inventory_panel_toggled)
@@ -29352,10 +32195,15 @@ class EventLogSystem(System):
         self.sim.events.subscribe("cover_hopped", self.on_cover_hopped)
         self.sim.events.subscribe("cover_left", self.on_cover_left)
         self.sim.events.subscribe("cover_blocked", self.on_cover_blocked)
+        self.sim.events.subscribe("stakeout_started", self.on_stakeout_started)
+        self.sim.events.subscribe("stakeout_ended", self.on_stakeout_ended)
         self.sim.events.subscribe("rumor_shared", self.on_rumor_shared)
         self.sim.events.subscribe("npc_socialized", self.on_npc_socialized)
         self.sim.events.subscribe("armor_equipped", self.on_armor_equipped)
         self.sim.events.subscribe("armor_removed", self.on_armor_removed)
+        self.sim.events.subscribe("disguise_equipped", self.on_disguise_equipped)
+        self.sim.events.subscribe("disguise_removed", self.on_disguise_removed)
+        self.sim.events.subscribe("disguise_blown", self.on_disguise_blown)
         self.sim.events.subscribe("weapon_equipped", self.on_weapon_equipped)
         self.sim.events.subscribe("weapon_removed", self.on_weapon_removed)
         self.sim.events.subscribe("weapon_cycle_blocked", self.on_weapon_cycle_blocked)
@@ -29372,12 +32220,6 @@ class EventLogSystem(System):
         self.sim.events.subscribe("combat_overlay_exited", self.on_combat_overlay_exited)
         self.sim.events.subscribe("property_trespass", self.on_property_trespass)
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
-        self.sim.events.subscribe("quest_available", self.on_quest_available)
-        self.sim.events.subscribe("quest_accepted", self.on_quest_accepted)
-        self.sim.events.subscribe("quest_completed", self.on_quest_completed)
-        self.sim.events.subscribe("quest_turn_in_noop", self.on_quest_turn_in_noop)
-        self.sim.events.subscribe("quest_accept_blocked", self.on_quest_accept_blocked)
-        self.sim.events.subscribe("quest_none_available", self.on_quest_none)
         self.sim.events.subscribe("property_owner_changed", self.on_property_owner_changed)
         self.sim.events.subscribe("property_purchased", self.on_property_purchased)
         self.sim.events.subscribe("player_business_acquired", self.on_player_business_acquired)
@@ -30020,8 +32862,103 @@ class EventLogSystem(System):
                 return best[3], best[4]
         return None, ()
 
+    def _current_chunk_owned_vehicle_recovery_options(self, *, exclude_vehicle_id=None, require_fuel=False, limit=2):
+        chunk_coord = self._player_chunk_coord()
+        if not chunk_coord:
+            return ()
+        pos = self.sim.ecs.get(Position).get(self.player_eid)
+        assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+        inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
+        excluded_id = str(exclude_vehicle_id or "").strip()
+        candidates = []
+        for prop in self.sim.properties.values():
+            if not _property_is_vehicle(prop):
+                continue
+            vehicle_id = str(prop.get("id", "")).strip()
+            if excluded_id and vehicle_id == excluded_id:
+                continue
+            if self.sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0))) != tuple(chunk_coord):
+                continue
+            owned = bool(
+                prop.get("owner_eid") == self.player_eid
+                or str(prop.get("owner_tag", "") or "").strip().lower() == "player"
+                or (assets and vehicle_id in getattr(assets, "owned_property_ids", set()))
+            )
+            if not owned:
+                continue
+            fuel, fuel_capacity = _vehicle_fuel_values(prop)
+            if require_fuel and fuel <= 0:
+                continue
+            lock_state = property_lock_state(prop)
+            has_key = bool(
+                lock_state["key_id"]
+                and inventory_matching_property_key(
+                    inventory,
+                    property_id=prop.get("id"),
+                    key_id=lock_state["key_id"],
+                ) is not None
+            )
+            hotwired = bool(_property_metadata(prop).get("vehicle_hotwired"))
+            if lock_state["locked"] and not has_key and not hotwired:
+                continue
+            distance = 999
+            if pos:
+                distance = _manhattan(pos.x, pos.y, int(prop.get("x", 0)), int(prop.get("y", 0)))
+            if hotwired:
+                readiness = "hotwired"
+            elif has_key:
+                readiness = "key on hand"
+            elif lock_state["locked"]:
+                readiness = "locked"
+            else:
+                readiness = "unlocked"
+            candidates.append((
+                int(distance),
+                -int(fuel),
+                str(prop.get("name", prop.get("id", "vehicle"))).strip().lower(),
+                {
+                    "name": _vehicle_label(prop),
+                    "fuel": int(fuel),
+                    "fuel_capacity": int(fuel_capacity),
+                    "readiness": readiness,
+                },
+            ))
+        candidates.sort()
+        return tuple(row[3] for row in candidates[: max(1, int(limit))])
+
+    def _owned_vehicle_recovery_sentence(self, *, exclude_vehicle_id=None):
+        options = self._current_chunk_owned_vehicle_recovery_options(
+            exclude_vehicle_id=exclude_vehicle_id,
+            require_fuel=True,
+            limit=2,
+        )
+        if not options:
+            return ""
+        first = options[0]
+        subject = "Another owned vehicle is in this chunk" if str(exclude_vehicle_id or "").strip() else "Owned vehicle in this chunk"
+        detail = (
+            f"{first['name']} {first['fuel']}/{first['fuel_capacity']} "
+            f"({first['readiness']})"
+        )
+        if len(options) > 1:
+            detail += f" (+{len(options) - 1} more)"
+        return f"{subject}: {detail}."
+
     def _service_recovery_hint(self, service, *, on_foot=False):
         service_label = _site_service_label(service).strip() or str(service or "service")
+        service_key = str(service or "").strip().lower()
+        sentences = []
+        has_owned_recovery = False
+        if not on_foot:
+            sentences.append("Press Z to go on foot.")
+        if service_key == "fuel":
+            active_vehicle = self._player_active_vehicle_property()
+            recovery_sentence = self._owned_vehicle_recovery_sentence(
+                exclude_vehicle_id=(active_vehicle or {}).get("id"),
+            )
+            if recovery_sentence:
+                sentences.append(recovery_sentence)
+                has_owned_recovery = True
         local_names = self._current_chunk_service_props(service)
         if not local_names:
             local_names = self._chunk_preview_service_names(service, self._player_chunk_coord())
@@ -30029,20 +32966,24 @@ class EventLogSystem(System):
             target_text = ", ".join(local_names[:2])
             if len(local_names) > 2:
                 target_text += f" (+{len(local_names) - 2} more)"
-            if on_foot:
-                return f"Recovery: {service_label.title()} is available in this chunk at {target_text}. Walk over and press E."
-            return f"Recovery: press Z to go on foot. {service_label.title()} is available in this chunk at {target_text}."
+            sentences.append(
+                f"{service_label.title()} is available in this chunk at {target_text}."
+                + (" Walk over and press E." if on_foot else "")
+            )
+            return "Recovery: " + " ".join(sentences)
 
         chunk_coord, names = self._nearest_chunk_service_preview(service)
         if chunk_coord:
             preview = f" ({', '.join(names[:2])})" if names else ""
-            if on_foot:
-                return f"Recovery: no {service_label} in this chunk. Nearest known {service_label} is around chunk {chunk_coord}{preview}."
-            return f"Recovery: press Z to go on foot. Nearest known {service_label} is around chunk {chunk_coord}{preview}."
+            sentences.append(f"No {service_label} in this chunk. Nearest known {service_label} is around chunk {chunk_coord}{preview}.")
+            return "Recovery: " + " ".join(sentences)
 
-        if on_foot:
-            return f"Recovery: no clear {service_label} lead here. Search for another vehicle, service site, or settlement."
-        return f"Recovery: press Z to go on foot and search for {service_label}, another vehicle, or a settlement."
+        if has_owned_recovery:
+            return "Recovery: " + " ".join(sentences)
+        sentences.append(
+            f"No clear {service_label} lead here. Search for another vehicle, service site, or settlement."
+        )
+        return "Recovery: " + " ".join(sentences)
 
     def _player_active_vehicle_property(self):
         state = self.sim.ecs.get(VehicleState).get(self.player_eid)
@@ -30055,20 +32996,32 @@ class EventLogSystem(System):
 
     def _site_service_interaction_label(self, service):
         service_key = str(service or "").strip().lower()
-        if service_key != "fuel":
+        if service_key not in {"fuel", "repair"}:
             return _site_service_label(service)
 
         vehicle_prop = self._player_active_vehicle_property()
         if not vehicle_prop:
-            return "fuel (needs active vehicle)"
+            if service_key == "fuel":
+                return "fuel (needs active vehicle)"
+            return "repair (needs owned vehicle)"
 
         vehicle_name = _vehicle_label(vehicle_prop)
-        fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
-        if fuel_capacity > 0 and fuel >= fuel_capacity:
-            return f"fuel for {vehicle_name} {fuel}/{fuel_capacity} (full)"
-        if fuel <= 0:
-            return f"fuel for {vehicle_name} {fuel}/{fuel_capacity} (empty)"
-        return f"fuel for {vehicle_name} {fuel}/{fuel_capacity}"
+        if service_key == "fuel":
+            fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
+            if fuel_capacity > 0 and fuel >= fuel_capacity:
+                return f"fuel for {vehicle_name} {fuel}/{fuel_capacity} (full)"
+            if fuel <= 0:
+                return f"fuel for {vehicle_name} {fuel}/{fuel_capacity} (empty)"
+            return f"fuel for {vehicle_name} {fuel}/{fuel_capacity}"
+
+        durability = max(1, min(10, _int_or_default(_vehicle_profile_from_property(vehicle_prop).get("durability"), 5)))
+        if durability >= 10:
+            return f"repair for {vehicle_name} D{durability}/10 (solid)"
+        if durability <= 3:
+            return f"repair for {vehicle_name} D{durability}/10 (rough)"
+        if durability <= 6:
+            return f"repair for {vehicle_name} D{durability}/10 (worn)"
+        return f"repair for {vehicle_name} D{durability}/10"
 
     def _security_post_target(self, prop):
         linked = _infrastructure_target_property(self.sim, prop)
@@ -30728,6 +33681,23 @@ class EventLogSystem(System):
                 text += f" {skill_note}"
             self.sim.log.add(text)
             return
+        if service == "repair":
+            durability_gain = int(event.data.get("durability_gain", 0))
+            durability = int(event.data.get("durability", 0))
+            durability_max = int(event.data.get("durability_max", 10))
+            credits_spent = int(event.data.get("credits_spent", 0))
+            base_credits_spent = int(event.data.get("base_credits_spent", credits_spent))
+            vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
+            text = (
+                f"Repair: {prop_name} patches up {vehicle_name} "
+                f"(+{durability_gain}D, -{credits_spent}c, {durability}/{durability_max})."
+            )
+            if base_credits_spent > credits_spent:
+                text += f" Quoted down from {base_credits_spent}c."
+            if skill_note:
+                text += f" {skill_note}"
+            self.sim.log.add(text)
+            return
         if service == "vending":
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             credits_spent = int(event.data.get("credits_spent", 0))
@@ -30822,6 +33792,9 @@ class EventLogSystem(System):
         if reason == "no_vehicle" and service == "fuel":
             self.sim.log.add(f"Fuel: {prop_name} can only fuel a vehicle you own or have set active.")
             return
+        if reason == "no_vehicle" and service == "repair":
+            self.sim.log.add(f"Repair: {prop_name} can only work on a vehicle you own or have set active.")
+            return
         if reason == "tank_full" and service == "fuel":
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             fuel = int(event.data.get("fuel", 0))
@@ -30830,6 +33803,12 @@ class EventLogSystem(System):
                 self.sim.log.add(f"Fuel: {vehicle_name} is already topped off at {prop_name} ({fuel}/{fuel_capacity}).")
             else:
                 self.sim.log.add(f"Fuel: {vehicle_name} is already topped off at {prop_name}.")
+            return
+        if reason == "fully_repaired" and service == "repair":
+            vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
+            durability = int(event.data.get("durability", 0))
+            durability_max = int(event.data.get("durability_max", 10))
+            self.sim.log.add(f"Repair: {vehicle_name} is already in solid shape at {prop_name} ({durability}/{durability_max}).")
             return
         if reason == "no_credits" and service == "fuel":
             cost = int(event.data.get("cost", 0))
@@ -30843,6 +33822,16 @@ class EventLogSystem(System):
                 )
             else:
                 self.sim.log.add(f"Fuel: {prop_name} charges {cost}c per unit for {vehicle_name}; you have {credits}c.")
+            return
+        if reason == "no_credits" and service == "repair":
+            cost = int(event.data.get("cost", 0))
+            credits = int(event.data.get("credits", 0))
+            vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
+            durability = int(event.data.get("durability", 0))
+            durability_max = int(event.data.get("durability_max", 10))
+            self.sim.log.add(
+                f"Repair: {prop_name} quotes {cost}c per point for {vehicle_name}; you have {credits}c ({durability}/{durability_max})."
+            )
             return
         if reason == "no_credits" and service == "vending":
             cost = int(event.data.get("cost", 0))
@@ -31246,6 +34235,116 @@ class EventLogSystem(System):
         armor_name = event.data.get("armor_name", event.data.get("item_id", "armor"))
         self.sim.log.add(f"Removed {armor_name}.")
 
+    def on_disguise_equipped(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "disguise"))).strip() or "disguise"
+        role_text = _disguise_role_label(event.data.get("role_id"), title_case=True)
+        try:
+            strength_pct = int(round(float(event.data.get("strength", 1.0)) * 100.0))
+        except (TypeError, ValueError):
+            strength_pct = 100
+        strength_pct = max(1, strength_pct)
+        self.sim.log.add(f"Disguise on: {item_name} ({role_text}, {strength_pct}%).")
+
+    def on_disguise_removed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "disguise"))).strip() or "disguise"
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        if reason in {"dropped", "sold", "stashed"}:
+            self.sim.log.add(f"Disguise lost: {item_name}.")
+            return
+        self.sim.log.add(f"Disguise off: {item_name}.")
+
+    def on_disguise_blown(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "disguise"))).strip() or "disguise"
+        self._log(
+            f"Disguise blown: {item_name}.",
+            channel="alerts",
+            priority="high",
+            dedupe_window=6,
+            dedupe_key=f"disguise-blown:{item_name.lower()}",
+        )
+
+    def on_camera_scrutiny(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        camera_name = str(event.data.get("camera_name", "camera") or "camera").strip() or "camera"
+        role_text = _disguise_role_label(event.data.get("disguise_role"))
+        confidence = max(0.0, min(1.0, float(event.data.get("confidence", 0.0) or 0.0)))
+        if confidence >= 0.72:
+            self._log(
+                f"{camera_name} lingers on your {role_text} cover.",
+                channel="alerts",
+                priority="high",
+                dedupe_window=8,
+                dedupe_key=f"camera-scrutiny:{event.data.get('camera_property_id')}:{int(confidence * 10)}",
+            )
+            return
+        self._log(
+            f"{camera_name} tracks you, but the {role_text} cover still holds.",
+            channel="alerts",
+            priority="normal",
+            dedupe_window=8,
+            dedupe_key=f"camera-scrutiny:{event.data.get('camera_property_id')}:low",
+        )
+
+    def on_camera_alerted(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        camera_name = str(event.data.get("camera_name", "camera") or "camera").strip() or "camera"
+        if bool(event.data.get("disguise_failed")):
+            role_text = _disguise_role_label(event.data.get("disguise_role"))
+            self._log(
+                f"{camera_name} burns through your {role_text} cover.",
+                channel="alerts",
+                priority="high",
+                dedupe_window=8,
+                dedupe_key=f"camera-alert:{event.data.get('camera_property_id')}:cover",
+            )
+            return
+        self._log(
+            f"{camera_name} spots you.",
+            channel="alerts",
+            priority="high",
+            dedupe_window=8,
+            dedupe_key=f"camera-alert:{event.data.get('camera_property_id')}:plain",
+        )
+
+    def on_stakeout_started(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        property_name = str(event.data.get("property_name", "target site") or "target site").strip() or "target site"
+        self._log(
+            f"Stakeout started: {property_name}. Hold position while hidden.",
+            channel="status",
+            priority="normal",
+            dedupe_window=10,
+            dedupe_key=f"stakeout-start:{event.data.get('property_id')}",
+        )
+
+    def on_stakeout_ended(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        property_name = str(event.data.get("property_name", "target site") or "target site").strip() or "target site"
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        if reason == "observed":
+            message = f"Stakeout blown: {property_name}."
+        elif reason == "move":
+            message = f"Stakeout broken: {property_name}."
+        else:
+            message = f"Stakeout ended: {property_name}."
+        self._log(
+            message,
+            channel="status",
+            priority="normal" if reason != "observed" else "high",
+            dedupe_window=10,
+            dedupe_key=f"stakeout-end:{event.data.get('property_id')}:{reason or 'ended'}",
+        )
+
     def on_item_use_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -31290,6 +34389,11 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         open_state = bool(event.data.get("open"))
+        panel_kind = str(event.data.get("panel_kind", "inventory")).strip().lower() or "inventory"
+        title = str(event.data.get("title", "Inventory")).strip() or "Inventory"
+        if panel_kind in {"cache", "container"}:
+            self.sim.log.add(f"{title} {'opened' if open_state else 'closed'}.")
+            return
         if open_state:
             self.sim.log.add("Inventory opened.")
         else:
@@ -31299,7 +34403,12 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         if event.data.get("empty"):
-            self.sim.log.add("Inventory empty.")
+            panel_kind = str(event.data.get("panel_kind", "inventory")).strip().lower() or "inventory"
+            title = str(event.data.get("title", "Inventory")).strip() or "Inventory"
+            if panel_kind in {"cache", "container"}:
+                self.sim.log.add(f"{title} is empty.")
+            else:
+                self.sim.log.add("Inventory empty.")
             return
         text = event.data.get("inspect_text")
         if text:
@@ -31902,53 +35011,6 @@ class EventLogSystem(System):
                 dedupe_key="surrender-nearby",
             )
 
-    def on_quest_available(self, event):
-        difficulty = event.data.get("difficulty", 1)
-        self._log(
-            f"Quest available [T{difficulty}]: {event.data['title']} ({event.data['quest_id']}).",
-            channel="mission",
-            priority="high",
-        )
-
-    def on_quest_accepted(self, event):
-        difficulty = event.data.get("difficulty", 1)
-        self._log(f"Quest accepted [T{difficulty}]: {event.data['title']}.", channel="mission", priority="high")
-
-    def on_quest_completed(self, event):
-        reward = event.data.get("reward", {})
-        credits = reward.get("credits", 0)
-        deed = reward.get("property_deed")
-        difficulty = event.data.get("difficulty", 1)
-
-        if deed:
-            self._log(
-                f"Quest complete [T{difficulty}]: {event.data['title']} "
-                f"(+{credits} credits, deed {deed}).",
-                channel="mission",
-                priority="high",
-            )
-        else:
-            self._log(
-                f"Quest complete [T{difficulty}]: {event.data['title']} (+{credits} credits).",
-                channel="mission",
-                priority="high",
-            )
-
-    def on_quest_turn_in_noop(self, event):
-        if event.data.get("eid") != self.player_eid:
-            return
-        self.sim.log.add("Quest progress resolves automatically when objectives are met.")
-
-    def on_quest_accept_blocked(self, event):
-        if event.data.get("eid") != self.player_eid:
-            return
-        self.sim.log.add("Quest board full: complete or drop active quests first.")
-
-    def on_quest_none(self, event):
-        if event.data.get("eid") != self.player_eid:
-            return
-        self.sim.log.add("No quest available right now.")
-
     def on_property_owner_changed(self, event):
         if event.data.get("new_owner_eid") != self.player_eid:
             return
@@ -32296,11 +35358,11 @@ class EventLogSystem(System):
             return
         if reason == "missing_key":
             name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
-            self.sim.log.add(f"You need the key for {name}.")
+            self.sim.log.add(f"You own {name}, but you don't have its key on hand.")
             return
         if reason == "key_required":
             name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
-            self.sim.log.add(f"{name} is locked. You'll need a key, a lockpick kit, or exceptional intrusion skill.")
+            self.sim.log.add(f"{name} is locked and not yours. You'll need a key, a lockpick kit, or exceptional intrusion skill.")
             return
         if reason == "hotwire_failed":
             name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
@@ -32855,11 +35917,18 @@ class EventLogSystem(System):
             return
         property_name = str(event.data.get("target_property_name", "")).strip() or "target site"
         item_name = str(event.data.get("target_item_name", "")).strip() or "target asset"
-        self._log(
-            f"Target site identified: {property_name}. Recover {item_name}.",
-            channel="mission",
-            priority="critical",
-        )
+        target_reason = str(event.data.get("target_reason", "")).strip() or "site lead"
+        quality_label = str(event.data.get("target_quality_label", "")).strip() or "working"
+        target_value_bonus = max(0, int(event.data.get("target_value_bonus", 0) or 0))
+        target_intel_score = max(0, int(event.data.get("target_intel_score", 0) or 0))
+        target_entry_detail = str(event.data.get("target_entry_detail", "")).strip()
+        message = f"Target site identified: {property_name}. Recover {item_name}."
+        if target_intel_score > 0:
+            mark_text = "richer mark" if target_value_bonus >= 2 else "cleaner mark" if target_value_bonus >= 1 else "right mark"
+            message += f" {quality_label.capitalize()} intel via {target_reason} makes it the {mark_text}."
+        if target_entry_detail:
+            message += f" Best angle: {target_entry_detail}"
+        self._log(message, channel="mission", priority="critical")
 
     def on_final_operation_target_recovered(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -33465,7 +36534,7 @@ class RenderSystem(System):
             f"Aim/Combat: {aim_open}, move cursor, F cycle target, {aim_confirm}, v cover, C cover hop, Shift+S sneak, V cycle weapon.",
             "Items: I inventory, G pick up nearby, U use/equip/stow, R drop.",
             "Visual classes: vehicles use '&' symbol colors only; properties use letters; items are bright symbols; humans use colored @ symbols and wildlife uses taxonomy letters.",
-            "Progress: O operations report, Y known locations, L event log history.",
+            "Progress: O operations report, Y known locations and owned vehicles, L event log history.",
             "Log modal: T cycles filters; H sets the current modal filter as the live HUD filter.",
             "Debug: D live telemetry for lighting, stealth, pressure, property access, and objective state.",
             "Services: M trade panel, B bank, N insurance, P buy property.",
@@ -33515,6 +36584,26 @@ class RenderSystem(System):
             "selected_index": 0,
             "inspect_text": "",
         })
+        inventory_panel_kind = str(inventory_ui.get("panel_kind", "inventory")).strip().lower() or "inventory"
+        if inventory_panel_kind == "cache":
+            inventory_panel_kind = "container"
+            inventory_ui["panel_kind"] = "container"
+            inventory_ui.setdefault("container_kind", "cache")
+            inventory_ui.setdefault("container_label", "Cache")
+        inventory_container_kind = str(inventory_ui.get("container_kind", "")).strip().lower()
+        if not inventory_container_kind and inventory_panel_kind == "container":
+            inventory_container_kind = "container"
+        inventory_container_label = str(inventory_ui.get("container_label", "")).strip() or (
+            "Cache" if inventory_container_kind == "cache" else "Container"
+        )
+        inventory_container_instance_id = str(inventory_ui.get("container_instance_id", "") or "").strip() or None
+        inventory_container_capacity = max(0, _int_or_default(inventory_ui.get("container_capacity"), 0))
+        inventory_container_view = str(
+            inventory_ui.get("container_view", inventory_ui.get("cache_view", "pack"))
+        ).strip().lower() or "pack"
+        inventory_container_view = "pack" if inventory_container_view == "pack" else "container"
+        inventory_ui["container_view"] = inventory_container_view
+        inventory_ui["cache_view"] = "pack" if inventory_container_view == "pack" else "cache"
         trade_ui = getattr(self.sim, "trade_ui", {
             "open": False,
             "mode": "buy",
@@ -33563,25 +36652,14 @@ class RenderSystem(System):
             "lines": [],
             "scroll": 0,
         })
-        report_ui = getattr(self.sim, "report_ui", {
-            "open": False,
-            "kind": "progress",
-            "title": "Operations Report",
-            "lines": [],
-            "scroll": 0,
-        })
+        report_ui = _report_debug_ui.ensure_report_ui_state(self.sim)
         log_ui = getattr(self.sim, "log_ui", {
             "open": False,
             "title": "Event Log",
             "lines": [],
             "scroll": 0,
         })
-        debug_ui = getattr(self.sim, "debug_ui", {
-            "open": False,
-            "title": "Debug Overlay",
-            "lines": [],
-            "scroll": 0,
-        })
+        debug_ui = _report_debug_ui.ensure_debug_ui_state(self.sim)
 
         screen_w, screen_h = self.view.size()
         map_h = max(1, min(self.sim.tilemap.height, screen_h - self.hud_lines))
@@ -34067,12 +37145,7 @@ class RenderSystem(System):
                         )
                     self._draw_appearance(sx, sy, appearance, attrs=attrs)
 
-            active_quest_target = None
-            if self.sim.quests["active"]:
-                objective = self.sim.quests["active"][0].get("objective", {})
-                active_quest_target = objective.get("property_id")
-            if not active_quest_target:
-                active_quest_target = active_final_operation_target_property_id(self.sim)
+            active_quest_target = active_final_operation_target_property_id(self.sim)
 
             for prop in self.sim.properties.values():
                 display_pos = _property_display_position(prop, active_quest_target=active_quest_target)
@@ -34290,6 +37363,7 @@ class RenderSystem(System):
         player_cover = covers.get(self.player_eid)
         player_modes = modes.get(self.player_eid)
         player_vehicle_state = vehicle_states.get(self.player_eid)
+        active_disguise = getattr(self.sim, "disguise_state", None)
         active_vehicle_prop = None
         if player_vehicle_state and player_vehicle_state.active_vehicle_id:
             maybe_vehicle = self.sim.properties.get(player_vehicle_state.active_vehicle_id)
@@ -34342,6 +37416,25 @@ class RenderSystem(System):
             status_chunks.append(f"Light {context} {player_pct}% (out {outside_pct}%)")
         else:
             status_chunks.append(f"Light out {outside_pct}%")
+        if isinstance(active_disguise, dict):
+            role_text = _disguise_role_label(active_disguise.get("role_id"), title_case=True)
+            try:
+                strength_pct = int(round(float(active_disguise.get("strength", 0.0)) * 100.0))
+            except (TypeError, ValueError):
+                strength_pct = 0
+            status_chunks.append(f"Disguise {role_text} {max(0, strength_pct)}%")
+        stakeout_snapshot = _stakeout_progress_snapshot(self.sim, self.player_eid, player_pos, require_hidden=False)
+        if isinstance(stakeout_snapshot, dict) and (bool(stakeout_snapshot.get("hidden")) or bool(stakeout_snapshot.get("active"))):
+            target_name = str(stakeout_snapshot.get("property_name", "site")).strip() or "site"
+            if bool(stakeout_snapshot.get("mapped")):
+                status_chunks.append(f"Stakeout {target_name} mapped")
+            elif bool(stakeout_snapshot.get("active")):
+                reveals_done = max(0, _int_or_default(stakeout_snapshot.get("reveals_done", 0), 0))
+                max_reveals = max(1, _int_or_default(stakeout_snapshot.get("max_reveals", STAKEOUT_MAX_REVEALS), STAKEOUT_MAX_REVEALS))
+                next_reveal_in = max(1, _int_or_default(stakeout_snapshot.get("next_reveal_in", STAKEOUT_REVEAL_INTERVAL), STAKEOUT_REVEAL_INTERVAL))
+                status_chunks.append(f"Stakeout {target_name} {reveals_done}/{max_reveals} next {next_reveal_in}t")
+            else:
+                status_chunks.append(f"Stakeout ready {target_name}")
         overlay = getattr(self.sim, "combat_overlay", {})
         if overlay.get("active"):
             threat_count = overlay.get("threat_count", 0)
@@ -34364,7 +37457,34 @@ class RenderSystem(System):
             vehicle_name = _vehicle_label(active_vehicle_prop)
             fuel, fuel_capacity = _vehicle_fuel_values(active_vehicle_prop)
             mode_text = "driving" if (player_vehicle_state and player_vehicle_state.in_vehicle) else "parked"
-            status_chunks.append(f"Vehicle {vehicle_name} {mode_text} F{fuel}/{fuel_capacity}")
+            vehicle_bits = [f"Vehicle {vehicle_name} {mode_text} F{fuel}/{fuel_capacity}"]
+            if player_pos and not (player_vehicle_state and player_vehicle_state.in_vehicle):
+                vehicle_chunk = self.sim.chunk_coords(
+                    int(active_vehicle_prop.get("x", player_pos.x)),
+                    int(active_vehicle_prop.get("y", player_pos.y)),
+                )
+                player_chunk = self.sim.chunk_coords(int(player_pos.x), int(player_pos.y))
+                if vehicle_chunk == player_chunk:
+                    vehicle_bits.append("here")
+                else:
+                    vehicle_bits.append(f"offsite {vehicle_chunk[0]},{vehicle_chunk[1]}c")
+            lock_state = property_lock_state(active_vehicle_prop)
+            has_key = bool(
+                lock_state["key_id"]
+                and inventory_matching_property_key(
+                    inventory,
+                    property_id=active_vehicle_prop.get("id"),
+                    key_id=lock_state["key_id"],
+                ) is not None
+            )
+            hotwired = bool(_property_metadata(active_vehicle_prop).get("vehicle_hotwired"))
+            if hotwired:
+                vehicle_bits.append("hotwired")
+            elif has_key:
+                vehicle_bits.append("key")
+            elif lock_state["locked"]:
+                vehicle_bits.append("no-key")
+            status_chunks.append(" ".join(vehicle_bits))
         if look_ui.get("active"):
             look_mode = str(look_ui.get("mode", zoom_mode)).lower()
             label = "Aim" if look_purpose == "aim" else "Look"
@@ -34576,7 +37696,14 @@ class RenderSystem(System):
             else:
                 controls = "Look: move cursor, X/T inspect, Esc close, ? help"
         elif inventory_ui.get("open"):
-            controls = "Inventory: browse, U use/equip/stow, R drop, E inspect, O ops, Y locations, L log, D debug, I/Esc close, ? help"
+            if inventory_panel_kind == "container":
+                controls = (
+                    f"{inventory_container_label}: browse, U transfer, Left/Right or Tab switch "
+                    f"{inventory_container_label.lower()}/pack, E inspect, O ops, Y locations, "
+                    f"L log, D debug, I/Esc close, ? help"
+                )
+            else:
+                controls = "Inventory: browse, U use/equip/stow, R drop, E inspect, O ops, Y locations, L log, D debug, I/Esc close, ? help"
         elif trade_ui.get("open"):
             controls = "Trade: browse, B/S mode, E trade, X inspect, O ops, Y locations, L log, D debug, M close, ? help"
         elif dialog_ui.get("open"):
@@ -34673,8 +37800,30 @@ class RenderSystem(System):
                     self.view.draw_text(panel_x, panel_y + row, mid)
                 self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
 
+            panel_kind = inventory_panel_kind
+            panel_title = str(inventory_ui.get("title", "Inventory")).strip() or "Inventory"
+            container_view = inventory_container_view
+            container_kind = inventory_container_kind
+            container_label = inventory_container_label
+            container_instance_id = inventory_container_instance_id
+            container_capacity = inventory_container_capacity
+            note_text = str(inventory_ui.get("note_text", "")).strip()
             inv = inventories.get(self.player_eid)
-            entries = list(inv.items) if inv else []
+            if panel_kind == "container" and container_view == "container":
+                property_id = str(inventory_ui.get("property_id", "") or "").strip()
+                if container_kind == "worn":
+                    entries = _inventory_entries_stowed_in_container(inv, container_instance_id) if inv and container_instance_id else []
+                elif container_kind == "cache":
+                    cache_inventories = getattr(self.sim, "cache_inventories", {})
+                    entries = list(cache_inventories.get(property_id, ())) if isinstance(cache_inventories, dict) and property_id else []
+                else:
+                    container_inventories = getattr(self.sim, "container_inventories", {})
+                    container_store = container_inventories.get(container_kind, {}) if isinstance(container_inventories, dict) else {}
+                    entries = list(container_store.get(property_id, ())) if isinstance(container_store, dict) and property_id else []
+            elif panel_kind == "container" and container_kind == "worn":
+                entries = _inventory_entries_loose_for_container(inv, container_instance_id) if inv and container_instance_id else (list(inv.items) if inv else [])
+            else:
+                entries = list(inv.items) if inv else []
             if entries:
                 selected_index = int(inventory_ui.get("selected_index", 0))
                 selected_index = max(0, min(selected_index, len(entries) - 1))
@@ -34683,11 +37832,45 @@ class RenderSystem(System):
                 inventory_ui["selected_index"] = 0
                 selected_index = 0
 
-            header = " Inventory "
+            header = f" {panel_title} "
             self.view.draw_text(panel_x + 2, panel_y, _clip(header, panel_w - 4))
 
-            cap = inv.capacity if inv else 0
-            slot_line = f"Slots {len(entries)}/{cap}"
+            if panel_kind == "container":
+                container_count = 0
+                property_id = str(inventory_ui.get("property_id", "") or "").strip()
+                if container_kind == "worn":
+                    if inv and container_instance_id:
+                        container_count = len(_inventory_entries_stowed_in_container(inv, container_instance_id))
+                    if container_capacity > 0:
+                        container_count_text = f"{container_label} {container_count}/{container_capacity}"
+                    else:
+                        container_count_text = f"{container_label} {container_count}"
+                elif container_kind == "cache":
+                    cache_inventories = getattr(self.sim, "cache_inventories", {})
+                    if isinstance(cache_inventories, dict) and property_id:
+                        container_count = len(list(cache_inventories.get(property_id, ())))
+                    container_count_text = f"{container_label} {container_count}/{PlayerActionSystem.CACHE_MAX_STACKS}"
+                else:
+                    container_inventories = getattr(self.sim, "container_inventories", {})
+                    container_store = container_inventories.get(container_kind, {}) if isinstance(container_inventories, dict) else {}
+                    if isinstance(container_store, dict) and property_id:
+                        container_count = len(list(container_store.get(property_id, ())))
+                    container_count_text = f"{container_label} {container_count}"
+                if container_kind == "worn":
+                    pack_count = len(_inventory_entries_loose_for_container(inv, container_instance_id)) if inv and container_instance_id else (len(list(inv.items)) if inv else 0)
+                else:
+                    pack_count = len(list(inv.items)) if inv else 0
+                pack_cap = inv.capacity if inv else 0
+                slot_line = (
+                    f"View {container_label.upper() if container_view == 'container' else 'PACK'}"
+                    f" | {container_count_text}"
+                    f" | Pack {pack_count}/{pack_cap}"
+                )
+                if note_text:
+                    slot_line += f" | {note_text}"
+            else:
+                cap = inv.capacity if inv else 0
+                slot_line = f"Slots {len(entries)}/{cap}"
             self.view.draw_text(panel_x + 2, panel_y + 1, _clip(slot_line, panel_w - 4))
 
             list_y = panel_y + 2
@@ -34700,6 +37883,8 @@ class RenderSystem(System):
             visible_entries = entries[start: start + list_h]
             armor_loadout = self.sim.ecs.get(ArmorLoadout).get(self.player_eid)
             weapon_loadout = self.sim.ecs.get(WeaponLoadout).get(self.player_eid)
+            active_disguise = getattr(self.sim, "disguise_state", None)
+            equipped_container = getattr(self.sim, "equipped_container", None)
             for idx, entry in enumerate(visible_entries):
                 absolute = start + idx
                 marker = ">" if absolute == selected_index else " "
@@ -34707,21 +37892,32 @@ class RenderSystem(System):
                 glyph = item_def.get("glyph", "*")
                 name = item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG)
                 gear_marker = ""
-                if armor_loadout and armor_loadout.is_equipped(entry.get("instance_id")):
-                    gear_marker = "A"
-                elif weapon_loadout:
-                    weapon_id = _item_weapon_id(item_def)
-                    instance = weapon_loadout.weapon_instances.get(weapon_id, {}) if weapon_id else {}
-                    if (
-                        weapon_id
-                        and weapon_loadout.current_weapon() == weapon_id
-                        and isinstance(instance, dict)
-                        and str(instance.get("inventory_instance_id", "")).strip() == str(entry.get("instance_id", "")).strip()
+                if panel_kind != "container" or container_view == "pack":
+                    if armor_loadout and armor_loadout.is_equipped(entry.get("instance_id")):
+                        gear_marker = "A"
+                    elif (
+                        isinstance(active_disguise, dict)
+                        and str(active_disguise.get("instance_id", "")).strip() == str(entry.get("instance_id", "")).strip()
                     ):
-                        gear_marker = "W"
+                        gear_marker = "D"
+                    elif weapon_loadout:
+                        weapon_id = _item_weapon_id(item_def)
+                        instance = weapon_loadout.weapon_instances.get(weapon_id, {}) if weapon_id else {}
+                        if (
+                            weapon_id
+                            and weapon_loadout.current_weapon() == weapon_id
+                            and isinstance(instance, dict)
+                            and str(instance.get("inventory_instance_id", "")).strip() == str(entry.get("instance_id", "")).strip()
+                        ):
+                            gear_marker = "W"
+                    elif (
+                        isinstance(equipped_container, dict)
+                        and str(equipped_container.get("instance_id", "")).strip() == str(entry.get("instance_id", "")).strip()
+                    ):
+                        gear_marker = "C"
                 ammo_suffix = ""
                 weapon_id = _item_weapon_id(item_def)
-                if weapon_id:
+                if weapon_id and (panel_kind != "container" or container_view == "pack"):
                     weapon = weapon_by_id(weapon_id)
                     ammo_type = _weapon_ammo_type_label(weapon)
                     if _weapon_uses_ammo(weapon):
@@ -34732,13 +37928,23 @@ class RenderSystem(System):
                             ammo_suffix = f" [{ammo_type}]"
                     else:
                         ammo_suffix = " [melee]"
-                label = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} {name} x{entry['quantity']}{ammo_suffix}"
+                storage_suffix = ""
+                if panel_kind != "container":
+                    stowed_container_instance = _entry_stowed_container_instance(entry)
+                    if stowed_container_instance:
+                        storage_suffix = " [stowed]"
+                label = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} {name} x{entry['quantity']}{ammo_suffix}{storage_suffix}"
                 self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2))
 
             if not entries:
-                self.view.draw_text(panel_x + 2, list_y, _clip("(empty)", panel_w - 4))
+                empty_label = "(empty)"
+                if panel_kind == "container":
+                    empty_label = f"({container_label.lower()} empty)" if container_view == "container" else "(pack empty)"
+                self.view.draw_text(panel_x + 2, list_y, _clip(empty_label, panel_w - 4))
 
             inspect_text = inventory_ui.get("inspect_text", "")
+            if panel_kind == "container" and note_text and not inspect_text:
+                inspect_text = note_text
             if entries:
                 selected = entries[selected_index]
                 item_def = ITEM_CATALOG.get(selected["item_id"], {})
@@ -34749,10 +37955,13 @@ class RenderSystem(System):
                     metadata=selected.get("metadata"),
                     item_catalog=ITEM_CATALOG,
                 )
-                inspect_text = inspect_text or _item_legend_line(
-                    selected["item_id"],
-                    f"{inspect_name} [{legal}] {tags}",
-                )
+                if not inspect_text:
+                    inspect_text = _item_legend_line(
+                        selected["item_id"],
+                        f"{inspect_name} [{legal}] {tags}",
+                    )
+            elif note_text:
+                inspect_text = inspect_text or note_text
 
             self._draw_display_line(
                 panel_x + 2,
@@ -34760,7 +37969,13 @@ class RenderSystem(System):
                 _clip_display_line(inspect_text, panel_w - 4),
                 panel_w - 4,
             )
-            hint = "U use/equip/stow  R drop  E inspect  O ops  Y locations  L log  D debug  I close"
+            if panel_kind == "container":
+                hint = (
+                    f"U transfer  Left/Right or Tab switch {container_label.lower()}/pack  "
+                    f"E inspect  O ops  Y locations  L log  D debug  I close"
+                )
+            else:
+                hint = "U use/equip/stow  R drop  E inspect  O ops  Y locations  L log  D debug  I close"
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, panel_w - 4))
         elif trade_ui.get("open"):
             panel_w = min(max(40, map_w // 2), map_w)
@@ -35062,147 +38277,19 @@ class RenderSystem(System):
                 footer = action_tail
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, panel_w - 4))
         elif report_ui.get("open"):
-            panel_w = min(max(56, screen_w - 4), screen_w)
-            panel_w = max(28, panel_w)
-            panel_h = min(max(12, map_h - 1), map_h)
-            panel_h = max(8, panel_h)
-            panel_x = max(0, (screen_w - panel_w) // 2)
-            panel_y = max(0, (map_h - panel_h) // 2)
-
-            def _clip(text, width):
-                if width <= 0:
-                    return ""
-                if len(text) <= width:
-                    return text
-                if width <= 3:
-                    return text[:width]
-                return text[: width - 3] + "..."
-
-            if panel_w >= 2 and panel_h >= 2:
-                top = "+" + ("-" * (panel_w - 2)) + "+"
-                mid = "|" + (" " * (panel_w - 2)) + "|"
-                bot = "+" + ("-" * (panel_w - 2)) + "+"
-
-                self.view.draw_text(panel_x, panel_y, top)
-                for row in range(1, panel_h - 1):
-                    self.view.draw_text(panel_x, panel_y + row, mid)
-                self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
-
-            title = str(report_ui.get("title", "Operations Report")).strip() or "Operations Report"
-            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(f" {title} ", panel_w - 4))
-
-            body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
-            body_h = max(1, panel_h - 4)
-            report_kind = str(report_ui.get("kind", "progress")).strip().lower() or "progress"
-            if report_kind == "known_locations":
-                rows = list(report_ui.get("rows", ()) or ())
-                filter_mode = str(report_ui.get("filter_mode", "visible")).strip().lower() or "visible"
-                selected_index = max(0, min(int(report_ui.get("selected_index", 0)), len(rows) - 1)) if rows else 0
-                report_ui["selected_index"] = selected_index
-                row_count = len(rows)
-                detail_reserve = 8 if rows else 4
-                list_h = max(1, min(max(1, row_count), max(1, body_h - detail_reserve)))
-                max_scroll = max(0, len(rows) - list_h)
-                scroll = max(0, min(int(report_ui.get("scroll", 0)), max_scroll))
-                if rows:
-                    if selected_index < scroll:
-                        scroll = selected_index
-                    elif selected_index >= scroll + list_h:
-                        scroll = selected_index - list_h + 1
-                else:
-                    scroll = 0
-                report_ui["scroll"] = scroll
-
-                mode_label = "hidden" if filter_mode == "hidden" else "active"
-                count_label = f"{len(rows)} {mode_label}"
-                recency_label = "sorted by last revised"
-                self.view.draw_text(panel_x + 2, panel_y + 2, _clip(f"{count_label} | {recency_label}", panel_w - 4))
-
-                list_y = panel_y + 3
-                visible_rows = rows[scroll: scroll + list_h]
-                for idx, row in enumerate(visible_rows):
-                    absolute = scroll + idx
-                    entry_line = _known_location_list_line(
-                        row,
-                        ordinal=absolute + 1,
-                        selected=(absolute == selected_index),
-                    )
-                    self._draw_display_line(
-                        panel_x + 1,
-                        list_y + idx,
-                        _clip_display_line(entry_line, panel_w - 2),
-                        panel_w - 2,
-                    )
-
-                if not rows:
-                    empty_text = "(no hidden locations)" if filter_mode == "hidden" else "(no known locations)"
-                    self.view.draw_text(panel_x + 2, list_y, _clip(empty_text, panel_w - 4))
-
-                detail_y = list_y + list_h + 1
-                detail_h = max(1, (panel_y + panel_h - 2) - detail_y)
-                detail_lines = []
-                if rows:
-                    row = rows[selected_index]
-                    detail_lines.extend(_known_location_detail_lines(row))
-                else:
-                    detail_lines.append("Nothing selected.")
-                    detail_lines.append("Press H to switch between active and hidden notebook entries.")
-
-                display_detail_lines = []
-                for raw in detail_lines:
-                    wrapped = _wrap_display_lines(raw, panel_w - 4) if _line_text(raw).strip() else [""]
-                    display_detail_lines.extend(wrapped)
-                visible_detail_lines = display_detail_lines[:detail_h]
-                for idx, line in enumerate(visible_detail_lines):
-                    self._draw_display_line(
-                        panel_x + 2,
-                        detail_y + idx,
-                        _clip_display_line(line, panel_w - 4),
-                        panel_w - 4,
-                    )
-
-                footer_bits = []
-                if scroll > 0:
-                    footer_bits.append("more above")
-                if scroll + list_h < len(rows):
-                    footer_bits.append("more below")
-                footer = " | ".join(footer_bits) if footer_bits else ""
-                action_verb = "restore" if filter_mode == "hidden" else "hide"
-                action_tail = f"Enter inspect | G go | M mark | R {action_verb} | H hidden | Y close | O ops | L log | D debug | ? help"
-                if footer:
-                    footer = f"{footer} | {action_tail}"
-                else:
-                    footer = action_tail
-            else:
-                display_lines = []
-                for raw in list(report_ui.get("lines", ()) or ()) or ["No report data."]:
-                    wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
-                    display_lines.extend(wrapped)
-                display_lines = display_lines or ["No report data."]
-                scroll = max(0, min(int(report_ui.get("scroll", 0)), len(display_lines) - 1))
-                report_ui["scroll"] = scroll
-                visible_lines = display_lines[scroll: scroll + body_h]
-
-                for idx, line in enumerate(visible_lines[:body_h]):
-                    self._draw_display_line(
-                        panel_x + 2,
-                        panel_y + 2 + idx,
-                        _clip_display_line(line, body_w),
-                        body_w,
-                    )
-
-                footer_bits = []
-                if scroll > 0:
-                    footer_bits.append("more above")
-                if scroll + body_h < len(display_lines):
-                    footer_bits.append("more below")
-                footer = " | ".join(footer_bits) if footer_bits else ""
-                action_tail = "O close | Y locations | L log | D debug | ? help"
-                if footer:
-                    footer = f"{footer} | {action_tail}"
-                else:
-                    footer = f"{action_tail} | Up/Down scroll"
-            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, panel_w - 4))
+            _report_debug_ui.draw_report_modal(
+                self.view,
+                report_ui,
+                screen_w=screen_w,
+                map_h=map_h,
+                view_text_wrap_width_fn=_view_text_wrap_width,
+                draw_display_line_fn=self._draw_display_line,
+                clip_display_line_fn=_clip_display_line,
+                wrap_display_lines_fn=_wrap_display_lines,
+                line_text_fn=_line_text,
+                known_location_list_line_fn=_known_location_list_line,
+                known_location_detail_lines_fn=_known_location_detail_lines,
+            )
         elif log_ui.get("open"):
             panel_w = min(max(56, screen_w - 4), screen_w)
             panel_w = max(28, panel_w)
@@ -35272,66 +38359,17 @@ class RenderSystem(System):
                 footer = "T cycle filter | H set HUD filter | L close | O ops | Y locations | D debug | Up/Down scroll | ? help"
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, panel_w - 4))
         elif debug_ui.get("open"):
-            panel_w = min(max(56, screen_w - 4), screen_w)
-            panel_w = max(28, panel_w)
-            panel_h = min(max(12, map_h - 1), map_h)
-            panel_h = max(8, panel_h)
-            panel_x = max(0, (screen_w - panel_w) // 2)
-            panel_y = max(0, (map_h - panel_h) // 2)
-
-            def _clip(text, width):
-                if width <= 0:
-                    return ""
-                if len(text) <= width:
-                    return text
-                if width <= 3:
-                    return text[:width]
-                return text[: width - 3] + "..."
-
-            if panel_w >= 2 and panel_h >= 2:
-                top = "+" + ("-" * (panel_w - 2)) + "+"
-                mid = "|" + (" " * (panel_w - 2)) + "|"
-                bot = "+" + ("-" * (panel_w - 2)) + "+"
-
-                self.view.draw_text(panel_x, panel_y, top)
-                for row in range(1, panel_h - 1):
-                    self.view.draw_text(panel_x, panel_y + row, mid)
-                self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
-
-            title = str(debug_ui.get("title", "Debug Overlay")).strip() or "Debug Overlay"
-            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(f" {title} ", panel_w - 4))
-
-            body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
-            body_h = max(1, panel_h - 4)
-            display_lines = []
-            for raw in list(debug_ui.get("lines", ()) or ()) or ["No debug data."]:
-                wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
-                display_lines.extend(wrapped)
-            display_lines = display_lines or ["No debug data."]
-            max_scroll = max(0, len(display_lines) - body_h)
-            scroll = max(0, min(int(debug_ui.get("scroll", 0)), max_scroll))
-            debug_ui["scroll"] = scroll
-            visible_lines = display_lines[scroll: scroll + body_h]
-
-            for idx, line in enumerate(visible_lines[:body_h]):
-                self._draw_display_line(
-                    panel_x + 2,
-                    panel_y + 2 + idx,
-                    _clip_display_line(line, body_w),
-                    body_w,
-                )
-
-            footer_bits = []
-            if scroll > 0:
-                footer_bits.append("more above")
-            if scroll + body_h < len(display_lines):
-                footer_bits.append("more below")
-            footer = " | ".join(footer_bits) if footer_bits else ""
-            if footer:
-                footer = f"{footer} | D close | O ops | Y locations | L log | ? help"
-            else:
-                footer = "D close | O ops | Y locations | L log | Up/Down scroll | ? help"
-            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, panel_w - 4))
+            _report_debug_ui.draw_debug_modal(
+                self.view,
+                debug_ui,
+                screen_w=screen_w,
+                map_h=map_h,
+                view_text_wrap_width_fn=_view_text_wrap_width,
+                draw_display_line_fn=self._draw_display_line,
+                clip_display_line_fn=_clip_display_line,
+                wrap_display_lines_fn=_wrap_display_lines,
+                line_text_fn=_line_text,
+            )
 
         if help_ui.get("open"):
             panel_w = min(max(48, map_w - 2), map_w)

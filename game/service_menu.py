@@ -1217,6 +1217,24 @@ class ServiceMenuSystem(System):
             if fuel_capacity > 0:
                 lines.append(f"Tank {fuel}/{fuel_capacity}.")
             return f"Fuel: {prop_name}", lines
+        if service == "repair":
+            durability_gain = int(event.data.get("durability_gain", 0))
+            durability = int(event.data.get("durability", 0))
+            durability_max = int(event.data.get("durability_max", 10))
+            credits_spent = int(event.data.get("credits_spent", 0))
+            base_credits_spent = int(event.data.get("base_credits_spent", credits_spent))
+            vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
+            skill_note = _sentence_from_note(event.data.get("skill_note", ""))
+            lines = [
+                f"{prop_name} patches up {vehicle_name}.",
+                f"+{durability_gain} durability for {_credit_amount_label(credits_spent)}.",
+            ]
+            if base_credits_spent > credits_spent:
+                lines.append(f"Quoted down from {_credit_amount_label(base_credits_spent)}.")
+            if skill_note:
+                lines.append(skill_note)
+            lines.append(f"Condition {durability}/{durability_max}.")
+            return f"Repair: {prop_name}", lines
         if service == "vending":
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             credits_spent = int(event.data.get("credits_spent", 0))
@@ -1316,6 +1334,8 @@ class ServiceMenuSystem(System):
             return f"Intel: {prop_name}", [f"{prop_name} has no fresh routes or leads right now."]
         if reason == "no_vehicle" and service == "fuel":
             return f"Fuel: {prop_name}", [f"{prop_name} can only refuel a vehicle you own or have set active."]
+        if reason == "no_vehicle" and service == "repair":
+            return f"Repair: {prop_name}", [f"{prop_name} can only work on a vehicle you own or have set active."]
         if reason == "tank_full" and service == "fuel":
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             fuel = int(event.data.get("fuel", 0))
@@ -1323,6 +1343,11 @@ class ServiceMenuSystem(System):
             if fuel_capacity > 0:
                 return f"Fuel: {prop_name}", [f"{vehicle_name} is already topped off.", f"Tank {fuel}/{fuel_capacity}."]
             return f"Fuel: {prop_name}", [f"{vehicle_name} is already topped off."]
+        if reason == "fully_repaired" and service == "repair":
+            vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
+            durability = int(event.data.get("durability", 0))
+            durability_max = int(event.data.get("durability_max", 10))
+            return f"Repair: {prop_name}", [f"{vehicle_name} is already in solid shape.", f"Condition {durability}/{durability_max}."]
         if reason == "no_credits" and service == "fuel":
             cost = int(event.data.get("cost", 0))
             credits = int(event.data.get("credits", 0))
@@ -1330,6 +1355,16 @@ class ServiceMenuSystem(System):
             return f"Fuel: {prop_name}", [
                 f"{prop_name} charges {_credit_amount_label(cost)} per unit for {vehicle_name}.",
                 f"You have {_credit_amount_label(credits)} on hand.",
+            ]
+        if reason == "no_credits" and service == "repair":
+            cost = int(event.data.get("cost", 0))
+            credits = int(event.data.get("credits", 0))
+            vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
+            durability = int(event.data.get("durability", 0))
+            durability_max = int(event.data.get("durability_max", 10))
+            return f"Repair: {prop_name}", [
+                f"{prop_name} quotes {_credit_amount_label(cost)} per repair point for {vehicle_name}.",
+                f"You have {_credit_amount_label(credits)} on hand. Condition {durability}/{durability_max}.",
             ]
         if reason == "no_credits" and service == "vending":
             cost = int(event.data.get("cost", 0))

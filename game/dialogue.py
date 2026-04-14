@@ -21,11 +21,14 @@ TOPIC_ORDER = (
     "fire",
     "services",
     "service_fuel",
+    "service_repair",
     "service_banking",
     "service_insurance",
     "service_rest",
     "service_intel",
     "service_trade",
+    "service_used_cars",
+    "service_vehicle_fetch",
     "service_gaming",
     "hours",
     "owner",
@@ -33,6 +36,7 @@ TOPIC_ORDER = (
     "access",
     "entry",
     "keyholder",
+    "weak_point",
     "purpose",
     "apologize",
     "leave",
@@ -41,6 +45,15 @@ TOPIC_ORDER = (
     "detail",
     "opportunities",
     "contract",
+    "side_job",
+    "hire_runner",
+    "backup_orders",
+    "backup_follow",
+    "backup_hold",
+    "backup_distract",
+    "backup_goto_wait",
+    "backup_wait_return",
+    "backup_kill",
     "objective",
     "angle",
     "risk",
@@ -55,7 +68,6 @@ TOPIC_ORDER = (
     "bye",
     "payoff",
     "fence",
-    "hire_runner",
 )
 
 
@@ -130,11 +142,14 @@ TOPIC_DEFS = {
         "root": False,
         "unlocks": (
             "service_fuel",
+            "service_repair",
             "service_banking",
             "service_insurance",
             "service_rest",
             "service_intel",
             "service_trade",
+            "service_used_cars",
+            "service_vehicle_fetch",
             "service_gaming",
             "trade",
         ),
@@ -144,13 +159,18 @@ TOPIC_DEFS = {
         "root": False,
         "unlocks": (),
     },
+    "service_repair": {
+        "label": "Any repair shop nearby?",
+        "root": False,
+        "unlocks": (),
+    },
     "service_banking": {
-        "label": "Any bank nearby?",
+        "label": "Any bank or broker nearby?",
         "root": False,
         "unlocks": (),
     },
     "service_insurance": {
-        "label": "Any insurer nearby?",
+        "label": "Any insurer or claims desk nearby?",
         "root": False,
         "unlocks": (),
     },
@@ -166,6 +186,16 @@ TOPIC_DEFS = {
     },
     "service_trade": {
         "label": "Any shopping around here?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_used_cars": {
+        "label": "Any used cars nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_vehicle_fetch": {
+        "label": "Anyone who can retrieve a vehicle?",
         "root": False,
         "unlocks": (),
     },
@@ -187,20 +217,25 @@ TOPIC_DEFS = {
     "security": {
         "label": "How tight is security there?",
         "root": False,
-        "unlocks": ("access", "entry", "keyholder"),
+        "unlocks": ("access", "entry", "keyholder", "weak_point"),
     },
     "access": {
         "label": "How is it secured?",
         "root": False,
-        "unlocks": ("entry", "keyholder"),
+        "unlocks": ("entry", "keyholder", "weak_point"),
     },
     "entry": {
         "label": "Is there another way in?",
         "root": False,
-        "unlocks": (),
+        "unlocks": ("weak_point",),
     },
     "keyholder": {
         "label": "Who carries access?",
+        "root": False,
+        "unlocks": (),
+    },
+    "weak_point": {
+        "label": "What's the weak point there?",
         "root": False,
         "unlocks": (),
     },
@@ -227,11 +262,14 @@ TOPIC_DEFS = {
             "detail",
             "history",
             "service_fuel",
+            "service_repair",
             "service_banking",
             "service_insurance",
             "service_rest",
             "service_intel",
             "service_trade",
+            "service_used_cars",
+            "service_vehicle_fetch",
             "service_gaming",
         ),
     },
@@ -248,15 +286,62 @@ TOPIC_DEFS = {
     "opportunities": {
         "label": "Anything worth pursuing?",
         "root": True,
-        "unlocks": ("objective", "angle", "risk", "contract"),
+        "unlocks": ("objective", "angle", "risk", "contract", "side_job", "hire_runner"),
     },
     "contract": {
         "label": "Any contracts going?",
         "root": False,
         "unlocks": (),
     },
+    "side_job": {
+        "label": "Need anything handled quietly?",
+        "root": False,
+        "unlocks": (),
+    },
     "hire_runner": {
-        "label": "I need someone discreet for a few hours. Interested?",
+        "label": "I need backup for a few hours. Interested?",
+        "root": False,
+        "unlocks": ("backup_orders",),
+    },
+    "backup_orders": {
+        "label": "Let's tighten the plan.",
+        "root": False,
+        "unlocks": (
+            "backup_follow",
+            "backup_hold",
+            "backup_distract",
+            "backup_goto_wait",
+            "backup_wait_return",
+            "backup_kill",
+        ),
+    },
+    "backup_follow": {
+        "label": "Back to passive cover.",
+        "root": False,
+        "unlocks": (),
+    },
+    "backup_hold": {
+        "label": "Hang here.",
+        "root": False,
+        "unlocks": (),
+    },
+    "backup_distract": {
+        "label": "Make a distraction.",
+        "root": False,
+        "unlocks": (),
+    },
+    "backup_goto_wait": {
+        "label": "Head to the marked spot and wait.",
+        "root": False,
+        "unlocks": (),
+    },
+    "backup_wait_return": {
+        "label": "Head to the marked spot, wait, then return.",
+        "root": False,
+        "unlocks": (),
+    },
+    "backup_kill": {
+        "label": "Take out the marked target.",
         "root": False,
         "unlocks": (),
     },
@@ -718,6 +803,7 @@ STYLE_LEAD_IN_BANKS = {
     "access",
     "entry",
     "keyholder",
+    "weak_point",
     "purpose_defuse",
     "purpose_wary",
     "purpose_fail",
@@ -770,6 +856,7 @@ STYLE_CATCH_BANKS = {
     "access",
     "entry",
     "keyholder",
+    "weak_point",
     "purpose_defuse",
     "purpose_wary",
     "purpose_fail",
@@ -1136,6 +1223,17 @@ DIALOGUE_BANKS = {
         "Nobody local enough to name.",
         "No clear hand on it that I would trust telling you about.",
         "Hard to pin that down cleanly.",
+    ),
+    "weak_point": (
+        "{weak_point_summary}",
+        "If there is a soft seam, {weak_point_summary_lc}",
+        "The place bends here: {weak_point_summary_lc}",
+        "What gives first? {weak_point_summary_lc}",
+    ),
+    "weak_point_none": (
+        "No weak point I would bet on from here.",
+        "Nothing soft enough to call it a real seam.",
+        "If there is a gap, I do not know it cleanly enough to name.",
     ),
     "purpose_defuse": (
         "Fine. Keep it quick and keep it clean.",
@@ -1602,6 +1700,28 @@ DIALOGUE_BANKS = {
         "No work on offer at the moment.",
         "Check back later. Nothing on the table right now.",
     ),
+    "side_job_offer": (
+        "Maybe. {side_job_summary} Keep it clean and you walk with {reward_hint}, plus a better name with {favor_target}.",
+        "Yeah, one small thing. {side_job_summary} Do it right and it pays {reward_hint}, and {favor_target} remembers it.",
+        "There is a quiet errand going. {side_job_summary} Handle it softly and you collect {reward_hint} with a little goodwill attached.",
+        "I could use a discreet hand. {side_job_summary} Bring it through without noise and that is {reward_hint}, plus a favor with {favor_target}.",
+    ),
+    "side_job_repeat": (
+        "Same side job. {side_job_summary} Finish it clean and the rate stays {reward_hint}.",
+        "Same errand, still open. {side_job_summary} Reward is still {reward_hint}.",
+        "Nothing changed. {side_job_summary} Bring it through quietly and collect {reward_hint}.",
+    ),
+    "side_job_accepted": (
+        "Good. Keep it moving and do not make me regret the ask.",
+        "Fine. Quiet hands, short trail, then we are square.",
+        "That works. Make the drop and come back clean.",
+        "Good. Do it right and I will remember it.",
+    ),
+    "side_job_none": (
+        "Nothing small and quiet right now.",
+        "No side work on the table at the moment.",
+        "Not the kind of errand I hand out lightly. Nothing open right now.",
+    ),
     "farewell": (
         "Take care.",
         "Alright. Stay sharp.",
@@ -1665,11 +1785,11 @@ DIALOGUE_BANKS = {
         "Too soon. You're making me nervous.",
     ),
     "hire_runner_accept": (
-        "{hire_runner_cost} and I don't see anything for {hire_runner_hours}.",
-        "Alright. {hire_runner_cost}. I'm busy with something else tonight.",
-        "{hire_runner_cost} to have bad memory. I can do that.",
-        "Fine. {hire_runner_cost}. You were never here.",
-        "I've got things to do. {hire_runner_cost} buys you some quiet.",
+        "{hire_runner_cost} and I stay with you for {hire_runner_hours}. Keep moving.",
+        "Alright. {hire_runner_cost}. I watch your flank for {hire_runner_hours}.",
+        "{hire_runner_cost} and I am on your side for {hire_runner_hours}.",
+        "Fine. {hire_runner_cost}. Stay where I can see you.",
+        "You bought another pair of hands. {hire_runner_cost}. Lead.",
     ),
     "hire_runner_decline_clean": (
         "I don't do that kind of arrangement. Move along.",
@@ -1684,10 +1804,55 @@ DIALOGUE_BANKS = {
         "Not worth the risk for that amount.",
     ),
     "hire_runner_already_hired": (
-        "We already have an arrangement. Relax.",
-        "You're covered. Stay low.",
-        "I haven't forgotten. Go do what you need to.",
-        "Still watching the other way. Give me some space.",
+        "We already have an arrangement. I am with you.",
+        "You're covered. Keep moving.",
+        "I haven't wandered off. Lead.",
+        "Still on your side. Just do not lose me.",
+    ),
+    "backup_orders": (
+        "Yeah. You want me close, posted up, making noise, or putting someone down?",
+        "Say it plain. I can stay on you, hold a spot, draw eyes, or handle a marked problem.",
+        "Alright. Give the word. Passive cover, a position to hold, a distraction, or a harder push?",
+    ),
+    "backup_follow": (
+        "Alright. Back to passive cover. I stay near you and keep my eyes open.",
+        "Copy. I am back on your shoulder unless something live shows up.",
+        "Fine. I stick close and watch your flank again.",
+    ),
+    "backup_hold": (
+        "Got it. I will hold here and keep watch.",
+        "I can post here. Come find me when you are ready to move.",
+        "Here works. I stay put and keep my head up.",
+    ),
+    "backup_distract": (
+        "Sure. I will pull some eyes away from you.",
+        "Got it. I will make enough noise to bend attention.",
+        "I can stir things up a little. Move when you are ready.",
+    ),
+    "backup_goto_wait": (
+        "Alright. I will head to {backup_marked_spot} and sit tight.",
+        "Copy. I will move to {backup_marked_spot} and wait there.",
+        "Marked spot, then quiet. I have it.",
+    ),
+    "backup_wait_return": (
+        "Got it. I will post at {backup_marked_spot}, wait a bit, then circle back.",
+        "I can do that. {backup_marked_spot}, hold for a minute, then back to you.",
+        "Alright. I will stage at {backup_marked_spot} and return after a short beat.",
+    ),
+    "backup_kill_trusted": (
+        "If that is the move, I will handle {backup_kill_target}.",
+        "You are sure? Fine. I will put {backup_kill_target} down.",
+        "Alright. {backup_kill_target} is mine.",
+    ),
+    "backup_kill_paid": (
+        "{backup_kill_cost} and I will make {backup_kill_target} stop being your problem.",
+        "That is hazard-pay territory. {backup_kill_cost}, and I will handle {backup_kill_target}.",
+        "For {backup_kill_cost}, I can put {backup_kill_target} in the ground.",
+    ),
+    "backup_kill_refuse": (
+        "No clean shot from me on that.",
+        "Mark somebody real if you want that kind of work.",
+        "Not like that. Give me a real target or another order.",
     ),
 }
 
@@ -1925,6 +2090,10 @@ def topic_label(topic_id, context=None):
         return f"Is there another way into {context['owner_place_name']}?"
     if topic_id == "keyholder" and context.get("owner_place_name"):
         return f"Who carries access to {context['owner_place_name']}?"
+    if topic_id == "weak_point" and context.get("workplace_here"):
+        return "What's the weak point here?"
+    if topic_id == "weak_point" and context.get("owner_place_name"):
+        return f"What's the weak point at {context['owner_place_name']}?"
     if topic_id == "purpose" and context.get("guarded"):
         return "I'm not here for trouble."
     if topic_id == "apologize" and context.get("guarded"):
@@ -1935,16 +2104,22 @@ def topic_label(topic_id, context=None):
         return f"What goes on at {context['owner_place_name']}?"
     if topic_id == "service_fuel":
         return "Any fuel nearby?"
+    if topic_id == "service_repair":
+        return "Any repair shop nearby?"
     if topic_id == "service_banking":
-        return "Any bank nearby?"
+        return "Any bank or broker nearby?"
     if topic_id == "service_insurance":
-        return "Any insurer nearby?"
+        return "Any insurer or claims desk nearby?"
     if topic_id == "service_rest":
         return "Anywhere to sleep nearby?"
     if topic_id == "service_intel":
         return "Anywhere selling intel nearby?"
     if topic_id == "service_trade":
         return "Any shopping around here?"
+    if topic_id == "service_used_cars":
+        return "Any used cars nearby?"
+    if topic_id == "service_vehicle_fetch":
+        return "Anyone who can retrieve a vehicle?"
     if topic_id == "service_gaming":
         return "Any gaming around here?"
     if topic_id == "hours" and context.get("owner_place_name"):
@@ -1972,6 +2147,22 @@ def topic_label(topic_id, context=None):
         if pressure_tier == "medium":
             return "Am I drawing attention right now?"
         return "Should I keep my head down?"
+    if topic_id == "backup_orders":
+        return _with_hint("Let's tighten the plan.", "backup_status_hint")
+    if topic_id == "backup_follow":
+        return "Back to passive cover."
+    if topic_id == "backup_hold":
+        return "Hang here."
+    if topic_id == "backup_distract":
+        return "Make a distraction."
+    if topic_id == "backup_goto_wait":
+        return _with_hint("Head to the marked spot and wait.", "backup_cursor_hint")
+    if topic_id == "backup_wait_return":
+        return _with_hint("Head to the marked spot, wait, then return.", "backup_cursor_hint")
+    if topic_id == "backup_kill":
+        target_name = str(context.get("backup_kill_target_name", "")).strip()
+        base = f"Take out {target_name}." if target_name else "Take out the marked target."
+        return _with_hint(base, "backup_kill_cost_hint")
     if topic_id == "weird":
         return "Ask something weird."
     if topic_id == "pry":
