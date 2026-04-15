@@ -2550,6 +2550,145 @@ def _strongest_memory_entry(memory, kind, *, predicate=None):
     return best
 
 
+def _recent_actor_memory_impression(sim, memory, actor_eid, *, max_age=360):
+    if sim is None or not memory or actor_eid is None:
+        return 0.0
+    player_eid = getattr(sim, "player_eid", None)
+    total = 0.0
+    total_weight = 0.0
+    current_tick = int(getattr(sim, "tick", 0))
+
+    for entry in list(getattr(memory, "entries", ()) or ()):
+        if not isinstance(entry, dict):
+            continue
+        age = max(0, current_tick - int(entry.get("tick", current_tick) or current_tick))
+        if age > int(max_age):
+            continue
+        kind = str(entry.get("kind", "")).strip().lower()
+        data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+        strength = _clamp(float(entry.get("strength", 0.0) or 0.0), lo=0.0, hi=1.0)
+        if strength <= 0.0:
+            continue
+        age_mult = max(0.25, 1.0 - (age / float(max_age + 1)))
+        contribution = None
+
+        if kind == "actor_reputation" and data.get("actor_eid") == actor_eid:
+            approval = _clamp(float(data.get("approval", 0.0) or 0.0), lo=-1.0, hi=1.0)
+            contribution = approval * strength * age_mult
+        elif kind == "player_reputation" and actor_eid == player_eid and data.get("player_eid") == actor_eid:
+            worldview = str(data.get("worldview", "neutral") or "neutral").strip().lower()
+            approval = 0.44
+            if worldview in {"order", "care"}:
+                approval = 0.52
+            elif worldview == "chaos":
+                approval = 0.48
+            contribution = approval * strength * age_mult
+        elif kind == "offense" and data.get("offender_eid") == actor_eid:
+            offense_score = int(data.get("offense_score", 0) or 0)
+            severity = min(1.0, strength * (0.72 + (offense_score / 120.0)))
+            contribution = -severity * age_mult
+        elif kind == "threat" and data.get("source_eid") == actor_eid:
+            contribution = -min(1.0, strength * 0.92) * age_mult
+
+        if contribution is None or abs(float(contribution)) < 0.0001:
+            continue
+        total += float(contribution)
+        total_weight += max(0.1, abs(float(contribution)))
+
+    if total_weight <= 0.0:
+        return 0.0
+    return _clamp(total / total_weight, lo=-1.0, hi=1.0)
+
+
+def _npc_actor_impression(sim, npc_eid, actor_eid, *, memory=None, social=None):
+    if sim is None or npc_eid is None or actor_eid is None:
+        return 0.0
+    if npc_eid == actor_eid:
+        return 1.0
+
+    score = 0.0
+    if social is None:
+        social = sim.ecs.get(NPCSocial).get(npc_eid)
+    if social:
+        bond = social.bonds.get(actor_eid)
+        if isinstance(bond, dict):
+            relation = str(bond.get("kind", "") or "").strip().lower()
+            bond_score = (
+                (float(bond.get("trust", 0.0) or 0.0) * 0.44)
+                + (float(bond.get("closeness", 0.0) or 0.0) * 0.33)
+                + (float(bond.get("protectiveness", 0.0) or 0.0) * 0.23)
+            )
+            if relation in {"family", "partner"}:
+                bond_score = max(bond_score, 0.84)
+            elif relation == "friend":
+                bond_score = max(bond_score, 0.68)
+            score += min(0.9, bond_score)
+
+    if memory is None:
+        memory = sim.ecs.get(NPCMemory).get(npc_eid)
+    score += _recent_actor_memory_impression(sim, memory, actor_eid, max_age=360)
+    return _clamp(score, lo=-1.0, hi=1.0)
+
+
+def _npc_conflict_alignment(sim, npc_eid, source_eid, target_eid, *, memory=None, social=None, traits=None, justice=None):
+    if sim is None or npc_eid is None or source_eid is None or target_eid is None:
+        return 0.0
+    if source_eid == target_eid:
+        return 0.0
+    if npc_eid == target_eid:
+        return 1.0
+    if npc_eid == source_eid:
+        return -1.0
+
+    if memory is None:
+        memory = sim.ecs.get(NPCMemory).get(npc_eid)
+    if social is None:
+        social = sim.ecs.get(NPCSocial).get(npc_eid)
+    if traits is None:
+        traits = sim.ecs.get(NPCTraits).get(npc_eid) or NPCTraits()
+    if justice is None:
+        justice = sim.ecs.get(JusticeProfile).get(npc_eid)
+
+    corruption = _clamp(getattr(justice, "corruption", 0.0) if justice else 0.0, lo=0.0, hi=1.0)
+    justice_drive = (
+        (_justice_level(justice, default=0.5) * 0.46)
+        + (_crime_sensitivity(justice, default=0.5) * 0.24)
+        + ((1.0 - corruption) * 0.16)
+        + (float(getattr(traits, "discipline", 0.5) or 0.5) * 0.14)
+    )
+    violence_bias = (
+        0.06
+        + (float(getattr(traits, "empathy", 0.5) or 0.5) * 0.22)
+        + (justice_drive * 0.28)
+        - (corruption * 0.12)
+    )
+
+    source_view = _npc_actor_impression(sim, npc_eid, source_eid, memory=memory, social=social)
+    target_view = _npc_actor_impression(sim, npc_eid, target_eid, memory=memory, social=social)
+
+    if social:
+        target_bond = social.bonds.get(target_eid)
+        if isinstance(target_bond, dict):
+            violence_bias += (
+                (float(target_bond.get("protectiveness", 0.0) or 0.0) * 0.35)
+                + (float(target_bond.get("trust", 0.0) or 0.0) * 0.18)
+            )
+        source_bond = social.bonds.get(source_eid)
+        if isinstance(source_bond, dict):
+            violence_bias -= (
+                (float(source_bond.get("protectiveness", 0.0) or 0.0) * 0.24)
+                + (float(source_bond.get("trust", 0.0) or 0.0) * 0.14)
+            )
+
+    if source_view <= -0.35:
+        violence_bias += min(0.42, abs(source_view) * 0.55)
+    if target_view <= -0.35:
+        violence_bias -= min(0.42, abs(target_view) * 0.55)
+
+    alignment = violence_bias + (target_view * 0.72) - (source_view * 0.62)
+    return _clamp(alignment, lo=-1.0, hi=1.0)
+
+
 def _guard_grace_suppresses_memory_entry(sim, npc_eid, entry, offender_eid):
     if offender_eid is None or not isinstance(entry, dict):
         return False
@@ -5171,10 +5310,6 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
     else:
         chunk_text = "?,?"
 
-    tile_text = "?"
-    if player_pos:
-        tile_text = f"{player_pos.x},{player_pos.y}"
-
     light_phase = _hud_status_label(lighting_state.get("phase", "day"), fallback="Day")
     time_label = str(lighting_state.get("time_label", "--:--")).strip() or "--:--"
     area_label = _hud_status_label(area_type, fallback="Unknown")
@@ -5191,12 +5326,7 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
         status_chunks.append(f"District {district_label}")
     if str(security or "").strip() and str(security).strip() != "?":
         status_chunks.append(f"Security {security}")
-    status_chunks.extend([
-        f"Time {time_label} {light_phase}",
-        f"Tick {sim.tick}",
-        f"Seed {sim.seed}",
-        f"Tile {tile_text}",
-    ])
+    status_chunks.append(f"Time {time_label} {light_phase}")
     return status_chunks
 
 
@@ -5344,7 +5474,7 @@ def _door_open_attempt(sim, eid, x, y, z, *, allow_override=False):
             breach_severity=float(getattr(ingress, "breach_severity", 0.0) or 0.0),
         )
         if access.permitted:
-            return (_set_door_open_state(sim, x, y, z, True), access.standing_reason or "authorized_open")
+            return (_set_door_open_state(sim, x, y, z, True), "authorized_open")
 
         lock_state = property_lock_state(prop)
         if not bool(lock_state.get("locked")):
@@ -5483,6 +5613,8 @@ def _door_interaction_candidate(sim, pos):
 def _door_action_text(reason, *, opening=False):
     reason_key = str(reason or "").strip().lower()
     if opening:
+        if reason_key == "already_open":
+            return "The door is already open."
         if reason_key in {"authorized_open", "opened", "opened_inside", "opened_unlocked", "override_open", "picked_front_door", "manual_front_door_override"}:
             return "You open the door."
         if reason_key == "locked_property":
@@ -9619,14 +9751,22 @@ class NPCInteractionSystem(System):
     CONTRACTOR_DURATION = 240   # ticks of bought backup
     CONTRACTOR_MIN_STANDING = 0.35
     CONTRACTOR_MIN_CORRUPTION = 0.30
+    FALLOUT_MIN_STANDING = 0.28
     SIDE_JOB_MIN_STANDING = 0.44
     SIDE_JOB_COOLDOWN_TICKS = 240
+    SIDE_JOB_KINDS = ("issuer_delivery", "issuer_pickup", "issuer_procure", "issuer_pressure")
     SIDE_JOB_ITEM_POOL = (
         "credstick_chip",
         "street_ration",
         "med_gel",
+        "micro_medkit",
+        "trauma_foam",
+        "hydration_salts",
         "transit_daypass",
         "access_badge",
+        "lockpick_kit",
+        "pocket_multitool",
+        "light_ammo_box",
     )
     CONTRACTOR_DISTRACTION_TICKS = 24
     CONTRACTOR_RETURN_WAIT_TICKS = 20
@@ -10786,17 +10926,122 @@ class NPCInteractionSystem(System):
             parts.append("W")
         return "".join(parts) if parts else "HERE"
 
+    def _dialogue_allows_opportunity_entry(self, entry, *, allow_rival_followup=False):
+        if not isinstance(entry, dict):
+            return False
+        kind = str(entry.get("kind", "")).strip().lower()
+        requirements = entry.get("requirements", {})
+        is_rival_followup = kind == "rival_followup"
+        if isinstance(requirements, dict) and bool(requirements.get("rival_followup")):
+            is_rival_followup = True
+        if is_rival_followup and not allow_rival_followup:
+            return False
+        return True
+
+    def _dialogue_is_rival_followup_entry(self, entry):
+        return self._dialogue_allows_opportunity_entry(entry, allow_rival_followup=True) and not self._dialogue_allows_opportunity_entry(entry)
+
     def _dialogue_opportunity_rows(self, limit=3, observer_eid=None):
         # Structured opportunity facts are produced by the opportunities module.
         # This keeps dialogue logic focused on phrasing, while the underlying
         # opportunity data stays consistent with other consumers.
         observer = self.player_eid if observer_eid is None else observer_eid
-        return evaluate_opportunity_facts(
+        capped_limit = max(1, int(limit))
+        rows = evaluate_opportunity_facts(
             self.sim,
             self.player_eid,
-            limit=limit,
+            limit=max(12, capped_limit * 4),
             observer_eid=observer,
         )
+        filtered = [
+            row for row in rows
+            if self._dialogue_allows_opportunity_entry(row)
+        ]
+        return tuple(filtered[:capped_limit])
+
+    def _dialogue_fallout_rows(self, limit=4, observer_eid=None):
+        observer = self.player_eid if observer_eid is None else observer_eid
+        capped_limit = max(1, int(limit))
+        rows = evaluate_opportunity_facts(
+            self.sim,
+            self.player_eid,
+            limit=max(12, capped_limit * 4),
+            observer_eid=observer,
+        )
+        filtered = [
+            row for row in rows
+            if self._dialogue_is_rival_followup_entry(row)
+        ]
+        return tuple(filtered[:capped_limit])
+
+    def _dialogue_active_opportunity_entry(self, opportunity_id):
+        try:
+            target_id = int(opportunity_id or 0)
+        except (TypeError, ValueError):
+            target_id = 0
+        if target_id <= 0:
+            return None
+        traits = getattr(self.sim, "world_traits", {})
+        opp_state = traits.get("opportunities", {}) if isinstance(traits, dict) else {}
+        active = opp_state.get("active", ()) if isinstance(opp_state, dict) else ()
+        for entry in active:
+            if not isinstance(entry, dict):
+                continue
+            if int(entry.get("id", 0) or 0) == target_id:
+                return entry
+        return None
+
+    def _dialogue_fallout_shortlist(self, rows, context):
+        if not rows:
+            return ()
+        scored = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            distance = max(0, int(row.get("distance", 99) or 99))
+            reward = dict(row.get("reward", {}))
+            confidence = max(0.0, min(1.0, float(row.get("confidence", 0.0) or 0.0)))
+            risk = str(row.get("risk", "low")).strip().lower() or "low"
+            raw_entry = self._dialogue_active_opportunity_entry(row.get("id"))
+            seed_tick = int((raw_entry or {}).get("seed_tick", 0) or 0)
+            age = max(0, int(self.sim.tick) - seed_tick)
+            intel_value = max(0, int(reward.get("intel", 0) or 0))
+            standing_value = max(0, int(reward.get("standing", 0) or 0))
+            credits_value = max(0, int(reward.get("credits", 0) or 0))
+
+            score = 1.0
+            score += max(0.0, 2.6 - (distance * 0.34))
+            score += min(1.4, intel_value * 0.55)
+            score += min(0.8, standing_value * 0.35)
+            score += min(0.9, credits_value / 30.0)
+            score += confidence * 0.9
+            score += max(0.0, 1.2 - (age / 240.0))
+            if risk == "hazardous":
+                score += 0.22
+            elif risk == "exposed":
+                score += 0.12
+
+            scored.append((score, seed_tick, int(row.get("id", 0) or 0), row))
+
+        if not scored:
+            return ()
+
+        scored.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        return tuple(item[3] for item in scored[: min(3, len(scored))])
+
+    def _dialogue_selected_fallout_row(self, context, *, ask_count=1):
+        rows = tuple(context.get("fallout_rows", ()) or ())
+        shortlist = self._dialogue_fallout_shortlist(rows, context)
+        if not shortlist:
+            return None
+        ask_index = max(0, int(ask_count or 1) - 1)
+        memory = self._dialogue_memory(context.get("npc_eid"))
+        open_count = max(1, int(memory.get("opened_count", 1) or 1))
+        chooser = random.Random(
+            f"{self.sim.seed}:dialogue-fallout:{context.get('npc_eid', 0)}:{open_count}:{len(shortlist)}"
+        )
+        start_index = chooser.randrange(len(shortlist))
+        return shortlist[(start_index + ask_index) % len(shortlist)]
 
     def _rival_operator_rows(self):
         traits = getattr(self.sim, "world_traits", {})
@@ -10820,11 +11065,17 @@ class NPCInteractionSystem(System):
                 return rival
         return None
 
-    def _rival_active_opportunities(self):
+    def _rival_active_opportunities(self, *, allow_rival_followup=True):
         traits = getattr(self.sim, "world_traits", {})
         opp_state = traits.get("opportunities", {}) if isinstance(traits, dict) else {}
         active = opp_state.get("active", ()) if isinstance(opp_state, dict) else ()
-        return [entry for entry in active if isinstance(entry, dict)]
+        entries = [entry for entry in active if isinstance(entry, dict)]
+        if allow_rival_followup:
+            return entries
+        return [
+            entry for entry in entries
+            if self._dialogue_allows_opportunity_entry(entry)
+        ]
 
     def _rival_target_entry(self, rival):
         try:
@@ -10833,7 +11084,7 @@ class NPCInteractionSystem(System):
             target_id = 0
         if target_id <= 0:
             return None
-        for entry in self._rival_active_opportunities():
+        for entry in self._rival_active_opportunities(allow_rival_followup=False):
             if int(entry.get("id", 0) or 0) == target_id:
                 return entry
         return None
@@ -10921,7 +11172,7 @@ class NPCInteractionSystem(System):
         current_chunk = self._dialogue_normalize_chunk(rival.get("current_chunk"))
         hustle = str(rival.get("hustle", "cash")).strip().lower() or "cash"
         scored = []
-        for entry in self._rival_active_opportunities():
+        for entry in self._rival_active_opportunities(allow_rival_followup=False):
             try:
                 opportunity_id = int(entry.get("id", 0) or 0)
             except (TypeError, ValueError):
@@ -10988,6 +11239,8 @@ class NPCInteractionSystem(System):
             rival,
             exclude_id=int(target_entry.get("id", 0) or 0) if isinstance(target_entry, dict) else 0,
         )
+        if not self._dialogue_allows_opportunity_entry(chosen_entry):
+            chosen_entry = None
         chosen_row = self._dialogue_fact_from_opportunity_entry(chosen_entry)
 
         context.update({
@@ -11100,7 +11353,7 @@ class NPCInteractionSystem(System):
         for entry in opp_state.get("active", ()):
             if not isinstance(entry, dict):
                 continue
-            if str(entry.get("kind", "")).strip().lower() != "issuer_delivery":
+            if str(entry.get("kind", "")).strip().lower() not in self.SIDE_JOB_KINDS:
                 continue
             issuer = entry.get("issuer", {}) if isinstance(entry.get("issuer"), dict) else {}
             if _int_or_default(issuer.get("npc_eid"), 0) == npc_int:
@@ -11123,7 +11376,7 @@ class NPCInteractionSystem(System):
         for entry in reversed(list(opp_state.get("completed", ()))):
             if not isinstance(entry, dict):
                 continue
-            if str(entry.get("kind", "")).strip().lower() != "issuer_delivery":
+            if str(entry.get("kind", "")).strip().lower() not in self.SIDE_JOB_KINDS:
                 continue
             issuer = entry.get("issuer", {}) if isinstance(entry.get("issuer"), dict) else {}
             if _int_or_default(issuer.get("npc_eid"), 0) != npc_int:
@@ -11133,6 +11386,192 @@ class NPCInteractionSystem(System):
                 return entry
             break
         return None
+
+    def _remember_opportunity_npc_interaction(self, npc_eid):
+        npc_int = _int_or_default(npc_eid, 0)
+        if npc_int <= 0:
+            return
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            self.sim.world_traits = {}
+            traits = self.sim.world_traits
+        recent = traits.get("recent_npc_interactions")
+        if not isinstance(recent, dict):
+            recent = {}
+            traits["recent_npc_interactions"] = recent
+        current_tick = int(getattr(self.sim, "tick", 0))
+        recent[str(npc_int)] = current_tick
+        cutoff = current_tick - 12
+        for raw_eid, raw_tick in list(recent.items()):
+            if _int_or_default(raw_tick, default=-10_000) < cutoff:
+                recent.pop(raw_eid, None)
+
+    def _side_job_target_properties(self, origin_chunk, *, issuer_property_id, max_distance=3):
+        origin_chunk = (
+            _int_or_default((origin_chunk or (0, 0))[0], 0),
+            _int_or_default((origin_chunk or (0, 0))[1], 0),
+        )
+        candidates = []
+        for prop in list(getattr(self.sim, "properties", {}).values()):
+            if not isinstance(prop, dict):
+                continue
+            property_id = str(prop.get("id", "") or "").strip()
+            if not property_id or property_id == str(issuer_property_id or "").strip():
+                continue
+            if str(prop.get("kind", "")).strip().lower() != "building":
+                continue
+            try:
+                chunk = self.sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+            except (TypeError, ValueError):
+                continue
+            distance = abs(int(chunk[0]) - int(origin_chunk[0])) + abs(int(chunk[1]) - int(origin_chunk[1]))
+            if distance <= 0 or distance > int(max_distance):
+                continue
+            score = 0
+            if _property_is_storefront(prop):
+                score += 4
+            if _finance_services_for_property(prop):
+                score += 2
+            if _site_services_for_property(prop):
+                score += 2
+            if _property_is_public(prop):
+                score += 1
+            name = str(prop.get("name", property_id)).strip() or property_id
+            candidates.append((-score, distance, name.lower(), property_id, prop))
+        candidates.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+        return [row[-1] for row in candidates]
+
+    def _side_job_pressure_target(self, npc_eid, *, issuer_property_id, origin_chunk, max_distance=3):
+        memories = self.sim.ecs.get(NPCMemory)
+        memory = memories.get(npc_eid) if memories else None
+        if not memory:
+            return None
+
+        origin_chunk = (
+            _int_or_default((origin_chunk or (0, 0))[0], 0),
+            _int_or_default((origin_chunk or (0, 0))[1], 0),
+        )
+        issuer_property_id = str(issuer_property_id or "").strip()
+        player_eid = _int_or_default(getattr(self, "player_eid", None), 0)
+        socials = self.sim.ecs.get(NPCSocial)
+        social = socials.get(npc_eid)
+        occupations = self.sim.ecs.get(Occupation)
+        routines = self.sim.ecs.get(NPCRoutine)
+        positions = self.sim.ecs.get(Position)
+        ais = self.sim.ecs.get(AI)
+        issuer_name = _entity_display_name(self.sim, npc_eid, title_case=True) or "your contact"
+        now = int(getattr(self.sim, "tick", 0))
+
+        def _target_site(target_eid):
+            occupation = occupations.get(target_eid)
+            routine = routines.get(target_eid)
+            prop = _workplace_property(self.sim, occupation=occupation, routine=routine) or _home_property(self.sim, routine=routine)
+            if isinstance(prop, dict):
+                return prop
+            pos = positions.get(target_eid)
+            if not pos:
+                return None
+            prop = _property_covering(self.sim, pos.x, pos.y, pos.z) or self.sim.property_at(pos.x, pos.y, pos.z)
+            return prop if isinstance(prop, dict) else None
+
+        candidates = []
+        for entry in reversed(list(getattr(memory, "entries", ()) or ())):
+            if not isinstance(entry, dict):
+                continue
+            age = max(0, now - _int_or_default(entry.get("tick"), now))
+            data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+            kind = str(entry.get("kind", "")).strip().lower()
+            target_eid = 0
+            score = 0.0
+            reason = ""
+
+            if kind == "actor_reputation" and age <= 260:
+                target_eid = _int_or_default(data.get("actor_eid"), 0)
+                try:
+                    approval = float(data.get("approval", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    approval = 0.0
+                if target_eid <= 0 or target_eid in {_int_or_default(npc_eid, 0), player_eid} or approval > -0.28:
+                    continue
+                score = abs(approval) * max(0.08, float(entry.get("strength", 0.0) or 0.0))
+                target_name = _entity_display_name(self.sim, target_eid, title_case=True) or "someone nearby"
+                against_eid = _int_or_default(data.get("against_eid"), 0)
+                if against_eid == _int_or_default(npc_eid, 0):
+                    reason = f"{target_name} keeps crossing {issuer_name}."
+                    score += 0.08
+                elif social and against_eid > 0 and against_eid in social.bonds:
+                    against_name = _entity_display_name(self.sim, against_eid, title_case=True) or "someone nearby"
+                    reason = f"{target_name} has been leaning on {against_name}."
+                    score += 0.05
+                else:
+                    reason = f"{target_name} keeps coming up as trouble around {issuer_name}."
+            elif kind == "conflict_side" and age <= 180:
+                side_eid = _int_or_default(data.get("side_eid"), 0)
+                target_eid = _int_or_default(data.get("against_eid"), 0)
+                if target_eid <= 0 or target_eid in {_int_or_default(npc_eid, 0), player_eid}:
+                    continue
+                ally_score = 0.0
+                ally_name = issuer_name
+                if side_eid == _int_or_default(npc_eid, 0):
+                    ally_score = 0.74
+                elif social and side_eid in social.bonds:
+                    bond = social.bonds.get(side_eid, {})
+                    ally_score = (float(bond.get("trust", 0.0) or 0.0) * 0.62) + (float(bond.get("closeness", 0.0) or 0.0) * 0.38)
+                    ally_name = _entity_display_name(self.sim, side_eid, title_case=True) or issuer_name
+                if ally_score < 0.34:
+                    continue
+                score = max(0.08, float(entry.get("strength", 0.0) or 0.0)) * (0.74 + (ally_score * 0.42))
+                target_name = _entity_display_name(self.sim, target_eid, title_case=True) or "someone nearby"
+                reason = (
+                    f"{target_name} has been crossing {issuer_name} lately."
+                    if side_eid == _int_or_default(npc_eid, 0)
+                    else f"{target_name} has been leaning on {ally_name}."
+                )
+            else:
+                continue
+
+            if target_eid <= 0 or score <= 0.0:
+                continue
+            target_prop = _target_site(target_eid)
+            if not isinstance(target_prop, dict):
+                continue
+            target_property_id = str(target_prop.get("id", "") or "").strip()
+            if not target_property_id or target_property_id == issuer_property_id:
+                continue
+            try:
+                target_chunk = self.sim.chunk_coords(int(target_prop.get("x", 0)), int(target_prop.get("y", 0)))
+            except (TypeError, ValueError):
+                continue
+            distance = abs(int(target_chunk[0]) - int(origin_chunk[0])) + abs(int(target_chunk[1]) - int(origin_chunk[1]))
+            if distance > int(max_distance):
+                continue
+            occupation = occupations.get(target_eid)
+            ai = ais.get(target_eid)
+            target_role = _career_label(occupation) or str(getattr(ai, "role", "person") or "person").replace("_", " ").strip() or "person"
+            candidates.append({
+                "npc_eid": int(target_eid),
+                "npc_name": _entity_display_name(self.sim, target_eid, title_case=True) or "someone nearby",
+                "target_role": target_role,
+                "property_id": target_property_id,
+                "property_name": str(target_prop.get("name", target_property_id)).strip() or "the site",
+                "building_id": _building_id_from_property(target_prop),
+                "chunk": (int(target_chunk[0]), int(target_chunk[1])),
+                "distance": int(distance),
+                "reason": reason,
+                "score": round(score, 3),
+                "public": _property_is_public(target_prop),
+            })
+
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda row: (
+                -float(row.get("score", 0.0) or 0.0),
+                int(row.get("distance", 99) or 99),
+                str(row.get("npc_name", "")).lower(),
+            )
+        )
+        return dict(candidates[0])
 
     def _build_side_job_offer(self, context):
         if not isinstance(context, dict):
@@ -11161,52 +11600,48 @@ class NPCInteractionSystem(System):
         rng = random.Random(
             f"{self.sim.seed}:issuer-side-job:{int(npc_eid)}:{issuer_property_id}:{self.sim.tick // self.SIDE_JOB_COOLDOWN_TICKS}"
         )
-        item_pool = [item_id for item_id in self.SIDE_JOB_ITEM_POOL if item_id in ITEM_CATALOG]
-        if not item_pool:
-            return None
-        item_id = str(rng.choice(item_pool)).strip().lower()
-        item_label = item_display_name(item_id, item_catalog=ITEM_CATALOG)
+
+        def _item_pool(item_ids):
+            if isinstance(item_ids, str):
+                raw = [item_ids]
+            elif isinstance(item_ids, (list, tuple, set)):
+                raw = list(item_ids)
+            else:
+                raw = []
+            return [
+                str(item_id).strip().lower()
+                for item_id in raw
+                if str(item_id).strip().lower() in ITEM_CATALOG
+            ]
+
+        def _pick_item(item_ids):
+            pool = _item_pool(item_ids)
+            if not pool:
+                pool = _item_pool(self.SIDE_JOB_ITEM_POOL)
+            if not pool:
+                return ""
+            return str(rng.choice(pool)).strip().lower()
+
+        def _reward_with_bonus(base_reward, *bonus_item_pools):
+            reward = dict(base_reward or {})
+            bonus_items = []
+            for pool in bonus_item_pools:
+                bonus_item_id = _pick_item(pool)
+                if not bonus_item_id:
+                    continue
+                bonus_items.append({"item_id": bonus_item_id, "quantity": 1})
+            if bonus_items:
+                reward["items"] = bonus_items
+            return reward
 
         origin_chunk = self.sim.chunk_coords(
             _int_or_default(issuer_prop.get("x"), 0),
             _int_or_default(issuer_prop.get("y"), 0),
         )
-        offsets = (
-            (1, 0),
-            (-1, 0),
-            (0, 1),
-            (0, -1),
-            (1, 1),
-            (-1, 1),
-            (1, -1),
-            (-1, -1),
-        )
-        step_x, step_y = rng.choice(offsets)
-        distance = rng.randint(1, 3)
-        target_chunk = (
-            int(origin_chunk[0]) + (step_x * distance),
-            int(origin_chunk[1]) + (step_y * distance),
-        )
-        if target_chunk == origin_chunk:
-            target_chunk = (int(origin_chunk[0]) + 1, int(origin_chunk[1]))
-
-        direction_bits = []
-        if target_chunk[1] < origin_chunk[1]:
-            direction_bits.append("N")
-        elif target_chunk[1] > origin_chunk[1]:
-            direction_bits.append("S")
-        if target_chunk[0] > origin_chunk[0]:
-            direction_bits.append("E")
-        elif target_chunk[0] < origin_chunk[0]:
-            direction_bits.append("W")
-        direction = "".join(direction_bits) if direction_bits else "HERE"
-        distance_text = opportunity_distance_text(
-            abs(int(target_chunk[0]) - int(origin_chunk[0])) + abs(int(target_chunk[1]) - int(origin_chunk[1])),
-            direction,
-        )
-
         issuer_name = _entity_display_name(self.sim, npc_eid, title_case=True) or str(context.get("npc_name", "")).strip() or "your contact"
         issuer_place_name = str(issuer_prop.get("name", issuer_property_id)).strip() or "the handoff point"
+        issuer_building_id = _building_id_from_property(issuer_prop)
+        issuer_justice = self.sim.ecs.get(JusticeProfile).get(npc_eid)
         org_eid = property_organization_eid(self.sim, issuer_prop, ensure=True)
         org_name = organization_name(
             self.sim,
@@ -11214,47 +11649,409 @@ class NPCInteractionSystem(System):
             fallback=str(context.get("organization_name", "")).strip() or issuer_place_name,
         )
         base_reward = 16 + int(round(float(context.get("contact_standing", 0.0) or 0.0) * 18.0))
-        reward_credits = max(18, min(42, base_reward + (distance * 3)))
-
-        return {
-            "key": f"issuer_delivery:{int(npc_eid)}:{issuer_property_id}:{target_chunk[0]}:{target_chunk[1]}:{item_id}:{self.sim.tick // self.SIDE_JOB_COOLDOWN_TICKS}",
-            "title": "Quiet Delivery",
-            "summary": f"Carry {item_label} from {issuer_place_name} to a trusted hand {distance_text}.",
-            "kind": "issuer_delivery",
-            "source": "contact",
-            "chunk": target_chunk,
-            "location": "issued_job",
-            "playstyles": ("social", "stealth", "economic"),
-            "reward": {"credits": reward_credits, "standing": 1},
-            "risk": "low" if distance <= 1 else "exposed",
-            "pressure": "low" if distance <= 1 else "medium",
-            "requirements": {
-                "pickup_chunk": origin_chunk,
-                "delivery_chunk": target_chunk,
-                "visit_chunk": target_chunk,
-                "require_item_id": item_id,
-                "require_item_qty": 1,
-                "consume_item": True,
-                "provide_item": True,
-                "item_label": item_label,
-                "acquisition_hint": "provided",
-                "player_accepted": True,
-            },
-            "issuer": {
-                "npc_eid": int(npc_eid),
-                "npc_name": issuer_name,
-                "property_id": issuer_property_id,
-                "organization_eid": int(org_eid) if org_eid is not None else None,
-                "organization_name": org_name,
-                "relation_kind": "job_issuer",
-                "person_standing_delta": 0.08,
-                "property_standing_delta": 0.05,
-                "organization_standing_delta": 0.06 if org_eid is not None else 0.0,
-                "benefits": ("known_name",),
-            },
-            "status": "active",
-            "seed_tick": int(getattr(self.sim, "tick", 0)),
+        issuer_finance = set(_finance_services_for_property(issuer_prop))
+        issuer_site_services = set(_site_services_for_property(issuer_prop))
+        issuer_storefront = _property_is_storefront(issuer_prop)
+        issuer_payload = {
+            "npc_eid": int(npc_eid),
+            "npc_name": issuer_name,
+            "property_id": issuer_property_id,
+            "organization_eid": int(org_eid) if org_eid is not None else None,
+            "organization_name": org_name,
+            "relation_kind": "job_issuer",
+            "person_standing_delta": 0.08,
+            "property_standing_delta": 0.05,
+            "organization_standing_delta": 0.06 if org_eid is not None else 0.0,
+            "benefits": ("known_name",),
         }
+
+        remote_candidates = self._side_job_target_properties(
+            origin_chunk,
+            issuer_property_id=issuer_property_id,
+            max_distance=3,
+        )
+        pressure_target = self._side_job_pressure_target(
+            npc_eid,
+            issuer_property_id=issuer_property_id,
+            origin_chunk=origin_chunk,
+            max_distance=3,
+        )
+        remote_prop = rng.choice(remote_candidates[: min(6, len(remote_candidates))]) if remote_candidates else None
+        remote_chunk = None
+        remote_property_id = ""
+        remote_building_id = ""
+        remote_place_name = ""
+        distance = 0
+        distance_text = "here"
+        remote_finance = set()
+        remote_site_services = set()
+        remote_storefront = False
+        remote_public = False
+        if isinstance(remote_prop, dict):
+            remote_property_id = str(remote_prop.get("id", "") or "").strip()
+            remote_building_id = _building_id_from_property(remote_prop)
+            remote_place_name = str(remote_prop.get("name", remote_property_id)).strip() or "the destination"
+            remote_finance = set(_finance_services_for_property(remote_prop))
+            remote_site_services = set(_site_services_for_property(remote_prop))
+            remote_storefront = _property_is_storefront(remote_prop)
+            remote_public = _property_is_public(remote_prop)
+            remote_chunk = self.sim.chunk_coords(
+                _int_or_default(remote_prop.get("x"), 0),
+                _int_or_default(remote_prop.get("y"), 0),
+            )
+            distance = abs(int(remote_chunk[0]) - int(origin_chunk[0])) + abs(int(remote_chunk[1]) - int(origin_chunk[1]))
+            direction_bits = []
+            if int(remote_chunk[1]) < int(origin_chunk[1]):
+                direction_bits.append("N")
+            elif int(remote_chunk[1]) > int(origin_chunk[1]):
+                direction_bits.append("S")
+            if int(remote_chunk[0]) > int(origin_chunk[0]):
+                direction_bits.append("E")
+            elif int(remote_chunk[0]) < int(origin_chunk[0]):
+                direction_bits.append("W")
+            distance_text = opportunity_distance_text(distance, "".join(direction_bits) if direction_bits else "HERE")
+
+        period_key = self.sim.tick // self.SIDE_JOB_COOLDOWN_TICKS
+        offers = []
+        pressure_offers = []
+
+        def _append_procure_offer(family, title, summary_template, item_ids, *, credit_bonus=8, standing=1, intel=0, bonus_items=(), pressure="medium"):
+            item_id = _pick_item(item_ids)
+            if not item_id:
+                return
+            item_label = item_display_name(item_id, item_catalog=ITEM_CATALOG)
+            reward = {"credits": max(22, min(54, base_reward + int(credit_bonus))), "standing": int(standing)}
+            if int(intel) > 0:
+                reward["intel"] = int(intel)
+            offers.append({
+                "key": f"issuer_procure:{family}:{int(npc_eid)}:{issuer_property_id}:{item_id}:{period_key}",
+                "title": title,
+                "summary": summary_template.format(item_label=item_label),
+                "kind": "issuer_procure",
+                "contract_family": family,
+                "source": "contact",
+                "chunk": origin_chunk,
+                "location": "issued_job",
+                "playstyles": ("economic", "social", "stealth"),
+                "reward": _reward_with_bonus(reward, *bonus_items),
+                "risk": "low",
+                "pressure": pressure,
+                "requirements": {
+                    "delivery_chunk": origin_chunk,
+                    "visit_chunk": origin_chunk,
+                    "delivery_property_id": issuer_property_id,
+                    "delivery_building_id": issuer_building_id,
+                    "interact_npc_eid": int(npc_eid),
+                    "interact_npc_name": issuer_name,
+                    "require_item_id": item_id,
+                    "require_item_qty": 1,
+                    "consume_item": True,
+                    "provide_item": False,
+                    "item_label": item_label,
+                    "acquisition_hint": "buy_or_find",
+                    "player_accepted": True,
+                },
+                "issuer": dict(issuer_payload),
+                "status": "active",
+                "seed_tick": int(getattr(self.sim, "tick", 0)),
+            })
+
+        def _append_delivery_offer(family, title, summary_template, item_ids, *, credit_bonus=0, standing=1, intel=0, bonus_items=(), risk=None, pressure=None):
+            if not remote_chunk or not remote_property_id:
+                return
+            item_id = _pick_item(item_ids)
+            if not item_id:
+                return
+            item_label = item_display_name(item_id, item_catalog=ITEM_CATALOG)
+            reward = {"credits": max(18, min(50, base_reward + int(credit_bonus) + (distance * 4))), "standing": int(standing)}
+            if int(intel) > 0:
+                reward["intel"] = int(intel)
+            offers.append({
+                "key": f"issuer_delivery:{family}:{int(npc_eid)}:{issuer_property_id}:{remote_property_id}:{item_id}:{period_key}",
+                "title": title,
+                "summary": summary_template.format(item_label=item_label),
+                "kind": "issuer_delivery",
+                "contract_family": family,
+                "source": "contact",
+                "chunk": remote_chunk,
+                "location": "issued_job",
+                "playstyles": ("social", "stealth", "economic"),
+                "reward": _reward_with_bonus(reward, *bonus_items),
+                "risk": str(risk or ("low" if distance <= 1 else "exposed")).strip().lower() or "low",
+                "pressure": str(pressure or ("low" if distance <= 1 else "medium")).strip().lower() or "low",
+                "requirements": {
+                    "pickup_chunk": origin_chunk,
+                    "pickup_property_id": issuer_property_id,
+                    "pickup_building_id": issuer_building_id,
+                    "delivery_chunk": remote_chunk,
+                    "visit_chunk": remote_chunk,
+                    "delivery_property_id": remote_property_id,
+                    "delivery_building_id": remote_building_id,
+                    "property_id": remote_property_id,
+                    "building_id": remote_building_id,
+                    "require_item_id": item_id,
+                    "require_item_qty": 1,
+                    "consume_item": True,
+                    "provide_item": True,
+                    "item_label": item_label,
+                    "acquisition_hint": "provided",
+                    "player_accepted": True,
+                },
+                "issuer": dict(issuer_payload),
+                "status": "active",
+                "seed_tick": int(getattr(self.sim, "tick", 0)),
+            })
+
+        def _append_pickup_offer(family, title, summary_template, item_ids, *, credit_bonus=4, standing=1, intel=0, bonus_items=(), risk=None, pressure=None):
+            if not remote_chunk or not remote_property_id:
+                return
+            item_id = _pick_item(item_ids)
+            if not item_id:
+                return
+            item_label = item_display_name(item_id, item_catalog=ITEM_CATALOG)
+            reward = {"credits": max(20, min(52, base_reward + int(credit_bonus) + (distance * 4))), "standing": int(standing)}
+            if int(intel) > 0:
+                reward["intel"] = int(intel)
+            offers.append({
+                "key": f"issuer_pickup:{family}:{int(npc_eid)}:{issuer_property_id}:{remote_property_id}:{item_id}:{period_key}",
+                "title": title,
+                "summary": summary_template.format(item_label=item_label),
+                "kind": "issuer_pickup",
+                "contract_family": family,
+                "source": "contact",
+                "chunk": remote_chunk,
+                "location": "issued_job",
+                "playstyles": ("social", "stealth", "economic"),
+                "reward": _reward_with_bonus(reward, *bonus_items),
+                "risk": str(risk or ("low" if distance <= 1 else "exposed")).strip().lower() or "low",
+                "pressure": str(pressure or ("medium" if distance >= 2 else "low")).strip().lower() or "low",
+                "requirements": {
+                    "pickup_chunk": remote_chunk,
+                    "pickup_property_id": remote_property_id,
+                    "pickup_building_id": remote_building_id,
+                    "delivery_chunk": origin_chunk,
+                    "visit_chunk": origin_chunk,
+                    "delivery_property_id": issuer_property_id,
+                    "delivery_building_id": issuer_building_id,
+                    "interact_npc_eid": int(npc_eid),
+                    "interact_npc_name": issuer_name,
+                    "require_item_id": item_id,
+                    "require_item_qty": 1,
+                    "consume_item": True,
+                    "provide_item": True,
+                    "item_label": item_label,
+                    "acquisition_hint": "pickup",
+                    "player_accepted": True,
+                },
+                "issuer": dict(issuer_payload),
+                "status": "active",
+                "seed_tick": int(getattr(self.sim, "tick", 0)),
+            })
+
+        def _append_pressure_offer(family, title, summary_template, *, credit_bonus=10, standing=2, bonus_items=(), risk="exposed", pressure="medium"):
+            if not isinstance(pressure_target, dict):
+                return
+            target_eid = _int_or_default(pressure_target.get("npc_eid"), 0)
+            target_property_id = str(pressure_target.get("property_id", "") or "").strip()
+            if target_eid <= 0 or not target_property_id:
+                return
+            target_name = str(pressure_target.get("npc_name", "") or "").strip() or "the mark"
+            target_place_name = str(pressure_target.get("property_name", "") or "").strip() or "the site"
+            target_building_id = str(pressure_target.get("building_id", "") or "").strip()
+            target_chunk = tuple(pressure_target.get("chunk", ())) if isinstance(pressure_target.get("chunk"), (list, tuple)) else ()
+            if len(target_chunk) != 2:
+                return
+            target_distance = _int_or_default(pressure_target.get("distance"), 0)
+            direction_bits = []
+            if int(target_chunk[1]) < int(origin_chunk[1]):
+                direction_bits.append("N")
+            elif int(target_chunk[1]) > int(origin_chunk[1]):
+                direction_bits.append("S")
+            if int(target_chunk[0]) > int(origin_chunk[0]):
+                direction_bits.append("E")
+            elif int(target_chunk[0]) < int(origin_chunk[0]):
+                direction_bits.append("W")
+            distance_text = opportunity_distance_text(target_distance, "".join(direction_bits) if direction_bits else "HERE")
+            reward = {"credits": max(24, min(66, base_reward + int(credit_bonus) + (target_distance * 5))), "standing": int(standing)}
+            pressure_offers.append({
+                "key": f"issuer_pressure:{family}:{int(npc_eid)}:{issuer_property_id}:{target_property_id}:{target_eid}:{period_key}",
+                "title": title,
+                "summary": summary_template.format(
+                    target_name=target_name,
+                    target_place_name=target_place_name,
+                    distance_text=distance_text,
+                    issuer_name=issuer_name,
+                    pressure_reason=str(pressure_target.get("reason", "") or "").strip(),
+                ),
+                "kind": "issuer_pressure",
+                "contract_family": family,
+                "source": "contact",
+                "chunk": (int(target_chunk[0]), int(target_chunk[1])),
+                "location": "issued_job",
+                "playstyles": ("social", "stealth"),
+                "reward": _reward_with_bonus(reward, *bonus_items),
+                "risk": str(risk or "exposed").strip().lower() or "exposed",
+                "pressure": str(pressure or "medium").strip().lower() or "medium",
+                "requirements": {
+                    "visit_chunk": (int(target_chunk[0]), int(target_chunk[1])),
+                    "interaction_chunk": (int(target_chunk[0]), int(target_chunk[1])),
+                    "property_id": target_property_id,
+                    "building_id": target_building_id,
+                    "interact_npc_eid": int(target_eid),
+                    "interact_npc_name": target_name,
+                    "interaction_requirement": "pressure",
+                    "pressure_reason": str(pressure_target.get("reason", "") or "").strip(),
+                    "player_accepted": True,
+                },
+                "issuer": dict(issuer_payload),
+                "status": "active",
+                "seed_tick": int(getattr(self.sim, "tick", 0)),
+            })
+
+        _append_procure_offer(
+            "tool_request",
+            "Tool Request",
+            f"Find {{item_label}} and hand it to {issuer_name} at {issuer_place_name}. They need usable kit before the local window closes.",
+            ("lockpick_kit", "pocket_multitool", "access_badge"),
+            credit_bonus=10,
+            bonus_items=(("credstick_chip", "transit_daypass"),),
+        )
+        _append_procure_offer(
+            "medical_resupply",
+            "Medical Resupply",
+            f"Source {{item_label}} and bring it back to {issuer_name} at {issuer_place_name}. Somebody nearby needs it quickly and quietly.",
+            ("med_gel", "micro_medkit", "trauma_foam", "hydration_salts"),
+            credit_bonus=8,
+            bonus_items=(("med_gel", "hydration_salts"),),
+        )
+        _append_procure_offer(
+            "paper_run",
+            "Clean Papers",
+            f"Bring {{item_label}} back to {issuer_name} at {issuer_place_name}. They are lining up a clean-looking handoff and need the paperwork to match.",
+            ("access_badge", "transit_daypass", "credstick_chip"),
+            credit_bonus=6,
+            intel=1,
+            bonus_items=(("credstick_chip", "transit_daypass"),),
+            pressure="low",
+        )
+        if issuer_storefront or issuer_finance or issuer_site_services:
+            _append_procure_offer(
+                "buyback",
+                "Buyback Order",
+                f"Find {{item_label}} and sell it back to {issuer_name} at {issuer_place_name}. They have a quiet buyer waiting on the strip.",
+                ("street_ration", "hydration_salts", "med_gel", "lockpick_kit", "pocket_multitool"),
+                credit_bonus=9,
+                bonus_items=(("street_ration", "credstick_chip"),),
+            )
+
+        if remote_chunk and remote_property_id:
+            _append_delivery_offer(
+                "quiet_delivery",
+                "Quiet Delivery",
+                f"Carry {{item_label}} from {issuer_place_name} to {remote_place_name} {distance_text} and hand it off there.",
+                ("credstick_chip", "access_badge", "transit_daypass"),
+                bonus_items=(("credstick_chip", "transit_daypass"),),
+            )
+            _append_delivery_offer(
+                "medical_drop",
+                "Medical Drop",
+                f"Carry {{item_label}} from {issuer_place_name} to {remote_place_name} {distance_text}. Keep it clean and get it there before the need turns loud.",
+                ("med_gel", "micro_medkit", "trauma_foam"),
+                credit_bonus=2,
+                bonus_items=(("med_gel", "hydration_salts"),),
+                risk="exposed" if distance >= 2 else "low",
+                pressure="medium",
+            )
+            if remote_storefront or remote_public or "repair" in remote_site_services:
+                _append_delivery_offer(
+                    "backroom_transfer",
+                    "Backroom Transfer",
+                    f"Move {{item_label}} from {issuer_place_name} to {remote_place_name} {distance_text}. The buyer wants it off the floor and out of sight.",
+                    ("lockpick_kit", "pocket_multitool", "light_ammo_box"),
+                    credit_bonus=4,
+                    bonus_items=(("lockpick_kit", "light_ammo_box"),),
+                    risk="exposed",
+                    pressure="medium",
+                )
+            if remote_finance or "intel" in remote_site_services:
+                _append_delivery_offer(
+                    "claims_packet",
+                    "Claims Packet",
+                    f"Carry {{item_label}} from {issuer_place_name} to {remote_place_name} {distance_text}. It has to land before the claim traffic dries up.",
+                    ("credstick_chip", "access_badge", "transit_daypass"),
+                    credit_bonus=5,
+                    intel=1,
+                    bonus_items=(("credstick_chip", "transit_daypass"),),
+                    risk="exposed",
+                    pressure="medium",
+                )
+
+            _append_pickup_offer(
+                "dead_drop_return",
+                "Dead Drop Return",
+                f"Pick up {{item_label}} from {remote_place_name} {distance_text} and bring it back to {issuer_name}. The package should already be waiting.",
+                ("credstick_chip", "light_ammo_box", "transit_daypass"),
+                bonus_items=(("lockpick_kit", "pocket_multitool"),),
+            )
+            _append_pickup_offer(
+                "parts_return",
+                "Parts Return",
+                f"Collect {{item_label}} from {remote_place_name} {distance_text} and bring it back to {issuer_name} before another buyer notices the gap.",
+                ("pocket_multitool", "lockpick_kit", "light_ammo_box"),
+                credit_bonus=5,
+                bonus_items=(("light_ammo_box", "pocket_multitool"),),
+                risk="exposed",
+            )
+            if remote_public or "shelter" in remote_site_services:
+                _append_pickup_offer(
+                    "clinic_recovery",
+                    "Clinic Recovery",
+                    f"Pick up {{item_label}} from {remote_place_name} {distance_text} and bring it back to {issuer_name}. They want the recovery stock moved before anyone audits it.",
+                    ("med_gel", "micro_medkit", "trauma_foam", "hydration_salts"),
+                    credit_bonus=3,
+                    bonus_items=(("med_gel", "micro_medkit"),),
+                )
+            if remote_finance or "intel" in remote_site_services:
+                _append_pickup_offer(
+                    "records_recovery",
+                    "Records Recovery",
+                    f"Recover {{item_label}} from {remote_place_name} {distance_text} and bring it back to {issuer_name}. Somebody there still owes them clean paperwork.",
+                    ("access_badge", "credstick_chip", "transit_daypass"),
+                    credit_bonus=6,
+                    intel=1,
+                    bonus_items=(("credstick_chip", "transit_daypass"),),
+                    risk="exposed",
+                )
+
+        if pressure_target:
+            _append_pressure_offer(
+                "pressure_visit",
+                "Pressure Visit",
+                "{target_name} is at {target_place_name} {distance_text}. Find them and make it clear {issuer_name} wants the problem settled. {pressure_reason}",
+                bonus_items=(("credstick_chip", "light_ammo_box"),),
+            )
+            if bool(pressure_target.get("public")):
+                _append_pressure_offer(
+                    "quiet_collection",
+                    "Quiet Collection",
+                    "Catch {target_name} at {target_place_name} {distance_text} and lean on them until they stop dodging {issuer_name}. {pressure_reason}",
+                    credit_bonus=12,
+                    bonus_items=(("credstick_chip", "transit_daypass"),),
+                    risk="hazardous",
+                    pressure="high",
+                )
+
+        if pressure_offers:
+            corruption = float(getattr(issuer_justice, "corruption", 0.0) or 0.0) if issuer_justice else 0.0
+            if float(pressure_target.get("score", 0.0) or 0.0) >= 0.48 and (
+                corruption >= 0.34 or float(context.get("contact_standing", 0.0) or 0.0) >= 0.76
+            ):
+                return dict(rng.choice(pressure_offers))
+            offers.extend(pressure_offers)
+
+        if not offers:
+            return None
+        return dict(rng.choice(offers))
 
     def _ensure_side_job_offer(self, context):
         existing = self._side_job_for_npc(context.get("npc_eid"))
@@ -11305,6 +12102,27 @@ class NPCInteractionSystem(System):
             awareness_state="heard",
             confidence=confidence,
             source=source_text,
+        )
+
+    def _learn_dialogue_opportunity_row(self, row, *, source="dialogue", confidence_mult=1.0):
+        if not isinstance(row, dict):
+            return
+        opportunity_id = int(row.get("id", 0) or 0)
+        if opportunity_id <= 0:
+            return
+        confidence = max(0.42, min(0.92, float(row.get("confidence", 0.66) or 0.66)))
+        try:
+            confidence *= float(confidence_mult)
+        except (TypeError, ValueError):
+            pass
+        confidence = max(0.24, min(0.96, confidence))
+        reveal_opportunity_to_observer(
+            self.sim,
+            self.player_eid,
+            opportunity_id,
+            awareness_state="heard",
+            confidence=confidence,
+            source=str(source or "dialogue"),
         )
 
     def _bond_snapshot(self, npc_eid):
@@ -11366,6 +12184,9 @@ class NPCInteractionSystem(System):
             return None
         strongest_trait = None
         strongest_property_threat = None
+        strongest_actor_reputation = None
+        strongest_actor_score = 0.0
+        strongest_conflict_side = None
         for entry in memory.entries:
             age = self.sim.tick - int(entry.get("tick", 0))
             if entry.get("kind") == "world_trait" and age <= 240:
@@ -11374,11 +12195,83 @@ class NPCInteractionSystem(System):
             elif entry.get("kind") == "property_threat" and age <= 200:
                 if not strongest_property_threat or float(entry.get("strength", 0.0)) > float(strongest_property_threat.get("strength", 0.0)):
                     strongest_property_threat = entry
+            elif entry.get("kind") == "actor_reputation" and age <= 220:
+                data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+                actor_eid = _int_or_default(data.get("actor_eid"), 0)
+                try:
+                    approval = float(data.get("approval", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    approval = 0.0
+                if actor_eid <= 0 or abs(approval) < 0.18:
+                    continue
+                score = abs(approval) * max(0.08, float(entry.get("strength", 0.0) or 0.0))
+                if actor_eid == int(self.player_eid):
+                    score += 0.06
+                if strongest_actor_reputation is None or score > strongest_actor_score:
+                    strongest_actor_reputation = entry
+                    strongest_actor_score = score
+            elif entry.get("kind") == "conflict_side" and age <= 180:
+                data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+                side_eid = _int_or_default(data.get("side_eid"), 0)
+                against_eid = _int_or_default(data.get("against_eid"), 0)
+                if side_eid <= 0 or against_eid <= 0 or side_eid == against_eid:
+                    continue
+                if not strongest_conflict_side or float(entry.get("strength", 0.0)) > float(strongest_conflict_side.get("strength", 0.0)):
+                    strongest_conflict_side = entry
         if strongest_property_threat:
             property_id = strongest_property_threat.get("data", {}).get("property_id")
             prop = self.sim.properties.get(property_id) if property_id else None
             if prop:
                 return f"They warn you about trouble around {prop.get('name', property_id)}."
+        if strongest_actor_reputation:
+            data = strongest_actor_reputation.get("data", {}) if isinstance(strongest_actor_reputation.get("data"), dict) else {}
+            actor_eid = _int_or_default(data.get("actor_eid"), 0)
+            try:
+                approval = float(data.get("approval", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                approval = 0.0
+            via = str(data.get("via", "") or "").strip().lower()
+            if actor_eid == int(self.player_eid):
+                if approval <= -0.48 or via in {"witnessed_damage", "witnessed_offense", "npc_offended"}:
+                    return "They have heard you bring trouble with you."
+                if approval < 0.0:
+                    return "They have heard your name on the wrong side of a few stories."
+                if via == "dialogue_guard_resolution":
+                    return "They have heard you can talk a hot room back down."
+                return "They have heard you come through when things count."
+            actor_name = _entity_display_name(self.sim, actor_eid, title_case=True) or "someone nearby"
+            if approval <= -0.48:
+                return f"They keep bringing up {actor_name} as bad news."
+            if approval < 0.0:
+                return f"They keep bringing up {actor_name} as somebody who causes trouble."
+            return f"They keep bringing up {actor_name} as someone who comes through."
+        strongest_reputation = None
+        for entry in memory.entries:
+            age = self.sim.tick - int(entry.get("tick", 0))
+            if entry.get("kind") != "player_reputation" or age > 320:
+                continue
+            data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+            if int(data.get("player_eid", -1) or -1) != int(self.player_eid):
+                continue
+            if not strongest_reputation or float(entry.get("strength", 0.0)) > float(strongest_reputation.get("strength", 0.0)):
+                strongest_reputation = entry
+        if strongest_reputation:
+            family = str(strongest_reputation.get("data", {}).get("contract_family", "work")).replace("_", " ").strip() or "work"
+            worldview = str(strongest_reputation.get("data", {}).get("worldview", "neutral")).strip().lower() or "neutral"
+            if worldview == "order":
+                return f"They remember you handled {family} cleanly."
+            if worldview == "chaos":
+                return f"They remember you came through when things got messy around the {family} job."
+            return f"They remember you came through on {family}."
+        if strongest_conflict_side:
+            data = strongest_conflict_side.get("data", {}) if isinstance(strongest_conflict_side.get("data"), dict) else {}
+            side_eid = _int_or_default(data.get("side_eid"), 0)
+            against_eid = _int_or_default(data.get("against_eid"), 0)
+            if side_eid > 0 and against_eid > 0 and side_eid != against_eid:
+                side_name = "you" if side_eid == int(self.player_eid) else (_entity_display_name(self.sim, side_eid, title_case=True) or "someone nearby")
+                against_name = "you" if against_eid == int(self.player_eid) else (_entity_display_name(self.sim, against_eid, title_case=True) or "someone nearby")
+                if side_name != against_name:
+                    return f"They say the room keeps taking {side_name}'s side over {against_name}."
         if strongest_trait:
             topic = str(strongest_trait.get("data", {}).get("topic", "")).strip().lower()
             claim_value = _world_trait_claim_value(strongest_trait.get("data", {}))
@@ -12361,8 +13254,12 @@ class NPCInteractionSystem(System):
         rapport = self._conversation_rapport()
         intro_entry = self._player_person_contact_entry(npc_eid)
         intro_standing = float((intro_entry or {}).get("standing", 0.0))
+        trust = float((bond or {}).get("trust", 0.0))
+        closeness = float((bond or {}).get("closeness", 0.0))
+        bond_score = (trust * 0.6) + (closeness * 0.4)
         contact_standing = self._contact_standing(bond, rapport)
         social_standing = max(contact_standing, intro_standing)
+        fallout_rep = max(intro_standing, bond_score)
         pressure = _pressure_snapshot(self.sim)
         pressure_effects = dict(pressure.get("effects", {}) if isinstance(pressure, dict) else {})
         pressure_tier = str(pressure.get("tier", "low")).strip().lower() or "low"
@@ -12431,6 +13328,8 @@ class NPCInteractionSystem(System):
             for row in focus_facts:
                 if not isinstance(row, dict):
                     continue
+                if not self._dialogue_allows_opportunity_entry(row):
+                    continue
                 title = str(row.get("title", "Opportunity")).strip() or "Opportunity"
                 reason = str(row.get("reason", "")).strip()
                 distance = int(row.get("distance", 0) or 0)
@@ -12450,6 +13349,7 @@ class NPCInteractionSystem(System):
             objective_focus = tuple(line for line in focus_lines if line)
         final_operation_eval = evaluate_final_operation(self.sim, self.player_eid)
         opportunity_rows = self._dialogue_opportunity_rows(limit=3, observer_eid=npc_eid)
+        fallout_rows = self._dialogue_fallout_rows(limit=6, observer_eid=npc_eid)
 
         # Dialogue should use structured opportunity facts rather than the
         # board-style text output. Keep the board evaluation around for
@@ -12462,6 +13362,7 @@ class NPCInteractionSystem(System):
             "district_type": district_type,
             "objective_focus_lines": objective_focus,
             "opportunity_rows": opportunity_rows,
+            "fallout_rows": fallout_rows,
         }
         opportunity_summary = self._opportunity_summary(base_context)
         opportunity_detail = opportunity_summary
@@ -12638,6 +13539,14 @@ class NPCInteractionSystem(System):
             "final_operation_target_entry_label": str((final_operation_eval or {}).get("target_entry_label", "")).strip(),
             "final_operation_target_entry_detail": str((final_operation_eval or {}).get("target_entry_detail", "")).strip(),
             "opportunity_rows": opportunity_rows,
+            "fallout_rows": fallout_rows,
+            "fallout_count": len(fallout_rows),
+            "fallout_rep": fallout_rep,
+            "fallout_available": bool(
+                fallout_rows
+                and not guarded
+                and float(fallout_rep or 0.0) >= self.FALLOUT_MIN_STANDING
+            ),
             "opportunity_judgments": tuple(opportunity_judgments),
             "primary_opportunity_judgment": primary_opportunity_judgment,
             "primary_opportunity_title": str(opportunity_rows[0].get("title", "")).strip() if opportunity_rows else "",
@@ -13061,7 +13970,13 @@ class NPCInteractionSystem(System):
         item_label = str(requirements.get("item_label", "")).strip()
         acquisition_hint = str(requirements.get("acquisition_hint", "")).strip().lower()
         if not item_label:
-            return ""
+            interact_name = str(requirements.get("interact_npc_name", "")).strip()
+            interaction_requirement = str(requirements.get("interaction_requirement", "contact")).strip().lower() or "contact"
+            if not interact_name:
+                return ""
+            if interaction_requirement == "pressure":
+                return f"You need to lean on {interact_name} in person"
+            return f"You need to reach {interact_name} in person"
         if acquisition_hint == "provided":
             return f"They should hand over the {item_label} at pickup"
         if acquisition_hint == "buy_or_find":
@@ -13279,6 +14194,34 @@ class NPCInteractionSystem(System):
             return str(focus_lines[0]).strip()
         return str(context.get("opportunity_summary", "")).strip()
 
+    def _fallout_summary(self, row, context, *, quality=None):
+        if not isinstance(row, dict):
+            return ""
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "fallout")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        title = str(row.get("title", "Opportunity")).strip() or "Opportunity"
+        summary = str(row.get("summary", "")).strip()
+        distance = int(row.get("distance", 0) or 0)
+        direction = str(row.get("direction", "HERE")).strip()
+        risk = str(row.get("risk", "low")).strip().lower() or "low"
+        distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
+
+        if quality_mode == "guarded":
+            return f"{title} {distance_phrase} is still the fallout I would watch, but I would get there before the story settles."
+        if quality_mode == "vague":
+            return f"{title} {distance_phrase} might still have something left in the wake."
+
+        base = f"{title} {distance_phrase} is still live."
+        if summary:
+            base = f"{base} {summary}"
+        if risk == "hazardous":
+            base = f"{base} It could still turn ugly."
+        elif risk == "exposed":
+            base = f"{base} Move before the block finishes comparing notes."
+        else:
+            base = f"{base} It is cleaner if you get there before it cools."
+        return base.strip()
+
     def _final_operation_lead_reason_line(self, context, *, quality=None):
         target_property_name = str(context.get("final_operation_target_property_name", "")).strip() or "the target site"
         target_property_id = str(context.get("final_operation_target_property_id", "")).strip()
@@ -13390,7 +14333,13 @@ class NPCInteractionSystem(System):
         item_label = str(requirements.get("item_label", "")).strip()
         acquisition_hint = str(requirements.get("acquisition_hint", "")).strip().lower()
         if not item_label:
-            return ""
+            interact_name = str(requirements.get("interact_npc_name", "")).strip()
+            interaction_requirement = str(requirements.get("interaction_requirement", "contact")).strip().lower() or "contact"
+            if not interact_name:
+                return ""
+            if interaction_requirement == "pressure":
+                return f"You need to find {interact_name} in person and make the message stick."
+            return f"The real job is reaching {interact_name} directly, not just touching the block."
         if acquisition_hint == "provided":
             return f"They should hand you the {item_label} at pickup, so the real job is making the drop cleanly."
         if acquisition_hint == "buy_or_find":
@@ -13404,7 +14353,13 @@ class NPCInteractionSystem(System):
         item_label = str(requirements.get("item_label", "")).strip()
         acquisition_hint = str(requirements.get("acquisition_hint", "")).strip().lower()
         if not item_label:
-            return ""
+            interact_name = str(requirements.get("interact_npc_name", "")).strip()
+            interaction_requirement = str(requirements.get("interaction_requirement", "contact")).strip().lower() or "contact"
+            if not interact_name:
+                return ""
+            if interaction_requirement == "pressure":
+                return f"If {interact_name} slips away or brushes you off, the whole pressure job stays open."
+            return f"It only pays once you reach {interact_name} directly."
         if acquisition_hint == "provided":
             return f"Once they hand over the {item_label}, do not lose it before the drop."
         if acquisition_hint == "buy_or_find":
@@ -14713,6 +15668,8 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "opportunities" and not (self._opportunity_summary(context) or self._objective_summary(context, 1)):
                 continue
+            if topic_id == "fallout" and not context.get("fallout_available"):
+                continue
             if topic_id == "contract" and not context.get("contract_kill_offer"):
                 continue
             if topic_id == "side_job" and not context.get("side_job_available"):
@@ -15382,6 +16339,36 @@ class NPCInteractionSystem(System):
                     )
                 ]
             }
+        if topic_id == "fallout":
+            quality = self._dialogue_pressure_intel_quality(context, topic_id)
+            row = self._dialogue_selected_fallout_row(context, ask_count=ask_count)
+            summary = self._fallout_summary(row, context, quality=quality)
+            bank_id = "fallout" if summary else "fallout_none"
+            if row:
+                self._learn_dialogue_opportunity_row(
+                    row,
+                    source="npc_dialogue_fallout",
+                    confidence_mult=float(quality.get("confidence_mult", 1.0)),
+                )
+                self.sim.emit(Event(
+                    "dialogue_opportunity_hint",
+                    eid=self.player_eid,
+                    npc_eid=npc_eid,
+                    summary=summary,
+                    detail=str(row.get("summary", "")).strip() or summary,
+                ))
+            return {
+                "npc_lines": [
+                    self._say(
+                        bank_id,
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                        fallout_summary=summary,
+                        fallout_summary_lc=_dialogue_lower_start(summary),
+                    )
+                ]
+            }
         if topic_id == "objective":
             summary = self._objective_summary(context, ask_count)
             bank_id = "objective" if summary else "objective_none"
@@ -15893,6 +16880,9 @@ class NPCInteractionSystem(System):
                 or self._angle_summary(context, 1)
                 or self._risk_summary(context, 1)
             )
+        if topic_id == "fallout":
+            next_row = self._dialogue_selected_fallout_row(context, ask_count=ask_count + 1)
+            return self._fallout_summary(next_row, context)
         if topic_id == "objective":
             return self._angle_summary(context, ask_count + 1) or self._risk_summary(context, 1)
         if topic_id == "angle":
@@ -16048,6 +17038,7 @@ class NPCInteractionSystem(System):
         npc_eid = event.data.get("npc_eid")
         if npc_eid is None:
             return
+        self._remember_opportunity_npc_interaction(npc_eid)
         context = self._dialogue_context(npc_eid)
         if not context:
             return
@@ -16087,6 +17078,7 @@ class NPCInteractionSystem(System):
         npc_eid = state.get("npc_eid")
         if npc_eid is None:
             return
+        self._remember_opportunity_npc_interaction(npc_eid)
         topic_id = str(event.data.get("topic_id", "") or "").strip().lower()
         if not topic_id:
             return
@@ -27926,6 +28918,9 @@ class NPCMemorySystem(System):
         super().__init__(sim)
         self.sim.events.subscribe("noise", self.on_noise)
         self.sim.events.subscribe("action_offense", self.on_action_offense)
+        self.sim.events.subscribe("npc_offended", self.on_npc_offended)
+        self.sim.events.subscribe("dialogue_guard_resolution", self.on_dialogue_guard_resolution)
+        self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
         self.sim.events.subscribe("npc_protect_ally", self.on_npc_protect_ally)
         self.sim.events.subscribe("npc_warn_property", self.on_npc_warn_property)
         self.sim.events.subscribe("npc_defend_property", self.on_npc_defend_property)
@@ -28122,6 +29117,29 @@ class NPCMemorySystem(System):
                 property_id=offense_property_id,
                 has_property_stake=has_property_stake,
             )
+            approval = -min(
+                1.0,
+                perceived
+                * (
+                    0.34
+                    + min(0.44, offense_score / 95.0)
+                    + (0.14 if has_property_stake else 0.0)
+                ),
+            )
+            memory.remember(
+                tick=self.sim.tick,
+                kind="actor_reputation",
+                strength=max(0.08, min(1.0, perceived * 0.92)),
+                actor_eid=offender_eid,
+                approval=round(float(approval), 3),
+                action=action,
+                context=context,
+                offense_score=offense_score,
+                offense_tier=offense_tier,
+                property_id=offense_property_id,
+                has_property_stake=has_property_stake,
+                via="witnessed_offense",
+            )
 
             if offense_score >= 35:
                 memory.remember(
@@ -28155,6 +29173,300 @@ class NPCMemorySystem(System):
                     offense_tier=offense_tier,
                     perceived=round(perceived, 3),
                 ))
+
+    def on_npc_offended(self, event):
+        offender_eid = event.data.get("offender_eid")
+        offended_eid = event.data.get("npc_eid")
+        if offender_eid is None or offended_eid is None or offender_eid == offended_eid:
+            return
+
+        try:
+            perceived = float(event.data.get("perceived", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            perceived = 0.0
+        offense_score = int(event.data.get("offense_score", 0) or 0)
+        if perceived <= 0.0 and offense_score <= 0:
+            return
+
+        positions = self.sim.ecs.get(Position)
+        memories = self.sim.ecs.get(NPCMemory)
+        socials = self.sim.ecs.get(NPCSocial)
+        traits_map = self.sim.ecs.get(NPCTraits)
+        justices = self.sim.ecs.get(JusticeProfile)
+        needs_map = self.sim.ecs.get(NPCNeeds)
+        offended_pos = positions.get(offended_eid)
+        offender_pos = positions.get(offender_eid)
+        if not offended_pos or not memories:
+            return
+
+        for eid, memory in memories.items():
+            if eid == offender_eid:
+                continue
+            pos = positions.get(eid)
+            if not pos or int(pos.z) != int(offended_pos.z):
+                continue
+            if eid != offended_eid:
+                if not _observer_can_notice_position(self.sim, eid, offended_pos.x, offended_pos.y, offended_pos.z):
+                    continue
+                dist = _manhattan(pos.x, pos.y, offended_pos.x, offended_pos.y)
+                if dist > 8:
+                    continue
+                distance_mult = max(0.24, 1.0 - (dist / 9.0))
+            else:
+                distance_mult = 1.0
+
+            social = socials.get(eid)
+            traits = traits_map.get(eid) or NPCTraits()
+            justice = justices.get(eid)
+            alignment = _npc_conflict_alignment(
+                self.sim,
+                eid,
+                offender_eid,
+                offended_eid,
+                memory=memory,
+                social=social,
+                traits=traits,
+                justice=justice,
+            )
+            impact = min(
+                1.0,
+                (0.08 + (max(0.0, perceived) * 0.44) + (max(0, offense_score) / 180.0))
+                * distance_mult,
+            )
+            if impact <= 0.06:
+                continue
+
+            offender_approval = _clamp(-alignment * (0.76 + (impact * 0.18)), lo=-1.0, hi=1.0)
+            offended_approval = _clamp(alignment * (0.64 + (impact * 0.12)), lo=-1.0, hi=1.0)
+            memory.remember(
+                tick=self.sim.tick,
+                kind="actor_reputation",
+                strength=max(0.08, impact),
+                actor_eid=offender_eid,
+                approval=round(float(offender_approval), 3),
+                against_eid=offended_eid,
+                action=event.data.get("action"),
+                context=event.data.get("context"),
+                offense_score=offense_score,
+                via="npc_offended",
+            )
+            memory.remember(
+                tick=self.sim.tick,
+                kind="actor_reputation",
+                strength=max(0.08, impact * 0.88),
+                actor_eid=offended_eid,
+                approval=round(float(offended_approval), 3),
+                against_eid=offender_eid,
+                action=event.data.get("action"),
+                context=event.data.get("context"),
+                offense_score=offense_score,
+                via="npc_offended",
+            )
+
+            if (offense_score >= 20 or perceived >= 0.62) and abs(alignment) >= 0.18:
+                side_eid = offended_eid if alignment >= 0.0 else offender_eid
+                against_eid = offender_eid if alignment >= 0.0 else offended_eid
+                target_pos = offender_pos if alignment >= 0.0 and offender_pos and int(offender_pos.z) == int(offended_pos.z) else offended_pos
+                memory.remember(
+                    tick=self.sim.tick,
+                    kind="conflict_side",
+                    strength=min(1.0, abs(alignment) * max(0.22, impact)),
+                    side_eid=side_eid,
+                    against_eid=against_eid,
+                    source_eid=offender_eid,
+                    target_eid=offended_eid,
+                    x=target_pos.x if target_pos else offended_pos.x,
+                    y=target_pos.y if target_pos else offended_pos.y,
+                    z=target_pos.z if target_pos else offended_pos.z,
+                    via="npc_offended",
+                )
+            if (offense_score >= 26 or perceived >= 0.72) and alignment >= 0.28:
+                target_pos = offender_pos if offender_pos and int(offender_pos.z) == int(offended_pos.z) else offended_pos
+                memory.remember(
+                    tick=self.sim.tick,
+                    kind="ally_threatened",
+                    strength=min(1.0, alignment * max(0.24, impact)),
+                    ally_eid=offended_eid,
+                    against_eid=offender_eid,
+                    x=target_pos.x if target_pos else offended_pos.x,
+                    y=target_pos.y if target_pos else offended_pos.y,
+                    z=target_pos.z if target_pos else offended_pos.z,
+                    via="npc_offended",
+                )
+
+            npc_needs = needs_map.get(eid)
+            if npc_needs and alignment >= 0.12:
+                npc_needs.safety = _clamp(npc_needs.safety - (impact * 1.2))
+
+    def on_dialogue_guard_resolution(self, event):
+        player_eid = event.data.get("eid")
+        if player_eid is None:
+            player_eid = getattr(self.sim, "player_eid", None)
+        if player_eid is None:
+            return
+
+        npc_eid = event.data.get("npc_eid")
+        if npc_eid is None:
+            return
+        memories = self.sim.ecs.get(NPCMemory)
+        memory = memories.get(npc_eid) if memories else None
+        if memories is not None and memory is None:
+            self.sim.ecs.add(npc_eid, NPCMemory())
+            memory = self.sim.ecs.get(NPCMemory).get(npc_eid)
+        if not memory:
+            return
+
+        outcome = str(event.data.get("outcome", "wary") or "wary").strip().lower() or "wary"
+        tactic = str(event.data.get("tactic", "dialogue") or "dialogue").strip().lower() or "dialogue"
+        approval_by_outcome = {
+            "deescalated": 0.66,
+            "wary": 0.08,
+            "aggravated": -0.54,
+        }
+        strength_by_outcome = {
+            "deescalated": 0.68,
+            "wary": 0.32,
+            "aggravated": 0.6,
+        }
+        memory.remember(
+            tick=self.sim.tick,
+            kind="actor_reputation",
+            strength=float(strength_by_outcome.get(outcome, 0.3)),
+            actor_eid=player_eid,
+            approval=float(approval_by_outcome.get(outcome, 0.0)),
+            tactic=tactic,
+            outcome=outcome,
+            via="dialogue_guard_resolution",
+        )
+
+        if outcome == "deescalated" and getattr(memory, "entries", None):
+            trimmed = []
+            for entry in list(memory.entries):
+                if not isinstance(entry, dict):
+                    trimmed.append(entry)
+                    continue
+                kind = str(entry.get("kind", "")).strip().lower()
+                data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+                against_eid = data.get("against_eid")
+                offender_eid = data.get("offender_eid")
+                source_eid = data.get("source_eid")
+                if kind in {"conflict_side", "ally_threatened"} and against_eid == player_eid:
+                    continue
+                if kind == "threat" and source_eid == player_eid:
+                    continue
+                if kind == "offense" and offender_eid == player_eid and str(data.get("context", "")).strip().lower().startswith("dialogue_"):
+                    continue
+                trimmed.append(entry)
+            memory.entries = trimmed
+
+    def on_entity_damaged(self, event):
+        source_eid = event.data.get("source_eid")
+        target_eid = event.data.get("target_eid")
+        damage = int(event.data.get("damage", 0) or 0)
+        x = event.data.get("x")
+        y = event.data.get("y")
+        z = event.data.get("z")
+        if source_eid is None or target_eid is None or source_eid == target_eid:
+            return
+        if damage <= 0 or x is None or y is None or z is None:
+            return
+
+        positions = self.sim.ecs.get(Position)
+        memories = self.sim.ecs.get(NPCMemory)
+        socials = self.sim.ecs.get(NPCSocial)
+        traits_map = self.sim.ecs.get(NPCTraits)
+        justices = self.sim.ecs.get(JusticeProfile)
+        needs_map = self.sim.ecs.get(NPCNeeds)
+        if not memories:
+            return
+
+        for eid, memory in memories.items():
+            if eid in {source_eid, target_eid}:
+                continue
+            pos = positions.get(eid)
+            if not pos or int(pos.z) != int(z):
+                continue
+            if not _observer_can_notice_position(self.sim, eid, x, y, z):
+                continue
+            dist = _manhattan(pos.x, pos.y, x, y)
+            if dist > 9:
+                continue
+
+            distance_mult = max(0.22, 1.0 - (dist / 10.0))
+            social = socials.get(eid)
+            traits = traits_map.get(eid) or NPCTraits()
+            justice = justices.get(eid)
+            alignment = _npc_conflict_alignment(
+                self.sim,
+                eid,
+                source_eid,
+                target_eid,
+                memory=memory,
+                social=social,
+                traits=traits,
+                justice=justice,
+            )
+            impact = min(1.0, (0.16 + (damage / 12.0)) * distance_mult)
+            if impact <= 0.05:
+                continue
+
+            source_approval = _clamp(-alignment, lo=-1.0, hi=1.0)
+            target_approval = _clamp(alignment * 0.85, lo=-1.0, hi=1.0)
+            memory.remember(
+                tick=self.sim.tick,
+                kind="actor_reputation",
+                strength=impact,
+                actor_eid=source_eid,
+                approval=round(source_approval, 3),
+                target_eid=target_eid,
+                damage=damage,
+                damage_kind=str(event.data.get("damage_kind", "harm") or "harm"),
+                via="witnessed_damage",
+            )
+            memory.remember(
+                tick=self.sim.tick,
+                kind="actor_reputation",
+                strength=max(0.08, impact * 0.84),
+                actor_eid=target_eid,
+                approval=round(target_approval, 3),
+                source_eid=source_eid,
+                damage=damage,
+                damage_kind=str(event.data.get("damage_kind", "harm") or "harm"),
+                via="witnessed_damage",
+            )
+
+            if abs(alignment) >= 0.22:
+                side_eid = target_eid if alignment >= 0.0 else source_eid
+                against_eid = source_eid if alignment >= 0.0 else target_eid
+                memory.remember(
+                    tick=self.sim.tick,
+                    kind="conflict_side",
+                    strength=min(1.0, abs(alignment) * 0.86 + (impact * 0.28)),
+                    side_eid=side_eid,
+                    against_eid=against_eid,
+                    source_eid=source_eid,
+                    target_eid=target_eid,
+                    x=x,
+                    y=y,
+                    z=z,
+                    via="witnessed_damage",
+                )
+
+            if alignment >= 0.34:
+                memory.remember(
+                    tick=self.sim.tick,
+                    kind="ally_threatened",
+                    strength=min(1.0, alignment * 0.82),
+                    ally_eid=target_eid,
+                    against_eid=source_eid,
+                    x=x,
+                    y=y,
+                    z=z,
+                )
+
+            npc_needs = needs_map.get(eid)
+            if npc_needs:
+                npc_needs.safety = _clamp(npc_needs.safety - (impact * 2.2))
 
     def on_npc_warn_property(self, event):
         npc_eid = event.data.get("npc_eid")
@@ -28365,9 +29677,12 @@ class NPCMemorySystem(System):
             # Immediate danger should cool off, but not instantly.
             "threat": 0.001,
             "ally_threatened": 0.001,
+            "conflict_side": 0.0012,
             # Consequence memory should linger.
             "offense": 0.0001,
             "property_threat": 0.0002,
+            "player_reputation": 0.0003,
+            "actor_reputation": 0.00035,
             # Shared world beliefs persist for a while.
             "world_trait": 0.00025,
         }
@@ -28485,6 +29800,249 @@ class RumorSystem(System):
             if best is None or float(entry["strength"]) > float(best["strength"]):
                 best = entry
         return best
+
+    def _recent_actor_reputation_strength(self, memory, actor_eid, *, approval_sign=0, max_age=220):
+        best = 0.0
+        for entry in memory.entries:
+            if entry["kind"] != "actor_reputation":
+                continue
+            if self.sim.tick - entry["tick"] > max_age:
+                continue
+            data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+            if data.get("actor_eid") != actor_eid:
+                continue
+            try:
+                approval = float(data.get("approval", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                approval = 0.0
+            if approval_sign > 0 and approval <= 0.0:
+                continue
+            if approval_sign < 0 and approval >= 0.0:
+                continue
+            score = abs(approval) * float(entry.get("strength", 0.0) or 0.0)
+            best = max(best, score)
+        return best
+
+    def _strongest_recent_actor_reputation(self, memory, max_age=320):
+        best = None
+        best_score = 0.0
+        for entry in memory.entries:
+            if entry["kind"] != "actor_reputation":
+                continue
+            if self.sim.tick - entry["tick"] > max_age:
+                continue
+            data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+            try:
+                approval = float(data.get("approval", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                approval = 0.0
+            score = abs(approval) * float(entry.get("strength", 0.0) or 0.0)
+            if score < 0.12:
+                continue
+            if best is None or score > best_score:
+                best = entry
+                best_score = score
+        return best
+
+    def _recent_conflict_side_strength(self, memory, side_eid, against_eid, max_age=140):
+        best = 0.0
+        for entry in memory.entries:
+            if entry["kind"] != "conflict_side":
+                continue
+            if self.sim.tick - entry["tick"] > max_age:
+                continue
+            data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+            if data.get("side_eid") != side_eid or data.get("against_eid") != against_eid:
+                continue
+            best = max(best, float(entry.get("strength", 0.0) or 0.0))
+        return best
+
+    def _strongest_recent_conflict_side(self, memory, max_age=140):
+        best = None
+        for entry in memory.entries:
+            if entry["kind"] != "conflict_side":
+                continue
+            if self.sim.tick - entry["tick"] > max_age:
+                continue
+            if best is None or float(entry.get("strength", 0.0) or 0.0) > float(best.get("strength", 0.0) or 0.0):
+                best = entry
+        return best
+
+    def _actor_role_label(self, eid):
+        if eid is None:
+            return ""
+        if eid == getattr(self.sim, "player_eid", None):
+            return "player"
+        ai = self.sim.ecs.get(AI).get(eid)
+        return str(getattr(ai, "role", "") or "").strip().lower()
+
+    def _rumor_worldview_profile(self, eid):
+        traits = self.sim.ecs.get(NPCTraits).get(eid) or NPCTraits()
+        justice = self.sim.ecs.get(JusticeProfile).get(eid)
+        role = self._actor_role_label(eid) or "civilian"
+
+        corruption = _clamp(getattr(justice, "corruption", 0.0) if justice else 0.0, lo=0.0, hi=1.0)
+        order = _clamp(
+            (float(getattr(traits, "discipline", 0.5) or 0.5) * 0.38)
+            + (_justice_level(justice, default=0.5) * 0.38)
+            + ((1.0 - corruption) * 0.24),
+            lo=0.0,
+            hi=1.0,
+        )
+        chaos = _clamp(
+            ((1.0 - float(getattr(traits, "discipline", 0.5) or 0.5)) * 0.3)
+            + (corruption * 0.44)
+            + ((1.0 - _justice_level(justice, default=0.5)) * 0.26),
+            lo=0.0,
+            hi=1.0,
+        )
+        care = _clamp(
+            (float(getattr(traits, "empathy", 0.5) or 0.5) * 0.58)
+            + (float(getattr(traits, "loyalty", 0.5) or 0.5) * 0.24)
+            + ((1.0 - corruption) * 0.18),
+            lo=0.0,
+            hi=1.0,
+        )
+        share = 0.42 + (float(getattr(traits, "empathy", 0.5) or 0.5) * 0.12)
+
+        if role in {"guard", "scout"}:
+            order = _clamp(order + 0.22, lo=0.0, hi=1.0)
+            care = _clamp(care + 0.04, lo=0.0, hi=1.0)
+            share = min(1.0, share + 0.04)
+        elif role in {"worker", "clerk", "cashier", "merchant", "shopkeeper", "resident", "civilian", "manager"}:
+            care = _clamp(care + 0.12, lo=0.0, hi=1.0)
+            share = min(1.0, share + 0.07)
+        elif role in {"runner", "thief", "dealer", "drunk", "pit_boss"}:
+            chaos = _clamp(chaos + 0.24, lo=0.0, hi=1.0)
+            order = _clamp(order - 0.08, lo=0.0, hi=1.0)
+            share = min(1.0, share + 0.05)
+        elif role in {"medic", "doctor", "nurse", "dispatcher"}:
+            care = _clamp(care + 0.16, lo=0.0, hi=1.0)
+            order = _clamp(order + 0.05, lo=0.0, hi=1.0)
+            share = min(1.0, share + 0.04)
+
+        return {
+            "role": role,
+            "order": order,
+            "chaos": chaos,
+            "care": care,
+            "share": _clamp(share, lo=0.35, hi=1.0),
+        }
+
+    def _actor_reputation_rumor_interest(self, speaker_eid, entry):
+        if not isinstance(entry, dict):
+            return 0.0
+        profile = self._rumor_worldview_profile(speaker_eid)
+        data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+        actor_role = self._actor_role_label(data.get("actor_eid"))
+        via = str(data.get("via", "") or "").strip().lower()
+        context = str(data.get("context", "") or "").strip().lower()
+        outcome = str(data.get("outcome", "") or "").strip().lower()
+        worldview = str(data.get("worldview", "") or "").strip().lower()
+        try:
+            approval = float(data.get("approval", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            approval = 0.0
+
+        frame_order = 0.0
+        frame_chaos = 0.0
+        frame_care = 0.0
+        if via == "job_completion":
+            if worldview == "order":
+                frame_order = 0.76
+            elif worldview == "chaos":
+                frame_chaos = 0.76
+            else:
+                frame_care = 0.72
+                frame_order = 0.22
+        elif via == "dialogue_guard_resolution":
+            if outcome == "deescalated":
+                frame_care = 0.78
+                frame_order = 0.52
+            elif outcome == "aggravated":
+                frame_order = 0.72
+                frame_care = 0.24
+            else:
+                frame_care = 0.34
+                frame_order = 0.32
+        elif via in {"witnessed_damage", "npc_offended"}:
+            frame_care = 0.68
+            frame_order = 0.42
+        elif via == "witnessed_offense":
+            if context.startswith("dialogue_"):
+                frame_care = 0.56
+                frame_order = 0.2
+            else:
+                frame_order = 0.72
+                frame_care = 0.18
+        else:
+            frame_order = 0.44
+            frame_care = 0.28
+
+        if actor_role in {"guard", "scout"}:
+            if approval < 0.0:
+                frame_chaos += 0.36
+                frame_care += 0.12
+                frame_order *= 0.82
+            else:
+                frame_order += 0.22
+        elif actor_role in {"worker", "resident", "civilian", "clerk", "cashier", "merchant", "shopkeeper", "manager"} and approval < 0.0:
+            frame_care += 0.24
+
+        interest = (
+            (frame_order * profile["order"])
+            + (frame_chaos * profile["chaos"])
+            + (frame_care * profile["care"])
+        ) * profile["share"]
+        if (
+            via == "witnessed_offense"
+            and not context.startswith("dialogue_")
+            and approval < 0.0
+            and actor_role in {"player", "runner", "thief", "dealer", "drunk", "civilian", "resident"}
+            and profile["chaos"] > profile["order"]
+        ):
+            interest *= 0.42
+        if approval > 0.0:
+            interest += 0.06 * profile["care"]
+        else:
+            interest += 0.04 * max(profile["order"], profile["chaos"])
+        return _clamp(interest, lo=0.0, hi=1.2)
+
+    def _conflict_side_rumor_interest(self, speaker_eid, entry):
+        if not isinstance(entry, dict):
+            return 0.0
+        profile = self._rumor_worldview_profile(speaker_eid)
+        data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+        side_role = self._actor_role_label(data.get("side_eid"))
+        against_role = self._actor_role_label(data.get("against_eid"))
+
+        frame_order = 0.0
+        frame_chaos = 0.0
+        frame_care = 0.34
+        if against_role in {"guard", "scout"} and side_role in {"player", "runner", "thief", "dealer", "drunk", "civilian", "resident"}:
+            frame_chaos = 0.78
+            frame_care += 0.12
+        else:
+            frame_care += 0.28
+            frame_order = 0.36
+
+        if side_role in {"worker", "resident", "civilian", "clerk", "cashier", "merchant", "shopkeeper", "manager"}:
+            frame_care += 0.22
+        if against_role in {"worker", "resident", "civilian", "clerk", "cashier", "merchant", "shopkeeper", "manager"}:
+            frame_care += 0.28
+            frame_chaos *= 0.8
+
+        interest = (
+            (frame_order * profile["order"])
+            + (frame_chaos * profile["chaos"])
+            + (frame_care * profile["care"])
+        ) * profile["share"]
+        if against_role in {"guard", "scout"}:
+            if profile["role"] in {"guard", "scout"}:
+                interest *= 0.28
+            elif profile["order"] > (profile["chaos"] + 0.18):
+                interest *= 0.72
+        return _clamp(interest, lo=0.0, hi=1.2)
 
     def _mutate_trait_claim(self, claimed_value, topic):
         traits = getattr(self.sim, "world_traits", {}) or {}
@@ -28660,6 +30218,217 @@ class RumorSystem(System):
 
         return shares
 
+    def _social_actor_reputation_pass(self, memories, socials, positions):
+        shares = 0
+        for from_eid, social in socials.items():
+            source_memory = memories.get(from_eid)
+            source_pos = positions.get(from_eid)
+            if not source_memory or not source_pos:
+                continue
+            if not _detail_tick_allowed(self.sim, source_pos, from_eid, coarse_divisor=4):
+                continue
+            if (self.sim.tick + from_eid) % 4 != 0:
+                continue
+
+            strongest = self._strongest_recent_actor_reputation(source_memory, max_age=320)
+            if not strongest:
+                continue
+
+            source_data = strongest.get("data", {}) if isinstance(strongest.get("data"), dict) else {}
+            actor_eid = source_data.get("actor_eid")
+            if actor_eid is None:
+                continue
+            try:
+                approval = float(source_data.get("approval", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                approval = 0.0
+            if abs(approval) < 0.12:
+                continue
+
+            ranked_bonds = sorted(
+                social.bonds.items(),
+                key=lambda row: (row[1]["trust"] * 0.65) + (row[1]["closeness"] * 0.35),
+                reverse=True,
+            )
+            for to_eid, bond in ranked_bonds:
+                if bond["trust"] < 0.58 or bond["closeness"] < 0.46:
+                    continue
+                if actor_eid == to_eid:
+                    continue
+                interest = self._actor_reputation_rumor_interest(from_eid, strongest)
+                if interest < 0.18:
+                    continue
+
+                target_memory = memories.get(to_eid)
+                target_pos = positions.get(to_eid)
+                if not target_memory or not target_pos:
+                    continue
+                if target_pos.z != source_pos.z:
+                    continue
+                if _manhattan(source_pos.x, source_pos.y, target_pos.x, target_pos.y) > 6:
+                    continue
+
+                sign = 1 if approval > 0.0 else -1
+                key = (from_eid, to_eid, "actor_reputation", actor_eid, sign)
+                last_tick = self.last_share_tick.get(key, -10_000)
+                if self.sim.tick - last_tick < self.share_cooldown_ticks:
+                    continue
+
+                source_strength = float(strongest.get("strength", 0.0) or 0.0)
+                shared_strength = max(
+                    0.08,
+                    min(0.86, source_strength * (0.42 + (bond["trust"] * 0.24)) * (0.7 + (interest * 0.55))),
+                )
+                shared_approval = _clamp(approval * (0.78 + (bond["trust"] * 0.08) + (min(1.0, interest) * 0.18)), lo=-1.0, hi=1.0)
+                incoming_score = abs(shared_approval) * shared_strength
+                existing = self._recent_actor_reputation_strength(
+                    target_memory,
+                    actor_eid,
+                    approval_sign=sign,
+                    max_age=220,
+                )
+                if existing >= incoming_score - 0.03:
+                    continue
+
+                target_memory.remember(
+                    tick=self.sim.tick,
+                    kind="actor_reputation",
+                    strength=shared_strength,
+                    actor_eid=actor_eid,
+                    approval=round(shared_approval, 3),
+                    against_eid=source_data.get("against_eid"),
+                    source_eid=from_eid,
+                    via="social_rumor",
+                )
+
+                self.last_share_tick[key] = self.sim.tick
+                shares += 1
+                break
+
+        return shares
+
+    def _social_conflict_side_pass(self, memories, socials, positions):
+        shares = 0
+        for from_eid, social in socials.items():
+            source_memory = memories.get(from_eid)
+            source_pos = positions.get(from_eid)
+            if not source_memory or not source_pos:
+                continue
+            if not _detail_tick_allowed(self.sim, source_pos, from_eid, coarse_divisor=4):
+                continue
+            if (self.sim.tick + from_eid) % 5 != 0:
+                continue
+
+            strongest = self._strongest_recent_conflict_side(source_memory, max_age=140)
+            if not strongest:
+                continue
+
+            source_data = strongest.get("data", {}) if isinstance(strongest.get("data"), dict) else {}
+            side_eid = source_data.get("side_eid")
+            against_eid = source_data.get("against_eid")
+            if side_eid is None or against_eid is None or side_eid == against_eid:
+                continue
+
+            ranked_bonds = sorted(
+                social.bonds.items(),
+                key=lambda row: (row[1]["trust"] * 0.68) + (row[1]["closeness"] * 0.32),
+                reverse=True,
+            )
+            for to_eid, bond in ranked_bonds:
+                if bond["trust"] < 0.62 or bond["closeness"] < 0.5:
+                    continue
+                if to_eid in {side_eid, against_eid}:
+                    continue
+                interest = self._conflict_side_rumor_interest(from_eid, strongest)
+                if interest < 0.22:
+                    continue
+
+                target_memory = memories.get(to_eid)
+                target_pos = positions.get(to_eid)
+                if not target_memory or not target_pos:
+                    continue
+                if target_pos.z != source_pos.z:
+                    continue
+                if _manhattan(source_pos.x, source_pos.y, target_pos.x, target_pos.y) > 6:
+                    continue
+
+                key = (from_eid, to_eid, "conflict_side", side_eid, against_eid)
+                last_tick = self.last_share_tick.get(key, -10_000)
+                if self.sim.tick - last_tick < self.share_cooldown_ticks:
+                    continue
+
+                source_strength = float(strongest.get("strength", 0.0) or 0.0)
+                shared_strength = max(
+                    0.1,
+                    min(0.9, source_strength * (0.4 + (bond["trust"] * 0.28)) * (0.72 + (interest * 0.52))),
+                )
+                existing = self._recent_conflict_side_strength(
+                    target_memory,
+                    side_eid,
+                    against_eid,
+                    max_age=140,
+                )
+                if existing >= shared_strength - 0.03:
+                    continue
+
+                target_memory.remember(
+                    tick=self.sim.tick,
+                    kind="conflict_side",
+                    strength=shared_strength,
+                    side_eid=side_eid,
+                    against_eid=against_eid,
+                    source_eid=source_data.get("source_eid", from_eid),
+                    target_eid=source_data.get("target_eid"),
+                    x=source_data.get("x", source_pos.x),
+                    y=source_data.get("y", source_pos.y),
+                    z=source_data.get("z", source_pos.z),
+                    via="social_rumor",
+                )
+
+                existing_side_view = self._recent_actor_reputation_strength(
+                    target_memory,
+                    side_eid,
+                    approval_sign=1,
+                    max_age=220,
+                )
+                side_score = 0.34 * max(0.1, shared_strength)
+                if existing_side_view < side_score - 0.02:
+                    target_memory.remember(
+                        tick=self.sim.tick,
+                        kind="actor_reputation",
+                        strength=max(0.08, shared_strength * 0.72),
+                        actor_eid=side_eid,
+                        approval=round(min(0.68, 0.28 + (shared_strength * 0.24)), 3),
+                        against_eid=against_eid,
+                        source_eid=from_eid,
+                        via="social_rumor",
+                    )
+
+                existing_against_view = self._recent_actor_reputation_strength(
+                    target_memory,
+                    against_eid,
+                    approval_sign=-1,
+                    max_age=220,
+                )
+                against_score = 0.4 * max(0.1, shared_strength)
+                if existing_against_view < against_score - 0.02:
+                    target_memory.remember(
+                        tick=self.sim.tick,
+                        kind="actor_reputation",
+                        strength=max(0.08, shared_strength * 0.78),
+                        actor_eid=against_eid,
+                        approval=round(max(-0.74, -0.34 - (shared_strength * 0.26)), 3),
+                        against_eid=side_eid,
+                        source_eid=from_eid,
+                        via="social_rumor",
+                    )
+
+                self.last_share_tick[key] = self.sim.tick
+                shares += 1
+                break
+
+        return shares
+
     def _social_world_trait_pass(self, memories, socials, positions):
         shares = 0
         for from_eid, social in socials.items():
@@ -28750,6 +30519,8 @@ class RumorSystem(System):
 
         self._ambient_rumor_pass(memories, positions)
         shares = self._social_rumor_pass(memories, socials, positions)
+        shares += self._social_actor_reputation_pass(memories, socials, positions)
+        shares += self._social_conflict_side_pass(memories, socials, positions)
         shares += self._social_world_trait_pass(memories, socials, positions)
 
         self.sim.rumor_stats["active"] = len(self.recent_offenses)
@@ -29758,6 +31529,77 @@ class NPCWillSystem(System):
                         )
                     best_target_eid = property_threat["data"].get("offender_eid")
 
+            ally_threat = _strongest_memory_entry(
+                memory,
+                "ally_threatened",
+                predicate=_memory_visible,
+            )
+            if ally_threat:
+                threat_strength = float(ally_threat.get("strength", 0.0) or 0.0)
+                threat_data = ally_threat.get("data", {}) if isinstance(ally_threat.get("data"), dict) else {}
+                ally_eid = threat_data.get("ally_eid")
+                against_eid = threat_data.get("against_eid")
+                against_pos = positions.get(against_eid) if against_eid is not None else None
+                ally_bond = social.bonds.get(ally_eid) if social and ally_eid is not None else {}
+                protectiveness = float((ally_bond or {}).get("protectiveness", 0.0) or 0.0)
+                trust = float((ally_bond or {}).get("trust", 0.0) or 0.0)
+                protect_drive = (
+                    (threat_strength * 48.0)
+                    + (protectiveness * 22.0)
+                    + (trust * 10.0)
+                    + (traits.loyalty * 14.0)
+                    + (traits.empathy * 9.0)
+                )
+                if against_pos and int(against_pos.z) == int(pos.z):
+                    if protect_drive > best_score and (threat_strength >= 0.24 or protectiveness >= 0.62):
+                        best_intent = "protecting"
+                        best_score = min(96.0, protect_drive)
+                        best_target = (against_pos.x, against_pos.y, against_pos.z)
+                        best_target_eid = against_eid
+
+            conflict_side = _strongest_memory_entry(
+                memory,
+                "conflict_side",
+                predicate=_memory_visible,
+            )
+            if conflict_side:
+                side_strength = float(conflict_side.get("strength", 0.0) or 0.0)
+                side_data = conflict_side.get("data", {}) if isinstance(conflict_side.get("data"), dict) else {}
+                side_eid = side_data.get("side_eid")
+                against_eid = side_data.get("against_eid")
+                side_pos = positions.get(side_eid) if side_eid is not None else None
+                against_pos = positions.get(against_eid) if against_eid is not None else None
+                side_impression = _npc_actor_impression(self.sim, eid, side_eid, memory=memory, social=social)
+                against_impression = _npc_actor_impression(self.sim, eid, against_eid, memory=memory, social=social)
+                commit_ready = (
+                    side_strength >= 0.38
+                    or traits.bravery >= 0.58
+                    or traits.loyalty >= 0.72
+                    or traits.empathy >= 0.76
+                    or side_impression >= 0.58
+                    or against_impression <= -0.58
+                )
+                protect_drive = (
+                    (side_strength * 54.0)
+                    + (max(0.0, side_impression) * 18.0)
+                    + (max(0.0, -against_impression) * 16.0)
+                    + (traits.bravery * 10.0)
+                    + (traits.loyalty * 8.0)
+                    + (traits.empathy * 6.0)
+                )
+                if against_pos and int(against_pos.z) == int(pos.z) and commit_ready and protect_drive > best_score:
+                    best_intent = "protecting"
+                    best_score = min(96.0, protect_drive)
+                    best_target = (against_pos.x, against_pos.y, against_pos.z)
+                    best_target_eid = against_eid
+                elif side_pos and int(side_pos.z) == int(pos.z):
+                    investigate_score = max(18.0, side_strength * 48.0)
+                    if investigate_score > best_score:
+                        best_intent = "investigating"
+                        best_score = investigate_score
+                        best_target = (side_pos.x, side_pos.y, side_pos.z)
+                        best_target_eid = side_eid
+
             offense = _strongest_memory_entry(
                 memory,
                 "offense",
@@ -30021,6 +31863,165 @@ class NPCSocialDynamicsSystem(System):
             if best is None or float(entry.get("strength", 0.0)) > float(best.get("strength", 0.0)):
                 best = entry
         return best
+
+    def _recent_actor_reputation_entry(self, npc_eid, *, max_age=220):
+        memory = self.sim.ecs.get(NPCMemory).get(npc_eid)
+        if not memory:
+            return None
+        best = None
+        best_score = 0.0
+        player_eid = getattr(self.sim, "player_eid", None)
+        for entry in list(getattr(memory, "entries", ()) or ()):
+            if str(entry.get("kind", "")).strip().lower() != "actor_reputation":
+                continue
+            age = self.sim.tick - int(entry.get("tick", 0) or 0)
+            if age > max_age:
+                continue
+            data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+            actor_eid = _int_or_default(data.get("actor_eid"), 0)
+            if actor_eid <= 0 or actor_eid == int(npc_eid):
+                continue
+            try:
+                approval = float(data.get("approval", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                approval = 0.0
+            if abs(approval) < 0.18:
+                continue
+            score = abs(approval) * max(0.08, float(entry.get("strength", 0.0) or 0.0))
+            via = str(data.get("via", "") or "").strip().lower()
+            if via == "job_completion":
+                score *= 0.78
+            if actor_eid == int(player_eid or -1):
+                score += 0.06
+            if best is None or score > best_score:
+                best = entry
+                best_score = score
+        return best
+
+    def _recent_conflict_side_entry(self, npc_eid, *, max_age=160):
+        memory = self.sim.ecs.get(NPCMemory).get(npc_eid)
+        if not memory:
+            return None
+        best = None
+        best_score = 0.0
+        for entry in list(getattr(memory, "entries", ()) or ()):
+            if str(entry.get("kind", "")).strip().lower() != "conflict_side":
+                continue
+            age = self.sim.tick - int(entry.get("tick", 0) or 0)
+            if age > max_age:
+                continue
+            data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+            side_eid = _int_or_default(data.get("side_eid"), 0)
+            against_eid = _int_or_default(data.get("against_eid"), 0)
+            if side_eid <= 0 or against_eid <= 0 or side_eid == against_eid:
+                continue
+            score = max(0.08, float(entry.get("strength", 0.0) or 0.0))
+            if best is None or score > best_score:
+                best = entry
+                best_score = score
+        return best
+
+    def _social_actor_name(self, actor_eid):
+        actor_int = _int_or_default(actor_eid, 0)
+        if actor_int <= 0:
+            return ""
+        player_eid = _int_or_default(getattr(self.sim, "player_eid", None), 0)
+        if actor_int == player_eid:
+            identity = self.sim.ecs.get(CreatureIdentity).get(actor_int)
+            if identity:
+                label = str(identity.display_name()).replace("_", " ").strip()
+                if label and label.lower() not in {"entity", "player"}:
+                    return label.title()
+            ai = self.sim.ecs.get(AI).get(actor_int)
+            role = str(getattr(ai, "role", "") or "").strip().lower()
+            if role and role not in {"entity", "player"}:
+                return f"that {role.replace('_', ' ')}"
+            return "that runner"
+        return _entity_display_name(self.sim, actor_int, title_case=True) or "someone"
+
+    def _actor_reputation_chatter_payload(self, speaker_eid, partner_eid, tone):
+        entry = self._recent_actor_reputation_entry(speaker_eid)
+        if not entry:
+            return None
+        data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+        actor_eid = _int_or_default(data.get("actor_eid"), 0)
+        if actor_eid <= 0 or actor_eid in {_int_or_default(speaker_eid, 0), _int_or_default(partner_eid, 0)}:
+            return None
+        actor_name = self._social_actor_name(actor_eid)
+        if not actor_name:
+            return None
+        try:
+            approval = float(data.get("approval", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            approval = 0.0
+        if abs(approval) < 0.18:
+            return None
+        via = str(data.get("via", "") or "").strip().lower()
+        offense_score = _int_or_default(data.get("offense_score"), 0)
+        if approval <= -0.5 or via == "witnessed_damage" or offense_score >= 30:
+            reputation_read = "they are getting read like bad news whenever a room gets tense."
+        elif approval < 0.0:
+            reputation_read = "they have a rough name around the block."
+        elif via == "job_completion":
+            reputation_read = "people keep saying they come through when work needs doing."
+        elif approval >= 0.5:
+            reputation_read = "they are getting a solid name with people nearby."
+        else:
+            reputation_read = "their name is landing a little better than it used to."
+        summary = f"{actor_name} {reputation_read}".strip().rstrip(".")
+        quote = self._say_social(
+            "chatter_actor_reputation",
+            speaker_eid,
+            partner_eid,
+            tone,
+            topic_id="chatter_actor_reputation",
+            actor_name=actor_name,
+            reputation_read=reputation_read,
+            reputation_read_lc=_dialogue_lower_start(reputation_read),
+        )
+        return {
+            "topic": "actor_reputation",
+            "quote": quote,
+            "summary": summary,
+            "detail": f"People around here keep reading {actor_name} that way.",
+            "channel": "social",
+            "priority": "normal" if actor_eid == _int_or_default(getattr(self.sim, "player_eid", None), 0) else "low",
+            "actor_eid": actor_eid,
+        }
+
+    def _conflict_side_chatter_payload(self, speaker_eid, partner_eid, tone):
+        entry = self._recent_conflict_side_entry(speaker_eid)
+        if not entry:
+            return None
+        data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+        side_eid = _int_or_default(data.get("side_eid"), 0)
+        against_eid = _int_or_default(data.get("against_eid"), 0)
+        if side_eid <= 0 or against_eid <= 0 or side_eid == against_eid:
+            return None
+        side_name = self._social_actor_name(side_eid)
+        against_name = self._social_actor_name(against_eid)
+        if not side_name or not against_name or side_name == against_name:
+            return None
+        conflict_summary = f"people around here are taking {side_name}'s side over {against_name}"
+        quote = self._say_social(
+            "chatter_conflict_side",
+            speaker_eid,
+            partner_eid,
+            tone,
+            topic_id="chatter_conflict_side",
+            conflict_summary=conflict_summary,
+            conflict_summary_lc=_dialogue_lower_start(conflict_summary),
+        )
+        return {
+            "topic": "conflict_side",
+            "quote": quote,
+            "summary": conflict_summary[:1].upper() + conflict_summary[1:],
+            "detail": f"The room still sounds tilted toward {side_name} against {against_name}.",
+            "channel": "social",
+            "priority": "normal" if _int_or_default(getattr(self.sim, "player_eid", None), 0) in {side_eid, against_eid} else "low",
+            "side_eid": side_eid,
+            "against_eid": against_eid,
+        }
 
     def _shared_workplace_prop(self, speaker_eid, partner_eid):
         occupations = self.sim.ecs.get(Occupation)
@@ -30420,6 +32421,8 @@ class NPCSocialDynamicsSystem(System):
                 bonus_builders.append(self._illegal_goods_chatter_payload)
         if tone == "conspiring":
             builders = (
+                self._conflict_side_chatter_payload,
+                self._actor_reputation_chatter_payload,
                 self._security_chatter_payload,
                 self._offense_chatter_payload,
                 self._supervisor_chatter_payload,
@@ -30427,18 +32430,22 @@ class NPCSocialDynamicsSystem(System):
         elif tone == "rambling":
             builders = (
                 self._world_trait_chatter_payload,
+                self._actor_reputation_chatter_payload,
                 self._offense_chatter_payload,
                 self._check_in_chatter_payload,
             )
         elif tone == "check_in" or relation in {"family", "partner"}:
             builders = (
                 self._check_in_chatter_payload,
+                self._conflict_side_chatter_payload,
                 self._schedule_chatter_payload,
                 self._supervisor_chatter_payload,
             )
         else:
             builders = (
                 self._offense_chatter_payload,
+                self._actor_reputation_chatter_payload,
+                self._conflict_side_chatter_payload,
                 self._world_trait_chatter_payload,
                 self._schedule_chatter_payload,
                 self._supervisor_chatter_payload,
@@ -36662,7 +38669,15 @@ class RenderSystem(System):
         debug_ui = _report_debug_ui.ensure_debug_ui_state(self.sim)
 
         screen_w, screen_h = self.view.size()
-        map_h = max(1, min(self.sim.tilemap.height, screen_h - self.hud_lines))
+        configured_hud_lines = max(1, int(self.hud_lines))
+        map_h = max(1, min(self.sim.tilemap.height, screen_h - configured_hud_lines))
+        hud_lines = max(
+            1,
+            min(
+                max(1, int(screen_h) - 1),
+                max(configured_hud_lines, int(screen_h) - int(map_h)),
+            ),
+        )
         map_w = min(self.sim.tilemap.width, screen_w)
         hud_w = max(1, int(screen_w))
         hud_text_w = _view_text_wrap_width(self.view, hud_w)
@@ -37556,9 +39571,9 @@ class RenderSystem(System):
 
         economy_chunks = [
             f"Cr {credits}",
-            f"Props {owned}",
             f"Inv {carried_slots}/{inventory.capacity if inventory else 0} u{carried_units}",
             f"HP {hp_text}",
+            f"Status {active_status_count}",
             f"Wpn {weapon_name}",
             f"Ammo {ammo_text}",
             f"Arm {armor_name}",
@@ -37577,26 +39592,6 @@ class RenderSystem(System):
             economy_chunks.append(
                 f"Needs E{player_needs.energy:.0f}/S{player_needs.safety:.0f}/So{player_needs.social:.0f}"
             )
-        rumor_stats = getattr(self.sim, "rumor_stats", {})
-        rumor_active = int(rumor_stats.get("active", 0))
-        rumor_shares = int(rumor_stats.get("shares_last_tick", 0))
-        bank_balance = finance.bank_balance if finance else 0
-        policy_tokens = []
-        if finance:
-            for key, label in (("money", "M"), ("item", "I"), ("medical", "H")):
-                policy = finance.policies.get(key)
-                if not policy:
-                    continue
-                active = int(policy.get("expires_tick", 0)) > self.sim.tick
-                if active:
-                    policy_tokens.append(label)
-        policy_text = "".join(policy_tokens) if policy_tokens else "-"
-        economy_chunks.extend([
-            f"Bank {bank_balance}",
-            f"Ins {policy_text}",
-            f"Status {active_status_count}",
-            f"Rumors {rumor_active} {rumor_shares}/t",
-        ])
         pressure = _pressure_snapshot(self.sim)
         pressure_tier = str(pressure.get("tier", "low")).strip().lower()
         pressure_attention = int(pressure.get("attention", 0))
@@ -37735,7 +39730,7 @@ class RenderSystem(System):
             turn_mode=_combat_turn_pacing_active(self.sim),
             stealth_state=getattr(self.sim, "player_stealth_state", None),
         )
-        wrapped_sections = _fit_wrapped_sections([
+        wrapped_sections_spec = [
             {
                 "lines": status_lines,
                 "min_lines": 1,
@@ -37766,13 +39761,34 @@ class RenderSystem(System):
                 "min_lines": 1,
                 "trim_priority": 3,
             },
-        ], max(1, self.hud_lines - 1))
+        ]
+        desired_log_rows = 3 if hud_lines >= 9 else (2 if hud_lines >= 6 else 1)
+        min_section_rows = sum(
+            1
+            for section in wrapped_sections_spec
+            if list(section.get("lines", ()) or ())
+        )
+        reserved_log_rows = max(
+            1,
+            min(
+                desired_log_rows,
+                max(0, int(hud_lines) - min_section_rows),
+            ),
+        )
+        wrapped_sections = _fit_wrapped_sections(
+            wrapped_sections_spec,
+            max(1, hud_lines - reserved_log_rows),
+        )
 
         hud_y = map_h
         for section in wrapped_sections:
             for line in section["lines"]:
+                if hud_y >= screen_h:
+                    break
                 self._draw_display_line(0, hud_y, line, hud_w)
                 hud_y += 1
+            if hud_y >= screen_h:
+                break
 
         if inventory_ui.get("open"):
             panel_w = min(max(36, map_w // 2), map_w)
@@ -38396,11 +40412,14 @@ class RenderSystem(System):
             for idx, line in enumerate(visible_lines):
                 self.view.draw_text(panel_x + 2, panel_y + 1 + idx, line[: max(0, panel_w - 4)])
 
-        log_budget = max(1, self.hud_lines - (hud_y - map_h))
+        visible_hud_rows = max(0, int(screen_h) - int(hud_y))
+        log_budget = max(0, min(visible_hud_rows, int(hud_lines) - (int(hud_y) - int(map_h))))
         self._advance_hud_queue(log_budget)
         logs = self._visible_hud_logs(log_budget)
         log_y = hud_y
         for line in logs:
+            if log_y >= screen_h:
+                break
             prefixed = _line_with_prefix(line, _log_prefix(line))
             line_segments = _line_segments(prefixed)
             if line_segments:

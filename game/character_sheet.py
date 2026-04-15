@@ -6,6 +6,7 @@ from game.components import (
     FinancialProfile,
     Inventory,
     NPCNeeds,
+    Position,
     PlayerAssets,
     SkillProfile,
     StatusEffects,
@@ -86,6 +87,36 @@ def _active_status_text(status_effects, *, duration_label_fn, sim):
     return ", ".join(rows)
 
 
+def _sheet_floor_label(z, *, zoom_mode="city"):
+    if str(zoom_mode or "").strip().lower() == "overworld":
+        return "Overworld"
+    try:
+        z = int(z)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if z < 0:
+        return f"Basement {abs(z)}"
+    return f"Floor {z + 1}"
+
+
+def _sheet_policy_text(finance, *, tick=0):
+    if not finance:
+        return "-"
+    tokens = []
+    policies = getattr(finance, "policies", {}) or {}
+    for key, label in (("money", "M"), ("item", "I"), ("medical", "H")):
+        policy = policies.get(key)
+        if not isinstance(policy, dict):
+            continue
+        try:
+            active = int(policy.get("expires_tick", 0)) > int(tick)
+        except (TypeError, ValueError):
+            active = False
+        if active:
+            tokens.append(label)
+    return "".join(tokens) if tokens else "-"
+
+
 def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     if sim is None or player_eid is None:
         return (
@@ -104,6 +135,7 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     finance = ecs.get(FinancialProfile).get(player_eid)
     vitality = ecs.get(Vitality).get(player_eid)
     inventory = ecs.get(Inventory).get(player_eid)
+    position = ecs.get(Position).get(player_eid)
     loadout = ecs.get(WeaponLoadout).get(player_eid)
     armor = ecs.get(ArmorLoadout).get(player_eid)
     status_effects = ecs.get(StatusEffects).get(player_eid)
@@ -112,6 +144,23 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     credits = int(getattr(assets, "credits", 0) or 0)
     bank_balance = int(getattr(finance, "bank_balance", 0) or 0)
     owned = len(getattr(assets, "owned_property_ids", ()) or ())
+    active_status_count = len(getattr(status_effects, "active", {}) or {})
+    zoom_mode = str(getattr(sim, "zoom_mode", "city") or "city").strip().lower() or "city"
+    if position is not None:
+        chunk = sim.chunk_coords(int(getattr(position, "x", 0)), int(getattr(position, "y", 0)))
+        chunk_text = f"{int(chunk[0])},{int(chunk[1])}"
+        tile_text = f"{int(getattr(position, 'x', 0))},{int(getattr(position, 'y', 0))},{int(getattr(position, 'z', 0))}"
+        floor_text = _sheet_floor_label(getattr(position, "z", 0), zoom_mode=zoom_mode)
+    else:
+        chunk = getattr(sim, "active_chunk_coord", None)
+        chunk_text = f"{int(chunk[0])},{int(chunk[1])}" if isinstance(chunk, tuple) and len(chunk) >= 2 else "?,?"
+        tile_text = "?,?,?"
+        floor_text = _sheet_floor_label(0, zoom_mode=zoom_mode)
+    mode_text = "In Vehicle" if zoom_mode == "overworld" else "On Foot"
+    rumor_stats = getattr(sim, "rumor_stats", {}) or {}
+    rumor_active = int(rumor_stats.get("active", 0) or 0)
+    rumor_shares = int(rumor_stats.get("shares_last_tick", 0) or 0)
+    policy_text = _sheet_policy_text(finance, tick=getattr(sim, "tick", 0))
     hp_text = "?"
     if vitality is not None:
         hp_text = f"{int(getattr(vitality, 'hp', 0))}/{int(getattr(vitality, 'max_hp', 0))}"
@@ -137,14 +186,22 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
 
     summary_lines = [
         "OVERVIEW",
-        f"Seed {getattr(sim, 'seed', '?')} | Credits {credits} | Bank {bank_balance} | Owned props {owned}",
-        f"HP {hp_text} | Heat {str(pressure.get('tier', 'low'))} {int(pressure.get('attention', 0))} | Status {len(getattr(status_effects, 'active', {}) or {})}",
-    ]
+        f"Credits {credits} | Bank {bank_balance} | Owned props {owned}",
+        f"HP {hp_text} | Heat {str(pressure.get('tier', 'low'))} {int(pressure.get('attention', 0))} | Status {active_status_count}",
+        ]
     if needs is not None:
         summary_lines.append(
             f"Needs Energy {float(getattr(needs, 'energy', 0.0)):.0f} | Safety {float(getattr(needs, 'safety', 0.0)):.0f} | Social {float(getattr(needs, 'social', 0.0)):.0f}"
         )
     summary_lines.append(f"Active effects {_active_status_text(status_effects, duration_label_fn=duration_label_fn, sim=sim)}")
+    summary_lines.extend([
+        "",
+        "RUN",
+        f"Tick {int(getattr(sim, 'tick', 0) or 0)} | Seed {getattr(sim, 'seed', '?')}",
+        f"{mode_text} | {floor_text} | Chunk {chunk_text}",
+        f"Tile {tile_text}",
+        f"Insurance {policy_text} | Rumors {rumor_active} active {rumor_shares}/t",
+    ])
 
     if core is not None:
         summary_lines.extend([
