@@ -95,6 +95,7 @@ DEFAULT_CITY_FIXTURE_SPECS = (
         "cover_value": 0.42,
         "weight": 2,
         "priorities": ("edge", "street_side", "entry_side", "open"),
+        "metadata": {"interaction_role": "sabotage_target", "fixture_kind": "electrical"},
     },
     {
         "id": "transformer",
@@ -106,6 +107,7 @@ DEFAULT_CITY_FIXTURE_SPECS = (
         "cover_value": 0.55,
         "weight": 1,
         "priorities": ("edge", "street_side", "open"),
+        "metadata": {"interaction_role": "sabotage_target", "fixture_kind": "electrical"},
     },
     {
         "id": "atm_kiosk",
@@ -124,6 +126,7 @@ DEFAULT_CITY_FIXTURE_SPECS = (
         "light_radius": 3,
         "light_intensity": 0.32,
         "light_phases": ("dawn", "dusk", "night"),
+        "metadata": {"fixture_kind": "electronic"},
     },
     {
         "id": "claim_terminal",
@@ -142,6 +145,7 @@ DEFAULT_CITY_FIXTURE_SPECS = (
         "light_radius": 3,
         "light_intensity": 0.28,
         "light_phases": ("dawn", "dusk", "night"),
+        "metadata": {"fixture_kind": "electronic"},
     },
 )
 
@@ -193,6 +197,7 @@ DEFAULT_NON_CITY_FIXTURE_SPECS = (
         "cover_value": 0.4,
         "weight": 1,
         "priorities": ("edge", "open", "path_side"),
+        "metadata": {"interaction_role": "cache_target", "fixture_kind": "cache"},
     },
 )
 
@@ -290,6 +295,13 @@ def _normalize_fixture_spec(raw):
     light_radius = int(max(0, round(_num(raw.get("light_radius", light.get("radius", 0)), 0.0))))
     light_intensity = max(0.0, min(1.0, _num(raw.get("light_intensity", light.get("intensity", 0.0)), 0.0)))
     raw_light_phases = raw.get("light_phases", light.get("phases", ()))
+    raw_metadata = raw.get("metadata")
+    metadata = {}
+    if isinstance(raw_metadata, dict):
+        for key, value in raw_metadata.items():
+            key_text = str(key).strip()
+            if key_text:
+                metadata[key_text] = value
     light_phases = []
     if isinstance(raw_light_phases, (list, tuple)):
         for phase in raw_light_phases:
@@ -318,6 +330,7 @@ def _normalize_fixture_spec(raw):
         "light_radius": max(0, int(light_radius)),
         "light_intensity": float(light_intensity),
         "light_phases": tuple(light_phases),
+        "metadata": metadata,
     }
 
 
@@ -521,8 +534,15 @@ def _build_fixture_metadata(spec, rng, area_type):
     site_services = tuple(spec.get("site_services", ()))
     cost_min = 90 if kind == "fixture" else 120
     cost_max = 260 if kind == "fixture" else 320
+    raw_metadata = spec.get("metadata")
+    metadata = {}
+    if isinstance(raw_metadata, dict):
+        for key, value in raw_metadata.items():
+            key_text = str(key).strip()
+            if key_text:
+                metadata[key_text] = value
 
-    return {
+    metadata.update({
         "archetype": str(spec.get("id", "fixture")).strip().lower() or "fixture",
         "fixture_type": str(spec.get("id", "fixture")).strip().lower() or "fixture",
         "display_glyph": str(spec.get("glyph", "f"))[:1] or "f",
@@ -539,7 +559,8 @@ def _build_fixture_metadata(spec, rng, area_type):
         "light_radius": int(max(0, spec.get("light_radius", 0))),
         "light_intensity": float(max(0.0, min(1.0, spec.get("light_intensity", 0.0)))),
         "light_phases": list(spec.get("light_phases", ())),
-    }
+    })
+    return metadata
 
 
 def generate_chunk_fixture_records(sim, chunk, rng, origin_x, origin_y, chunk_size, target_count):

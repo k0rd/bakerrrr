@@ -721,6 +721,81 @@ def _best_cover_candidate(sim, x, y, z):
     return options[0] if options else None
 
 
+def _cover_matches_candidate(sim, cover, candidate):
+    if not cover or not cover.active or not candidate:
+        return False
+
+    current_property_id = None
+    if cover.source_kind == "property" and cover.source:
+        sx, sy, sz = cover.source
+        prop = sim.property_at(sx, sy, sz)
+        if prop:
+            current_property_id = prop.get("id")
+
+    return (
+        cover.cover_kind == candidate["cover_kind"]
+        and round(float(cover.cover_value), 2) == round(float(candidate["cover_value"]), 2)
+        and cover.source == candidate["source"]
+        and cover.source_kind == candidate["source_kind"]
+        and cover.block_dir == candidate.get("block_dir")
+        and current_property_id == candidate.get("property_id")
+    )
+
+
+def _engage_cover_candidate_for_entity(sim, eid, candidate, *, tick=0, event_type="cover_taken"):
+    cover = sim.ecs.get(CoverState).get(eid)
+    if not cover or not candidate:
+        return False
+
+    cover.engage(
+        cover_kind=candidate["cover_kind"],
+        cover_value=candidate["cover_value"],
+        source=candidate["source"],
+        source_kind=candidate["source_kind"],
+        block_dir=candidate.get("block_dir"),
+        tick=tick,
+    )
+    sim.emit(Event(
+        event_type,
+        eid=eid,
+        cover_kind=cover.cover_kind,
+        cover_value=round(cover.cover_value, 2),
+        source=cover.source,
+        source_kind=cover.source_kind,
+        block_dir=cover.block_dir,
+        property_id=candidate.get("property_id"),
+    ))
+    return True
+
+
+def _clear_cover_for_entity(sim, eid, *, tick=0, reason="manual"):
+    cover = sim.ecs.get(CoverState).get(eid)
+    if not cover or not cover.active:
+        return False
+    cover.clear(tick=tick)
+    sim.emit(Event(
+        "cover_left",
+        eid=eid,
+        reason=reason,
+    ))
+    return True
+
+
+def _cover_effect_for_candidate(candidate, entity_x, entity_y, threat_x, threat_y):
+    if not candidate:
+        return 0.0
+    base = float(max(0.0, min(0.95, candidate.get("cover_value", 0.0))))
+    block_dir = candidate.get("block_dir")
+    if not block_dir:
+        return base * 0.55
+    threat_dir = _direction_step(entity_x, entity_y, threat_x, threat_y)
+    if threat_dir == tuple(block_dir):
+        return base
+    if threat_dir == (-int(block_dir[0]), -int(block_dir[1])):
+        return base * 0.2
+    return base * 0.35
+
+
 def _line_points(ax, ay, bx, by):
     x0 = int(ax)
     y0 = int(ay)
@@ -972,6 +1047,364 @@ def _weapon_context_for_entity(sim, eid):
     if not isinstance(instance, dict):
         instance = {}
     return loadout, weapon, instance
+
+
+def _weapon_tags(weapon):
+    if not isinstance(weapon, dict):
+        return set()
+    return {
+        str(tag).strip().lower()
+        for tag in weapon.get("tags", ())
+        if str(tag).strip()
+    }
+
+
+def _weapon_is_melee(weapon):
+    if not isinstance(weapon, dict):
+        return True
+    if "melee" in _weapon_tags(weapon):
+        return True
+    try:
+        return int(weapon.get("range", 1)) <= 1
+    except (TypeError, ValueError):
+        return True
+
+
+def _npc_weapon_preferred_band(weapon, profile=None):
+    if not isinstance(weapon, dict) or _weapon_is_melee(weapon):
+        return (1, 1, 1)
+
+    try:
+        max_range = int(max(1, weapon.get("range", 1)))
+    except (TypeError, ValueError):
+        max_range = 1
+    profile_max = int(max_range)
+    if profile is not None:
+        try:
+            profile_max = int(max(1, getattr(profile, "max_range", max_range)))
+        except (TypeError, ValueError):
+            profile_max = int(max_range)
+    profile_max = max(1, min(max_range, profile_max))
+
+    tags = _weapon_tags(weapon)
+    if "shotgun" in tags:
+        ideal_min = 2
+        ideal_max = min(profile_max, 4)
+    elif "smg" in tags or "burst" in tags:
+        ideal_min = 2
+        ideal_max = min(profile_max, 6)
+    elif "precision" in tags or "rifle" in tags:
+        ideal_min = min(profile_max, max(3, int(round(max_range * 0.45))))
+        ideal_max = profile_max
+    else:
+        ideal_min = max(2, int(round(max_range * 0.3)))
+        ideal_max = min(profile_max, max(ideal_min, int(round(max_range * 0.75))))
+
+    ideal_min = max(1, min(int(ideal_min), profile_max))
+    ideal_max = max(ideal_min, min(int(ideal_max), profile_max))
+    return ideal_min, ideal_max, max_range
+
+
+def _npc_combat_metrics(*, needs=None, traits=None, vitality=None, suppression=None, weapon=None):
+    traits = traits or NPCTraits()
+    hp_ratio = 1.0
+    if vitality:
+        hp_ratio = max(0.0, min(1.0, float(vitality.hp) / float(max(1, vitality.max_hp))))
+
+    pressure = 0.0
+    if suppression:
+        try:
+            pressure = float(suppression.pressure)
+        except (TypeError, ValueError):
+            pressure = 0.0
+    pressure = max(0.0, min(1.0, pressure))
+
+    safety = 75.0
+    if needs:
+        try:
+            safety = float(needs.safety)
+        except (TypeError, ValueError):
+            safety = 75.0
+    safety = max(0.0, min(100.0, safety))
+
+    has_ranged = bool(isinstance(weapon, dict) and not _weapon_is_melee(weapon))
+    low_health = max(0.0, 0.6 - hp_ratio)
+    low_safety = max(0.0, (48.0 - safety) / 48.0)
+
+    retreat_bias = _clamp(
+        (pressure * 0.72)
+        + (low_health * 1.05)
+        + (low_safety * 0.45)
+        + (0.16 if not has_ranged else 0.0)
+        - (float(traits.bravery) * 0.52)
+        - (float(traits.discipline) * 0.18),
+        lo=0.0,
+        hi=1.0,
+    )
+    assault_bias = _clamp(
+        0.28
+        + (float(traits.bravery) * 0.58)
+        + (0.18 if has_ranged else 0.0)
+        - (pressure * 0.45)
+        - (low_health * 0.65)
+        - (0.14 if not has_ranged else 0.0),
+        lo=0.0,
+        hi=1.0,
+    )
+
+    return {
+        "hp_ratio": hp_ratio,
+        "pressure": pressure,
+        "safety": safety,
+        "has_ranged": has_ranged,
+        "retreat_bias": retreat_bias,
+        "assault_bias": assault_bias,
+    }
+
+
+def _npc_tactical_reachable_tiles(sim, eid, pos, *, max_steps=4):
+    origin = (int(pos.x), int(pos.y))
+    frontier = deque([(origin[0], origin[1], 0)])
+    seen = {origin}
+    tiles = [(origin[0], origin[1], 0)]
+    directions = (
+        (0, -1),
+        (1, 0),
+        (0, 1),
+        (-1, 0),
+        (-1, -1),
+        (1, -1),
+        (-1, 1),
+        (1, 1),
+    )
+
+    while frontier:
+        cx, cy, steps = frontier.popleft()
+        if steps >= int(max_steps):
+            continue
+        for dx, dy in directions:
+            nx = int(cx + dx)
+            ny = int(cy + dy)
+            if (nx, ny) in seen:
+                continue
+            step_ok, _ = _can_step_transition_for(
+                sim,
+                moving_eid=eid,
+                from_x=int(cx),
+                from_y=int(cy),
+                to_x=nx,
+                to_y=ny,
+                z=int(pos.z),
+            )
+            if not step_ok:
+                continue
+            seen.add((nx, ny))
+            next_steps = int(steps) + 1
+            frontier.append((nx, ny, next_steps))
+            tiles.append((nx, ny, next_steps))
+    return tiles
+
+
+def _known_threat_position_for_npc(sim, eid, pos, *, target_eid=None, memory=None, radius=12):
+    positions = sim.ecs.get(Position)
+    if target_eid is not None:
+        target_pos = positions.get(target_eid)
+        if target_pos and int(target_pos.z) == int(pos.z):
+            return (int(target_pos.x), int(target_pos.y), int(target_pos.z))
+
+    if memory:
+        threat = memory.strongest("threat")
+        if threat:
+            data = threat.get("data", {}) if isinstance(threat.get("data"), dict) else {}
+            tx = data.get("x")
+            ty = data.get("y")
+            tz = data.get("z", pos.z)
+            if tx is not None and ty is not None and int(tz) == int(pos.z):
+                return (int(tx), int(ty), int(tz))
+
+    threats = _threat_positions_for_entity(sim, eid, pos, radius=radius)
+    if not threats:
+        return None
+    _threat_eid, _dist, tx, ty = min(threats, key=lambda row: row[1])
+    return (int(tx), int(ty), int(pos.z))
+
+
+def _pick_npc_retreat_target(sim, eid, pos, threat_pos, *, metrics=None, max_steps=5):
+    if pos is None or not isinstance(threat_pos, (list, tuple)) or len(threat_pos) < 3:
+        return None
+    if int(threat_pos[2]) != int(pos.z):
+        return None
+
+    metrics = metrics or {}
+    current_dist = _grid_distance(pos.x, pos.y, threat_pos[0], threat_pos[1])
+    best = None
+    best_score = float("-inf")
+
+    for cx, cy, steps in _npc_tactical_reachable_tiles(sim, eid, pos, max_steps=max_steps):
+        threat_dist = _grid_distance(cx, cy, threat_pos[0], threat_pos[1])
+        if threat_dist < 2:
+            continue
+        candidate = _best_cover_candidate(sim, cx, cy, int(pos.z))
+        cover_effect = _cover_effect_for_candidate(candidate, cx, cy, threat_pos[0], threat_pos[1])
+
+        score = (float(threat_dist) * 2.8) + (cover_effect * 18.0) - (float(steps) * 4.0)
+        if threat_dist <= current_dist:
+            score -= 9.0
+        if cover_effect >= 0.18:
+            score += 8.0
+        if (cx, cy) == (int(pos.x), int(pos.y)):
+            score -= 4.0
+        score += float(metrics.get("retreat_bias", 0.0) or 0.0) * float(max(0, threat_dist - current_dist)) * 4.0
+
+        if best is None or score > best_score:
+            best = (int(cx), int(cy), int(pos.z))
+            best_score = score
+
+    return best
+
+
+def _score_npc_combat_tile(sim, eid, current_pos, target_pos, *, weapon=None, profile=None, metrics=None, tile=None, target_eid=None):
+    if current_pos is None or target_pos is None or tile is None:
+        return None
+
+    cx, cy, steps = tile
+    z = int(current_pos.z)
+    current_dist = _grid_distance(current_pos.x, current_pos.y, target_pos.x, target_pos.y)
+    dist = _grid_distance(cx, cy, target_pos.x, target_pos.y)
+    metrics = metrics or {}
+    retreat_bias = float(metrics.get("retreat_bias", 0.0) or 0.0)
+    assault_bias = float(metrics.get("assault_bias", 0.0) or 0.0)
+    has_ranged = bool(metrics.get("has_ranged", False))
+
+    cover_candidate = _best_cover_candidate(sim, cx, cy, z)
+    cover_effect = _cover_effect_for_candidate(cover_candidate, cx, cy, target_pos.x, target_pos.y)
+
+    score = 0.0
+    score -= float(steps) * 3.5
+    if (cx, cy) == (int(current_pos.x), int(current_pos.y)):
+        score += 5.0
+
+    if has_ranged:
+        ideal_min, ideal_max, max_range = _npc_weapon_preferred_band(weapon, profile=profile)
+        if dist > max_range:
+            score -= 42.0 + float(dist - max_range) * 7.0
+        else:
+            viability = _weapon_target_viability(
+                sim,
+                source_eid=eid,
+                source_pos=Position(cx, cy, z),
+                weapon=weapon,
+                target_x=target_pos.x,
+                target_y=target_pos.y,
+                target_z=target_pos.z,
+                target_eid=target_eid,
+            )
+            if viability.get("ok"):
+                score += 18.0
+            else:
+                score -= 14.0
+
+            if dist < ideal_min:
+                score -= float(ideal_min - dist) * (12.0 + (retreat_bias * 12.0))
+            elif dist > ideal_max:
+                score -= float(dist - ideal_max) * 6.0
+            else:
+                score += 16.0
+
+            if dist > current_dist and retreat_bias >= 0.3:
+                score += float(dist - current_dist) * (4.0 + (retreat_bias * 6.0))
+            elif dist < current_dist and assault_bias >= 0.45:
+                score += float(current_dist - dist) * 2.2
+    else:
+        if dist <= 1:
+            score += 22.0 * assault_bias
+            score -= 18.0 * retreat_bias
+        else:
+            score -= float(dist) * max(2.0, 5.5 - (assault_bias * 3.0))
+            if dist < current_dist:
+                score += float(current_dist - dist) * ((8.0 * assault_bias) + 2.0)
+            if dist > current_dist:
+                score += float(dist - current_dist) * (9.0 * retreat_bias)
+
+    score += cover_effect * (30.0 + (retreat_bias * 28.0) + (10.0 if has_ranged else 0.0))
+    if dist <= 1 and has_ranged and retreat_bias >= 0.25:
+        score -= 12.0
+    if dist <= 1 and not has_ranged and retreat_bias >= 0.35:
+        score -= 14.0
+
+    return {
+        "x": int(cx),
+        "y": int(cy),
+        "z": z,
+        "steps": int(steps),
+        "score": float(score),
+        "cover_candidate": cover_candidate,
+        "cover_effect": float(cover_effect),
+        "distance": int(dist),
+    }
+
+
+def _pick_npc_combat_position(sim, eid, pos, target_pos, *, weapon=None, profile=None, metrics=None, target_eid=None):
+    if pos is None or target_pos is None or int(target_pos.z) != int(pos.z):
+        return None
+
+    metrics = metrics or {}
+    max_steps = 4 if bool(metrics.get("has_ranged")) or float(metrics.get("retreat_bias", 0.0) or 0.0) >= 0.4 else 3
+    best = None
+    for tile in _npc_tactical_reachable_tiles(sim, eid, pos, max_steps=max_steps):
+        scored = _score_npc_combat_tile(
+            sim,
+            eid,
+            pos,
+            target_pos,
+            weapon=weapon,
+            profile=profile,
+            metrics=metrics,
+            tile=tile,
+            target_eid=target_eid,
+        )
+        if not scored:
+            continue
+        if best is None:
+            best = scored
+            continue
+        if float(scored["score"]) > float(best["score"]) + 0.05:
+            best = scored
+            continue
+        if abs(float(scored["score"]) - float(best["score"])) <= 0.05 and int(scored["steps"]) < int(best["steps"]):
+            best = scored
+    return best
+
+
+def _sync_npc_cover_against_threat(sim, eid, pos, threat_pos, *, tick=0, min_effect=0.18):
+    cover = sim.ecs.get(CoverState).get(eid)
+    if not cover or pos is None or threat_pos is None:
+        return False
+    if int(pos.z) != int(threat_pos[2]):
+        return False
+
+    candidate = _best_cover_candidate(sim, pos.x, pos.y, pos.z)
+    if not candidate:
+        return False
+
+    effect = _cover_effect_for_candidate(candidate, pos.x, pos.y, threat_pos[0], threat_pos[1])
+    current_effect = 0.0
+    if cover.active:
+        current_effect = _effective_cover_value(cover, pos.x, pos.y, threat_pos[0], threat_pos[1])
+        if _cover_matches_candidate(sim, cover, candidate):
+            return True
+
+    if effect < max(float(min_effect), current_effect - 0.05):
+        return False
+
+    event_type = "cover_shifted" if cover.active else "cover_taken"
+    return _engage_cover_candidate_for_entity(
+        sim,
+        eid,
+        candidate,
+        tick=tick,
+        event_type=event_type,
+    )
 
 
 def _entity_uses_melee_aim(sim, eid):
@@ -2226,6 +2659,14 @@ NOISY_TAMPER_METHODS = {
     "crash_window_entry",
 }
 
+OBVIOUS_TRESPASS_METHODS = {
+    "forced_side_entry",
+    "jimmied_side_entry",
+    "forced_breach",
+    "deep_breach",
+    "crash_window_entry",
+}
+
 
 def _tamper_is_noisy(*, ingress_kind="", ingress_method="", breach_severity=0.0):
     ingress_kind = str(ingress_kind or "").strip().lower()
@@ -2248,6 +2689,17 @@ def _quiet_unwitnessed_tamper(prop, *, witnessed, ingress_kind="", ingress_metho
         ingress_method=ingress_method,
         breach_severity=breach_severity,
     )
+
+
+def _trespass_is_obvious_breach(*, ingress_kind="", ingress_method="", breach_severity=0.0):
+    ingress_kind = str(ingress_kind or "").strip().lower()
+    ingress_method = str(ingress_method or "").strip().lower()
+    breach_severity = float(max(0.0, breach_severity))
+    if ingress_kind in {"boundary_breach", "deep_breach"}:
+        return True
+    if ingress_method in OBVIOUS_TRESPASS_METHODS:
+        return True
+    return breach_severity >= 0.58
 
 
 def _emit_property_lock_tamper_event(sim, eid, prop, *, x, y, z, method):
@@ -24484,6 +24936,9 @@ class NPCWeaponSystem(System):
         loadouts = self.sim.ecs.get(WeaponLoadout)
         profiles = self.sim.ecs.get(WeaponUseProfile)
         vitalities = self.sim.ecs.get(Vitality)
+        needs_map = self.sim.ecs.get(NPCNeeds)
+        traits_map = self.sim.ecs.get(NPCTraits)
+        suppressions = self.sim.ecs.get(SuppressionState)
 
         for eid, ai in ais.items():
             if eid == self.player_eid:
@@ -24512,12 +24967,29 @@ class NPCWeaponSystem(System):
             if target_vitality and target_vitality.downed:
                 continue
 
+            suppression = suppressions.get(eid)
+            if suppression and suppression.surrendered:
+                continue
+
+            needs = needs_map.get(eid)
+            traits = traits_map.get(eid) or NPCTraits()
             has_weapon = bool(loadout and loadout.weapon_ids and loadout.current_weapon())
             if not has_weapon:
-                if _grid_distance(pos.x, pos.y, target_pos.x, target_pos.y) > 1:
+                dist = _grid_distance(pos.x, pos.y, target_pos.x, target_pos.y)
+                if dist > 1:
+                    continue
+                metrics = _npc_combat_metrics(
+                    needs=needs,
+                    traits=traits,
+                    vitality=vitality,
+                    suppression=suppression,
+                    weapon=None,
+                )
+                if metrics["retreat_bias"] >= 0.38 and self.rng.random() < 0.9:
                     continue
                 aggression = float(getattr(profile, "aggression", 0.55) if profile else 0.55)
-                if self.rng.random() > max(0.18, min(0.92, aggression)):
+                commit = (aggression * 0.55) + (metrics["assault_bias"] * 0.6) - (metrics["retreat_bias"] * 0.7)
+                if self.rng.random() > max(0.08, min(0.92, commit + 0.18)):
                     continue
                 self.sim.emit(Event(
                     "melee_attack_request",
@@ -24533,20 +25005,41 @@ class NPCWeaponSystem(System):
                 continue
 
             # Suppressed NPCs hesitate; pinned NPCs won't fire at all.
-            suppression = self.sim.ecs.get(SuppressionState).get(eid)
-            if suppression and suppression.surrendered:
-                continue
             if suppression and suppression.pinned():
                 if self.rng.random() < 0.82:
                     continue
 
+            dist = _grid_distance(pos.x, pos.y, target_pos.x, target_pos.y)
             weapon = weapon_by_id(loadout.current_weapon())
+            if _weapon_is_melee(weapon) and dist > 1:
+                best_alt = None
+                best_alt_range = -1
+                for weapon_id in loadout.weapon_ids:
+                    alt_weapon = weapon_by_id(weapon_id)
+                    if _weapon_is_melee(alt_weapon):
+                        continue
+                    alt_range = int(max(1, alt_weapon.get("range", 1)))
+                    if alt_range > best_alt_range:
+                        best_alt = weapon_id
+                        best_alt_range = alt_range
+                if best_alt:
+                    loadout.equip(best_alt)
+                    weapon = weapon_by_id(loadout.current_weapon())
+
+            metrics = _npc_combat_metrics(
+                needs=needs,
+                traits=traits,
+                vitality=vitality,
+                suppression=suppression,
+                weapon=weapon,
+            )
             if int(weapon.get("explosion_radius", 0)) > 0 and not profile.allow_explosives:
                 continue
 
-            dist = _grid_distance(pos.x, pos.y, target_pos.x, target_pos.y)
             max_range = min(int(weapon.get("range", 1)), int(profile.max_range))
             if dist < profile.min_range or dist > max_range:
+                continue
+            if _weapon_is_melee(weapon) and metrics["retreat_bias"] >= 0.45 and self.rng.random() < 0.82:
                 continue
 
             viability = _weapon_target_viability(
@@ -24567,6 +25060,8 @@ class NPCWeaponSystem(System):
             if suppression and suppression.shaken():
                 accuracy *= max(0.25, 1.0 - (suppression.pressure * 0.55))
             aggression_roll = profile.aggression * 0.85
+            if _weapon_is_melee(weapon):
+                aggression_roll *= max(0.35, 0.45 + (metrics["assault_bias"] * 0.8) - (metrics["retreat_bias"] * 0.5))
             if self.rng.random() > max(0.12, min(0.96, accuracy * aggression_roll + 0.18)):
                 continue
 
@@ -27351,14 +27846,41 @@ class RunPressureSystem(System):
     def on_property_trespass(self, event):
         if event.data.get("offender_eid") != self.player_eid:
             return
-        if not bool(event.data.get("witnessed", True)):
-            return
 
         severity_label = str(event.data.get("severity_label", "trespass")).strip().lower()
         severity_score = max(0, int(event.data.get("severity_score", 0)))
+        witnessed = bool(event.data.get("witnessed", True))
         ingress_kind = str(event.data.get("ingress_kind", "")).strip().lower()
         aperture_kind = str(event.data.get("aperture_kind", "")).strip().lower()
         ingress_method = str(event.data.get("ingress_method", "")).strip().lower()
+        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
+        obvious_breach = _trespass_is_obvious_breach(
+            ingress_kind=ingress_kind,
+            ingress_method=ingress_method,
+            breach_severity=breach_severity,
+        )
+
+        if not witnessed and not obvious_breach:
+            base = 1 if severity_label == "suspicious" else 2
+            if severity_label == "serious_trespass":
+                base = 3
+            delta = base + max(0, severity_score // 40)
+            self._emit_pressure(
+                delta=min(6, delta),
+                source="trespass",
+                reason=severity_label or "trespass",
+                source_event="property_trespass",
+                category="escalation",
+                extra={
+                    "severity_label": severity_label,
+                    "severity_score": severity_score,
+                    "ingress_kind": ingress_kind,
+                    "ingress_method": ingress_method,
+                    "witnessed": witnessed,
+                    "obvious_breach": obvious_breach,
+                },
+            )
+            return
 
         base = 1 if severity_label == "suspicious" else 3
         if severity_label == "serious_trespass":
@@ -27382,6 +27904,8 @@ class RunPressureSystem(System):
                 "severity_score": severity_score,
                 "ingress_kind": ingress_kind,
                 "ingress_method": ingress_method,
+                "witnessed": witnessed,
+                "obvious_breach": obvious_breach,
             },
         )
 
@@ -27728,6 +28252,16 @@ class OrganizationReputationSystem(System):
         severity_label = str(event.data.get("severity_label", "trespass")).strip().lower() or "trespass"
         access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
         witnessed = bool(event.data.get("witnessed", True))
+        ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
+        ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
+        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
+        obvious_breach = _trespass_is_obvious_breach(
+            ingress_kind=ingress_kind,
+            ingress_method=ingress_method,
+            breach_severity=breach_severity,
+        )
+        if not witnessed and not obvious_breach:
+            return
         heat_delta = 2 if severity_label == "suspicious" else 4
         standing_delta = -0.03 if severity_label == "suspicious" else -0.06
         if severity_label == "serious_trespass":
@@ -31476,6 +32010,59 @@ class NPCWillSystem(System):
                 if (recent_threat and recent_threat["strength"] > 0.25) or (
                     recent_property and recent_property["strength"] > 0.25
                 ):
+                    threat_focus = _known_threat_position_for_npc(
+                        self.sim,
+                        eid,
+                        pos,
+                        target_eid=ai.target_eid,
+                        memory=memory,
+                        radius=12,
+                    )
+                    _loadout, held_weapon, _instance = _weapon_context_for_entity(self.sim, eid)
+                    metrics = _npc_combat_metrics(
+                        needs=needs,
+                        traits=traits,
+                        vitality=vitality,
+                        suppression=suppression,
+                        weapon=held_weapon,
+                    )
+                    role_key = str(getattr(ai, "role", "") or "").strip().lower()
+                    retreat_threshold = 0.62 if role_key in {"guard", "scout"} and metrics["has_ranged"] else 0.46
+                    should_seek_safety = bool(
+                        threat_focus
+                        and (
+                            (suppression and suppression.pinned())
+                            or metrics["retreat_bias"] >= retreat_threshold
+                            or (
+                                not metrics["has_ranged"]
+                                and metrics["retreat_bias"] >= 0.34
+                                and (
+                                    (suppression and suppression.shaken())
+                                    or metrics["hp_ratio"] < 0.6
+                                )
+                            )
+                        )
+                    )
+                    if should_seek_safety:
+                        retreat_target = _pick_npc_retreat_target(
+                            self.sim,
+                            eid,
+                            pos,
+                            threat_focus,
+                            metrics=metrics,
+                            max_steps=5,
+                        )
+                        if retreat_target and retreat_target != (int(pos.x), int(pos.y), int(pos.z)):
+                            self._set_intent(
+                                eid,
+                                ai,
+                                will,
+                                "seeking_safety",
+                                max(82.0, 68.0 + (metrics["retreat_bias"] * 26.0)),
+                                retreat_target,
+                                None,
+                            )
+                            continue
                     # Pinned NPCs stay put instead of advancing.
                     if suppression and suppression.pinned():
                         will.intent = "protecting"
@@ -32833,6 +33420,11 @@ class NPCInvestigateSystem(System):
         move_throttles = self.sim.ecs.get(MovementThrottle)
         effects_map = self.sim.ecs.get(StatusEffects)
         noise_profiles = self.sim.ecs.get(NoiseProfile)
+        memories = self.sim.ecs.get(NPCMemory)
+        traits_map = self.sim.ecs.get(NPCTraits)
+        weapon_profiles = self.sim.ecs.get(WeaponUseProfile)
+        vitalities = self.sim.ecs.get(Vitality)
+        suppressions = self.sim.ecs.get(SuppressionState)
         global_stride = int(max(1, getattr(self.sim, "npc_move_tick_stride", 1)))
 
         moving_states = {
@@ -32878,11 +33470,66 @@ class NPCInvestigateSystem(System):
                 continue
 
             tx, ty, tz = target
+            threat_focus = None
+            if ai.state == "protecting" and ai.target_eid is not None:
+                threat_focus = _known_threat_position_for_npc(
+                    self.sim,
+                    eid,
+                    pos,
+                    target_eid=ai.target_eid,
+                    memory=memories.get(eid),
+                    radius=12,
+                )
+                if threat_focus:
+                    _loadout, held_weapon, _instance = _weapon_context_for_entity(self.sim, eid)
+                    metrics = _npc_combat_metrics(
+                        needs=needs_map.get(eid),
+                        traits=traits_map.get(eid) or NPCTraits(),
+                        vitality=vitalities.get(eid),
+                        suppression=suppressions.get(eid),
+                        weapon=held_weapon,
+                    )
+                    tactical_target = _pick_npc_combat_position(
+                        self.sim,
+                        eid,
+                        pos,
+                        Position(threat_focus[0], threat_focus[1], threat_focus[2]),
+                        weapon=held_weapon,
+                        profile=weapon_profiles.get(eid),
+                        metrics=metrics,
+                        target_eid=ai.target_eid,
+                    )
+                    if tactical_target:
+                        tx = int(tactical_target["x"])
+                        ty = int(tactical_target["y"])
+                        tz = int(tactical_target["z"])
 
             if pos.z != tz:
                 ai.state = "idle"
                 ai.target = None
                 ai.target_eid = None
+                continue
+
+            hold_cooldown = (
+                throttle.cooldown_for(ai.state, status_multiplier=status_speed_mult)
+                if throttle
+                else int(max(1, round(
+                    float(max(1, self.DEFAULT_MOVE_COOLDOWNS.get(ai.state, 2))) / status_speed_mult
+                )))
+            )
+            if ai.state == "protecting" and threat_focus and pos.x == tx and pos.y == ty:
+                _sync_npc_cover_against_threat(
+                    self.sim,
+                    eid,
+                    pos,
+                    threat_focus,
+                    tick=self.sim.tick,
+                    min_effect=0.16,
+                )
+                if throttle:
+                    throttle.next_move_tick = self.sim.tick + hold_cooldown
+                else:
+                    self.next_move_tick[eid] = self.sim.tick + hold_cooldown
                 continue
 
             if pos.x == tx and pos.y == ty:
@@ -33015,14 +33662,17 @@ class NPCInvestigateSystem(System):
                     reason="npc_step",
                 )
 
-            cooldown = (
-                throttle.cooldown_for(ai.state, status_multiplier=status_speed_mult)
-                if throttle
-                else int(max(1, round(
-                    float(max(1, self.DEFAULT_MOVE_COOLDOWNS.get(ai.state, 2))) / status_speed_mult
-                )))
-            )
+            cooldown = hold_cooldown
             if not moved:
+                if ai.state == "protecting" and threat_focus:
+                    _sync_npc_cover_against_threat(
+                        self.sim,
+                        eid,
+                        pos,
+                        threat_focus,
+                        tick=self.sim.tick,
+                        min_effect=0.16,
+                    )
                 self.sim.emit(Event("npc_move_blocked", npc_eid=eid, x=pos.x, y=pos.y, z=pos.z))
                 if throttle:
                     throttle.next_move_tick = max(throttle.next_move_tick, self.sim.tick + 1)
@@ -33053,6 +33703,15 @@ class NPCInvestigateSystem(System):
                 target_z=int(pos.z),
                 emit_clear_offense=False,
             )
+            if ai.state == "protecting" and threat_focus:
+                _sync_npc_cover_against_threat(
+                    self.sim,
+                    eid,
+                    pos,
+                    threat_focus,
+                    tick=self.sim.tick,
+                    min_effect=0.16,
+                )
 
             if throttle:
                 throttle.next_move_tick = self.sim.tick + cooldown
@@ -36045,7 +36704,26 @@ class EventLogSystem(System):
                 "Warning: protected spaces can escalate from suspicion to intervention if witnesses care.",
             )
         else:
-            self._log(f"{prefix} (unseen): {label}.", channel="alerts", priority="high", dedupe_window=4)
+            ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
+            ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
+            breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
+            if _trespass_is_obvious_breach(
+                ingress_kind=ingress_kind,
+                ingress_method=ingress_method,
+                breach_severity=breach_severity,
+            ):
+                self._log(
+                    f"{prefix} (unseen, evidence left): {label}.",
+                    channel="alerts",
+                    priority="high",
+                    dedupe_window=4,
+                )
+                self._warn_once(
+                    "unseen_obvious_trespass",
+                    "Warning: a forced or jimmied entry can still sour site reputation even if nobody sees you.",
+                )
+            else:
+                self._log(f"{prefix} (unseen): {label}.", channel="alerts", priority="high", dedupe_window=4)
 
     def on_property_tamper(self, event):
         if event.data.get("offender_eid") != self.player_eid:
