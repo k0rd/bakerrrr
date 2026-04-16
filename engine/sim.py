@@ -2,7 +2,7 @@ import random
 
 from .buildings import layout_chunk_building, world_building_id
 from .ecs import ECS
-from .events import EventBus
+from .events import Event, EventBus
 from .sites import layout_chunk_site, site_entry_front_cell, site_layout_reserved_footprints
 from .world import World
 from .eventlog import EventLog
@@ -205,6 +205,30 @@ class Simulation:
 
     def is_time_paused(self):
         return bool(self.pause_reasons)
+
+    def advance_time(self, ticks, *, reason="time_skip", emit_event=True, **event_data):
+        try:
+            delta = int(ticks)
+        except (TypeError, ValueError):
+            delta = 0
+        delta = max(0, delta)
+        if delta <= 0:
+            return 0
+
+        start_tick = int(self.tick)
+        end_tick = start_tick + delta
+        self.tick = end_tick
+
+        if emit_event:
+            payload = {
+                "ticks": delta,
+                "from_tick": start_tick,
+                "to_tick": end_tick,
+                "reason": str(reason or "time_skip").strip().lower() or "time_skip",
+            }
+            payload.update(event_data)
+            self.emit(Event("time_advanced", **payload))
+        return delta
 
     def chunk_coords(self, x, y):
         return (x // self.chunk_size, y // self.chunk_size)

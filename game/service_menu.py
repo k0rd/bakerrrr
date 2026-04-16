@@ -1267,6 +1267,7 @@ class ServiceMenuSystem(System):
             energy_gain = int(event.data.get("energy_gain", 0))
             safety_gain = int(event.data.get("safety_gain", 0))
             social_gain = int(event.data.get("social_gain", 0))
+            time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0))
             gain_bits = []
             if hp_gain > 0:
                 gain_bits.append(f"HP +{hp_gain}")
@@ -1276,16 +1277,20 @@ class ServiceMenuSystem(System):
                 gain_bits.append(f"S +{safety_gain}")
             if social_gain > 0:
                 gain_bits.append(f"So +{social_gain}")
-            return f"Shelter: {prop_name}", [
+            lines = [
                 f"{prop_name} gives you a safe place to steady up.",
                 " ".join(gain_bits) if gain_bits else "You settle yourself and recover a little.",
             ]
+            if time_advanced_ticks > 0:
+                lines.append(f"You lay low for {_tick_duration_label(self.sim, time_advanced_ticks)}.")
+            return f"Shelter: {prop_name}", lines
         if service == "rest":
             hp_gain = int(event.data.get("hp_gain", 0))
             energy_gain = int(event.data.get("energy_gain", 0))
             safety_gain = int(event.data.get("safety_gain", 0))
             social_gain = int(event.data.get("social_gain", 0))
             credits_spent = int(event.data.get("credits_spent", 0))
+            time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0))
             gain_bits = []
             if hp_gain > 0:
                 gain_bits.append(f"HP +{hp_gain}")
@@ -1297,6 +1302,8 @@ class ServiceMenuSystem(System):
                 gain_bits.append(f"So +{social_gain}")
             lines = [f"Room rented for {_credit_amount_label(credits_spent)}."]
             lines.append(" ".join(gain_bits) if gain_bits else "You come away better rested.")
+            if time_advanced_ticks > 0:
+                lines.append(f"You sleep through {_tick_duration_label(self.sim, time_advanced_ticks)}.")
             return f"Rest: {prop_name}", lines
         if service == "vehicle_fetch":
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"

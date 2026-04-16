@@ -1270,9 +1270,20 @@ class StatusEffects:
         return status in self.active
 
     def tick(self):
+        return self.advance(1)
+
+    def advance(self, ticks):
+        try:
+            ticks = int(ticks)
+        except (TypeError, ValueError):
+            ticks = 0
+        ticks = max(0, ticks)
+        if ticks <= 0:
+            return []
+
         expired = []
         for status, state in list(self.active.items()):
-            state["remaining"] -= 1
+            state["remaining"] -= ticks
             if state["remaining"] <= 0:
                 expired.append(status)
                 self.active.pop(status)

@@ -93,12 +93,14 @@ VENDING_ITEM_POOL = _build_vending_item_pool()
 class SiteServiceSystem(System):
 
     SHELTER_COOLDOWN_TICKS = 180
+    SHELTER_STAY_HOURS = 6
     INTEL_COOLDOWN_TICKS = 45
     INTEL_RADIUS = 2
     FUEL_UNIT_PRICE = 3
     REPAIR_POINT_PRICE = 18
     VENDING_BASE_COST = 6
     REST_COST = 25
+    REST_STAY_HOURS = 8
     REST_COOLDOWN_TICKS = 1800
     REST_WELL_RESTED_TICKS = 900
     FETCH_BASE_COST = 15
@@ -147,6 +149,48 @@ class SiteServiceSystem(System):
 
     def _vehicle_state_for(self, eid):
         return self.sim.ecs.get(VehicleState).get(eid)
+
+    def _ticks_per_hour(self):
+        world_traits = getattr(self.sim, "world_traits", {})
+        clock = world_traits.get("clock", {}) if isinstance(world_traits, dict) else {}
+        try:
+            ticks_per_hour = int(clock.get("ticks_per_hour", 600))
+        except (TypeError, ValueError, AttributeError):
+            ticks_per_hour = 600
+        return max(60, ticks_per_hour)
+
+    def _hours_to_ticks(self, hours):
+        try:
+            total_hours = float(hours)
+        except (TypeError, ValueError):
+            total_hours = 0.0
+        return max(0, int(round(total_hours * float(self._ticks_per_hour()))))
+
+    def _advance_time_for_service(self, eid, prop, service, ticks):
+        ticks = max(0, int(ticks))
+        if ticks <= 0:
+            return 0
+
+        prop_name = prop.get("name", prop.get("id", "site"))
+        advanced_ticks = int(self.sim.advance_time(
+            ticks,
+            reason="site_service",
+            eid=eid,
+            property_id=prop.get("id"),
+            property_name=prop_name,
+            service=service,
+        ))
+
+        effects_map = self.sim.ecs.get(StatusEffects)
+        for target_eid, effects in list(effects_map.items()):
+            expired = effects.advance(advanced_ticks)
+            for status in expired:
+                self.sim.emit(Event(
+                    "status_expired",
+                    eid=target_eid,
+                    status=status,
+                ))
+        return advanced_ticks
 
     def _choose_vending_item(self, eid, prop):
         if not VENDING_ITEM_POOL:
@@ -817,17 +861,13 @@ class SiteServiceSystem(System):
         if needs:
             if float(needs.energy) < 95.0:
                 energy_gain = min(18, max(4, int(round((100.0 - float(needs.energy)) * 0.32))))
-                needs.energy = _clamp(float(needs.energy) + energy_gain)
             if float(needs.safety) < 92.0:
                 safety_gain = min(14, max(3, int(round((100.0 - float(needs.safety)) * 0.24))))
-                needs.safety = _clamp(float(needs.safety) + safety_gain)
             if float(needs.social) < 70.0:
                 social_gain = min(8, max(2, int(round((72.0 - float(needs.social)) * 0.18))))
-                needs.social = _clamp(float(needs.social) + social_gain)
 
         if vitality and int(vitality.hp) < int(vitality.max_hp):
             hp_gain = min(2, int(vitality.max_hp) - int(vitality.hp))
-            vitality.hp = min(int(vitality.max_hp), int(vitality.hp) + hp_gain)
 
         if energy_gain <= 0 and safety_gain <= 0 and social_gain <= 0 and hp_gain <= 0:
             self.sim.emit(Event(
@@ -841,6 +881,19 @@ class SiteServiceSystem(System):
             return
 
         self._set_service_cooldown(eid, prop, "shelter", self.SHELTER_COOLDOWN_TICKS)
+        stay_ticks = self._hours_to_ticks(self.SHELTER_STAY_HOURS)
+        advanced_ticks = self._advance_time_for_service(eid, prop, "shelter", stay_ticks)
+
+        if needs:
+            if energy_gain > 0:
+                needs.energy = _clamp(float(needs.energy) + energy_gain)
+            if safety_gain > 0:
+                needs.safety = _clamp(float(needs.safety) + safety_gain)
+            if social_gain > 0:
+                needs.social = _clamp(float(needs.social) + social_gain)
+        if vitality and hp_gain > 0:
+            vitality.hp = min(int(vitality.max_hp), int(vitality.hp) + hp_gain)
+
         self.sim.emit(Event(
             "site_service_used",
             eid=eid,
@@ -852,6 +905,7 @@ class SiteServiceSystem(System):
             social_gain=social_gain,
             hp_gain=hp_gain,
             cooldown_ticks=self.SHELTER_COOLDOWN_TICKS,
+            time_advanced_ticks=advanced_ticks,
         ))
 
     def _apply_rest(self, eid, prop):
@@ -889,18 +943,27 @@ class SiteServiceSystem(System):
 
         if needs:
             energy_gain = min(40, max(10, int(round((100.0 - float(needs.energy)) * 0.7))))
-            needs.energy = _clamp(float(needs.energy) + energy_gain)
             safety_gain = min(30, max(8, int(round((100.0 - float(needs.safety)) * 0.55))))
-            needs.safety = _clamp(float(needs.safety) + safety_gain)
             social_gain = min(12, max(3, int(round((75.0 - float(needs.social)) * 0.25))))
-            needs.social = _clamp(float(needs.social) + social_gain)
 
         if vitality:
             missing_hp = max(0, int(vitality.max_hp) - int(vitality.hp))
             hp_gain = min(missing_hp, max(5, int(round(missing_hp * 0.6))))
-            vitality.hp = min(int(vitality.max_hp), int(vitality.hp) + hp_gain)
 
         effects = self.sim.ecs.get(StatusEffects).get(eid)
+        if assets:
+            assets.credits = max(0, int(assets.credits) - int(self.REST_COST))
+
+        self._set_service_cooldown(eid, prop, "rest", self.REST_COOLDOWN_TICKS)
+        stay_ticks = self._hours_to_ticks(self.REST_STAY_HOURS)
+        advanced_ticks = self._advance_time_for_service(eid, prop, "rest", stay_ticks)
+
+        if needs:
+            needs.energy = _clamp(float(needs.energy) + energy_gain)
+            needs.safety = _clamp(float(needs.safety) + safety_gain)
+            needs.social = _clamp(float(needs.social) + social_gain)
+        if vitality and hp_gain > 0:
+            vitality.hp = min(int(vitality.max_hp), int(vitality.hp) + hp_gain)
         if effects:
             effects.add(
                 "well_rested",
@@ -912,10 +975,6 @@ class SiteServiceSystem(System):
                 },
             )
 
-        if assets:
-            assets.credits = max(0, int(assets.credits) - int(self.REST_COST))
-
-        self._set_service_cooldown(eid, prop, "rest", self.REST_COOLDOWN_TICKS)
         self.sim.emit(Event(
             "site_service_used",
             eid=eid,
@@ -929,6 +988,7 @@ class SiteServiceSystem(System):
             credits_spent=self.REST_COST,
             well_rested_ticks=self.REST_WELL_RESTED_TICKS,
             cooldown_ticks=self.REST_COOLDOWN_TICKS,
+            time_advanced_ticks=advanced_ticks,
         ))
 
     def _player_vehicle_properties(self, eid):

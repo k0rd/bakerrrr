@@ -35730,6 +35730,7 @@ class EventLogSystem(System):
             energy_gain = int(event.data.get("energy_gain", 0))
             safety_gain = int(event.data.get("safety_gain", 0))
             social_gain = int(event.data.get("social_gain", 0))
+            time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0))
             if hp_gain > 0:
                 bits.append(f"HP +{hp_gain}")
             if energy_gain > 0:
@@ -35739,7 +35740,8 @@ class EventLogSystem(System):
             if social_gain > 0:
                 bits.append(f"So +{social_gain}")
             gains = " ".join(bits) if bits else "steadying your nerves"
-            self.sim.log.add(f"Shelter: {prop_name} lets you catch your breath ({gains}).")
+            duration_note = f" over {_tick_duration_label(self.sim, time_advanced_ticks)}" if time_advanced_ticks > 0 else ""
+            self.sim.log.add(f"Shelter: {prop_name} lets you catch your breath{duration_note} ({gains}).")
             return
         if service == "rest":
             bits = []
@@ -35748,6 +35750,7 @@ class EventLogSystem(System):
             safety_gain = int(event.data.get("safety_gain", 0))
             social_gain = int(event.data.get("social_gain", 0))
             credits_spent = int(event.data.get("credits_spent", 0))
+            time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0))
             if hp_gain > 0:
                 bits.append(f"HP +{hp_gain}")
             if energy_gain > 0:
@@ -35757,7 +35760,8 @@ class EventLogSystem(System):
             if social_gain > 0:
                 bits.append(f"So +{social_gain}")
             gains = " ".join(bits) if bits else "a good night's sleep"
-            self.sim.log.add(f"Rest: {prop_name} rents you a room (-{credits_spent}c). {gains}. You feel well rested.")
+            duration_note = f", {_tick_duration_label(self.sim, time_advanced_ticks)}" if time_advanced_ticks > 0 else ""
+            self.sim.log.add(f"Rest: {prop_name} rents you a room (-{credits_spent}c{duration_note}). {gains}. You feel well rested.")
             return
         if service == "vehicle_fetch":
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
