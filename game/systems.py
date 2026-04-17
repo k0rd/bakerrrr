@@ -1,4 +1,5 @@
 import curses
+import hashlib
 import itertools
 import json
 import random
@@ -157,9 +158,20 @@ from game.organizations import (
     seed_property_organization_defaults,
 )
 from game.population import (
+    ADMIN_ROOM_KINDS,
+    FRONT_ROOM_KINDS,
+    HOSPITALITY_ROOM_KINDS,
     INDUSTRIAL_ARCHETYPES,
+    MEDICAL_ARCHETYPES,
+    MEDICAL_ROOM_KINDS,
+    NIGHTLIFE_ARCHETYPES,
+    RESIDENTIAL_ARCHETYPES,
     SALVAGE_ARCHETYPES,
     SECURITY_ARCHETYPES,
+    SECURE_ROOM_KINDS,
+    STOREFRONT_ARCHETYPES,
+    TRANSIT_ARCHETYPES,
+    WORKROOM_KINDS,
     _spawn_human,
     seed_chunk_items,
     spawn_chunk_npcs,
@@ -3849,6 +3861,13 @@ LOG_PRIORITY_HIGH = 2
 LOG_PRIORITY_CRITICAL = 3
 
 PLAYER_FEEDBACK_LOG_STYLES = {
+    "location": {
+        "channel": "general",
+        "priority": "high",
+        "dedupe_window": 6,
+        "badge": "SITE",
+        "badge_color": "property_fixture",
+    },
     "movement": {
         "channel": "general",
         "priority": "high",
@@ -5418,6 +5437,716 @@ def _structure_summary(info):
         bits.append(f"plan:{preview}")
 
     return " ".join(bit for bit in bits if bit)
+
+
+FINANCE_ARCHETYPES = {
+    "bank",
+    "brokerage",
+    "pawn_shop",
+}
+ENTERTAINMENT_ARCHETYPES = NIGHTLIFE_ARCHETYPES | {
+    "casino",
+    "gallery",
+}
+HOSPITALITY_ARCHETYPES = {
+    "bar",
+    "flophouse",
+    "hotel",
+    "restaurant",
+    "soup_kitchen",
+    "street_kitchen",
+    "tavern",
+}
+OFFICE_ARCHETYPES = {
+    "co_working_hub",
+    "media_lab",
+    "office",
+    "tower",
+}
+TRANSIT_BUILDING_ARCHETYPES = TRANSIT_ARCHETYPES | {
+    "metro_exchange",
+}
+
+BUILDING_CATEGORY_OPENINGS = {
+    "entertainment": (
+        "The place is built to gather noise, light, and attention in one direction.",
+        "Everything here wants a crowd, an audience, or at least a witness.",
+        "The layout is tuned for spectacle before privacy.",
+    ),
+    "finance": (
+        "Everything here suggests orderly transactions and controlled access.",
+        "The place feels designed to slow people down before anything valuable is within reach.",
+        "The layout is built around caution, routine, and the quiet weight of paperwork.",
+    ),
+    "general": (
+        "The space carries the logic of its trade.",
+        "The layout feels deliberate, even when the finish is plain.",
+        "It reads as a place with a specific job and no urge to hide it.",
+    ),
+    "hospitality": (
+        "The space works to soften people as soon as they cross the threshold.",
+        "It feels designed for bodies to linger, eat, or settle in.",
+        "Comfort is part of the plan here, even when the finish is worn.",
+    ),
+    "industrial": (
+        "The place is all throughput and hard-wearing surfaces.",
+        "It feels built for loading, repair, or storage before anything else.",
+        "The layout favors utility over comfort at every turn.",
+    ),
+    "medical": (
+        "The rooms are laid out for intake, treatment, and controlled movement.",
+        "It reads as procedural space: triage first, reassurance second.",
+        "The place balances care with containment.",
+    ),
+    "office": (
+        "The space leans on workflow more than comfort.",
+        "It reads as a place built for meetings, paperwork, and people moving on schedule.",
+        "The interior feels arranged around desks, deadlines, and controlled circulation.",
+    ),
+    "residential": (
+        "The building feels lived in before it feels designed.",
+        "It reads as a place shaped by routine rather than presentation.",
+        "The layout gives more room to habit than ceremony.",
+    ),
+    "retail": (
+        "The frontage is meant to catch attention and hold it just long enough to make a sale.",
+        "It feels tuned for quick judgment from the threshold.",
+        "The place is arranged to turn foot traffic into decisions.",
+    ),
+    "secure": (
+        "The whole building announces control before welcome.",
+        "It reads as a place that expects scrutiny and keeps backups behind another door.",
+        "Everything about it says checkpoints first, explanations later.",
+    ),
+    "transit": (
+        "The space is organized around flow, handoff, and keeping people moving.",
+        "Everything here is about passage rather than staying.",
+        "It feels tuned for arrivals, departures, and quick exchanges.",
+    ),
+}
+BUILDING_CATEGORY_DETAILS = {
+    "entertainment": (
+        "Even the quieter corners feel like staging areas for whatever happens in public.",
+        "Nothing here stays neutral for long once voices start to bounce off the room.",
+        "The deeper rooms feel like support spaces for a performance the street never fully sees.",
+    ),
+    "finance": (
+        "The public side is polite, but the deeper rooms clearly belong to tighter rules.",
+        "Open sightlines keep the front legible while the valuable work disappears deeper in.",
+        "The room order makes it clear that trust here is procedural, not personal.",
+    ),
+    "general": (
+        "The deeper you look, the more the floor plan starts explaining itself.",
+        "The shape of the interior tells you more than the decor does.",
+        "It feels like a working layout first and a mood second.",
+    ),
+    "hospitality": (
+        "The place clearly expects people to stay long enough for the mood to matter.",
+        "The front edge welcomes, but the service side keeps the whole illusion running.",
+        "Even the practical corners are arranged so they do not fully break the mood.",
+    ),
+    "industrial": (
+        "Most of the comfort has been traded away for clearance, reach, and durable surfaces.",
+        "The plan keeps work moving forward even when nothing about it is pretty.",
+        "Every deeper space feels like a support room for heavier work close by.",
+    ),
+    "medical": (
+        "The order of the rooms makes it clear who gets sorted, treated, or kept waiting first.",
+        "Clean procedure matters more here than charm.",
+        "The whole place feels built to separate intake, care, and restricted handling.",
+    ),
+    "office": (
+        "The plan separates greeting space from the rooms where the actual decisions pile up.",
+        "Most of the tone comes from quiet control rather than any one decorative choice.",
+        "The deeper rooms feel meant for people who already know why they are here.",
+    ),
+    "residential": (
+        "Whatever the building was meant to be on paper, routine has had the final say.",
+        "The plan feels shaped by repeated use more than by any single design gesture.",
+        "The quieter rooms make the public face feel almost incidental.",
+    ),
+    "retail": (
+        "The front is arranged to read quickly, while the deeper rooms do the slower work of keeping stock and margins intact.",
+        "Everything close to the door is presentation; everything deeper in is maintenance.",
+        "The room order moves cleanly from impression to transaction to back-room reality.",
+    ),
+    "secure": (
+        "The plan keeps public access shallow and the serious work behind another threshold.",
+        "Most of the comfort has been sacrificed to observation, delay, and control.",
+        "The deeper rooms feel like answers to risks the public never gets to see.",
+    ),
+    "transit": (
+        "The layout exists to keep one movement handing off to the next without much friction.",
+        "The place reads like a chain of thresholds rather than a single settled room.",
+        "Even the quieter pockets feel borrowed from a system built around movement.",
+    ),
+}
+ROOM_CATEGORY_SENTENCES = {
+    "admin": (
+        "Paperwork, decisions, and quiet authority gather here.",
+        "The room feels built for schedules, files, and conversations that stay behind closed doors.",
+        "This is the kind of space where the building's rules get interpreted instead of explained.",
+    ),
+    "entertainment": (
+        "The room is arranged to pull attention forward and keep the energy public.",
+        "Everything here feels tuned for spectacle, reaction, or shared focus.",
+        "The space wants an audience even when it is standing empty.",
+    ),
+    "front": (
+        "The room is built to receive people before the rest of the building decides what to do with them.",
+        "This is the threshold space where the building first states its intentions.",
+        "The room works as an introduction, not a conclusion.",
+    ),
+    "general": (
+        "The room carries the building's purpose in a quieter, more focused form.",
+        "The space feels like one deliberate piece of a larger working plan.",
+        "Whatever else the building is doing, this room has a clear part in it.",
+    ),
+    "hospitality": (
+        "The room is meant to keep people settled, fed, or at least willing to stay a while.",
+        "Comfort and service are doing most of the visible work here.",
+        "The space softens people before the more practical parts of the building take over.",
+    ),
+    "medical": (
+        "The room is laid out for examination, treatment, or careful handling.",
+        "Everything about the space suggests procedure before improvisation.",
+        "The room feels tuned for care that still has to stay controlled.",
+    ),
+    "residential": (
+        "Privacy is thinner here than comfort, but routine still settles into the corners.",
+        "The room feels shaped by repeated use more than by display.",
+        "It reads as a lived-in space, even when the details are sparse.",
+    ),
+    "secure": (
+        "Every surface suggests control, oversight, or deliberate delay.",
+        "The room feels stripped down to whatever can be watched, locked, or accounted for.",
+        "The space is plainly built for custody rather than comfort.",
+    ),
+    "transit": (
+        "The room is set up for handoff and movement, not lingering.",
+        "Everything here suggests passage, timing, and quick exchange.",
+        "The space exists to keep people moving through a system bigger than this one room.",
+    ),
+    "work": (
+        "Tool reach, clearance, and workflow matter more here than comfort.",
+        "The room feels built around repeated tasks and quick access to the next step.",
+        "Everything about the space says this is where the practical work lands.",
+    ),
+}
+ROOM_KIND_SENTENCES = {
+    "airlock": (
+        "The room exists to slow entry down and make every transition deliberate.",
+        "Nothing here is casual; the whole point is to control what crosses through.",
+    ),
+    "bar_top": (
+        "The counter line turns the room into a narrow stage for service, gossip, and pacing.",
+        "Everything about the room funnels attention toward whoever is standing behind the bar.",
+    ),
+    "cash_cage": (
+        "Grilles, sightlines, and controlled reach make the room feel secure even when it is quiet.",
+        "The whole space is built around keeping money visible to staff and distant from everyone else.",
+    ),
+    "concourse": (
+        "The room spreads movement wide enough to sort traffic before it narrows again elsewhere.",
+        "Everything about the space is built to absorb arrivals without letting them settle.",
+    ),
+    "count_room": (
+        "The room feels clinical about value: tally first, trust later.",
+        "Every detail suggests accounting under tight control rather than ordinary office work.",
+    ),
+    "courtroom": (
+        "The room is arranged so authority has a fixed place and everyone else is expected to feel it.",
+        "Sightlines, distance, and the raised points of focus make the room feel intentionally unequal.",
+    ),
+    "dance_floor": (
+        "Open space and clear sightlines make the room feel ready for noise the second people fill it.",
+        "The whole room exists to turn bodies into part of the performance.",
+    ),
+    "dispatch_desk": (
+        "The room is tuned for quick decisions, short messages, and work moving out the door again.",
+        "Everything here feels one step away from being handed off or rerouted.",
+    ),
+    "gaming_floor": (
+        "The room is built to keep attention circulating without ever fully letting it rest.",
+        "Sightlines, open lanes, and managed distractions make the room feel deliberately absorbing.",
+    ),
+    "guest_floor": (
+        "The room trades privacy for orderly repetition, one door or partition after the next.",
+        "Everything here feels standardized enough to host strangers without ever really personalizing the space.",
+    ),
+    "holding": (
+        "Bare surfaces and controlled exits make the room feel temporary in all the worst ways.",
+        "The room is plainly built to keep someone here, not comfortable.",
+    ),
+    "kitchen": (
+        "Heat, prep space, and short working paths dominate the room.",
+        "Everything here is arranged around speed, mess, and staying one step ahead of the next plate.",
+    ),
+    "lab_floor": (
+        "Bench space, procedure, and controlled mess give the room a focused, technical tension.",
+        "The room feels built for repeatable work where mistakes would echo longer than the noise that made them.",
+    ),
+    "loading_bay": (
+        "Wide clearance and blunt surfaces make the room feel ready for weight before people.",
+        "The room is built for turnover, not comfort.",
+    ),
+    "manager_office": (
+        "The room keeps authority close to the floor without fully mixing with it.",
+        "Everything here suggests oversight with just enough distance to feel intentional.",
+    ),
+    "noc": (
+        "The room feels built for watching systems rather than touching them directly.",
+        "Every surface suggests monitoring, escalation, and quiet urgency.",
+    ),
+    "open_office": (
+        "The room spreads work out in plain view, trading privacy for coordination.",
+        "Shared sightlines and repeated desks make the space feel like workflow made visible.",
+    ),
+    "platform": (
+        "The room holds the tension between waiting and immediate departure.",
+        "Everything here feels like a pause that expects to end abruptly.",
+    ),
+    "records": (
+        "Paper trails and retrieval logic matter more here than comfort.",
+        "The room feels built to preserve memory in whatever format the building trusts.",
+    ),
+    "records_office": (
+        "Files, retention, and quiet administrative control define the room.",
+        "The room feels like the back end of every public promise the building makes.",
+    ),
+    "records_room": (
+        "The room exists to store decisions long after the people who made them have moved on.",
+        "Everything here feels organized against forgetfulness.",
+    ),
+    "repair_bench": (
+        "The room narrows into practical work: reach, tools, and the patience to keep something running.",
+        "Every surface looks chosen for hard use instead of display.",
+    ),
+    "security_room": (
+        "The room is built to watch, verify, and decide who becomes a problem.",
+        "Everything here suggests oversight, restricted access, and quick escalation.",
+    ),
+    "server_room": (
+        "The room trades comfort for containment, uptime, and controlled noise.",
+        "Everything here feels designed to keep systems alive, not people at ease.",
+    ),
+    "service_bay": (
+        "Working clearance and tool access matter more here than any attempt at polish.",
+        "The room is tuned for vehicles, machinery, or equipment to arrive broken and leave useful.",
+    ),
+    "showroom": (
+        "The room is staged to make stock look more certain than the back end probably feels.",
+        "Everything visible here is doing sales work, even when nobody is speaking.",
+    ),
+    "stage": (
+        "The room makes direction feel obvious; all the focus lines point one way.",
+        "Even empty, the space still behaves like it expects attention.",
+    ),
+    "surveillance_room": (
+        "The room is less about action than about owning the angle on it.",
+        "Everything here suggests a habit of watching other rooms from a safer distance.",
+    ),
+    "teller_row": (
+        "Counter lanes and queue rails turn the room into a controlled funnel for routine transactions.",
+        "The room is all measured access, with just enough openness to keep the public moving in line.",
+    ),
+    "testing_lab": (
+        "The room feels built for procedure, calibration, and results that need to stand up later.",
+        "Everything here suggests controlled trials rather than open-ended experiment.",
+    ),
+    "vault": (
+        "Thick boundaries and a stripped-down layout make everything here feel weighty and watched.",
+        "The room carries the plain logic of serious storage: less softness, more certainty.",
+    ),
+}
+
+
+def _deterministic_text_rng(*parts):
+    key = "||".join(str(part or "").strip() for part in parts if str(part or "").strip())
+    if not key:
+        key = "location-description"
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
+    return random.Random(int.from_bytes(digest[:8], "big"))
+
+
+def _description_choice(rng, options, fallback=""):
+    values = [str(option).strip() for option in tuple(options or ()) if str(option).strip()]
+    if not values:
+        return str(fallback).strip()
+    return values[rng.randrange(len(values))]
+
+
+def _humanize_slug(value, *, title=False):
+    text = re.sub(r"\s+", " ", str(value or "").replace("_", " ").strip())
+    if not text:
+        return ""
+    return text.title() if title else text
+
+
+def _location_building_category(archetype, *, storefront=False):
+    archetype = str(archetype or "").strip().lower()
+    if archetype in FINANCE_ARCHETYPES:
+        return "finance"
+    if archetype in MEDICAL_ARCHETYPES:
+        return "medical"
+    if archetype in SECURITY_ARCHETYPES:
+        return "secure"
+    if archetype in INDUSTRIAL_ARCHETYPES or archetype in SALVAGE_ARCHETYPES:
+        return "industrial"
+    if archetype in ENTERTAINMENT_ARCHETYPES:
+        return "entertainment"
+    if archetype in HOSPITALITY_ARCHETYPES:
+        return "hospitality"
+    if archetype in RESIDENTIAL_ARCHETYPES or archetype in {"barracks", "hotel"}:
+        return "residential"
+    if archetype in TRANSIT_BUILDING_ARCHETYPES:
+        return "transit"
+    if archetype in OFFICE_ARCHETYPES:
+        return "office"
+    if storefront or archetype in STOREFRONT_ARCHETYPES:
+        return "retail"
+    return "general"
+
+
+def _building_display_name(prop=None, structure=None):
+    if isinstance(prop, dict):
+        signage = _property_signage(prop)
+        sign_text = str((signage or {}).get("text", "") or "").strip()
+        if sign_text:
+            return sign_text
+
+        metadata = _property_metadata(prop)
+        business_name = str(metadata.get("business_name") or "").strip()
+        if business_name:
+            return business_name
+
+        prop_name = str(prop.get("name", "") or "").strip()
+        if prop_name and not (":" in prop_name and " " not in prop_name):
+            return prop_name
+
+        archetype_label = _humanize_slug(metadata.get("archetype"), title=True)
+        if archetype_label:
+            return archetype_label
+
+    if isinstance(structure, dict):
+        structure_name = str(structure.get("name", "") or "").strip()
+        if structure_name and not (":" in structure_name and " " not in structure_name):
+            return structure_name
+
+        archetype_label = _humanize_slug(structure.get("archetype"), title=True)
+        if archetype_label:
+            return archetype_label
+
+    return "Building"
+
+
+def _room_plan_description_sentence(rooms, rng):
+    labels = []
+    for room in tuple(rooms or ()):
+        label = _humanize_slug(room)
+        if label and label not in labels:
+            labels.append(label)
+    if not labels:
+        return ""
+    if len(labels) == 1:
+        return _description_choice(
+            rng,
+            (
+                f"Most of the interior resolves into a single {labels[0]}.",
+                f"The plan is almost entirely given over to one main {labels[0]}.",
+            ),
+        )
+    if len(labels) == 2:
+        return _description_choice(
+            rng,
+            (
+                f"The plan moves from {labels[0]} to {labels[1]}.",
+                f"Inside, the space steps from {labels[0]} into {labels[1]}.",
+            ),
+        )
+    return _description_choice(
+        rng,
+        (
+            f"The floor plan runs from {labels[0]} through {labels[1]} toward {labels[-1]}.",
+            f"Inside, the rooms progress from {labels[0]} to {labels[1]}, then tighten around {labels[-1]}.",
+            f"The plan starts with {labels[0]}, passes through {labels[1]}, and keeps pulling deeper toward {labels[-1]}.",
+        ),
+    )
+
+
+def _building_security_detail(prop):
+    metadata = _property_metadata(prop)
+    feature_labels = []
+    for feature in tuple(metadata.get("security_features", ()) or ()):
+        feature_key = str(feature or "").strip().lower()
+        if feature_key == "cameras":
+            feature_labels.append("cameras")
+        elif feature_key == "locked_doors":
+            feature_labels.append("locked interior doors")
+        elif feature_key == "guards":
+            feature_labels.append("visible guard presence")
+    feature_labels = [label for index, label in enumerate(feature_labels) if label not in feature_labels[:index]]
+    if not feature_labels:
+        return ""
+    if len(feature_labels) == 1:
+        return feature_labels[0]
+    return f"{feature_labels[0]} and {feature_labels[1]}"
+
+
+def _building_detail_sentence(prop, structure, category, rng):
+    details = []
+    metadata = _property_metadata(prop)
+
+    sign_text = str((_property_signage(prop) or {}).get("text", "") or "").strip() if isinstance(prop, dict) else ""
+    security_text = _building_security_detail(prop) if isinstance(prop, dict) else ""
+    founder_last = str(metadata.get("business_founder_last_name") or "").strip()
+
+    try:
+        floors = int(metadata.get("floors", structure.get("floors", 1) if isinstance(structure, dict) else 1))
+    except (TypeError, ValueError):
+        floors = 1
+
+    if security_text:
+        details.append(f"{security_text.capitalize()} keep the place feeling watched even when nobody is speaking.")
+    if sign_text:
+        details.append(f'"{sign_text}" still does some of the welcoming before the room layout takes over.')
+    if floors > 1:
+        details.append("The stacked floors make it feel like a layered operation rather than a single public room.")
+    if founder_last:
+        details.append(f"It still carries the air of a {founder_last} venture meant to be remembered.")
+    if isinstance(prop, dict) and bool(_property_is_storefront(prop)):
+        details.append("The front edge is arranged to make a fast first impression before the deeper rooms explain themselves.")
+    if isinstance(prop, dict) and bool(metadata.get("large_parcel")):
+        details.append("It sprawls wide enough to feel like an operation, not just a frontage.")
+
+    if not details:
+        details = BUILDING_CATEGORY_DETAILS.get(category, BUILDING_CATEGORY_DETAILS["general"])
+    return _description_choice(rng, details)
+
+
+def _building_entry_description(sim, prop=None, structure=None):
+    prop = prop if isinstance(prop, dict) else None
+    structure = structure if isinstance(structure, dict) else None
+    structure_archetype = str((structure or {}).get("archetype", "") or "").strip().lower()
+    if prop is None and structure_archetype.endswith("_core"):
+        return ""
+
+    metadata = _property_metadata(prop)
+    archetype = str(metadata.get("archetype", (structure or {}).get("archetype", "")) or "").strip().lower()
+    display_name = _building_display_name(prop, structure)
+    building_token = (
+        _building_id_from_property(prop)
+        or _building_id_from_structure(structure)
+        or str((prop or {}).get("id", "") or "").strip()
+        or display_name
+    )
+    category = _location_building_category(
+        archetype,
+        storefront=bool(prop and _property_is_storefront(prop)),
+    )
+    rooms = tuple(metadata.get("rooms", ())) or tuple((structure or {}).get("rooms", ()))
+    rng = _deterministic_text_rng(getattr(sim, "seed", ""), "building-entry", building_token, archetype)
+
+    parts = [
+        f"{display_name}: {_description_choice(rng, BUILDING_CATEGORY_OPENINGS.get(category, BUILDING_CATEGORY_OPENINGS['general']))}",
+        _room_plan_description_sentence(rooms, rng),
+        _building_detail_sentence(prop, structure, category, rng),
+    ]
+    return " ".join(part for part in parts if part).strip()
+
+
+def _room_category(room_kind, *, building_category="general"):
+    room_kind = str(room_kind or "").strip().lower()
+    if not room_kind:
+        return "general"
+    if room_kind in SECURE_ROOM_KINDS:
+        return "secure"
+    if room_kind in MEDICAL_ROOM_KINDS:
+        return "medical"
+    if room_kind in WORKROOM_KINDS:
+        return "work"
+    if room_kind in HOSPITALITY_ROOM_KINDS:
+        return "hospitality"
+    if room_kind in ADMIN_ROOM_KINDS:
+        return "admin"
+    if room_kind in FRONT_ROOM_KINDS:
+        return "front"
+
+    if any(token in room_kind for token in ("vault", "security", "surveillance", "cage", "holding", "armored", "airlock", "lockup")):
+        return "secure"
+    if any(token in room_kind for token in ("exam", "triage", "treatment", "surgery", "dispensary", "lab")):
+        return "medical"
+    if any(token in room_kind for token in ("office", "records", "conference", "meeting", "briefing", "interview", "manager", "executive")):
+        return "admin"
+    if any(token in room_kind for token in ("entry", "lobby", "reception", "foyer", "waiting", "counter", "desk", "showroom", "sales")):
+        return "front"
+    if any(token in room_kind for token in ("service", "repair", "loading", "sorting", "dispatch", "shop", "assembly", "parts", "storage", "power", "racks", "noc", "control")):
+        return "work"
+    if any(token in room_kind for token in ("bar", "kitchen", "dining", "seating", "commons", "booth", "guest")):
+        return "hospitality"
+    if any(token in room_kind for token in ("gaming", "dance", "stage", "song", "play", "prize", "exhibit", "studio", "green_room", "vip")):
+        return "entertainment"
+    if any(token in room_kind for token in ("platform", "concourse", "ticket", "locker")):
+        return "transit"
+    if any(token in room_kind for token in ("bed", "bunk", "living", "shared_room", "units", "washroom", "bathroom", "laundry", "nap")):
+        return "residential"
+
+    if building_category in {"entertainment", "transit", "medical"}:
+        return building_category
+    return "general"
+
+
+def _room_position_sentence(structure, rng):
+    info = structure if isinstance(structure, dict) else {}
+    rooms = tuple(info.get("rooms", ())) if isinstance(info.get("rooms"), (list, tuple)) else ()
+    try:
+        room_index = int(info.get("room_index", -1))
+    except (TypeError, ValueError):
+        room_index = -1
+    if room_index < 0 or len(rooms) <= 1:
+        return ""
+    if room_index == 0:
+        return _description_choice(
+            rng,
+            (
+                "It works as the front edge of the floor plan.",
+                "This is where the building first starts telling you what kind of place it is.",
+            ),
+        )
+    if room_index >= len(rooms) - 1:
+        return _description_choice(
+            rng,
+            (
+                "It sits at the deep end of the plan, where casual traffic thins out.",
+                "The room feels like the place the public side was always leading away from.",
+            ),
+        )
+    return _description_choice(
+        rng,
+        (
+            "It occupies the middle stretch of the plan, meant to pass people inward or back out again.",
+            "The room acts as a hinge between the public edge and the deeper work beyond it.",
+        ),
+    )
+
+
+def _room_floor_sentence(structure, rng):
+    info = structure if isinstance(structure, dict) else {}
+    try:
+        floor = int(info.get("floor", 0))
+    except (TypeError, ValueError):
+        floor = 0
+    if floor > 0:
+        return _description_choice(
+            rng,
+            (
+                f"Up on {_floor_label(floor, long=True)}, the building feels a little more private and sorted.",
+                f"{_floor_label(floor, long=True)} pulls the room away from the public pace below.",
+            ),
+        )
+    if floor < 0:
+        return _description_choice(
+            rng,
+            (
+                f"Down on {_floor_label(floor, long=True)}, the space feels more stripped to utility and control.",
+                f"{_floor_label(floor, long=True)} gives the room a deeper, more withheld mood.",
+            ),
+        )
+    return ""
+
+
+def _room_display_label(structure):
+    info = structure if isinstance(structure, dict) else {}
+    room_label = _humanize_slug(info.get("room_kind"), title=True) or "Room"
+    try:
+        floor = int(info.get("floor", 0))
+    except (TypeError, ValueError):
+        floor = 0
+    if floor != 0:
+        return f"{room_label} ({_floor_label(floor, long=True)})"
+    return room_label
+
+
+def _room_entry_description(sim, structure, prop=None):
+    if not isinstance(structure, dict):
+        return ""
+
+    room_kind = str(structure.get("room_kind", "") or "").strip().lower()
+    if not room_kind:
+        return ""
+
+    prop = prop if isinstance(prop, dict) else None
+    building_token = (
+        _building_id_from_property(prop)
+        or _building_id_from_structure(structure)
+        or str((prop or {}).get("id", "") or "").strip()
+        or room_kind
+    )
+    building_category = _location_building_category(
+        str(_property_metadata(prop).get("archetype", structure.get("archetype", "")) or "").strip().lower(),
+        storefront=bool(prop and _property_is_storefront(prop)),
+    )
+    category = _room_category(room_kind, building_category=building_category)
+    try:
+        floor = int(structure.get("floor", 0))
+    except (TypeError, ValueError):
+        floor = 0
+    rng = _deterministic_text_rng(getattr(sim, "seed", ""), "room-entry", building_token, floor, room_kind)
+
+    core = _description_choice(
+        rng,
+        ROOM_KIND_SENTENCES.get(room_kind, ROOM_CATEGORY_SENTENCES.get(category, ROOM_CATEGORY_SENTENCES["general"])),
+    )
+    extra = _room_floor_sentence(structure, rng) or _room_position_sentence(structure, rng)
+    parts = [f"{_room_display_label(structure)}: {core}"]
+    if extra:
+        parts.append(extra)
+    return " ".join(part for part in parts if part).strip()
+
+
+def _location_description_snapshot(sim, x, y, z):
+    if sim is None or x is None or y is None or z is None:
+        return {
+            "prop": None,
+            "structure": None,
+            "building_token": "",
+            "room_token": "",
+        }
+
+    try:
+        x = int(x)
+        y = int(y)
+        z = int(z)
+    except (TypeError, ValueError):
+        return {
+            "prop": None,
+            "structure": None,
+            "building_token": "",
+            "room_token": "",
+        }
+
+    structure = sim.structure_at(x, y, z) if hasattr(sim, "structure_at") else None
+    prop = _property_covering(sim, x, y, z)
+    prop_kind = str((prop or {}).get("kind", "") or "").strip().lower()
+    building_token = _building_id_from_property(prop) if prop_kind == "building" else ""
+    if not building_token:
+        building_token = _building_id_from_structure(structure)
+
+    room_kind = str((structure or {}).get("room_kind", "") or "").strip().lower()
+    room_token = ""
+    if room_kind:
+        try:
+            floor = int((structure or {}).get("floor", z))
+        except (TypeError, ValueError):
+            floor = int(z)
+        room_token = f"{building_token}:{floor}:{room_kind}" if building_token else f"{floor}:{room_kind}"
+
+    return {
+        "prop": prop if isinstance(prop, dict) else None,
+        "structure": structure if isinstance(structure, dict) else None,
+        "building_token": str(building_token or "").strip(),
+        "room_token": room_token,
+    }
 
 
 def _property_knowledge_hint(sim, viewer_eid, prop):
@@ -34805,6 +35534,14 @@ class EventLogSystem(System):
         super().__init__(sim)
         self.player_eid = player_eid
         self.run_warning_flags = set()
+        self.last_location_building_token = ""
+        self.last_location_room_token = ""
+
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if player_pos is not None:
+            snapshot = _location_description_snapshot(self.sim, player_pos.x, player_pos.y, player_pos.z)
+            self.last_location_building_token = snapshot["building_token"]
+            self.last_location_room_token = snapshot["room_token"]
 
         self.sim.events.subscribe("move_blocked", self.on_move_blocked)
         self.sim.events.subscribe("entity_moved", self.on_entity_moved)
@@ -35136,6 +35873,56 @@ class EventLogSystem(System):
             for ground in ground_items
         )
         return f"You see {item_text} here.", signature
+
+    def _emit_location_entry_descriptions(self, event):
+        current = _location_description_snapshot(
+            self.sim,
+            event.data.get("x"),
+            event.data.get("y"),
+            event.data.get("z"),
+        )
+        previous = _location_description_snapshot(
+            self.sim,
+            event.data.get("old_x"),
+            event.data.get("old_y"),
+            event.data.get("old_z"),
+        )
+
+        previous_building_token = previous["building_token"] or self.last_location_building_token
+        previous_room_token = previous["room_token"] or self.last_location_room_token
+        current_building_token = current["building_token"]
+        current_room_token = current["room_token"]
+
+        if current_building_token and current_building_token != previous_building_token:
+            text = _building_entry_description(
+                self.sim,
+                prop=current["prop"],
+                structure=current["structure"],
+            )
+            if text:
+                _log_player_feedback(
+                    self.sim,
+                    text,
+                    kind="location",
+                    dedupe_key=f"location:building:{current_building_token}",
+                )
+
+        if current_room_token and current_room_token != previous_room_token:
+            text = _room_entry_description(
+                self.sim,
+                current["structure"],
+                prop=current["prop"],
+            )
+            if text:
+                _log_player_feedback(
+                    self.sim,
+                    text,
+                    kind="location",
+                    dedupe_key=f"location:room:{current_room_token}",
+                )
+
+        self.last_location_building_token = current_building_token
+        self.last_location_room_token = current_room_token
 
     def _player_is_near_event_position(self, event, radius=8):
         x = event.data.get("x")
@@ -35794,6 +36581,8 @@ class EventLogSystem(System):
         z = event.data.get("z")
         if x is None or y is None or z is None:
             return
+
+        self._emit_location_entry_descriptions(event)
 
         text, signature = self._ground_item_notice_text(x, y, z)
         if not text:

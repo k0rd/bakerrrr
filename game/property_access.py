@@ -179,8 +179,9 @@ CONTROLLER_INTRUSION_PROFILES = {
 }
 
 DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
-    "casino": ("slots", "casino_holdem", "plinko", "twenty_one"),
+    "casino": ("slots", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", "casino_holdem", "plinko", "twenty_one"),
     "flophouse": ("rest",),
+    "gaming_hall": ("video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker"),
     "hotel": ("rest",),
     "tavern": ("intel",),
 }

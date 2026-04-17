@@ -570,6 +570,40 @@ CASINO_HOLDEM_ANTE_BONUS_MULTIPLIERS = {
     5: 2,
     4: 1,
 }
+CASINO_VIDEO_POKER_PAYOUT_MULTIPLIERS = {
+    "royal_flush": 250,
+    8: 50,
+    7: 25,
+    6: 9,
+    5: 6,
+    4: 4,
+    3: 3,
+    2: 2,
+    "jacks_or_better": 1,
+}
+CASINO_THREE_CARD_POKER_ANTE_BONUS_MULTIPLIERS = {
+    5: 5,
+    4: 4,
+    3: 1,
+}
+CASINO_KENO_NUMBER_COUNT = 20
+CASINO_KENO_DRAW_COUNT = 8
+CASINO_KENO_MAX_PICKS = 5
+CASINO_KENO_PAYOUT_MULTIPLIERS = {
+    1: {1: 2},
+    2: {2: 5},
+    3: {2: 1, 3: 8},
+    4: {2: 1, 3: 4, 4: 15},
+    5: {3: 2, 4: 8, 5: 30},
+}
+CASINO_CRAPS_MAX_POINT_ROLLS = 32
+CASINO_ROULETTE_NUMBER_MAX = 36
+CASINO_ROULETTE_RED_NUMBERS = frozenset({
+    1, 3, 5, 7, 9,
+    12, 14, 16, 18,
+    19, 21, 23, 25, 27,
+    30, 32, 34, 36,
+})
 CASINO_GAME_PROFILES = {
     "slots": {
         "title": "Slots",
@@ -579,6 +613,60 @@ CASINO_GAME_PROFILES = {
         "prompt": "Pick a stake and let the reels fly.",
         "note": "Three reels, classic symbols, and a loud machine when the sevens land.",
         "social_gain": (1, 3),
+    },
+    "video_poker": {
+        "title": "Video Poker",
+        "service_label": "video poker",
+        "menu_label": "Play video poker",
+        "bet_options": (10, 25, 50),
+        "prompt": "Post a wager, choose which cards to hold, then take one draw.",
+        "note": "Classic jacks-or-better rules: hold what you like, draw once, and let the pay table decide.",
+        "social_gain": (1, 4),
+    },
+    "keno": {
+        "title": "Keno",
+        "service_label": "keno",
+        "menu_label": "Play keno",
+        "bet_options": (5, 15, 30),
+        "prompt": "Pick your spots, let the blower draw, and sweat the ticket.",
+        "note": "Quick-draw house keno uses a 20-number board, one ticket, and one fast reveal.",
+        "social_gain": (1, 3),
+    },
+    "roulette": {
+        "title": "Roulette",
+        "service_label": "roulette",
+        "menu_label": "Play roulette",
+        "bet_options": (10, 25, 50),
+        "prompt": "Post a chip, pick a pocket or an outside section, and let the wheel spin.",
+        "note": "Single-zero house wheel with straight-up numbers, colors, parity, ranges, dozens, and columns.",
+        "social_gain": (1, 4),
+    },
+    "craps": {
+        "title": "Craps",
+        "service_label": "craps",
+        "menu_label": "Play craps",
+        "bet_options": (10, 25, 50),
+        "prompt": "Post a chip, choose pass line, don't pass, or field, and let the dice run.",
+        "note": "Pass line and don't pass auto-play through the point; field is a one-roll side action.",
+        "social_gain": (2, 5),
+    },
+    "baccarat": {
+        "title": "Baccarat",
+        "service_label": "baccarat",
+        "menu_label": "Play baccarat",
+        "bet_options": (20, 40, 100),
+        "prompt": "Post a wager, back player, banker, or tie, and let the shoe run one hand.",
+        "note": "Punto Banco rules with naturals and third-card draws handled automatically.",
+        "social_gain": (1, 4),
+    },
+    "three_card_poker": {
+        "title": "Three-Card Poker",
+        "service_label": "three-card poker",
+        "menu_label": "Play three-card poker",
+        "bet_options": (15, 30, 75),
+        "prompt": "Post an ante, read your three cards, then play or fold against the dealer.",
+        "note": "Dealer qualifies with queen-high or better, and straights or better earn an ante bonus.",
+        "social_gain": (2, 4),
     },
     "casino_holdem": {
         "title": "Casino Hold'em",
@@ -983,6 +1071,1357 @@ def _casino_best_poker_hand(cards):
         "name": _casino_poker_hand_name(best_score),
         "category": CASINO_POKER_CATEGORY_NAMES.get(int(best_score[0]), "hand"),
         "cards": tuple(best_cards),
+    }
+
+
+def _casino_video_poker_normalize_session(session):
+    if not isinstance(session, dict):
+        return None
+    cards = [
+        str(card).strip().upper()
+        for card in list(session.get("cards", ()) or ())[:5]
+        if str(card).strip()
+    ]
+    holds_raw = list(session.get("holds", ()) or ())
+    holds = []
+    for idx in range(len(cards)):
+        holds.append(bool(holds_raw[idx]) if idx < len(holds_raw) else False)
+    return {
+        "service": "video_poker",
+        "seed_token": str(session.get("seed_token", "")).strip(),
+        "wager": int(session.get("wager", 0)),
+        "stake": int(session.get("stake", session.get("wager", 0))),
+        "deck": list(session.get("deck", ()) or ()),
+        "deck_index": int(session.get("deck_index", 0)),
+        "cards": cards,
+        "holds": holds,
+        "property_id": session.get("property_id"),
+        "property_name": str(session.get("property_name", "")).strip(),
+    }
+
+
+def _casino_video_poker_start(seed_token, wager):
+    deck = _casino_shuffled_deck(seed_token)
+    return {
+        "service": "video_poker",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": int(wager),
+        "deck": list(deck),
+        "deck_index": 5,
+        "cards": list(deck[:5]),
+        "holds": [False, False, False, False, False],
+    }
+
+
+def _casino_video_poker_toggle_hold(session, card_index):
+    current = _casino_video_poker_normalize_session(session)
+    if not current:
+        return None
+    try:
+        idx = int(card_index)
+    except (TypeError, ValueError):
+        return current
+    if 0 <= idx < len(current["holds"]):
+        current["holds"][idx] = not bool(current["holds"][idx])
+    return current
+
+
+def _casino_video_poker_payout_profile(score):
+    category = int(score[0]) if score else 0
+    primary = int(score[1]) if len(score) > 1 else 0
+    if category == 8 and primary == 14:
+        return int(CASINO_VIDEO_POKER_PAYOUT_MULTIPLIERS.get("royal_flush", 0)), "royal_flush"
+    if category >= 2:
+        return int(CASINO_VIDEO_POKER_PAYOUT_MULTIPLIERS.get(category, 0)), {
+            8: "straight_flush",
+            7: "four_kind",
+            6: "full_house",
+            5: "flush",
+            4: "straight",
+            3: "three_kind",
+            2: "two_pair",
+        }.get(category, "blank")
+    if category == 1 and primary >= 11:
+        return int(CASINO_VIDEO_POKER_PAYOUT_MULTIPLIERS.get("jacks_or_better", 0)), "jacks_or_better"
+    return 0, "blank"
+
+
+def _casino_video_poker_outcome_text(outcome_key):
+    mapping = {
+        "royal_flush": (
+            "Royal flush.",
+            "The machine erupts as the top straight flush lands clean across the screen.",
+        ),
+        "straight_flush": (
+            "Straight flush.",
+            "Five perfect runners in one suit lock in a rare premium payout.",
+        ),
+        "four_kind": (
+            "Four of a kind.",
+            "The draw spikes trips into quads and the cabinet starts flashing.",
+        ),
+        "full_house": (
+            "Full house.",
+            "A made pair fills up behind the trips for one of the best routine pays on the board.",
+        ),
+        "flush": (
+            "Flush.",
+            "All five cards stay in one suit and the machine pays a healthy return.",
+        ),
+        "straight": (
+            "Straight.",
+            "The ranks line up edge to edge and the draw pays solidly.",
+        ),
+        "three_kind": (
+            "Trips.",
+            "A third copy lands and turns the hand into a paying set.",
+        ),
+        "two_pair": (
+            "Two pair.",
+            "The draw catches the second pair and nudges the hand into profit.",
+        ),
+        "jacks_or_better": (
+            "Jacks or better.",
+            "The high pair is enough to keep the credits cycling.",
+        ),
+        "blank": (
+            "No paying hand.",
+            "The one draw misses the pay table and the machine keeps the stake.",
+        ),
+    }
+    return mapping.get(str(outcome_key or "blank").strip().lower(), mapping["blank"])
+
+
+def _casino_video_poker_draw(session):
+    current = _casino_video_poker_normalize_session(session)
+    if not current:
+        return None
+
+    cards = list(current.get("cards", ()) or ())
+    holds = list(current.get("holds", ()) or ())
+    deck = list(current.get("deck", ()) or ())
+    deck_index = int(current.get("deck_index", 0))
+    held_slots = tuple(idx + 1 for idx, held in enumerate(holds) if held)
+    drawn_slots = []
+    for idx, held in enumerate(holds):
+        if held:
+            continue
+        if deck_index < len(deck):
+            cards[idx] = deck[deck_index]
+            deck_index += 1
+        drawn_slots.append(idx + 1)
+
+    score = _casino_evaluate_five_card_poker(cards)
+    payout_mult, outcome_key = _casino_video_poker_payout_profile(score)
+    hand_name = _casino_poker_hand_name(score)
+    payout = int(max(0, payout_mult) * int(current.get("wager", 0)))
+    headline, detail = _casino_video_poker_outcome_text(outcome_key)
+    if held_slots:
+        hold_line = f"Held: {', '.join(str(slot) for slot in held_slots)}."
+    else:
+        hold_line = "Held: none."
+    if drawn_slots:
+        draw_line = f"Drawn: {', '.join(str(slot) for slot in drawn_slots)}."
+    else:
+        draw_line = "Drawn: none (stand pat)."
+
+    return {
+        "service": "video_poker",
+        "wager": int(current["wager"]),
+        "stake": int(current["stake"]),
+        "payout": int(payout),
+        "outcome_key": outcome_key,
+        "headline": headline,
+        "detail": detail,
+        "summary": f"Final hand {_casino_cards_text(cards)} ({hand_name}). {headline}",
+        "result_lines": [
+            f"Final hand: {_casino_cards_text(cards)}",
+            hold_line,
+            draw_line,
+            f"Made: {hand_name}.",
+            detail,
+        ],
+        "player_cards": tuple(cards),
+        "player_hand_name": str(hand_name),
+        "held_slots": tuple(int(slot) for slot in held_slots),
+        "drawn_slots": tuple(int(slot) for slot in drawn_slots),
+        "social_gain": _casino_social_gain("video_poker", f"{current['seed_token']}:{outcome_key}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_keno_normalize_session(session):
+    if not isinstance(session, dict):
+        return None
+    picks = []
+    seen = set()
+    for raw in list(session.get("picks", ()) or ()):
+        try:
+            number = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if number < 1 or number > CASINO_KENO_NUMBER_COUNT or number in seen:
+            continue
+        seen.add(number)
+        picks.append(number)
+        if len(picks) >= CASINO_KENO_MAX_PICKS:
+            break
+    picks.sort()
+    return {
+        "service": "keno",
+        "seed_token": str(session.get("seed_token", "")).strip(),
+        "wager": int(session.get("wager", 0)),
+        "stake": int(session.get("stake", session.get("wager", 0))),
+        "picks": picks,
+        "property_id": session.get("property_id"),
+        "property_name": str(session.get("property_name", "")).strip(),
+    }
+
+
+def _casino_keno_start(seed_token, wager):
+    return {
+        "service": "keno",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": int(wager),
+        "picks": [],
+    }
+
+
+def _casino_keno_toggle_pick(session, number):
+    current = _casino_keno_normalize_session(session)
+    if not current:
+        return None
+    try:
+        ticket_number = int(number)
+    except (TypeError, ValueError):
+        return current
+    if ticket_number < 1 or ticket_number > CASINO_KENO_NUMBER_COUNT:
+        return current
+    picks = list(current.get("picks", ()) or ())
+    if ticket_number in picks:
+        picks.remove(ticket_number)
+    elif len(picks) < CASINO_KENO_MAX_PICKS:
+        picks.append(ticket_number)
+    picks.sort()
+    current["picks"] = picks
+    return current
+
+
+def _casino_keno_outcome_text(pick_count, hit_count, payout_mult):
+    if int(payout_mult) <= 0:
+        return (
+            "Blank board.",
+            "The blower misses your ticket and the house keeps the wager.",
+        )
+    if int(hit_count) >= int(pick_count) and int(pick_count) > 0:
+        return (
+            "Perfect ticket.",
+            "Every marked number comes out of the cage and the ticket pays hot.",
+        )
+    if int(hit_count) >= max(2, int(pick_count) - 1):
+        return (
+            "Hot ticket.",
+            "Enough of your numbers land to turn the ticket into a real hit.",
+        )
+    return (
+        "Small return.",
+        "A couple of your spots sneak through for a modest keno payback.",
+    )
+
+
+def _casino_keno_draw(session):
+    current = _casino_keno_normalize_session(session)
+    if not current:
+        return None
+    picks = tuple(int(number) for number in list(current.get("picks", ()) or ()))
+    if not picks:
+        return None
+
+    draw_rng = random.Random(f"{current['seed_token']}:keno")
+    drawn_numbers = tuple(sorted(
+        int(number)
+        for number in draw_rng.sample(range(1, CASINO_KENO_NUMBER_COUNT + 1), CASINO_KENO_DRAW_COUNT)
+    ))
+    drawn_set = set(drawn_numbers)
+    hit_numbers = tuple(number for number in picks if number in drawn_set)
+    pick_count = len(picks)
+    hit_count = len(hit_numbers)
+    payout_mult = int(CASINO_KENO_PAYOUT_MULTIPLIERS.get(pick_count, {}).get(hit_count, 0))
+    payout = int(max(0, payout_mult) * int(current.get("wager", 0)))
+    headline, detail = _casino_keno_outcome_text(pick_count, hit_count, payout_mult)
+
+    return {
+        "service": "keno",
+        "wager": int(current["wager"]),
+        "stake": int(current["stake"]),
+        "payout": int(payout),
+        "outcome_key": "pay" if payout > 0 else "blank",
+        "headline": headline,
+        "detail": detail,
+        "summary": (
+            f"Ticket {' '.join(f'{number:02d}' for number in picks)} catches "
+            f"{hit_count} of {pick_count}. {headline}"
+        ),
+        "result_lines": [
+            f"Ticket: {' '.join(f'{number:02d}' for number in picks)}",
+            f"Draw: {' '.join(f'{number:02d}' for number in drawn_numbers)}",
+            (
+                f"Hits: {' '.join(f'{number:02d}' for number in hit_numbers)} "
+                f"({hit_count}/{pick_count})."
+                if hit_numbers
+                else f"Hits: none (0/{pick_count})."
+            ),
+            (
+                f"Pay table: x{payout_mult} on {hit_count} hit{'s' if hit_count != 1 else ''}."
+                if payout_mult > 0
+                else "Pay table: no return on this miss."
+            ),
+            detail,
+        ],
+        "picked_numbers": picks,
+        "drawn_numbers": drawn_numbers,
+        "hit_numbers": hit_numbers,
+        "pick_count": int(pick_count),
+        "hit_count": int(hit_count),
+        "payout_mult": int(payout_mult),
+        "social_gain": _casino_social_gain("keno", f"{current['seed_token']}:{pick_count}:{hit_count}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_roulette_normalize_session(session):
+    if not isinstance(session, dict):
+        return None
+    view = str(session.get("view", "board") or "board").strip().lower()
+    if view not in {"board", "numbers"}:
+        view = "board"
+    return {
+        "service": "roulette",
+        "seed_token": str(session.get("seed_token", "")).strip(),
+        "wager": int(session.get("wager", 0)),
+        "stake": int(session.get("stake", session.get("wager", 0))),
+        "view": view,
+        "property_id": session.get("property_id"),
+        "property_name": str(session.get("property_name", "")).strip(),
+    }
+
+
+def _casino_roulette_start(seed_token, wager):
+    return {
+        "service": "roulette",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": int(wager),
+        "view": "board",
+    }
+
+
+def _casino_roulette_color(number):
+    try:
+        pocket = int(number)
+    except (TypeError, ValueError):
+        pocket = 0
+    if pocket == 0:
+        return "green"
+    return "red" if pocket in CASINO_ROULETTE_RED_NUMBERS else "black"
+
+
+def _casino_roulette_bet_label(bet_kind, bet_value=None):
+    kind = str(bet_kind or "").strip().lower()
+    if kind == "straight":
+        try:
+            number = int(bet_value)
+        except (TypeError, ValueError):
+            number = 0
+        return f"Straight {number:02d}"
+    if kind == "color":
+        value = str(bet_value or "").strip().lower()
+        return value.title() or "Color"
+    if kind == "parity":
+        value = str(bet_value or "").strip().lower()
+        return "Odd" if value == "odd" else "Even"
+    if kind == "range":
+        value = str(bet_value or "").strip().lower()
+        return "1-18" if value == "low" else "19-36"
+    if kind == "dozen":
+        try:
+            dozen = int(bet_value)
+        except (TypeError, ValueError):
+            dozen = 1
+        if dozen == 2:
+            return "2nd Dozen (13-24)"
+        if dozen == 3:
+            return "3rd Dozen (25-36)"
+        return "1st Dozen (1-12)"
+    if kind == "column":
+        try:
+            column = int(bet_value)
+        except (TypeError, ValueError):
+            column = 1
+        return f"Column {max(1, min(3, column))}"
+    return "Roulette Bet"
+
+
+def _casino_roulette_payout_multiplier(bet_kind):
+    kind = str(bet_kind or "").strip().lower()
+    if kind == "straight":
+        return 36
+    if kind in {"dozen", "column"}:
+        return 3
+    return 2
+
+
+def _casino_roulette_bet_hits(spin_number, bet_kind, bet_value=None):
+    kind = str(bet_kind or "").strip().lower()
+    pocket = int(spin_number)
+    if kind == "straight":
+        try:
+            return pocket == int(bet_value)
+        except (TypeError, ValueError):
+            return False
+    if pocket == 0:
+        return False
+    if kind == "color":
+        return _casino_roulette_color(pocket) == str(bet_value or "").strip().lower()
+    if kind == "parity":
+        value = str(bet_value or "").strip().lower()
+        return (pocket % 2 == 1) if value == "odd" else (pocket % 2 == 0)
+    if kind == "range":
+        value = str(bet_value or "").strip().lower()
+        if value == "low":
+            return 1 <= pocket <= 18
+        return 19 <= pocket <= CASINO_ROULETTE_NUMBER_MAX
+    if kind == "dozen":
+        try:
+            dozen = int(bet_value)
+        except (TypeError, ValueError):
+            return False
+        lo = ((dozen - 1) * 12) + 1
+        hi = min(CASINO_ROULETTE_NUMBER_MAX, lo + 11)
+        return lo <= pocket <= hi
+    if kind == "column":
+        try:
+            column = int(bet_value)
+        except (TypeError, ValueError):
+            return False
+        return ((pocket - 1) % 3) + 1 == max(1, min(3, column))
+    return False
+
+
+def _casino_roulette_resolve(session, bet_kind, bet_value=None):
+    current = _casino_roulette_normalize_session(session)
+    if not current:
+        return None
+
+    kind = str(bet_kind or "").strip().lower()
+    label = _casino_roulette_bet_label(kind, bet_value)
+    spin_rng = random.Random(f"{current['seed_token']}:roulette")
+    spin_number = spin_rng.randint(0, CASINO_ROULETTE_NUMBER_MAX)
+    spin_color = _casino_roulette_color(spin_number)
+    hit = _casino_roulette_bet_hits(spin_number, kind, bet_value)
+    payout_mult = _casino_roulette_payout_multiplier(kind) if hit else 0
+    payout = int(max(0, payout_mult) * int(current.get("wager", 0)))
+
+    if hit and kind == "straight":
+        headline = "Straight-up hit."
+        detail = "The ball dives straight into your pocket and the croupier builds a towering payout."
+        outcome_key = "straight"
+    elif hit and kind in {"dozen", "column"}:
+        headline = "Section hit."
+        detail = "Your section covers the winning pocket and the layout pays 2 to 1."
+        outcome_key = kind
+    elif hit:
+        headline = "Even-money hit."
+        detail = "Your outside bet catches the winner and the table pays even money."
+        outcome_key = kind
+    elif spin_number == 0 and kind != "straight":
+        headline = "Zero sweeps the board."
+        detail = "The ball settles on 0 green and wipes out the outside action."
+        outcome_key = "zero"
+    else:
+        headline = "No hit."
+        detail = "The ball lands away from your mark and the house keeps the chip."
+        outcome_key = "miss"
+
+    return {
+        "service": "roulette",
+        "wager": int(current["wager"]),
+        "stake": int(current["stake"]),
+        "payout": int(payout),
+        "outcome_key": outcome_key,
+        "headline": headline,
+        "detail": detail,
+        "summary": f"Spin {spin_number:02d} {spin_color}. Bet {label}. {headline}",
+        "result_lines": [
+            f"Spin: {spin_number:02d} {spin_color.title()}",
+            f"Bet: {label}",
+            (
+                f"Payout: x{payout_mult} gross return."
+                if payout_mult > 0
+                else "Payout: no return on this spin."
+            ),
+            detail,
+        ],
+        "spin_number": int(spin_number),
+        "spin_color": str(spin_color),
+        "bet_kind": kind,
+        "bet_value": bet_value,
+        "bet_label": label,
+        "payout_mult": int(payout_mult),
+        "social_gain": _casino_social_gain("roulette", f"{current['seed_token']}:{kind}:{spin_number}:{outcome_key}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_craps_normalize_session(session):
+    if not isinstance(session, dict):
+        return None
+    view = str(session.get("view", "layout") or "layout").strip().lower()
+    if view not in {"layout", "pass_odds", "dont_pass_odds", "place", "hardways", "props"}:
+        view = "layout"
+    return {
+        "service": "craps",
+        "seed_token": str(session.get("seed_token", "")).strip(),
+        "wager": int(session.get("wager", 0)),
+        "stake": int(session.get("stake", session.get("wager", 0))),
+        "view": view,
+        "property_id": session.get("property_id"),
+        "property_name": str(session.get("property_name", "")).strip(),
+    }
+
+
+def _casino_craps_start(seed_token, wager):
+    return {
+        "service": "craps",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": int(wager),
+        "view": "layout",
+    }
+
+
+def _casino_craps_bet_label(bet_kind, bet_value=None):
+    kind = str(bet_kind or "").strip().lower()
+    if kind == "pass_odds":
+        try:
+            mult = int(bet_value)
+        except (TypeError, ValueError):
+            mult = 1
+        return f"Pass Line + {max(1, mult)}x Odds"
+    if kind == "dont_pass":
+        return "Don't Pass"
+    if kind == "dont_pass_odds":
+        try:
+            mult = int(bet_value)
+        except (TypeError, ValueError):
+            mult = 1
+        return f"Don't Pass + {max(1, mult)}x Odds"
+    if kind == "field":
+        return "Field"
+    if kind == "place":
+        try:
+            number = int(bet_value)
+        except (TypeError, ValueError):
+            number = 0
+        return f"Place {number}"
+    if kind == "hardway":
+        try:
+            number = int(bet_value)
+        except (TypeError, ValueError):
+            number = 0
+        return f"Hard {number}"
+    if kind == "prop":
+        value = str(bet_value or "").strip().lower()
+        labels = {
+            "2": "Snake Eyes (2)",
+            "3": "Ace-Deuce (3)",
+            "11": "Yo (11)",
+            "12": "Boxcars (12)",
+            "any_craps": "Any Craps",
+            "any_seven": "Any Seven",
+        }
+        return labels.get(value, "Proposition Bet")
+    return "Pass Line"
+
+
+def _casino_craps_roll_pair(rng):
+    die_one = rng.randint(1, 6)
+    die_two = rng.randint(1, 6)
+    return die_one, die_two, die_one + die_two
+
+
+def _casino_craps_roll_text(roll):
+    die_one = int(roll.get("die_one", 0))
+    die_two = int(roll.get("die_two", 0))
+    total = int(roll.get("total", die_one + die_two))
+    return f"{die_one}+{die_two}={total}"
+
+
+def _casino_craps_profit_ratio(stake, numerator, denominator):
+    stake = max(0, int(stake))
+    denominator = max(1, int(denominator))
+    return int(round(float(stake) * float(int(numerator)) / float(denominator)))
+
+
+def _casino_craps_odds_profit(point_number, odds_stake, *, lay=False):
+    point = int(point_number)
+    if point in {4, 10}:
+        ratio = (1, 2) if lay else (2, 1)
+    elif point in {5, 9}:
+        ratio = (2, 3) if lay else (3, 2)
+    else:
+        ratio = (5, 6) if lay else (6, 5)
+    return _casino_craps_profit_ratio(odds_stake, ratio[0], ratio[1])
+
+
+def _casino_craps_place_profit(number, stake):
+    number = int(number)
+    ratios = {
+        4: (9, 5),
+        5: (7, 5),
+        6: (7, 6),
+        8: (7, 6),
+        9: (7, 5),
+        10: (9, 5),
+    }
+    ratio = ratios.get(number)
+    if not ratio:
+        return 0
+    return _casino_craps_profit_ratio(stake, ratio[0], ratio[1])
+
+
+def _casino_craps_resolve(session, bet_kind, bet_value=None):
+    current = _casino_craps_normalize_session(session)
+    if not current:
+        return None
+
+    kind = str(bet_kind or "").strip().lower()
+    if kind not in {"pass", "dont_pass", "field", "pass_odds", "dont_pass_odds", "place", "hardway", "prop"}:
+        return None
+
+    roll_rng = random.Random(f"{current['seed_token']}:craps")
+    rolls = []
+
+    def take_roll():
+        die_one, die_two, total = _casino_craps_roll_pair(roll_rng)
+        roll = {
+            "die_one": int(die_one),
+            "die_two": int(die_two),
+            "total": int(total),
+        }
+        rolls.append(roll)
+        return roll
+
+    bet_label = _casino_craps_bet_label(kind, bet_value)
+    wager = int(current.get("wager", 0))
+    stake = int(current.get("stake", wager))
+    odds_stake = max(0, stake - wager)
+    point_number = 0
+    payout = 0
+    payout_mult = 0
+    outcome_key = "miss"
+    headline = "No hit."
+    detail = "The table turns against you and the house keeps the chip."
+    lines = [f"Bet: {bet_label}"]
+
+    if kind in {"pass", "dont_pass", "field", "pass_odds", "dont_pass_odds"}:
+        come_out = take_roll()
+        come_out_total = int(come_out["total"])
+        lines.append(f"Come-out: {_casino_craps_roll_text(come_out)}")
+
+        if kind == "field":
+            if come_out_total in {2, 12}:
+                payout_mult = 3
+                payout = int(payout_mult * wager)
+                outcome_key = "field_double"
+                headline = "Field cracks loud."
+                detail = "The dice hit the rare edge of the field and the box pays double."
+            elif come_out_total in {3, 4, 9, 10, 11}:
+                payout_mult = 2
+                payout = int(payout_mult * wager)
+                outcome_key = "field_win"
+                headline = "Field hit."
+                detail = "The roll lands inside the field and the table pays even money."
+            else:
+                outcome_key = "field_miss"
+                headline = "Field miss."
+                detail = "The roll lands in the dead middle and the field bet goes dark."
+            lines.append("Field pays even on 3, 4, 9, 10, and 11; 2 and 12 pay double.")
+        else:
+            pass_side = kind in {"pass", "pass_odds"}
+            odds_kind = kind in {"pass_odds", "dont_pass_odds"}
+            if odds_kind:
+                try:
+                    odds_mult = max(1, int(bet_value))
+                except (TypeError, ValueError):
+                    odds_mult = 1
+                required_odds = wager * odds_mult
+                if odds_stake < required_odds:
+                    return None
+                odds_stake = required_odds
+                lines.append(
+                    f"Odds: {odds_mult}x behind the line ({_credit_amount_label(odds_stake)} reserved)."
+                )
+                lines.append("True-odds pays are rounded to the nearest credit when the ratio lands off-grid.")
+
+            if pass_side and come_out_total in {7, 11}:
+                payout = int(wager * 2) + int(odds_stake)
+                outcome_key = "pass_natural_odds" if odds_kind else "pass_natural"
+                headline = "Natural winner."
+                detail = (
+                    "Seven or eleven on the come-out pays the pass line, and any reserved odds chips come right back."
+                    if odds_kind
+                    else "Seven or eleven on the come-out and the pass line pays instantly."
+                )
+            elif pass_side and come_out_total in {2, 3, 12}:
+                payout = int(odds_stake)
+                outcome_key = "pass_craps_odds" if odds_kind else "pass_craps"
+                headline = "Craps on the come-out."
+                detail = (
+                    "The shooter throws craps, so the pass line loses and the reserved odds chips are returned untouched."
+                    if odds_kind
+                    else "The shooter throws craps and the pass line loses before a point is set."
+                )
+            elif (not pass_side) and come_out_total in {2, 3}:
+                payout = int(wager * 2) + int(odds_stake)
+                outcome_key = "dont_pass_win_odds" if odds_kind else "dont_pass_win"
+                headline = "Don't pass connects."
+                detail = (
+                    "The shooter opens with craps, so the don't pass line wins and any reserved odds come back untouched."
+                    if odds_kind
+                    else "The shooter opens with craps and the don't pass side gets paid."
+                )
+            elif (not pass_side) and come_out_total in {7, 11}:
+                payout = int(odds_stake)
+                outcome_key = "dont_pass_lose_odds" if odds_kind else "dont_pass_lose"
+                headline = "Natural against you."
+                detail = (
+                    "Seven or eleven on the come-out burns the don't pass line, but the reserved odds chips come back."
+                    if odds_kind
+                    else "Seven or eleven on the come-out burns the don't pass bet."
+                )
+            elif (not pass_side) and come_out_total == 12:
+                payout = int(wager) + int(odds_stake)
+                outcome_key = "dont_pass_push_odds" if odds_kind else "dont_pass_push"
+                headline = "Bar twelve push."
+                detail = (
+                    "Twelve shows on the come-out, so the don't pass line pushes and the reserved odds chips are returned."
+                    if odds_kind
+                    else "Twelve shows on the come-out, so the don't pass bet pushes."
+                )
+            else:
+                point_number = int(come_out_total)
+                lines.append(f"Point: {point_number}")
+                for _ in range(CASINO_CRAPS_MAX_POINT_ROLLS):
+                    roll = take_roll()
+                    total = int(roll["total"])
+                    if pass_side and total == point_number:
+                        payout = int(wager * 2)
+                        if odds_kind and odds_stake > 0:
+                            odds_profit = _casino_craps_odds_profit(point_number, odds_stake, lay=False)
+                            payout += int(odds_stake + odds_profit)
+                            outcome_key = "pass_point_odds"
+                            headline = "Point made with odds."
+                            detail = "The shooter hits the point, so both the line and the true-odds bet get paid."
+                        else:
+                            outcome_key = "pass_point"
+                            headline = "Point made."
+                            detail = "The shooter hits the point before sevening out and the pass line gets paid."
+                        break
+                    if total == 7:
+                        if pass_side:
+                            outcome_key = "seven_out_odds" if odds_kind else "seven_out"
+                            headline = "Seven out."
+                            detail = (
+                                "A seven shows before the point comes back, so both the line and odds fall."
+                                if odds_kind
+                                else "A seven shows before the point comes back and the pass line goes down."
+                            )
+                        else:
+                            payout = int(wager * 2)
+                            if odds_kind and odds_stake > 0:
+                                odds_profit = _casino_craps_odds_profit(point_number, odds_stake, lay=True)
+                                payout += int(odds_stake + odds_profit)
+                                outcome_key = "dont_pass_seven_odds"
+                                headline = "Seven out pays the dark side."
+                                detail = "The shooter sevens out before the point returns, so the don't pass line and odds both cash."
+                            else:
+                                outcome_key = "dont_pass_seven"
+                                headline = "Seven out pays."
+                                detail = "The shooter sevens out before the point returns and the don't pass side wins."
+                        break
+                    if (not pass_side) and total == point_number:
+                        outcome_key = "dont_pass_point_odds" if odds_kind else "dont_pass_point"
+                        headline = "Point repeats."
+                        detail = (
+                            "The point comes back first, so the don't pass line and odds both lose."
+                            if odds_kind
+                            else "The point comes back first, so the don't pass bet loses."
+                        )
+                        break
+                else:
+                    return None
+                lines.append("After point: " + " -> ".join(_casino_craps_roll_text(roll) for roll in rolls[1:]))
+    elif kind == "place":
+        try:
+            target_number = int(bet_value)
+        except (TypeError, ValueError):
+            target_number = 0
+        if target_number not in {4, 5, 6, 8, 9, 10}:
+            return None
+        for _ in range(CASINO_CRAPS_MAX_POINT_ROLLS):
+            roll = take_roll()
+            total = int(roll["total"])
+            if total == target_number:
+                profit = _casino_craps_place_profit(target_number, wager)
+                payout = int(wager + profit)
+                outcome_key = f"place_{target_number}_hit"
+                headline = "Place number hits."
+                detail = f"Your place {target_number} lands before seven, so the box pays the bet."
+                break
+            if total == 7:
+                outcome_key = "place_seven_out"
+                headline = "Seven sweeps the place bet."
+                detail = "A seven shows before your number and the place chip is gone."
+                break
+        else:
+            return None
+        lines.append("Rolls: " + " -> ".join(_casino_craps_roll_text(roll) for roll in rolls))
+        lines.append("Place pays 9:5 on 4/10, 7:5 on 5/9, and 7:6 on 6/8, rounded to the nearest credit.")
+    elif kind == "hardway":
+        try:
+            target_number = int(bet_value)
+        except (TypeError, ValueError):
+            target_number = 0
+        if target_number not in {4, 6, 8, 10}:
+            return None
+        target_face = target_number // 2
+        for _ in range(CASINO_CRAPS_MAX_POINT_ROLLS):
+            roll = take_roll()
+            total = int(roll["total"])
+            die_one = int(roll["die_one"])
+            die_two = int(roll["die_two"])
+            if total == 7:
+                outcome_key = "hardway_seven_out"
+                headline = "Seven out kills the hardway."
+                detail = "A seven shows before the doubles arrive, and the hardway chip disappears."
+                break
+            if total == target_number and die_one == target_face and die_two == target_face:
+                payout_mult = 10 if target_number in {6, 8} else 8
+                payout = int(wager * payout_mult)
+                outcome_key = f"hard_{target_number}_hit"
+                headline = "Hardway lands."
+                detail = f"The dice pair up on hard {target_number} before an easy way or seven shows."
+                break
+            if total == target_number:
+                outcome_key = f"easy_{target_number}"
+                headline = "Easy way breaks it."
+                detail = f"The number shows the easy way before the doubles, so the hardway loses."
+                break
+        else:
+            return None
+        lines.append("Rolls: " + " -> ".join(_casino_craps_roll_text(roll) for roll in rolls))
+        lines.append("Hard 4/10 pays 7:1; hard 6/8 pays 9:1.")
+    else:
+        value = str(bet_value or "").strip().lower()
+        prop_totals = {
+            "2": {2},
+            "3": {3},
+            "11": {11},
+            "12": {12},
+            "any_craps": {2, 3, 12},
+            "any_seven": {7},
+        }
+        gross_payouts = {
+            "2": 31,
+            "3": 16,
+            "11": 16,
+            "12": 31,
+            "any_craps": 8,
+            "any_seven": 5,
+        }
+        winning_totals = prop_totals.get(value)
+        if not winning_totals:
+            return None
+        roll = take_roll()
+        total = int(roll["total"])
+        lines.append(f"Roll: {_casino_craps_roll_text(roll)}")
+        if total in winning_totals:
+            payout_mult = int(gross_payouts.get(value, 0))
+            payout = int(wager * payout_mult)
+            outcome_key = f"prop_{value}_hit"
+            headline = "Center action hits."
+            detail = "The one-roll proposition lands clean and the center of the table pays loud."
+        else:
+            outcome_key = f"prop_{value}_miss"
+            headline = "Prop misses."
+            detail = "The one-roll shot misses and the center action is gone."
+
+    roll_totals = tuple(int(roll.get("total", 0)) for roll in rolls)
+    roll_pairs = tuple((int(roll.get("die_one", 0)), int(roll.get("die_two", 0))) for roll in rolls)
+    result_lines = list(lines)
+    if payout_mult > 0:
+        result_lines.append(f"Payout: x{payout_mult} gross return.")
+    elif payout > 0:
+        result_lines.append(f"Payout: {_credit_amount_label(payout)} returned.")
+    else:
+        result_lines.append("Payout: no return on this hand.")
+    result_lines.append(detail)
+
+    return {
+        "service": "craps",
+        "wager": int(wager),
+        "stake": int(stake),
+        "payout": int(payout),
+        "outcome_key": outcome_key,
+        "headline": headline,
+        "detail": detail,
+        "summary": (
+            f"{bet_label}"
+            + (
+                f" with come-out {roll_totals[0]}"
+                if roll_totals and kind in {"pass", "dont_pass", "field", "pass_odds", "dont_pass_odds"}
+                else ""
+            )
+            + (f", point {point_number}" if point_number > 0 else "")
+            + f". {headline}"
+        ),
+        "result_lines": result_lines,
+        "bet_kind": kind,
+        "bet_value": bet_value,
+        "bet_label": bet_label,
+        "come_out_total": int(roll_totals[0]) if roll_totals else 0,
+        "point_number": int(point_number),
+        "roll_totals": roll_totals,
+        "roll_pairs": roll_pairs,
+        "payout_mult": int(payout_mult),
+        "odds_stake": int(odds_stake),
+        "social_gain": _casino_social_gain("craps", f"{current['seed_token']}:{kind}:{bet_value}:{outcome_key}:{point_number}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_baccarat_normalize_session(session):
+    if not isinstance(session, dict):
+        return None
+    player_cards = [
+        str(card).strip().upper()
+        for card in list(session.get("player_cards", ()) or ())[:3]
+        if str(card).strip()
+    ]
+    banker_cards = [
+        str(card).strip().upper()
+        for card in list(session.get("banker_cards", ()) or ())[:3]
+        if str(card).strip()
+    ]
+    return {
+        "service": "baccarat",
+        "seed_token": str(session.get("seed_token", "")).strip(),
+        "wager": int(session.get("wager", 0)),
+        "stake": int(session.get("stake", session.get("wager", 0))),
+        "deck": list(session.get("deck", ()) or ()),
+        "deck_index": int(session.get("deck_index", 0)),
+        "player_cards": player_cards,
+        "banker_cards": banker_cards,
+        "property_id": session.get("property_id"),
+        "property_name": str(session.get("property_name", "")).strip(),
+    }
+
+
+def _casino_baccarat_start(seed_token, wager):
+    deck = _casino_shuffled_deck(seed_token)
+    return {
+        "service": "baccarat",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": int(wager),
+        "deck": list(deck),
+        "deck_index": 4,
+        "player_cards": [deck[0], deck[2]],
+        "banker_cards": [deck[1], deck[3]],
+    }
+
+
+def _casino_baccarat_card_value(card):
+    rank = str(card or "??").strip().upper()[:1]
+    if rank == "A":
+        return 1
+    if rank in {"T", "J", "Q", "K"}:
+        return 0
+    try:
+        return int(rank)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _casino_baccarat_total(cards):
+    return sum(_casino_baccarat_card_value(card) for card in list(cards or ())) % 10
+
+
+def _casino_baccarat_should_banker_draw(banker_total, player_third_card):
+    total = int(banker_total)
+    if total <= 2:
+        return True
+    if total >= 7:
+        return False
+
+    player_value = _casino_baccarat_card_value(player_third_card)
+    if total == 3:
+        return player_value != 8
+    if total == 4:
+        return 2 <= player_value <= 7
+    if total == 5:
+        return 4 <= player_value <= 7
+    if total == 6:
+        return 6 <= player_value <= 7
+    return False
+
+
+def _casino_baccarat_bet_label(bet_side):
+    side = str(bet_side or "").strip().lower()
+    if side == "banker":
+        return "Banker"
+    if side == "tie":
+        return "Tie"
+    return "Player"
+
+
+def _casino_baccarat_payout(wager, winning_side, bet_side):
+    wager = max(0, int(wager))
+    winner = str(winning_side or "").strip().lower()
+    side = str(bet_side or "").strip().lower()
+    if winner != side:
+        return 0, 0, ""
+    if side == "player":
+        return wager * 2, 0, "Player pays even money."
+    if side == "banker":
+        commission = max(0, int(round(float(wager) * 0.05)))
+        return max(0, (wager * 2) - commission), commission, "Banker pays even money minus the 5% commission."
+    if side == "tie":
+        return wager * 9, 0, "Tie pays 8 to 1 plus the posted wager back."
+    return 0, 0, ""
+
+
+def _casino_baccarat_resolve(session, bet_side):
+    current = _casino_baccarat_normalize_session(session)
+    if not current:
+        return None
+
+    side = str(bet_side or "").strip().lower()
+    if side not in {"player", "banker", "tie"}:
+        return None
+
+    deck = list(current.get("deck", ()) or ())
+    deck_index = int(current.get("deck_index", 0))
+    player_cards = list(current.get("player_cards", ()) or ())
+    banker_cards = list(current.get("banker_cards", ()) or ())
+    if len(player_cards) < 2 or len(banker_cards) < 2:
+        return None
+
+    player_total = _casino_baccarat_total(player_cards)
+    banker_total = _casino_baccarat_total(banker_cards)
+    player_natural = player_total >= 8
+    banker_natural = banker_total >= 8
+    player_third_card = ""
+    banker_third_card = ""
+
+    if not player_natural and not banker_natural:
+        if player_total <= 5 and deck_index < len(deck):
+            player_third_card = str(deck[deck_index]).strip().upper()
+            deck_index += 1
+            if player_third_card:
+                player_cards.append(player_third_card)
+                player_total = _casino_baccarat_total(player_cards)
+
+        if player_third_card:
+            if _casino_baccarat_should_banker_draw(banker_total, player_third_card) and deck_index < len(deck):
+                banker_third_card = str(deck[deck_index]).strip().upper()
+                deck_index += 1
+                if banker_third_card:
+                    banker_cards.append(banker_third_card)
+                    banker_total = _casino_baccarat_total(banker_cards)
+        elif banker_total <= 5 and deck_index < len(deck):
+            banker_third_card = str(deck[deck_index]).strip().upper()
+            deck_index += 1
+            if banker_third_card:
+                banker_cards.append(banker_third_card)
+                banker_total = _casino_baccarat_total(banker_cards)
+
+    if player_total > banker_total:
+        winning_side = "player"
+    elif banker_total > player_total:
+        winning_side = "banker"
+    else:
+        winning_side = "tie"
+
+    payout, commission, payout_line = _casino_baccarat_payout(current.get("wager", 0), winning_side, side)
+    bet_label = _casino_baccarat_bet_label(side)
+    winner_label = _casino_baccarat_bet_label(winning_side)
+
+    if winning_side == side and side == "banker":
+        headline = "Banker hand wins."
+        detail = "The banker side edges ahead and the payout clears after commission."
+        outcome_key = "banker_win"
+    elif winning_side == side and side == "player":
+        headline = "Player hand wins."
+        detail = "Player finishes with the higher point total and the bet pays even money."
+        outcome_key = "player_win"
+    elif winning_side == side and side == "tie":
+        headline = "Tie hits."
+        detail = "Both hands stop on the same point total and the tie bet pays the premium."
+        outcome_key = "tie_hit"
+    elif winning_side == "tie":
+        headline = "Table lands on a tie."
+        detail = "The hands deadlock, so the player and banker sides both go down."
+        outcome_key = "tie"
+    else:
+        headline = "Wrong side."
+        detail = f"The {winner_label.lower()} hand takes the point and the house keeps the wager."
+        outcome_key = f"{winning_side}_miss"
+
+    result_lines = [
+        f"Bet: {bet_label}",
+        f"Player: {_casino_cards_text(player_cards)} ({player_total})",
+        f"Banker: {_casino_cards_text(banker_cards)} ({banker_total})",
+        f"Winner: {winner_label}",
+        payout_line if payout_line else "Payout: no return on this hand.",
+    ]
+    if player_natural or banker_natural:
+        result_lines.append("Natural hand: the third-card rules never come into play.")
+    elif player_third_card or banker_third_card:
+        draw_bits = []
+        if player_third_card:
+            draw_bits.append(f"Player draws {_casino_card_label(player_third_card)}.")
+        if banker_third_card:
+            draw_bits.append(f"Banker draws {_casino_card_label(banker_third_card)}.")
+        result_lines.append(" ".join(draw_bits))
+    else:
+        result_lines.append("Both hands stand on the opening two cards.")
+    if commission > 0:
+        result_lines.append(f"Commission: {commission}c comes off the banker win.")
+    result_lines.append(detail)
+
+    return {
+        "service": "baccarat",
+        "wager": int(current["wager"]),
+        "stake": int(current["stake"]),
+        "payout": int(payout),
+        "outcome_key": outcome_key,
+        "headline": headline,
+        "detail": detail,
+        "summary": f"Bet {bet_label}. Player {player_total}, banker {banker_total}. {headline}",
+        "result_lines": result_lines,
+        "bet_side": side,
+        "winning_side": winning_side,
+        "player_cards": tuple(player_cards),
+        "banker_cards": tuple(banker_cards),
+        "player_total": int(player_total),
+        "banker_total": int(banker_total),
+        "player_natural": bool(player_natural),
+        "banker_natural": bool(banker_natural),
+        "player_third_card": player_third_card,
+        "banker_third_card": banker_third_card,
+        "commission": int(commission),
+        "social_gain": _casino_social_gain("baccarat", f"{current['seed_token']}:{side}:{winning_side}"),
+        "stake_already_paid": True,
+    }
+
+
+def _casino_three_card_straight_high(ranks):
+    unique = sorted({int(rank) for rank in list(ranks or ()) if int(rank) > 0})
+    if len(unique) != 3:
+        return 0
+    if unique == [2, 3, 14]:
+        return 3
+    if unique[0] + 1 == unique[1] and unique[1] + 1 == unique[2]:
+        return unique[2]
+    return 0
+
+
+def _casino_three_card_poker_hand_name(score):
+    category = int(score[0]) if score else 0
+    primary = int(score[1]) if len(score) > 1 else 0
+    if category == 5:
+        return f"{_casino_rank_name(primary)}-high straight flush"
+    if category == 4:
+        return f"three {_casino_rank_name(primary)}s"
+    if category == 3:
+        return f"{_casino_rank_name(primary)}-high straight"
+    if category == 2:
+        return f"{_casino_rank_name(primary)}-high flush"
+    if category == 1:
+        return f"pair of {_casino_rank_name(primary)}s"
+    return f"{_casino_rank_name(primary)}-high"
+
+
+def _casino_evaluate_three_card_poker(cards):
+    ranks = sorted((_casino_card_rank(card) for card in list(cards or ())), reverse=True)
+    suits = [_casino_card_suit(card) for card in list(cards or ())]
+    counts = Counter(ranks)
+    ordered_counts = sorted(counts.items(), key=lambda item: (item[1], item[0]), reverse=True)
+    flush = len(set(suits)) == 1 if suits else False
+    straight_high = _casino_three_card_straight_high(ranks)
+
+    if flush and straight_high:
+        return (5, straight_high)
+    if ordered_counts and ordered_counts[0][1] == 3:
+        return (4, ordered_counts[0][0])
+    if straight_high:
+        return (3, straight_high)
+    if flush:
+        return tuple([2] + sorted(ranks, reverse=True))
+    if ordered_counts and ordered_counts[0][1] == 2:
+        pair_rank = ordered_counts[0][0]
+        kicker = max(rank for rank in ranks if rank != pair_rank)
+        return (1, pair_rank, kicker)
+    return tuple([0] + sorted(ranks, reverse=True))
+
+
+def _casino_three_card_poker_dealer_qualifies(score):
+    if not score:
+        return False
+    category = int(score[0])
+    if category >= 1:
+        return True
+    return int(score[1]) >= 12 if len(score) > 1 else False
+
+
+def _casino_three_card_poker_ante_bonus_multiplier(score):
+    if not score:
+        return 0
+    return int(CASINO_THREE_CARD_POKER_ANTE_BONUS_MULTIPLIERS.get(int(score[0]), 0))
+
+
+def _casino_three_card_poker_start(seed_token, wager):
+    deck = _casino_shuffled_deck(seed_token)
+    return {
+        "service": "three_card_poker",
+        "seed_token": str(seed_token),
+        "wager": int(wager),
+        "stake": int(wager),
+        "player_cards": [deck[0], deck[2], deck[4]],
+        "dealer_cards": [deck[1], deck[3], deck[5]],
+    }
+
+
+def _casino_three_card_poker_normalize_session(session):
+    if not isinstance(session, dict):
+        return None
+    return {
+        "service": "three_card_poker",
+        "seed_token": str(session.get("seed_token", "")).strip(),
+        "wager": int(session.get("wager", 0)),
+        "stake": int(session.get("stake", session.get("wager", 0))),
+        "player_cards": [
+            str(card).strip().upper()
+            for card in list(session.get("player_cards", ()) or ())[:3]
+            if str(card).strip()
+        ],
+        "dealer_cards": [
+            str(card).strip().upper()
+            for card in list(session.get("dealer_cards", ()) or ())[:3]
+            if str(card).strip()
+        ],
+        "property_id": session.get("property_id"),
+        "property_name": str(session.get("property_name", "")).strip(),
+    }
+
+
+def _casino_three_card_poker_resolve(session, action):
+    current = _casino_three_card_poker_normalize_session(session)
+    if not current:
+        return None
+    action = str(action or "").strip().lower()
+    if action not in {"play", "fold"}:
+        return None
+
+    wager = int(current.get("wager", 0))
+    stake = int(current.get("stake", wager))
+    player_cards = list(current.get("player_cards", ()) or ())
+    dealer_cards = list(current.get("dealer_cards", ()) or ())
+    player_score = _casino_evaluate_three_card_poker(player_cards)
+    player_hand_name = _casino_three_card_poker_hand_name(player_score)
+
+    if action == "fold":
+        return {
+            "service": "three_card_poker",
+            "wager": int(wager),
+            "stake": int(stake),
+            "payout": 0,
+            "outcome_key": "fold",
+            "headline": "You fold the ante.",
+            "detail": "The hand looks thin, so you slide the ante away and let the dealer keep it.",
+            "summary": f"You fold {_casino_cards_text(player_cards)} ({player_hand_name}) and give up the ante.",
+            "result_lines": [
+                f"Your hand: {_casino_cards_text(player_cards)} ({player_hand_name})",
+                "You fold before the dealer turns the hand over.",
+            ],
+            "player_cards": tuple(player_cards),
+            "player_hand_name": str(player_hand_name),
+            "social_gain": _casino_social_gain("three_card_poker", f"{current.get('seed_token', '')}:fold"),
+            "stake_already_paid": True,
+        }
+
+    ante_stake = int(wager)
+    play_stake = max(0, int(stake) - int(ante_stake))
+    dealer_score = _casino_evaluate_three_card_poker(dealer_cards)
+    dealer_hand_name = _casino_three_card_poker_hand_name(dealer_score)
+    dealer_qualifies = _casino_three_card_poker_dealer_qualifies(dealer_score)
+    ante_bonus_mult = _casino_three_card_poker_ante_bonus_multiplier(player_score)
+    ante_bonus = int(max(0, ante_bonus_mult) * ante_stake)
+
+    if not dealer_qualifies:
+        outcome_key = "dealer_not_qualify"
+        payout = int((ante_stake * 2) + play_stake + ante_bonus)
+        headline = "Dealer doesn't qualify."
+        detail = "The dealer misses queen-high, so the ante wins and the play wager pushes."
+    elif player_score > dealer_score:
+        outcome_key = "player_win"
+        payout = int((stake * 2) + ante_bonus)
+        headline = "You beat the dealer."
+        detail = "Your three-card hand outruns the dealer, so both wagers pay even money."
+    elif player_score == dealer_score:
+        outcome_key = "push"
+        payout = int(stake + ante_bonus)
+        headline = "Push."
+        detail = "The hands tie exactly, so the ante and play both push."
+    else:
+        outcome_key = "dealer_win"
+        payout = int(ante_bonus)
+        headline = "Dealer wins."
+        detail = "The dealer turns over the better hand and sweeps the main action."
+
+    result_lines = [
+        f"You: {_casino_cards_text(player_cards)} ({player_hand_name})",
+        f"Dealer: {_casino_cards_text(dealer_cards)} ({dealer_hand_name})",
+        "Dealer qualifies." if dealer_qualifies else "Dealer does not qualify (needs queen-high or better).",
+    ]
+    if ante_bonus > 0:
+        result_lines.append(f"Ante bonus pays x{ante_bonus_mult} for your {player_hand_name}.")
+    result_lines.append(detail)
+    return {
+        "service": "three_card_poker",
+        "wager": int(wager),
+        "stake": int(stake),
+        "payout": int(payout),
+        "outcome_key": outcome_key,
+        "headline": headline,
+        "detail": detail,
+        "summary": (
+            f"You show {player_hand_name} against dealer {dealer_hand_name}. {headline}"
+        ),
+        "result_lines": result_lines,
+        "player_cards": tuple(player_cards),
+        "dealer_cards": tuple(dealer_cards),
+        "player_hand_name": str(player_hand_name),
+        "dealer_hand_name": str(dealer_hand_name),
+        "dealer_qualifies": bool(dealer_qualifies),
+        "ante_bonus": int(ante_bonus),
+        "ante_bonus_mult": int(ante_bonus_mult),
+        "social_gain": _casino_social_gain("three_card_poker", f"{current.get('seed_token', '')}:{outcome_key}"),
+        "stake_already_paid": True,
     }
 
 
@@ -1796,20 +3235,40 @@ __all__ = [
     "CASINO_GAME_SERVICE_IDS",
     "CASINO_PLINKO_LANE_COUNT",
     "_casino_apply_round_result",
+    "_casino_baccarat_normalize_session",
+    "_casino_baccarat_resolve",
+    "_casino_baccarat_start",
     "_casino_blackjack_line",
     "_casino_blackjack_total",
     "_casino_cards_text",
+    "_casino_craps_normalize_session",
+    "_casino_craps_resolve",
+    "_casino_craps_start",
     "_casino_game_profile",
     "_casino_game_title",
+    "_casino_keno_draw",
+    "_casino_keno_normalize_session",
+    "_casino_keno_start",
+    "_casino_keno_toggle_pick",
     "_casino_holdem_resolve",
     "_casino_holdem_start",
     "_casino_plinko_resolve",
+    "_casino_roulette_normalize_session",
+    "_casino_roulette_resolve",
+    "_casino_roulette_start",
     "_casino_round_seed",
     "_casino_slots_resolve",
+    "_casino_three_card_poker_normalize_session",
+    "_casino_three_card_poker_resolve",
+    "_casino_three_card_poker_start",
     "_casino_twenty_one_action_ids",
     "_casino_twenty_one_normalize_session",
     "_casino_twenty_one_resolve",
     "_casino_twenty_one_start",
+    "_casino_video_poker_draw",
+    "_casino_video_poker_normalize_session",
+    "_casino_video_poker_start",
+    "_casino_video_poker_toggle_hold",
     "_clamp",
     "_credit_amount_label",
     "_int_or_default",

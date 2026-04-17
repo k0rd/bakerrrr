@@ -24,23 +24,47 @@ from game.property_runtime import (
     site_services_for_property as _site_services_for_property,
 )
 from game.service_runtime import (
+    CASINO_KENO_DRAW_COUNT,
+    CASINO_KENO_MAX_PICKS,
+    CASINO_KENO_NUMBER_COUNT,
+    CASINO_ROULETTE_NUMBER_MAX,
     CASINO_GAME_SERVICE_IDS,
     CASINO_PLINKO_LANE_COUNT,
     _casino_apply_round_result,
+    _casino_baccarat_normalize_session,
+    _casino_baccarat_resolve,
+    _casino_baccarat_start,
     _casino_blackjack_line,
     _casino_blackjack_total,
     _casino_cards_text,
+    _casino_craps_normalize_session,
+    _casino_craps_resolve,
+    _casino_craps_start,
     _casino_game_profile,
     _casino_game_title,
+    _casino_keno_draw,
+    _casino_keno_normalize_session,
+    _casino_keno_start,
+    _casino_keno_toggle_pick,
     _casino_holdem_resolve,
     _casino_holdem_start,
     _casino_plinko_resolve,
+    _casino_roulette_normalize_session,
+    _casino_roulette_resolve,
+    _casino_roulette_start,
     _casino_round_seed,
     _casino_slots_resolve,
+    _casino_three_card_poker_normalize_session,
+    _casino_three_card_poker_resolve,
+    _casino_three_card_poker_start,
     _casino_twenty_one_action_ids,
     _casino_twenty_one_normalize_session,
     _casino_twenty_one_resolve,
     _casino_twenty_one_start,
+    _casino_video_poker_draw,
+    _casino_video_poker_normalize_session,
+    _casino_video_poker_start,
+    _casino_video_poker_toggle_hold,
     _credit_amount_label,
     _int_or_default,
     _line_text,
@@ -339,6 +363,313 @@ class ServiceMenuSystem(System):
             session=session,
         )
 
+    def _open_video_poker_table(self, prop, session):
+        session = _casino_video_poker_normalize_session(session)
+        cards = list(session.get("cards", ()) or ()) if isinstance(session, dict) else []
+        holds = list(session.get("holds", ()) or ()) if isinstance(session, dict) else []
+        held_slots = [str(idx + 1) for idx, held in enumerate(holds) if held]
+        transcript = [f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted."]
+        for idx, card in enumerate(cards):
+            marker = " [HELD]" if idx < len(holds) and holds[idx] else ""
+            transcript.append(f"{idx + 1}. {_casino_cards_text([card])}{marker}")
+        transcript.append(f"Held: {', '.join(held_slots) if held_slots else 'none'}.")
+        transcript.append("Draw replaces every card not marked held.")
+        transcript.append(f"Wallet {_credit_amount_label(self._wallet_credits())}.")
+        topics = []
+        for idx, card in enumerate(cards):
+            held = idx < len(holds) and holds[idx]
+            topics.append({
+                "id": f"video_poker:toggle:{idx}",
+                "label": f"{'Release' if held else 'Hold'} {idx + 1} ({_casino_cards_text([card])})",
+            })
+        topics.append({
+            "id": "video_poker:draw",
+            "label": "Stand Pat" if holds and all(holds) else "Draw",
+        })
+        self._open_casino_modal(
+            prop,
+            "video_poker",
+            subtitle="Choose your holds",
+            transcript=transcript,
+            topics=topics,
+            hint="Toggle any cards you want to hold, then draw once. Esc forfeits the posted stake.",
+            mode="casino:video_poker:hand",
+            session=session,
+        )
+
+    def _open_keno_table(self, prop, session, *, notice=""):
+        session = _casino_keno_normalize_session(session)
+        picks = list(session.get("picks", ()) or ()) if isinstance(session, dict) else []
+        pick_set = set(picks)
+        transcript = []
+        notice = str(notice or "").strip()
+        if notice:
+            transcript.append(notice)
+        transcript.extend([
+            f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.",
+            f"Mark up to {CASINO_KENO_MAX_PICKS} spots from 01-{CASINO_KENO_NUMBER_COUNT:02d}.",
+            (
+                f"Selected ({len(picks)}/{CASINO_KENO_MAX_PICKS}): "
+                f"{' '.join(f'{number:02d}' for number in picks)}."
+                if picks
+                else f"Selected (0/{CASINO_KENO_MAX_PICKS}): none."
+            ),
+            f"The house will draw {CASINO_KENO_DRAW_COUNT} balls.",
+            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+        ])
+        topics = [
+            {
+                "id": f"keno:toggle:{number}",
+                "label": f"[{'X' if number in pick_set else ' '}] {number:02d}",
+            }
+            for number in range(1, CASINO_KENO_NUMBER_COUNT + 1)
+        ]
+        topics.append({"id": "keno:clear", "label": "Clear Ticket"})
+        topics.append({"id": "keno:draw", "label": "Draw Ticket"})
+        self._open_casino_modal(
+            prop,
+            "keno",
+            subtitle="Mark your ticket",
+            transcript=transcript,
+            topics=topics,
+            hint="Mark up to five numbers, then draw once. Esc forfeits the posted stake.",
+            mode="casino:keno:ticket",
+            session=session,
+        )
+
+    def _open_roulette_table(self, prop, session, *, notice=""):
+        session = _casino_roulette_normalize_session(session)
+        view = str(session.get("view", "board") or "board").strip().lower() if isinstance(session, dict) else "board"
+        transcript = []
+        notice = str(notice or "").strip()
+        if notice:
+            transcript.append(notice)
+        transcript.append(f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.")
+
+        if view == "numbers":
+            transcript.extend([
+                "Straight-up board: pick one number from 00-36.",
+                "Single number bets pay 35 to 1 plus the posted chip back.",
+                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+            ])
+            topics = [
+                {"id": f"roulette:straight:{number}", "label": f"{number:02d} (x36 return)"}
+                for number in range(0, CASINO_ROULETTE_NUMBER_MAX + 1)
+            ]
+            topics.append({"id": "roulette:back", "label": "Back to Outside Bets"})
+            subtitle = "Straight-up board"
+            hint = "Pick a single number for the spin. Esc forfeits the posted stake."
+            mode = "casino:roulette:numbers"
+        else:
+            transcript.extend([
+                "Outside board: colors, parity, ranges, dozens, and columns.",
+                "Even-money bets return x2; dozens and columns return x3. Zero beats the outside board.",
+                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+            ])
+            topics = [
+                {"id": "roulette:view:numbers", "label": "Straight Up Number (35:1)"},
+                {"id": "roulette:red", "label": "Red (x2 return)"},
+                {"id": "roulette:black", "label": "Black (x2 return)"},
+                {"id": "roulette:odd", "label": "Odd (x2 return)"},
+                {"id": "roulette:even", "label": "Even (x2 return)"},
+                {"id": "roulette:low", "label": "1-18 (x2 return)"},
+                {"id": "roulette:high", "label": "19-36 (x2 return)"},
+                {"id": "roulette:dozen:1", "label": "1st Dozen 1-12 (x3 return)"},
+                {"id": "roulette:dozen:2", "label": "2nd Dozen 13-24 (x3 return)"},
+                {"id": "roulette:dozen:3", "label": "3rd Dozen 25-36 (x3 return)"},
+                {"id": "roulette:column:1", "label": "Column 1 (x3 return)"},
+                {"id": "roulette:column:2", "label": "Column 2 (x3 return)"},
+                {"id": "roulette:column:3", "label": "Column 3 (x3 return)"},
+            ]
+            subtitle = "Place your chip"
+            hint = "Choose a pocket or an outside section. Esc forfeits the posted stake."
+            mode = "casino:roulette:board"
+
+        self._open_casino_modal(
+            prop,
+            "roulette",
+            subtitle=subtitle,
+            transcript=transcript,
+            topics=topics,
+            hint=hint,
+            mode=mode,
+            session=session,
+        )
+
+    def _open_craps_table(self, prop, session, *, notice=""):
+        session = _casino_craps_normalize_session(session)
+        view = str(session.get("view", "layout") or "layout").strip().lower() if isinstance(session, dict) else "layout"
+        transcript = []
+        notice = str(notice or "").strip()
+        if notice:
+            transcript.append(notice)
+        transcript.append(f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.")
+        wager = int(session.get("wager", 0))
+
+        if view == "pass_odds":
+            transcript.extend([
+                "Back the pass line with extra odds if a point goes up.",
+                "True odds pay 2:1 on 4/10, 3:2 on 5/9, and 6:5 on 6/8.",
+                "Reserved odds chips are returned untouched when the come-out resolves before a point.",
+                "Mixed-ratio pays are rounded to the nearest credit.",
+                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+            ])
+            topics = [
+                {"id": f"craps:pass_odds:{mult}", "label": f"Pass + {mult}x Odds (+{_credit_amount_label(wager * mult)})"}
+                for mult in (1, 2, 3)
+            ]
+            topics.append({"id": "craps:back", "label": "Back to Main Layout"})
+            subtitle = "Pass odds"
+            hint = "Choose how much odds action to tuck behind the pass line. Esc forfeits the posted base chip."
+        elif view == "dont_pass_odds":
+            transcript.extend([
+                "Lay odds behind the don't pass once the point could go up.",
+                "Lay odds win 1:2 on 4/10, 2:3 on 5/9, and 5:6 on 6/8.",
+                "Reserved odds chips are returned untouched when the come-out resolves before a point.",
+                "Mixed-ratio pays are rounded to the nearest credit.",
+                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+            ])
+            topics = [
+                {"id": f"craps:dont_pass_odds:{mult}", "label": f"Don't Pass + {mult}x Odds (+{_credit_amount_label(wager * mult)})"}
+                for mult in (1, 2, 3)
+            ]
+            topics.append({"id": "craps:back", "label": "Back to Main Layout"})
+            subtitle = "Don't pass odds"
+            hint = "Choose how much lay odds to park behind the don't pass line. Esc forfeits the posted base chip."
+        elif view == "place":
+            transcript.extend([
+                "Place bets win if the chosen number lands before any 7.",
+                "4/10 pay 9:5, 5/9 pay 7:5, and 6/8 pay 7:6.",
+                "Mixed-ratio pays are rounded to the nearest credit.",
+                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+            ])
+            topics = [
+                {"id": f"craps:place:{number}", "label": f"Place {number}"}
+                for number in (4, 5, 6, 8, 9, 10)
+            ]
+            topics.append({"id": "craps:back", "label": "Back to Main Layout"})
+            subtitle = "Place bets"
+            hint = "Pick a place number and ride it against the seven. Esc forfeits the posted chip."
+        elif view == "hardways":
+            transcript.extend([
+                "Hardways need doubles before an easy way of the same number or any 7.",
+                "Hard 4/10 pay 7:1. Hard 6/8 pay 9:1.",
+                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+            ])
+            topics = [
+                {"id": f"craps:hard:{number}", "label": f"Hard {number}"}
+                for number in (4, 6, 8, 10)
+            ]
+            topics.append({"id": "craps:back", "label": "Back to Main Layout"})
+            subtitle = "Hardways"
+            hint = "Pick a hardway and sweat the doubles. Esc forfeits the posted chip."
+        elif view == "props":
+            transcript.extend([
+                "Center-table props are one-roll shots with loud payoffs.",
+                "2/12 pay 30:1, 3/11 pay 15:1, any craps pays 7:1, and any seven pays 4:1.",
+                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+            ])
+            topics = [
+                {"id": "craps:prop:2", "label": "Snake Eyes 2 (x31 return)"},
+                {"id": "craps:prop:3", "label": "Ace-Deuce 3 (x16 return)"},
+                {"id": "craps:prop:11", "label": "Yo 11 (x16 return)"},
+                {"id": "craps:prop:12", "label": "Boxcars 12 (x31 return)"},
+                {"id": "craps:prop:any_craps", "label": "Any Craps (x8 return)"},
+                {"id": "craps:prop:any_seven", "label": "Any Seven (x5 return)"},
+                {"id": "craps:back", "label": "Back to Main Layout"},
+            ]
+            subtitle = "Prop bets"
+            hint = "Take a one-roll prop shot. Esc forfeits the posted chip."
+        else:
+            transcript.extend([
+                "Choose pass line, don't pass, or field before the shooter takes the dice.",
+                "Pass line and don't pass can also be backed with odds. Place bets, hardways, and props are on side boards.",
+                "Mixed-ratio pays are rounded to the nearest credit when the math lands between whole credits.",
+                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+            ])
+            topics = [
+                {"id": "craps:pass", "label": "Pass Line"},
+                {"id": "craps:dont_pass", "label": "Don't Pass"},
+                {"id": "craps:field", "label": "Field"},
+                {"id": "craps:view:pass_odds", "label": "Pass Odds"},
+                {"id": "craps:view:dont_pass_odds", "label": "Don't Pass Odds"},
+                {"id": "craps:view:place", "label": "Place Bets"},
+                {"id": "craps:view:hardways", "label": "Hardways"},
+                {"id": "craps:view:props", "label": "Prop Bets"},
+            ]
+            subtitle = "Place your bet"
+            hint = "Pick a line bet or open a side board. Esc forfeits the posted stake."
+
+        self._open_casino_modal(
+            prop,
+            "craps",
+            subtitle=subtitle,
+            transcript=transcript,
+            topics=topics,
+            hint=hint,
+            mode=f"casino:craps:{view}",
+            session=session,
+        )
+
+    def _open_baccarat_table(self, prop, session, *, notice=""):
+        session = _casino_baccarat_normalize_session(session)
+        transcript = []
+        notice = str(notice or "").strip()
+        if notice:
+            transcript.append(notice)
+        transcript.extend([
+            f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.",
+            "Choose player, banker, or tie before the dealer opens the shoe.",
+            "Player pays even money. Banker pays 0.95 to 1 after commission. Tie pays 8 to 1.",
+            "Two cards each are dealt and the third-card rules run automatically.",
+            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+        ])
+        topics = [
+            {"id": "baccarat:player", "label": "Player (x2 return)"},
+            {"id": "baccarat:banker", "label": "Banker (x1.95 return)"},
+            {"id": "baccarat:tie", "label": "Tie (x9 return)"},
+        ]
+        self._open_casino_modal(
+            prop,
+            "baccarat",
+            subtitle="Back a side",
+            transcript=transcript,
+            topics=topics,
+            hint="Pick player, banker, or tie. Esc forfeits the posted stake.",
+            mode="casino:baccarat:layout",
+            session=session,
+        )
+
+    def _open_three_card_poker_table(self, prop, session, *, notice=""):
+        session = _casino_three_card_poker_normalize_session(session)
+        wager = int(session.get("wager", 0))
+        transcript = []
+        notice = str(notice or "").strip()
+        if notice:
+            transcript.append(notice)
+        transcript.extend([
+            f"Ante {_credit_amount_label(wager)} is posted.",
+            f"Your hand: {_casino_cards_text(session.get('player_cards', ())) }".rstrip(),
+            "Dealer: ?? ?? ??",
+            f"Play adds {_credit_amount_label(wager)} more; fold surrenders the ante.",
+            "Dealer qualifies with queen-high or better. Straight or better pays an ante bonus.",
+            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+        ])
+        topics = [
+            {"id": "three_card_poker:play", "label": f"Play {_credit_amount_label(wager)}"},
+            {"id": "three_card_poker:fold", "label": "Fold"},
+        ]
+        self._open_casino_modal(
+            prop,
+            "three_card_poker",
+            subtitle="Read the hand",
+            transcript=transcript,
+            topics=topics,
+            hint="Play or fold. Esc walks away and forfeits the ante.",
+            mode="casino:three_card_poker:hand",
+            session=session,
+        )
+
     def _start_casino_round(self, prop, service, wager):
         wager = int(wager)
         prop_name = self._casino_prop_name(prop)
@@ -359,6 +690,88 @@ class ServiceMenuSystem(System):
                 self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
                 return
             self._open_plinko_lane_menu(prop, service, wager)
+            return
+
+        if service == "video_poker":
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            session = _casino_video_poker_start(self._casino_round_seed(prop, service, wager), wager)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            self._open_video_poker_table(prop, session)
+            return
+
+        if service == "keno":
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            session = _casino_keno_start(self._casino_round_seed(prop, service, wager), wager)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            self._open_keno_table(prop, session)
+            return
+
+        if service == "roulette":
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            session = _casino_roulette_start(self._casino_round_seed(prop, service, wager), wager)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            self._open_roulette_table(prop, session)
+            return
+
+        if service == "craps":
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            session = _casino_craps_start(self._casino_round_seed(prop, service, wager), wager)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            self._open_craps_table(prop, session)
+            return
+
+        if service == "baccarat":
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            session = _casino_baccarat_start(self._casino_round_seed(prop, service, wager), wager)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            self._open_baccarat_table(prop, session)
+            return
+
+        if service == "three_card_poker":
+            needed = int(wager) * 2
+            if self._wallet_credits() < needed:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=needed, credits=self._wallet_credits(), wager=wager)
+                return
+            ok, credits = self._casino_commit_stake(wager)
+            if not ok:
+                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                return
+            session = _casino_three_card_poker_start(self._casino_round_seed(prop, service, wager), wager)
+            session.update({
+                "property_id": prop.get("id"),
+                "property_name": prop_name,
+            })
+            self._open_three_card_poker_table(prop, session)
             return
 
         if service == "twenty_one":
@@ -420,6 +833,224 @@ class ServiceMenuSystem(System):
             self._emit_casino_round(prop, service, round_result)
             return True
 
+        if service == "video_poker" and option_id.startswith("video_poker:toggle:"):
+            try:
+                card_index = int(option_id.rsplit(":", 1)[-1])
+            except (TypeError, ValueError):
+                card_index = -1
+            if card_index < 0:
+                self._present_service_result("Video Poker", ["That hold selection is not valid."], property_id=prop.get("id"))
+                return True
+            next_session = _casino_video_poker_toggle_hold(session, card_index)
+            if next_session:
+                self._open_video_poker_table(prop, next_session)
+            return True
+
+        if service == "video_poker" and option_id == "video_poker:draw":
+            round_result = _casino_video_poker_draw(session)
+            if not round_result:
+                self._present_service_result("Video Poker", ["That hand cannot be resolved cleanly right now."], property_id=prop.get("id"))
+                return True
+            self._emit_casino_round(prop, service, round_result)
+            return True
+
+        if service == "keno" and option_id.startswith("keno:toggle:"):
+            current = _casino_keno_normalize_session(session)
+            try:
+                ticket_number = int(option_id.rsplit(":", 1)[-1])
+            except (TypeError, ValueError):
+                ticket_number = -1
+            if not current or ticket_number < 1 or ticket_number > CASINO_KENO_NUMBER_COUNT:
+                self._open_keno_table(prop, current or session, notice="That number is not on the board.")
+                return True
+            picks = list(current.get("picks", ()) or ())
+            if ticket_number not in picks and len(picks) >= CASINO_KENO_MAX_PICKS:
+                self._open_keno_table(
+                    prop,
+                    current,
+                    notice=f"You can only mark {CASINO_KENO_MAX_PICKS} spots on one ticket.",
+                )
+                return True
+            next_session = _casino_keno_toggle_pick(current, ticket_number)
+            if next_session:
+                self._open_keno_table(prop, next_session)
+            return True
+
+        if service == "keno" and option_id == "keno:clear":
+            current = _casino_keno_normalize_session(session)
+            if current:
+                current["picks"] = []
+                self._open_keno_table(prop, current)
+            return True
+
+        if service == "keno" and option_id == "keno:draw":
+            current = _casino_keno_normalize_session(session)
+            if not current or not list(current.get("picks", ()) or ()):
+                self._open_keno_table(prop, current or session, notice="Mark at least one number before the draw.")
+                return True
+            round_result = _casino_keno_draw(current)
+            if not round_result:
+                self._open_keno_table(prop, current, notice="The ticket could not be resolved cleanly. Try that draw again.")
+                return True
+            self._emit_casino_round(prop, service, round_result)
+            return True
+
+        if service == "roulette" and option_id == "roulette:view:numbers":
+            current = _casino_roulette_normalize_session(session)
+            if current:
+                current["view"] = "numbers"
+                self._open_roulette_table(prop, current)
+            return True
+
+        if service == "roulette" and option_id == "roulette:back":
+            current = _casino_roulette_normalize_session(session)
+            if current:
+                current["view"] = "board"
+                self._open_roulette_table(prop, current)
+            return True
+
+        if service == "roulette":
+            current = _casino_roulette_normalize_session(session)
+            bet_kind = ""
+            bet_value = None
+            if option_id in {"roulette:red", "roulette:black"}:
+                bet_kind = "color"
+                bet_value = option_id.rsplit(":", 1)[-1]
+            elif option_id in {"roulette:odd", "roulette:even"}:
+                bet_kind = "parity"
+                bet_value = option_id.rsplit(":", 1)[-1]
+            elif option_id in {"roulette:low", "roulette:high"}:
+                bet_kind = "range"
+                bet_value = option_id.rsplit(":", 1)[-1]
+            elif option_id.startswith("roulette:dozen:"):
+                bet_kind = "dozen"
+                try:
+                    bet_value = int(option_id.rsplit(":", 1)[-1])
+                except (TypeError, ValueError):
+                    bet_value = None
+            elif option_id.startswith("roulette:column:"):
+                bet_kind = "column"
+                try:
+                    bet_value = int(option_id.rsplit(":", 1)[-1])
+                except (TypeError, ValueError):
+                    bet_value = None
+            elif option_id.startswith("roulette:straight:"):
+                bet_kind = "straight"
+                try:
+                    bet_value = int(option_id.rsplit(":", 1)[-1])
+                except (TypeError, ValueError):
+                    bet_value = None
+            if bet_kind:
+                round_result = _casino_roulette_resolve(current, bet_kind, bet_value)
+                if not round_result:
+                    self._open_roulette_table(prop, current or session, notice="That bet could not be resolved cleanly. Try another spin.")
+                    return True
+                self._emit_casino_round(prop, service, round_result)
+                return True
+
+        if service == "craps" and option_id.startswith("craps:view:"):
+            current = _casino_craps_normalize_session(session)
+            if not current:
+                self._present_service_result("Craps", ["That table is not available right now."], property_id=prop.get("id"))
+                return True
+            next_view = option_id.rsplit(":", 1)[-1]
+            current["view"] = next_view
+            self._open_craps_table(prop, current)
+            return True
+
+        if service == "craps" and option_id == "craps:back":
+            current = _casino_craps_normalize_session(session)
+            if current:
+                current["view"] = "layout"
+                self._open_craps_table(prop, current)
+            return True
+
+        if service == "craps":
+            current = _casino_craps_normalize_session(session)
+            if not current:
+                self._present_service_result("Craps", ["That table is not available right now."], property_id=prop.get("id"))
+                return True
+            bet_kind = ""
+            bet_value = None
+            odds_extra = 0
+            if option_id in {"craps:pass", "craps:dont_pass", "craps:field"}:
+                bet_kind = option_id.rsplit(":", 1)[-1]
+            elif option_id.startswith("craps:pass_odds:"):
+                bet_kind = "pass_odds"
+                try:
+                    bet_value = max(1, int(option_id.rsplit(":", 1)[-1]))
+                except (TypeError, ValueError):
+                    bet_value = None
+                odds_extra = int(current.get("wager", 0)) * int(bet_value or 0)
+            elif option_id.startswith("craps:dont_pass_odds:"):
+                bet_kind = "dont_pass_odds"
+                try:
+                    bet_value = max(1, int(option_id.rsplit(":", 1)[-1]))
+                except (TypeError, ValueError):
+                    bet_value = None
+                odds_extra = int(current.get("wager", 0)) * int(bet_value or 0)
+            elif option_id.startswith("craps:place:"):
+                bet_kind = "place"
+                try:
+                    bet_value = int(option_id.rsplit(":", 1)[-1])
+                except (TypeError, ValueError):
+                    bet_value = None
+            elif option_id.startswith("craps:hard:"):
+                bet_kind = "hardway"
+                try:
+                    bet_value = int(option_id.rsplit(":", 1)[-1])
+                except (TypeError, ValueError):
+                    bet_value = None
+            elif option_id.startswith("craps:prop:"):
+                bet_kind = "prop"
+                bet_value = option_id.split(":", 2)[-1]
+            if bet_kind:
+                if odds_extra > 0:
+                    ok, credits = self._casino_commit_stake(odds_extra)
+                    if not ok:
+                        self._emit_casino_blocked(prop, service, "no_credits", cost=odds_extra, credits=credits, wager=int(current.get("wager", 0)))
+                        return True
+                    current["stake"] = int(current.get("stake", current.get("wager", 0))) + odds_extra
+                round_result = _casino_craps_resolve(current, bet_kind, bet_value)
+                if not round_result:
+                    self._open_craps_table(prop, current, notice="That roll sequence could not be resolved cleanly. Try another shooter.")
+                    return True
+                self._emit_casino_round(prop, service, round_result)
+                return True
+
+        if service == "baccarat" and option_id in {"baccarat:player", "baccarat:banker", "baccarat:tie"}:
+            current = _casino_baccarat_normalize_session(session)
+            if not current:
+                self._present_service_result("Baccarat", ["That shoe is not available right now."], property_id=prop.get("id"))
+                return True
+            bet_side = option_id.rsplit(":", 1)[-1]
+            round_result = _casino_baccarat_resolve(current, bet_side)
+            if not round_result:
+                self._open_baccarat_table(prop, current, notice="That wager could not be resolved cleanly. Try another hand.")
+                return True
+            self._emit_casino_round(prop, service, round_result)
+            return True
+
+        if service == "three_card_poker" and option_id in {"three_card_poker:play", "three_card_poker:fold"}:
+            current = _casino_three_card_poker_normalize_session(session)
+            if not current:
+                self._present_service_result("Three-Card Poker", ["That table is not available right now."], property_id=prop.get("id"))
+                return True
+            action = option_id.rsplit(":", 1)[-1]
+            if action == "play":
+                wager = int(current.get("wager", 0))
+                ok, credits = self._casino_commit_stake(wager)
+                if not ok:
+                    self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
+                    return True
+                current["stake"] = int(current.get("stake", wager)) + wager
+            round_result = _casino_three_card_poker_resolve(current, action)
+            if not round_result:
+                self._open_three_card_poker_table(prop, current, notice="That hand could not be resolved cleanly. Try another deal.")
+                return True
+            self._emit_casino_round(prop, service, round_result)
+            return True
+
         if service == "twenty_one" and option_id in {"twenty_one:hit", "twenty_one:stand"}:
             action = "hit" if option_id.endswith(":hit") else "stand"
             next_session, round_result = _casino_twenty_one_resolve(session, action)
@@ -464,7 +1095,7 @@ class ServiceMenuSystem(System):
         if not isinstance(session, dict):
             return
         service = str(session.get("service", "")).strip().lower()
-        if service not in {"plinko", "twenty_one", "casino_holdem"}:
+        if service not in {"plinko", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", "twenty_one", "casino_holdem"}:
             self._clear_casino_session()
             return
         prop = self.sim.properties.get(session.get("property_id"))
@@ -490,6 +1121,135 @@ class ServiceMenuSystem(System):
                     "The attendant sweeps the chip off the rail.",
                 ],
                 "drop_lane": None,
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        elif service == "video_poker":
+            current = _casino_video_poker_normalize_session(session)
+            cards = tuple(current.get("cards", ()) or ()) if isinstance(current, dict) else ()
+            held_slots = tuple(
+                idx + 1
+                for idx, held in enumerate(list(current.get("holds", ()) or ()) if isinstance(current, dict) else [])
+                if held
+            )
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You leave the machine mid-hand.",
+                "detail": "The posted credits stay behind when you walk away before the draw.",
+                "summary": f"You abandon video poker and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    f"Cards: {_casino_cards_text(cards)}",
+                    f"Held: {', '.join(str(slot) for slot in held_slots) if held_slots else 'none'}.",
+                    "You step away before the draw and the wager is gone.",
+                ],
+                "player_cards": cards,
+                "held_slots": held_slots,
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        elif service == "keno":
+            current = _casino_keno_normalize_session(session)
+            picks = tuple(current.get("picks", ()) or ()) if isinstance(current, dict) else ()
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You crumple the ticket.",
+                "detail": "The posted keno wager is gone when you walk away before the draw.",
+                "summary": f"You abandon keno and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    (
+                        f"Ticket: {' '.join(f'{number:02d}' for number in picks)}"
+                        if picks
+                        else "Ticket: blank."
+                    ),
+                    "You leave before the house draws the board, so the ticket dies on the rail.",
+                ],
+                "picked_numbers": picks,
+                "pick_count": int(len(picks)),
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        elif service == "roulette":
+            current = _casino_roulette_normalize_session(session)
+            view = str(current.get("view", "board") or "board").strip().lower() if isinstance(current, dict) else "board"
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You leave the wheel cold.",
+                "detail": "The posted roulette chip is gone when you step away before the croupier spins.",
+                "summary": f"You abandon roulette and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    f"Chip posted: {_credit_amount_label(stake)}.",
+                    (
+                        "You walk away from the straight-up board before the spin."
+                        if view == "numbers"
+                        else "You walk away from the layout before the spin."
+                    ),
+                ],
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        elif service == "craps":
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You leave the rail cold.",
+                "detail": "The posted craps chip is gone when you step away before calling the bet.",
+                "summary": f"You abandon craps and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    f"Chip posted: {_credit_amount_label(stake)}.",
+                    "You leave before choosing pass line, don't pass, or field.",
+                ],
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        elif service == "baccarat":
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You leave the shoe unopened.",
+                "detail": "The posted baccarat wager stays on the felt when you walk before the hand is dealt.",
+                "summary": f"You abandon baccarat and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    f"Chip posted: {_credit_amount_label(stake)}.",
+                    "You step away before choosing player, banker, or tie.",
+                ],
+                "social_gain": 0,
+                "stake_already_paid": True,
+            }
+        elif service == "three_card_poker":
+            current = _casino_three_card_poker_normalize_session(session)
+            player_cards = tuple(current.get("player_cards", ()) or ()) if isinstance(current, dict) else ()
+            round_result = {
+                "service": service,
+                "wager": wager,
+                "stake": stake,
+                "payout": 0,
+                "outcome_key": "forfeit",
+                "headline": "You leave the ante in the circle.",
+                "detail": "The posted three-card poker ante is gone when you walk before calling the play bet.",
+                "summary": f"You abandon three-card poker and forfeit {_credit_amount_label(stake)}.",
+                "result_lines": [
+                    f"Your hand: {_casino_cards_text(player_cards)}" if player_cards else "Your hand: --",
+                    "You walk before deciding to play or fold, so the ante stays on the felt.",
+                ],
+                "player_cards": player_cards,
                 "social_gain": 0,
                 "stake_already_paid": True,
             }
