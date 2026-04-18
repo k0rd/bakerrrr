@@ -81,6 +81,8 @@ from game.components import (
 from game.dialogue import (
     choose_dialogue_line,
     ordered_topic_ids as _ordered_dialogue_topic_ids,
+    topic_player_line as _dialogue_topic_player_line,
+    topic_player_reaction_line as _dialogue_topic_player_reaction_line,
     speaker_style as _dialogue_speaker_style,
     topic_label as _dialogue_topic_label,
     topic_unlocks as _dialogue_topic_unlocks,
@@ -16709,6 +16711,7 @@ class NPCInteractionSystem(System):
             score -= 0.07
 
         bank_id = ""
+        outcome = ""
         trust_delta = 0.0
         closeness_delta = 0.0
         close_dialog = False
@@ -16719,16 +16722,19 @@ class NPCInteractionSystem(System):
             score += 0.08
             if score >= 0.56:
                 bank_id = "weird_soft"
+                outcome = "soft"
                 trust_delta = -0.005
                 closeness_delta = 0.0
             elif score >= 0.3:
                 bank_id = "weird_wary"
+                outcome = "wary"
                 trust_delta = -0.02
                 closeness_delta = -0.01
                 perceived = 0.42
                 offense_score = 10
             else:
                 bank_id = "weird_fail"
+                outcome = "fail"
                 trust_delta = -0.05
                 closeness_delta = -0.03
                 close_dialog = True
@@ -16738,16 +16744,19 @@ class NPCInteractionSystem(System):
             score -= 0.04
             if score >= 0.6:
                 bank_id = "pry_soft"
+                outcome = "soft"
                 trust_delta = -0.015
                 closeness_delta = -0.01
             elif score >= 0.36:
                 bank_id = "pry_wary"
+                outcome = "wary"
                 trust_delta = -0.035
                 closeness_delta = -0.02
                 perceived = 0.58
                 offense_score = 18
             else:
                 bank_id = "pry_fail"
+                outcome = "fail"
                 trust_delta = -0.07
                 closeness_delta = -0.04
                 close_dialog = True
@@ -16757,25 +16766,33 @@ class NPCInteractionSystem(System):
             score -= 0.18
             if score >= 0.68:
                 bank_id = "insult_soft"
+                outcome = "soft"
                 trust_delta = -0.03
                 closeness_delta = -0.02
                 perceived = 0.5
                 offense_score = 16
             elif score >= 0.44:
                 bank_id = "insult_wary"
+                outcome = "wary"
                 trust_delta = -0.06
                 closeness_delta = -0.035
                 perceived = 0.72
                 offense_score = 28
             else:
                 bank_id = "insult_fail"
+                outcome = "fail"
                 trust_delta = -0.1
                 closeness_delta = -0.06
                 close_dialog = True
                 perceived = 0.94
                 offense_score = 40
 
-        line = self._say(bank_id, context, topic_id=tactic, count=ask_count)
+        line = self._dialogue_misstep_reaction_line(
+            context,
+            tactic,
+            ask_count=ask_count,
+            outcome=outcome,
+        ) or self._say(bank_id, context, topic_id=tactic, count=ask_count)
         self._shift_dialogue_bond(
             npc_eid,
             trust_delta=trust_delta,
@@ -16805,6 +16822,159 @@ class NPCInteractionSystem(System):
             style_profile=context.get("speech_style"),
             **slots,
         )
+
+    def _dialogue_misstep_reaction_line(self, context, tactic, *, ask_count, outcome):
+        tactic = str(tactic or "").strip().lower()
+        outcome = str(outcome or "").strip().lower()
+        if tactic not in self.MISSTEP_TOPICS or not outcome:
+            return ""
+        return _dialogue_topic_player_reaction_line(
+            tactic,
+            seed=self.sim.seed,
+            npc_eid=context.get("npc_eid"),
+            count=ask_count,
+            outcome=outcome,
+            context=context,
+        )
+
+    def _dialogue_initiative_line(self, context, topic_id):
+        topic_id = str(topic_id or "").strip().lower()
+        if bool(context.get("guarded")) or topic_id in self.MISSTEP_TOPICS:
+            return ""
+        npc_eid = context.get("npc_eid")
+        if npc_eid is None:
+            return ""
+        ask_count = self._dialogue_topic_count(npc_eid, topic_id)
+        if ask_count != 1:
+            return ""
+
+        tone = str(context.get("tone", "neutral")).strip().lower() or "neutral"
+        pressure_tier = str(context.get("pressure_tier", "low")).strip().lower() or "low"
+        bond = context.get("bond") or self._bond_snapshot(npc_eid) or {}
+        npc_traits = context.get("npc_traits") or NPCTraits()
+        trust = float(bond.get("trust", 0.0))
+        closeness = float(bond.get("closeness", 0.0))
+        empathy = float(getattr(npc_traits, "empathy", 0.5))
+
+        if topic_id == "name":
+            if tone == "wary" and trust < 0.34:
+                return ""
+            return self._say("initiative_name", context, topic_id=topic_id, count=ask_count, salt="initiative")
+
+        bank_map = {
+            "history": "initiative_history",
+            "job": "initiative_job",
+            "workplace": "initiative_workplace",
+            "organization": "initiative_organization",
+            "people": "initiative_people",
+            "local": "initiative_local",
+            "concern": "initiative_concern",
+            "contacts": "initiative_contacts",
+            "introduction": "initiative_introduction",
+        }
+        bank_id = bank_map.get(topic_id)
+        if not bank_id:
+            return ""
+
+        chance = {
+            "history": 0.14,
+            "job": 0.22,
+            "workplace": 0.13,
+            "organization": 0.13,
+            "people": 0.17,
+            "local": 0.2,
+            "concern": 0.14,
+            "contacts": 0.18,
+            "introduction": 0.16,
+        }.get(topic_id, 0.0)
+        chance += trust * 0.18
+        chance += closeness * 0.08
+        chance += empathy * 0.08
+        if tone == "friendly":
+            chance += 0.08
+        elif tone == "wary":
+            chance -= 0.12
+        if pressure_tier == "medium":
+            chance -= 0.05
+        elif pressure_tier == "high":
+            chance -= 0.1
+        chance = max(0.0, min(0.62, chance))
+        if chance <= 0.0:
+            return ""
+        roll = random.Random(
+            f"{self.sim.seed}:dialogue-initiative:{npc_eid}:{topic_id}:{ask_count}:{self._dialogue_total_topics_asked(npc_eid)}"
+        ).random()
+        if roll > chance:
+            return ""
+        return self._say(bank_id, context, topic_id=topic_id, count=ask_count, salt="initiative")
+
+    def _apply_dialogue_initiative(self, context, topic_id, response):
+        response = dict(response or {})
+        if response.get("close") or response.get("open_trade"):
+            return response
+        initiative = self._dialogue_initiative_line(context, topic_id)
+        if not initiative:
+            return response
+        npc_lines = list(response.get("npc_lines", ()) or ())
+        npc_lines.append(initiative)
+        response["npc_lines"] = npc_lines
+        return response
+
+    def _dialogue_tutorial_hint(self, context):
+        pressure_tier = str(context.get("pressure_tier", "low")).strip().lower()
+        if pressure_tier in {"medium", "high"}:
+            return "Common topics unlock follow-ups as you talk. Heat is up, favors may stay cautious, and repeating yourself or pushing too hard can sour the conversation."
+        return "Common topics unlock follow-ups as you talk. New branches show with +, and repeating yourself or pushing too hard can sour the conversation."
+
+    def _dialogue_status_hint(self, context):
+        tone = str(context.get("tone", "neutral")).strip().lower() or "neutral"
+        pressure_tier = str(context.get("pressure_tier", "low")).strip().lower() or "low"
+        if bool(context.get("guarded")):
+            return "They are not in a friendly mood. Keep it clean or back out."
+        if pressure_tier == "high":
+            return "They are talking, but heat has them tight. One bad question could shut this down."
+        if pressure_tier == "medium":
+            return "They seem willing enough, but the heat is keeping them careful about names and favors."
+        bond = context.get("bond") or self._bond_snapshot(context.get("npc_eid")) or {}
+        trust = float(bond.get("trust", 0.0))
+        closeness = float(bond.get("closeness", 0.0))
+        if tone == "friendly":
+            return "They seem comfortable. A thoughtful follow-up should land better than a hard push."
+        if tone == "wary":
+            return "They are answering, but only just. Stay light or they may close off."
+        if trust >= 0.58 or closeness >= 0.56:
+            return "They seem open enough to volunteer a little if you give them something real to respond to."
+        return "They are talking, but you still need a reason for the sharper questions."
+
+    def _dialogue_hint_text(self, context, *, new_topic_labels=None):
+        npc_eid = context.get("npc_eid")
+        opened_count = 0
+        total_asked = 0
+        if npc_eid is not None:
+            memory = self._dialogue_memory(npc_eid)
+            opened_count = max(0, int(memory.get("opened_count", 0)))
+            total_asked = self._dialogue_total_topics_asked(npc_eid)
+        early_tutorial = opened_count <= 1 and total_asked <= 4
+        if new_topic_labels:
+            joined = ", ".join(str(label).strip() for label in new_topic_labels if str(label).strip())
+            if not joined:
+                return self._dialogue_tutorial_hint(context) if early_tutorial else self._dialogue_status_hint(context)
+            if early_tutorial:
+                return f"New topics: {joined}."
+            tone = str(context.get("tone", "neutral")).strip().lower() or "neutral"
+            pressure_tier = str(context.get("pressure_tier", "low")).strip().lower() or "low"
+            if pressure_tier in {"medium", "high"}:
+                lead = "Even cautious, they gave you a little more."
+            elif tone == "friendly":
+                lead = "They are warming to the conversation."
+            elif tone == "wary":
+                lead = "You got a little more out of them."
+            else:
+                lead = "That got them talking."
+            return f"{lead} New topics: {joined}."
+        if early_tutorial:
+            return self._dialogue_tutorial_hint(context)
+        return self._dialogue_status_hint(context)
 
     def _dialogue_player_line(self, topic_label):
         return f'You: "{str(topic_label).strip()}"'
@@ -16949,9 +17119,6 @@ class NPCInteractionSystem(System):
         memory = self._dialogue_memory(context["npc_eid"])
         state = self._dialog_ui_state()
         self.sim.set_time_paused(True, reason="dialog")
-        hint = "Common topics unlock follow-ups as you talk. New branches show with +, and repeating yourself or pushing too hard can sour the conversation."
-        if context.get("pressure_tier") in {"medium", "high"}:
-            hint = "Common topics unlock follow-ups as you talk. Heat is up, favors may stay cautious, and repeating yourself or pushing too hard can sour the conversation."
         state.update({
             "open": True,
             "kind": "conversation",
@@ -16963,7 +17130,7 @@ class NPCInteractionSystem(System):
             "topics": self._available_dialog_topics(context),
             "selected_index": 0,
             "scroll": 0,
-            "hint": hint,
+            "hint": self._dialogue_hint_text(context),
             "new_topic_ids": [],
             "close_pending": False,
             "machine_action": None,
@@ -18229,10 +18396,22 @@ class NPCInteractionSystem(System):
             extra_detail_lc=_dialogue_lower_start(detail),
         )
 
-    def _append_dialogue_response(self, context, topic_id, response):
+    def _append_dialogue_response(self, context, topic_id, response, *, previous_topic_id=""):
         state = self._dialog_ui_state()
         transcript = list(state.get("transcript", ()) or ())
-        transcript.append(self._dialogue_player_line(_dialogue_topic_label(topic_id, context=context)))
+        transcript.append(
+            self._dialogue_player_line(
+                _dialogue_topic_player_line(
+                    topic_id,
+                    seed=getattr(self.sim, "seed", 0),
+                    npc_eid=context.get("npc_eid"),
+                    count=self._dialogue_topic_count(context.get("npc_eid"), topic_id),
+                    context=context,
+                    previous_topic_id=previous_topic_id,
+                    total_asked=self._dialogue_total_topics_asked(context.get("npc_eid")),
+                )
+            )
+        )
         for line in response.get("npc_lines", ()) or ():
             formatted = self._dialogue_npc_line(context["npc_name"], line)
             if formatted:
@@ -18326,6 +18505,7 @@ class NPCInteractionSystem(System):
         topic_id = str(event.data.get("topic_id", "") or "").strip().lower()
         if not topic_id:
             return
+        previous_topic_id = str(self._dialogue_memory(npc_eid).get("last_topic_id", "")).strip().lower()
         selected_row = self._current_dialog_selected_row()
         previous_index = int(state.get("selected_index", 0))
         previous_topic_ids = {
@@ -18339,9 +18519,15 @@ class NPCInteractionSystem(System):
             self.sim.log.add("The conversation slips away.", channel="social", priority="low")
             return
         response = self._resolve_dialog_topic(context, topic_id)
+        response = self._apply_dialogue_initiative(context, topic_id, response)
         response = self._apply_dialogue_repeat_friction(context, topic_id, response)
         self._remember_revealed_social_lead_names(context, response)
-        self._append_dialogue_response(context, topic_id, response)
+        self._append_dialogue_response(
+            context,
+            topic_id,
+            response,
+            previous_topic_id=previous_topic_id,
+        )
         refreshed = self._dialogue_context(npc_eid)
         if not refreshed:
             self._close_dialog()
@@ -18360,9 +18546,9 @@ class NPCInteractionSystem(System):
                 for row in list(state.get("topics", ()) or ())
             }
             labels = [label_map.get(topic_id, topic_id.replace("_", " ")) for topic_id in state["new_topic_ids"][:3]]
-            state["hint"] = "New topics: " + ", ".join(label for label in labels if label) + "."
+            state["hint"] = self._dialogue_hint_text(refreshed, new_topic_labels=labels)
         else:
-            state["hint"] = "Common topics unlock follow-ups as you talk. New branches show with +, and repeating yourself too much will wear people out."
+            state["hint"] = self._dialogue_hint_text(refreshed)
         self._restore_dialog_selection(
             state.get("topics", ()),
             preferred_row=selected_row,

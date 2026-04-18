@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import string
 
 
 TOPIC_ORDER = (
@@ -422,6 +423,433 @@ TOPIC_DEFS = {
         "root": False,
         "unlocks": (),
     },
+}
+
+
+PLAYER_TOPIC_BANKS = {
+    "name": (
+        "So who are you?",
+        "What should I call you?",
+        "Mind telling me your name?",
+    ),
+    "history": (
+        "Have you been around here long?",
+        "So how long have you been on this block?",
+        "You local, or did you land here more recently?",
+    ),
+    "job": (
+        "So what do you do around here?",
+        "What kind of work do you do?",
+        "What do you do for a living?",
+    ),
+    "workplace": (
+        "Where do you usually work?",
+        "What place do you work out of?",
+        "Is {workplace_name} where you spend most of your time?",
+    ),
+    "organization": (
+        "Who are you working for?",
+        "Whose banner are you under around here?",
+        "Who are you working for over at {workplace_name}?",
+    ),
+    "supervisor": (
+        "So who actually runs things there?",
+        "Who do you answer to day to day?",
+        "Who is really in charge at {workplace_name}?",
+    ),
+    "coworkers": (
+        "Who else is on with you?",
+        "Who do you work alongside?",
+        "Who else is usually around at {workplace_name}?",
+    ),
+    "people": (
+        "Anybody around here worth knowing?",
+        "Who matters around here?",
+        "Who matters around {workplace_name}?",
+    ),
+    "services": (
+        "What does the place actually do?",
+        "So what are people coming there for?",
+        "What does {owner_place_name} mostly handle?",
+    ),
+    "hours": (
+        "When is the place actually open?",
+        "What hours does it keep?",
+        "When is {owner_place_name} usually open?",
+    ),
+    "owner": (
+        "Whose place is it, really?",
+        "Who really runs the place?",
+        "Who does {owner_place_name} answer to?",
+    ),
+    "security": (
+        "How tight is the place, really?",
+        "How much security are we talking?",
+        "How hard is {owner_place_name} to push?",
+    ),
+    "access": (
+        "What gets people through the door?",
+        "How do people usually get in?",
+        "What passes for access at {owner_place_name}?",
+    ),
+    "entry": (
+        "Any other way in besides the front?",
+        "Is there a side way in?",
+        "If you were looking for another way into {owner_place_name}, where would you start?",
+    ),
+    "keyholder": (
+        "Who actually carries the access?",
+        "Who keeps the key or badge?",
+        "Whose hand is the door to {owner_place_name} really in?",
+    ),
+    "weak_point": (
+        "Where does the place bend?",
+        "What's the soft spot?",
+        "If something gives first at {owner_place_name}, what is it?",
+    ),
+    "local": (
+        "So what's the word around here lately?",
+        "Anything local I should know?",
+        "What's been going on around here?",
+    ),
+    "concern": (
+        "What's got people on edge?",
+        "What is bothering folks around here?",
+        "Anything needling at this place lately?",
+    ),
+    "detail": (
+        "Can you get specific?",
+        "Give me the useful part.",
+        "What is the part that actually matters?",
+    ),
+    "opportunities": (
+        "Anything worth chasing right now?",
+        "Any angle on the street I should know about?",
+        "What sounds live around here right now?",
+    ),
+    "objective": (
+        "What would actually help me here?",
+        "If you were me, what would you focus on?",
+        "What's the move on {objective_title}?",
+    ),
+    "angle": (
+        "Where would you start?",
+        "What's the first move?",
+        "So what's the cleanest angle?",
+    ),
+    "risk": (
+        "What's the catch?",
+        "What could go wrong fastest?",
+        "What's the catch with {primary_opportunity_title}?",
+    ),
+    "attention": (
+        "How hot do I look right now?",
+        "Am I drawing eyes?",
+        "Should I be keeping my head down?",
+    ),
+    "contacts": (
+        "Know anybody I should be talking to?",
+        "Who would you point me toward?",
+        "Anybody useful I should know?",
+    ),
+    "introduction": (
+        "Would you introduce me to {social_lead_name}?",
+        "Think you could put me in touch with {social_lead_name}?",
+        "Can you connect me with {social_lead_name}?",
+    ),
+    "purpose": (
+        "I'm not looking for trouble.",
+        "Easy. I'm just passing through.",
+        "I'm not here to make this worse.",
+    ),
+    "apologize": (
+        "Alright, that's on me.",
+        "Sorry. My mistake.",
+        "Okay. I pushed that wrong.",
+    ),
+    "leave": (
+        "Fine. I'm going.",
+        "Alright. I'll move.",
+        "Okay. I'll get out of your way.",
+    ),
+    "trade": (
+        "Let me see what you've got.",
+        "Mind if we do business?",
+        "Let's talk prices.",
+    ),
+    "bye": (
+        "Alright. Take care.",
+        "That is enough for now. Later.",
+        "Appreciate it. I'll let you get back to it.",
+    ),
+    "weird": (
+        {
+            "text": "Do you think pigeons have favorite people?",
+            "npc_soft": (
+                "Pigeons having favorite people is a strange place to start, but I have heard worse.",
+                "I have never had to map the emotional lives of pigeons before, but fine.",
+            ),
+            "npc_wary": (
+                "You stopped me for a serious pigeon question?",
+                "Why are we talking about pigeons right now?",
+            ),
+            "npc_fail": (
+                "I am not doing pigeon philosophy with you.",
+                "Find someone else to workshop the pigeon thing on.",
+            ),
+        },
+        {
+            "text": "What soup best matches your mood today?",
+            "npc_soft": (
+                "The soup question is ridiculous, but at least it is original.",
+                "That is absurdly specific. Fine. Keep going.",
+            ),
+            "npc_wary": (
+                "Why would I tell you my mood in soup form?",
+                "That is a very strange thing to ask somebody cold.",
+            ),
+            "npc_fail": (
+                "No. I am not ranking my feelings as soup for you.",
+                "That soup question is where I tap out.",
+            ),
+        },
+        {
+            "text": "If this block had a mascot, what would it be?",
+            "npc_soft": (
+                "A block mascot is weirdly harmless as questions go.",
+                "That is odd, but at least I know what you mean.",
+            ),
+            "npc_wary": (
+                "You are asking me to assign a mascot to the whole block?",
+                "That is the sort of question that makes people edge away.",
+            ),
+            "npc_fail": (
+                "I am not doing a neighborhood mascot draft with you.",
+                "No. Take the mascot question somewhere else.",
+            ),
+        },
+        {
+            "text": "Do your shoes ever feel like they know too much?",
+            "npc_soft": (
+                "The shoe question is unsettling, but I can survive it.",
+                "That is one of the stranger things anyone has opened with around me.",
+            ),
+            "npc_wary": (
+                "What does that even mean about my shoes?",
+                "You are making this odd on purpose now.",
+            ),
+            "npc_fail": (
+                "I am not staying for haunted shoe talk.",
+                "No. The shoe thing is where this ends.",
+            ),
+        },
+        {
+            "text": "Be honest. Could you win an argument with a goose?",
+            "npc_soft": (
+                "The goose question is ridiculous, but I almost respect it.",
+                "That is bizarre, though I admit it paints a picture.",
+            ),
+            "npc_wary": (
+                "Why exactly are you sizing me up against a goose?",
+                "That is a strange little test to spring on somebody.",
+            ),
+            "npc_fail": (
+                "I am not debating goose combat with you.",
+                "Go ask somebody else about the goose.",
+            ),
+        },
+    ),
+    "pry": (
+        {
+            "text": "What do you worry about when it gets quiet?",
+            "npc_soft": (
+                "That gets personal fast, though I get what you are reaching for.",
+                "Quiet worries are not casual talk, but I see the angle.",
+            ),
+            "npc_wary": (
+                "That is a heavy question to drop on somebody cold.",
+                "You do not just walk up and ask people what keeps them up.",
+            ),
+            "npc_fail": (
+                "No. I am not opening that door for you.",
+                "That kind of question is exactly why this is over.",
+            ),
+        },
+        {
+            "text": "Who do you trust when things go sideways?",
+            "npc_soft": (
+                "Trust is personal territory, though I know why you would ask.",
+                "That is closer to the bone than most people start with.",
+            ),
+            "npc_wary": (
+                "You do not know me well enough to ask about trust like that.",
+                "That is not the kind of thing I hand over to a near stranger.",
+            ),
+            "npc_fail": (
+                "I am not giving you my trust map.",
+                "No. That question closes the door.",
+            ),
+        },
+        {
+            "text": "What do you wish people understood about you?",
+            "npc_soft": (
+                "That is personal, but at least it is honest.",
+                "You are reaching for the inside of a person there.",
+            ),
+            "npc_wary": (
+                "That is a lot to ask out of nowhere.",
+                "You are trying to get under the skin too fast.",
+            ),
+            "npc_fail": (
+                "No. I am not unpacking myself for you.",
+                "That is not a question you earn for free.",
+            ),
+        },
+        {
+            "text": "What part of yourself do you keep off the record?",
+            "npc_soft": (
+                "Off-the-record parts usually stay that way for a reason.",
+                "That is nosy, though I appreciate the honesty of it.",
+            ),
+            "npc_wary": (
+                "If it is off the record, why would I tell you?",
+                "You hear yourself, right? That is deeply personal.",
+            ),
+            "npc_fail": (
+                "I am not handing you the off-the-record parts.",
+                "No. That question is too far over the line.",
+            ),
+        },
+        {
+            "text": "When was the last time you changed your mind about someone?",
+            "npc_soft": (
+                "That is more intimate than it sounds, but fair enough.",
+                "You are leaning personal, though not without a reason.",
+            ),
+            "npc_wary": (
+                "That is not the kind of story I owe you.",
+                "You are digging for a private memory there.",
+            ),
+            "npc_fail": (
+                "No. I am not opening old history for you.",
+                "That kind of question is where I stop talking.",
+            ),
+        },
+    ),
+    "insult": (
+        {
+            "text": "You have the dramatic presence of a damp sandwich.",
+            "npc_soft": (
+                "A damp sandwich is weak material, but I will let it slide once.",
+                "Damp sandwich is awful. Almost impressive in its own way.",
+            ),
+            "npc_wary": (
+                "Did you really just compare me to a damp sandwich?",
+                "That is the cheap line you went with?",
+            ),
+            "npc_fail": (
+                "You do not get to call me a damp sandwich and keep talking.",
+                "No. We are not continuing after the sandwich line.",
+            ),
+        },
+        {
+            "text": "You sound like you lose arguments to vending machines.",
+            "npc_soft": (
+                "That vending-machine line is cheap, but I have heard rougher.",
+                "Weak shot, though I can admit it had structure.",
+            ),
+            "npc_wary": (
+                "You really stopped me to compare me to a vending machine loser?",
+                "That is the kind of insult you rehearse on the walk over.",
+            ),
+            "npc_fail": (
+                "Take the vending-machine routine somewhere else.",
+                "No. You do not get to swing that line and stay here.",
+            ),
+        },
+        {
+            "text": "I've met friendlier traffic cones.",
+            "npc_soft": (
+                "Traffic cone is a corny insult, but not the worst I have heard.",
+                "Friendlier traffic cones. Fine. You got your cheap shot in.",
+            ),
+            "npc_wary": (
+                "You walked up to call me worse than a traffic cone?",
+                "That is not as charming as you seem to think it is.",
+            ),
+            "npc_fail": (
+                "Go compare someone else to a traffic cone.",
+                "No. The traffic cone line ends this.",
+            ),
+        },
+        {
+            "text": "You have the energy of a waiting room magazine.",
+            "npc_soft": (
+                "Waiting-room magazine is specific enough that I almost respect it.",
+                "That was cheap, but at least you committed to the bit.",
+            ),
+            "npc_wary": (
+                "You really think that was worth saying out loud?",
+                "That is a strange amount of effort for a bad insult.",
+            ),
+            "npc_fail": (
+                "Keep the waiting-room material to yourself.",
+                "No. That line buys you the end of this conversation.",
+            ),
+        },
+        {
+            "text": "You carry yourself like a warning label nobody reads.",
+            "npc_soft": (
+                "That warning-label line was cheap, but I can let one pass.",
+                "Not your best work, though I understand the message.",
+            ),
+            "npc_wary": (
+                "That is a pretty deliberate way to make this worse.",
+                "You really wanted me annoyed, apparently.",
+            ),
+            "npc_fail": (
+                "Take the warning-label line and leave.",
+                "No. We are done after that one.",
+            ),
+        },
+    ),
+}
+
+
+PLAYER_CONNECTIVE_FOLLOWUP_PREFIXES = (
+    "And",
+    "So",
+    "Okay, then,",
+    "Right,",
+)
+
+PLAYER_CONNECTIVE_SHIFT_PREFIXES = (
+    "Alright,",
+    "Okay,",
+    "Different question,",
+    "Then,",
+)
+
+PLAYER_CONNECTIVE_SKIP_TOPICS = {
+    "weird",
+    "pry",
+    "insult",
+    "trade",
+    "bye",
+    "payoff",
+    "fence",
+    "hire",
+    "hire_manager",
+    "hire_staff",
+    "fire",
+    "hire_runner",
+    "backup_orders",
+    "backup_follow",
+    "backup_hold",
+    "backup_distract",
+    "backup_goto_wait",
+    "backup_wait_return",
+    "backup_kill",
 }
 
 
@@ -1330,6 +1758,101 @@ DIALOGUE_BANKS = {
         "Nothing worth your time from me today.",
         "Slow stretch right now. I would not count on that lasting.",
     ),
+    "initiative_name": (
+        "And you?",
+        "So what should I call you?",
+        "You got a name too, or are we skipping that part?",
+    ),
+    "initiative_history": (
+        "You new here, or just taking inventory?",
+        "You asking because you plan to stick around?",
+        "That curiosity, or are you trying to place me?",
+    ),
+    "initiative_job": (
+        "You asking out of curiosity, or is there a reason?",
+        "Why the interest?",
+        "That just curiosity, or are you headed somewhere with it?",
+    ),
+    "initiative_workplace": (
+        "You looking for me there, or just drawing a map?",
+        "That place matter to you for a reason?",
+        "You need the location, or just the shape of my day?",
+    ),
+    "initiative_organization": (
+        "You keeping score on who answers to who?",
+        "That kind of hierarchy matter to you for a reason?",
+        "You asking about the outfit, or about me?",
+    ),
+    "initiative_people": (
+        "You looking for friends, or leverage?",
+        "You collecting names, or actually looking to meet someone?",
+        "That you trying to build a circle, or just pull a thread?",
+    ),
+    "initiative_local": (
+        "You looking for work, trouble, or directions?",
+        "You after a lead, or just getting your bearings?",
+        "You trying to get the lay of the block, or is there something specific you need?",
+    ),
+    "initiative_concern": (
+        "You trying to stay ahead of trouble, or step into it?",
+        "That you being careful, or curious?",
+        "Good question. You planning around it?",
+    ),
+    "initiative_detail": (
+        "You like the useful part, I can respect that.",
+        "So you are listening for the part that matters.",
+        "Alright. You want the sharp version.",
+    ),
+    "initiative_opportunities": (
+        "You looking for money, leverage, or just a way in?",
+        "You after a score, or do you just like hearing the map out loud?",
+        "That you planning something, or just taking the temperature?",
+    ),
+    "initiative_risk": (
+        "You planning something that needs the caution?",
+        "Good. Most people ask for the angle and forget the cost.",
+        "So you are thinking about how this goes bad first.",
+    ),
+    "initiative_attention": (
+        "Then keep your head down if you can.",
+        "Good instinct. Too many people ignore that part.",
+        "That is the right question, honestly.",
+    ),
+    "initiative_contacts": (
+        "If I point you at someone, are you going to handle it cleanly?",
+        "You looking for a real connection, or just another name to lean on?",
+        "Depends what you think you are going to do with the introduction.",
+    ),
+    "initiative_introduction": (
+        "Depends what you plan to say when you meet them.",
+        "Maybe. That kind of introduction matters.",
+        "That depends how clean you mean to keep it.",
+    ),
+    "initiative_services": (
+        "You looking for the place, or the kind of people around it?",
+        "That you scouting the room, or shopping?",
+        "Useful to know the sign before you walk under it.",
+    ),
+    "initiative_security": (
+        "That question alone tells me you are thinking past the front door.",
+        "Most people do not ask that unless they need the real picture.",
+        "You are planning carefully, at least.",
+    ),
+    "initiative_access": (
+        "Access is usually the part people underestimate.",
+        "That is where places really tell you what they are.",
+        "Good. Doors matter more than signs.",
+    ),
+    "initiative_entry": (
+        "There is always the obvious way and the honest way.",
+        "People learn a lot from how a place is entered.",
+        "That is a better question than most.",
+    ),
+    "initiative_weak_point": (
+        "Every place pretends not to have one.",
+        "Soft spots are easier to talk about than fix.",
+        "That is the question owners hate most.",
+    ),
     "concern": (
         "{concern_summary}",
         "Lately? {concern_summary}",
@@ -2215,6 +2738,171 @@ def topic_label(topic_id, context=None):
     if topic_id == "contract" and context.get("contract_target_role"):
         return "You mentioned you have work on offer?"
     return str(topic_spec(topic_id).get("label", topic_id.replace("_", " ").title()))
+
+
+def _dialogue_lower_start(text):
+    text = str(text or "")
+    if not text:
+        return ""
+    first = text[:1]
+    if first.isalpha():
+        return first.lower() + text[1:]
+    return text
+
+
+def _normalize_player_topic_entry(entry, fallback_text):
+    if isinstance(entry, dict):
+        normalized = dict(entry)
+    else:
+        normalized = {"text": str(entry).strip()}
+    normalized["text"] = str(normalized.get("text", "")).strip() or str(fallback_text or "").strip()
+    for key in ("npc_soft", "npc_wary", "npc_fail"):
+        value = normalized.get(key, ())
+        if isinstance(value, str):
+            normalized[key] = (str(value).strip(),) if str(value).strip() else ()
+            continue
+        normalized[key] = tuple(
+            str(item).strip()
+            for item in tuple(value or ())
+            if str(item).strip()
+        )
+    return normalized
+
+
+def _render_topic_text(template, context, *, fallback=""):
+    template = str(template or "").strip()
+    fallback = str(fallback or "").strip()
+    if not template:
+        return fallback
+    if "{" not in template or "}" not in template:
+        return template
+    context = context if isinstance(context, dict) else {}
+    safe_slots = {}
+    for key, value in context.items():
+        if value is None or isinstance(value, (dict, list, tuple, set)):
+            continue
+        text = str(value).strip()
+        if text:
+            safe_slots[str(key)] = text
+    for (_literal, field_name, _format_spec, _conversion) in string.Formatter().parse(template):
+        if not field_name:
+            continue
+        field_key = str(field_name).split(".", 1)[0].split("[", 1)[0]
+        if not safe_slots.get(field_key, ""):
+            return fallback
+    try:
+        rendered = str(template).format(**safe_slots).strip()
+    except Exception:
+        return fallback
+    return rendered or fallback
+
+
+def _render_player_topic_entry(entry, context):
+    normalized = _normalize_player_topic_entry(entry, "")
+    text = _render_topic_text(normalized.get("text", ""), context, fallback="")
+    if not text:
+        return None
+    rendered = {
+        "text": text,
+        "npc_soft": (),
+        "npc_wary": (),
+        "npc_fail": (),
+    }
+    for key in ("npc_soft", "npc_wary", "npc_fail"):
+        rendered[key] = tuple(
+            rendered_text
+            for raw in tuple(normalized.get(key, ()) or ())
+            if (rendered_text := _render_topic_text(raw, context, fallback=""))
+        )
+    return rendered
+
+
+def topic_player_prompt(topic_id, *, seed, npc_eid, count=0, context=None):
+    topic_id = str(topic_id or "").strip().lower()
+    label = topic_label(topic_id, context=context)
+    options = tuple(PLAYER_TOPIC_BANKS.get(topic_id, ()))
+    if not options:
+        return {"text": label, "npc_soft": (), "npc_wary": (), "npc_fail": ()}
+    rendered_entries = [
+        rendered
+        for raw in options
+        if (rendered := _render_player_topic_entry(raw, context))
+    ]
+    if not rendered_entries:
+        return {"text": label, "npc_soft": (), "npc_wary": (), "npc_fail": ()}
+    try:
+        count = max(1, int(count))
+    except (TypeError, ValueError):
+        count = 1
+    offset = random.Random(f"{seed}:dialogue-player-topic:{npc_eid}:{topic_id}").randrange(len(rendered_entries))
+    return rendered_entries[(offset + count - 1) % len(rendered_entries)]
+
+
+def topic_player_reaction_line(topic_id, *, seed, npc_eid, count=0, outcome="soft", context=None):
+    prompt = topic_player_prompt(
+        topic_id,
+        seed=seed,
+        npc_eid=npc_eid,
+        count=count,
+        context=context,
+    )
+    outcome_key = f"npc_{str(outcome or 'soft').strip().lower() or 'soft'}"
+    options = tuple(prompt.get(outcome_key, ()))
+    if not options:
+        return ""
+    chooser = random.Random(
+        f"{seed}:dialogue-player-reaction:{npc_eid}:{topic_id}:{count}:{outcome_key}"
+    )
+    return str(options[chooser.randrange(len(options))]).strip()
+
+
+def topic_player_line(topic_id, *, seed, npc_eid, count=0, context=None, previous_topic_id="", total_asked=0):
+    topic_id = str(topic_id or "").strip().lower()
+    prompt = topic_player_prompt(
+        topic_id,
+        seed=seed,
+        npc_eid=npc_eid,
+        count=count,
+        context=context,
+    )
+    line = str(prompt.get("text", "")).strip() or topic_label(topic_id, context=context)
+    previous_topic_id = str(previous_topic_id or "").strip().lower()
+    try:
+        count = max(1, int(count))
+    except (TypeError, ValueError):
+        count = 1
+    try:
+        total_asked = max(0, int(total_asked))
+    except (TypeError, ValueError):
+        total_asked = 0
+    if (
+        not previous_topic_id
+        or total_asked <= 1
+        or count > 1
+        or topic_id in PLAYER_CONNECTIVE_SKIP_TOPICS
+        or not line.endswith("?")
+    ):
+        return line
+
+    followup = topic_id in topic_unlocks(previous_topic_id)
+    if followup and total_asked <= 3:
+        bridge_chance = 1.0
+    elif followup:
+        bridge_chance = 0.72
+    else:
+        bridge_chance = 0.26
+    roll = random.Random(
+        f"{seed}:dialogue-player-bridge:{npc_eid}:{previous_topic_id}:{topic_id}:{count}:{total_asked}"
+    ).random()
+    if roll > bridge_chance:
+        return line
+    prefixes = PLAYER_CONNECTIVE_FOLLOWUP_PREFIXES if followup else PLAYER_CONNECTIVE_SHIFT_PREFIXES
+    chooser = random.Random(
+        f"{seed}:dialogue-player-bridge-prefix:{npc_eid}:{previous_topic_id}:{topic_id}:{count}:{total_asked}"
+    )
+    prefix = str(prefixes[chooser.randrange(len(prefixes))]).strip()
+    lowered = _dialogue_lower_start(line)
+    return f"{prefix} {lowered}".strip()
 
 
 def ordered_topic_ids():
