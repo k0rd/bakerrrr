@@ -645,6 +645,55 @@ def _direction_step(from_x, from_y, to_x, to_y):
     return (0, 0)
 
 
+def _normalized_direction(dx, dy):
+    try:
+        dx = int(dx)
+    except (TypeError, ValueError):
+        dx = 0
+    try:
+        dy = int(dy)
+    except (TypeError, ValueError):
+        dy = 0
+    if dx > 0:
+        dx = 1
+    elif dx < 0:
+        dx = -1
+    if dy > 0:
+        dy = 1
+    elif dy < 0:
+        dy = -1
+    return (dx, dy)
+
+
+def _interaction_target_order_key(origin_x, origin_y, target_x, target_y, *, preferred_dir=None, stable_tiebreaker=()):
+    origin_x = int(origin_x)
+    origin_y = int(origin_y)
+    target_x = int(target_x)
+    target_y = int(target_y)
+    dist = _manhattan(origin_x, origin_y, target_x, target_y)
+    if not isinstance(stable_tiebreaker, tuple):
+        stable_tiebreaker = (stable_tiebreaker,)
+    if dist <= 0:
+        return (0, 0, 0, 0) + stable_tiebreaker
+
+    preferred = None
+    if preferred_dir is not None:
+        try:
+            preferred = _normalized_direction(preferred_dir[0], preferred_dir[1])
+        except (TypeError, ValueError, IndexError):
+            preferred = None
+        if preferred == (0, 0):
+            preferred = None
+
+    if preferred is not None:
+        step = _normalized_direction(target_x - origin_x, target_y - origin_y)
+        alignment = (step[0] * preferred[0]) + (step[1] * preferred[1])
+        mismatch = abs(step[0] - preferred[0]) + abs(step[1] - preferred[1])
+        return (1, -alignment, mismatch, dist) + stable_tiebreaker
+
+    return (1, 0, 0, dist) + stable_tiebreaker
+
+
 def _dir_label(step, short=False):
     mapping = {
         (1, 0): ("east", "E"),
@@ -6767,7 +6816,7 @@ def _set_property_locked_override(prop, *, locked, tick=0, method="manual_lock")
     return True
 
 
-def _door_interaction_candidate(sim, pos):
+def _door_interaction_candidate(sim, pos, *, preferred_dir=None):
     if pos is None:
         return None
 
@@ -6778,17 +6827,31 @@ def _door_interaction_candidate(sim, pos):
         (int(pos.x), int(pos.y) + 1, int(pos.z)),
         (int(pos.x) - 1, int(pos.y), int(pos.z)),
     ]
-    for x, y, z in candidates:
+    ranked = []
+    for index, (x, y, z) in enumerate(candidates):
         state = _operable_door_state_at(sim, x, y, z)
         if state is not None:
-            return {
-                "x": x,
-                "y": y,
-                "z": z,
-                "state": state,
-                "prop": _property_covering(sim, x, y, z),
-            }
-    return None
+            ranked.append((
+                _interaction_target_order_key(
+                    pos.x,
+                    pos.y,
+                    x,
+                    y,
+                    preferred_dir=preferred_dir,
+                    stable_tiebreaker=(index,),
+                ),
+                {
+                    "x": x,
+                    "y": y,
+                    "z": z,
+                    "state": state,
+                    "prop": _property_covering(sim, x, y, z),
+                },
+            ))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda row: row[0])
+    return ranked[0][1]
 
 
 def _door_action_text(reason, *, opening=False):
@@ -18797,12 +18860,66 @@ class PlayerActionSystem(System):
             reason=str(event.data.get("reason", "")).strip().lower() or "lost_hidden",
         )
 
-    def _nearest_sabotage_fixture(self, pos):
+    def _player_interact_direction_state(self):
+        state = getattr(self.sim, "player_interact_directions", None)
+        if not isinstance(state, dict):
+            self.sim.player_interact_directions = {}
+            state = self.sim.player_interact_directions
+        return state
+
+    def _remember_player_interact_direction(self, eid, dx, dy):
+        if eid is None:
+            return
+        direction = _normalized_direction(dx, dy)
+        if direction == (0, 0):
+            return
+        self._player_interact_direction_state()[int(eid)] = {
+            "dx": direction[0],
+            "dy": direction[1],
+            "tick": int(self.sim.tick),
+        }
+
+    def _player_interact_direction(self, eid):
+        if eid is None:
+            return None
+        state = self._player_interact_direction_state().get(int(eid))
+        if not isinstance(state, dict):
+            return None
+        direction = _normalized_direction(state.get("dx", 0), state.get("dy", 0))
+        if direction == (0, 0):
+            return None
+        return direction
+
+    def _interaction_target_sort_key(self, eid, pos, target_x, target_y, *, stable_tiebreaker=()):
+        return _interaction_target_order_key(
+            pos.x,
+            pos.y,
+            target_x,
+            target_y,
+            preferred_dir=self._player_interact_direction(eid),
+            stable_tiebreaker=stable_tiebreaker,
+        )
+
+    def _nearest_sabotage_fixture(self, eid, pos):
         nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=1)
-        for prop in sorted(nearby, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"])):
-            if _property_infrastructure_role(prop) == "sabotage_target":
-                return prop
-        return None
+        candidates = []
+        for prop in nearby:
+            if _property_infrastructure_role(prop) != "sabotage_target":
+                continue
+            candidates.append((
+                self._interaction_target_sort_key(
+                    eid,
+                    pos,
+                    int(prop.get("x", 0)),
+                    int(prop.get("y", 0)),
+                    stable_tiebreaker=(str(prop.get("id", "")),),
+                ),
+                prop,
+            ))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda row: row[0])
+        return candidates[0][1]
 
     def _security_fixture_target_property(self, prop):
         if not isinstance(prop, dict):
@@ -18928,7 +19045,6 @@ class PlayerActionSystem(System):
             profile = _vehicle_profile_from_property(prop)
             if not profile or not profile.get("usable", True):
                 continue
-            dist = _manhattan(pos.x, pos.y, int(prop.get("x", 0)), int(prop.get("y", 0)))
             owner_rank = 0
             if prop.get("owner_eid") == eid:
                 owner_rank = 3
@@ -18936,11 +19052,20 @@ class PlayerActionSystem(System):
                 owner_rank = 2
             elif str(prop.get("owner_tag", "")).strip().lower() == "public":
                 owner_rank = 1
-            candidates.append((-owner_rank, dist, str(prop.get("id", "")), prop))
+            candidates.append((
+                (-owner_rank,) + self._interaction_target_sort_key(
+                    eid,
+                    pos,
+                    int(prop.get("x", 0)),
+                    int(prop.get("y", 0)),
+                    stable_tiebreaker=(str(prop.get("id", "")),),
+                ),
+                prop,
+            ))
         if not candidates:
             return None
-        candidates.sort()
-        return candidates[0][3]
+        candidates.sort(key=lambda row: row[0])
+        return candidates[0][1]
 
     def _sync_vehicle_property_position(self, prop, x, y, z=0):
         if not _property_is_vehicle(prop):
@@ -19906,12 +20031,26 @@ class PlayerActionSystem(System):
     def _handle_ingress_action(self, eid, pos, ingress_mode):
         return self.property_ingress.handle_ingress_action(eid, pos, ingress_mode)
 
-    def _nearest_camera_fixture(self, pos):
+    def _nearest_camera_fixture(self, eid, pos):
         nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=1)
-        for prop in sorted(nearby, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"])):
-            if _property_infrastructure_role(prop) == "camera_target":
-                return prop
-        return None
+        candidates = []
+        for prop in nearby:
+            if _property_infrastructure_role(prop) != "camera_target":
+                continue
+            candidates.append((
+                self._interaction_target_sort_key(
+                    eid,
+                    pos,
+                    int(prop.get("x", 0)),
+                    int(prop.get("y", 0)),
+                    stable_tiebreaker=(str(prop.get("id", "")),),
+                ),
+                prop,
+            ))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda row: row[0])
+        return candidates[0][1]
 
     def _player_disable_camera(self, eid, pos, prop):
         now = self.sim.tick
@@ -19957,12 +20096,26 @@ class PlayerActionSystem(System):
             disabled_until=now + duration,
         ))
 
-    def _nearest_alarm_fixture(self, pos):
+    def _nearest_alarm_fixture(self, eid, pos):
         nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=1)
-        for prop in sorted(nearby, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"])):
-            if _property_infrastructure_role(prop) == "alarm_target":
-                return prop
-        return None
+        candidates = []
+        for prop in nearby:
+            if _property_infrastructure_role(prop) != "alarm_target":
+                continue
+            candidates.append((
+                self._interaction_target_sort_key(
+                    eid,
+                    pos,
+                    int(prop.get("x", 0)),
+                    int(prop.get("y", 0)),
+                    stable_tiebreaker=(str(prop.get("id", "")),),
+                ),
+                prop,
+            ))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda row: row[0])
+        return candidates[0][1]
 
     def _player_disable_alarm(self, eid, pos, prop):
         now = self.sim.tick
@@ -20083,12 +20236,26 @@ class PlayerActionSystem(System):
             return "Stash"
         return "Container"
 
-    def _nearest_cache_fixture(self, pos):
+    def _nearest_cache_fixture(self, eid, pos):
         nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=1)
-        for prop in sorted(nearby, key=lambda p: _manhattan(pos.x, pos.y, p["x"], p["y"])):
-            if _property_infrastructure_role(prop) in {"cache_target", "bones_stash"}:
-                return prop
-        return None
+        candidates = []
+        for prop in nearby:
+            if _property_infrastructure_role(prop) not in {"cache_target", "bones_stash"}:
+                continue
+            candidates.append((
+                self._interaction_target_sort_key(
+                    eid,
+                    pos,
+                    int(prop.get("x", 0)),
+                    int(prop.get("y", 0)),
+                    stable_tiebreaker=(str(prop.get("id", "")),),
+                ),
+                prop,
+            ))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda row: row[0])
+        return candidates[0][1]
 
     def _open_property_container_ui(self, eid, prop, *, container_kind="container", container_label=None):
         inventory_ui = getattr(self.sim, "inventory_ui", None)
@@ -20536,19 +20703,19 @@ class PlayerActionSystem(System):
             ))
 
     def _handle_interact_action(self, eid, pos):
-        sabotage_prop = self._nearest_sabotage_fixture(pos)
+        sabotage_prop = self._nearest_sabotage_fixture(eid, pos)
         if sabotage_prop is not None:
             self._player_sabotage_fixture(eid, pos, sabotage_prop)
             return
-        camera_prop = self._nearest_camera_fixture(pos)
+        camera_prop = self._nearest_camera_fixture(eid, pos)
         if camera_prop is not None:
             self._player_disable_camera(eid, pos, camera_prop)
             return
-        alarm_prop = self._nearest_alarm_fixture(pos)
+        alarm_prop = self._nearest_alarm_fixture(eid, pos)
         if alarm_prop is not None:
             self._player_disable_alarm(eid, pos, alarm_prop)
             return
-        cache_prop = self._nearest_cache_fixture(pos)
+        cache_prop = self._nearest_cache_fixture(eid, pos)
         if cache_prop is not None:
             self._player_interact_cache(eid, pos, cache_prop)
             return
@@ -21894,6 +22061,7 @@ class PlayerActionSystem(System):
                 return
             dx = event.data.get("dx", 0)
             dy = event.data.get("dy", 0)
+            self._remember_player_interact_direction(eid, dx, dy)
             origin_x = pos.x
             origin_y = pos.y
             origin_z = pos.z
@@ -39890,6 +40058,36 @@ class RenderSystem(System):
             return _filtered_log_lines(combined, filter_id)[-budget:]
         return _hud_log_lines(combined, filter_id, budget)
 
+    def _visible_hud_log_display_lines(self, budget, wrap_width):
+        budget = max(0, int(budget))
+        wrap_width = max(1, int(wrap_width))
+        if budget <= 0:
+            return []
+
+        visible_logs = list(self._visible_hud_logs(max(1, budget)))
+        if not visible_logs:
+            return []
+
+        visible_lines = []
+        remaining = budget
+        for line in reversed(visible_logs):
+            wrapped = list(
+                _wrap_display_lines(
+                    _line_with_prefix(line, _log_prefix(line)),
+                    wrap_width,
+                )
+                or [""]
+            )
+            if len(wrapped) <= remaining:
+                visible_lines[0:0] = wrapped
+                remaining -= len(wrapped)
+                if remaining <= 0:
+                    break
+                continue
+            visible_lines[0:0] = wrapped[:remaining]
+            break
+        return visible_lines
+
     def _draw(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None, layer=None, priority=None):
         kwargs = {"attrs": int(attrs or 0)}
         if color is not None:
@@ -41886,15 +42084,10 @@ class RenderSystem(System):
         visible_hud_rows = max(0, int(screen_h) - int(hud_y))
         log_budget = max(0, min(visible_hud_rows, int(hud_lines) - (int(hud_y) - int(map_h))))
         self._advance_hud_queue(log_budget)
-        logs = self._visible_hud_logs(log_budget)
+        logs = self._visible_hud_log_display_lines(log_budget, hud_text_w)
         log_y = hud_y
         for line in logs:
             if log_y >= screen_h:
                 break
-            prefixed = _line_with_prefix(line, _log_prefix(line))
-            line_segments = _line_segments(prefixed)
-            if line_segments:
-                self.view.draw_segments(0, log_y, line_segments, max_width=hud_w)
-            else:
-                self.view.draw_text(0, log_y, _line_text(prefixed))
+            self._draw_display_line(0, log_y, line, hud_w)
             log_y += 1

@@ -14,7 +14,6 @@ from game.property_runtime import (
     property_covering as _property_covering,
     property_display_position as _property_display_position,
     property_focus_position as _property_focus_position,
-    property_for_action as _property_for_action,
     property_infrastructure_role as _property_infrastructure_role,
 )
 
@@ -43,8 +42,29 @@ class PropertyActionRuntime:
         assets = self.sim.ecs.get(PlayerAssets).get(eid)
         return bool(assets and prop["id"] in assets.owned_property_ids)
 
-    def property_for_player_action(self, pos, radius=1):
-        return _property_for_action(self.sim, pos, radius=radius)
+    def property_for_player_action(self, pos, radius=1, actor_eid=None):
+        prop = _property_covering(self.sim, pos.x, pos.y, pos.z)
+        if prop:
+            return prop
+
+        nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=radius)
+        if not nearby:
+            return None
+
+        support = self._support()
+        preferred_dir = self.action_system._player_interact_direction(actor_eid) if actor_eid is not None else None
+        nearby = sorted(
+            nearby,
+            key=lambda current: support._interaction_target_order_key(
+                pos.x,
+                pos.y,
+                int(current.get("x", 0)),
+                int(current.get("y", 0)),
+                preferred_dir=preferred_dir,
+                stable_tiebreaker=(str(current.get("id", "")),),
+            ),
+        )
+        return nearby[0]
 
     def counts_as_known_location(self, prop):
         if not isinstance(prop, dict):
@@ -166,7 +186,11 @@ class PropertyActionRuntime:
 
     def handle_door_interaction(self, eid, pos):
         support = self._support()
-        candidate = support._door_interaction_candidate(self.sim, pos)
+        candidate = support._door_interaction_candidate(
+            self.sim,
+            pos,
+            preferred_dir=self.action_system._player_interact_direction(eid),
+        )
         if not candidate:
             return False
 
@@ -206,7 +230,11 @@ class PropertyActionRuntime:
 
     def handle_door_lock_toggle(self, eid, pos):
         support = self._support()
-        candidate = support._door_interaction_candidate(self.sim, pos)
+        candidate = support._door_interaction_candidate(
+            self.sim,
+            pos,
+            preferred_dir=self.action_system._player_interact_direction(eid),
+        )
         if not candidate:
             support._log_player_feedback(
                 self.sim,
@@ -366,7 +394,7 @@ class PropertyActionRuntime:
         if not prop:
             prop = self.sim.property_at(pos.x, pos.y, pos.z)
         if not prop:
-            prop = self.property_for_player_action(pos, radius=1)
+            prop = self.property_for_player_action(pos, radius=1, actor_eid=eid)
         if not prop:
             self.sim.emit(Event("interact_empty", eid=eid, x=pos.x, y=pos.y, z=pos.z))
             return
@@ -382,7 +410,7 @@ class PropertyActionRuntime:
         ))
 
     def handle_purchase(self, eid, pos):
-        prop = self.property_for_player_action(pos, radius=1)
+        prop = self.property_for_player_action(pos, radius=1, actor_eid=eid)
         if not prop:
             self.sim.emit(Event(
                 "property_purchase_blocked",

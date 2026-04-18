@@ -246,7 +246,28 @@ def _validate_identifier(report, source, path, value, *, field_name="id"):
     return True
 
 
-def _validate_string_list(report, source, path, value, *, field_name="list", allow_scalar=False, require_non_empty=False):
+def _duplicate_value_counts(values, *, normalize=None):
+    normalize_fn = normalize if callable(normalize) else (lambda value: str(value))
+    counts = {}
+    ordered = []
+    labels = {}
+    for value in values:
+        token = str(value)
+        key = normalize_fn(token)
+        if key not in counts:
+            ordered.append(key)
+            counts[key] = 0
+            labels[key] = token
+        counts[key] += 1
+    return [(labels[key], counts[key]) for key in ordered if counts[key] > 1]
+
+
+def _format_duplicate_examples(duplicates, limit=5):
+    preview = [f"{token!r} x{count}" for token, count in list(duplicates or ())[: max(1, int(limit))]]
+    return ", ".join(preview)
+
+
+def _validate_string_list(report, source, path, value, *, field_name="list", allow_scalar=False, require_non_empty=False, warn_on_duplicates=True):
     if allow_scalar and isinstance(value, str):
         values = [value]
     else:
@@ -265,7 +286,8 @@ def _validate_string_list(report, source, path, value, *, field_name="list", all
     if require_non_empty and not parsed:
         report.error(source, path, f"{field_name} must contain at least one entry")
 
-    _warn_if_duplicates(report, source, path, parsed, label="entry")
+    if warn_on_duplicates:
+        _warn_if_duplicates(report, source, path, parsed, label="entry")
     return parsed
 
 
@@ -925,14 +947,26 @@ def _validate_npc_names(path, report):
         if key not in human:
             report.error(source, ["human"], f"missing human.{key}")
             continue
-        _validate_string_list(
+        parsed = _validate_string_list(
             report,
             source,
             ["human", key],
             human.get(key),
             field_name=f"human.{key}",
             require_non_empty=True,
+            warn_on_duplicates=False,
         )
+        duplicates = _duplicate_value_counts(parsed, normalize=lambda value: str(value).casefold())
+        if duplicates:
+            report.error(
+                source,
+                ["human", key],
+                (
+                    f"human.{key} must contain unique entries; found {len(duplicates)} duplicate value(s) "
+                    f"covering {sum(count - 1 for _token, count in duplicates)} extra row(s). "
+                    f"Examples: {_format_duplicate_examples(duplicates)}"
+                ),
+            )
 
 
 def _validate_tile_map(path, report):
