@@ -2234,6 +2234,59 @@ def _observer_turns_blind_eye_to_offense(sim, observer_eid, offender_eid, *, act
     return int(offense_score or 0) <= max_score
 
 
+def _entities_have_family_bond(sim, first_eid, second_eid):
+    if sim is None or first_eid is None or second_eid is None:
+        return False
+
+    socials = sim.ecs.get(NPCSocial)
+    for source_eid, other_eid in ((first_eid, second_eid), (second_eid, first_eid)):
+        social = socials.get(source_eid)
+        if not social:
+            continue
+        bond = social.bonds.get(other_eid)
+        if not isinstance(bond, dict):
+            continue
+        if str(bond.get("kind", "") or "").strip().lower() == "family":
+            return True
+    return False
+
+
+def _defender_excuses_window_shot(sim, defender_eid, offender_eid, prop, *, defender_reason=""):
+    if sim is None or defender_eid is None or offender_eid is None or not isinstance(prop, dict):
+        return False
+    if defender_eid == offender_eid:
+        return True
+
+    positions = sim.ecs.get(Position)
+    offender_pos = positions.get(offender_eid)
+    if offender_pos:
+        offender_access = _evaluate_property_access(
+            sim,
+            offender_eid,
+            prop,
+            x=offender_pos.x,
+            y=offender_pos.y,
+            z=offender_pos.z,
+        )
+    else:
+        offender_access = _evaluate_property_access(
+            sim,
+            offender_eid,
+            prop,
+            x=prop.get("x"),
+            y=prop.get("y"),
+            z=prop.get("z", 0),
+        )
+
+    offender_reason = str(getattr(offender_access, "standing_reason", "") or "").strip().lower()
+    defender_reason = str(defender_reason or "").strip().lower()
+    if offender_reason in {"owner", "employee"} and defender_reason in {"owner", "employee"}:
+        return True
+    if _entities_have_family_bond(sim, defender_eid, offender_eid):
+        return True
+    return False
+
+
 def _player_hidden_status(sim, eid, x, y, z):
     modes = sim.ecs.get(PlayerModeState).get(eid)
     if not modes or not modes.sneak:
@@ -2720,6 +2773,7 @@ NOISY_TAMPER_METHODS = {
     "forced_side_entry",
     "deep_breach",
     "crash_window_entry",
+    "window_shot",
 }
 
 OBVIOUS_TRESPASS_METHODS = {
@@ -6502,6 +6556,7 @@ def _ingress_method_label(method):
         "quiet_window_entry": "quiet window",
         "careful_window_entry": "careful window",
         "crash_window_entry": "crash window",
+        "window_shot": "shot out window",
         "forced_breach": "forced breach",
         "deep_breach": "deep breach",
         "hotwire": "hotwire",
@@ -6663,6 +6718,69 @@ def _set_door_open_state(sim, x, y, z, is_open):
         color="feature_door",
         semantic_id=None,
     )
+    return True
+
+
+def _shatter_window_for_projectile(sim, offender_eid, x, y, z):
+    prop = _property_covering(sim, x, y, z)
+    aperture = _property_aperture_at(prop, x, y, z) if isinstance(prop, dict) else None
+    if not isinstance(aperture, dict) or not _is_window_aperture(aperture.get("kind", "")):
+        return False
+
+    sim.tilemap.set_tile(
+        int(x),
+        int(y),
+        Tile(walkable=True, transparent=True, glyph="/"),
+        z=int(z),
+    )
+
+    if offender_eid is None:
+        return True
+
+    offender_pos = sim.ecs.get(Position).get(offender_eid)
+    witnesses = []
+    for observer_eid in _watchers_for_position(
+        sim,
+        int(x),
+        int(y),
+        int(z),
+        exclude_eid=offender_eid,
+        offender_eid=offender_eid,
+    ):
+        if not offender_pos:
+            continue
+        if _observer_can_notice_position(
+            sim,
+            observer_eid,
+            offender_pos.x,
+            offender_pos.y,
+            offender_pos.z,
+        ):
+            witnesses.append(observer_eid)
+    access_level = _property_access_level(prop)
+    severity_score = 28 + (6 if access_level == "restricted" else 0)
+    sim.emit(Event(
+        "property_tamper",
+        offender_eid=offender_eid,
+        property_id=prop.get("id"),
+        owner_eid=prop.get("owner_eid"),
+        x=int(x),
+        y=int(y),
+        z=int(z),
+        witnessed=bool(witnesses),
+        witness_count=len(witnesses),
+        witnesses=tuple(witnesses[:6]),
+        access_level=access_level,
+        severity_score=min(100, severity_score),
+        severity_label=_trespass_label_from_score(severity_score),
+        standing_reason="none",
+        ingress_kind="alternate_aperture",
+        aperture_kind=str(aperture.get("kind", "window") or "window").strip().lower() or "window",
+        ingress_method="window_shot",
+        breach_severity=0.82,
+        defender_witnesses_only=True,
+        require_witnessed_identity=True,
+    ))
     return True
 
 
@@ -10188,6 +10306,10 @@ class WorldStreamingSystem(System):
                         "floors": int(building.get("floors", 1)),
                         "rooms": list(building.get("rooms", ())),
                         "footprint": dict(layout.get("footprint", {})),
+                        "footprint_excluded_cells": [
+                            {"x": int(cell_x), "y": int(cell_y)}
+                            for cell_x, cell_y in sorted(layout.get("excluded", ()) or ())
+                        ],
                         "entry": dict(layout.get("entry", {})),
                         "apertures": [dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)],
                         "signage": dict(layout["signage"]) if isinstance(layout.get("signage"), dict) else None,
@@ -10263,6 +10385,10 @@ class WorldStreamingSystem(System):
                     "floors": 1,
                     "rooms": ["entry", "room"],
                     "footprint": dict(layout.get("footprint", {})),
+                    "footprint_excluded_cells": [
+                        {"x": int(cell_x), "y": int(cell_y)}
+                        for cell_x, cell_y in sorted(layout.get("excluded", ()) or ())
+                    ],
                     "entry": dict(layout.get("entry", {})),
                     "apertures": [dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)],
                     "signage": dict(layout["signage"]) if isinstance(layout.get("signage"), dict) else None,
@@ -25970,13 +26096,22 @@ class WeaponSystem(System):
                 tile = self.sim.tilemap.tile_at(nx, ny, z)
                 blocked_tile = bool(tile and not tile.walkable)
                 if blocked_tile and not projectile.get("ignore_walls"):
+                    shattered_window = False
+                    if tile and tile.transparent:
+                        shattered_window = _shatter_window_for_projectile(
+                            self.sim,
+                            projectile.get("source_eid"),
+                            nx,
+                            ny,
+                            z,
+                        )
                     self._impact_projectile(
                         projectile_id,
                         projectile,
                         x=nx,
                         y=ny,
                         z=z,
-                        reason="blocked_tile",
+                        reason="shattered_window" if shattered_window else "blocked_tile",
                     )
                     break
 
@@ -29859,11 +29994,21 @@ class PropertyDefenseSystem(System):
         property_id = event.data.get("property_id")
         threat_type = str(event.type or "property_tamper").strip().lower()
         witnessed = bool(event.data.get("witnessed", threat_type != "property_trespass"))
+        witness_eids = set()
+        raw_witnesses = event.data.get("witnesses", ())
+        if isinstance(raw_witnesses, (list, tuple, set, frozenset)):
+            for raw_eid in raw_witnesses:
+                try:
+                    witness_eids.add(int(raw_eid))
+                except (TypeError, ValueError):
+                    continue
         severity_score = int(event.data.get("severity_score", 24 if threat_type != "property_trespass" else 18))
         severity_label = str(event.data.get("severity_label", "trespass") or "trespass").strip().lower()
         ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
         aperture_kind = str(event.data.get("aperture_kind", "") or "").strip().lower()
         ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
+        defender_witnesses_only = bool(event.data.get("defender_witnesses_only", False))
+        require_witnessed_identity = bool(event.data.get("require_witnessed_identity", False))
         pressure_effects = _pressure_effects(self.sim)
         severity_bias = int(max(0, pressure_effects.get("defense_severity_bias", 0)))
         protect_shift = int(max(0, pressure_effects.get("protect_threshold_shift", 0)))
@@ -29882,6 +30027,8 @@ class PropertyDefenseSystem(System):
             ingress_method=ingress_method,
             breach_severity=float(event.data.get("breach_severity", 0.0) or 0.0),
         ):
+            return
+        if threat_type == "property_tamper" and require_witnessed_identity and not witnessed:
             return
         if threat_type == "property_trespass" and severity_score < 10:
             return
@@ -29944,6 +30091,7 @@ class PropertyDefenseSystem(System):
             ingress_kind=ingress_kind,
             aperture_kind=aperture_kind,
             ingress_method=ingress_method,
+            witness_eids=frozenset(witness_eids) if defender_witnesses_only else None,
         )
 
     def _dispatch_defenders(
@@ -29957,6 +30105,7 @@ class PropertyDefenseSystem(System):
         ingress_kind="",
         aperture_kind="",
         ingress_method="",
+        witness_eids=None,
     ):
         ais = self.sim.ecs.get(AI)
         wills = self.sim.ecs.get(NPCWill)
@@ -30035,7 +30184,17 @@ class PropertyDefenseSystem(System):
         for defender_eid, defender_reason in defenders.items():
             if defender_eid == offender_eid:
                 continue
+            if witness_eids is not None and defender_eid not in witness_eids:
+                continue
             if _observer_is_active_contractor_ally(self.sim, defender_eid, offender_eid):
+                continue
+            if ingress_method == "window_shot" and _defender_excuses_window_shot(
+                self.sim,
+                defender_eid,
+                offender_eid,
+                prop,
+                defender_reason=defender_reason,
+            ):
                 continue
 
             ai = ais.get(defender_eid)
@@ -38601,6 +38760,9 @@ class EventLogSystem(System):
 
         profile = self._weapon_log_profile(event.data.get("weapon_id"), projectile_count=max(1, int(event.data.get("hits", 0))))
         reason = str(event.data.get("reason", "impact") or "impact").strip().lower()
+        if reason == "shattered_window":
+            self._log("The shot shatters the window.", channel="combat", priority="high", dedupe_window=2)
+            return
         if reason == "blocked_tile":
             self._log(profile["blocked"], channel="combat", priority="high", dedupe_window=2)
             return

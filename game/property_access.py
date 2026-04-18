@@ -8,6 +8,7 @@ from game.property_keys import inventory_matching_property_credential, property_
 
 DEFAULT_START_HOUR = 9
 DEFAULT_TICKS_PER_HOUR = 600
+ALWAYS_OPEN_SITE_SERVICES = {"rest", "shelter"}
 
 STOREFRONT_ARCHETYPE_HINTS = {
     "casino",
@@ -209,6 +210,28 @@ def _property_metadata(prop):
     return metadata if isinstance(metadata, dict) else {}
 
 
+def _shape_cells_2d(metadata, key):
+    if not isinstance(metadata, dict):
+        return frozenset()
+    raw = metadata.get(key)
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return frozenset()
+
+    cells = set()
+    for cell in raw:
+        if isinstance(cell, dict):
+            try:
+                cells.add((int(cell.get("x")), int(cell.get("y"))))
+            except (TypeError, ValueError):
+                continue
+        elif isinstance(cell, (list, tuple)) and len(cell) >= 2:
+            try:
+                cells.add((int(cell[0]), int(cell[1])))
+            except (TypeError, ValueError):
+                continue
+    return frozenset(cells)
+
+
 def _party_rep_proxy_actor(sim, actor_eid):
     if sim is None or actor_eid is None:
         return actor_eid
@@ -293,6 +316,15 @@ def site_services_for_property(prop):
     return tuple(ordered)
 
 
+def _property_offers_lodging_or_shelter(prop):
+    services = {
+        str(service).strip().lower()
+        for service in site_services_for_property(prop)
+        if str(service).strip()
+    }
+    return bool(services.intersection(ALWAYS_OPEN_SITE_SERVICES))
+
+
 def property_is_storefront(prop):
     metadata = _property_metadata(prop)
     if bool(metadata.get("is_storefront")):
@@ -328,6 +360,8 @@ def property_access_level(prop):
         return "restricted"
     if property_is_public(prop):
         return "public"
+    if _property_offers_lodging_or_shelter(prop):
+        return "public"
     if property_is_storefront(prop) or finance_services_for_property(prop):
         return "public"
     return "protected"
@@ -354,6 +388,8 @@ def world_hour(sim):
 
 
 def _default_open_window_for(prop):
+    if _property_offers_lodging_or_shelter(prop):
+        return (0, 24)
     metadata = _property_metadata(prop)
     archetype = str(metadata.get("archetype", "") or "").strip().lower()
     if (
@@ -777,6 +813,7 @@ def property_access_controller(sim, prop, hour=None):
         or finance_services_for_property(prop)
         or site_services_for_property(prop)
     )
+    always_open_lodging = _property_offers_lodging_or_shelter(prop)
     configured_kind = str(metadata.get("access_controller_kind", "") or "").strip().lower()
     configured_window = _normalize_open_window(metadata.get("access_controller_hours"))
     default_window = configured_window or _jittered_default_open_window(sim, prop, _default_open_window_for(prop))
@@ -800,7 +837,10 @@ def property_access_controller(sim, prop, hour=None):
 
     opening_window = None
     schedule_source = ""
-    if kind == "owner_schedule":
+    if always_open_lodging:
+        opening_window = (0, 24)
+        schedule_source = "always_open"
+    elif kind == "owner_schedule":
         owner_occ = sim.ecs.get(Occupation).get(owner_eid) if sim is not None and owner_eid is not None else None
         owner_window = _occupation_open_window(owner_occ)
         if owner_window and _occupation_matches_property(prop, owner_occ):
@@ -934,6 +974,8 @@ def _position_within_property(prop, x=None, y=None, z=None):
         return False
 
     metadata = _property_metadata(prop)
+    explicit_cells = _shape_cells_2d(metadata, "footprint_cells")
+    excluded_cells = _shape_cells_2d(metadata, "footprint_excluded_cells")
     footprint = metadata.get("footprint")
     if isinstance(footprint, dict):
         try:
@@ -947,15 +989,24 @@ def _position_within_property(prop, x=None, y=None, z=None):
             left = right = top = bottom = None
             base_z = floors = None
         else:
-            if base_z <= z < base_z + floors and left <= x <= right and top <= y <= bottom:
+            if not (base_z <= z < base_z + floors):
+                return False
+            if explicit_cells:
+                return (x, y) in explicit_cells
+            if left <= x <= right and top <= y <= bottom and (x, y) not in excluded_cells:
                 return True
 
     try:
-        return (
+        exact_match = (
             int(prop.get("x")) == x
             and int(prop.get("y")) == y
             and int(prop.get("z", 0)) == z
         )
+        if not exact_match:
+            return False
+        if explicit_cells:
+            return (x, y) in explicit_cells
+        return (x, y) not in excluded_cells
     except (TypeError, ValueError):
         return False
 

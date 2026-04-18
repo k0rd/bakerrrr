@@ -264,6 +264,131 @@ class Simulation:
         except (TypeError, ValueError):
             return None
 
+    def _property_footprint_excluded_cells(self, prop):
+        if not isinstance(prop, dict):
+            return frozenset()
+
+        metadata = prop.get("metadata")
+        if not isinstance(metadata, dict):
+            return frozenset()
+
+        configured = metadata.get("footprint_excluded_cells")
+        excluded = set()
+        if isinstance(configured, (list, tuple, set, frozenset)):
+            for cell in configured:
+                if isinstance(cell, dict):
+                    try:
+                        excluded.add((int(cell.get("x")), int(cell.get("y"))))
+                    except (TypeError, ValueError):
+                        continue
+                elif isinstance(cell, (list, tuple)) and len(cell) >= 2:
+                    try:
+                        excluded.add((int(cell[0]), int(cell[1])))
+                    except (TypeError, ValueError):
+                        continue
+            if excluded or configured == []:
+                return frozenset(excluded)
+
+        footprint = metadata.get("footprint")
+        building_id = str(metadata.get("building_id", "") or "").strip()
+        if not isinstance(footprint, dict) or not building_id:
+            return frozenset()
+
+        try:
+            left = int(footprint.get("left"))
+            right = int(footprint.get("right"))
+            top = int(footprint.get("top"))
+            bottom = int(footprint.get("bottom"))
+            base_z = int(prop.get("z", 0))
+            floors = max(1, int(metadata.get("floors", 1)))
+            basement_levels = max(0, int(metadata.get("basement_levels", 0)))
+        except (TypeError, ValueError):
+            return frozenset()
+
+        covered_xy = set()
+        for (cell_x, cell_y, cell_z), info in getattr(self, "structure_cells", {}).items():
+            if str((info or {}).get("building_id", "")).strip() != building_id:
+                continue
+            if not (base_z - basement_levels <= int(cell_z) < base_z + floors):
+                continue
+            covered_xy.add((int(cell_x), int(cell_y)))
+
+        if not covered_xy:
+            return frozenset()
+
+        for cell_y in range(top, bottom + 1):
+            for cell_x in range(left, right + 1):
+                if (int(cell_x), int(cell_y)) not in covered_xy:
+                    excluded.add((int(cell_x), int(cell_y)))
+
+        metadata["footprint_excluded_cells"] = [
+            {"x": int(cell_x), "y": int(cell_y)}
+            for cell_x, cell_y in sorted(excluded)
+        ]
+        return frozenset(excluded)
+
+    def _property_explicit_footprint_cells(self, prop):
+        if not isinstance(prop, dict):
+            return frozenset()
+
+        metadata = prop.get("metadata")
+        if not isinstance(metadata, dict):
+            return frozenset()
+
+        configured = metadata.get("footprint_cells")
+        cells = set()
+        if isinstance(configured, (list, tuple, set, frozenset)):
+            for cell in configured:
+                if isinstance(cell, dict):
+                    try:
+                        cells.add((int(cell.get("x")), int(cell.get("y"))))
+                    except (TypeError, ValueError):
+                        continue
+                elif isinstance(cell, (list, tuple)) and len(cell) >= 2:
+                    try:
+                        cells.add((int(cell[0]), int(cell[1])))
+                    except (TypeError, ValueError):
+                        continue
+            if cells or configured == []:
+                return frozenset(cells)
+
+        building_id = str(metadata.get("building_id", "") or "").strip()
+        if not building_id:
+            return frozenset()
+
+        footprint = metadata.get("footprint")
+        if not isinstance(footprint, dict):
+            return frozenset()
+
+        try:
+            left = int(footprint.get("left"))
+            right = int(footprint.get("right"))
+            top = int(footprint.get("top"))
+            bottom = int(footprint.get("bottom"))
+            base_z = int(prop.get("z", 0))
+            floors = max(1, int(metadata.get("floors", 1)))
+            basement_levels = max(0, int(metadata.get("basement_levels", 0)))
+        except (TypeError, ValueError):
+            return frozenset()
+
+        for (cell_x, cell_y, cell_z), info in getattr(self, "structure_cells", {}).items():
+            if str((info or {}).get("building_id", "")).strip() != building_id:
+                continue
+            if not (base_z - basement_levels <= int(cell_z) < base_z + floors):
+                continue
+            if not (left <= int(cell_x) <= right and top <= int(cell_y) <= bottom):
+                continue
+            cells.add((int(cell_x), int(cell_y)))
+
+        if not cells:
+            return frozenset()
+
+        metadata["footprint_cells"] = [
+            {"x": int(cell_x), "y": int(cell_y)}
+            for cell_x, cell_y in sorted(cells)
+        ]
+        return frozenset(cells)
+
     def _property_cover_coords(self, prop):
         if not isinstance(prop, dict):
             return ()
@@ -287,10 +412,18 @@ class Simulation:
         except (TypeError, ValueError):
             return ()
 
+        explicit_cells = self._property_explicit_footprint_cells(prop)
+        excluded = self._property_footprint_excluded_cells(prop)
         coords = []
         for cell_z in range(base_z - basement_levels, base_z + floors):
+            if explicit_cells:
+                for cell_x, cell_y in explicit_cells:
+                    coords.append((int(cell_x), int(cell_y), int(cell_z)))
+                continue
             for cell_y in range(top, bottom + 1):
                 for cell_x in range(left, right + 1):
+                    if (int(cell_x), int(cell_y)) in excluded:
+                        continue
                     coords.append((cell_x, cell_y, cell_z))
         return coords
 
@@ -425,11 +558,11 @@ class Simulation:
             cursor = span_end + 1
         return tuple(spans)
 
-    def _room_plan_for_shell(self, rooms, left, right, top, bottom, floor=0, floors=1, basement_levels=0):
-        interior_left = int(left) + 1
-        interior_right = int(right) - 1
-        interior_top = int(top) + 1
-        interior_bottom = int(bottom) - 1
+    def _room_plan_for_interior_bounds(self, rooms, left, right, top, bottom, floor=0, floors=1, basement_levels=0):
+        interior_left = int(left)
+        interior_right = int(right)
+        interior_top = int(top)
+        interior_bottom = int(bottom)
         if interior_left > interior_right or interior_top > interior_bottom:
             return {
                 "rooms": (),
@@ -682,6 +815,145 @@ class Simulation:
             "walls": tuple(walls),
             "doors": (door,),
         }
+
+    def _room_plan_point_for_entry_side(
+        self,
+        local_x,
+        local_y,
+        *,
+        interior_left,
+        interior_right,
+        interior_top,
+        interior_bottom,
+        entry_side,
+    ):
+        side = str(entry_side or "south").strip().lower() or "south"
+        if side == "north":
+            return (
+                int(interior_left) + int(local_x),
+                int(interior_bottom) - int(local_y),
+            )
+        if side == "east":
+            return (
+                int(interior_left) + int(local_y),
+                int(interior_top) + int(local_x),
+            )
+        if side == "west":
+            return (
+                int(interior_right) - int(local_y),
+                int(interior_top) + int(local_x),
+            )
+        return (
+            int(interior_left) + int(local_x),
+            int(interior_top) + int(local_y),
+        )
+
+    def _orient_room_plan_for_entry_side(
+        self,
+        room_plan,
+        *,
+        interior_left,
+        interior_right,
+        interior_top,
+        interior_bottom,
+        entry_side,
+    ):
+        side = str(entry_side or "south").strip().lower() or "south"
+        if side not in {"north", "south", "east", "west"}:
+            side = "south"
+
+        def world_point(local_x, local_y):
+            return self._room_plan_point_for_entry_side(
+                local_x,
+                local_y,
+                interior_left=interior_left,
+                interior_right=interior_right,
+                interior_top=interior_top,
+                interior_bottom=interior_bottom,
+                entry_side=side,
+            )
+
+        rooms_out = []
+        for room in (room_plan or {}).get("rooms", ()):
+            if not isinstance(room, dict):
+                continue
+            corners = (
+                world_point(room.get("left", 0), room.get("top", 0)),
+                world_point(room.get("left", 0), room.get("bottom", 0)),
+                world_point(room.get("right", 0), room.get("top", 0)),
+                world_point(room.get("right", 0), room.get("bottom", 0)),
+            )
+            xs = [int(x) for x, _y in corners]
+            ys = [int(y) for _x, y in corners]
+            rooms_out.append({
+                "kind": str(room.get("kind", "room") or "room").strip().lower() or "room",
+                "left": min(xs),
+                "right": max(xs),
+                "top": min(ys),
+                "bottom": max(ys),
+            })
+
+        walls_out = []
+        for wall in (room_plan or {}).get("walls", ()):
+            if not isinstance(wall, (list, tuple)) or len(wall) < 2:
+                continue
+            walls_out.append(world_point(wall[0], wall[1]))
+
+        doors_out = []
+        for door in (room_plan or {}).get("doors", ()):
+            if not isinstance(door, (list, tuple)) or len(door) < 2:
+                continue
+            doors_out.append(world_point(door[0], door[1]))
+
+        return {
+            "rooms": tuple(rooms_out),
+            "walls": tuple(dict.fromkeys((int(x), int(y)) for x, y in walls_out)),
+            "doors": tuple(dict.fromkeys((int(x), int(y)) for x, y in doors_out)),
+        }
+
+    def _room_plan_for_shell(self, rooms, left, right, top, bottom, floor=0, floors=1, basement_levels=0, entry_side="south"):
+        interior_left = int(left) + 1
+        interior_right = int(right) - 1
+        interior_top = int(top) + 1
+        interior_bottom = int(bottom) - 1
+        if interior_left > interior_right or interior_top > interior_bottom:
+            return {
+                "rooms": (),
+                "walls": (),
+                "doors": (),
+            }
+
+        side = str(entry_side or "south").strip().lower() or "south"
+        if side not in {"north", "south", "east", "west"}:
+            side = "south"
+
+        interior_width = interior_right - interior_left + 1
+        interior_height = interior_bottom - interior_top + 1
+        if side in {"east", "west"}:
+            local_right = max(0, interior_height - 1)
+            local_bottom = max(0, interior_width - 1)
+        else:
+            local_right = max(0, interior_width - 1)
+            local_bottom = max(0, interior_height - 1)
+
+        local_room_plan = self._room_plan_for_interior_bounds(
+            rooms,
+            left=0,
+            right=local_right,
+            top=0,
+            bottom=local_bottom,
+            floor=floor,
+            floors=floors,
+            basement_levels=basement_levels,
+        )
+        return self._orient_room_plan_for_entry_side(
+            local_room_plan,
+            interior_left=interior_left,
+            interior_right=interior_right,
+            interior_top=interior_top,
+            interior_bottom=interior_bottom,
+            entry_side=side,
+        )
 
     def _stamp_room_shell(self, left, right, top, bottom, z, door_x=None, door_y=None, apertures=None, room_plan=None, excluded=None):
         excluded = excluded or frozenset()
@@ -1073,6 +1345,7 @@ class Simulation:
                 bottom=bottom,
                 floor=0,
                 floors=1,
+                entry_side=entry.get("side", "south"),
             )
             structure_info["rooms"] = tuple(room.get("kind", "room") for room in room_plan.get("rooms", ())) or ("entry", "room")
             self._stamp_room_shell(
@@ -1259,6 +1532,7 @@ class Simulation:
                             floor=z,
                             floors=floors,
                             basement_levels=basement_levels,
+                            entry_side=entry.get("side", "south"),
                         )
                         structure_info = {
                             "building_id": chunk_building_id,
@@ -1314,8 +1588,24 @@ class Simulation:
                             excluded=shape_excluded,
                         )
                         if connector_cell is None:
-                            connector_x = right - 1 if connector_kind == "elevator" else left + 1
-                            connector_y = top + 1
+                            fallback_cells = [
+                                (int(x), int(y))
+                                for y in range(int(top), int(bottom) + 1)
+                                for x in range(int(left), int(right) + 1)
+                                if (int(x), int(y)) not in set(shape_excluded or ())
+                            ]
+                            if not fallback_cells:
+                                continue
+                            center_x = (int(left) + int(right)) // 2
+                            center_y = (int(top) + int(bottom)) // 2
+                            connector_x, connector_y = min(
+                                fallback_cells,
+                                key=lambda cell: (
+                                    abs(int(cell[0]) - center_x) + abs(int(cell[1]) - center_y),
+                                    int(cell[1]),
+                                    int(cell[0]),
+                                ),
+                            )
                         else:
                             connector_x, connector_y = connector_cell
                         self._add_vertical_link_stack(
