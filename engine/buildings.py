@@ -275,8 +275,14 @@ BUILDING_SHAPE_WEIGHTS = {
         "setback": 2,
         "deep_setback": 1,
         "rear_court": 1,
+        "triple_rear_courts": 1,
         "stepped_rear_court": 1,
+        "elbow_court": 1,
+        "offset_linked_wings": 1,
+        "quad_linked_wings": 1,
+        "offset_quad_linked_wings": 1,
         "u_shape": 1,
+        "side_u_shape": 1,
         "c_shape": 1,
         "offset_c_shape": 1,
     },
@@ -286,9 +292,15 @@ BUILDING_SHAPE_WEIGHTS = {
         "deep_setback": 1,
         "side_setback": 1,
         "rear_court": 1,
+        "triple_rear_courts": 1,
         "stepped_rear_court": 1,
         "offset_side_court": 1,
+        "elbow_court": 1,
+        "offset_linked_wings": 1,
+        "quad_linked_wings": 1,
+        "offset_quad_linked_wings": 1,
         "u_shape": 1,
+        "side_u_shape": 1,
         "c_shape": 1,
         "offset_c_shape": 1,
     },
@@ -298,13 +310,22 @@ BUILDING_SHAPE_WEIGHTS = {
         "deep_setback": 2,
         "side_setback": 2,
         "rear_court": 1,
+        "triple_rear_courts": 1,
         "side_court": 1,
         "stepped_rear_court": 1,
         "offset_side_court": 1,
+        "twin_side_courts": 1,
+        "elbow_court": 1,
+        "offset_linked_wings": 1,
+        "quad_linked_wings": 1,
+        "offset_quad_linked_wings": 1,
         "t_shape": 1,
         "c_shape": 1,
         "offset_c_shape": 1,
         "dogbone_shape": 1,
+        "comb_shape": 1,
+        "through_arcade_court": 1,
+        "double_comb_shape": 1,
     },
     "industrial": {
         "rect": 2,
@@ -312,6 +333,7 @@ BUILDING_SHAPE_WEIGHTS = {
         "deep_setback": 2,
         "side_setback": 2,
         "rear_court": 2,
+        "triple_rear_courts": 1,
         "side_court": 1,
         "pinched_waist": 1,
         "inner_court": 1,
@@ -320,6 +342,8 @@ BUILDING_SHAPE_WEIGHTS = {
         "twin_rear_courts": 1,
         "offset_side_court": 1,
         "u_shape": 1,
+        "side_u_shape": 1,
+        "elbow_court": 1,
         "t_shape": 1,
         "h_shape": 1,
         "c_shape": 1,
@@ -329,6 +353,19 @@ BUILDING_SHAPE_WEIGHTS = {
         "cross_shape": 1,
         "dogbone_shape": 1,
         "arcade_court": 1,
+        "offset_arcade_court": 1,
+        "side_arcade_court": 1,
+        "through_arcade_court": 1,
+        "offset_linked_wings": 1,
+        "triple_linked_wings": 1,
+        "offset_triple_linked_wings": 1,
+        "quad_linked_wings": 1,
+        "offset_quad_linked_wings": 1,
+        "quint_linked_wings": 1,
+        "offset_quint_linked_wings": 1,
+        "twin_side_courts": 1,
+        "comb_shape": 1,
+        "double_comb_shape": 1,
     },
     "corporate": {
         "rect": 2,
@@ -336,6 +373,7 @@ BUILDING_SHAPE_WEIGHTS = {
         "deep_setback": 2,
         "side_setback": 2,
         "rear_court": 2,
+        "triple_rear_courts": 1,
         "side_court": 2,
         "pinched_waist": 1,
         "inner_court": 2,
@@ -344,6 +382,8 @@ BUILDING_SHAPE_WEIGHTS = {
         "twin_rear_courts": 1,
         "offset_side_court": 1,
         "u_shape": 1,
+        "side_u_shape": 1,
+        "elbow_court": 1,
         "t_shape": 1,
         "h_shape": 1,
         "c_shape": 1,
@@ -353,6 +393,19 @@ BUILDING_SHAPE_WEIGHTS = {
         "cross_shape": 1,
         "dogbone_shape": 1,
         "arcade_court": 1,
+        "offset_arcade_court": 1,
+        "side_arcade_court": 1,
+        "through_arcade_court": 1,
+        "offset_linked_wings": 1,
+        "triple_linked_wings": 1,
+        "offset_triple_linked_wings": 1,
+        "quad_linked_wings": 1,
+        "offset_quad_linked_wings": 1,
+        "quint_linked_wings": 1,
+        "offset_quint_linked_wings": 1,
+        "twin_side_courts": 1,
+        "comb_shape": 1,
+        "double_comb_shape": 1,
     },
     "civic": {
         "rect": 3,
@@ -360,6 +413,7 @@ BUILDING_SHAPE_WEIGHTS = {
         "deep_setback": 2,
         "side_setback": 2,
         "rear_court": 2,
+        "triple_rear_courts": 1,
         "side_court": 1,
         "pinched_waist": 1,
         "inner_court": 1,
@@ -368,6 +422,8 @@ BUILDING_SHAPE_WEIGHTS = {
         "twin_rear_courts": 1,
         "offset_side_court": 1,
         "u_shape": 1,
+        "side_u_shape": 1,
+        "elbow_court": 1,
         "t_shape": 1,
         "h_shape": 1,
         "c_shape": 1,
@@ -377,6 +433,19 @@ BUILDING_SHAPE_WEIGHTS = {
         "cross_shape": 1,
         "dogbone_shape": 1,
         "arcade_court": 1,
+        "offset_arcade_court": 1,
+        "side_arcade_court": 1,
+        "through_arcade_court": 1,
+        "offset_linked_wings": 1,
+        "triple_linked_wings": 1,
+        "offset_triple_linked_wings": 1,
+        "quad_linked_wings": 1,
+        "offset_quad_linked_wings": 1,
+        "quint_linked_wings": 1,
+        "offset_quint_linked_wings": 1,
+        "twin_side_courts": 1,
+        "comb_shape": 1,
+        "double_comb_shape": 1,
     },
     "secure": {
         "rect": 2,
@@ -384,6 +453,7 @@ BUILDING_SHAPE_WEIGHTS = {
         "deep_setback": 2,
         "side_setback": 2,
         "rear_court": 1,
+        "triple_rear_courts": 1,
         "side_court": 1,
         "pinched_waist": 1,
         "inner_court": 1,
@@ -392,6 +462,8 @@ BUILDING_SHAPE_WEIGHTS = {
         "twin_rear_courts": 1,
         "offset_side_court": 1,
         "u_shape": 1,
+        "side_u_shape": 1,
+        "elbow_court": 1,
         "t_shape": 1,
         "h_shape": 1,
         "c_shape": 1,
@@ -401,6 +473,17 @@ BUILDING_SHAPE_WEIGHTS = {
         "cross_shape": 1,
         "dogbone_shape": 1,
         "arcade_court": 1,
+        "offset_arcade_court": 1,
+        "side_arcade_court": 1,
+        "through_arcade_court": 1,
+        "offset_linked_wings": 1,
+        "triple_linked_wings": 1,
+        "offset_triple_linked_wings": 1,
+        "quad_linked_wings": 1,
+        "offset_quad_linked_wings": 1,
+        "twin_side_courts": 1,
+        "comb_shape": 1,
+        "double_comb_shape": 1,
     },
     "entertainment": {
         "rect": 3,
@@ -408,6 +491,7 @@ BUILDING_SHAPE_WEIGHTS = {
         "deep_setback": 2,
         "side_setback": 2,
         "rear_court": 1,
+        "triple_rear_courts": 1,
         "side_court": 2,
         "pinched_waist": 1,
         "inner_court": 1,
@@ -416,6 +500,8 @@ BUILDING_SHAPE_WEIGHTS = {
         "twin_rear_courts": 1,
         "offset_side_court": 1,
         "u_shape": 1,
+        "side_u_shape": 1,
+        "elbow_court": 1,
         "t_shape": 1,
         "h_shape": 1,
         "c_shape": 1,
@@ -425,6 +511,17 @@ BUILDING_SHAPE_WEIGHTS = {
         "cross_shape": 1,
         "dogbone_shape": 1,
         "arcade_court": 1,
+        "offset_arcade_court": 1,
+        "side_arcade_court": 1,
+        "through_arcade_court": 1,
+        "offset_linked_wings": 1,
+        "triple_linked_wings": 1,
+        "offset_triple_linked_wings": 1,
+        "quad_linked_wings": 1,
+        "offset_quad_linked_wings": 1,
+        "twin_side_courts": 1,
+        "comb_shape": 1,
+        "double_comb_shape": 1,
     },
 }
 
@@ -590,6 +687,28 @@ def _anchored_notch_cells(left, right, top, bottom, side, depth, span, anchor="c
     return {(int(x), int(y)) for x in xs for y in ys}
 
 
+def _inset_anchored_notch_cells(left, right, top, bottom, side, depth, span, anchor="center", inset=1):
+    side = str(side or "north").strip().lower() or "north"
+    depth = max(1, int(depth))
+    span = max(1, int(span))
+    inset = max(0, int(inset))
+
+    if side in {"north", "south"}:
+        xs = _anchored_span(int(left) + 1 + inset, int(right) - 1 - inset, span, anchor=anchor)
+        if side == "north":
+            ys = range(int(top), min(int(bottom) + 1, int(top) + depth))
+        else:
+            ys = range(max(int(top), int(bottom) - depth + 1), int(bottom) + 1)
+        return {(int(x), int(y)) for x in xs for y in ys}
+
+    ys = _anchored_span(int(top) + 1 + inset, int(bottom) - 1 - inset, span, anchor=anchor)
+    if side == "west":
+        xs = range(int(left), min(int(right) + 1, int(left) + depth))
+    else:
+        xs = range(max(int(left), int(right) - depth + 1), int(right) + 1)
+    return {(int(x), int(y)) for x in xs for y in ys}
+
+
 def _center_notch_cells(left, right, top, bottom, side, depth, span):
     return _anchored_notch_cells(left, right, top, bottom, side, depth, span, anchor="center")
 
@@ -702,11 +821,42 @@ def _cross_notch_span_for_length(length):
     return max(1, interior - 2)
 
 
+def _comb_notch_span_for_length(length):
+    interior = max(0, int(length) - 2)
+    if interior >= 11:
+        return 3
+    if interior >= 9:
+        return 2
+    return 1 if interior > 0 else 0
+
+
 def _stepped_notch_cells(left, right, top, bottom, side, outer_depth, inner_depth, inner_span):
     cells = set(_center_strip_cells(left, right, top, bottom, side, outer_depth))
     if int(inner_depth) > int(outer_depth):
         cells.update(_center_notch_cells(left, right, top, bottom, side, inner_depth, inner_span))
     return cells
+
+
+def _arcade_bridge_cells(left, right, top, bottom, margin_x=2, margin_y=2, mode="horizontal"):
+    left = int(left)
+    right = int(right)
+    top = int(top)
+    bottom = int(bottom)
+    margin_x = max(1, int(margin_x))
+    margin_y = max(1, int(margin_y))
+    mode = str(mode or "horizontal").strip().lower() or "horizontal"
+    bridge_cells = set()
+
+    if mode in {"horizontal", "cross"}:
+        bridge_y = (int(top) + int(bottom)) // 2
+        for bridge_x in range(int(left) + margin_x, int(right) - margin_x + 1):
+            bridge_cells.add((int(bridge_x), int(bridge_y)))
+    if mode in {"vertical", "cross"}:
+        bridge_x = (int(left) + int(right)) // 2
+        for bridge_y in range(int(top) + margin_y, int(bottom) - margin_y + 1):
+            bridge_cells.add((int(bridge_x), int(bridge_y)))
+
+    return bridge_cells
 
 
 def _anchor_toward_side(side, toward_side):
@@ -734,12 +884,14 @@ def _opposite_anchor(anchor):
     return "center"
 
 
-def _linked_wing_cells(left, right, top, bottom, axis="horizontal"):
+def _linked_wing_cells(left, right, top, bottom, axis="horizontal", wing_count=2, connector_anchor="center"):
     left = int(left)
     right = int(right)
     top = int(top)
     bottom = int(bottom)
     axis = str(axis or "horizontal").strip().lower() or "horizontal"
+    wing_count = max(2, int(wing_count))
+    connector_anchor = str(connector_anchor or "center").strip().lower() or "center"
     width = right - left + 1
     height = bottom - top + 1
     excluded = set()
@@ -747,36 +899,131 @@ def _linked_wing_cells(left, right, top, bottom, axis="horizontal"):
     if axis == "vertical":
         if height < 7 or width < 5:
             return excluded
-        connector_h = 3 if height >= 11 else 1
-        connector_w = 3 if width >= 7 else 1
-        center_y = (top + bottom) // 2
-        center_x = (left + right) // 2
-        connector_top = max(top + 1, center_y - (connector_h // 2))
-        connector_bottom = min(bottom - 1, connector_top + connector_h - 1)
-        connector_left = max(left + 1, center_x - (connector_w // 2))
-        connector_right = min(right - 1, connector_left + connector_w - 1)
-        for y in range(connector_top, connector_bottom + 1):
-            for x in range(left + 1, right):
-                if connector_left <= x <= connector_right:
-                    continue
-                excluded.add((int(x), int(y)))
+        if wing_count > 2 and height < 11:
+            return excluded
+        divider_thickness = 3 if wing_count == 2 and height >= 11 else 1
+        connector_span = 3 if width >= 7 else 1
+        connector_xs = tuple(_anchored_span(left + 1, right - 1, connector_span, anchor=connector_anchor))
+        divider_centers = [
+            top + (((height - 1) * divider_index) // wing_count)
+            for divider_index in range(1, wing_count)
+        ]
+        for divider_center in divider_centers:
+            divider_top = max(top + 1, int(divider_center) - (divider_thickness // 2))
+            divider_bottom = min(bottom - 1, divider_top + divider_thickness - 1)
+            divider_top = max(top + 1, divider_bottom - divider_thickness + 1)
+            for y in range(divider_top, divider_bottom + 1):
+                for x in range(left + 1, right):
+                    if int(x) in connector_xs:
+                        continue
+                    excluded.add((int(x), int(y)))
         return excluded
 
     if width < 7 or height < 5:
         return excluded
-    connector_w = 3 if width >= 11 else 1
-    connector_h = 3 if height >= 7 else 1
-    center_x = (left + right) // 2
-    center_y = (top + bottom) // 2
-    connector_left = max(left + 1, center_x - (connector_w // 2))
-    connector_right = min(right - 1, connector_left + connector_w - 1)
-    connector_top = max(top + 1, center_y - (connector_h // 2))
-    connector_bottom = min(bottom - 1, connector_top + connector_h - 1)
-    for x in range(connector_left, connector_right + 1):
-        for y in range(top + 1, bottom):
-            if connector_top <= y <= connector_bottom:
+    if wing_count > 2 and width < 11:
+        return excluded
+    divider_thickness = 3 if wing_count == 2 and width >= 11 else 1
+    connector_span = 3 if height >= 7 else 1
+    connector_ys = tuple(_anchored_span(top + 1, bottom - 1, connector_span, anchor=connector_anchor))
+    divider_centers = [
+        left + (((width - 1) * divider_index) // wing_count)
+        for divider_index in range(1, wing_count)
+    ]
+    for divider_center in divider_centers:
+        divider_left = max(left + 1, int(divider_center) - (divider_thickness // 2))
+        divider_right = min(right - 1, divider_left + divider_thickness - 1)
+        divider_left = max(left + 1, divider_right - divider_thickness + 1)
+        for x in range(divider_left, divider_right + 1):
+            for y in range(top + 1, bottom):
+                if int(y) in connector_ys:
+                    continue
+                excluded.add((int(x), int(y)))
+    return excluded
+
+
+def _cell_components(cells):
+    remaining = {(int(x), int(y)) for x, y in cells}
+    components = []
+    while remaining:
+        start = remaining.pop()
+        component = {start}
+        stack = [start]
+        while stack:
+            x, y = stack.pop()
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if (nx, ny) in remaining:
+                    remaining.remove((nx, ny))
+                    component.add((nx, ny))
+                    stack.append((nx, ny))
+        components.append(component)
+    return components
+
+
+def _repair_corner_component_islands(excluded, left, right, top, bottom):
+    left = int(left)
+    right = int(right)
+    top = int(top)
+    bottom = int(bottom)
+    excluded = {(int(x), int(y)) for x, y in excluded}
+    corner_paths = (
+        ((left, top), (
+            tuple((int(x), top) for x in range(left + 1, right + 1)),
+            tuple((left, int(y)) for y in range(top + 1, bottom + 1)),
+        )),
+        ((right, top), (
+            tuple((int(x), top) for x in range(right - 1, left - 1, -1)),
+            tuple((right, int(y)) for y in range(top + 1, bottom + 1)),
+        )),
+        ((left, bottom), (
+            tuple((int(x), bottom) for x in range(left + 1, right + 1)),
+            tuple((left, int(y)) for y in range(bottom - 1, top - 1, -1)),
+        )),
+        ((right, bottom), (
+            tuple((int(x), bottom) for x in range(right - 1, left - 1, -1)),
+            tuple((right, int(y)) for y in range(bottom - 1, top - 1, -1)),
+        )),
+    )
+    for _attempt in range(4):
+        footprint = {
+            (int(x), int(y))
+            for y in range(top, bottom + 1)
+            for x in range(left, right + 1)
+            if (int(x), int(y)) not in excluded
+        }
+        components = _cell_components(footprint)
+        if len(components) <= 1:
+            return excluded
+        largest_component = max(components, key=len)
+        component_by_cell = {}
+        for component in components:
+            for cell in component:
+                component_by_cell[cell] = component
+        changed = False
+        for corner, paths in corner_paths:
+            corner_component = component_by_cell.get(corner)
+            if not corner_component or corner_component is largest_component:
                 continue
-            excluded.add((int(x), int(y)))
+            candidate_runs = []
+            for path in paths:
+                run = []
+                for cell in path:
+                    if cell in largest_component:
+                        candidate_runs.append(tuple(run))
+                        break
+                    if cell in excluded:
+                        run.append(cell)
+                else:
+                    continue
+            if not candidate_runs:
+                continue
+            best_run = min(candidate_runs, key=len)
+            for cell in best_run:
+                if cell in excluded:
+                    excluded.remove(cell)
+                    changed = True
+        if not changed:
+            return excluded
     return excluded
 
 
@@ -806,7 +1053,10 @@ def building_shape_exclusions(
     parcel_span_y = max(1, int(parcel_span_y))
     if width < 9 or height < 9:
         for advanced_shape in (
+            "triple_rear_courts",
+            "elbow_court",
             "u_shape",
+            "side_u_shape",
             "t_shape",
             "h_shape",
             "c_shape",
@@ -816,6 +1066,12 @@ def building_shape_exclusions(
             "cross_shape",
             "dogbone_shape",
             "arcade_court",
+            "offset_arcade_court",
+            "side_arcade_court",
+            "through_arcade_court",
+            "twin_side_courts",
+            "comb_shape",
+            "double_comb_shape",
         ):
             weights.pop(advanced_shape, None)
     linked_axis = ""
@@ -831,6 +1087,28 @@ def building_shape_exclusions(
         linked_axis = "vertical"
     elif width >= 9 and height >= 9:
         linked_axis = "horizontal" if width >= height else "vertical"
+    if not linked_axis:
+        for linked_shape in (
+            "offset_linked_wings",
+            "triple_linked_wings",
+            "offset_triple_linked_wings",
+            "quad_linked_wings",
+            "offset_quad_linked_wings",
+            "quint_linked_wings",
+            "offset_quint_linked_wings",
+        ):
+            weights.pop(linked_shape, None)
+    else:
+        if max(width, height) < 11:
+            weights.pop("offset_linked_wings", None)
+        if max(width, height) < 13:
+            weights.pop("triple_linked_wings", None)
+            weights.pop("offset_triple_linked_wings", None)
+            weights.pop("quad_linked_wings", None)
+            weights.pop("offset_quad_linked_wings", None)
+        if max(width, height) < 15:
+            weights.pop("quint_linked_wings", None)
+            weights.pop("offset_quint_linked_wings", None)
     if linked_axis:
         weights["linked_wings"] = max(int(weights.get("linked_wings", 0)), 3 if width >= 11 or height >= 11 else 2)
     shapes = list(weights.keys())
@@ -905,6 +1183,17 @@ def building_shape_exclusions(
         court_span = _u_court_span_for_length(shell_span)
         excluded.update(_center_notch_cells(left, right, top, bottom, back_side, court_depth, court_span))
 
+    elif shape == "side_u_shape":
+        side_options = list(PERPENDICULAR_WALL_SIDES.get(entry_side, ("west", "east")))
+        if not side_options:
+            side_options = ["west"]
+        side = rng.choice(side_options)
+        shell_span = height if side in {"west", "east"} else width
+        shell_depth = width if side in {"west", "east"} else height
+        court_depth = min(max(2, shell_depth - 3), 4 if shell_depth >= 11 else 3)
+        court_span = _u_court_span_for_length(shell_span)
+        excluded.update(_center_notch_cells(left, right, top, bottom, side, court_depth, court_span))
+
     elif shape == "c_shape":
         side_options = list(PERPENDICULAR_WALL_SIDES.get(entry_side, ("west", "east")))
         if not side_options:
@@ -948,6 +1237,16 @@ def building_shape_exclusions(
         excluded.update(_anchored_notch_cells(left, right, top, bottom, back_side, court_depth, court_span, anchor="start"))
         excluded.update(_anchored_notch_cells(left, right, top, bottom, back_side, court_depth, court_span, anchor="end"))
 
+    elif shape == "triple_rear_courts":
+        shell_span = width if back_side in {"north", "south"} else height
+        shell_depth = height if back_side in {"north", "south"} else width
+        court_depth = 3 if shell_depth >= 9 else 2
+        court_span = _comb_notch_span_for_length(shell_span)
+        if court_span > 0:
+            excluded.update(_anchored_notch_cells(left, right, top, bottom, back_side, court_depth, court_span, anchor="start"))
+            excluded.update(_center_notch_cells(left, right, top, bottom, back_side, court_depth, court_span))
+            excluded.update(_anchored_notch_cells(left, right, top, bottom, back_side, court_depth, court_span, anchor="end"))
+
     elif shape == "side_court":
         side_options = list(PERPENDICULAR_WALL_SIDES.get(entry_side, ("west", "east")))
         if not side_options:
@@ -966,6 +1265,37 @@ def building_shape_exclusions(
         court_span = _narrow_court_span_for_length(height if side in {"west", "east"} else width)
         anchor = _anchor_toward_side(side, back_side)
         excluded.update(_anchored_notch_cells(left, right, top, bottom, side, court_depth, court_span, anchor=anchor))
+
+    elif shape == "elbow_court":
+        side_options = list(PERPENDICULAR_WALL_SIDES.get(entry_side, ("west", "east")))
+        if not side_options:
+            side_options = ["west"]
+        side = rng.choice(side_options)
+        back_span = width if back_side in {"north", "south"} else height
+        back_depth = height if back_side in {"north", "south"} else width
+        side_span = height if side in {"west", "east"} else width
+        side_depth = width if side in {"west", "east"} else height
+        rear_depth = 2 if back_depth >= 9 else 1
+        side_court_depth = 2 if side_depth >= 9 else 1
+        rear_span = _narrow_court_span_for_length(back_span)
+        side_court_span = _narrow_court_span_for_length(side_span)
+        rear_anchor = _anchor_toward_side(back_side, side)
+        side_anchor = _anchor_toward_side(side, back_side)
+        inset = 2
+        excluded.update(_inset_anchored_notch_cells(left, right, top, bottom, back_side, rear_depth, rear_span, anchor=rear_anchor, inset=inset))
+        excluded.update(_inset_anchored_notch_cells(left, right, top, bottom, side, side_court_depth, side_court_span, anchor=side_anchor, inset=inset))
+
+    elif shape == "twin_side_courts":
+        side_options = list(PERPENDICULAR_WALL_SIDES.get(entry_side, ("west", "east")))
+        if not side_options:
+            side_options = ["west"]
+        side = rng.choice(side_options)
+        shell_span = height if side in {"west", "east"} else width
+        shell_depth = width if side in {"west", "east"} else height
+        court_depth = 3 if shell_depth >= 9 else 2
+        court_span = _paired_court_span_for_length(shell_span)
+        excluded.update(_anchored_notch_cells(left, right, top, bottom, side, court_depth, court_span, anchor="start"))
+        excluded.update(_anchored_notch_cells(left, right, top, bottom, side, court_depth, court_span, anchor="end"))
 
     elif shape == "t_shape":
         side_options = list(PERPENDICULAR_WALL_SIDES.get(entry_side, ("west", "east")))
@@ -1093,6 +1423,181 @@ def building_shape_exclusions(
                 court_span = _narrow_court_span_for_length(width)
             excluded.update(_center_notch_cells(left, right, top, bottom, opening_side, court_depth, court_span))
 
+    elif shape == "offset_arcade_court":
+        margin_x = 2 if width >= 9 else 1
+        margin_y = 2 if height >= 9 else 1
+        if width >= (margin_x * 2) + 3 and height >= (margin_y * 2) + 3:
+            excluded.update(_inner_court_cells(left, right, top, bottom, margin_x=margin_x, margin_y=margin_y))
+            side_options = list(PERPENDICULAR_WALL_SIDES.get(entry_side, ("west", "east")))
+            side_options.append(back_side)
+            side_options = [side for side in side_options if side != entry_side]
+            opening_side = rng.choice(tuple(dict.fromkeys(side_options))) if side_options else back_side
+            opening_anchor = rng.choice(("start", "end"))
+            if opening_side in {"west", "east"}:
+                court_depth = margin_x + 1
+                court_span = _narrow_court_span_for_length(height)
+            else:
+                court_depth = margin_y + 1
+                court_span = _narrow_court_span_for_length(width)
+            excluded.update(_anchored_notch_cells(left, right, top, bottom, opening_side, court_depth, court_span, anchor=opening_anchor))
+
+    elif shape == "side_arcade_court":
+        margin_x = 2 if width >= 9 else 1
+        margin_y = 2 if height >= 9 else 1
+        if width >= (margin_x * 2) + 3 and height >= (margin_y * 2) + 3:
+            excluded.update(_inner_court_cells(left, right, top, bottom, margin_x=margin_x, margin_y=margin_y))
+            for side in PERPENDICULAR_WALL_SIDES.get(entry_side, ("west", "east"))[:2]:
+                if side in {"west", "east"}:
+                    court_depth = margin_x + 1
+                    court_span = _narrow_court_span_for_length(height)
+                else:
+                    court_depth = margin_y + 1
+                    court_span = _narrow_court_span_for_length(width)
+                excluded.update(_center_notch_cells(left, right, top, bottom, side, court_depth, court_span))
+            # Keep a one-cell spine through the court so dual-side arcades stay
+            # connected instead of splitting into isolated top/bottom bands.
+            if entry_side in {"north", "south"}:
+                bridge_x = (int(left) + int(right)) // 2
+                for bridge_y in range(int(top) + margin_y, int(bottom) - margin_y + 1):
+                    excluded.discard((bridge_x, int(bridge_y)))
+            else:
+                bridge_y = (int(top) + int(bottom)) // 2
+                for bridge_x in range(int(left) + margin_x, int(right) - margin_x + 1):
+                    excluded.discard((int(bridge_x), bridge_y))
+
+    elif shape == "through_arcade_court":
+        margin_x = 2 if width >= 9 else 1
+        margin_y = 2 if height >= 9 else 1
+        if width >= (margin_x * 2) + 3 and height >= (margin_y * 2) + 3:
+            excluded.update(_inner_court_cells(left, right, top, bottom, margin_x=margin_x, margin_y=margin_y))
+            for side in (entry_side, back_side):
+                if side in {"west", "east"}:
+                    court_depth = margin_x + 1
+                    court_span = _narrow_court_span_for_length(height)
+                else:
+                    court_depth = margin_y + 1
+                    court_span = _narrow_court_span_for_length(width)
+                excluded.update(_center_notch_cells(left, right, top, bottom, side, court_depth, court_span))
+            bridge_mode = "horizontal" if entry_side in {"north", "south"} else "vertical"
+            excluded.difference_update(_arcade_bridge_cells(
+                left,
+                right,
+                top,
+                bottom,
+                margin_x=margin_x,
+                margin_y=margin_y,
+                mode=bridge_mode,
+            ))
+
+    elif shape == "comb_shape":
+        side_options = list(PERPENDICULAR_WALL_SIDES.get(entry_side, ("west", "east")))
+        if not side_options:
+            side_options = ["west"]
+        side = rng.choice(side_options)
+        shell_span = height if side in {"west", "east"} else width
+        shell_depth = width if side in {"west", "east"} else height
+        notch_depth = 3 if shell_depth >= 11 else 2
+        notch_span = _comb_notch_span_for_length(shell_span)
+        if notch_span > 0:
+            excluded.update(_anchored_notch_cells(left, right, top, bottom, side, notch_depth, notch_span, anchor="start"))
+            excluded.update(_center_notch_cells(left, right, top, bottom, side, notch_depth, notch_span))
+            excluded.update(_anchored_notch_cells(left, right, top, bottom, side, notch_depth, notch_span, anchor="end"))
+
+    elif shape == "double_comb_shape":
+        side_options = list(PERPENDICULAR_WALL_SIDES.get(entry_side, ("west", "east")))
+        if len(side_options) < 2:
+            side_options = ["west", "east"]
+        shell_span = height if side_options[0] in {"west", "east"} else width
+        shell_depth = width if side_options[0] in {"west", "east"} else height
+        notch_depth = 3 if shell_depth >= 11 else 2
+        notch_span = _comb_notch_span_for_length(shell_span)
+        if notch_span > 0:
+            for side in side_options[:2]:
+                excluded.update(_anchored_notch_cells(left, right, top, bottom, side, notch_depth, notch_span, anchor="start"))
+                excluded.update(_center_notch_cells(left, right, top, bottom, side, notch_depth, notch_span))
+                excluded.update(_anchored_notch_cells(left, right, top, bottom, side, notch_depth, notch_span, anchor="end"))
+
+    elif shape == "offset_linked_wings":
+        connector_anchor = rng.choice(("start", "end"))
+        excluded.update(_linked_wing_cells(
+            left,
+            right,
+            top,
+            bottom,
+            axis=linked_axis or "horizontal",
+            wing_count=2,
+            connector_anchor=connector_anchor,
+        ))
+
+    elif shape == "triple_linked_wings":
+        excluded.update(_linked_wing_cells(
+            left,
+            right,
+            top,
+            bottom,
+            axis=linked_axis or "horizontal",
+            wing_count=3,
+            connector_anchor="center",
+        ))
+
+    elif shape == "offset_triple_linked_wings":
+        connector_anchor = rng.choice(("start", "end"))
+        excluded.update(_linked_wing_cells(
+            left,
+            right,
+            top,
+            bottom,
+            axis=linked_axis or "horizontal",
+            wing_count=3,
+            connector_anchor=connector_anchor,
+        ))
+
+    elif shape == "quad_linked_wings":
+        excluded.update(_linked_wing_cells(
+            left,
+            right,
+            top,
+            bottom,
+            axis=linked_axis or "horizontal",
+            wing_count=4,
+            connector_anchor="center",
+        ))
+
+    elif shape == "offset_quad_linked_wings":
+        connector_anchor = rng.choice(("start", "end"))
+        excluded.update(_linked_wing_cells(
+            left,
+            right,
+            top,
+            bottom,
+            axis=linked_axis or "horizontal",
+            wing_count=4,
+            connector_anchor=connector_anchor,
+        ))
+
+    elif shape == "quint_linked_wings":
+        excluded.update(_linked_wing_cells(
+            left,
+            right,
+            top,
+            bottom,
+            axis=linked_axis or "horizontal",
+            wing_count=5,
+            connector_anchor="center",
+        ))
+
+    elif shape == "offset_quint_linked_wings":
+        connector_anchor = rng.choice(("start", "end"))
+        excluded.update(_linked_wing_cells(
+            left,
+            right,
+            top,
+            bottom,
+            axis=linked_axis or "horizontal",
+            wing_count=5,
+            connector_anchor=connector_anchor,
+        ))
+
     elif shape == "linked_wings":
         excluded.update(_linked_wing_cells(left, right, top, bottom, axis=linked_axis or "horizontal"))
 
@@ -1101,6 +1606,7 @@ def building_shape_exclusions(
         excluded = {(ex, ey) for ex, ey in excluded if ey != int(entry_y)}
     else:
         excluded = {(ex, ey) for ex, ey in excluded if ex != int(entry_x)}
+    excluded = _repair_corner_component_islands(excluded, left, right, top, bottom)
     return frozenset(excluded)
 
 

@@ -186,6 +186,42 @@ DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "hotel": ("rest",),
     "tavern": ("intel",),
 }
+OPTIONAL_SITE_SERVICES_BY_ARCHETYPE = {
+    "tavern": {
+        "chance": 0.34,
+        "bundles": (
+            (("video_poker",), 7),
+            (("keno",), 5),
+            (("slots",), 4),
+            (("video_poker", "keno"), 2),
+            (("slots", "video_poker"), 1),
+        ),
+    },
+    "corner_store": {
+        "chance": 0.18,
+        "bundles": (
+            (("keno",), 7),
+            (("slots",), 5),
+            (("video_poker",), 2),
+        ),
+    },
+    "pawn_shop": {
+        "chance": 0.14,
+        "bundles": (
+            (("video_poker",), 6),
+            (("slots",), 3),
+            (("keno",), 2),
+        ),
+    },
+    "restaurant": {
+        "chance": 0.06,
+        "bundles": (
+            (("keno",), 4),
+            (("video_poker",), 3),
+            (("slots",), 1),
+        ),
+    },
+}
 
 
 def _clamp_unit(value, default=0.0):
@@ -201,6 +237,18 @@ def _int_or_default(value, default):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _dedupe_service_ids(services):
+    ordered = []
+    seen = set()
+    for service in tuple(services or ()):
+        key = str(service).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+    return tuple(ordered)
 
 
 def _property_metadata(prop):
@@ -288,9 +336,90 @@ def finance_services_for_property(prop):
     return ()
 
 
-def default_site_services_for_archetype(archetype):
+def _optional_site_service_seed_token(prop):
+    metadata = _property_metadata(prop)
+    configured = str(metadata.get("site_service_seed_token", "") or "").strip()
+    if configured:
+        return configured
+
+    parts = []
+    building_id = str(metadata.get("building_id", "") or "").strip()
+    if building_id:
+        parts.append(building_id)
+
+    local_building_id = str(metadata.get("local_building_id", "") or "").strip()
+    chunk = metadata.get("chunk")
+    if local_building_id and isinstance(chunk, (list, tuple)) and len(chunk) >= 2:
+        parts.append(f"{int(chunk[0])}:{int(chunk[1])}:building:{local_building_id}")
+
+    site_kind = str(metadata.get("site_kind", "") or "").strip().lower()
+    site_id = str(metadata.get("site_id", "") or "").strip()
+    if site_kind and site_id and isinstance(chunk, (list, tuple)) and len(chunk) >= 2:
+        parts.append(f"{int(chunk[0])}:{int(chunk[1])}:site:{site_kind}:{site_id}")
+
+    prop_id = str(prop.get("id", "") or "").strip()
+    if prop_id:
+        parts.append(prop_id)
+
+    name = str(prop.get("name", "") or "").strip()
+    if name:
+        parts.append(name)
+
+    try:
+        x = int(prop.get("x"))
+        y = int(prop.get("y"))
+        z = int(prop.get("z", 0))
+        parts.append(f"{x}:{y}:{z}")
+    except (TypeError, ValueError):
+        pass
+
+    return "|".join(parts)
+
+
+def _roll_optional_site_services(archetype, *, seed_token=""):
     key = str(archetype or "").strip().lower()
-    return tuple(DEFAULT_SITE_SERVICES_BY_ARCHETYPE.get(key, ()))
+    if not key or not str(seed_token).strip():
+        return ()
+
+    profile = OPTIONAL_SITE_SERVICES_BY_ARCHETYPE.get(key)
+    if not isinstance(profile, dict):
+        return ()
+
+    rng = random.Random(f"optional-site-services:{key}:{seed_token}")
+    chance = _clamp_unit(profile.get("chance", 0.0))
+    if chance <= 0.0 or rng.random() >= chance:
+        return ()
+
+    bundles = []
+    total_weight = 0
+    for bundle, weight in tuple(profile.get("bundles", ()) or ()):
+        clean_bundle = _dedupe_service_ids(bundle)
+        try:
+            clean_weight = int(weight)
+        except (TypeError, ValueError):
+            continue
+        if not clean_bundle or clean_weight <= 0:
+            continue
+        bundles.append((clean_bundle, clean_weight))
+        total_weight += clean_weight
+    if total_weight <= 0:
+        return ()
+
+    pick = rng.randrange(total_weight)
+    cursor = 0
+    for bundle, weight in bundles:
+        cursor += weight
+        if pick < cursor:
+            return bundle
+    return bundles[-1][0]
+
+
+def default_site_services_for_archetype(archetype, *, seed_token=""):
+    key = str(archetype or "").strip().lower()
+    base = list(DEFAULT_SITE_SERVICES_BY_ARCHETYPE.get(key, ()))
+    if str(seed_token).strip():
+        base.extend(_roll_optional_site_services(key, seed_token=seed_token))
+    return _dedupe_service_ids(base)
 
 
 def site_services_for_property(prop):
@@ -303,17 +432,12 @@ def site_services_for_property(prop):
         services = [configured.strip().lower()]
 
     if not services:
-        services = list(default_site_services_for_archetype(metadata.get("archetype")))
+        services = list(default_site_services_for_archetype(
+            metadata.get("archetype"),
+            seed_token=_optional_site_service_seed_token(prop),
+        ))
 
-    ordered = []
-    seen = set()
-    for service in services:
-        key = str(service).strip().lower()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        ordered.append(key)
-    return tuple(ordered)
+    return _dedupe_service_ids(services)
 
 
 def _property_offers_lodging_or_shelter(prop):

@@ -10209,6 +10209,26 @@ class InputSystem(System):
             self.sim.emit(Event("quit_requested", eid=self.player_eid))
 
 
+def _building_site_service_seed_token(chunk_x, chunk_y, building, *, building_index=0):
+    local_building_id = ""
+    if isinstance(building, dict):
+        local_building_id = str(building.get("building_id", "") or "").strip()
+    if not local_building_id:
+        local_building_id = str(int(building_index))
+    return f"{int(chunk_x)}:{int(chunk_y)}:building:{local_building_id}"
+
+
+def _site_service_seed_token(chunk_x, chunk_y, site, *, site_index=0):
+    site_kind = "site"
+    site_id = ""
+    if isinstance(site, dict):
+        site_kind = str(site.get("kind", site_kind)).strip().lower() or "site"
+        site_id = str(site.get("site_id", "") or "").strip()
+    if not site_id:
+        site_id = str(int(site_index))
+    return f"{int(chunk_x)}:{int(chunk_y)}:site:{site_kind}:{site_id}"
+
+
 class WorldStreamingSystem(System):
 
     def __init__(self, sim, focus_eid):
@@ -10278,9 +10298,10 @@ class WorldStreamingSystem(System):
                 archetype = building["archetype"]
                 local_building_id = str(building.get("building_id", "") or "").strip()
                 chunk_building_id = world_building_id(key[0], key[1], local_building_id)
+                service_seed_token = _building_site_service_seed_token(key[0], key[1], building, building_index=i)
                 finance_services = list(finance_by_archetype.get(archetype, ()))
                 site_services = list(dict.fromkeys(
-                    list(_default_site_services_for_archetype(archetype))
+                    list(_default_site_services_for_archetype(archetype, seed_token=service_seed_token))
                     + list(vehicle_services_for_archetype(archetype))
                 ))
                 business_name = str(building.get("business_name") or "").strip()
@@ -10317,6 +10338,7 @@ class WorldStreamingSystem(System):
                         "purchase_cost": rng.randint(180, 460),
                         "finance_services": finance_services,
                         "site_services": site_services,
+                        "site_service_seed_token": service_seed_token,
                         "is_storefront": bool(building.get("is_storefront")),
                         "business_name": business_name or None,
                         "business_founder_name": business_founder_name or None,
@@ -10364,10 +10386,13 @@ class WorldStreamingSystem(System):
 
             self._ensure_property_anchor(x, y, z)
             site_kind = str(site.get("kind", "site")).strip().lower() or "site"
+            service_seed_token = _site_service_seed_token(key[0], key[1], site, site_index=idx)
             site_name = str(site.get("name", site_kind.replace("_", " ").title())).strip() or "Site"
             gameplay = site_gameplay_profile(site)
             public = bool(gameplay.get("public"))
             site_services = list(gameplay.get("site_services", ()))
+            if not site_services:
+                site_services = list(_default_site_services_for_archetype(site_kind, seed_token=service_seed_token))
             extra_services = list(vehicle_services_for_archetype(site_kind))
             if extra_services:
                 site_services = list(dict.fromkeys(site_services + extra_services))
@@ -10396,6 +10421,8 @@ class WorldStreamingSystem(System):
                     "finance_services": list(gameplay.get("finance_services", ())),
                     "is_storefront": bool(gameplay.get("is_storefront")),
                     "site_services": list(site_services),
+                    "site_service_seed_token": service_seed_token,
+                    "site_id": str(site.get("site_id", idx)),
                     "public": public,
                     "chunk": key,
                 },
@@ -13842,12 +13869,13 @@ class NPCInteractionSystem(System):
         names = []
 
         for block in chunk.get("blocks", ()):
-            for building in block.get("buildings", ()):
+            for building_index, building in enumerate(block.get("buildings", ())):
                 archetype = str(building.get("archetype", "")).strip().lower()
+                service_seed_token = _building_site_service_seed_token(cx, cy, building, building_index=building_index)
                 prop_stub = {"metadata": {"archetype": archetype}} if archetype else {"metadata": {}}
                 services_here = (
                     list(_finance_services_for_property(prop_stub))
-                    + list(_default_site_services_for_archetype(archetype))
+                    + list(_default_site_services_for_archetype(archetype, seed_token=service_seed_token))
                     + list(vehicle_services_for_archetype(archetype))
                 )
                 if not self._service_locator_matches(
@@ -13861,13 +13889,17 @@ class NPCInteractionSystem(System):
                 if label:
                     names.append(label)
 
-        for site in chunk.get("sites", ()):
+        for site_index, site in enumerate(chunk.get("sites", ())):
             kind = str(site.get("kind", "")).strip().lower()
+            service_seed_token = _site_service_seed_token(cx, cy, site, site_index=site_index)
             gameplay = site_gameplay_profile(site)
             prop_stub = {"metadata": {"archetype": kind}} if kind else {"metadata": {}}
+            configured_site_services = list(gameplay.get("site_services", ()))
+            if not configured_site_services:
+                configured_site_services = list(_default_site_services_for_archetype(kind, seed_token=service_seed_token))
             services_here = (
                 list(_finance_services_for_property(prop_stub))
-                + list(gameplay.get("site_services", ()))
+                + configured_site_services
                 + list(vehicle_services_for_archetype(kind))
             )
             if not self._service_locator_matches(
@@ -36744,19 +36776,24 @@ class EventLogSystem(System):
         names = []
 
         for block in chunk.get("blocks", ()):
-            for building in block.get("buildings", ()):
+            for building_index, building in enumerate(block.get("buildings", ())):
                 archetype = str(building.get("archetype", "")).strip().lower()
-                services = list(_default_site_services_for_archetype(archetype)) + list(vehicle_services_for_archetype(archetype))
+                service_seed_token = _building_site_service_seed_token(cx, cy, building, building_index=building_index)
+                services = list(_default_site_services_for_archetype(archetype, seed_token=service_seed_token)) + list(vehicle_services_for_archetype(archetype))
                 if service_key not in {str(item).strip().lower() for item in services if str(item).strip()}:
                     continue
                 label = str(building.get("business_name") or archetype.replace("_", " ").title()).strip()
                 if label:
                     names.append(label)
 
-        for site in chunk.get("sites", ()):
+        for site_index, site in enumerate(chunk.get("sites", ())):
             kind = str(site.get("kind", "")).strip().lower()
+            service_seed_token = _site_service_seed_token(cx, cy, site, site_index=site_index)
             gameplay = site_gameplay_profile(site)
-            services = list(gameplay.get("site_services", ())) + list(vehicle_services_for_archetype(kind))
+            services = list(gameplay.get("site_services", ()))
+            if not services:
+                services = list(_default_site_services_for_archetype(kind, seed_token=service_seed_token))
+            services += list(vehicle_services_for_archetype(kind))
             if service_key not in {str(item).strip().lower() for item in services if str(item).strip()}:
                 continue
             label = str(site.get("name") or kind.replace("_", " ").title()).strip()
