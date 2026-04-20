@@ -133,6 +133,18 @@
       {"type": "status", "status": "patched_up", "duration": 18, "modifiers": {"safety_tick_delta": 0.08, "move_speed_mult": -0.08}}
     ]
   },
+  "trauma_autoinjector": {
+    "name": "Trauma Autoinjector",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": ["consumable", "medical", "safety", "restricted", "death_save"],
+    "legal_status": "restricted",
+    "effects": [
+      {"type": "restore_hp", "delta": 14},
+      {"type": "modify_need", "need": "safety", "delta": 10},
+      {"type": "status", "status": "trauma_shocked", "duration": 22, "modifiers": {"safety_tick_delta": -0.06, "move_speed_mult": -0.2}}
+    ]
+  },
   "synth_focus_tabs": {
     "name": "Synth Focus Tabs",
     "glyph": "!",

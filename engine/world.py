@@ -414,10 +414,10 @@ class World:
     OPTIONAL_BUILDINGS_BY_DISTRICT = {
         "industrial": ("recycling_plant", "auto_garage", "freight_depot", "cold_storage", "tool_depot"),
         "residential": ("daycare", "laundromat", "pharmacy", "bookshop", "hardware_store"),
-        "downtown": ("hotel", "courthouse", "metro_exchange", "courier_office", "gallery", "casino", "tavern"),
-        "slums": ("chop_shop", "junk_market", "soup_kitchen", "flophouse", "street_kitchen"),
+        "downtown": ("hotel", "courthouse", "jail", "jail", "metro_exchange", "courier_office", "gallery", "casino", "tavern"),
+        "slums": ("chop_shop", "junk_market", "soup_kitchen", "flophouse", "street_kitchen", "jail"),
         "corporate": ("data_center", "co_working_hub", "biotech_clinic", "brokerage", "media_lab"),
-        "military": ("command_center", "motor_pool", "field_hospital", "recruitment_office", "supply_bunker"),
+        "military": ("command_center", "motor_pool", "field_hospital", "recruitment_office", "supply_bunker", "prison"),
         "entertainment": ("theater", "music_venue", "gaming_hall", "karaoke_box", "pool_hall", "casino"),
     }
 
@@ -467,6 +467,8 @@ class World:
         "hardware_store": ("counter", "aisles", "stock_room", "repair_bench"),
         "hotel": ("lobby", "guest_floor", "laundry", "service_office", "bar"),
         "courthouse": ("public_hall", "courtroom", "records_office", "holding", "judge_chambers"),
+        "jail": ("booking", "holding", "cell_block", "visitation", "control_room"),
+        "prison": ("intake", "cell_block", "visitation", "records_office", "control_room", "exercise_yard"),
         "metro_exchange": ("concourse", "platform", "ticketing", "control_booth", "maintenance_tunnel"),
         "courier_office": ("front_counter", "sorting_rack", "dispatch_desk", "locker_wall", "records"),
         "gallery": ("foyer", "exhibit_room", "prep_room", "office"),
@@ -504,6 +506,8 @@ class World:
         "co_working_hub",
         "cold_storage",
         "courthouse",
+        "jail",
+        "prison",
         "courier_office",
         "data_center",
         "factory",
@@ -536,6 +540,7 @@ class World:
         "brokerage",
         "co_working_hub",
         "courthouse",
+        "prison",
         "data_center",
         "hotel",
         "metro_exchange",
@@ -553,6 +558,7 @@ class World:
         "brokerage",
         "cold_storage",
         "courthouse",
+        "jail",
         "data_center",
         "field_hospital",
         "flophouse",
@@ -608,6 +614,7 @@ class World:
         "co_working_hub",
         "command_center",
         "courthouse",
+        "prison",
         "data_center",
         "factory",
         "field_hospital",
@@ -675,6 +682,8 @@ class World:
         "hardware_store": ("hardware_clerk", "repair_advisor", "stock_runner", "paint_mixer", "key_cutter"),
         "hotel": ("concierge", "housekeeper", "front_desk_agent", "night_auditor", "bellhop"),
         "courthouse": ("court_clerk", "bailiff", "records_archivist", "legal_aide"),
+        "jail": ("corrections_officer", "booking_clerk", "transport_deputy", "detention_nurse", "records_sergeant"),
+        "prison": ("corrections_officer", "yard_sergeant", "intake_clerk", "prison_counselor", "transport_guard", "control_operator"),
         "metro_exchange": ("station_agent", "ticketing_clerk", "transit_controller", "platform_supervisor", "fare_inspector"),
         "courier_office": ("courier_dispatcher", "parcel_sorter", "route_coordinator", "front_counter_clerk"),
         "gallery": ("gallery_attendant", "curator_aide", "installation_tech", "ticket_clerk"),
@@ -766,6 +775,7 @@ class World:
         "hardware_store",
         "hotel",
         "metro_exchange",
+        "jail",
         "courier_office",
         "gallery",
         "chop_shop",
@@ -814,6 +824,8 @@ class World:
         "hardware_store": ("Hardware", "Fix-It", "Supply"),
         "hotel": ("Hotel", "Inn", "Suites"),
         "metro_exchange": ("Transit Exchange", "Terminal", "Station"),
+        "jail": ("Jail", "Detention Center", "Holding House"),
+        "prison": ("Prison", "Correctional Complex", "Correctional Facility"),
         "courier_office": ("Courier", "Parcel Office", "Dispatch"),
         "gallery": ("Gallery", "Studio", "Exhibit House"),
         "chop_shop": ("Garage", "Parts Yard", "Scrap Bay"),
@@ -2022,6 +2034,8 @@ class World:
                 extra_floor_chance += 0.14
         if rng.random() < extra_floor_chance:
             floors += 1
+        if archetype == "prison":
+            floors = max(floors, 2)
         floors = max(1, min(3, floors))
 
         basement_levels = 0

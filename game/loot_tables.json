@@ -142,6 +142,7 @@
     {"item_id": "micro_medkit", "weight": 16},
     {"item_id": "bandage_roll", "weight": 18},
     {"item_id": "trauma_foam", "weight": 12},
+    {"item_id": "trauma_autoinjector", "weight": 4},
     {"item_id": "focus_inhaler", "weight": 16},
     {"item_id": "battery_pack", "weight": 10},
     {"item_id": "synth_focus_tabs", "weight": 10},
@@ -163,6 +164,7 @@
     {"item_id": "micro_medkit", "weight": 14},
     {"item_id": "bandage_roll", "weight": 12},
     {"item_id": "trauma_foam", "weight": 14},
+    {"item_id": "trauma_autoinjector", "weight": 5},
     {"item_id": "focus_inhaler", "weight": 16},
     {"item_id": "synth_focus_tabs", "weight": 11},
     {"item_id": "battery_pack", "weight": 10},
@@ -311,6 +313,7 @@
     {"item_id": "calm_patch", "weight": 18},
     {"item_id": "pain_blocker", "weight": 16},
     {"item_id": "trauma_foam", "weight": 14},
+    {"item_id": "trauma_autoinjector", "weight": 6},
     {"item_id": "focus_inhaler", "weight": 12},
     {"item_id": "synth_focus_tabs", "weight": 8}
   ],
@@ -321,6 +324,7 @@
     {"item_id": "field_dressing", "weight": 16},
     {"item_id": "calm_patch", "weight": 16},
     {"item_id": "trauma_foam", "weight": 16},
+    {"item_id": "trauma_autoinjector", "weight": 7},
     {"item_id": "focus_inhaler", "weight": 14},
     {"item_id": "black_market_stim", "weight": 6}
   ],

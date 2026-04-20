@@ -82,6 +82,7 @@ from game.site_services import SiteServiceSystem
 from game.skill_progression import SkillProgressionSystem
 from game.skills import seed_skill_profile
 from game.systems import (
+    BusinessPulseSceneSystem,
     CameraSystem,
     CoverSystem,
     CombatPacingSystem,
@@ -97,6 +98,7 @@ from game.systems import (
     NPCItemUseSystem,
     NPCMemorySystem,
     NPCNeedsSystem,
+    NPCSettlementSystem,
     NPCWeaponSystem,
     RumorSystem,
     NPCSocialDynamicsSystem,
@@ -277,11 +279,13 @@ def _register_runtime_systems(sim, view, player):
     npc_memory_system = NPCMemorySystem(sim)
     rumor_system = RumorSystem(sim)
     npc_needs_system = NPCNeedsSystem(sim)
+    npc_settlement_system = NPCSettlementSystem(sim)
     status_effect_system = StatusEffectSystem(sim)
     npc_item_use_system = NPCItemUseSystem(sim)
     npc_social_system = NPCSocialDynamicsSystem(sim)
     eavesdrop_system = EavesdropSystem(sim, player)
     npc_will_system = NPCWillSystem(sim)
+    business_pulse_scene_system = BusinessPulseSceneSystem(sim, player)
     npc_weapon_system = NPCWeaponSystem(sim, player)
     npc_system = NPCInvestigateSystem(sim)
 
@@ -325,6 +329,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(npc_memory_system)
     sim.register_system(rumor_system)
     sim.register_system(npc_needs_system)
+    sim.register_system(npc_settlement_system)
     sim.register_system(status_effect_system)
     sim.register_system(npc_item_use_system)
     sim.register_system(npc_social_system)
@@ -332,6 +337,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(world_events_system)
     suppression_system = SuppressionSystem(sim, player)
     sim.register_system(npc_will_system)
+    sim.register_system(business_pulse_scene_system)
     sim.register_system(npc_weapon_system)
     sim.register_system(suppression_system)
     sim.register_system(npc_system)

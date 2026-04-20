@@ -58,6 +58,8 @@ RESTRICTED_ARCHETYPES = {
     "checkpoint",
     "command_center",
     "data_center",
+    "jail",
+    "prison",
     "server_hub",
     "supply_bunker",
 }
@@ -112,10 +114,12 @@ BADGE_CONTROLLER_ARCHETYPES = {
     "checkpoint",
     "courthouse",
     "hotel",
+    "jail",
     "lab",
     "media_lab",
     "office",
     "pharmacy",
+    "prison",
     "tower",
 }
 BIOMETRIC_CONTROLLER_ARCHETYPES = {
@@ -689,7 +693,7 @@ def _controller_security_tier(prop, access_level, credential_mode):
     base = base_by_mode.get(str(credential_mode or "").strip().lower(), 1)
     if access_level == "restricted":
         base += 1
-    if archetype in {"bank", "tower", "armory", "checkpoint", "brokerage", "supply_bunker"}:
+    if archetype in {"bank", "tower", "armory", "checkpoint", "brokerage", "jail", "prison", "supply_bunker"}:
         base = max(base, 3)
     return max(1, min(5, base + feature_bonus))
 

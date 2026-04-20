@@ -78,6 +78,8 @@ PROPERTY_ARCHETYPE_DISPLAY = {
     "armory": ("G", "building_roof_secure"),
     "barracks": ("G", "building_roof_secure"),
     "courthouse": ("G", "building_roof_secure"),
+    "jail": ("G", "building_roof_secure"),
+    "prison": ("G", "building_roof_secure"),
     "tower": ("G", "building_roof_secure"),
     "command_center": ("G", "building_roof_secure"),
     "supply_bunker": ("G", "building_roof_secure"),

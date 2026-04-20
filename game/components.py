@@ -778,6 +778,36 @@ class NPCRoutine:
         self.work = work
 
 
+class NPCSettlement:
+    def __init__(
+        self,
+        arrived_tick=0,
+        origin="",
+        phase="arriving",
+        housing_status="unhoused",
+        employment_status="unemployed",
+        home_property_id="",
+        work_property_id="",
+        last_housing_tick=0,
+        last_job_tick=0,
+        last_social_tick=0,
+        drift_preferred=False,
+        story_id="",
+    ):
+        self.arrived_tick = int(arrived_tick or 0)
+        self.origin = str(origin or "").strip().lower()
+        self.phase = str(phase or "arriving").strip().lower() or "arriving"
+        self.housing_status = str(housing_status or "unhoused").strip().lower() or "unhoused"
+        self.employment_status = str(employment_status or "unemployed").strip().lower() or "unemployed"
+        self.home_property_id = str(home_property_id or "").strip()
+        self.work_property_id = str(work_property_id or "").strip()
+        self.last_housing_tick = int(last_housing_tick or 0)
+        self.last_job_tick = int(last_job_tick or 0)
+        self.last_social_tick = int(last_social_tick or 0)
+        self.drift_preferred = bool(drift_preferred)
+        self.story_id = str(story_id or "").strip()
+
+
 class WildlifeBehavior:
     def __init__(
         self,
@@ -1074,6 +1104,19 @@ class VehicleState:
         self.in_vehicle = bool(active)
         self.last_changed_tick = int(tick)
         return self.in_vehicle
+
+
+class DoorWaitState:
+    """Tracks when an NPC is waiting at a door after being summoned by knock."""
+    def __init__(self, aperture_x=0, aperture_y=0, aperture_z=0, start_tick=0, timeout_ticks=3000):
+        self.aperture_x = int(aperture_x)
+        self.aperture_y = int(aperture_y)
+        self.aperture_z = int(aperture_z)
+        self.start_tick = int(start_tick)
+        self.timeout_ticks = int(timeout_ticks)  # ~50 seconds at 60 ticks/second
+
+    def is_expired(self, current_tick):
+        return current_tick - self.start_tick >= self.timeout_ticks
 
 
 class FinancialProfile:
