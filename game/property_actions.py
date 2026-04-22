@@ -221,6 +221,23 @@ class PropertyActionRuntime:
             z,
             allow_override=False,
         )
+        if not success and str(reason or "").strip().lower() in {"locked_property", "closed_property", "door_access_denied"}:
+            knock = support._door_knock_attempt(
+                self.sim,
+                eid,
+                x,
+                y,
+                z,
+                reason=reason,
+                source="interact",
+            )
+            if bool((knock or {}).get("handled")):
+                support._log_player_feedback(
+                    self.sim,
+                    str((knock or {}).get("message", "")).strip() or support._door_action_text(reason, opening=True),
+                    kind="interaction",
+                )
+                return True
         support._log_player_feedback(
             self.sim,
             support._door_action_text(reason, opening=True),

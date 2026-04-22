@@ -1271,6 +1271,29 @@ def _contact_cover(sim, actor_eid, prop):
     return min(0.82, cover), "contact"
 
 
+def _door_service_courtesy(sim, actor_eid, prop):
+    if actor_eid is None or not isinstance(prop, dict):
+        return False
+
+    state = getattr(sim, "door_service_courtesies", None)
+    if not isinstance(state, dict):
+        return False
+
+    property_id = str(prop.get("id", "") or "").strip()
+    if not property_id:
+        return False
+
+    current_tick = int(getattr(sim, "tick", 0))
+    key = (int(actor_eid), property_id)
+    grant = state.get(key)
+    if not isinstance(grant, dict):
+        return False
+    if int(grant.get("until_tick", 0) or 0) <= current_tick:
+        state.pop(key, None)
+        return False
+    return bool(grant.get("allow_services", False))
+
+
 def _bond_cover(sim, actor_eid, owner_eid):
     if actor_eid is None or owner_eid is None or actor_eid == owner_eid:
         return 0.0, ""
@@ -1596,6 +1619,12 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
         customer_policy = _player_business_customer_policy(prop)
     if can_use_services and customer_policy in {"staff_only", "closed"}:
         can_use_services = standing_reason in {"owner", "employee", "credential_holder"}
+    if (
+        not can_use_services
+        and public_facing
+        and _door_service_courtesy(sim, actor_eid, prop)
+    ):
+        can_use_services = True
 
     severity_score = 0
     if inside_bounds and not permitted:

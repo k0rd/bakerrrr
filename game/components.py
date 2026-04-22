@@ -1108,12 +1108,40 @@ class VehicleState:
 
 class DoorWaitState:
     """Tracks when an NPC is waiting at a door after being summoned by knock."""
-    def __init__(self, aperture_x=0, aperture_y=0, aperture_z=0, start_tick=0, timeout_ticks=3000):
+    def __init__(
+        self,
+        aperture_x=0,
+        aperture_y=0,
+        aperture_z=0,
+        *,
+        wait_x=None,
+        wait_y=None,
+        wait_z=None,
+        property_id="",
+        caller_eid=None,
+        start_tick=0,
+        timeout_ticks=3000,
+        mood="neutral",
+        answer_role="resident",
+        allow_hours=True,
+        allow_services=False,
+        close_on_finish=True,
+    ):
         self.aperture_x = int(aperture_x)
         self.aperture_y = int(aperture_y)
         self.aperture_z = int(aperture_z)
+        self.wait_x = int(aperture_x if wait_x is None else wait_x)
+        self.wait_y = int(aperture_y if wait_y is None else wait_y)
+        self.wait_z = int(aperture_z if wait_z is None else wait_z)
+        self.property_id = str(property_id or "").strip()
+        self.caller_eid = caller_eid
         self.start_tick = int(start_tick)
         self.timeout_ticks = int(timeout_ticks)  # ~50 seconds at 60 ticks/second
+        self.mood = str(mood or "neutral").strip().lower() or "neutral"
+        self.answer_role = str(answer_role or "resident").strip().lower() or "resident"
+        self.allow_hours = bool(allow_hours)
+        self.allow_services = bool(allow_services)
+        self.close_on_finish = bool(close_on_finish)
 
     def is_expired(self, current_tick):
         return current_tick - self.start_tick >= self.timeout_ticks

@@ -82,11 +82,13 @@ from game.site_services import SiteServiceSystem
 from game.skill_progression import SkillProgressionSystem
 from game.skills import seed_skill_profile
 from game.systems import (
+    BusinessPulseAftermathSystem,
     BusinessPulseSceneSystem,
     CameraSystem,
     CoverSystem,
     CombatPacingSystem,
     CreatureHazardSystem,
+    DoorWaitSystem,
     EavesdropSystem,
     EventLogSystem,
     FinalOperationSystem,
@@ -284,7 +286,9 @@ def _register_runtime_systems(sim, view, player):
     npc_item_use_system = NPCItemUseSystem(sim)
     npc_social_system = NPCSocialDynamicsSystem(sim)
     eavesdrop_system = EavesdropSystem(sim, player)
+    door_wait_system = DoorWaitSystem(sim)
     npc_will_system = NPCWillSystem(sim)
+    business_pulse_aftermath_system = BusinessPulseAftermathSystem(sim)
     business_pulse_scene_system = BusinessPulseSceneSystem(sim, player)
     npc_weapon_system = NPCWeaponSystem(sim, player)
     npc_system = NPCInvestigateSystem(sim)
@@ -334,8 +338,10 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(npc_item_use_system)
     sim.register_system(npc_social_system)
     sim.register_system(eavesdrop_system)
+    sim.register_system(business_pulse_aftermath_system)
     sim.register_system(world_events_system)
     suppression_system = SuppressionSystem(sim, player)
+    sim.register_system(door_wait_system)
     sim.register_system(npc_will_system)
     sim.register_system(business_pulse_scene_system)
     sim.register_system(npc_weapon_system)

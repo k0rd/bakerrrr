@@ -6482,6 +6482,14 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                     "emphasis": "front",
                     "perimeter_bonus": 1.1,
                 },
+                {
+                    "phase": "street_triage",
+                    "label": "curbside triage",
+                    "street_label": "medics stabilizing somebody outside",
+                    "entry_sentence": "Emergency treatment has spilled right out to the threshold, where hurt bodies and clipped orders are suddenly visible from the street.",
+                    "emphasis": "medical",
+                    "perimeter_bonus": 1.8,
+                },
             )
 
     if category == "secure":
@@ -6601,6 +6609,14 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                 "emphasis": "work",
                 "perimeter_bonus": 0.6,
             },
+            {
+                "phase": "street_triage",
+                "label": "street triage",
+                "street_label": "someone being patched up near the entrance",
+                "entry_sentence": "A sudden injury has turned the frontage into a rough treatment spot, with somebody working fast to keep a hurt person steady.",
+                "emphasis": "front",
+                "perimeter_bonus": 1.7,
+            },
         )
     return ()
 
@@ -6619,7 +6635,22 @@ def _building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=No
     bucket = max(0, int(base_pulse.get("bucket", 0) or 0))
     hour = max(0, int(base_pulse.get("hour", 0) or 0))
 
-    events = _building_micro_event_pool(category, phase, open_now=open_now)
+    aftermath_event = _business_event_aftermath_micro_event(
+        sim,
+        prop=prop,
+        structure=structure,
+        base_pulse=base_pulse,
+    )
+    if isinstance(aftermath_event, dict) and str(aftermath_event.get("phase", "") or "").strip():
+        return {
+            "phase": str(aftermath_event.get("phase", "") or "").strip().lower(),
+            "label": str(aftermath_event.get("label", "") or "").strip(),
+            "street_label": str(aftermath_event.get("street_label", "") or "").strip(),
+            "entry_sentence": str(aftermath_event.get("entry_sentence", "") or "").strip(),
+            "emphasis": str(aftermath_event.get("emphasis", "") or "").strip().lower(),
+            "perimeter_bonus": max(0.0, float(aftermath_event.get("perimeter_bonus", 0.0) or 0.0)),
+        }
+    events = list(_building_micro_event_pool(category, phase, open_now=open_now))
     if not events:
         return {}
 
@@ -6643,6 +6674,11 @@ def _building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=No
     if event_phase in _BUSINESS_EVENT_DELIVERY_PHASES:
         rarity_rng = random.Random(f"{getattr(sim, 'seed', 0)}:building-micro-event-rarity:{building_key}:{event_phase}:{hour}")
         if rarity_rng.random() > 0.35:
+            return {}
+    rare_phase_chance = _BUSINESS_EVENT_RARE_PHASE_CHANCES.get(event_phase)
+    if rare_phase_chance is not None:
+        rarity_rng = random.Random(f"{getattr(sim, 'seed', 0)}:building-micro-event-rarity:{building_key}:{event_phase}:{hour}")
+        if rarity_rng.random() > float(rare_phase_chance):
             return {}
 
     return {
@@ -8228,10 +8264,34 @@ _BUSINESS_EVENT_QUEUE_PHASES = {
     "waiting_parties",
     "triage_spill",
     "last_call_spill",
-    "neighbors_lingering",
     "visitor_screening",
     "booking_queue",
     "release_queue",
+}
+_BUSINESS_EVENT_GATHERING_PHASES = {
+    "paperwork_surge",
+    "manifest_check",
+}
+_BUSINESS_EVENT_MEDICAL_RESPONSE_PHASES = {
+    "street_triage",
+}
+_BUSINESS_EVENT_RESIDENTIAL_SOCIAL_PHASES = {
+    "school_run",
+    "neighbors_lingering",
+}
+_BUSINESS_EVENT_HOSPITALITY_PRESSURE_PHASES = {
+    "reset_scramble",
+    "table_turnover",
+    "barback_reset",
+}
+_BUSINESS_EVENT_OPERATIONAL_PRESSURE_PHASES = {
+    "loading_push",
+    "dispatch_surge",
+}
+_BUSINESS_EVENT_AFTERMATH_PHASES = {
+    "taped_off_front",
+    "cleanup_detail",
+    "candle_vigil",
 }
 _BUSINESS_EVENT_SHIFT_PHASES = {
     "staff_handoff",
@@ -8242,15 +8302,21 @@ _BUSINESS_EVENT_SHIFT_PHASES = {
     "quiet_handoff",
     "guard_rotation",
     "custody_handoff",
+    "maintenance_loop",
 }
+_BUSINESS_EVENT_RARE_PHASE_CHANCES = {
+    "street_triage": 0.18,
+}
+_BUSINESS_EVENT_SCENE_PROPERTY_COOLDOWN_HOURS = 2
 
 
 def _business_event_scene_state(sim):
     state = getattr(sim, "business_event_scene_state", None)
     if isinstance(state, dict):
         state.setdefault("active", {})
+        state.setdefault("cooldowns", {})
         return state
-    state = {"active": {}}
+    state = {"active": {}, "cooldowns": {}}
     sim.business_event_scene_state = state
     return state
 
@@ -8335,6 +8401,210 @@ def _business_event_property_category(sim, prop):
     return ""
 
 
+def _business_event_aftermath_state(sim):
+    state = getattr(sim, "business_event_aftermath_state", None)
+    if isinstance(state, dict):
+        properties = state.get("properties")
+        if not isinstance(properties, dict):
+            state["properties"] = {}
+        return state
+    state = {"properties": {}}
+    sim.business_event_aftermath_state = state
+    return state
+
+
+def _prune_business_event_aftermath_state(sim):
+    state = _business_event_aftermath_state(sim)
+    properties = state.setdefault("properties", {})
+    tick = int(getattr(sim, "tick", 0) or 0)
+    for property_id, entry in list(properties.items()):
+        if not isinstance(entry, dict):
+            properties.pop(property_id, None)
+            continue
+        if str(property_id or "").strip() not in sim.properties:
+            properties.pop(property_id, None)
+            continue
+        try:
+            expires_tick = int(entry.get("expires_tick", tick) or tick)
+        except (TypeError, ValueError):
+            expires_tick = tick
+        if tick > expires_tick:
+            properties.pop(property_id, None)
+
+
+def _business_event_aftermath_entry(sim, prop):
+    if not isinstance(prop, dict):
+        return None
+    _prune_business_event_aftermath_state(sim)
+    property_id = str(prop.get("id", "") or "").strip()
+    if not property_id:
+        return None
+    entry = _business_event_aftermath_state(sim).setdefault("properties", {}).get(property_id)
+    return entry if isinstance(entry, dict) else None
+
+
+def _business_event_reactive_property_near(sim, x, y, z, *, radius=12):
+    try:
+        x = int(x)
+        y = int(y)
+        z = int(z)
+    except (TypeError, ValueError):
+        return None
+
+    direct = _property_covering(sim, x, y, z) or sim.property_at(x, y, z)
+    if isinstance(direct, dict) and str(direct.get("kind", "") or "").strip().lower() == "building":
+        return direct
+
+    target_chunk = sim.chunk_coords(x, y)
+    best = None
+    best_score = None
+    for candidate in sim.properties.values():
+        if not isinstance(candidate, dict):
+            continue
+        if str(candidate.get("kind", "") or "").strip().lower() != "building":
+            continue
+        try:
+            cx = int(candidate.get("x", 0))
+            cy = int(candidate.get("y", 0))
+            cz = int(candidate.get("z", 0))
+        except (TypeError, ValueError):
+            continue
+        if cz != z or sim.chunk_coords(cx, cy) != target_chunk:
+            continue
+        anchor = _business_event_frontage_anchor(sim, candidate) or _property_focus_position(candidate)
+        if not isinstance(anchor, (tuple, list)) or len(anchor) < 3:
+            continue
+        distance = _manhattan(x, y, int(anchor[0]), int(anchor[1]))
+        if distance > int(radius):
+            continue
+        access_level = _property_access_level(candidate)
+        category = _business_event_property_category(sim, candidate)
+        score = float(distance)
+        if _property_is_storefront(candidate) or _property_is_public(candidate):
+            score -= 0.8
+        if access_level == "public":
+            score -= 0.4
+        if category == "residential":
+            score -= 0.25
+        if best is None or score < best_score:
+            best = candidate
+            best_score = score
+    return best
+
+
+def _record_business_event_aftermath(
+    sim,
+    *,
+    x,
+    y,
+    z,
+    incident_kind="violence",
+    severity=0.4,
+    casualty=False,
+    serious=False,
+    damage_kind="",
+    prop=None,
+):
+    prop = prop if isinstance(prop, dict) else _business_event_reactive_property_near(sim, x, y, z)
+    if not isinstance(prop, dict):
+        return None
+
+    property_id = str(prop.get("id", "") or "").strip()
+    if not property_id:
+        return None
+
+    _prune_business_event_aftermath_state(sim)
+    properties = _business_event_aftermath_state(sim).setdefault("properties", {})
+    entry = dict(properties.get(property_id, {}) or {})
+    tick = int(getattr(sim, "tick", 0) or 0)
+    ticks_per_hour = _business_event_ticks_per_hour(sim)
+
+    try:
+        severity = max(0.18, min(1.0, float(severity)))
+    except (TypeError, ValueError):
+        severity = 0.4
+
+    incident_kind = str(incident_kind or "violence").strip().lower() or "violence"
+    damage_kind = str(damage_kind or "").strip().lower()
+    created_tick = entry.get("created_tick")
+    try:
+        created_tick = int(created_tick)
+    except (TypeError, ValueError):
+        created_tick = tick
+
+    casualty_count = max(0, int(entry.get("casualty_count", 0) or 0)) + (1 if casualty else 0)
+    serious_count = max(0, int(entry.get("serious_count", 0) or 0)) + (1 if serious else 0)
+    if casualty:
+        duration_ticks = int(ticks_per_hour * 3)
+    elif incident_kind == "hazard":
+        duration_ticks = int(ticks_per_hour * 2)
+    else:
+        duration_ticks = int(ticks_per_hour * 2.5)
+
+    entry.update({
+        "property_id": property_id,
+        "building_id": _building_id_from_property(prop),
+        "incident_kind": incident_kind,
+        "damage_kind": damage_kind or str(entry.get("damage_kind", "") or "").strip().lower(),
+        "severity": max(float(entry.get("severity", 0.0) or 0.0), severity),
+        "casualty_count": casualty_count,
+        "serious_count": serious_count,
+        "created_tick": min(created_tick, tick),
+        "last_tick": tick,
+        "expires_tick": max(tick + duration_ticks, int(entry.get("expires_tick", 0) or 0)),
+    })
+    properties[property_id] = entry
+    return entry
+
+
+def _business_event_aftermath_micro_event(sim, prop=None, structure=None, base_pulse=None):
+    if not isinstance(prop, dict):
+        return {}
+    entry = _business_event_aftermath_entry(sim, prop)
+    if not isinstance(entry, dict):
+        return {}
+
+    category = str((base_pulse or {}).get("category", "") or "").strip().lower() or _business_event_property_category(sim, prop)
+    tick = int(getattr(sim, "tick", 0) or 0)
+    ticks_per_hour = _business_event_ticks_per_hour(sim)
+    try:
+        created_tick = int(entry.get("created_tick", tick) or tick)
+    except (TypeError, ValueError):
+        created_tick = tick
+    age_ticks = max(0, tick - created_tick)
+    age_hours = float(age_ticks) / float(max(1, ticks_per_hour))
+    incident_kind = str(entry.get("incident_kind", "violence") or "violence").strip().lower() or "violence"
+    casualty_count = max(0, int(entry.get("casualty_count", 0) or 0))
+    severity = max(0.18, min(1.0, float(entry.get("severity", 0.4) or 0.4)))
+
+    if casualty_count > 0 and category == "residential" and age_hours >= 0.5:
+        return {
+            "phase": "candle_vigil",
+            "label": "candle vigil",
+            "street_label": "candles and quiet voices at the entrance",
+            "entry_sentence": "What happened here has already curdled into a quiet vigil, with candles, little offerings, and people speaking softly because louder would feel wrong.",
+            "emphasis": "residential",
+            "perimeter_bonus": 1.9 + (severity * 0.6),
+        }
+    if incident_kind == "hazard" or age_hours >= 0.65:
+        return {
+            "phase": "cleanup_detail",
+            "label": "cleanup detail",
+            "street_label": "cones and a cleanup crew at the entrance",
+            "entry_sentence": "The frontage is being reset after recent trouble, all cones, short instructions, and workers trying to make the doorway usable again without pretending nothing happened.",
+            "emphasis": "work",
+            "perimeter_bonus": 1.55 + (severity * 0.45),
+        }
+    return {
+        "phase": "taped_off_front",
+        "label": "taped-off frontage",
+        "street_label": "tape and witnesses holding near the door",
+        "entry_sentence": "Recent trouble has left the frontage half held in place, with tape, bystanders, and nobody quite ready to act like the doorway is ordinary again.",
+        "emphasis": "front",
+        "perimeter_bonus": 2.05 + (severity * 0.55),
+    }
+
+
 def _business_event_delivery_blueprint(category):
     category = str(category or "").strip().lower()
     if category == "medical":
@@ -8364,7 +8634,8 @@ def _business_event_delivery_blueprint(category):
         "fixture_type": "delivery_cargo",
         "fixture_glyph": "c",
         "actor_specs": actor_specs,
-        "release_budget": 1,
+        "keep_hours": 1,
+        "release_budget": 0,
         "drift_preferred": False,
     }
 
@@ -8404,6 +8675,7 @@ def _business_event_gathering_blueprint(category):
         "fixture_type": fixture_type,
         "fixture_glyph": fixture_glyph,
         "actor_specs": actor_specs,
+        "keep_hours": 2,
         "release_budget": 1,
         "drift_preferred": True,
     }
@@ -8438,9 +8710,368 @@ def _business_event_inspection_blueprint(category):
         "fixture_type": "inspection_packet",
         "fixture_glyph": "i",
         "actor_specs": actor_specs,
+        "keep_hours": 2,
         "release_budget": 1,
         "drift_preferred": False,
     }
+
+
+def _business_event_admin_review_blueprint(category, *, event_phase=""):
+    category = str(category or "").strip().lower()
+    event_phase = str(event_phase or "").strip().lower()
+    if event_phase == "manifest_check":
+        fixture_name = "Dispatch Clipboard" if category == "transit" else "Manifest Clipboard"
+        fixture_type = "manifest_clipboard"
+        fixture_glyph = "i"
+        actor_specs = [
+            {"role": "worker", "career": "dispatcher" if category == "transit" else "manifest_clerk", "linger_ticks": 16},
+            {"role": "worker", "career": "site_rep", "linger_ticks": 14},
+        ]
+    elif category in {"office", "finance"}:
+        fixture_name = "Audit Packet"
+        fixture_type = "admin_packet"
+        fixture_glyph = "i"
+        actor_specs = [
+            {"role": "worker", "career": "auditor", "linger_ticks": 16},
+            {"role": "worker", "career": "site_rep", "linger_ticks": 14},
+        ]
+    elif category == "retail":
+        fixture_name = "Receipt Binder"
+        fixture_type = "admin_packet"
+        fixture_glyph = "i"
+        actor_specs = [
+            {"role": "worker", "career": "review_clerk", "linger_ticks": 15},
+            {"role": "worker", "career": "site_rep", "linger_ticks": 14},
+        ]
+    else:
+        fixture_name = "Review Packet"
+        fixture_type = "admin_packet"
+        fixture_glyph = "i"
+        actor_specs = [
+            {"role": "worker", "career": "review_clerk", "linger_ticks": 15},
+            {"role": "worker", "career": "site_rep", "linger_ticks": 14},
+        ]
+    return {
+        "scene_type": "gathering",
+        "fixture_name": fixture_name,
+        "fixture_type": fixture_type,
+        "fixture_glyph": fixture_glyph,
+        "actor_specs": actor_specs,
+        "keep_hours": 1,
+        "release_budget": 0,
+        "drift_preferred": False,
+    }
+
+
+def _business_event_medical_response_blueprint(category, *, event_phase=""):
+    category = str(category or "").strip().lower()
+    event_phase = str(event_phase or "").strip().lower()
+    if event_phase != "street_triage":
+        return None
+
+    medical_site = category == "medical"
+    medic_career = "triage_nurse" if medical_site else "combat_medic"
+    victim_career = "patient" if medical_site else "injured_bystander"
+    fixture_name = "Triage Kit" if medical_site else "Field Med Case"
+    actor_specs = [
+        {
+            "role": "worker",
+            "career": medic_career,
+            "linger_ticks": 16,
+            "site_affiliated": medical_site,
+        },
+        {
+            "role": "civilian",
+            "career": victim_career,
+            "linger_ticks": 20,
+            "fixed_position": True,
+            "site_affiliated": False,
+            "hp_ratio_range": (0.22, 0.48),
+            "needs_overrides": {"safety": (10, 26), "energy": (18, 42)},
+            "status_effects": (
+                {
+                    "status": "trauma_shocked",
+                    "duration": 90,
+                    "modifiers": {
+                        "safety_tick_delta": -0.08,
+                        "move_speed_mult": -0.28,
+                    },
+                },
+            ),
+        },
+        {
+            "role": "civilian",
+            "career": victim_career,
+            "linger_ticks": 20,
+            "fixed_position": True,
+            "site_affiliated": False,
+            "hp_ratio_range": (0.34, 0.58),
+            "needs_overrides": {"safety": (16, 32), "energy": (24, 48)},
+            "status_effects": (
+                {
+                    "status": "trauma_shocked",
+                    "duration": 72,
+                    "modifiers": {
+                        "safety_tick_delta": -0.06,
+                        "move_speed_mult": -0.22,
+                    },
+                },
+            ),
+        },
+    ]
+    return {
+        "scene_type": "gathering",
+        "fixture_name": fixture_name,
+        "fixture_type": "trauma_kit",
+        "fixture_glyph": "h",
+        "actor_specs": actor_specs,
+        "keep_hours": 1,
+        "release_budget": 0,
+        "drift_preferred": False,
+    }
+
+
+def _business_event_residential_social_blueprint(category, *, event_phase=""):
+    category = str(category or "").strip().lower()
+    event_phase = str(event_phase or "").strip().lower()
+    if event_phase == "school_run":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Backpack Cluster",
+            "fixture_type": "school_bags",
+            "fixture_glyph": "b",
+            "actor_specs": [
+                {"role": "civilian", "career": "guardian", "linger_ticks": 16},
+                {"role": "civilian", "career": "student", "linger_ticks": 18, "fixed_position": True},
+                {"role": "civilian", "career": "student", "linger_ticks": 18, "fixed_position": True},
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    if event_phase == "neighbors_lingering":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Shared Cooler",
+            "fixture_type": "stoop_cooler",
+            "fixture_glyph": "c",
+            "actor_specs": [
+                {"role": "civilian", "career": "resident", "linger_ticks": 20},
+                {"role": "civilian", "career": "resident", "linger_ticks": 20},
+                {"role": "civilian", "career": "retiree", "linger_ticks": 24, "fixed_position": True},
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    return None
+
+
+def _business_event_operational_pressure_blueprint(category, *, event_phase=""):
+    category = str(category or "").strip().lower()
+    event_phase = str(event_phase or "").strip().lower()
+    if event_phase == "loading_push":
+        fixture_name = "Freight Dolly" if category == "industrial" else "Load Dolly"
+        return {
+            "scene_type": "shift",
+            "fixture_name": fixture_name,
+            "fixture_type": "loading_dolly",
+            "fixture_glyph": "f",
+            "actor_specs": [
+                {"role": "worker", "career": "loader", "linger_ticks": 10},
+                {"role": "worker", "career": "dockhand", "linger_ticks": 10},
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    if event_phase == "dispatch_surge":
+        return {
+            "scene_type": "shift",
+            "fixture_name": "Dispatch Satchel" if category == "transit" else "Route Satchel",
+            "fixture_type": "dispatch_satchel",
+            "fixture_glyph": "s",
+            "actor_specs": [
+                {"role": "worker", "career": "dispatcher", "linger_ticks": 12},
+                {"role": "worker", "career": "driver" if category == "transit" else "loader", "linger_ticks": 10},
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    return None
+
+
+def _business_event_aftermath_blueprint(category, *, event_phase=""):
+    category = str(category or "").strip().lower()
+    event_phase = str(event_phase or "").strip().lower()
+    if event_phase == "taped_off_front":
+        if category == "residential":
+            third_actor = {"role": "civilian", "career": "resident", "linger_ticks": 18, "fixed_position": True}
+        elif category == "secure":
+            third_actor = {"role": "guard", "career": "gate_guard", "linger_ticks": 16, "site_affiliated": True, "fixed_position": True}
+        else:
+            third_actor = {"role": "worker", "career": "site_rep", "linger_ticks": 16, "site_affiliated": True, "fixed_position": True}
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Tape Stanchion",
+            "fixture_type": "incident_tape",
+            "fixture_glyph": "t",
+            "actor_specs": [
+                {"role": "civilian", "career": "witness", "linger_ticks": 18},
+                {"role": "civilian", "career": "witness", "linger_ticks": 18},
+                third_actor,
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    if event_phase == "cleanup_detail":
+        second_career = "sanitation_worker" if category in {"medical", "hospitality", "entertainment"} else "maintenance_tech"
+        return {
+            "scene_type": "shift",
+            "fixture_name": "Cleanup Cart",
+            "fixture_type": "cleanup_cart",
+            "fixture_glyph": "c",
+            "actor_specs": [
+                {"role": "worker", "career": "cleanup_crew", "linger_ticks": 12},
+                {"role": "worker", "career": second_career, "linger_ticks": 12},
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    if event_phase == "candle_vigil":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Memorial Candles",
+            "fixture_type": "memorial_candles",
+            "fixture_glyph": "v",
+            "actor_specs": [
+                {"role": "civilian", "career": "resident", "linger_ticks": 22, "fixed_position": True},
+                {"role": "civilian", "career": "mourner", "linger_ticks": 22, "fixed_position": True},
+                {"role": "civilian", "career": "mourner", "linger_ticks": 20},
+            ],
+            "keep_hours": 2,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    return None
+
+
+def _business_event_neighborhood_target(sim, prop, *, rng=None):
+    if not isinstance(prop, dict):
+        return None
+    try:
+        origin_x = int(prop.get("x", 0))
+        origin_y = int(prop.get("y", 0))
+        origin_z = int(prop.get("z", 0))
+    except (TypeError, ValueError):
+        return None
+
+    origin_chunk = sim.chunk_coords(origin_x, origin_y)
+    origin_id = str(prop.get("id", "") or "").strip()
+    weighted = []
+    for candidate in sim.properties.values():
+        if not isinstance(candidate, dict):
+            continue
+        if str(candidate.get("kind", "") or "").strip().lower() != "building":
+            continue
+        candidate_id = str(candidate.get("id", "") or "").strip()
+        if not candidate_id or candidate_id == origin_id:
+            continue
+        try:
+            cx = int(candidate.get("x", 0))
+            cy = int(candidate.get("y", 0))
+            cz = int(candidate.get("z", 0))
+        except (TypeError, ValueError):
+            continue
+        if sim.chunk_coords(cx, cy) != origin_chunk or cz != origin_z:
+            continue
+        distance = _manhattan(origin_x, origin_y, cx, cy)
+        if distance < 3 or distance > 18:
+            continue
+        category = _business_event_property_category(sim, candidate)
+        access_level = _property_access_level(candidate)
+        score = max(0.2, 18.0 - float(distance))
+        if _property_is_storefront(candidate) or _property_is_public(candidate):
+            score += 2.0
+        if access_level == "public":
+            score += 2.4
+        if category == "hospitality":
+            score += 2.6
+        elif category == "retail":
+            score += 2.2
+        elif category in {"medical", "transit", "civic"}:
+            score += 1.3
+        elif category in {"residential", "secure"}:
+            score -= 1.6
+        if score > 0.0:
+            weighted.append((score, candidate))
+
+    if not weighted:
+        return None
+    if rng is None:
+        rng = random.Random(f"{getattr(sim, 'seed', 0)}:business-scene-neighborhood:{origin_id}")
+    total = sum(weight for weight, _candidate in weighted)
+    pick = rng.uniform(0.0, total)
+    running = 0.0
+    choice = weighted[-1][1]
+    for weight, candidate in weighted:
+        running += weight
+        if pick <= running:
+            choice = candidate
+            break
+    return choice
+
+
+def _business_event_hospitality_pressure_blueprint(category, *, event_phase=""):
+    category = str(category or "").strip().lower()
+    event_phase = str(event_phase or "").strip().lower()
+    if event_phase == "reset_scramble":
+        return {
+            "scene_type": "shift",
+            "fixture_name": "Bus Tub",
+            "fixture_type": "reset_cart",
+            "fixture_glyph": "b",
+            "actor_specs": [
+                {"role": "worker", "career": "server", "linger_ticks": 10},
+                {"role": "worker", "career": "dishwasher", "linger_ticks": 10},
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    if event_phase == "table_turnover":
+        return {
+            "scene_type": "shift",
+            "fixture_name": "Turnover Tray",
+            "fixture_type": "turnover_tray",
+            "fixture_glyph": "t",
+            "actor_specs": [
+                {"role": "worker", "career": "host", "linger_ticks": 9},
+                {"role": "worker", "career": "server", "linger_ticks": 9},
+                {"role": "worker", "career": "server", "linger_ticks": 9},
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    if event_phase == "barback_reset":
+        return {
+            "scene_type": "shift",
+            "fixture_name": "Restock Crate",
+            "fixture_type": "barback_crate",
+            "fixture_glyph": "r",
+            "actor_specs": [
+                {"role": "worker", "career": "bartender", "linger_ticks": 10},
+                {"role": "worker", "career": "server", "linger_ticks": 10},
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    return None
 
 
 def _business_event_followup_target(sim, prop, *, scene_type="", category="", rng=None):
@@ -8533,12 +9164,32 @@ def _business_event_item_pool(scene_type, category, actor_spec):
             return ("city_pass_token", "transit_daypass", "protein_wrap", "bottled_water")
         return ("meal_voucher", "city_pass_token", "protein_wrap", "bottled_water")
     if scene_type == "shift":
+        if career in {"dispatcher", "manifest_clerk", "route_clerk"}:
+            return ("credstick_chip", "city_pass_token", "transit_daypass", "caff_shot")
+        if career in {"loader", "dockhand"}:
+            return ("pocket_multitool", "battery_pack", "caff_shot", "protein_wrap")
+        if career == "driver":
+            return ("city_pass_token", "transit_daypass", "caff_shot", "protein_wrap")
+        if career in {"cleanup_crew", "sanitation_worker", "maintenance_tech"}:
+            return ("pocket_multitool", "bottled_water", "caff_shot", "calm_patch")
         if category == "medical":
             return ("med_gel", "focus_inhaler", "micro_medkit", "caff_shot")
         if category in {"industrial", "transit"}:
             return ("pocket_multitool", "battery_pack", "caff_shot", "protein_wrap")
+        if category == "entertainment":
+            return ("spark_brew", "mint_strip", "caff_shot", "protein_wrap")
+        if category == "hospitality":
+            return ("caff_shot", "meal_voucher", "mint_strip", "protein_wrap")
         return ("city_pass_token", "meal_voucher", "caff_shot", "protein_wrap")
     if scene_type == "gathering":
+        if career in {"guardian", "student"}:
+            return ("meal_voucher", "city_pass_token", "protein_wrap", "bottled_water")
+        if career in {"resident", "retiree", "smoker"}:
+            return ("spark_brew", "smoke_tab", "mint_strip", "city_pass_token")
+        if career in {"witness", "mourner"}:
+            return ("calm_patch", "bottled_water", "city_pass_token", "meal_voucher")
+        if career in {"triage_nurse", "combat_medic", "trauma_doctor", "medic", "paramedic"}:
+            return ("med_gel", "micro_medkit", "trauma_foam", "hydration_salts")
         if category in {"hospitality", "entertainment"}:
             return ("spark_brew", "meal_voucher", "mint_strip", "city_pass_token")
         if category in {"office", "finance"}:
@@ -8571,6 +9222,349 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
     actor_spec = actor_spec if isinstance(actor_spec, dict) else {}
     role = str(actor_spec.get("role", "") or "").strip().lower()
     career = str(actor_spec.get("career", "") or "").strip().lower()
+    current_name = str(prop.get("name", prop.get("id", "this place"))).strip() or "this place"
+    controller = _property_access_controller(sim, prop)
+    hours_text = _dialogue_hours_text(controller.get("opening_window")) if isinstance(controller, dict) else ""
+    requirement = _controller_access_requirement_text(controller) if isinstance(controller, dict) else ""
+
+    if event_phase == "paperwork_surge":
+        local_line = f"They are trying to clear a paperwork jam at {current_name} before the front side bogs down."
+        if hours_text and requirement:
+            detail_line = f"{current_name} is chewing through approvals during {hours_text}. After that the front wants {requirement}."
+        elif hours_text:
+            detail_line = f"{current_name} is buried in review work during {hours_text}, so the public side is thinning out."
+        elif requirement:
+            detail_line = f"The staff here are buried in receipts and approvals. Once they catch up, the front still wants {requirement}."
+        else:
+            detail_line = f"The front looks quiet because staff at {current_name} are stuck catching up on receipts, approvals, and back-office spill."
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "manifest_check":
+        local_line = f"They are holding a manifest check at {current_name} until the paperwork lines up."
+        if hours_text and requirement:
+            detail_line = f"Nothing is moving cleanly through {current_name} before {hours_text} unless it clears {requirement}."
+        elif hours_text:
+            detail_line = f"The crew is matching the manifest against the next receiving window at {current_name}, which is around {hours_text}."
+        elif requirement:
+            detail_line = f"The clipboard says the next load only moves once it clears {requirement} at {current_name}."
+        else:
+            detail_line = f"The crew here is stuck matching freight to paperwork before anything else leaves the edge of {current_name}."
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "school_run":
+        if career == "guardian":
+            local_line = f"Mornings at {current_name} are all bags, keys, and people trying not to miss the run."
+            detail_line = (
+                f"Give this stoop a little time and it clears back out. Right now everybody at {current_name} is trying to get the kids moving before the morning hardens."
+            )
+        else:
+            local_line = "Everybody is rushing because nobody wants to be the one who makes the whole morning late."
+            detail_line = (
+                f"This frontage only looks crowded because the building is all backpacks, lunch kits, and half-finished goodbyes for a few minutes."
+            )
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "hours",
+            "shared": False,
+        }
+
+    if event_phase == "neighbors_lingering":
+        neighborhood_target = _business_event_neighborhood_target(sim, prop, rng=rng)
+        target_name = ""
+        target_hours_text = ""
+        target_requirement = ""
+        target_property_id = ""
+        if isinstance(neighborhood_target, dict):
+            target_name = str(neighborhood_target.get("name", neighborhood_target.get("id", "the place"))).strip() or "the place"
+            target_property_id = str(neighborhood_target.get("id", "") or "").strip()
+            target_controller = _property_access_controller(sim, neighborhood_target)
+            if isinstance(target_controller, dict):
+                target_hours_text = _dialogue_hours_text(target_controller.get("opening_window"))
+                target_requirement = _controller_access_requirement_text(target_controller)
+        if career == "retiree":
+            local_line = f"We sit outside {current_name} most evenings and trade notes on who is still awake on the block."
+        else:
+            local_line = f"Nobody on this stoop is in a hurry to head in yet, so the talk turns into neighborhood gossip and who's still open."
+        if target_name and target_hours_text and target_requirement:
+            detail_line = f"If you need something nearby, people here keep pointing at {target_name}; they usually run during {target_hours_text}, though they still want {target_requirement}."
+        elif target_name and target_hours_text:
+            detail_line = f"If you need something nearby, the stoop keeps recommending {target_name}. They are usually moving during {target_hours_text}."
+        elif target_name and target_requirement:
+            detail_line = f"People here keep pointing at {target_name} for anything nearby, but they still want {target_requirement} when you hit the door."
+        elif target_name:
+            detail_line = f"Most nights this little stoop circle ends up recommending {target_name} to anyone still looking for something nearby."
+        else:
+            detail_line = f"This frontage only looks busy because the neighbors at {current_name} are stretching out the evening and swapping block gossip before they head upstairs."
+        return {
+            "property_id": str(prop.get("id", "") or "").strip(),
+            "target_property_id": target_property_id,
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if target_requirement and not target_hours_text else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "reset_scramble":
+        if career == "dishwasher":
+            local_line = f"The only reason {current_name} looks calm is that everything dirty is getting shoved through reset right now."
+        else:
+            local_line = f"We are flipping {current_name} between waves before the next service push lands on us."
+        if hours_text and requirement:
+            detail_line = f"{current_name} keeps running these short reset loops during {hours_text}. Outside that window the front still wants {requirement}."
+        elif hours_text:
+            detail_line = f"{current_name} is in one of those brief reset windows during {hours_text}, where the staff are trying to clear plates and re-set the room before the next wave."
+        elif requirement:
+            detail_line = f"The crew is using a quiet minute to reset {current_name}, but the front still wants {requirement} once the next wave hits."
+        else:
+            detail_line = f"This is the between-waves scramble at {current_name}: clear the mess, reset the room, and pretend it was always under control."
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "table_turnover":
+        if career == "host":
+            local_line = f"We barely clear a table at {current_name} before the next party wants it."
+        else:
+            local_line = f"The room is turning over so fast nobody at {current_name} gets to admire a clean table for long."
+        if hours_text and requirement:
+            detail_line = f"{current_name} is in its turnover crush during {hours_text}. Once the rush loosens, the front still wants {requirement}."
+        elif hours_text:
+            detail_line = f"{current_name} is in its turnover crunch during {hours_text}, with staff flipping tables as fast as they clear."
+        elif requirement:
+            detail_line = f"They are trying to keep the room moving at {current_name}; once the rush breaks, the front still wants {requirement}."
+        else:
+            detail_line = f"The public room at {current_name} is stuck in that fast-turning stretch where every clean setting already belongs to the next party."
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "barback_reset":
+        if career == "bartender":
+            local_line = f"We are trying to reload {current_name} before the late side of the night notices the gaps."
+        else:
+            local_line = f"The late rhythm here runs on ice, glass, and whoever can keep the reset loop moving."
+        if hours_text and requirement:
+            detail_line = f"{current_name} is running a late restock during {hours_text}. Once the room settles, the front still wants {requirement}."
+        elif hours_text:
+            detail_line = f"{current_name} is in a late reset pocket during {hours_text}, all glass runs, ice checks, and quick bottle counts."
+        elif requirement:
+            detail_line = f"They are reloading the late-service side of {current_name}, and the front still wants {requirement} once the room steadies."
+        else:
+            detail_line = f"This is the late reset loop at {current_name}: top off the glass, refill the ice, and keep the room from noticing what ran out."
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "loading_push":
+        if career == "dockhand":
+            local_line = f"The freight only looks chaotic at {current_name} because the crew is shoving it through in short bursts instead of letting it stack."
+        else:
+            local_line = f"We are trying to clear the load at {current_name} before the next burst lands on top of this one."
+        if hours_text and requirement:
+            detail_line = f"{current_name} is in a loading push during {hours_text}. Once the gate calms down, the front still wants {requirement}."
+        elif hours_text:
+            detail_line = f"{current_name} is in one of those short loading bursts during {hours_text}, where freight starts moving faster than anyone wants to narrate."
+        elif requirement:
+            detail_line = f"The crew is trying to keep freight from backing up at {current_name}, but the front still wants {requirement} once the push eases."
+        else:
+            detail_line = f"This is the kind of start-stop load pressure at {current_name} where everything moves in bursts and nobody trusts the stack to stay where it was."
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "dispatch_surge":
+        target_prop = _business_event_followup_target(
+            sim,
+            prop,
+            scene_type="shift",
+            category=category,
+            rng=rng,
+        )
+        target_name = str(target_prop.get("name", target_prop.get("id", "the place"))).strip() if isinstance(target_prop, dict) else ""
+        target_property_id = str(target_prop.get("id", "") or "").strip() if isinstance(target_prop, dict) else ""
+        time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(1, 3))
+        if career == "dispatcher":
+            local_line = (
+                f"Dispatch is trying to keep {current_name} from clogging up, "
+                + (f"and the next handoff is pointed at {target_name} around {time_text}." if target_name else "with the next handoff already being called.")
+            )
+        else:
+            local_line = (
+                f"Everything here is being routed in a hurry, "
+                + (f"with another stop lined up at {target_name} around {time_text}." if target_name else "and nobody wanting to be the reason the line stalls.")
+            )
+        if target_name and hours_text and requirement:
+            detail_line = f"The dispatch board says {target_name} is the next useful stop after {current_name}, around {time_text}. Until then the front still wants {requirement}."
+        elif target_name and hours_text:
+            detail_line = f"Dispatch talk says the next useful handoff after {current_name} lands at {target_name} around {time_text}, while this window is still hot during {hours_text}."
+        elif target_name and requirement:
+            detail_line = f"They keep routing people from {current_name} toward {target_name} around {time_text}, but this frontage still wants {requirement} while the surge is live."
+        elif target_name:
+            detail_line = f"The dispatch chatter here keeps circling back to {target_name} as the next handoff once {current_name} finishes clearing the current burst."
+        elif hours_text and requirement:
+            detail_line = f"{current_name} is running a dispatch surge during {hours_text}, and the front still wants {requirement} while traffic is clipping the edge of the site."
+        elif hours_text:
+            detail_line = f"{current_name} is in a dispatch surge during {hours_text}, with routes getting called faster than the frontage can hide it."
+        elif requirement:
+            detail_line = f"The dispatch chatter at {current_name} is spilling outward, but the front still wants {requirement} while the site is routing the next burst."
+        else:
+            detail_line = f"This is a dispatch surge at {current_name}: route calls, clipped orders, and just enough edge traffic to make the site readable from the street."
+
+        opportunity = {}
+        if isinstance(target_prop, dict) and target_property_id:
+            target_chunk = sim.chunk_coords(int(target_prop.get("x", 0)), int(target_prop.get("y", 0)))
+            opportunity = {
+                "key": f"business_scene_followup:{scene_id}:{target_property_id}:dispatch_surge",
+                "title": f"Dispatch Lead: {target_name}",
+                "summary": f"Dispatch chatter points to {target_name} around {time_text}.",
+                "kind": "lead_followup",
+                "source": "business_scene",
+                "chunk": target_chunk,
+                "location": "lead",
+                "playstyles": ("social", "stealth", "economic"),
+                "reward": {"credits": 5, "intel": 2},
+                "risk": "low",
+                "pressure": "low",
+                "requirements": {
+                    "visit_chunk": target_chunk,
+                    "property_id": target_property_id,
+                },
+                "status": "active",
+                "seed_tick": int(getattr(sim, "tick", 0)),
+            }
+        return {
+            "property_id": str(prop.get("id", "") or "").strip(),
+            "target_property_id": target_property_id,
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "opportunity": opportunity,
+            "shared": False,
+        }
+
+    if event_phase == "taped_off_front":
+        aftermath = _business_event_aftermath_entry(sim, prop) or {}
+        casualty_count = max(0, int(aftermath.get("casualty_count", 0) or 0))
+        incident_kind = str(aftermath.get("incident_kind", "violence") or "violence").strip().lower() or "violence"
+        if career == "site_rep":
+            local_line = f"We are keeping the frontage at {current_name} held for a minute because what happened out here is still too fresh."
+        elif career == "resident":
+            local_line = f"Nobody near {current_name} is ready to shrug and walk off yet, so people keep clustering right here and trading what they saw."
+        else:
+            local_line = f"People are still held at the front of {current_name} because nobody wants to be the one who pretends this doorway is normal already."
+        if casualty_count > 0 and hours_text and requirement:
+            detail_line = f"Somebody died close enough to {current_name} that the door is still half held and the front still wants {requirement} once they let people flow again during {hours_text}."
+        elif casualty_count > 0:
+            detail_line = f"The doorway at {current_name} is still being held after a fatal scene close by, with tape and low voices keeping everyone from moving on yet."
+        elif incident_kind == "hazard" and hours_text:
+            detail_line = f"They have the front of {current_name} held because a bad spill or hazard just turned the doorway into a caution line during {hours_text}."
+        elif incident_kind == "hazard":
+            detail_line = f"The front of {current_name} is still half held because a nasty hazard turned the doorway into a caution line."
+        elif hours_text and requirement:
+            detail_line = f"Somebody got hurt close enough to {current_name} that the frontage is still half taped and the front still wants {requirement} once the hold loosens during {hours_text}."
+        elif hours_text:
+            detail_line = f"Somebody got hurt close enough to {current_name} that the frontage is still half taped while the place tries to settle back into its usual hours during {hours_text}."
+        else:
+            detail_line = f"Somebody got hurt close enough to {current_name} that the frontage is still all tape, witnesses, and people talking low instead of walking through."
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "cleanup_detail":
+        aftermath = _business_event_aftermath_entry(sim, prop) or {}
+        casualty_count = max(0, int(aftermath.get("casualty_count", 0) or 0))
+        incident_kind = str(aftermath.get("incident_kind", "violence") or "violence").strip().lower() or "violence"
+        if career in {"cleanup_crew", "sanitation_worker", "maintenance_tech"}:
+            local_line = f"We are trying to clear the front of {current_name} and get it back to something people can step through."
+        else:
+            local_line = f"The people out here are not lingering for fun; they are trying to scrub the last of the trouble off {current_name}."
+        if casualty_count > 0 and hours_text and requirement:
+            detail_line = f"{current_name} is being reset after a fatal scene at the door. Once the cleanup crew finishes, the front still wants {requirement} during {hours_text}."
+        elif casualty_count > 0:
+            detail_line = f"The crew outside {current_name} is doing the slower kind of cleanup that only happens after somebody died close enough to leave the door feeling wrong."
+        elif incident_kind == "hazard" and hours_text:
+            detail_line = f"{current_name} is running a hazard cleanup at the frontage during {hours_text}, all cones, wipes, and workers trying to make the doorway usable again."
+        elif incident_kind == "hazard":
+            detail_line = f"The crew outside {current_name} is cleaning up a nasty hazard at the doorway before anybody trusts the frontage again."
+        elif hours_text and requirement:
+            detail_line = f"{current_name} is still clearing the frontage after somebody got hurt nearby. Once the cleanup crew peels off, the front still wants {requirement} during {hours_text}."
+        else:
+            detail_line = f"The crew outside {current_name} is scrubbing down the last visible signs of recent trouble so the doorway can pass for ordinary again."
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "candle_vigil":
+        if career == "resident":
+            local_line = f"People from {current_name} came out with candles because leaving this doorway dark felt worse."
+        else:
+            local_line = f"Nobody here is trying to turn this into a crowd; they just did not want what happened at {current_name} to pass without a mark."
+        if hours_text and requirement:
+            detail_line = f"The candles outside {current_name} are for somebody the block has not finished grieving yet. When the building settles back into hours during {hours_text}, the front still wants {requirement}."
+        else:
+            detail_line = f"The little vigil outside {current_name} is the block's way of admitting that what happened here still feels too fresh to walk past without stopping."
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "hours",
+            "shared": False,
+        }
+
+    if event_phase == "street_triage":
+        if career in {"triage_nurse", "combat_medic", "trauma_doctor", "medic", "paramedic"} or role == "worker":
+            local_line = f"We are trying to keep the hurt people outside {current_name} stable long enough to move them."
+            if hours_text and requirement:
+                detail_line = f"{current_name} is running curbside treatment during {hours_text}. After that the front still wants {requirement}."
+            elif hours_text:
+                detail_line = f"The medic is working the frontage at {current_name} because it is the fastest place to stabilize them during {hours_text}."
+            elif requirement:
+                detail_line = f"They pulled treatment out to the frontage at {current_name}; once the hurt are moving again, the front still wants {requirement}."
+            else:
+                detail_line = f"Somebody got torn up badly enough that the nearest workable patch of ground at {current_name} turned into a treatment spot."
+        else:
+            local_line = "They are trying to get me steady enough to move without dropping me."
+            if hours_text:
+                detail_line = f"They dragged me to {current_name} because it was the closest place someone could work on me during {hours_text}."
+            else:
+                detail_line = f"They hauled me over to {current_name} because it was the nearest place with enough light and room to stop the bleeding."
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "maintenance_loop":
+        return {}
 
     chance = 0.38
     if scene_type == "delivery" and career in {"courier", "receiver"}:
@@ -8597,7 +9591,6 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
     if not isinstance(target_prop, dict):
         return {}
     target_name = str(target_prop.get("name", target_prop.get("id", "the place"))).strip() or "the place"
-    current_name = str(prop.get("name", prop.get("id", "this place"))).strip() or "this place"
     time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(1, 3))
     org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
     org_name = str((org_snapshot or {}).get("organization_name", "") or "").strip()
@@ -9123,13 +10116,21 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
     prop = prop if isinstance(prop, dict) else None
     if prop is None:
         return {}
-    if str(scene.get("source_kind", "") or "").strip().lower() != "seed":
-        return {}
-
     scene_type = str(scene.get("scene_type", "") or "").strip().lower()
     fixture_type = str(fixture_type or "").strip().lower()
     category = str(scene.get("category", "") or "").strip().lower()
     event_phase = str(scene.get("event_phase", "") or "").strip().lower()
+    source_kind = str(scene.get("source_kind", "") or "").strip().lower()
+    allow_pulse_cache = source_kind == "pulse" and event_phase in (
+        _BUSINESS_EVENT_GATHERING_PHASES
+        | _BUSINESS_EVENT_MEDICAL_RESPONSE_PHASES
+        | _BUSINESS_EVENT_RESIDENTIAL_SOCIAL_PHASES
+        | _BUSINESS_EVENT_HOSPITALITY_PRESSURE_PHASES
+        | _BUSINESS_EVENT_OPERATIONAL_PRESSURE_PHASES
+        | _BUSINESS_EVENT_AFTERMATH_PHASES
+    )
+    if source_kind != "seed" and not allow_pulse_cache:
+        return {}
     prop_name = str(prop.get("name", prop.get("id", "the site"))).strip() or "the site"
     controller = _property_access_controller(sim, prop)
     hours_text = _dialogue_hours_text(controller.get("opening_window")) if isinstance(controller, dict) else ""
@@ -9160,11 +10161,154 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
         ]
         if category in {"medical", "industrial", "transit"} or rng.random() < 0.45:
             item_count += 1
-    elif scene_type == "gathering" and fixture_type in {"meeting_sign", "meeting_marker", "meeting_board", "inspection_packet"}:
+    elif scene_type == "shift" and fixture_type in {"reset_cart", "turnover_tray", "barback_crate", "loading_dolly", "dispatch_satchel", "cleanup_cart"}:
+        if fixture_type == "reset_cart" or event_phase == "reset_scramble":
+            container_label = "Bus Tub"
+            if hours_text and requirement:
+                note = (
+                    f"Bus tub: {prop_name} is between service waves during {hours_text}, clearing plates and resetting the room. "
+                    f"After that the front still wants {requirement}."
+                )
+            elif hours_text:
+                note = f"Bus tub: {prop_name} is in a short reset scramble during {hours_text}, trying to clear plates and re-set the room before the next wave."
+            elif requirement:
+                note = f"Bus tub: {prop_name} is using a quiet minute to reset the room, but the front still wants {requirement} when the next wave lands."
+            else:
+                note = f"Bus tub: {prop_name} is caught in a between-waves reset, all dirty plates, quick wipes, and the staff trying to get ahead of the next push."
+            pool = [item_id for item_id in ("protein_wrap", "bottled_water", "caff_shot", "mint_strip") if item_id in ITEM_CATALOG]
+            if rng.random() < 0.45:
+                item_count += 1
+            read_only_reason = "You can pocket something from the reset cart, but turning the staff bus tub into your personal locker would be a fast way to get noticed."
+        elif fixture_type == "turnover_tray" or event_phase == "table_turnover":
+            container_label = "Turnover Tray"
+            if hours_text and requirement:
+                note = (
+                    f"Turnover tray: {prop_name} is flipping tables hard during {hours_text}. "
+                    f"Once the rush loosens, the front still wants {requirement}."
+                )
+            elif hours_text:
+                note = f"Turnover tray: {prop_name} is in a table-turnover crush during {hours_text}, with clean settings barely lasting long enough to count."
+            elif requirement:
+                note = f"Turnover tray: the crew at {prop_name} is trying to keep the room moving, and the front still wants {requirement} when the rush breaks."
+            else:
+                note = f"Turnover tray: {prop_name} is in that hard-turning stretch where every clean setting already belongs to the next party."
+            pool = [item_id for item_id in ("meal_voucher", "caff_shot", "mint_strip", "bottled_water") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can pull something from the turnover tray, but stashing your own gear in active table reset kit would be asking for trouble."
+        elif fixture_type == "barback_crate" or event_phase == "barback_reset":
+            container_label = "Restock Crate"
+            if hours_text and requirement:
+                note = (
+                    f"Restock crate: {prop_name} is running a late reload during {hours_text}, topping off glass and bottles. "
+                    f"After that the front still wants {requirement}."
+                )
+            elif hours_text:
+                note = f"Restock crate: {prop_name} is in a late barback reset during {hours_text}, all glass runs, ice checks, and quick bottle counts."
+            elif requirement:
+                note = f"Restock crate: the late-service side of {prop_name} is being reloaded, and the front still wants {requirement} once the room steadies."
+            else:
+                note = f"Restock crate: {prop_name} is running a late reset loop of glass, ice, and bottles to keep the room from noticing what ran low."
+            pool = [item_id for item_id in ("spark_brew", "mint_strip", "caff_shot", "protein_wrap") if item_id in ITEM_CATALOG]
+            item_count += 1
+            if category == "entertainment":
+                item_count += 1
+            read_only_reason = "You can pull something from the restock crate, but using live bar reset stock as your stash would get ugly fast."
+        elif fixture_type == "loading_dolly" or event_phase == "loading_push":
+            container_label = "Freight Dolly"
+            if hours_text and requirement:
+                note = (
+                    f"Freight dolly: {prop_name} is in a loading push during {hours_text}, clearing freight in short bursts. "
+                    f"After that the front still wants {requirement}."
+                )
+            elif hours_text:
+                note = f"Freight dolly: {prop_name} is in a short loading burst during {hours_text}, with cargo moving in start-stop pushes instead of a clean flow."
+            elif requirement:
+                note = f"Freight dolly: the crew at {prop_name} is trying to keep cargo from stacking up, but the front still wants {requirement} while the push is live."
+            else:
+                note = f"Freight dolly: {prop_name} is under load pressure, all clipped pushes, shifting stacks, and the crew trying to keep the next burst from landing on the last one."
+            pool = [item_id for item_id in ("pocket_multitool", "battery_pack", "protein_wrap", "caff_shot") if item_id in ITEM_CATALOG]
+            item_count += 1
+            if category == "transit":
+                pool.extend(item_id for item_id in ("city_pass_token", "transit_daypass") if item_id in ITEM_CATALOG)
+            read_only_reason = "You can pull something from the freight dolly, but using live load gear as your own stash would slow the crew down fast."
+        elif fixture_type == "cleanup_cart" or event_phase == "cleanup_detail":
+            container_label = "Cleanup Cart"
+            aftermath = _business_event_aftermath_entry(sim, prop) or {}
+            casualty_count = max(0, int(aftermath.get("casualty_count", 0) or 0))
+            incident_kind = str(aftermath.get("incident_kind", "violence") or "violence").strip().lower() or "violence"
+            if casualty_count > 0 and hours_text and requirement:
+                note = (
+                    f"Cleanup cart: {prop_name} is being reset after a fatal scene at the door during {hours_text}. "
+                    f"Once the crew clears off, the front still wants {requirement}."
+                )
+            elif casualty_count > 0:
+                note = f"Cleanup cart: the frontage at {prop_name} is being reset after a fatal scene, all gloves, wipes, and workers trying not to talk louder than they need to."
+            elif incident_kind == "hazard" and hours_text:
+                note = f"Cleanup cart: {prop_name} is running a hazard cleanup during {hours_text}, with cones and supplies keeping the door half-held."
+            elif incident_kind == "hazard":
+                note = f"Cleanup cart: the frontage at {prop_name} is being scrubbed down after a nasty hazard turned the doorway into a caution line."
+            elif hours_text and requirement:
+                note = (
+                    f"Cleanup cart: {prop_name} is clearing the frontage after somebody got hurt nearby during {hours_text}. "
+                    f"After that the front still wants {requirement}."
+                )
+            else:
+                note = f"Cleanup cart: the crew at {prop_name} is trying to scrub the last visible signs of recent trouble off the doorway."
+            pool = [item_id for item_id in ("bottled_water", "calm_patch", "caff_shot", "pocket_multitool") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can pull something from the cleanup cart, but turning active recovery gear into your personal stash would get remembered fast."
+        else:
+            container_label = "Dispatch Satchel"
+            dispatch_target = _business_event_followup_target(
+                sim,
+                prop,
+                scene_type="shift",
+                category=category,
+                rng=rng,
+            )
+            target_name = str(dispatch_target.get("name", dispatch_target.get("id", "the place"))).strip() if isinstance(dispatch_target, dict) else ""
+            time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(1, 3))
+            if target_name and hours_text and requirement:
+                note = (
+                    f"Dispatch satchel: route slips at {prop_name} keep pointing toward {target_name} around {time_text}, "
+                    f"while this frontage is still hot during {hours_text} and still wants {requirement}."
+                )
+            elif target_name and hours_text:
+                note = f"Dispatch satchel: clipped route slips at {prop_name} point toward {target_name} around {time_text}, while this window is live during {hours_text}."
+            elif target_name and requirement:
+                note = f"Dispatch satchel: somebody at {prop_name} has marked {target_name} for the next handoff around {time_text}, but this edge still wants {requirement}."
+            elif target_name:
+                note = f"Dispatch satchel: the route slips here keep circling back to {target_name} as the next handoff once {prop_name} clears the current surge."
+            elif hours_text and requirement:
+                note = f"Dispatch satchel: {prop_name} is routing the next burst during {hours_text}, and the front still wants {requirement} while the board is hot."
+            elif hours_text:
+                note = f"Dispatch satchel: {prop_name} is in a dispatch surge during {hours_text}, with route notes and clipped orders spilling closer to the street."
+            elif requirement:
+                note = f"Dispatch satchel: clipped orders are spilling outward at {prop_name}, and the front still wants {requirement} while the surge is live."
+            else:
+                note = f"Dispatch satchel: {prop_name} is under a dispatch surge, all route slips, clipped orders, and edge traffic that should have stayed deeper inside."
+            pool = [item_id for item_id in ("credstick_chip", "city_pass_token", "transit_daypass", "caff_shot") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can lift something from the dispatch satchel, but stuffing your own gear into live route paperwork would be a good way to get remembered."
+    elif scene_type == "gathering" and fixture_type in {"meeting_sign", "meeting_marker", "meeting_board", "inspection_packet", "admin_packet", "manifest_clipboard", "trauma_kit", "school_bags", "stoop_cooler", "incident_tape", "memorial_candles"}:
         org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
         org_name = str((org_snapshot or {}).get("organization_name", "") or "").strip()
         org_label = org_name or prop_name
-        if fixture_type == "inspection_packet" or event_phase == "delivery_inspection":
+        if fixture_type == "school_bags" or event_phase == "school_run":
+            container_label = "Backpack Cluster"
+        elif fixture_type == "stoop_cooler" or event_phase == "neighbors_lingering":
+            container_label = "Shared Cooler"
+        elif fixture_type == "incident_tape" or event_phase == "taped_off_front":
+            container_label = "Tape Stanchion"
+        elif fixture_type == "memorial_candles" or event_phase == "candle_vigil":
+            container_label = "Memorial Candles"
+        elif fixture_type == "trauma_kit" or event_phase == "street_triage":
+            container_label = "Triage Kit" if category == "medical" else "Field Med Case"
+        elif fixture_type == "manifest_clipboard" or event_phase == "manifest_check":
+            container_label = "Manifest Clipboard"
+        elif fixture_type == "admin_packet" or event_phase == "paperwork_surge":
+            container_label = "Audit Packet" if category in {"office", "finance"} else "Receipt Binder"
+        elif fixture_type == "inspection_packet" or event_phase == "delivery_inspection":
             container_label = "Inspection Packet"
         elif fixture_type == "meeting_sign":
             container_label = "Guest List"
@@ -9172,7 +10316,95 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             container_label = "Briefing Kit"
         else:
             container_label = "Meeting Packet"
-        if event_phase == "delivery_inspection" and hours_text and requirement:
+        if event_phase == "school_run" and hours_text:
+            note = f"Backpack cluster: {prop_name} is in its morning school-run crush during {hours_text}, all half-zipped bags and rushed checklists."
+        elif event_phase == "school_run":
+            note = f"Backpack cluster: {prop_name} is caught in a short morning burst of bags, lunch kits, and people trying not to be the reason everyone is late."
+        elif event_phase == "neighbors_lingering":
+            neighborhood_target = _business_event_neighborhood_target(sim, prop, rng=rng)
+            target_name = ""
+            target_hours_text = ""
+            target_requirement = ""
+            if isinstance(neighborhood_target, dict):
+                target_name = str(neighborhood_target.get("name", neighborhood_target.get("id", "the place"))).strip() or "the place"
+                target_controller = _property_access_controller(sim, neighborhood_target)
+                if isinstance(target_controller, dict):
+                    target_hours_text = _dialogue_hours_text(target_controller.get("opening_window"))
+                    target_requirement = _controller_access_requirement_text(target_controller)
+            if target_name and target_hours_text and target_requirement:
+                note = (
+                    f"Shared cooler: {prop_name} has spilled into stoop talk, and somebody keeps repeating that {target_name} usually runs during {target_hours_text}. "
+                    f"They still want {target_requirement} at the door."
+                )
+            elif target_name and target_hours_text:
+                note = f"Shared cooler: {prop_name} has spilled into stoop talk, and somebody keeps repeating that {target_name} is usually moving during {target_hours_text}."
+            elif target_name and target_requirement:
+                note = f"Shared cooler: the evening stoop circle outside {prop_name} keeps pointing at {target_name}, though they still want {target_requirement} at the door."
+            elif target_name:
+                note = f"Shared cooler: the neighbors outside {prop_name} keep turning the conversation back toward {target_name} whenever anyone asks what is still worth walking to."
+            else:
+                note = f"Shared cooler: {prop_name} has spilled into a little evening stoop circle of drinks, cigarettes, and block gossip before everyone heads back up."
+        elif event_phase == "taped_off_front":
+            aftermath = _business_event_aftermath_entry(sim, prop) or {}
+            casualty_count = max(0, int(aftermath.get("casualty_count", 0) or 0))
+            incident_kind = str(aftermath.get("incident_kind", "violence") or "violence").strip().lower() or "violence"
+            if casualty_count > 0 and hours_text and requirement:
+                note = (
+                    f"Tape stanchion: {prop_name} is still half held after a fatal scene at the door during {hours_text}. "
+                    f"When the hold loosens, the front still wants {requirement}."
+                )
+            elif casualty_count > 0:
+                note = f"Tape stanchion: {prop_name} still has the doorway half taped after somebody died close enough to make the front feel wrong."
+            elif incident_kind == "hazard" and hours_text:
+                note = f"Tape stanchion: {prop_name} is holding the door because a fresh hazard turned the frontage into a caution line during {hours_text}."
+            elif incident_kind == "hazard":
+                note = f"Tape stanchion: the doorway at {prop_name} is still held because a nasty hazard has not finished being made safe."
+            elif hours_text and requirement:
+                note = f"Tape stanchion: somebody got hurt close enough to {prop_name} that the frontage is still half taped during {hours_text}, and the front still wants {requirement} once it settles."
+            else:
+                note = f"Tape stanchion: somebody got hurt close enough to {prop_name} that the frontage is still all tape, low voices, and people not ready to move on yet."
+        elif event_phase == "candle_vigil":
+            if hours_text and requirement:
+                note = (
+                    f"Memorial candles: people outside {prop_name} keep leaving quiet offerings for somebody the block has not finished grieving. "
+                    f"When the building settles during {hours_text}, the front still wants {requirement}."
+                )
+            else:
+                note = f"Memorial candles: people outside {prop_name} keep leaving quiet offerings because what happened here still feels too fresh to pass without stopping."
+        elif event_phase == "street_triage" and hours_text and requirement:
+            note = (
+                f"Triage kit: {prop_name} is running curbside treatment during {hours_text}. "
+                f"After that the front still wants {requirement}."
+            )
+        elif event_phase == "street_triage" and hours_text:
+            note = f"Triage kit: somebody got hurt badly enough that {prop_name} pulled treatment out to the frontage during {hours_text}."
+        elif event_phase == "street_triage" and requirement:
+            note = f"Triage kit: the medic is stabilizing someone outside {prop_name}; once that clears, the front still wants {requirement}."
+        elif event_phase == "street_triage":
+            note = f"Triage kit: the frontage at {prop_name} is serving as a temporary treatment spot while a medic tries to stabilize the injured."
+        elif event_phase == "paperwork_surge" and hours_text and requirement:
+            note = (
+                f"Audit packet: {prop_name} is chewing through a paperwork surge during {hours_text}. "
+                f"After that the front wants {requirement}."
+            )
+        elif event_phase == "paperwork_surge" and hours_text:
+            note = f"Audit packet: {prop_name} is buried in approvals and receipts during {hours_text}."
+        elif event_phase == "paperwork_surge" and requirement:
+            note = f"Audit packet: {prop_name} is clearing a paperwork jam, and the front still wants {requirement}."
+        elif event_phase == "paperwork_surge":
+            note = f"Audit packet: {prop_name} is trying to clear a back-office jam before the front side catches it."
+        elif event_phase == "manifest_check" and hours_text and requirement:
+            note = (
+                f"Manifest clipboard: {prop_name} is holding freight against the paperwork during {hours_text}. "
+                f"Anything after that still wants {requirement}."
+            )
+        elif event_phase == "manifest_check" and hours_text:
+            note = f"Manifest clipboard: {prop_name} is matching the next receiving window during {hours_text}."
+        elif event_phase == "manifest_check" and requirement:
+            note = f"Manifest clipboard: loads at {prop_name} are not supposed to move until they clear {requirement}."
+        elif event_phase == "manifest_check":
+            note = f"Manifest clipboard: the crew at {prop_name} is matching freight to paperwork before anything else moves."
+        elif event_phase == "delivery_inspection" and hours_text and requirement:
             note = (
                 f"Inspection packet: {prop_name} is drawing a quick review during {hours_text}. "
                 f"After that the front wants {requirement}."
@@ -9194,18 +10426,74 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             note = f"Guest list: invitees at {prop_name} are expected to clear {requirement} on the way in."
         else:
             note = f"Guest list: {prop_name} is set for a low-profile follow-up tied to {org_label}."
-        pool = [
-            item_id
-            for item_id in _business_event_item_pool(
-                "gathering",
-                category,
-                {"role": "worker", "career": "host"},
-            )
-            if item_id in ITEM_CATALOG
-        ]
-        if category in {"office", "finance", "hospitality", "entertainment"} or rng.random() < 0.35:
+        if event_phase == "school_run":
+            pool = [
+                item_id
+                for item_id in ("meal_voucher", "city_pass_token", "protein_wrap", "bottled_water")
+                if item_id in ITEM_CATALOG
+            ]
+            if rng.random() < 0.45:
+                item_count += 1
+            read_only_reason = "You can lift something from the bag pile, but stuffing your own gear into a family's morning school mess would be a terrible idea."
+        elif event_phase == "neighbors_lingering":
+            pool = [
+                item_id
+                for item_id in ("spark_brew", "smoke_tab", "mint_strip", "bottled_water", "city_pass_token")
+                if item_id in ITEM_CATALOG
+            ]
             item_count += 1
-        read_only_reason = "You can pocket something from the meeting setup, but there is nowhere to stash your own gear here."
+            read_only_reason = "You can pocket something from the shared cooler, but using a neighbor hangout as your personal stash would not stay friendly for long."
+        elif event_phase == "taped_off_front":
+            pool = [
+                item_id
+                for item_id in ("calm_patch", "bottled_water", "city_pass_token", "meal_voucher")
+                if item_id in ITEM_CATALOG
+            ]
+            item_count += 1
+            read_only_reason = "You can pocket something left near the taped frontage, but turning an active incident hold into your own stash would be bleak and obvious."
+        elif event_phase == "candle_vigil":
+            pool = [
+                item_id
+                for item_id in ("calm_patch", "bottled_water", "meal_voucher", "city_pass_token")
+                if item_id in ITEM_CATALOG
+            ]
+            item_count += 1
+            read_only_reason = "You can take something left near the vigil, but using a memorial as your personal stash would be cold enough to get remembered."
+        elif event_phase == "street_triage":
+            pool = [
+                item_id
+                for item_id in ("med_gel", "micro_medkit", "trauma_foam", "hydration_salts", "calm_patch")
+                if item_id in ITEM_CATALOG
+            ]
+            item_count += 1
+            if category == "medical":
+                item_count += 1
+            read_only_reason = "You can lift emergency supplies from the kit, but this treatment cache is not a safe place to stash your own gear."
+        elif event_phase == "paperwork_surge":
+            packet_pool = ("credstick_chip", "city_pass_token", "focus_inhaler", "protein_wrap")
+            pool = [item_id for item_id in packet_pool if item_id in ITEM_CATALOG]
+            if category in {"office", "finance"}:
+                item_count += 1
+            read_only_reason = "You can lift something from the review packet, but this stack is not for storing your own gear."
+        elif event_phase == "manifest_check":
+            packet_pool = ("pocket_multitool", "battery_pack", "caff_shot", "protein_wrap")
+            pool = [item_id for item_id in packet_pool if item_id in ITEM_CATALOG]
+            if category in {"industrial", "transit"}:
+                item_count += 1
+            read_only_reason = "You can pull something from the manifest cart, but this clipboard stash is not yours to use as a locker."
+        else:
+            pool = [
+                item_id
+                for item_id in _business_event_item_pool(
+                    "gathering",
+                    category,
+                    {"role": "worker", "career": "host"},
+                )
+                if item_id in ITEM_CATALOG
+            ]
+            if category in {"office", "finance", "hospitality", "entertainment"} or rng.random() < 0.35:
+                item_count += 1
+            read_only_reason = "You can pocket something from the meeting setup, but there is nowhere to stash your own gear here."
     else:
         return {}
 
@@ -9378,19 +10666,60 @@ def _business_event_scene_blueprint(prop, pulse):
             "fixture_type": fixture_type,
             "fixture_glyph": fixture_glyph,
             "actor_specs": actor_specs,
+            "keep_hours": 2,
             "release_budget": 1,
             "drift_preferred": True,
         }
 
+    if event_phase in _BUSINESS_EVENT_MEDICAL_RESPONSE_PHASES:
+        return _business_event_medical_response_blueprint(category, event_phase=event_phase)
+
+    if event_phase in _BUSINESS_EVENT_RESIDENTIAL_SOCIAL_PHASES:
+        return _business_event_residential_social_blueprint(category, event_phase=event_phase)
+
+    if event_phase in _BUSINESS_EVENT_HOSPITALITY_PRESSURE_PHASES:
+        return _business_event_hospitality_pressure_blueprint(category, event_phase=event_phase)
+
+    if event_phase in _BUSINESS_EVENT_OPERATIONAL_PRESSURE_PHASES:
+        return _business_event_operational_pressure_blueprint(category, event_phase=event_phase)
+
+    if event_phase in _BUSINESS_EVENT_AFTERMATH_PHASES:
+        return _business_event_aftermath_blueprint(category, event_phase=event_phase)
+
+    if event_phase in _BUSINESS_EVENT_GATHERING_PHASES:
+        return _business_event_admin_review_blueprint(category, event_phase=event_phase)
+
     if event_phase in _BUSINESS_EVENT_SHIFT_PHASES:
+        if event_phase == "maintenance_loop":
+            actor_specs = [
+                {"role": "worker", "career": "maintenance_tech", "linger_ticks": 14},
+            ]
+            if category in {"hospitality", "entertainment", "industrial", "medical", "transit"}:
+                actor_specs.append({"role": "worker", "career": "maintenance_tech", "linger_ticks": 14})
+            return {
+                "scene_type": "shift",
+                "fixture_name": "Tool Cart" if category not in {"industrial", "transit"} else "Service Cart",
+                "fixture_type": "service_cart",
+                "fixture_glyph": "t",
+                "actor_specs": actor_specs,
+                "keep_hours": 1,
+                "release_budget": 0,
+                "drift_preferred": False,
+            }
         if category == "secure":
             fixture_name = "Duty Board"
             fixture_type = "shift_board"
             fixture_glyph = "n"
-            actor_specs = [
-                {"role": "guard", "career": "corrections_officer", "linger_ticks": 16},
-                {"role": "guard", "career": "corrections_officer", "linger_ticks": 16},
-            ]
+            if event_phase == "guard_rotation":
+                actor_specs = [
+                    {"role": "guard", "career": "shift_sergeant", "linger_ticks": 16},
+                    {"role": "guard", "career": "gate_guard", "linger_ticks": 16},
+                ]
+            else:
+                actor_specs = [
+                    {"role": "guard", "career": "transport_officer", "linger_ticks": 16},
+                    {"role": "worker", "career": "release_clerk", "linger_ticks": 14},
+                ]
         else:
             fixture_name = "Shift Cart" if category in {"industrial", "transit"} else "Notice Board"
             fixture_type = "shift_cart" if category in {"industrial", "transit"} else "shift_board"
@@ -9403,10 +10732,136 @@ def _business_event_scene_blueprint(prop, pulse):
             "fixture_type": fixture_type,
             "fixture_glyph": fixture_glyph,
             "actor_specs": actor_specs,
+            "keep_hours": 2,
             "release_budget": 1,
             "drift_preferred": False,
         }
     return None
+
+
+class BusinessPulseAftermathSystem(System):
+    def __init__(self, sim):
+        super().__init__(sim)
+        self.runs_without_turn = True
+        self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
+        self.sim.events.subscribe("npc_killed", self.on_npc_killed)
+        self.sim.events.subscribe("player_killed", self.on_player_killed)
+        self.sim.events.subscribe("creature_hazard_triggered", self.on_creature_hazard_triggered)
+
+    def _record(self, *, x, y, z, incident_kind="violence", severity=0.4, casualty=False, serious=False, damage_kind=""):
+        return _record_business_event_aftermath(
+            self.sim,
+            x=x,
+            y=y,
+            z=z,
+            incident_kind=incident_kind,
+            severity=severity,
+            casualty=casualty,
+            serious=serious,
+            damage_kind=damage_kind,
+        )
+
+    def on_entity_damaged(self, event):
+        x = event.data.get("x")
+        y = event.data.get("y")
+        z = event.data.get("z")
+        if x is None or y is None or z is None:
+            return
+        try:
+            damage = int(event.data.get("damage", 0) or 0)
+            hp = int(event.data.get("hp", 0) or 0)
+            max_hp = max(1, int(event.data.get("max_hp", 1) or 1))
+        except (TypeError, ValueError):
+            return
+        damage_kind = str(event.data.get("damage_kind", "harm") or "harm").strip().lower() or "harm"
+        violent = damage_kind in {"ballistic", "explosive", "melee"}
+        if violent:
+            serious = damage >= max(3, max_hp // 5) or hp <= max(1, max_hp // 3)
+            severity = 0.24 + min(0.56, float(damage) / float(max_hp))
+            if hp <= 0:
+                severity += 0.18
+            self._record(
+                x=x,
+                y=y,
+                z=z,
+                incident_kind="violence",
+                severity=severity,
+                casualty=False,
+                serious=serious,
+                damage_kind=damage_kind,
+            )
+            return
+        if damage < max(2, max_hp // 6):
+            return
+        severity = 0.22 + min(0.48, float(damage) / float(max_hp))
+        self._record(
+            x=x,
+            y=y,
+            z=z,
+            incident_kind="hazard",
+            severity=severity,
+            casualty=False,
+            serious=hp <= max(1, max_hp // 2),
+            damage_kind=damage_kind,
+        )
+
+    def on_npc_killed(self, event):
+        x = event.data.get("x")
+        y = event.data.get("y")
+        z = event.data.get("z")
+        if x is None or y is None or z is None:
+            return
+        reason = str(event.data.get("reason", "killed") or "killed").strip().lower() or "killed"
+        incident_kind = "hazard" if reason in {"burned", "creature_hazard", "toxin", "condition"} else "violence"
+        self._record(
+            x=x,
+            y=y,
+            z=z,
+            incident_kind=incident_kind,
+            severity=0.92,
+            casualty=True,
+            serious=True,
+            damage_kind=reason,
+        )
+
+    def on_player_killed(self, event):
+        x = event.data.get("x")
+        y = event.data.get("y")
+        z = event.data.get("z")
+        if x is None or y is None or z is None:
+            return
+        damage_kind = str(event.data.get("damage_kind", "lethal_damage") or "lethal_damage").strip().lower() or "lethal_damage"
+        incident_kind = "hazard" if damage_kind in {"condition", "toxin"} else "violence"
+        self._record(
+            x=x,
+            y=y,
+            z=z,
+            incident_kind=incident_kind,
+            severity=0.98,
+            casualty=True,
+            serious=True,
+            damage_kind=damage_kind,
+        )
+
+    def on_creature_hazard_triggered(self, event):
+        x = event.data.get("x")
+        y = event.data.get("y")
+        z = event.data.get("z", 0)
+        if x is None or y is None:
+            return
+        self._record(
+            x=x,
+            y=y,
+            z=z,
+            incident_kind="hazard",
+            severity=0.58,
+            casualty=False,
+            serious=True,
+            damage_kind="creature_hazard",
+        )
+
+    def update(self):
+        _prune_business_event_aftermath_state(self.sim)
 
 
 class BusinessPulseSceneSystem(System):
@@ -9459,6 +10914,11 @@ class BusinessPulseSceneSystem(System):
             return []
 
         active = _business_event_scene_state(self.sim).get("active", {})
+        active_scene_by_property = {}
+        for active_scene_id, active_scene in active.items():
+            property_id = str((active_scene or {}).get("property_id", "") or "").strip()
+            if property_id:
+                active_scene_by_property[property_id] = str(active_scene_id or "").strip()
         candidates = []
         for prop in self.sim.properties.values():
             if not isinstance(prop, dict):
@@ -9487,6 +10947,13 @@ class BusinessPulseSceneSystem(System):
 
             scene_id = self._scene_id_for(prop, pulse)
             if not scene_id:
+                continue
+            property_id = str(prop.get("id", "") or "").strip()
+            event_phase = str((pulse or {}).get("event_phase", "") or "").strip().lower()
+            active_scene_id = active_scene_by_property.get(property_id, "")
+            if active_scene_id and active_scene_id != scene_id:
+                continue
+            if event_phase not in _BUSINESS_EVENT_AFTERMATH_PHASES and self._scene_property_on_cooldown(property_id):
                 continue
             score = float(pulse.get("perimeter_bonus", 0.0) or 0.0)
             if _property_is_storefront(prop) or _property_is_public(prop):
@@ -9617,13 +11084,19 @@ class BusinessPulseSceneSystem(System):
             return
         actor_spec = actor_spec if isinstance(actor_spec, dict) else {}
         source_kind = str(scene.get("source_kind", "") or "").strip().lower()
+        event_phase = str(scene.get("event_phase", "") or "").strip().lower()
         role = str(actor_spec.get("role", "") or "").strip().lower()
         career = str(actor_spec.get("career", "") or "").strip().lower()
         site_affiliated = career in {"receiver", "shift_worker"} or (
             role == "worker" and str(scene.get("scene_type", "") or "").strip().lower() == "shift"
         )
+        if event_phase in _BUSINESS_EVENT_GATHERING_PHASES and role == "worker":
+            site_affiliated = True
         if source_kind == "seed" and role == "worker":
             site_affiliated = True
+        explicit_site_affiliated = actor_spec.get("site_affiliated")
+        if explicit_site_affiliated is not None:
+            site_affiliated = bool(explicit_site_affiliated)
 
         occupation = self.sim.ecs.get(Occupation).get(eid)
         routine = self.sim.ecs.get(NPCRoutine).get(eid)
@@ -9640,6 +11113,61 @@ class BusinessPulseSceneSystem(System):
                 occupation.shift_end = int(opening_window[1]) % 24
             if routine:
                 routine.work = tuple(scene.get("anchor", routine.work)) if scene.get("anchor") else routine.work
+
+        vitality = self.sim.ecs.get(Vitality).get(eid)
+        hp_ratio_range = actor_spec.get("hp_ratio_range")
+        if vitality and isinstance(hp_ratio_range, (tuple, list)) and len(hp_ratio_range) >= 2:
+            try:
+                low = max(0.05, min(1.0, float(hp_ratio_range[0])))
+                high = max(low, min(1.0, float(hp_ratio_range[1])))
+            except (TypeError, ValueError):
+                low = high = None
+            if low is not None and high is not None:
+                target_ratio = rng.uniform(low, high)
+                max_hp = max(1, int(getattr(vitality, "max_hp", 1) or 1))
+                target_hp = int(round(max_hp * target_ratio))
+                if max_hp > 1:
+                    target_hp = min(max_hp - 1, target_hp)
+                vitality.hp = max(1, min(max_hp, max(1, target_hp)))
+                vitality.downed = False
+
+        needs = self.sim.ecs.get(NPCNeeds).get(eid)
+        needs_overrides = actor_spec.get("needs_overrides")
+        if needs and isinstance(needs_overrides, dict):
+            for need_name, raw_value in needs_overrides.items():
+                if not hasattr(needs, str(need_name)):
+                    continue
+                value = raw_value
+                if isinstance(raw_value, (tuple, list)) and len(raw_value) >= 2:
+                    try:
+                        low = float(raw_value[0])
+                        high = float(raw_value[1])
+                    except (TypeError, ValueError):
+                        continue
+                    value = rng.uniform(min(low, high), max(low, high))
+                try:
+                    setattr(needs, str(need_name), _clamp(float(value)))
+                except (TypeError, ValueError):
+                    continue
+
+        statuses = self.sim.ecs.get(StatusEffects).get(eid)
+        status_effects = actor_spec.get("status_effects")
+        if statuses and isinstance(status_effects, (tuple, list)):
+            for effect in status_effects:
+                if not isinstance(effect, dict):
+                    continue
+                status_name = str(effect.get("status", "") or "").strip()
+                if not status_name:
+                    continue
+                try:
+                    duration = int(effect.get("duration", 1) or 1)
+                except (TypeError, ValueError):
+                    duration = 1
+                statuses.add(
+                    status=status_name,
+                    duration=max(1, duration),
+                    modifiers=dict(effect.get("modifiers", {}) or {}),
+                )
 
         pool = [
             item_id
@@ -9669,6 +11197,8 @@ class BusinessPulseSceneSystem(System):
             "scene_type": str(scene.get("scene_type", "") or "").strip().lower(),
             "category": str(scene.get("category", "") or "").strip().lower(),
             "event_phase": str(scene.get("event_phase", "") or "").strip().lower(),
+            "role": role,
+            "career": career,
             "site_affiliated": bool(site_affiliated),
             "carried_item_ids": tuple(carried_item_ids),
         }
@@ -9750,6 +11280,25 @@ class BusinessPulseSceneSystem(System):
         }
         self._decorate_scene_actor(scene, actor_spec, eid, rng=rng)
         return eid
+
+    def _scene_property_on_cooldown(self, property_id):
+        property_id = str(property_id or "").strip()
+        if not property_id:
+            return False
+        cooldowns = _business_event_scene_state(self.sim).get("cooldowns", {})
+        if not isinstance(cooldowns, dict):
+            return False
+        end_tick = cooldowns.get(property_id)
+        if end_tick is None:
+            return False
+        try:
+            elapsed = int(self.sim.tick) - int(end_tick)
+        except (TypeError, ValueError):
+            return False
+        if elapsed < 0:
+            return False
+        cooldown_ticks = _business_event_ticks_per_hour(self.sim) * _BUSINESS_EVENT_SCENE_PROPERTY_COOLDOWN_HOURS
+        return elapsed < cooldown_ticks
 
     def _materialize_delivery_scene(self, scene, blueprint, rng):
         anchor = scene["anchor"]
@@ -9841,13 +11390,36 @@ class BusinessPulseSceneSystem(System):
         support_tiles = self._anchor_support_tiles(anchor, reserved=reserved, limit=6)
         fixture_tile = support_tiles[0] if support_tiles else None
         if fixture_tile is not None:
-            self._register_scene_fixture(
+            scene_prop = self._scene_property(scene)
+            interaction = _business_event_scene_fixture_interaction(
+                self.sim,
+                scene,
+                scene_prop,
+                fixture_type=blueprint.get("fixture_type", "shift_board"),
+                rng=rng,
+            )
+            fixture_property_id = self._register_scene_fixture(
                 scene,
                 fixture_tile,
                 name=blueprint.get("fixture_name", "Notice Board"),
                 fixture_type=blueprint.get("fixture_type", "shift_board"),
                 glyph=blueprint.get("fixture_glyph", "n"),
+                extra_metadata=(interaction or {}).get("property_metadata"),
             )
+            if fixture_property_id and isinstance(interaction, dict):
+                container_kind = str(((interaction.get("property_metadata") or {}).get("container_kind", "scene"))).strip().lower() or "scene"
+                loot_entries = [
+                    dict(entry)
+                    for entry in list(interaction.get("loot_entries", ()) or ())
+                    if isinstance(entry, dict)
+                ]
+                if loot_entries:
+                    container_entries = _property_runtime_container_entries(
+                        self.sim,
+                        fixture_property_id,
+                        container_kind=container_kind,
+                    )
+                    container_entries[:] = loot_entries
             reserved.add(fixture_tile)
 
         cluster_tiles = [anchor] + self._anchor_support_tiles(anchor, reserved=reserved, limit=8)
@@ -9904,7 +11476,7 @@ class BusinessPulseSceneSystem(System):
         for index, actor_spec in enumerate(actor_specs):
             spawn_pos = cluster_tiles[index % len(cluster_tiles)]
             route_points = [spawn_pos]
-            if len(cluster_tiles) > 1:
+            if not bool((actor_spec or {}).get("fixed_position")) and len(cluster_tiles) > 1:
                 route_points.append(cluster_tiles[(index + 1) % len(cluster_tiles)])
             eid = self._spawn_scene_actor(scene, actor_spec, spawn_pos=spawn_pos, route_points=route_points, rng=rng)
             if eid is not None:
@@ -9927,6 +11499,7 @@ class BusinessPulseSceneSystem(System):
             "actor_routes": {},
             "release_budget": max(0, int(blueprint.get("release_budget", 0) or 0)),
             "drift_preferred": bool(blueprint.get("drift_preferred", False)),
+            "keep_hours": max(1, int(blueprint.get("keep_hours", 2) or 2)),
             "pulse_hour": max(0, int((spec.get("pulse") or {}).get("hour", 0) or 0)),
         }
         rng = random.Random(f"{self.sim.seed}:business-scene:{scene['scene_id']}")
@@ -9962,7 +11535,132 @@ class BusinessPulseSceneSystem(System):
         )
         return released is not None
 
+    def _scene_actor_in_active_dialogue(self, eid):
+        dialog_ui = getattr(self.sim, "dialog_ui", None)
+        if not isinstance(dialog_ui, dict) or not bool(dialog_ui.get("open")):
+            return False
+        npc_eid = dialog_ui.get("npc_eid")
+        try:
+            return int(npc_eid) == int(eid)
+        except (TypeError, ValueError):
+            return npc_eid == eid
+
+    def _scene_actor_in_live_combat(self, eid):
+        ai = self.sim.ecs.get(AI).get(eid)
+        if ai and str(ai.state or "").strip().lower() == "protecting":
+            return True
+
+        will = self.sim.ecs.get(NPCWill).get(eid)
+        if will and str(will.intent or "").strip().lower() == "protecting":
+            return True
+
+        for other_eid, other_ai in self.sim.ecs.get(AI).items():
+            if int(other_eid) == int(eid):
+                continue
+            if str(getattr(other_ai, "state", "") or "").strip().lower() != "protecting":
+                continue
+            try:
+                if int(getattr(other_ai, "target_eid", None)) == int(eid):
+                    return True
+            except (TypeError, ValueError):
+                if getattr(other_ai, "target_eid", None) == eid:
+                    return True
+
+        for other_eid, other_will in self.sim.ecs.get(NPCWill).items():
+            if int(other_eid) == int(eid):
+                continue
+            if str(getattr(other_will, "intent", "") or "").strip().lower() != "protecting":
+                continue
+            try:
+                if int(getattr(other_will, "target_eid", None)) == int(eid):
+                    return True
+            except (TypeError, ValueError):
+                if getattr(other_will, "target_eid", None) == eid:
+                    return True
+
+        return False
+
+    def _scene_actor_preservation_mode(self, eid):
+        if eid is None or self.sim.ecs.get(Position).get(eid) is None:
+            return ""
+        if _active_contractor_record(self.sim, eid, ally_eid=self.player_eid) is not None:
+            return "keep_hired"
+        if actor_player_business_employment(self.sim, eid, owner_eid=self.player_eid) is not None:
+            return "keep_hired"
+        if self._scene_actor_in_live_combat(eid):
+            return "keep_combat"
+        if self._scene_actor_in_active_dialogue(eid):
+            return "release_dialogue"
+        return ""
+
+    def _prepare_preserved_scene_actor(self, eid, mode):
+        if str(mode or "").strip().lower() != "keep_hired":
+            return
+        if actor_player_business_employment(self.sim, eid, owner_eid=self.player_eid) is None:
+            return
+
+        ai = self.sim.ecs.get(AI).get(eid)
+        if ai and str(ai.state or "").strip().lower() == "holding" and ai.target_eid is None:
+            ai.state = "idle"
+            ai.target = None
+            ai.target_eid = None
+
+        will = self.sim.ecs.get(NPCWill).get(eid)
+        if will and str(will.intent or "").strip().lower() == "holding" and will.target_eid is None:
+            will.intent = "idle"
+            will.score = 0.0
+            will.target = None
+            will.target_eid = None
+            will.last_tick = self.sim.tick
+
+    def _scene_release_targets(self, scene, *, preserve_modes=None):
+        actor_ids = [
+            int(eid)
+            for eid in list(scene.get("spawned_entity_ids", ()) or ())
+            if self.sim.ecs.get(Position).get(eid) is not None
+        ]
+        if not actor_ids:
+            return set()
+
+        preserve_modes = dict(preserve_modes or {})
+        forced_release = {
+            int(eid)
+            for eid, mode in preserve_modes.items()
+            if str(mode or "").strip().lower() == "release_dialogue"
+        }
+        actor_ids = [
+            int(eid)
+            for eid in actor_ids
+            if not str(preserve_modes.get(int(eid), "") or "").strip().lower().startswith("keep_")
+            and int(eid) not in forced_release
+        ]
+
+        budget = min(len(actor_ids), max(0, int(scene.get("release_budget", 0) or 0)))
+        if budget <= 0:
+            return forced_release
+
+        actor_state = _business_event_actor_state(self.sim)
+        ranked = []
+        for index, eid in enumerate(actor_ids):
+            note = actor_state.get(int(eid), {}) if isinstance(actor_state, dict) else {}
+            local_line = str((note or {}).get("local_line", "") or "").strip()
+            detail_line = str((note or {}).get("detail_line", "") or "").strip()
+            followup_seed_id = str((note or {}).get("followup_seed_id", "") or "").strip()
+            followup_opportunity = (note or {}).get("followup_opportunity", {})
+            ranked.append((
+                -int(bool(followup_seed_id)),
+                -int(isinstance(followup_opportunity, dict) and bool(followup_opportunity)),
+                -int(bool(local_line or detail_line)),
+                index,
+                int(eid),
+            ))
+        ranked.sort()
+        return forced_release | {eid for *_score, eid in ranked[:budget]}
+
     def _dematerialize_scene(self, scene):
+        property_id = str(scene.get("property_id", "") or "").strip()
+        if property_id:
+            _business_event_scene_state(self.sim).setdefault("cooldowns", {})[property_id] = int(self.sim.tick)
         for property_id in list(scene.get("spawned_property_ids", ())):
             prop = self.sim.properties.get(property_id)
             if prop is None:
@@ -9970,12 +11668,20 @@ class BusinessPulseSceneSystem(System):
             _clear_property_runtime_container_state(self.sim, property_id)
             self.sim.remove_property(property_id)
 
+        preserve_modes = {
+            int(eid): self._scene_actor_preservation_mode(eid)
+            for eid in list(scene.get("spawned_entity_ids", ()) or ())
+        }
+        release_targets = self._scene_release_targets(scene, preserve_modes=preserve_modes)
         for eid in list(scene.get("spawned_entity_ids", ())):
-            if self._release_scene_actor(scene, eid):
+            mode = str(preserve_modes.get(int(eid), "") or "").strip().lower()
+            if mode.startswith("keep_"):
+                self._prepare_preserved_scene_actor(int(eid), mode)
+                continue
+            if int(eid) in release_targets and self._release_scene_actor(scene, eid):
                 continue
             _business_event_actor_state(self.sim).pop(int(eid), None)
-            # preserve non-actor scene entities as part of the world; do not destroy them
-            # during teardown so once an event has occurred the spawned entities remain.
+            self.sim.remove_entity(eid)
 
     def _update_scene_actor_routes(self, scene):
         positions = self.sim.ecs.get(Position)
@@ -9985,6 +11691,11 @@ class BusinessPulseSceneSystem(System):
             pos = positions.get(eid)
             ai = ais.get(eid)
             if not pos or not ai:
+                continue
+            preserve_mode = self._scene_actor_preservation_mode(eid)
+            if preserve_mode:
+                if str(preserve_mode).strip().lower().startswith("keep_"):
+                    self._prepare_preserved_scene_actor(int(eid), preserve_mode)
                 continue
             if _entity_is_downed(self.sim, eid):
                 _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
@@ -10011,15 +11722,15 @@ class BusinessPulseSceneSystem(System):
         if not isinstance(scene, dict):
             return False
         pulse_hour = int(scene.get("pulse_hour", 0) or 0)
+        keep_hours = max(1, int(scene.get("keep_hours", 2) or 2))
         try:
             current_hour = int(_world_hour(self.sim)) % 24
         except (TypeError, ValueError):
             current_hour = 0
-        # Keep scenes active for 4 hours to allow player interaction
         forward_diff = (current_hour - pulse_hour) % 24
         backward_diff = (pulse_hour - current_hour) % 24
         min_diff = min(forward_diff, backward_diff)
-        return min_diff <= 3
+        return min_diff < keep_hours
 
     def update(self):
         active_chunk = self._active_chunk_coord()
@@ -10507,6 +12218,535 @@ def _door_close_attempt(sim, eid, x, y, z):
     if _door_tile_is_occupied(sim, x, y, z):
         return False, "door_occupied"
     return (_set_door_open_state(sim, x, y, z, False), "closed")
+
+
+def _door_service_courtesies_state(sim):
+    state = getattr(sim, "door_service_courtesies", None)
+    if isinstance(state, dict):
+        return state
+    state = {}
+    sim.door_service_courtesies = state
+    return state
+
+
+def _door_wait_ticks_per_hour(sim):
+    clock = getattr(sim, "world_traits", {}).get("clock", {}) if sim is not None else {}
+    try:
+        ticks_per_hour = int(clock.get("ticks_per_hour", 600))
+    except (TypeError, ValueError):
+        ticks_per_hour = 600
+    return max(60, ticks_per_hour)
+
+
+def _actor_in_active_dialogue(sim, eid):
+    dialog_ui = getattr(sim, "dialog_ui", None)
+    if not isinstance(dialog_ui, dict) or not bool(dialog_ui.get("open")):
+        return False
+    npc_eid = dialog_ui.get("npc_eid")
+    try:
+        return int(npc_eid) == int(eid)
+    except (TypeError, ValueError):
+        return npc_eid == eid
+
+
+def _actor_in_live_combat(sim, eid):
+    ai = sim.ecs.get(AI).get(eid)
+    if ai and str(ai.state or "").strip().lower() == "protecting":
+        return True
+
+    will = sim.ecs.get(NPCWill).get(eid)
+    if will and str(will.intent or "").strip().lower() == "protecting":
+        return True
+
+    for other_eid, other_ai in sim.ecs.get(AI).items():
+        if int(other_eid) == int(eid):
+            continue
+        if str(getattr(other_ai, "state", "") or "").strip().lower() != "protecting":
+            continue
+        try:
+            if int(getattr(other_ai, "target_eid", None)) == int(eid):
+                return True
+        except (TypeError, ValueError):
+            if getattr(other_ai, "target_eid", None) == eid:
+                return True
+
+    for other_eid, other_will in sim.ecs.get(NPCWill).items():
+        if int(other_eid) == int(eid):
+            continue
+        if str(getattr(other_will, "intent", "") or "").strip().lower() != "protecting":
+            continue
+        try:
+            if int(getattr(other_will, "target_eid", None)) == int(eid):
+                return True
+        except (TypeError, ValueError):
+            if getattr(other_will, "target_eid", None) == eid:
+                return True
+
+    return False
+
+
+def _door_wait_hold_target(state):
+    if not isinstance(state, DoorWaitState):
+        return None
+    return (int(state.wait_x), int(state.wait_y), int(state.wait_z))
+
+
+def _door_wait_clear_service_courtesies(sim, *, responder_eid=None, caller_eid=None, property_id=""):
+    state = _door_service_courtesies_state(sim)
+    property_id = str(property_id or "").strip()
+    for key, grant in list(state.items()):
+        if not isinstance(grant, dict):
+            state.pop(key, None)
+            continue
+        if responder_eid is not None and int(grant.get("responder_eid", -1) or -1) != int(responder_eid):
+            continue
+        if caller_eid is not None and int(key[0]) != int(caller_eid):
+            continue
+        if property_id and str(key[1] or "").strip() != property_id:
+            continue
+        state.pop(key, None)
+
+
+def _door_wait_claim_role(sim, responder_eid, prop):
+    if not isinstance(prop, dict):
+        return "resident"
+
+    if prop.get("owner_eid") == responder_eid:
+        return "owner"
+
+    position = sim.ecs.get(Position).get(responder_eid)
+    _, claim_reason = _property_claim_reason(
+        sim,
+        responder_eid,
+        prop,
+        x=getattr(position, "x", None),
+        y=getattr(position, "y", None),
+        z=getattr(position, "z", None),
+        min_standing=0.58,
+    )
+    claim_reason = str(claim_reason or "").strip().lower()
+    if claim_reason == "employee":
+        return "worker"
+    if claim_reason == "resident":
+        return "resident"
+    if claim_reason == "owner":
+        return "owner"
+
+    routine = sim.ecs.get(NPCRoutine).get(responder_eid)
+    occupation = sim.ecs.get(Occupation).get(responder_eid)
+    workplace_prop = _workplace_property(sim, occupation=occupation, routine=routine)
+    if workplace_prop and str(workplace_prop.get("id", "")).strip() == str(prop.get("id", "")).strip():
+        return "worker"
+    home_prop = _home_property(sim, routine=routine)
+    if home_prop and str(home_prop.get("id", "")).strip() == str(prop.get("id", "")).strip():
+        return "resident"
+    return "resident"
+
+
+def _door_wait_recent_offense_strength(sim, responder_eid, caller_eid, *, max_age=220):
+    if responder_eid is None or caller_eid is None:
+        return 0.0
+    memory = sim.ecs.get(NPCMemory).get(responder_eid)
+    if not memory:
+        return 0.0
+    best = 0.0
+    current_tick = int(getattr(sim, "tick", 0))
+    for entry in tuple(memory.entries):
+        if str(entry.get("kind", "")).strip().lower() != "offense":
+            continue
+        if entry.get("data", {}).get("offender_eid") != caller_eid:
+            continue
+        if current_tick - int(entry.get("tick", 0) or 0) > max_age:
+            continue
+        try:
+            best = max(best, float(entry.get("strength", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return max(0.0, min(1.0, best))
+
+
+def _door_wait_relationship_score(sim, responder_eid, caller_eid):
+    if responder_eid is None or caller_eid is None:
+        return 0.0
+
+    score = 0.0
+    intro = _person_contact_entry(sim, caller_eid, responder_eid)
+    if isinstance(intro, dict):
+        try:
+            score = max(score, float(intro.get("standing", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            pass
+
+    social = sim.ecs.get(NPCSocial).get(responder_eid)
+    bond = social.bonds.get(caller_eid) if social else None
+    if isinstance(bond, dict):
+        try:
+            closeness = max(0.0, min(1.0, float(bond.get("closeness", 0.0) or 0.0)))
+        except (TypeError, ValueError):
+            closeness = 0.0
+        try:
+            trust = max(0.0, min(1.0, float(bond.get("trust", 0.0) or 0.0)))
+        except (TypeError, ValueError):
+            trust = 0.0
+        score = max(score, (trust * 0.6) + (closeness * 0.4))
+
+    return max(0.0, min(1.0, score))
+
+
+def _door_wait_disposition(sim, responder_eid, caller_eid, prop):
+    role = _door_wait_claim_role(sim, responder_eid, prop)
+    player_eid = getattr(sim, "player_eid", None)
+    position = sim.ecs.get(Position).get(caller_eid)
+    access = _evaluate_property_access(
+        sim,
+        caller_eid,
+        prop,
+        x=getattr(position, "x", None),
+        y=getattr(position, "y", None),
+        z=getattr(position, "z", None),
+    ) if caller_eid is not None else None
+
+    relation = _door_wait_relationship_score(sim, responder_eid, caller_eid)
+    offense = _door_wait_recent_offense_strength(sim, responder_eid, caller_eid)
+    ai = sim.ecs.get(AI).get(responder_eid)
+    needs = sim.ecs.get(NPCNeeds).get(responder_eid)
+
+    wake_penalty = 0.0
+    if ai and str(ai.state or "").strip().lower() == "resting":
+        wake_penalty += 0.22
+    if needs is not None:
+        energy = max(0.0, min(100.0, float(getattr(needs, "energy", 100.0) or 100.0)))
+        if energy < 28.0:
+            wake_penalty += 0.22
+        elif energy < 45.0:
+            wake_penalty += 0.12
+        elif energy < 60.0:
+            wake_penalty += 0.05
+    if access is not None and access.currently_open is False:
+        wake_penalty += 0.06
+
+    if caller_eid is not None and caller_eid != player_eid:
+        relation = max(relation, 0.48)
+
+    score = relation - wake_penalty - (offense * 0.9)
+    if access is not None:
+        if int(access.severity_score) >= 26:
+            score -= 0.3
+        elif int(access.severity_score) >= 12:
+            score -= 0.12
+
+    if offense >= 0.3 or (access is not None and int(access.severity_score) >= 26 and relation < 0.72):
+        mood = "hostile"
+    elif score < 0.22:
+        mood = "hostile"
+    elif score < 0.48:
+        mood = "irritated"
+    elif score < 0.74:
+        mood = "neutral"
+    else:
+        mood = "friendly"
+
+    allow_services = bool(
+        caller_eid == player_eid
+        and _property_is_storefront(prop)
+        and mood in {"neutral", "friendly"}
+        and relation >= 0.42
+        and offense < 0.2
+    )
+    return {
+        "role": role,
+        "mood": mood,
+        "allow_hours": mood != "hostile",
+        "allow_services": allow_services,
+    }
+
+
+def _door_wait_timeout_ticks(sim, mood="neutral"):
+    ticks_per_hour = _door_wait_ticks_per_hour(sim)
+    mood_key = str(mood or "neutral").strip().lower() or "neutral"
+    if mood_key == "friendly":
+        return max(720, int(ticks_per_hour * 2.0))
+    if mood_key == "irritated":
+        return max(420, int(ticks_per_hour * 1.0))
+    if mood_key == "hostile":
+        return max(300, int(ticks_per_hour * 0.75))
+    return max(600, int(ticks_per_hour * 1.25))
+
+
+def _door_wait_neighbor_tiles(sim, prop, x, y, z):
+    inside = []
+    outside = []
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        nx = int(x) + dx
+        ny = int(y) + dy
+        nz = int(z)
+        if not sim.tilemap.in_bounds(nx, ny):
+            continue
+        if not sim.tilemap.is_walkable(nx, ny, nz):
+            continue
+        covered = _property_covering(sim, nx, ny, nz)
+        tile = (nx, ny, nz)
+        if covered and str(covered.get("id", "")).strip() == str((prop or {}).get("id", "")).strip():
+            inside.append(tile)
+        else:
+            outside.append(tile)
+    return inside, outside
+
+
+def _door_wait_target_for(sim, responder_eid, caller_eid, prop, x, y, z):
+    player_eid = getattr(sim, "player_eid", None)
+    responder_pos = sim.ecs.get(Position).get(responder_eid)
+    inside_tiles, outside_tiles = _door_wait_neighbor_tiles(sim, prop, x, y, z)
+
+    def _is_available(tile):
+        tx, ty, tz = tile
+        return not any(int(other_eid) != int(responder_eid) for other_eid in sim.tilemap.entities_at(tx, ty, tz))
+
+    def _sorted_tiles(candidates):
+        return sorted(
+            candidates,
+            key=lambda tile: (
+                0 if _is_available(tile) else 1,
+                _manhattan(
+                    getattr(responder_pos, "x", int(x)),
+                    getattr(responder_pos, "y", int(y)),
+                    tile[0],
+                    tile[1],
+                ),
+                abs(int(tile[2]) - int(getattr(responder_pos, "z", z))),
+                tile[1],
+                tile[0],
+            ),
+        )
+
+    aperture_target = (int(x), int(y), int(z))
+    if caller_eid == player_eid:
+        aperture_blocked = any(int(other_eid) != int(responder_eid) for other_eid in sim.tilemap.entities_at(int(x), int(y), int(z)))
+        if not aperture_blocked:
+            return aperture_target
+        for tile in _sorted_tiles(list(inside_tiles) + list(outside_tiles)):
+            if _is_available(tile):
+                return tile
+        return aperture_target
+
+    for tile in _sorted_tiles(inside_tiles):
+        if _is_available(tile):
+            return tile
+    for tile in _sorted_tiles(outside_tiles):
+        if _is_available(tile):
+            return tile
+    return aperture_target
+
+
+def _door_wait_existing_responder(sim, property_id, x, y, z):
+    property_id = str(property_id or "").strip()
+    for responder_eid, state in list(sim.ecs.get(DoorWaitState).items()):
+        if not isinstance(state, DoorWaitState):
+            continue
+        if str(state.property_id or "").strip() != property_id:
+            continue
+        if (
+            int(state.aperture_x),
+            int(state.aperture_y),
+            int(state.aperture_z),
+        ) != (int(x), int(y), int(z)):
+            continue
+        if state.is_expired(int(getattr(sim, "tick", 0))):
+            continue
+        return responder_eid, state
+    return None, None
+
+
+def _door_wait_feedback_text(sim, caller_eid, responder_eid, disposition, *, existing=False, answered_now=False):
+    player_eid = getattr(sim, "player_eid", None)
+    if caller_eid != player_eid:
+        return ""
+
+    responder_name = _entity_display_name(sim, responder_eid, title_case=True) or "Someone"
+    mood = str((disposition or {}).get("mood", "neutral") or "neutral").strip().lower() or "neutral"
+    if existing:
+        return f"You knock. {responder_name} is already coming to the door."
+    if answered_now:
+        if mood == "hostile":
+            return f"You knock. {responder_name} takes the doorway with a hard look."
+        if mood == "friendly":
+            return f"You knock. {responder_name} answers and opens the door for you."
+        return f"You knock. {responder_name} answers and comes to the door."
+    if mood == "hostile":
+        return f"You knock. {responder_name} stirs inside and does not sound pleased."
+    if mood == "friendly":
+        return f"You knock. {responder_name} answers from inside and starts for the door."
+    if mood == "irritated":
+        return f"You knock. {responder_name} answers from inside, sounding annoyed."
+    return f"You knock. {responder_name} starts for the door."
+
+
+def _door_wait_no_answer_text(sim, caller_eid):
+    if caller_eid != getattr(sim, "player_eid", None):
+        return ""
+    return "You knock, but no one answers."
+
+
+def _door_wait_candidate_score(sim, eid, pos, prop, x, y, z):
+    role = _door_wait_claim_role(sim, eid, prop)
+    role_rank = {
+        "owner": 0,
+        "worker": 1,
+        "resident": 2,
+    }.get(role, 3)
+    ai = sim.ecs.get(AI).get(eid)
+    role_id = str(getattr(ai, "role", "") or "").strip().lower()
+    return (
+        role_rank,
+        0 if role_id in {"guard", "clerk", "merchant", "resident"} else 1,
+        _manhattan(pos.x, pos.y, int(x), int(y)),
+        int(pos.y),
+        int(pos.x),
+    )
+
+
+def _pick_door_wait_responder(sim, caller_eid, prop, x, y, z):
+    if not isinstance(prop, dict) or str(prop.get("kind", "")).strip().lower() != "building":
+        return None
+
+    player_eid = getattr(sim, "player_eid", None)
+    positions = sim.ecs.get(Position)
+    identities = sim.ecs.get(CreatureIdentity)
+    candidates = []
+    for eid, pos in positions.items():
+        if eid in {caller_eid, player_eid}:
+            continue
+        if int(pos.z) != int(z):
+            continue
+        if _entity_is_downed(sim, eid) or _actor_is_animal_or_wildlife(sim, eid):
+            continue
+        if sim.ecs.get(DoorWaitState).get(eid) is not None:
+            continue
+        if _actor_in_live_combat(sim, eid):
+            continue
+        identity = identities.get(eid)
+        if identity and str(identity.taxonomy_class or "hominid").strip().lower() != "hominid":
+            continue
+        covered = _property_covering(sim, pos.x, pos.y, pos.z)
+        if not covered or str(covered.get("id", "")).strip() != str(prop.get("id", "")).strip():
+            continue
+        access, claim_reason = _property_claim_reason(sim, eid, prop, x=pos.x, y=pos.y, z=pos.z, min_standing=0.58)
+        if not claim_reason and float(getattr(access, "standing", 0.0) or 0.0) < 0.58:
+            continue
+        if sim.ecs.get(AI).get(eid) is None:
+            continue
+        candidates.append((_door_wait_candidate_score(sim, eid, pos, prop, x, y, z), eid))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: row[0])
+    return candidates[0][1]
+
+
+def _door_knock_attempt(sim, caller_eid, x, y, z, *, reason="", source="interact"):
+    prop = _property_covering(sim, x, y, z)
+    if not isinstance(prop, dict) or str(prop.get("kind", "")).strip().lower() != "building":
+        return {"handled": False, "message": ""}
+
+    property_id = str(prop.get("id", "") or "").strip()
+    if not property_id:
+        return {"handled": False, "message": ""}
+
+    responder_eid, existing_state = _door_wait_existing_responder(sim, property_id, x, y, z)
+    if responder_eid is not None and isinstance(existing_state, DoorWaitState):
+        disposition = {
+            "mood": str(existing_state.mood or "neutral").strip().lower() or "neutral",
+        }
+        answered_now = False
+        responder_pos = sim.ecs.get(Position).get(responder_eid)
+        if responder_pos and (
+            int(responder_pos.x),
+            int(responder_pos.y),
+            int(responder_pos.z),
+        ) == (
+            int(existing_state.wait_x),
+            int(existing_state.wait_y),
+            int(existing_state.wait_z),
+        ):
+            answered_now = True
+        return {
+            "handled": True,
+            "message": _door_wait_feedback_text(
+                sim,
+                caller_eid,
+                responder_eid,
+                disposition,
+                existing=True,
+                answered_now=answered_now,
+            ),
+        }
+
+    responder_eid = _pick_door_wait_responder(sim, caller_eid, prop, x, y, z)
+    if responder_eid is None:
+        return {"handled": True, "message": _door_wait_no_answer_text(sim, caller_eid)}
+
+    disposition = _door_wait_disposition(sim, responder_eid, caller_eid, prop)
+    wait_target = _door_wait_target_for(sim, responder_eid, caller_eid, prop, x, y, z)
+    timeout_ticks = _door_wait_timeout_ticks(sim, disposition.get("mood", "neutral"))
+    state = DoorWaitState(
+        int(x),
+        int(y),
+        int(z),
+        wait_x=wait_target[0],
+        wait_y=wait_target[1],
+        wait_z=wait_target[2],
+        property_id=property_id,
+        caller_eid=caller_eid,
+        start_tick=int(getattr(sim, "tick", 0)),
+        timeout_ticks=timeout_ticks,
+        mood=str(disposition.get("mood", "neutral") or "neutral"),
+        answer_role=str(disposition.get("role", "resident") or "resident"),
+        allow_hours=bool(disposition.get("allow_hours", True)),
+        allow_services=bool(disposition.get("allow_services", False)),
+        close_on_finish=True,
+    )
+    sim.ecs.add(responder_eid, state)
+
+    ai = sim.ecs.get(AI).get(responder_eid)
+    will = sim.ecs.get(NPCWill).get(responder_eid)
+    if ai is not None:
+        _sync_ai_intent(
+            ai,
+            will,
+            int(getattr(sim, "tick", 0)),
+            "holding",
+            score=74.0,
+            target=wait_target,
+            target_eid=None,
+        )
+
+    responder_pos = sim.ecs.get(Position).get(responder_eid)
+    answered_now = bool(
+        responder_pos
+        and (
+            int(responder_pos.x),
+            int(responder_pos.y),
+            int(responder_pos.z),
+        ) == (
+            int(wait_target[0]),
+            int(wait_target[1]),
+            int(wait_target[2]),
+        )
+    )
+    if answered_now and _manhattan(int(responder_pos.x), int(responder_pos.y), int(x), int(y)) <= 1:
+        _set_door_open_state(sim, int(x), int(y), int(z), True)
+
+    return {
+        "handled": True,
+        "message": _door_wait_feedback_text(
+            sim,
+            caller_eid,
+            responder_eid,
+            disposition,
+            existing=False,
+            answered_now=answered_now,
+        ),
+    }
 
 
 def _set_property_locked_override(prop, *, locked, tick=0, method="manual_lock"):
@@ -18326,11 +20566,27 @@ class NPCInteractionSystem(System):
         npc_needs = self.sim.ecs.get(NPCNeeds).get(npc_eid)
         npc_traits = self.sim.ecs.get(NPCTraits).get(npc_eid)
         memory = self.sim.ecs.get(NPCMemory).get(npc_eid)
+        door_wait_state = self.sim.ecs.get(DoorWaitState).get(npc_eid)
         suppression = self.sim.ecs.get(SuppressionState).get(npc_eid)
         portfolio = self.sim.ecs.get(PropertyPortfolio).get(npc_eid)
         recent_offense = self._recent_player_offense(memory)
+        door_answering = False
+        if isinstance(door_wait_state, DoorWaitState) and not door_wait_state.is_expired(self.sim.tick):
+            try:
+                door_answering = int(getattr(door_wait_state, "caller_eid", -1)) == int(self.player_eid)
+            except (TypeError, ValueError):
+                door_answering = getattr(door_wait_state, "caller_eid", None) == self.player_eid
+        door_answer_mood = (
+            str(getattr(door_wait_state, "mood", "neutral") or "neutral").strip().lower()
+            if door_answering
+            else ""
+        )
         trespass_prop = self._current_trespass_property(npc_eid, player_pos)
-        guarded = bool(trespass_prop or (recent_offense and float(recent_offense.get("strength", 0.0)) >= 0.18))
+        guarded = bool(
+            trespass_prop
+            or (recent_offense and float(recent_offense.get("strength", 0.0)) >= 0.18)
+            or (door_answering and door_answer_mood in {"hostile", "irritated"})
+        )
         peaceful_orders_only = bool(suppression and suppression.surrendered)
         display_name = _entity_display_name(self.sim, npc_eid, title_case=True)
         career_text = _career_label(occupation)
@@ -18375,12 +20631,19 @@ class NPCInteractionSystem(System):
         pressure = _pressure_snapshot(self.sim)
         pressure_effects = dict(pressure.get("effects", {}) if isinstance(pressure, dict) else {})
         pressure_tier = str(pressure.get("tier", "low")).strip().lower() or "low"
-        tone = "guarded" if guarded else self._pressure_adjusted_tone(
-            self._bond_tone(bond),
-            pressure_tier=pressure_tier,
-            standing=social_standing,
-            recent_offense=bool(recent_offense),
-        )
+        if door_answering:
+            tone = {
+                "hostile": "guarded",
+                "irritated": "wary",
+                "friendly": "friendly",
+            }.get(door_answer_mood, "neutral")
+        else:
+            tone = "guarded" if guarded else self._pressure_adjusted_tone(
+                self._bond_tone(bond),
+                pressure_tier=pressure_tier,
+                standing=social_standing,
+                recent_offense=bool(recent_offense),
+            )
         lead_confidence = min(0.96, 0.56 + (rapport * 0.28))
         chunk = {}
         world = getattr(self.sim, "world", None)
@@ -18608,6 +20871,11 @@ class NPCInteractionSystem(System):
             "contact_standing": contact_standing,
             "intro_standing": intro_standing,
             "social_standing": social_standing,
+            "door_answering": door_answering,
+            "door_answer_mood": door_answer_mood,
+            "door_answer_role": str(getattr(door_wait_state, "answer_role", "") or "").strip().lower() if door_answering else "",
+            "door_answer_hours": bool(getattr(door_wait_state, "allow_hours", False)) if door_answering else False,
+            "door_answer_services": bool(getattr(door_wait_state, "allow_services", False)) if door_answering else False,
             "home_prop": home_prop,
             "workplace_prop": workplace_prop,
             "owned_prop": owned_prop,
@@ -20816,6 +23084,15 @@ class NPCInteractionSystem(System):
     def _dialogue_status_hint(self, context):
         if bool(context.get("peaceful_orders_only")):
             return "They have surrendered. Keep it simple: move them, leave them, or end it."
+        if bool(context.get("door_answering")):
+            mood = str(context.get("door_answer_mood", "neutral") or "neutral").strip().lower() or "neutral"
+            if mood == "hostile":
+                return "They answered the knock, but only barely. Say what you need or step away."
+            if mood == "irritated":
+                return "They came to the door annoyed. Keep it short and to the point."
+            if bool(context.get("door_answer_services")):
+                return "They are willing to handle a little after-hours business from the doorway."
+            return "They answered the door. Stick to the reason you knocked."
         tone = str(context.get("tone", "neutral")).strip().lower() or "neutral"
         pressure_tier = str(context.get("pressure_tier", "low")).strip().lower() or "low"
         if bool(context.get("guarded")):
@@ -20876,6 +23153,25 @@ class NPCInteractionSystem(System):
             return ""
         return f'{npc_name}: "{text}"'
 
+    def _door_answer_allowed_topics(self, context):
+        if not bool(context.get("door_answering")):
+            return set()
+        mood = str(context.get("door_answer_mood", "neutral") or "neutral").strip().lower() or "neutral"
+        allowed = {"bye"}
+        if mood == "hostile":
+            allowed.update({"purpose", "apologize", "leave"})
+            return allowed
+        allowed.update({"name", "job", "owner", "hours", "purpose", "apologize", "leave"})
+        if context.get("workplace_prop"):
+            allowed.add("workplace")
+        if context.get("service_summary"):
+            allowed.add("services")
+        if context.get("trade_available"):
+            allowed.add("trade")
+        if mood == "friendly":
+            allowed.add("contacts")
+        return allowed
+
     def _dialogue_opening_lines(self, context):
         memory = self._dialogue_memory(context["npc_eid"])
         open_count = max(0, int(memory.get("opened_count", 0)))
@@ -20886,6 +23182,32 @@ class NPCInteractionSystem(System):
                     "Okay. I dropped it. Just tell me where you want me.",
                 )
             ]
+        if bool(context.get("door_answering")):
+            mood = str(context.get("door_answer_mood", "neutral") or "neutral").strip().lower() or "neutral"
+            if mood == "hostile":
+                first = "It's closed. Say what you need and keep it short."
+            elif mood == "irritated":
+                first = "You got me to the door. Make it quick."
+            elif mood == "friendly":
+                first = "We're closed, but if this is quick I can help from the doorway."
+            else:
+                first = "We're shut, but I'm listening. What do you need?"
+            lines = [self._dialogue_npc_line(context["npc_name"], first)]
+            if bool(context.get("door_answer_services")) and context.get("service_summary"):
+                lines.append(
+                    self._dialogue_npc_line(
+                        context["npc_name"],
+                        f"If you just need {context['service_summary']}, I can handle that from here.",
+                    )
+                )
+            elif bool(context.get("door_answer_hours")) and context.get("hours_text"):
+                lines.append(
+                    self._dialogue_npc_line(
+                        context["npc_name"],
+                        f"If you're checking hours, it's {self._dialogue_hours_summary(context)}.",
+                    )
+                )
+            return [line for line in lines if line]
         if context.get("guarded"):
             first = self._say(
                 "greet_guarded",
@@ -20923,6 +23245,7 @@ class NPCInteractionSystem(System):
     def _available_dialog_topics(self, context):
         available = []
         unlocked = set(self._dialogue_memory(context["npc_eid"])["unlocked_topics"])
+        door_topics = self._door_answer_allowed_topics(context)
         guarded_only = {"purpose", "apologize", "leave"}
         peaceful_orders_only = bool(context.get("peaceful_orders_only"))
         peaceful_topics = {
@@ -20939,7 +23262,9 @@ class NPCInteractionSystem(System):
             if topic_id in self.MISSTEP_TOPICS:
                 if not self._dialogue_misstep_available(context, topic_id):
                     continue
-            elif not (peaceful_orders_only and topic_id in peaceful_topics) and topic_id not in self.ROOT_TOPICS and topic_id not in unlocked:
+            elif not (peaceful_orders_only and topic_id in peaceful_topics) and topic_id not in self.ROOT_TOPICS and topic_id not in unlocked and topic_id not in door_topics:
+                continue
+            if door_topics and topic_id not in door_topics:
                 continue
             if topic_id in self.SERVICE_LOCATOR_TOPICS and (bool(context.get("guarded")) or not bool(context.get("human", True))):
                 continue
@@ -37134,6 +39459,143 @@ def _relocate_indoor_wildlife_outdoors(sim, eid, pos, routine):
     return True
 
 
+class DoorWaitSystem(System):
+
+    def _clear_wait(self, eid, state):
+        ai = self.sim.ecs.get(AI).get(eid)
+        will = self.sim.ecs.get(NPCWill).get(eid)
+        target = _door_wait_hold_target(state)
+        if ai and str(ai.state or "").strip().lower() == "holding":
+            if target is None or tuple(ai.target or ()) == tuple(target):
+                ai.state = "idle"
+                ai.target = None
+                ai.target_eid = None
+        if will and str(will.intent or "").strip().lower() == "holding":
+            if target is None or tuple(will.target or ()) == tuple(target):
+                will.intent = "idle"
+                will.score = 0.0
+                will.target = None
+                will.target_eid = None
+
+        _door_wait_clear_service_courtesies(
+            self.sim,
+            responder_eid=eid,
+            caller_eid=getattr(state, "caller_eid", None),
+            property_id=str(getattr(state, "property_id", "") or "").strip(),
+        )
+
+        prop = self.sim.properties.get(str(getattr(state, "property_id", "") or "").strip())
+        should_close = False
+        if isinstance(prop, dict):
+            lock_state = property_lock_state(prop)
+            if bool(lock_state.get("locked")):
+                should_close = True
+            else:
+                controller = _property_access_controller(self.sim, prop)
+                should_close = bool(isinstance(controller, dict) and controller.get("open_now") is False)
+        if should_close and bool(getattr(state, "close_on_finish", False)):
+            _door_close_attempt(
+                self.sim,
+                eid,
+                int(getattr(state, "aperture_x", 0)),
+                int(getattr(state, "aperture_y", 0)),
+                int(getattr(state, "aperture_z", 0)),
+            )
+
+        self.sim.ecs.get(DoorWaitState).pop(eid, None)
+
+    def update(self):
+        positions = self.sim.ecs.get(Position)
+        ais = self.sim.ecs.get(AI)
+        wills = self.sim.ecs.get(NPCWill)
+        current_tick = int(getattr(self.sim, "tick", 0))
+        courtesy_state = _door_service_courtesies_state(self.sim)
+
+        for key, grant in list(courtesy_state.items()):
+            if not isinstance(grant, dict) or int(grant.get("until_tick", 0) or 0) <= current_tick:
+                courtesy_state.pop(key, None)
+
+        for eid, state in list(self.sim.ecs.get(DoorWaitState).items()):
+            if not isinstance(state, DoorWaitState):
+                self.sim.ecs.get(DoorWaitState).pop(eid, None)
+                continue
+
+            pos = positions.get(eid)
+            if pos is None:
+                self._clear_wait(eid, state)
+                continue
+
+            if _actor_in_live_combat(self.sim, eid):
+                self._clear_wait(eid, state)
+                continue
+
+            if (
+                _active_contractor_record(self.sim, eid, ally_eid=getattr(self.sim, "player_eid", None)) is not None
+                or actor_player_business_employment(self.sim, eid, owner_eid=getattr(self.sim, "player_eid", None)) is not None
+            ) and not _actor_in_active_dialogue(self.sim, eid):
+                self._clear_wait(eid, state)
+                continue
+
+            if state.is_expired(current_tick) and not _actor_in_active_dialogue(self.sim, eid):
+                self._clear_wait(eid, state)
+                continue
+
+            target = _door_wait_hold_target(state)
+            ai = ais.get(eid)
+            will = wills.get(eid)
+            if (
+                ai is not None
+                and not _actor_in_active_dialogue(self.sim, eid)
+                and str(ai.state or "").strip().lower() != "protecting"
+            ):
+                if tuple(ai.target or ()) != tuple(target) or str(ai.state or "").strip().lower() != "holding" or ai.target_eid is not None:
+                    _sync_ai_intent(
+                        ai,
+                        will,
+                        current_tick,
+                        "holding",
+                        score=74.0,
+                        target=target,
+                        target_eid=None,
+                    )
+
+            near_aperture = bool(
+                int(pos.z) == int(state.aperture_z)
+                and _manhattan(int(pos.x), int(pos.y), int(state.aperture_x), int(state.aperture_y)) <= 1
+            )
+            if near_aperture:
+                door_state = _operable_door_state_at(
+                    self.sim,
+                    int(state.aperture_x),
+                    int(state.aperture_y),
+                    int(state.aperture_z),
+                )
+                if isinstance(door_state, dict) and not bool(door_state.get("open", False)):
+                    _set_door_open_state(
+                        self.sim,
+                        int(state.aperture_x),
+                        int(state.aperture_y),
+                        int(state.aperture_z),
+                        True,
+                    )
+
+                property_id = str(state.property_id or "").strip()
+                caller_eid = getattr(state, "caller_eid", None)
+                if bool(getattr(state, "allow_services", False)) and caller_eid is not None and property_id:
+                    courtesy_state[(int(caller_eid), property_id)] = {
+                        "until_tick": current_tick + max(1, int(state.timeout_ticks or 1)),
+                        "allow_services": True,
+                        "responder_eid": int(eid),
+                    }
+            else:
+                _door_wait_clear_service_courtesies(
+                    self.sim,
+                    responder_eid=eid,
+                    caller_eid=getattr(state, "caller_eid", None),
+                    property_id=str(state.property_id or "").strip(),
+                )
+
+
 class NPCWillSystem(System):
 
     def _set_intent(self, eid, ai, will, intent, score, target=None, target_eid=None):
@@ -38993,13 +41455,39 @@ class NPCInvestigateSystem(System):
                 z=pos.z,
             )
 
+            if not step and _manhattan(pos.x, pos.y, tx, ty) <= 1:
+                direct_reason = _closed_door_move_block_reason(
+                    self.sim,
+                    eid,
+                    tx,
+                    ty,
+                    tz,
+                )
+                if str(direct_reason or "").strip().lower() in {"locked_property", "closed_property", "door_access_denied"}:
+                    knock = _door_knock_attempt(
+                        self.sim,
+                        eid,
+                        tx,
+                        ty,
+                        tz,
+                        reason=direct_reason,
+                        source="npc_move",
+                    )
+                    if bool((knock or {}).get("handled")):
+                        if throttle:
+                            throttle.next_move_tick = max(throttle.next_move_tick, self.sim.tick + 1)
+                        else:
+                            self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + 1)
+                        continue
+
             moved = False
+            blocked_reason = None
             if step:
                 nx, ny = step
                 origin_x = int(pos.x)
                 origin_y = int(pos.y)
                 origin_z = int(pos.z)
-                moved, _ = try_move_entity(
+                moved, blocked_reason = try_move_entity(
                     self.sim,
                     eid=eid,
                     new_x=nx,
@@ -39010,6 +41498,18 @@ class NPCInvestigateSystem(System):
 
             cooldown = hold_cooldown
             if not moved:
+                knock_handled = False
+                if step and str(blocked_reason or "").strip().lower() in {"locked_property", "closed_property", "door_access_denied"}:
+                    knock = _door_knock_attempt(
+                        self.sim,
+                        eid,
+                        nx,
+                        ny,
+                        pos.z,
+                        reason=blocked_reason,
+                        source="npc_move",
+                    )
+                    knock_handled = bool((knock or {}).get("handled"))
                 if ai.state == "protecting" and threat_focus:
                     _sync_npc_cover_against_threat(
                         self.sim,
@@ -39019,7 +41519,8 @@ class NPCInvestigateSystem(System):
                         tick=self.sim.tick,
                         min_effect=0.16,
                     )
-                self.sim.emit(Event("npc_move_blocked", npc_eid=eid, x=pos.x, y=pos.y, z=pos.z))
+                if not knock_handled:
+                    self.sim.emit(Event("npc_move_blocked", npc_eid=eid, x=pos.x, y=pos.y, z=pos.z))
                 if throttle:
                     throttle.next_move_tick = max(throttle.next_move_tick, self.sim.tick + 1)
                 else:
@@ -39192,6 +41693,44 @@ _WORLD_EVENT_CATALOG = {
         "flavor_end": (
             "The market packs up. Quiet settles back in.",
             "Last stalls fold. The block returns to normal.",
+        ),
+    },
+    "hunter_party": {
+        "label": "Hunter Party",
+        "duration_lo": 22,
+        "duration_hi": 36,
+        "weight": 14,
+        "area_types": {"frontier", "wilderness"},
+        "pressure_delta": 0,
+        "trade_buy_mult": 1.0,
+        "trade_sell_mult": 1.0,
+        "flavor_start": (
+            "Fresh boot prints and low voices mark a hunter party working the nearby wilds.",
+            "A hunting crew has set a field rack and is trading stories over the day's haul.",
+            "You catch the smell of game and woodsmoke: a hunter party is camped nearby.",
+        ),
+        "flavor_end": (
+            "The hunter party shoulders their gear and slips back into the wilds.",
+            "The hunting crew packs the rack and moves on before dark.",
+        ),
+    },
+    "campout": {
+        "label": "Campout",
+        "duration_lo": 26,
+        "duration_hi": 44,
+        "weight": 12,
+        "area_types": {"frontier", "wilderness", "coastal"},
+        "pressure_delta": 0,
+        "trade_buy_mult": 1.0,
+        "trade_sell_mult": 1.0,
+        "flavor_start": (
+            "A small camp has gone up nearby, lanterns and low conversation carrying on the air.",
+            "Someone has made a temporary camp in the open, with a fire ring and bedrolls.",
+            "Camp smoke curls nearby: travelers are bedding down for a while.",
+        ),
+        "flavor_end": (
+            "The campers stamp out the fire and clear the site.",
+            "The camp breaks at first light, leaving only warm ash behind.",
         ),
     },
 }
@@ -39451,7 +41990,12 @@ class WorldEventsSystem(System):
             guard_count = int(event.get("guard_count", 0))
         except (TypeError, ValueError):
             guard_count = 0
-        return guard_count > 0 or bool(event.get("spawn_market_stall"))
+        event_key = str(event.get("key", "")).strip().lower()
+        return (
+            guard_count > 0
+            or bool(event.get("spawn_market_stall"))
+            or event_key in {"hunter_party", "campout"}
+        )
 
     def _event_rng(self, event, salt):
         event_id = event.get("id", 0) if isinstance(event, dict) else 0
@@ -39662,6 +42206,145 @@ class WorldEventsSystem(System):
         )
         event["spawned_entity_ids"].append(vendor_eid)
 
+    def _set_event_actor_intent(self, eid, intent, target, *, score=32.0):
+        if not isinstance(target, (tuple, list)) or len(target) < 3:
+            return
+        hold_target = (int(target[0]), int(target[1]), int(target[2]))
+        ai = self.sim.ecs.get(AI).get(eid)
+        if ai:
+            ai.state = str(intent or "holding").strip().lower() or "holding"
+            ai.target = hold_target
+            ai.target_eid = None
+        will = self.sim.ecs.get(NPCWill).get(eid)
+        if will:
+            will.intent = str(intent or "holding").strip().lower() or "holding"
+            will.score = float(score)
+            will.target = hold_target
+            will.target_eid = None
+
+    def _spawn_event_fixture(
+        self,
+        event,
+        anchor,
+        *,
+        name,
+        fixture_type,
+        glyph,
+        color,
+        light_enabled=False,
+        light_radius=0,
+        light_intensity=0.0,
+        light_phases=None,
+    ):
+        if not isinstance(anchor, (tuple, list)) or len(anchor) < 3:
+            return None
+        ax, ay, az = int(anchor[0]), int(anchor[1]), int(anchor[2])
+        metadata = {
+            "archetype": "world_event_fixture",
+            "fixture_type": str(fixture_type or "world_event_fixture").strip().lower() or "world_event_fixture",
+            "public": True,
+            "display_glyph": str(glyph or "*")[:1] or "*",
+            "display_color": str(color or "item_tool").strip() or "item_tool",
+            "world_event_id": int(event.get("id", 0)),
+            "world_event_key": str(event.get("key", "")).strip().lower(),
+        }
+        if light_enabled:
+            metadata.update({
+                "light_enabled": True,
+                "light_radius": max(1, int(light_radius or 1)),
+                "light_intensity": max(0.1, float(light_intensity or 0.1)),
+                "light_phases": list(light_phases or ("dusk", "night")),
+            })
+        property_id = self.sim.register_property(
+            name=str(name or "Event Fixture").strip() or "Event Fixture",
+            kind="fixture",
+            x=ax,
+            y=ay,
+            z=az,
+            owner_eid=None,
+            owner_tag="public",
+            metadata=metadata,
+        )
+        event["spawned_property_ids"].append(property_id)
+        return self.sim.properties.get(property_id)
+
+    def _spawn_wilderness_party(self, event):
+        event_key = str(event.get("key", "")).strip().lower()
+        if event_key not in {"hunter_party", "campout"}:
+            return
+        rng = self._event_rng(event, event_key)
+        anchor = self._pick_event_tile(
+            event,
+            rng,
+            prefer_center=False,
+            min_player_distance=5,
+        )
+        if not anchor:
+            return
+
+        if event_key == "hunter_party":
+            self._spawn_event_fixture(
+                event,
+                anchor,
+                name="Game Rack",
+                fixture_type="game_rack",
+                glyph="r",
+                color="item_tool",
+            )
+            crew = (
+                ("worker", "hunter"),
+                ("worker", "trapper"),
+                ("civilian", "trail_guide"),
+            )
+        else:
+            self._spawn_event_fixture(
+                event,
+                anchor,
+                name="Campfire Ring",
+                fixture_type="campfire_ring",
+                glyph="f",
+                color="cat_orange",
+                light_enabled=True,
+                light_radius=3,
+                light_intensity=0.62,
+                light_phases=("dusk", "night"),
+            )
+            crew = (
+                ("civilian", "camper"),
+                ("civilian", "camper"),
+                ("civilian", "trail_guide"),
+            )
+
+        reserved = {tuple(anchor)}
+        for actor_index, (role, career) in enumerate(crew):
+            hold_spot = self._pick_adjacent_street_tile(anchor, reserved=reserved)
+            if hold_spot is None:
+                hold_spot = self._pick_event_tile(
+                    event,
+                    rng,
+                    reserved=reserved,
+                    prefer_center=False,
+                    min_player_distance=4,
+                )
+            if hold_spot is None:
+                continue
+            reserved.add(tuple(hold_spot))
+            actor_rng = self._event_rng(
+                event,
+                f"{event_key}:{actor_index}:{hold_spot[0]}:{hold_spot[1]}",
+            )
+            eid = _spawn_human(
+                self.sim,
+                actor_rng,
+                str(role or "civilian").strip().lower() or "civilian",
+                hold_spot,
+                career=str(career or "resident").strip().lower() or "resident",
+                work=anchor,
+                shift_window=(0, 0),
+            )
+            self._set_event_actor_intent(eid, "holding", hold_spot, score=34.0)
+            event["spawned_entity_ids"].append(eid)
+
     def _release_event_entity(self, event, eid):
         newcomer = self.sim.ecs.get(NPCSettlement).get(eid)
         if newcomer is None:
@@ -39686,6 +42369,8 @@ class WorldEventsSystem(System):
             self._spawn_guard_patrols(event)
         if bool(event.get("spawn_market_stall")):
             self._spawn_market_stall(event)
+        if str(event.get("key", "")).strip().lower() in {"hunter_party", "campout"}:
+            self._spawn_wilderness_party(event)
 
         if not self._event_has_physical_manifestation(event):
             event["materialized"] = True
@@ -39767,17 +42452,37 @@ class WorldEventsSystem(System):
             return None
         player_chunk = self.sim.chunk_coords(pos.x, pos.y)
         px, py = int(player_chunk[0]), int(player_chunk[1])
+        player_desc = self.sim.world.overworld_descriptor(px, py)
+        player_area_type = str(player_desc.get("area_type", "city")).strip().lower() or "city"
+        supported_area_types = set()
+        for template in _WORLD_EVENT_CATALOG.values():
+            for area_type in template.get("area_types", {"city"}):
+                clean_area = str(area_type).strip().lower()
+                if clean_area:
+                    supported_area_types.add(clean_area)
+        if not supported_area_types:
+            return None
+        tick = int(getattr(self.sim, "tick", 0))
 
-        # Gather nearby city chunks from the world grid.
+        # Gather nearby chunks whose area type currently supports event content.
         candidates = []
+        same_area_candidates = []
         for dx in range(-3, 4):
             for dy in range(-3, 4):
                 cx, cy = px + dx, py + dy
                 desc = self.sim.world.overworld_descriptor(cx, cy)
-                if str(desc.get("area_type", "")).strip().lower() != "city":
+                area_type = str(desc.get("area_type", "city")).strip().lower() or "city"
+                if area_type not in supported_area_types:
+                    continue
+                if self._chunk_on_cooldown(state, cx, cy, tick):
                     continue
                 dist = abs(dx) + abs(dy)
-                candidates.append((cx, cy, dist))
+                candidate = (cx, cy, dist, area_type)
+                candidates.append(candidate)
+                if area_type == player_area_type:
+                    same_area_candidates.append(candidate)
+        if same_area_candidates:
+            candidates = same_area_candidates
         if not candidates:
             return None
 
@@ -39839,6 +42544,7 @@ class WorldEventsSystem(System):
             "label": template["label"],
             "cx": cx,
             "cy": cy,
+            "area_type": area_type,
             "district_type": district_type,
             "start_tick": tick,
             "end_tick": tick + duration,
