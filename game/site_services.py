@@ -28,6 +28,9 @@ from game.service_runtime import (
     _overworld_discovery_profile,
     _overworld_discovery_summary_bits,
     _overworld_legend_line,
+    _rail_transit_destinations,
+    _rail_transit_payment_profile,
+    _rail_transit_travel_ticks,
     _overworld_travel_profile,
     _overworld_travel_summary_bits,
     _site_service_roll_index,
@@ -107,6 +110,7 @@ class SiteServiceSystem(System):
     FETCH_DISTANCE_MULT = 4
     FETCH_EMPTY_SURCHARGE = 20
     FETCH_DELIVERY_TICKS = 600
+    RAIL_CITY_TOKEN_MAX_DISTANCE = 4
 
     def __init__(self, sim, player_eid):
         super().__init__(sim)
@@ -149,6 +153,28 @@ class SiteServiceSystem(System):
 
     def _vehicle_state_for(self, eid):
         return self.sim.ecs.get(VehicleState).get(eid)
+
+    def _inventory_item_count(self, eid, item_id):
+        inventory = self._inventory_for(eid)
+        if not inventory:
+            return 0
+        item_id = str(item_id or "").strip().lower()
+        if not item_id:
+            return 0
+        return sum(
+            int(entry.get("quantity", 0) or 0)
+            for entry in list(getattr(inventory, "items", ()) or ())
+            if str(entry.get("item_id", "") or "").strip().lower() == item_id
+        )
+
+    def _consume_inventory_item(self, eid, item_id, quantity=1):
+        inventory = self._inventory_for(eid)
+        if not inventory:
+            return None
+        return inventory.remove_item(
+            item_id=str(item_id or "").strip().lower(),
+            quantity=max(1, int(quantity)),
+        )
 
     def _ticks_per_hour(self):
         world_traits = getattr(self.sim, "world_traits", {})
@@ -264,6 +290,64 @@ class SiteServiceSystem(System):
                         continue
                     if self.sim.tilemap.is_walkable(nx, ny, z):
                         return nx, ny
+        return None
+
+    def _find_walkable_near(self, x, y, z=0, radius=8):
+        x = int(x)
+        y = int(y)
+        z = int(z)
+        if self.sim.tilemap.is_walkable(x, y, z):
+            return x, y
+        for ring in range(1, max(1, int(radius)) + 1):
+            for dy in range(-ring, ring + 1):
+                for dx in range(-ring, ring + 1):
+                    if abs(dx) != ring and abs(dy) != ring:
+                        continue
+                    nx = x + dx
+                    ny = y + dy
+                    if self.sim.detail_for_xy(nx, ny) == "unloaded":
+                        continue
+                    if self.sim.tilemap.is_walkable(nx, ny, z):
+                        return nx, ny
+        return x, y
+
+    def _move_entity(self, eid, pos, new_x, new_y, new_z, *, reason="site_service"):
+        old_x = int(pos.x)
+        old_y = int(pos.y)
+        old_z = int(pos.z)
+        new_x = int(new_x)
+        new_y = int(new_y)
+        new_z = int(new_z)
+        if (old_x, old_y, old_z) == (new_x, new_y, new_z):
+            return
+        self.sim.tilemap.move_entity(
+            eid,
+            oldx=old_x,
+            oldy=old_y,
+            oldz=old_z,
+            newx=new_x,
+            newy=new_y,
+            newz=new_z,
+        )
+        pos.x = new_x
+        pos.y = new_y
+        pos.z = new_z
+        self.sim.emit(Event(
+            "entity_moved",
+            eid=eid,
+            old_x=old_x,
+            old_y=old_y,
+            old_z=old_z,
+            x=new_x,
+            y=new_y,
+            z=new_z,
+            reason=str(reason or "site_service").strip().lower() or "site_service",
+        ))
+
+    def _world_streamer(self):
+        for system in tuple(getattr(self.sim, "systems", ()) or ()):
+            if hasattr(system, "_ensure_chunk_properties") and hasattr(system, "_ensure_chunk_population"):
+                return system
         return None
 
     def _apply_fuel_service(self, eid, prop, pos):
@@ -829,6 +913,9 @@ class SiteServiceSystem(System):
         if service == "repair":
             self._apply_repair_service(eid, prop, pos)
             return True
+        if service == "rail_transit":
+            self._apply_rail_transit(eid, prop, pos, request=request)
+            return True
         if service == "vehicle_sales_new":
             self._apply_vehicle_sale(eid, prop, pos, quality="new", request=request)
             return True
@@ -989,6 +1076,138 @@ class SiteServiceSystem(System):
             well_rested_ticks=self.REST_WELL_RESTED_TICKS,
             cooldown_ticks=self.REST_COOLDOWN_TICKS,
             time_advanced_ticks=advanced_ticks,
+        ))
+
+    def _apply_rail_transit(self, eid, prop, pos, request=None):
+        request = request if isinstance(request, dict) else {}
+        vehicle_state = self._vehicle_state_for(eid)
+        if vehicle_state and bool(getattr(vehicle_state, "in_vehicle", False)):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="rail_transit",
+                reason="leave_vehicle",
+            ))
+            return
+
+        destinations = list(_rail_transit_destinations(self.sim, prop) or ())
+        if not destinations:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="rail_transit",
+                reason="no_destinations",
+            ))
+            return
+
+        requested_chunk = request.get("destination_chunk")
+        if isinstance(requested_chunk, (list, tuple)) and len(requested_chunk) >= 2:
+            try:
+                requested_chunk = (int(requested_chunk[0]), int(requested_chunk[1]))
+            except (TypeError, ValueError):
+                requested_chunk = None
+        else:
+            requested_chunk = None
+        requested_building_id = str(request.get("destination_building_id", "") or "").strip()
+
+        selected = None
+        for destination in destinations:
+            destination_chunk = tuple(destination.get("chunk", ()) or ())
+            destination_building_id = str(destination.get("building_id", "") or "").strip()
+            if requested_building_id and destination_building_id == requested_building_id:
+                selected = destination
+                break
+            if requested_chunk and destination_chunk == requested_chunk:
+                selected = destination
+                break
+        if not isinstance(selected, dict):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="rail_transit",
+                reason="invalid_destination",
+            ))
+            return
+
+        city_tokens = self._inventory_item_count(eid, "city_pass_token")
+        daypasses = self._inventory_item_count(eid, "transit_daypass")
+        skill_terms = _mobility_service_skill_terms(self.sim, eid)
+        payment = _rail_transit_payment_profile(
+            selected.get("distance", 1),
+            price_mult=skill_terms.get("price_mult", 1.0),
+            city_tokens=city_tokens,
+            daypasses=daypasses,
+        )
+        fare_mode = str(payment.get("fare_mode", "credits")).strip().lower() or "credits"
+        assets = self._assets_for(eid)
+        credits = int(getattr(assets, "credits", 0)) if assets else 0
+        credits_spent = 0
+
+        if fare_mode == "transit_daypass":
+            self._consume_inventory_item(eid, "transit_daypass", quantity=1)
+        elif fare_mode == "city_pass_token":
+            self._consume_inventory_item(eid, "city_pass_token", quantity=1)
+        else:
+            fare_cost = int(payment.get("cost", 0) or 0)
+            if credits < fare_cost:
+                self.sim.emit(Event(
+                    "site_service_blocked",
+                    eid=eid,
+                    property_id=prop["id"],
+                    property_name=prop.get("name", prop["id"]),
+                    service="rail_transit",
+                    reason="no_credits",
+                    cost=fare_cost,
+                    credits=credits,
+                    destination_name=selected.get("station_name", ""),
+                ))
+                return
+            if assets:
+                assets.credits = max(0, int(assets.credits) - fare_cost)
+            credits_spent = fare_cost
+
+        travel_ticks = _rail_transit_travel_ticks(self.sim, selected.get("distance", 1))
+        advanced_ticks = self._advance_time_for_service(eid, prop, "rail_transit", travel_ticks)
+
+        dest_x = int(selected.get("entry_x", pos.x))
+        dest_y = int(selected.get("entry_y", pos.y))
+        dest_z = int(selected.get("entry_z", 0))
+        self.sim.stream_world(dest_x, dest_y)
+        self.sim.ensure_loaded_chunk_terrain()
+        landing_x, landing_y = self._find_walkable_near(dest_x, dest_y, dest_z, radius=6)
+        self._move_entity(eid, pos, landing_x, landing_y, dest_z, reason="rail_transit")
+
+        world_streamer = self._world_streamer()
+        if world_streamer is not None:
+            world_streamer.update()
+            landing_x, landing_y = self._find_walkable_near(dest_x, dest_y, dest_z, radius=6)
+            self._move_entity(eid, pos, landing_x, landing_y, dest_z, reason="rail_transit")
+
+        skill_note = ""
+        if fare_mode == "credits" and int(payment.get("base_cost", 0) or 0) > int(payment.get("cost", 0) or 0):
+            skill_note = str(skill_terms.get("note", "") or "").strip()
+
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service="rail_transit",
+            destination_name=str(selected.get("station_name", "") or "").strip() or "Transit Exchange",
+            destination_chunk=tuple(selected.get("chunk", ()) or ()),
+            destination_building_id=str(selected.get("building_id", "") or "").strip(),
+            distance=int(selected.get("distance", 0) or 0),
+            fare_mode=fare_mode,
+            credits_spent=int(credits_spent),
+            base_credits_spent=int(payment.get("base_cost", 0) or 0),
+            skill_note=skill_note,
+            time_advanced_ticks=int(advanced_ticks),
         ))
 
     def _player_vehicle_properties(self, eid):

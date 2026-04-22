@@ -8247,6 +8247,7 @@ class NPCSettlementSystem(System):
 
 
 _BUSINESS_EVENT_SCENE_CAP = 3
+_BUSINESS_EVENT_REGULAR_SCENE_CAP = 1
 _BUSINESS_EVENT_RELEASE_CAP = _NEWCOMER_LOCAL_CAP + 1
 _BUSINESS_EVENT_DELIVERY_PHASES = {
     "delivery_drop",
@@ -8307,7 +8308,7 @@ _BUSINESS_EVENT_SHIFT_PHASES = {
 _BUSINESS_EVENT_RARE_PHASE_CHANCES = {
     "street_triage": 0.18,
 }
-_BUSINESS_EVENT_SCENE_PROPERTY_COOLDOWN_HOURS = 2
+_BUSINESS_EVENT_SCENE_PROPERTY_COOLDOWN_HOURS = 4
 
 
 def _business_event_scene_state(sim):
@@ -10983,14 +10984,42 @@ class BusinessPulseSceneSystem(System):
                 str(row.get("property_id", "") or ""),
             )
         )
-        selected = []
+        priority_candidates = []
+        regular_candidates = []
         for candidate in candidates:
+            pulse = candidate.get("pulse") or {}
+            event_phase = str(pulse.get("event_phase", "") or "").strip().lower()
+            source_kind = str(candidate.get("source_kind", "pulse") or "pulse").strip().lower()
+            if source_kind == "seed" or event_phase in _BUSINESS_EVENT_AFTERMATH_PHASES:
+                priority_candidates.append(candidate)
+            else:
+                regular_candidates.append(candidate)
+
+        selected = []
+        def _can_place(candidate):
+            anchor = candidate["anchor"]
+            return not any(
+                _manhattan(anchor[0], anchor[1], other["anchor"][0], other["anchor"][1]) <= 4
+                for other in selected
+            )
+
+        for candidate in priority_candidates:
             if len(selected) >= _BUSINESS_EVENT_SCENE_CAP:
                 break
-            anchor = candidate["anchor"]
-            if any(_manhattan(anchor[0], anchor[1], other["anchor"][0], other["anchor"][1]) <= 4 for other in selected):
+            if not _can_place(candidate):
                 continue
             selected.append(candidate)
+
+        regular_selected = 0
+        for candidate in regular_candidates:
+            if len(selected) >= _BUSINESS_EVENT_SCENE_CAP:
+                break
+            if regular_selected >= _BUSINESS_EVENT_REGULAR_SCENE_CAP:
+                break
+            if not _can_place(candidate):
+                continue
+            selected.append(candidate)
+            regular_selected += 1
         return selected
 
     def _register_scene_fixture(self, scene, pos, *, name, fixture_type, glyph, color="building_roof_storefront", extra_metadata=None):
@@ -16189,6 +16218,7 @@ class WorldStreamingSystem(System):
                         "site_services": site_services,
                         "site_service_seed_token": service_seed_token,
                         "is_storefront": bool(building.get("is_storefront")),
+                        "public": bool(building.get("public")),
                         "business_name": business_name or None,
                         "business_founder_name": business_founder_name or None,
                         "business_founder_first_name": business_founder_first_name or None,
@@ -21045,6 +21075,17 @@ class NPCInteractionSystem(System):
             if reputation == "professional":
                 return "Long enough to know sloppy people keep funding careful ones."
             return "Long enough to know the city pays out in mistakes."
+        scene_note = dict(context.get("scene_note", {}) or {})
+        scene_type = str(scene_note.get("scene_type", "")).strip().lower()
+        event_phase = str(scene_note.get("event_phase", "")).strip().lower()
+        site_affiliated = bool(scene_note.get("site_affiliated"))
+        career = str(scene_note.get("career", "")).strip().lower()
+        if scene_type == "delivery" and (career == "courier" or not site_affiliated):
+            if event_phase == "doorstep_drop":
+                return "Not long. I am only here long enough to finish this doorstep drop."
+            return "Not long. I am only here for this drop before I move on."
+        if event_phase == "maintenance_loop" and not site_affiliated:
+            return "Not long. I am just here for a service call before I move on."
         owner_place_name = str(context.get("owner_place_name", "")).strip()
         workplace_name = str(context.get("workplace_name", "")).strip()
         home_name = str(context.get("home_name", "")).strip()
@@ -21052,16 +21093,16 @@ class NPCInteractionSystem(System):
         if context.get("guarded") and owner_place_name:
             return f"I have been around {owner_place_name} long enough to know who belongs near it."
         if workplace_name and home_name and workplace_name.lower() != home_name.lower():
-            return f"I have been splitting time between {workplace_name} and {home_name} for a while now."
+            return f"Long enough that {workplace_name} is work and {home_name} is home."
         if home_name:
-            return f"I have been anchored around {home_name} more than anywhere else."
+            return f"Long enough that {home_name} feels like home."
         if workplace_name:
-            return f"Most people know me through {workplace_name}."
+            return f"Long enough that {workplace_name} stopped feeling new."
         if owner_place_name:
-            return f"I have spent enough time around {owner_place_name} to know its rhythm."
+            return f"Long enough to know the rhythm around {owner_place_name}."
         if other_name:
-            return f"I have been around long enough to know {other_name} and a few other faces."
-        return "I have been around long enough to recognize the regulars."
+            return f"Long enough to know {other_name} and a few other faces."
+        return "Long enough to recognize the regulars."
 
     def _routine_summary(self, context, *, quality=None):
         quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "routine")
@@ -21136,27 +21177,39 @@ class NPCInteractionSystem(System):
         organization_role = str(context.get("organization_role", "")).strip().lower()
         career_text = str(context.get("career_text", "")).strip()
         workplace_name = str(context.get("workplace_name", "")).strip()
+        scene_note = dict(context.get("scene_note", {}) or {})
+        scene_type = str(scene_note.get("scene_type", "")).strip().lower()
+        event_phase = str(scene_note.get("event_phase", "")).strip().lower()
+        site_affiliated = bool(scene_note.get("site_affiliated"))
 
+        if scene_type == "delivery" and not site_affiliated:
+            return "Nobody at this stop signs me. I am with the delivery side, then I move on."
+        if event_phase == "maintenance_loop" and not site_affiliated:
+            return "Nobody here signs me. I am on the maintenance side for this call and then I am gone."
         if organization_role == "owner" and workplace_name and organization_name_text and organization_name_text.lower() != workplace_name.lower():
-            return f"I own and run {workplace_name} under {organization_name_text}."
+            return f"Nobody over me. {workplace_name} runs under {organization_name_text}, and it is mine."
         if organization_role == "owner" and workplace_name:
-            return f"I own and run {workplace_name}."
+            return f"Nobody over me. {workplace_name} is mine."
+        if organization_role == "owner":
+            return "Nobody over me. I work for myself."
         if organization_name_text:
-            if career_text and workplace_name and organization_name_text.lower() != workplace_name.lower():
-                return f"I do {career_text} work for {organization_name_text}, mostly out of {workplace_name}."
             if career_text:
-                return f"I do {career_text} work for {organization_name_text}."
-            if organization_role == "manager" and workplace_name:
-                return f"I manage things for {organization_name_text} at {workplace_name}."
+                if organization_kind == "civic":
+                    return f"{organization_name_text}. I do {career_text} work on the public side."
+                if organization_kind == "institution":
+                    return f"{organization_name_text}. I do {career_text} work under their chain."
+                return f"{organization_name_text}. I do {career_text} work for them."
+            if organization_role == "manager":
+                return f"{organization_name_text}. I manage the place for them."
             if organization_kind == "civic":
                 return f"It is {organization_name_text}. Public side of things."
             if organization_kind == "institution":
                 return f"It is {organization_name_text}. More chain of command than charm."
-            return f"{organization_name_text} signs the checks."
+            return f"{organization_name_text}. That is the outfit I am with."
         if workplace_name and career_text:
-            return f"I do {career_text} work out of {workplace_name}."
+            return f"Mostly this place. I do {career_text} work here."
         if workplace_name:
-            return f"This place, {workplace_name}, more or less."
+            return f"Mostly this place. No bigger outfit than that."
         return ""
 
     def _supervisor_summary(self, context):
@@ -21169,26 +21222,26 @@ class NPCInteractionSystem(System):
 
         if organization_role == "owner":
             if workplace_name:
-                return f"Mostly me. I own and run {workplace_name}."
-            return "Mostly me."
-        if organization_role == "manager" and not supervisor_name:
-            if workplace_name:
-                return f"Questions usually land with me at {workplace_name}."
-            return "Questions usually land with me."
+                return f"Nobody above me at {workplace_name}. It is my call."
+            return "Nobody above me. It is my call."
         if supervisor_name:
             if supervisor_role == "owner":
                 if workplace_name:
-                    return f"{supervisor_name} owns {workplace_name} and sets the tone."
+                    return f"{supervisor_name} owns {workplace_name}. Big calls go through them."
                 return f"{supervisor_name} owns the place."
             if supervisor_role == "manager":
                 if workplace_name:
                     return f"{supervisor_name} runs the floor at {workplace_name} most days."
                 return f"{supervisor_name} runs the floor most days."
             return f"I answer to {supervisor_name}."
+        if organization_role == "manager":
+            if workplace_name:
+                return f"Nobody local above me at {workplace_name}. Floor calls land on me."
+            return "Nobody local above me. Floor calls land on me."
         if organization_kind == "civic":
             return "Depends which supervisor drew the shift."
         if organization_name_text:
-            return f"{organization_name_text} keeps a chain over the place, even if it shifts."
+            return f"{organization_name_text} keeps a chain over the place, even if it changes faces."
         return ""
 
     def _coworker_summary(self, context):
@@ -21196,6 +21249,7 @@ class NPCInteractionSystem(System):
         supervisor_name = str(context.get("supervisor_name", "")).strip()
         organization_role = str(context.get("organization_role", "")).strip().lower()
         coworker_names = list(context.get("coworker_names", ()) or ())
+        organization_member_count = max(0, int(context.get("organization_member_count", 0) or 0))
 
         if coworker_names:
             shown_names = coworker_names[:2]
@@ -21208,12 +21262,22 @@ class NPCInteractionSystem(System):
             if workplace_name:
                 return f"You will usually see {names_text} around {workplace_name}."
             return f"Usually {names_text}."
-        if supervisor_name and workplace_name and organization_role not in {"owner", "manager"}:
+        if organization_member_count <= 1:
+            if workplace_name:
+                return f"No regular crew at {workplace_name}. Usually just me."
+            return "No regular crew. Usually just me."
+        if supervisor_name and workplace_name and organization_role not in {"owner", "manager"} and organization_member_count <= 2:
             return f"Usually just {supervisor_name} and me around {workplace_name}."
-        if organization_role in {"owner", "manager"} and workplace_name:
-            return f"Not many. I mostly keep {workplace_name} running."
+        if organization_role == "owner":
+            if workplace_name:
+                return f"No steady crew at {workplace_name}. I mostly keep it moving myself."
+            return "No steady crew. I mostly keep it moving myself."
+        if organization_role == "manager":
+            if workplace_name:
+                return f"The roster shifts around at {workplace_name}, but I am usually the one holding it together."
+            return "The roster shifts around, but I am usually the one holding it together."
         if workplace_name:
-            return f"Most shifts at {workplace_name} are just me."
+            return f"Small crew at {workplace_name}. Depends who is on."
         return ""
 
     def _social_lead_sentence(self, lead):
@@ -44514,6 +44578,25 @@ class EventLogSystem(System):
             credits_spent = int(event.data.get("credits_spent", 0))
             self.sim.log.add(f"Vending: {prop_name} drops {item_name} into your bag (-{credits_spent}c).")
             return
+        if service == "rail_transit":
+            destination_name = str(event.data.get("destination_name", "the next station")).strip() or "the next station"
+            distance = max(1, int(event.data.get("distance", 0) or 0))
+            fare_mode = str(event.data.get("fare_mode", "credits")).strip().lower() or "credits"
+            credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0) or 0)
+            text = f"Rail: {prop_name} sends you to {destination_name} ({distance}c)."
+            if fare_mode == "transit_daypass":
+                text += " Ride covered by daypass."
+            elif fare_mode == "city_pass_token":
+                text += " Ride covered by city token."
+            else:
+                text += f" Fare -{credits_spent}c."
+            if time_advanced_ticks > 0:
+                text += f" Travel time {_tick_duration_label(self.sim, time_advanced_ticks)}."
+            if skill_note:
+                text += f" {skill_note}"
+            self.sim.log.add(text)
+            return
         if service in {"vehicle_sales_new", "vehicle_sales_used"}:
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             price = int(event.data.get("price", 0))
@@ -44598,6 +44681,15 @@ class EventLogSystem(System):
             ready_in = int(event.data.get("ready_in", 0))
             self.sim.log.add(f"{prop_name} cannot help with {_site_service_label(service)} again yet ({ready_in}t).")
             return
+        if reason == "no_destinations" and service == "rail_transit":
+            self.sim.log.add(f"Rail: {prop_name} has no outbound stations posted right now.")
+            return
+        if reason == "invalid_destination" and service == "rail_transit":
+            self.sim.log.add(f"Rail: {prop_name} loses that departure off the board before you can board.")
+            return
+        if reason == "leave_vehicle" and service == "rail_transit":
+            self.sim.log.add(f"Rail: leave your vehicle before boarding at {prop_name}.")
+            return
         if reason == "no_need" and service == "shelter":
             self.sim.log.add(f"You do not need to bunk at {prop_name} right now.")
             return
@@ -44653,6 +44745,12 @@ class EventLogSystem(System):
             credits = int(event.data.get("credits", 0))
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             self.sim.log.add(f"Vending: {item_name} costs {cost}c at {prop_name}; you only have {credits}c.")
+            return
+        if reason == "no_credits" and service == "rail_transit":
+            cost = int(event.data.get("cost", 0))
+            credits = int(event.data.get("credits", 0))
+            destination_name = str(event.data.get("destination_name", "that station")).strip() or "that station"
+            self.sim.log.add(f"Rail: fare to {destination_name} from {prop_name} is {cost}c; you only have {credits}c.")
             return
         if reason == "inventory_full" and service == "vending":
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"

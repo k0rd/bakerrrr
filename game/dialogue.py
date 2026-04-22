@@ -448,19 +448,19 @@ PLAYER_TOPIC_BANKS = {
         "Is {workplace_name} where you spend most of your time?",
     ),
     "organization": (
-        "Who are you working for?",
-        "Whose banner are you under around here?",
-        "Who are you working for over at {workplace_name}?",
+        "Who are you tied in with there?",
+        "Whose outfit is {workplace_name}?",
+        "Are you working for somebody there, or is it your show?",
     ),
     "supervisor": (
-        "So who actually runs things there?",
-        "Who do you answer to day to day?",
-        "Who is really in charge at {workplace_name}?",
+        "So who calls the shots there?",
+        "Is there anybody above you day to day?",
+        "When something goes wrong at {workplace_name}, whose problem is it?",
     ),
     "coworkers": (
-        "Who else is on with you?",
-        "Who do you work alongside?",
-        "Who else is usually around at {workplace_name}?",
+        "Who else is usually on with you?",
+        "Is it mostly a crew, or mostly just you?",
+        "Who do you usually end up working alongside at {workplace_name}?",
     ),
     "people": (
         "Anybody around here worth knowing?",
@@ -2605,15 +2605,27 @@ def topic_label(topic_id, context=None):
     if topic_id == "workplace" and context.get("workplace_here"):
         return "Do you work here?"
     if topic_id == "organization" and context.get("workplace_name"):
-        return f"Who do you work for at {context['workplace_name']}?"
+        if str(context.get("organization_role", "")).strip().lower() == "owner":
+            return f"Is {context['workplace_name']} yours?"
+        if context.get("workplace_here"):
+            return "Who's the outfit behind this place?"
+        return f"Who's the outfit behind {context['workplace_name']}?"
     if topic_id == "supervisor" and context.get("workplace_here"):
-        return "Who runs things here?"
+        if str(context.get("organization_role", "")).strip().lower() == "owner":
+            return "Anybody above you here?"
+        return "Who calls the shots here?"
     if topic_id == "supervisor" and context.get("workplace_name"):
-        return f"Who runs things at {context['workplace_name']}?"
+        if str(context.get("organization_role", "")).strip().lower() == "owner":
+            return f"Anybody above you at {context['workplace_name']}?"
+        return f"Who calls the shots at {context['workplace_name']}?"
     if topic_id == "coworkers" and context.get("workplace_here"):
-        return "Who else works here?"
+        if int(context.get("organization_member_count", 0) or 0) <= 1:
+            return "Is it usually just you here?"
+        return "Who else is usually on here?"
     if topic_id == "coworkers" and context.get("workplace_name"):
-        return f"Who else works at {context['workplace_name']}?"
+        if int(context.get("organization_member_count", 0) or 0) <= 1:
+            return f"Is it usually just you at {context['workplace_name']}?"
+        return f"Who else is usually on at {context['workplace_name']}?"
     if topic_id == "people" and context.get("workplace_here"):
         return "Who should I know here?"
     if topic_id == "people" and context.get("workplace_name"):

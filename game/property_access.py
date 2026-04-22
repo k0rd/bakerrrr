@@ -106,6 +106,7 @@ PUBLIC_HOURS_BY_ARCHETYPE = {
 
 NEUTRAL_STANDING_REASONS = {"", "none", "open_business", "public_space"}
 AUTO_CONTROLLER_OWNER_TAGS = {"", "public", "city", "community", "neutral", "none", "unowned"}
+ALWAYS_PUBLIC_ARCHETYPES = {"metro_exchange"}
 BADGE_CONTROLLER_ARCHETYPES = {
     "armory",
     "bank",
@@ -188,6 +189,7 @@ DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "flophouse": ("rest",),
     "gaming_hall": ("video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker"),
     "hotel": ("rest",),
+    "metro_exchange": ("rail_transit",),
     "tavern": ("intel",),
 }
 OPTIONAL_SITE_SERVICES_BY_ARCHETYPE = {
@@ -476,6 +478,8 @@ def storefront_service_mode(prop):
 def property_is_public(prop):
     metadata = _property_metadata(prop)
     if bool(metadata.get("public")):
+        return True
+    if _property_archetype(prop) in ALWAYS_PUBLIC_ARCHETYPES:
         return True
 
     owner_tag = str(prop.get("owner_tag", "") or "").strip().lower()

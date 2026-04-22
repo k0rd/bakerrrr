@@ -10,6 +10,7 @@ import itertools
 import random
 from collections import Counter
 
+from engine.buildings import layout_chunk_building, world_building_id
 from game.components import AI, CreatureIdentity, NPCNeeds, Occupation, PlayerAssets, Position
 from game.organizations import occupation_targets_property, property_org_members
 from game.population import work_shift_active
@@ -139,6 +140,190 @@ def _sentence_from_note(note):
     if text[-1] not in ".!?":
         text += "."
     return text
+
+
+RAIL_TRANSIT_SEARCH_RADIUS = 12
+RAIL_TRANSIT_MENU_LIMIT = 8
+RAIL_TRANSIT_CITY_TOKEN_MAX_DISTANCE = 4
+RAIL_TRANSIT_BASE_COST = 8
+RAIL_TRANSIT_COST_PER_CHUNK = 3
+
+
+def _building_property_id(sim, building_id):
+    building_id = str(building_id or "").strip()
+    if not building_id:
+        return ""
+    for prop in getattr(sim, "properties", {}).values():
+        if not isinstance(prop, dict):
+            continue
+        metadata = prop.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        if str(metadata.get("building_id", "") or "").strip() == building_id:
+            return str(prop.get("id", "") or "").strip()
+    return ""
+
+
+def _property_chunk(sim, prop):
+    if not isinstance(prop, dict):
+        return (0, 0)
+    metadata = prop.get("metadata")
+    if isinstance(metadata, dict):
+        chunk = metadata.get("chunk")
+        if isinstance(chunk, (list, tuple)) and len(chunk) >= 2:
+            try:
+                return (int(chunk[0]), int(chunk[1]))
+            except (TypeError, ValueError):
+                pass
+    return sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+
+
+def _chunk_direction_label(origin_chunk, target_chunk):
+    try:
+        ox, oy = int(origin_chunk[0]), int(origin_chunk[1])
+        tx, ty = int(target_chunk[0]), int(target_chunk[1])
+    except (TypeError, ValueError, IndexError):
+        return ""
+    dx = tx - ox
+    dy = ty - oy
+    parts = []
+    if dy < 0:
+        parts.append(f"{abs(dy)}N")
+    elif dy > 0:
+        parts.append(f"{dy}S")
+    if dx > 0:
+        parts.append(f"{dx}E")
+    elif dx < 0:
+        parts.append(f"{abs(dx)}W")
+    return " ".join(parts) or "HERE"
+
+
+def _rail_transit_destinations(sim, origin_prop, *, radius=None, limit=None):
+    if not isinstance(origin_prop, dict) or getattr(sim, "world", None) is None:
+        return ()
+
+    radius = max(1, int(RAIL_TRANSIT_SEARCH_RADIUS if radius is None else radius))
+    limit = max(1, int(RAIL_TRANSIT_MENU_LIMIT if limit is None else limit))
+    origin_chunk = _property_chunk(sim, origin_prop)
+    origin_building_id = str(((origin_prop.get("metadata") or {}).get("building_id", "") or "")).strip()
+    chunk_size = int(max(8, getattr(sim, "chunk_size", 16) or 16))
+
+    seen = set()
+    candidates = []
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            distance = _manhattan(0, 0, dx, dy)
+            if distance <= 0 or distance > radius:
+                continue
+            cx = origin_chunk[0] + dx
+            cy = origin_chunk[1] + dy
+            chunk = sim.world.get_chunk(cx, cy)
+            desc = sim.world.overworld_descriptor(cx, cy)
+            district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+            blocks = tuple((chunk or {}).get("blocks", ()) or ())
+            origin_x = int(cx) * chunk_size
+            origin_y = int(cy) * chunk_size
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                buildings = tuple(block.get("buildings", ()) or ())
+                building_count = len(buildings)
+                for building_index, building in enumerate(buildings):
+                    if str((building or {}).get("archetype", "") or "").strip().lower() != "metro_exchange":
+                        continue
+                    layout = layout_chunk_building(
+                        origin_x=origin_x,
+                        origin_y=origin_y,
+                        chunk_size=chunk_size,
+                        block_grid_x=int(block.get("grid_x", 0) or 0),
+                        block_grid_y=int(block.get("grid_y", 0) or 0),
+                        building_index=building_index,
+                        building=building,
+                        building_count=building_count,
+                    )
+                    if not isinstance(layout, dict):
+                        continue
+                    building_id = world_building_id(cx, cy, building)
+                    if origin_building_id and building_id == origin_building_id:
+                        continue
+                    if building_id in seen:
+                        continue
+                    seen.add(building_id)
+                    entry = dict(layout.get("entry", {}) or {})
+                    station_name = str((building or {}).get("business_name", "") or "").strip() or "Transit Exchange"
+                    district_type = str((district or {}).get("district_type", "unknown") or "unknown").strip().lower() or "unknown"
+                    settlement_name = str((desc or {}).get("settlement_name", "") or "").strip()
+                    candidates.append({
+                        "building_id": building_id,
+                        "property_id": _building_property_id(sim, building_id),
+                        "station_name": station_name,
+                        "chunk": (int(cx), int(cy)),
+                        "distance": int(distance),
+                        "direction_label": _chunk_direction_label(origin_chunk, (cx, cy)),
+                        "district_type": district_type,
+                        "settlement_name": settlement_name,
+                        "entry_x": int(entry.get("x", layout.get("anchor_x", origin_x))),
+                        "entry_y": int(entry.get("y", layout.get("anchor_y", origin_y))),
+                        "entry_z": int(entry.get("z", 0)),
+                    })
+
+    candidates.sort(
+        key=lambda row: (
+            int(row.get("distance", 9999)),
+            str(row.get("station_name", "")).strip().lower(),
+            tuple(row.get("chunk", (0, 0))),
+        )
+    )
+    return tuple(candidates[:limit])
+
+
+def _rail_transit_quote(distance, *, price_mult=1.0):
+    try:
+        distance = max(1, int(distance))
+    except (TypeError, ValueError):
+        distance = 1
+    try:
+        price_mult = float(price_mult)
+    except (TypeError, ValueError):
+        price_mult = 1.0
+    base_cost = int(RAIL_TRANSIT_BASE_COST + (distance * RAIL_TRANSIT_COST_PER_CHUNK))
+    cost = max(4, int(round(float(base_cost) * max(0.45, price_mult))))
+    return {
+        "base_cost": int(base_cost),
+        "cost": int(cost),
+        "distance": int(distance),
+        "city_pass_valid": bool(distance <= int(RAIL_TRANSIT_CITY_TOKEN_MAX_DISTANCE)),
+    }
+
+
+def _rail_transit_payment_profile(distance, *, price_mult=1.0, city_tokens=0, daypasses=0):
+    quote = _rail_transit_quote(distance, price_mult=price_mult)
+    if int(daypasses or 0) > 0:
+        fare_mode = "transit_daypass"
+    elif int(city_tokens or 0) > 0 and bool(quote.get("city_pass_valid")):
+        fare_mode = "city_pass_token"
+    else:
+        fare_mode = "credits"
+    return {
+        **quote,
+        "fare_mode": fare_mode,
+    }
+
+
+def _rail_transit_travel_ticks(sim, distance):
+    try:
+        distance = max(1, int(distance))
+    except (TypeError, ValueError):
+        distance = 1
+    world_traits = getattr(sim, "world_traits", {})
+    clock = world_traits.get("clock", {}) if isinstance(world_traits, dict) else {}
+    try:
+        ticks_per_hour = int(clock.get("ticks_per_hour", 600))
+    except (TypeError, ValueError, AttributeError):
+        ticks_per_hour = 600
+    ticks_per_hour = max(60, ticks_per_hour)
+    hours = 0.35 + (0.25 * float(distance))
+    return max(60, int(round(float(ticks_per_hour) * hours)))
 
 
 OVERWORLD_DISTRICT_GLYPHS = {
@@ -3184,6 +3369,7 @@ def _site_service_label(service):
         return str(casino_profile.get("service_label", casino_profile.get("title", service))).strip().lower()
     mapping = {
         "intel": "intel",
+        "rail_transit": "rail travel",
         "shelter": "shelter",
         "rest": "lodging",
         "vending": "snacks",
@@ -3206,6 +3392,7 @@ def _service_menu_option_label(option_id):
         "trade_sell": "Sell goods",
         "banking": "Manage bank funds",
         "insurance": "Review coverage",
+        "rail_transit": "Take the train",
         "vending": "Buy a snack",
         "fuel": "Refuel vehicle",
         "repair": "Repair vehicle",
@@ -3278,6 +3465,10 @@ __all__ = [
     "_overworld_discovery_summary_bits",
     "_overworld_legend_line",
     "_overworld_render_style",
+    "_rail_transit_destinations",
+    "_rail_transit_payment_profile",
+    "_rail_transit_quote",
+    "_rail_transit_travel_ticks",
     "_overworld_travel_profile",
     "_overworld_travel_summary_bits",
     "_sentence_from_note",

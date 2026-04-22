@@ -431,6 +431,9 @@ class World:
         "military": (2, 4),
         "entertainment": (2, 4),
     }
+    ALWAYS_INCLUDED_OPTIONAL_BUILDINGS_BY_DISTRICT = {
+        "downtown": ("metro_exchange",),
+    }
 
     ROOM_TEMPLATES = {
         "warehouse": ("loading_bay", "receiving", "storage", "dispatch", "office", "secure_cage"),
@@ -748,6 +751,9 @@ class World:
         "karaoke_box",
         "pool_hall",
     }
+    PUBLIC_BUILDING_ARCHETYPES = {
+        "metro_exchange",
+    }
 
     NAMED_BUSINESS_ARCHETYPES = {
         "warehouse",
@@ -1038,6 +1044,9 @@ class World:
                 count = rng.randint(lo, hi)
                 if count > 0:
                     selected.extend(rng.sample(optional, count))
+            for archetype in self.ALWAYS_INCLUDED_OPTIONAL_BUILDINGS_BY_DISTRICT.get(district, ()):
+                if archetype in optional and archetype not in selected:
+                    selected.append(archetype)
 
             pools[district] = tuple(dict.fromkeys(selected))
 
@@ -2081,6 +2090,7 @@ class World:
             "business_founder_first_name": business_founder.get("first_name") if business_founder else None,
             "business_founder_last_name": business_founder.get("last_name") if business_founder else None,
             "is_storefront": archetype in self.STOREFRONT_ARCHETYPES,
+            "public": archetype in self.PUBLIC_BUILDING_ARCHETYPES,
         }
 
     def _large_parcel_chance(self, district_type, density, wealth):
