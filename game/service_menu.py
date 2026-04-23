@@ -30,6 +30,7 @@ from game.service_runtime import (
     CASINO_ROULETTE_NUMBER_MAX,
     CASINO_GAME_SERVICE_IDS,
     CASINO_PLINKO_LANE_COUNT,
+    TRANSIT_SERVICE_IDS,
     _casino_apply_round_result,
     _casino_baccarat_normalize_session,
     _casino_baccarat_resolve,
@@ -68,14 +69,18 @@ from game.service_runtime import (
     _credit_amount_label,
     _int_or_default,
     _line_text,
-    _rail_transit_destinations,
-    _rail_transit_payment_profile,
     _sentence_from_note,
     _service_menu_option_label,
     _site_service_label,
     _site_service_roll_index,
     _storefront_service_profile,
     _tick_duration_label,
+    _transit_destinations as _shared_transit_destinations,
+    _transit_fare_label,
+    _transit_inventory_label,
+    _transit_payment_profile,
+    _transit_service_profile,
+    _transit_service_title,
     _vehicle_sale_offer_label,
     _vehicle_sale_offers,
     _vehicle_sale_quality,
@@ -1660,15 +1665,27 @@ class ServiceMenuSystem(System):
             "casino_session": None,
         })
 
-    def _open_rail_transit_menu(self, prop):
+    def _transit_destinations(self, prop, service):
+        service = str(service or "").strip().lower()
+        if service not in TRANSIT_SERVICE_IDS:
+            return ()
+        return _shared_transit_destinations(self.sim, prop, service)
+
+    def _open_transit_menu(self, prop, service):
         self._clear_pending_service_result()
         self._clear_casino_session()
+        service = str(service or "").strip().lower()
+        profile = _transit_service_profile(service) or {}
+        title = _transit_service_title(service)
         prop_name = str(prop.get("name", prop.get("id", "Transit"))).strip() or "Transit"
-        destinations = _rail_transit_destinations(self.sim, prop)
+        destinations = self._transit_destinations(prop, service)
         if not destinations:
+            no_destinations_line = str(
+                profile.get("no_destinations_line", "No outbound transit service is posted from {prop_name} right now.")
+            ).format(prop_name=prop_name)
             self._present_service_result(
-                f"Rail: {prop_name}",
-                [f"No outbound rail stations are posted from {prop_name} right now."],
+                f"{title}: {prop_name}",
+                [no_destinations_line],
                 property_id=prop.get("id"),
             )
             return
@@ -1677,47 +1694,60 @@ class ServiceMenuSystem(System):
         daypasses = self._inventory_item_count("transit_daypass")
         topics = []
         for index, destination in enumerate(destinations, start=1):
-            payment = _rail_transit_payment_profile(
+            payment = _transit_payment_profile(
+                service,
                 destination.get("distance", 1),
                 city_tokens=city_tokens,
                 daypasses=daypasses,
             )
             distance = int(destination.get("distance", 0) or 0)
             direction_label = str(destination.get("direction_label", "")).strip()
-            station_name = str(destination.get("station_name", "Transit Exchange")).strip() or "Transit Exchange"
-            if payment.get("fare_mode") == "transit_daypass":
-                fare_label = "daypass"
-            elif payment.get("fare_mode") == "city_pass_token":
-                fare_label = "city token"
+            destination_name = str(destination.get("destination_name", destination.get("station_name", "Transit Stop"))).strip() or "Transit Stop"
+            if bool(profile.get("token_only")):
+                fare_label = _transit_fare_label(
+                    service,
+                    fare_mode="city_pass_token",
+                    token_cost=int(payment.get("token_cost", payment.get("cost", 1)) or 1),
+                )
+                if daypasses > 0 and bool(profile.get("allow_daypass", True)):
+                    fare_label = f"{fare_label} / daypass"
             else:
-                fare_label = _credit_amount_label(payment.get("cost", 0))
+                fare_label = _transit_fare_label(
+                    service,
+                    fare_mode=payment.get("fare_mode", "credits"),
+                    cost=int(payment.get("cost", 0) or 0),
+                    token_cost=int(payment.get("token_cost", 0) or 0),
+                )
             bits = [f"{distance}c"]
             if direction_label:
                 bits.append(direction_label)
             settlement_name = str(destination.get("settlement_name", "")).strip()
             if settlement_name:
                 bits.append(settlement_name)
-            label = f"{station_name} [{' | '.join(bits)}] - {fare_label}"
+            label = f"{destination_name} [{' | '.join(bits)}] - {fare_label}"
             topics.append({
-                "id": f"rail_transit:dest:{index}",
+                "id": f"{service}:dest:{index}",
                 "label": label,
                 "destination_chunk": tuple(destination.get("chunk", ()) or ()),
+                "destination_node_id": str(destination.get("node_id", "")).strip(),
                 "destination_building_id": str(destination.get("building_id", "")).strip(),
-                "destination_name": station_name,
+                "destination_name": destination_name,
                 "destination_distance": distance,
                 "quoted_cost": int(payment.get("cost", 0) or 0),
+                "quoted_token_cost": int(payment.get("token_cost", 0) or 0),
                 "quote_mode": str(payment.get("fare_mode", "credits")).strip().lower() or "credits",
             })
 
-        transcript = [
-            f"Choose a rail destination from {prop_name}.",
-            "Travel is station to station only. You will arrive at the destination exchange, not at your final address.",
-            (
-                f"Wallet {_credit_amount_label(self._wallet_credits())} | "
-                f"City tokens {city_tokens} | Daypasses {daypasses}."
-            ),
-            "City pass tokens cover shorter hops. Transit daypasses cover any listed line.",
-        ]
+        transcript = [f"Choose a {title.lower()} destination from {prop_name}."]
+        transcript.extend(
+            str(line).strip()
+            for line in tuple(profile.get("summary_lines", ()) or ())
+            if str(line).strip()
+        )
+        transcript.append(
+            f"Wallet {_credit_amount_label(self._wallet_credits())} | "
+            f"City tokens {city_tokens} | Daypasses {daypasses}."
+        )
         state = self._dialog_ui_state()
         self.sim.set_time_paused(True, reason="dialog")
         state.update({
@@ -1725,19 +1755,22 @@ class ServiceMenuSystem(System):
             "kind": "service_menu",
             "npc_eid": None,
             "property_id": prop.get("id"),
-            "title": f"Rail: {prop_name}",
-            "subtitle": "Station departures",
+            "title": f"{title}: {prop_name}",
+            "subtitle": str(profile.get("subtitle", "Transit departures")).strip() or "Transit departures",
             "transcript": transcript,
             "topics": topics,
             "selected_index": 0,
             "scroll": 0,
-            "hint": "Choose the station you want. Esc closes; Space clears result messages.",
+            "hint": "Choose the stop you want. Esc closes; Space clears result messages.",
             "new_topic_ids": [],
             "close_pending": False,
             "machine_action": None,
-            "service_menu_mode": "rail_transit",
+            "service_menu_mode": service,
             "casino_session": None,
         })
+
+    def _open_rail_transit_menu(self, prop):
+        self._open_transit_menu(prop, "rail_transit")
 
     def _present_service_result(self, title, lines, *, subtitle="", property_id=None):
         state = self._dialog_ui_state()
@@ -2159,28 +2192,46 @@ class ServiceMenuSystem(System):
             if time_advanced_ticks > 0:
                 lines.append(f"You sleep through {_tick_duration_label(self.sim, time_advanced_ticks)}.")
             return f"Rest: {prop_name}", lines
-        if service == "rail_transit":
-            destination_name = str(event.data.get("destination_name", "the next station")).strip() or "the next station"
+        if service in TRANSIT_SERVICE_IDS:
+            profile = _transit_service_profile(service) or {}
+            title = _transit_service_title(service)
+            destination_name = str(event.data.get("destination_name", "the next stop")).strip() or "the next stop"
             distance = int(event.data.get("distance", 0) or 0)
             time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0) or 0)
             fare_mode = str(event.data.get("fare_mode", "credits")).strip().lower() or "credits"
             credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            token_cost = int(event.data.get("token_cost", 0) or 0)
             skill_note = _sentence_from_note(event.data.get("skill_note", ""))
-            lines = [
-                f"You ride out from {prop_name} and pull in at {destination_name}.",
-                f"{max(1, distance)} chunks by rail.",
-            ]
+            success_lines = tuple(profile.get("success_lines", ()) or ())
+            if len(success_lines) >= 2:
+                lines = [
+                    str(success_lines[0]).format(
+                        prop_name=prop_name,
+                        destination_name=destination_name,
+                        distance=max(1, distance),
+                    ),
+                    str(success_lines[1]).format(
+                        prop_name=prop_name,
+                        destination_name=destination_name,
+                        distance=max(1, distance),
+                    ),
+                ]
+            else:
+                lines = [
+                    f"You travel out from {prop_name} and arrive at {destination_name}.",
+                    f"{max(1, distance)} chunks by {_site_service_label(service)}.",
+                ]
             if fare_mode == "transit_daypass":
                 lines.append("You ride on a transit daypass.")
             elif fare_mode == "city_pass_token":
-                lines.append("You feed a city pass token into the gate.")
+                lines.append(f"Fare {_transit_fare_label(service, fare_mode=fare_mode, token_cost=token_cost)}.")
             else:
                 lines.append(f"Fare {_credit_amount_label(credits_spent)}.")
             if time_advanced_ticks > 0:
                 lines.append(f"Travel time {_tick_duration_label(self.sim, time_advanced_ticks)}.")
             if skill_note:
                 lines.append(skill_note)
-            return f"Rail: {prop_name}", lines
+            return f"{title}: {prop_name}", lines
         if service == "vehicle_fetch":
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             credits_spent = int(event.data.get("credits_spent", 0))
@@ -2211,12 +2262,35 @@ class ServiceMenuSystem(System):
         if reason == "cooldown":
             ready_in = int(event.data.get("ready_in", 0))
             return title, [f"{_site_service_label(service).title()} is not available again yet.", f"Ready in {ready_in}t."]
-        if reason == "no_destinations" and service == "rail_transit":
-            return f"Rail: {prop_name}", [f"No outbound rail stations are posted from {prop_name} right now."]
-        if reason == "invalid_destination" and service == "rail_transit":
-            return f"Rail: {prop_name}", ["That destination board changed before you boarded.", "Pick a fresh station from the departures list."]
-        if reason == "leave_vehicle" and service == "rail_transit":
-            return f"Rail: {prop_name}", ["Leave your vehicle before boarding rail.", "Transit is station to station, not car to station."]
+        if service in TRANSIT_SERVICE_IDS and reason == "no_destinations":
+            profile = _transit_service_profile(service) or {}
+            title = _transit_service_title(service)
+            line = str(
+                profile.get("no_destinations_line", "No outbound transit service is posted from {prop_name} right now.")
+            ).format(prop_name=prop_name)
+            return f"{title}: {prop_name}", [line]
+        if service in TRANSIT_SERVICE_IDS and reason == "invalid_destination":
+            profile = _transit_service_profile(service) or {}
+            title = _transit_service_title(service)
+            lines = [
+                str(line).strip()
+                for line in tuple(profile.get("invalid_destination_lines", ()) or ())
+                if str(line).strip()
+            ]
+            if not lines:
+                lines = ["That transit departure changed before you boarded.", "Pick a fresh stop from the board."]
+            return f"{title}: {prop_name}", lines
+        if service in TRANSIT_SERVICE_IDS and reason == "leave_vehicle":
+            profile = _transit_service_profile(service) or {}
+            title = _transit_service_title(service)
+            lines = [
+                str(line).strip()
+                for line in tuple(profile.get("leave_vehicle_lines", ()) or ())
+                if str(line).strip()
+            ]
+            if not lines:
+                lines = ["Leave your vehicle before boarding transit.", "Transit is stop to stop, not car to stop."]
+            return f"{title}: {prop_name}", lines
         if reason == "no_need" and service == "shelter":
             return title, [f"You do not need shelter at {prop_name} right now."]
         if reason == "no_leads" and service == "intel":
@@ -2263,14 +2337,53 @@ class ServiceMenuSystem(System):
                 f"{item_name} costs {_credit_amount_label(cost)} here.",
                 f"You only have {_credit_amount_label(credits)} on hand.",
             ]
-        if reason == "no_credits" and service == "rail_transit":
+        if reason == "no_tokens" and service in TRANSIT_SERVICE_IDS:
+            profile = _transit_service_profile(service) or {}
+            title = _transit_service_title(service)
+            token_cost = int(event.data.get("token_cost", 0) or 0)
+            city_tokens = int(event.data.get("city_tokens", 0) or 0)
+            daypasses = int(event.data.get("daypasses", 0) or 0)
+            destination_name = str(event.data.get("destination_name", "that stop")).strip() or "that stop"
+            fare_label = _transit_fare_label(service, fare_mode="city_pass_token", token_cost=token_cost)
+            inventory_label = _transit_inventory_label(city_tokens=city_tokens, daypasses=daypasses)
+            lines = [
+                str(line).format(
+                    destination_name=destination_name,
+                    fare_label=fare_label,
+                    inventory_label=inventory_label,
+                )
+                for line in tuple(profile.get("blocked_no_fare_lines", ()) or ())
+                if str(line).strip()
+            ]
+            if not lines:
+                lines = [
+                    f"Fare to {destination_name} is {fare_label}.",
+                    f"You only have {inventory_label} on hand.",
+                ]
+            return f"{title}: {prop_name}", lines
+        if reason == "no_credits" and service in TRANSIT_SERVICE_IDS:
+            profile = _transit_service_profile(service) or {}
+            title = _transit_service_title(service)
             cost = int(event.data.get("cost", 0))
             credits = int(event.data.get("credits", 0))
-            destination_name = str(event.data.get("destination_name", "that station")).strip() or "that station"
-            return f"Rail: {prop_name}", [
-                f"Fare to {destination_name} is {_credit_amount_label(cost)}.",
-                f"You only have {_credit_amount_label(credits)} on hand.",
+            destination_name = str(event.data.get("destination_name", "that stop")).strip() or "that stop"
+            fare_label = _credit_amount_label(cost)
+            inventory_label = _credit_amount_label(credits)
+            lines = [
+                str(line).format(
+                    destination_name=destination_name,
+                    fare_label=fare_label,
+                    inventory_label=inventory_label,
+                )
+                for line in tuple(profile.get("blocked_no_fare_lines", ()) or ())
+                if str(line).strip()
             ]
+            if not lines:
+                lines = [
+                    f"Fare to {destination_name} is {fare_label}.",
+                    f"You only have {inventory_label} on hand.",
+                ]
+            return f"{title}: {prop_name}", lines
         if reason == "inventory_full" and service == "vending":
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             return f"Vending: {prop_name}", [
@@ -2463,11 +2576,11 @@ class ServiceMenuSystem(System):
             else:
                 self._present_service_result("Banking", ["No banking service is available right now."])
             return
-        if option_id == "rail_transit":
+        if option_id in TRANSIT_SERVICE_IDS:
             if isinstance(prop, dict):
-                self._open_rail_transit_menu(prop)
+                self._open_transit_menu(prop, option_id)
             else:
-                self._present_service_result("Rail", ["No rail service is available right now."])
+                self._present_service_result(_transit_service_title(option_id), ["That transit service is not available right now."])
             return
         if option_id in {"vehicle_sales_new", "vehicle_sales_used"}:
             if isinstance(prop, dict):
@@ -2475,9 +2588,18 @@ class ServiceMenuSystem(System):
             else:
                 self._present_service_result("Vehicles", ["That vehicle service is not available right now."])
             return
-        if option_id.startswith("rail_transit:dest:"):
+        transit_service = next(
+            (
+                service
+                for service in TRANSIT_SERVICE_IDS
+                if option_id.startswith(f"{service}:dest:")
+            ),
+            "",
+        )
+        if transit_service:
+            title = _transit_service_title(transit_service)
             if not isinstance(prop, dict):
-                self._present_service_result("Rail", ["That rail destination is not available right now."])
+                self._present_service_result(title, ["That transit destination is not available right now."])
                 return
             selected = next(
                 (
@@ -2488,26 +2610,28 @@ class ServiceMenuSystem(System):
                 None,
             )
             if not isinstance(selected, dict):
-                self._present_service_result("Rail", ["That rail destination could not be resolved cleanly."])
+                self._present_service_result(title, ["That transit destination could not be resolved cleanly."])
                 return
             prop_name = prop.get("name", property_id)
             self._begin_pending_service_result(
                 channel="site",
                 property_id=property_id,
                 property_name=prop_name,
-                service="rail_transit",
+                service=transit_service,
             )
             self.sim.emit(Event(
                 "site_service_request",
                 eid=self.player_eid,
                 property_id=property_id,
-                service="rail_transit",
+                service=transit_service,
                 property_name=prop_name,
                 destination_chunk=tuple(selected.get("destination_chunk", ()) or ()),
+                destination_node_id=str(selected.get("destination_node_id", "")).strip(),
                 destination_building_id=str(selected.get("destination_building_id", "")).strip(),
                 destination_name=str(selected.get("destination_name", "")).strip(),
                 distance=int(selected.get("destination_distance", 0) or 0),
                 quoted_cost=int(selected.get("quoted_cost", 0) or 0),
+                quoted_token_cost=int(selected.get("quoted_token_cost", 0) or 0),
                 quote_mode=str(selected.get("quote_mode", "credits")).strip().lower() or "credits",
             ))
             return

@@ -791,8 +791,11 @@ class NPCSettlement:
         last_housing_tick=0,
         last_job_tick=0,
         last_social_tick=0,
+        last_life_tick=0,
+        last_move_tick=0,
         drift_preferred=False,
         story_id="",
+        life_goal="",
     ):
         self.arrived_tick = int(arrived_tick or 0)
         self.origin = str(origin or "").strip().lower()
@@ -804,8 +807,11 @@ class NPCSettlement:
         self.last_housing_tick = int(last_housing_tick or 0)
         self.last_job_tick = int(last_job_tick or 0)
         self.last_social_tick = int(last_social_tick or 0)
+        self.last_life_tick = int(last_life_tick or 0)
+        self.last_move_tick = int(last_move_tick or 0)
         self.drift_preferred = bool(drift_preferred)
         self.story_id = str(story_id or "").strip()
+        self.life_goal = str(life_goal or "").strip().lower()
 
 
 class WildlifeBehavior:

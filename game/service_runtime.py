@@ -11,6 +11,7 @@ import random
 from collections import Counter
 
 from engine.buildings import layout_chunk_building, world_building_id
+from engine.sites import layout_chunk_site
 from game.components import AI, CreatureIdentity, NPCNeeds, Occupation, PlayerAssets, Position
 from game.organizations import occupation_targets_property, property_org_members
 from game.population import work_shift_active
@@ -147,6 +148,184 @@ RAIL_TRANSIT_MENU_LIMIT = 8
 RAIL_TRANSIT_CITY_TOKEN_MAX_DISTANCE = 4
 RAIL_TRANSIT_BASE_COST = 8
 RAIL_TRANSIT_COST_PER_CHUNK = 3
+BUS_TRANSIT_SEARCH_RADIUS = 6
+BUS_TRANSIT_MENU_LIMIT = 8
+BUS_TRANSIT_TOKEN_DISTANCE_STEP = 3
+SHUTTLE_TRANSIT_SEARCH_RADIUS = 3
+SHUTTLE_TRANSIT_MENU_LIMIT = 6
+SHUTTLE_TRANSIT_TOKEN_DISTANCE_STEP = 2
+FERRY_TRANSIT_SEARCH_RADIUS = 10
+FERRY_TRANSIT_MENU_LIMIT = 6
+FERRY_TRANSIT_TOKEN_DISTANCE_STEP = 2
+
+TRANSIT_SERVICE_PROFILES = {
+    "rail_transit": {
+        "title": "Rail",
+        "service_label": "rail travel",
+        "menu_label": "Take the train",
+        "subtitle": "Station departures",
+        "summary_lines": (
+            "Travel is station to station only. You will arrive at the destination exchange, not at your final address.",
+            "City pass tokens cover shorter hops. Transit daypasses cover any listed line.",
+        ),
+        "no_destinations_line": "No outbound rail stations are posted from {prop_name} right now.",
+        "invalid_destination_lines": (
+            "That destination board changed before you boarded.",
+            "Pick a fresh station from the departures list.",
+        ),
+        "leave_vehicle_lines": (
+            "Leave your vehicle before boarding rail.",
+            "Transit is station to station, not car to station.",
+        ),
+        "blocked_no_fare_lines": (
+            "Fare to {destination_name} is {fare_label}.",
+            "You only have {inventory_label} on hand.",
+        ),
+        "success_lines": (
+            "You ride out from {prop_name} and pull in at {destination_name}.",
+            "{distance} chunks by rail.",
+        ),
+        "log_prefix": "Rail",
+        "travel_mode": "rail",
+        "node_archetypes": frozenset({"metro_exchange"}),
+        "scan_buildings": True,
+        "scan_sites": False,
+        "search_radius": RAIL_TRANSIT_SEARCH_RADIUS,
+        "menu_limit": RAIL_TRANSIT_MENU_LIMIT,
+        "base_cost": RAIL_TRANSIT_BASE_COST,
+        "cost_per_chunk": RAIL_TRANSIT_COST_PER_CHUNK,
+        "city_token_max_distance": RAIL_TRANSIT_CITY_TOKEN_MAX_DISTANCE,
+        "token_only": False,
+        "allow_daypass": True,
+        "prefer_tokens": False,
+        "travel_base_hours": 0.35,
+        "travel_hours_per_chunk": 0.25,
+    },
+    "bus_transit": {
+        "title": "Bus",
+        "service_label": "bus travel",
+        "menu_label": "Catch the bus",
+        "subtitle": "Posted routes",
+        "summary_lines": (
+            "Buses run stop to stop between posted transit nodes. You will arrive at the destination stop, not a private address.",
+            "Local bus rides take city tokens. Transit daypasses still cover the line if you want to save your tokens.",
+        ),
+        "no_destinations_line": "No outbound bus routes are posted from {prop_name} right now.",
+        "invalid_destination_lines": (
+            "That bus route rolled off the board before departure.",
+            "Pick a fresh stop from the posted routes.",
+        ),
+        "leave_vehicle_lines": (
+            "Leave your vehicle before boarding the bus.",
+            "Bus travel is stop to stop, not car to stop.",
+        ),
+        "blocked_no_fare_lines": (
+            "Bus fare to {destination_name} is {fare_label}.",
+            "You only have {inventory_label} on hand.",
+        ),
+        "success_lines": (
+            "You catch the bus out from {prop_name} and step off at {destination_name}.",
+            "{distance} chunks by bus.",
+        ),
+        "log_prefix": "Bus",
+        "travel_mode": "bus",
+        "node_archetypes": frozenset({"metro_exchange", "relay_post", "truck_stop"}),
+        "scan_buildings": True,
+        "scan_sites": True,
+        "search_radius": BUS_TRANSIT_SEARCH_RADIUS,
+        "menu_limit": BUS_TRANSIT_MENU_LIMIT,
+        "token_only": True,
+        "allow_daypass": True,
+        "prefer_tokens": True,
+        "token_distance_step": BUS_TRANSIT_TOKEN_DISTANCE_STEP,
+        "max_token_cost": 3,
+        "travel_base_hours": 0.25,
+        "travel_hours_per_chunk": 0.18,
+    },
+    "shuttle_transit": {
+        "title": "Shuttle",
+        "service_label": "shuttle travel",
+        "menu_label": "Book a shuttle",
+        "subtitle": "Short-hop transfers",
+        "summary_lines": (
+            "Shuttles handle short transfers between posted support stops. They are for local hops, not for replacing your own wheels.",
+            "Shuttle rides take city tokens. Transit daypasses cover the seat if you are already riding on one.",
+        ),
+        "no_destinations_line": "No shuttle transfers are posted from {prop_name} right now.",
+        "invalid_destination_lines": (
+            "That shuttle transfer cleared before you could take it.",
+            "Pick a fresh short-hop stop from the board.",
+        ),
+        "leave_vehicle_lines": (
+            "Leave your vehicle before taking a shuttle.",
+            "Shuttles handle stop to stop transfers, not vehicle hauling.",
+        ),
+        "blocked_no_fare_lines": (
+            "Shuttle fare to {destination_name} is {fare_label}.",
+            "You only have {inventory_label} on hand.",
+        ),
+        "success_lines": (
+            "A shuttle rolls out from {prop_name} and drops you at {destination_name}.",
+            "{distance} chunks by shuttle.",
+        ),
+        "log_prefix": "Shuttle",
+        "travel_mode": "shuttle",
+        "node_archetypes": frozenset({"relay_post", "truck_stop", "roadhouse", "dock_shack"}),
+        "scan_buildings": True,
+        "scan_sites": True,
+        "search_radius": SHUTTLE_TRANSIT_SEARCH_RADIUS,
+        "menu_limit": SHUTTLE_TRANSIT_MENU_LIMIT,
+        "token_only": True,
+        "allow_daypass": True,
+        "prefer_tokens": True,
+        "token_distance_step": SHUTTLE_TRANSIT_TOKEN_DISTANCE_STEP,
+        "max_token_cost": 2,
+        "travel_base_hours": 0.18,
+        "travel_hours_per_chunk": 0.14,
+    },
+    "ferry_transit": {
+        "title": "Ferry",
+        "service_label": "ferry travel",
+        "menu_label": "Take the ferry",
+        "subtitle": "Waterfront departures",
+        "summary_lines": (
+            "Ferries run landing to landing between posted waterfront stops. You will arrive at the destination landing, not a private berth.",
+            "Longer crossings take city tokens. Transit daypasses cover the passage if you already have one.",
+        ),
+        "no_destinations_line": "No outbound ferry departures are posted from {prop_name} right now.",
+        "invalid_destination_lines": (
+            "That ferry departure cleared off the board before boarding.",
+            "Pick a fresh landing from the posted crossings.",
+        ),
+        "leave_vehicle_lines": (
+            "Leave your vehicle before boarding the ferry.",
+            "Ferry travel is landing to landing, not vehicle hauling.",
+        ),
+        "blocked_no_fare_lines": (
+            "Ferry fare to {destination_name} is {fare_label}.",
+            "You only have {inventory_label} on hand.",
+        ),
+        "success_lines": (
+            "You board at {prop_name} and come ashore at {destination_name}.",
+            "{distance} chunks by ferry.",
+        ),
+        "log_prefix": "Ferry",
+        "travel_mode": "ferry",
+        "node_archetypes": frozenset({"dock_shack", "ferry_post", "tide_station"}),
+        "scan_buildings": True,
+        "scan_sites": True,
+        "search_radius": FERRY_TRANSIT_SEARCH_RADIUS,
+        "menu_limit": FERRY_TRANSIT_MENU_LIMIT,
+        "token_only": True,
+        "allow_daypass": True,
+        "prefer_tokens": False,
+        "token_distance_step": FERRY_TRANSIT_TOKEN_DISTANCE_STEP,
+        "max_token_cost": 5,
+        "travel_base_hours": 0.45,
+        "travel_hours_per_chunk": 0.28,
+    },
+}
+TRANSIT_SERVICE_IDS = tuple(TRANSIT_SERVICE_PROFILES.keys())
 
 
 def _building_property_id(sim, building_id):
@@ -161,6 +340,32 @@ def _building_property_id(sim, building_id):
             continue
         if str(metadata.get("building_id", "") or "").strip() == building_id:
             return str(prop.get("id", "") or "").strip()
+    return ""
+
+
+def _site_property_id(sim, chunk_x, chunk_y, site_kind, site_id):
+    site_kind = str(site_kind or "").strip().lower()
+    site_id = str(site_id or "").strip()
+    if not site_kind or not site_id:
+        return ""
+    for prop in getattr(sim, "properties", {}).values():
+        if not isinstance(prop, dict):
+            continue
+        metadata = prop.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        if str(metadata.get("site_kind", "") or "").strip().lower() != site_kind:
+            continue
+        if str(metadata.get("site_id", "") or "").strip() != site_id:
+            continue
+        chunk = metadata.get("chunk")
+        if isinstance(chunk, (list, tuple)) and len(chunk) >= 2:
+            try:
+                if (int(chunk[0]), int(chunk[1])) != (int(chunk_x), int(chunk_y)):
+                    continue
+            except (TypeError, ValueError):
+                continue
+        return str(prop.get("id", "") or "").strip()
     return ""
 
 
@@ -198,14 +403,195 @@ def _chunk_direction_label(origin_chunk, target_chunk):
     return " ".join(parts) or "HERE"
 
 
-def _rail_transit_destinations(sim, origin_prop, *, radius=None, limit=None):
-    if not isinstance(origin_prop, dict) or getattr(sim, "world", None) is None:
+def _transit_service_profile(service):
+    return TRANSIT_SERVICE_PROFILES.get(str(service or "").strip().lower())
+
+
+def _transit_service_title(service):
+    profile = _transit_service_profile(service)
+    if profile:
+        return str(profile.get("title", service)).strip() or str(service or "Transit").replace("_", " ").title()
+    return str(service or "Transit").replace("_", " ").title()
+
+
+def _transit_service_log_prefix(service):
+    profile = _transit_service_profile(service)
+    if profile:
+        return str(profile.get("log_prefix", _transit_service_title(service))).strip() or _transit_service_title(service)
+    return _transit_service_title(service)
+
+
+def _transit_service_mode_label(service):
+    profile = _transit_service_profile(service)
+    if profile:
+        return str(profile.get("travel_mode", "transit")).strip().lower() or "transit"
+    return "transit"
+
+
+def _transit_token_amount_label(amount):
+    try:
+        amount = max(0, int(amount))
+    except (TypeError, ValueError):
+        amount = 0
+    unit = "city token" if amount == 1 else "city tokens"
+    return f"{amount} {unit}"
+
+
+def _transit_inventory_label(*, city_tokens=0, daypasses=0):
+    try:
+        city_tokens = max(0, int(city_tokens))
+    except (TypeError, ValueError):
+        city_tokens = 0
+    try:
+        daypasses = max(0, int(daypasses))
+    except (TypeError, ValueError):
+        daypasses = 0
+    daypass_unit = "daypass" if daypasses == 1 else "daypasses"
+    return f"{_transit_token_amount_label(city_tokens)} and {daypasses} {daypass_unit}"
+
+
+def _transit_fare_label(service, *, fare_mode="", cost=0, token_cost=0):
+    fare_mode = str(fare_mode or "").strip().lower()
+    if fare_mode == "transit_daypass":
+        return "daypass"
+    if fare_mode == "city_pass_token" or bool((_transit_service_profile(service) or {}).get("token_only")):
+        return _transit_token_amount_label(token_cost or cost or 1)
+    return _credit_amount_label(cost)
+
+
+def _transit_node_id_from_property(sim, prop):
+    metadata = prop.get("metadata") or {} if isinstance(prop, dict) else {}
+    site_kind = str(metadata.get("site_kind", "") or "").strip().lower()
+    site_id = str(metadata.get("site_id", "") or "").strip()
+    if site_kind and site_id:
+        chunk = _property_chunk(sim, prop)
+        return f"site:{int(chunk[0])}:{int(chunk[1])}:{site_kind}:{site_id}"
+
+    building_id = str(metadata.get("building_id", "") or "").strip()
+    if building_id:
+        return f"building:{building_id}"
+
+    prop_id = str((prop or {}).get("id", "") or "").strip()
+    if prop_id:
+        return f"property:{prop_id}"
+    return ""
+
+
+def _transit_stop_name(raw_name, fallback):
+    name = str(raw_name or "").strip()
+    if name:
+        return name
+    return str(fallback or "Transit Stop").strip() or "Transit Stop"
+
+
+def _property_service_ids(prop):
+    metadata = prop.get("metadata") if isinstance(prop, dict) else {}
+    if not isinstance(metadata, dict):
+        return frozenset()
+    return frozenset(
+        str(service or "").strip().lower()
+        for service in tuple(metadata.get("site_services", ()) or ())
+        if str(service or "").strip()
+    )
+
+
+def _property_transit_archetype(prop):
+    metadata = prop.get("metadata") if isinstance(prop, dict) else {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return str(
+        metadata.get("site_kind", "") or metadata.get("archetype", "") or prop.get("archetype", "") if isinstance(prop, dict) else ""
+    ).strip().lower()
+
+
+def _chunk_has_transit_service_node(sim, chunk, service):
+    profile = _transit_service_profile(service)
+    if not profile or getattr(sim, "world", None) is None:
+        return False
+    try:
+        chunk = (int(chunk[0]), int(chunk[1]))
+    except (TypeError, ValueError, IndexError):
+        return False
+    node_archetypes = {
+        str(archetype).strip().lower()
+        for archetype in tuple(profile.get("node_archetypes", ()) or ())
+        if str(archetype).strip()
+    }
+    if not node_archetypes:
+        return False
+
+    for prop in tuple(getattr(sim, "properties", {}).values()):
+        if not isinstance(prop, dict):
+            continue
+        if _property_chunk(sim, prop) != chunk:
+            continue
+        if service in _property_service_ids(prop):
+            return True
+        if _property_transit_archetype(prop) in node_archetypes:
+            return True
+
+    world_chunk = sim.world.get_chunk(chunk[0], chunk[1])
+    for block in tuple((world_chunk or {}).get("blocks", ()) or ()):
+        if not isinstance(block, dict):
+            continue
+        for building in tuple(block.get("buildings", ()) or ()):
+            if not isinstance(building, dict):
+                continue
+            if str(building.get("archetype", "") or "").strip().lower() in node_archetypes:
+                return True
+    for site in tuple((world_chunk or {}).get("sites", ()) or ()):
+        if not isinstance(site, dict):
+            continue
+        if str(site.get("kind", "") or "").strip().lower() in node_archetypes:
+            return True
+    return False
+
+
+def _transit_services_connecting_chunks(sim, origin_chunk, target_chunk, *, services=None):
+    if getattr(sim, "world", None) is None:
+        return ()
+    try:
+        origin_chunk = (int(origin_chunk[0]), int(origin_chunk[1]))
+        target_chunk = (int(target_chunk[0]), int(target_chunk[1]))
+    except (TypeError, ValueError, IndexError):
+        return ()
+    distance = _manhattan(origin_chunk[0], origin_chunk[1], target_chunk[0], target_chunk[1])
+    if distance <= 0:
+        return ()
+    requested = tuple(services or TRANSIT_SERVICE_IDS)
+    connected = []
+    for service in requested:
+        profile = _transit_service_profile(service)
+        if not profile:
+            continue
+        radius = max(1, int(profile.get("search_radius", 6) or 6))
+        if distance > radius:
+            continue
+        if not _chunk_has_transit_service_node(sim, origin_chunk, service):
+            continue
+        if not _chunk_has_transit_service_node(sim, target_chunk, service):
+            continue
+        connected.append(str(service).strip().lower())
+    return tuple(connected)
+
+
+def _transit_destinations(sim, origin_prop, service, *, radius=None, limit=None):
+    profile = _transit_service_profile(service)
+    if not profile or not isinstance(origin_prop, dict) or getattr(sim, "world", None) is None:
         return ()
 
-    radius = max(1, int(RAIL_TRANSIT_SEARCH_RADIUS if radius is None else radius))
-    limit = max(1, int(RAIL_TRANSIT_MENU_LIMIT if limit is None else limit))
+    node_archetypes = {
+        str(archetype).strip().lower()
+        for archetype in tuple(profile.get("node_archetypes", ()) or ())
+        if str(archetype).strip()
+    }
+    if not node_archetypes:
+        return ()
+
+    radius = max(1, int(profile.get("search_radius", 6) if radius is None else radius))
+    limit = max(1, int(profile.get("menu_limit", 8) if limit is None else limit))
     origin_chunk = _property_chunk(sim, origin_prop)
-    origin_building_id = str(((origin_prop.get("metadata") or {}).get("building_id", "") or "")).strip()
+    origin_node_id = _transit_node_id_from_property(sim, origin_prop)
     chunk_size = int(max(8, getattr(sim, "chunk_size", 16) or 16))
 
     seen = set()
@@ -220,43 +606,101 @@ def _rail_transit_destinations(sim, origin_prop, *, radius=None, limit=None):
             chunk = sim.world.get_chunk(cx, cy)
             desc = sim.world.overworld_descriptor(cx, cy)
             district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
-            blocks = tuple((chunk or {}).get("blocks", ()) or ())
             origin_x = int(cx) * chunk_size
             origin_y = int(cy) * chunk_size
-            for block in blocks:
-                if not isinstance(block, dict):
-                    continue
-                buildings = tuple(block.get("buildings", ()) or ())
-                building_count = len(buildings)
-                for building_index, building in enumerate(buildings):
-                    if str((building or {}).get("archetype", "") or "").strip().lower() != "metro_exchange":
+            district_type = str((district or {}).get("district_type", "unknown") or "unknown").strip().lower() or "unknown"
+            settlement_name = str((desc or {}).get("settlement_name", "") or "").strip()
+
+            if bool(profile.get("scan_buildings", True)):
+                blocks = tuple((chunk or {}).get("blocks", ()) or ())
+                for block in blocks:
+                    if not isinstance(block, dict):
                         continue
-                    layout = layout_chunk_building(
+                    buildings = tuple(block.get("buildings", ()) or ())
+                    building_count = len(buildings)
+                    for building_index, building in enumerate(buildings):
+                        archetype = str((building or {}).get("archetype", "") or "").strip().lower()
+                        if archetype not in node_archetypes:
+                            continue
+                        layout = layout_chunk_building(
+                            origin_x=origin_x,
+                            origin_y=origin_y,
+                            chunk_size=chunk_size,
+                            block_grid_x=int(block.get("grid_x", 0) or 0),
+                            block_grid_y=int(block.get("grid_y", 0) or 0),
+                            building_index=building_index,
+                            building=building,
+                            building_count=building_count,
+                        )
+                        if not isinstance(layout, dict):
+                            continue
+                        building_id = world_building_id(cx, cy, building)
+                        node_id = f"building:{building_id}"
+                        if origin_node_id and node_id == origin_node_id:
+                            continue
+                        if node_id in seen:
+                            continue
+                        seen.add(node_id)
+                        entry = dict(layout.get("entry", {}) or {})
+                        stop_name = _transit_stop_name(
+                            (building or {}).get("business_name", ""),
+                            archetype.replace("_", " ").title(),
+                        )
+                        candidates.append({
+                            "node_id": node_id,
+                            "building_id": building_id,
+                            "property_id": _building_property_id(sim, building_id),
+                            "destination_name": stop_name,
+                            "station_name": stop_name,
+                            "node_archetype": archetype,
+                            "chunk": (int(cx), int(cy)),
+                            "distance": int(distance),
+                            "direction_label": _chunk_direction_label(origin_chunk, (cx, cy)),
+                            "district_type": district_type,
+                            "settlement_name": settlement_name,
+                            "entry_x": int(entry.get("x", layout.get("anchor_x", origin_x))),
+                            "entry_y": int(entry.get("y", layout.get("anchor_y", origin_y))),
+                            "entry_z": int(entry.get("z", 0)),
+                        })
+
+            if bool(profile.get("scan_sites", True)):
+                reserved_site_footprints = []
+                for site_index, site in enumerate(tuple((chunk or {}).get("sites", ()) or ())):
+                    if not isinstance(site, dict):
+                        continue
+                    site_kind = str(site.get("kind", "") or "").strip().lower()
+                    if site_kind not in node_archetypes:
+                        continue
+                    layout = layout_chunk_site(
                         origin_x=origin_x,
                         origin_y=origin_y,
                         chunk_size=chunk_size,
-                        block_grid_x=int(block.get("grid_x", 0) or 0),
-                        block_grid_y=int(block.get("grid_y", 0) or 0),
-                        building_index=building_index,
-                        building=building,
-                        building_count=building_count,
+                        site_index=site_index,
+                        site=site,
+                        reserved_footprints=reserved_site_footprints,
                     )
                     if not isinstance(layout, dict):
                         continue
-                    building_id = world_building_id(cx, cy, building)
-                    if origin_building_id and building_id == origin_building_id:
+                    reserved_site_footprints.append(dict(layout.get("footprint", {})))
+                    site_id = str(site.get("site_id", site_index) or site_index).strip() or str(site_index)
+                    node_id = f"site:{int(cx)}:{int(cy)}:{site_kind}:{site_id}"
+                    if origin_node_id and node_id == origin_node_id:
                         continue
-                    if building_id in seen:
+                    if node_id in seen:
                         continue
-                    seen.add(building_id)
+                    seen.add(node_id)
                     entry = dict(layout.get("entry", {}) or {})
-                    station_name = str((building or {}).get("business_name", "") or "").strip() or "Transit Exchange"
-                    district_type = str((district or {}).get("district_type", "unknown") or "unknown").strip().lower() or "unknown"
-                    settlement_name = str((desc or {}).get("settlement_name", "") or "").strip()
+                    stop_name = _transit_stop_name(
+                        site.get("name", ""),
+                        site_kind.replace("_", " ").title(),
+                    )
                     candidates.append({
-                        "building_id": building_id,
-                        "property_id": _building_property_id(sim, building_id),
-                        "station_name": station_name,
+                        "node_id": node_id,
+                        "building_id": "",
+                        "property_id": _site_property_id(sim, cx, cy, site_kind, site_id),
+                        "destination_name": stop_name,
+                        "station_name": stop_name,
+                        "node_archetype": site_kind,
                         "chunk": (int(cx), int(cy)),
                         "distance": int(distance),
                         "direction_label": _chunk_direction_label(origin_chunk, (cx, cy)),
@@ -270,14 +714,44 @@ def _rail_transit_destinations(sim, origin_prop, *, radius=None, limit=None):
     candidates.sort(
         key=lambda row: (
             int(row.get("distance", 9999)),
-            str(row.get("station_name", "")).strip().lower(),
+            str(row.get("destination_name", "")).strip().lower(),
             tuple(row.get("chunk", (0, 0))),
+            str(row.get("node_id", "")).strip().lower(),
         )
     )
     return tuple(candidates[:limit])
 
 
-def _rail_transit_quote(distance, *, price_mult=1.0):
+def _transit_token_cost(service, distance):
+    profile = _transit_service_profile(service) or {}
+    try:
+        distance = max(1, int(distance))
+    except (TypeError, ValueError):
+        distance = 1
+    step = max(1, int(profile.get("token_distance_step", 99) or 99))
+    base = max(1, int(profile.get("token_base_cost", 1) or 1))
+    token_cost = int(base + ((distance - 1) // step))
+    max_token_cost = profile.get("max_token_cost")
+    if max_token_cost is not None:
+        try:
+            token_cost = min(token_cost, max(1, int(max_token_cost)))
+        except (TypeError, ValueError):
+            pass
+    return max(1, token_cost)
+
+
+def _transit_quote(service, distance, *, price_mult=1.0):
+    profile = _transit_service_profile(service)
+    if not profile:
+        return {
+            "base_cost": 0,
+            "cost": 0,
+            "distance": max(1, _int_or_default(distance, 1)),
+            "city_pass_valid": False,
+            "token_cost": 0,
+            "token_only": False,
+        }
+
     try:
         distance = max(1, int(distance))
     except (TypeError, ValueError):
@@ -286,31 +760,66 @@ def _rail_transit_quote(distance, *, price_mult=1.0):
         price_mult = float(price_mult)
     except (TypeError, ValueError):
         price_mult = 1.0
-    base_cost = int(RAIL_TRANSIT_BASE_COST + (distance * RAIL_TRANSIT_COST_PER_CHUNK))
-    cost = max(4, int(round(float(base_cost) * max(0.45, price_mult))))
+
+    token_only = bool(profile.get("token_only"))
+    token_cost = _transit_token_cost(service, distance) if token_only else 0
+    city_pass_valid = bool(token_only)
+    if not token_only:
+        base_cost = int(profile.get("base_cost", 0) or 0) + (distance * int(profile.get("cost_per_chunk", 0) or 0))
+        cost = max(4, int(round(float(base_cost) * max(0.45, price_mult))))
+        city_pass_valid = bool(distance <= int(profile.get("city_token_max_distance", 0) or 0))
+        if city_pass_valid:
+            token_cost = _transit_token_cost(service, distance)
+    else:
+        base_cost = token_cost
+        cost = token_cost
+
     return {
         "base_cost": int(base_cost),
         "cost": int(cost),
         "distance": int(distance),
-        "city_pass_valid": bool(distance <= int(RAIL_TRANSIT_CITY_TOKEN_MAX_DISTANCE)),
+        "city_pass_valid": bool(city_pass_valid),
+        "token_cost": int(token_cost),
+        "token_only": bool(token_only),
     }
 
 
-def _rail_transit_payment_profile(distance, *, price_mult=1.0, city_tokens=0, daypasses=0):
-    quote = _rail_transit_quote(distance, price_mult=price_mult)
-    if int(daypasses or 0) > 0:
-        fare_mode = "transit_daypass"
-    elif int(city_tokens or 0) > 0 and bool(quote.get("city_pass_valid")):
-        fare_mode = "city_pass_token"
+def _transit_payment_profile(service, distance, *, price_mult=1.0, city_tokens=0, daypasses=0):
+    profile = _transit_service_profile(service) or {}
+    quote = _transit_quote(service, distance, price_mult=price_mult)
+    allow_daypass = bool(profile.get("allow_daypass", True))
+    prefer_tokens = bool(profile.get("prefer_tokens", False))
+    token_cost = int(quote.get("token_cost", 0) or 0)
+    available_tokens = max(0, _int_or_default(city_tokens, 0))
+    available_daypasses = max(0, _int_or_default(daypasses, 0))
+
+    if prefer_tokens:
+        if token_cost > 0 and available_tokens >= token_cost:
+            fare_mode = "city_pass_token"
+        elif allow_daypass and available_daypasses > 0:
+            fare_mode = "transit_daypass"
+        elif bool(quote.get("token_only")):
+            fare_mode = "city_pass_token"
+        else:
+            fare_mode = "credits"
     else:
-        fare_mode = "credits"
+        if allow_daypass and available_daypasses > 0:
+            fare_mode = "transit_daypass"
+        elif token_cost > 0 and available_tokens >= token_cost:
+            fare_mode = "city_pass_token"
+        elif bool(quote.get("token_only")):
+            fare_mode = "city_pass_token"
+        else:
+            fare_mode = "credits"
+
     return {
         **quote,
         "fare_mode": fare_mode,
     }
 
 
-def _rail_transit_travel_ticks(sim, distance):
+def _transit_travel_ticks(sim, service, distance):
+    profile = _transit_service_profile(service) or {}
     try:
         distance = max(1, int(distance))
     except (TypeError, ValueError):
@@ -322,8 +831,98 @@ def _rail_transit_travel_ticks(sim, distance):
     except (TypeError, ValueError, AttributeError):
         ticks_per_hour = 600
     ticks_per_hour = max(60, ticks_per_hour)
-    hours = 0.35 + (0.25 * float(distance))
+    hours = float(profile.get("travel_base_hours", 0.25) or 0.25) + (
+        float(profile.get("travel_hours_per_chunk", 0.2) or 0.2) * float(distance)
+    )
     return max(60, int(round(float(ticks_per_hour) * hours)))
+
+
+def _rail_transit_destinations(sim, origin_prop, *, radius=None, limit=None):
+    return _transit_destinations(sim, origin_prop, "rail_transit", radius=radius, limit=limit)
+
+
+def _bus_transit_destinations(sim, origin_prop, *, radius=None, limit=None):
+    return _transit_destinations(sim, origin_prop, "bus_transit", radius=radius, limit=limit)
+
+
+def _shuttle_transit_destinations(sim, origin_prop, *, radius=None, limit=None):
+    return _transit_destinations(sim, origin_prop, "shuttle_transit", radius=radius, limit=limit)
+
+
+def _ferry_transit_destinations(sim, origin_prop, *, radius=None, limit=None):
+    return _transit_destinations(sim, origin_prop, "ferry_transit", radius=radius, limit=limit)
+
+
+def _rail_transit_quote(distance, *, price_mult=1.0):
+    return _transit_quote("rail_transit", distance, price_mult=price_mult)
+
+
+def _bus_transit_quote(distance, *, price_mult=1.0):
+    return _transit_quote("bus_transit", distance, price_mult=price_mult)
+
+
+def _shuttle_transit_quote(distance, *, price_mult=1.0):
+    return _transit_quote("shuttle_transit", distance, price_mult=price_mult)
+
+
+def _ferry_transit_quote(distance, *, price_mult=1.0):
+    return _transit_quote("ferry_transit", distance, price_mult=price_mult)
+
+
+def _rail_transit_payment_profile(distance, *, price_mult=1.0, city_tokens=0, daypasses=0):
+    return _transit_payment_profile(
+        "rail_transit",
+        distance,
+        price_mult=price_mult,
+        city_tokens=city_tokens,
+        daypasses=daypasses,
+    )
+
+
+def _bus_transit_payment_profile(distance, *, price_mult=1.0, city_tokens=0, daypasses=0):
+    return _transit_payment_profile(
+        "bus_transit",
+        distance,
+        price_mult=price_mult,
+        city_tokens=city_tokens,
+        daypasses=daypasses,
+    )
+
+
+def _shuttle_transit_payment_profile(distance, *, price_mult=1.0, city_tokens=0, daypasses=0):
+    return _transit_payment_profile(
+        "shuttle_transit",
+        distance,
+        price_mult=price_mult,
+        city_tokens=city_tokens,
+        daypasses=daypasses,
+    )
+
+
+def _ferry_transit_payment_profile(distance, *, price_mult=1.0, city_tokens=0, daypasses=0):
+    return _transit_payment_profile(
+        "ferry_transit",
+        distance,
+        price_mult=price_mult,
+        city_tokens=city_tokens,
+        daypasses=daypasses,
+    )
+
+
+def _rail_transit_travel_ticks(sim, distance):
+    return _transit_travel_ticks(sim, "rail_transit", distance)
+
+
+def _bus_transit_travel_ticks(sim, distance):
+    return _transit_travel_ticks(sim, "bus_transit", distance)
+
+
+def _shuttle_transit_travel_ticks(sim, distance):
+    return _transit_travel_ticks(sim, "shuttle_transit", distance)
+
+
+def _ferry_transit_travel_ticks(sim, distance):
+    return _transit_travel_ticks(sim, "ferry_transit", distance)
 
 
 OVERWORLD_DISTRICT_GLYPHS = {
@@ -3367,9 +3966,11 @@ def _site_service_label(service):
     casino_profile = CASINO_GAME_PROFILES.get(service)
     if casino_profile:
         return str(casino_profile.get("service_label", casino_profile.get("title", service))).strip().lower()
+    transit_profile = _transit_service_profile(service)
+    if transit_profile:
+        return str(transit_profile.get("service_label", service)).strip().lower() or service.replace("_", " ")
     mapping = {
         "intel": "intel",
-        "rail_transit": "rail travel",
         "shelter": "shelter",
         "rest": "lodging",
         "vending": "snacks",
@@ -3387,12 +3988,14 @@ def _service_menu_option_label(option_id):
     casino_profile = _casino_game_profile(option_id)
     if casino_profile:
         return str(casino_profile.get("menu_label", _casino_game_title(option_id))).strip()
+    transit_profile = _transit_service_profile(option_id)
+    if transit_profile:
+        return str(transit_profile.get("menu_label", _transit_service_title(option_id))).strip() or _transit_service_title(option_id)
     mapping = {
         "trade_buy": "Browse goods",
         "trade_sell": "Sell goods",
         "banking": "Manage bank funds",
         "insurance": "Review coverage",
-        "rail_transit": "Take the train",
         "vending": "Buy a snack",
         "fuel": "Refuel vehicle",
         "repair": "Repair vehicle",
@@ -3421,6 +4024,7 @@ def _credit_amount_label(amount):
 __all__ = [
     "CASINO_GAME_SERVICE_IDS",
     "CASINO_PLINKO_LANE_COUNT",
+    "TRANSIT_SERVICE_IDS",
     "_casino_apply_round_result",
     "_casino_baccarat_normalize_session",
     "_casino_baccarat_resolve",
@@ -3465,10 +4069,33 @@ __all__ = [
     "_overworld_discovery_summary_bits",
     "_overworld_legend_line",
     "_overworld_render_style",
+    "_bus_transit_destinations",
+    "_bus_transit_payment_profile",
+    "_bus_transit_quote",
+    "_bus_transit_travel_ticks",
+    "_ferry_transit_destinations",
+    "_ferry_transit_payment_profile",
+    "_ferry_transit_quote",
+    "_ferry_transit_travel_ticks",
     "_rail_transit_destinations",
     "_rail_transit_payment_profile",
     "_rail_transit_quote",
     "_rail_transit_travel_ticks",
+    "_shuttle_transit_destinations",
+    "_shuttle_transit_payment_profile",
+    "_shuttle_transit_quote",
+    "_shuttle_transit_travel_ticks",
+    "_transit_fare_label",
+    "_transit_inventory_label",
+    "_transit_services_connecting_chunks",
+    "_transit_payment_profile",
+    "_transit_quote",
+    "_transit_service_log_prefix",
+    "_transit_service_mode_label",
+    "_transit_service_profile",
+    "_transit_service_title",
+    "_transit_token_amount_label",
+    "_transit_travel_ticks",
     "_overworld_travel_profile",
     "_overworld_travel_summary_bits",
     "_sentence_from_note",

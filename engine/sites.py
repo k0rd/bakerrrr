@@ -61,16 +61,17 @@ WINDOWED_SITE_KINDS = {
 SITE_GAMEPLAY_PROFILES = {
     "relay_post": {
         "public": True,
-        "site_services": ("intel",),
+        "site_services": ("intel", "bus_transit", "shuttle_transit"),
     },
     "roadhouse": {
         "public": True,
         "is_storefront": True,
+        "site_services": ("shuttle_transit",),
     },
     "truck_stop": {
         "public": True,
         "is_storefront": True,
-        "site_services": ("shelter",),
+        "site_services": ("shelter", "bus_transit", "shuttle_transit"),
     },
     "inspection_shed": {
         "public": True,
@@ -106,6 +107,7 @@ SITE_GAMEPLAY_PROFILES = {
     "dock_shack": {
         "public": True,
         "is_storefront": True,
+        "site_services": ("shuttle_transit", "ferry_transit"),
     },
     "bait_shop": {
         "public": True,
@@ -113,11 +115,11 @@ SITE_GAMEPLAY_PROFILES = {
     },
     "ferry_post": {
         "public": True,
-        "site_services": ("intel",),
+        "site_services": ("intel", "ferry_transit"),
     },
     "tide_station": {
         "public": True,
-        "site_services": ("intel",),
+        "site_services": ("intel", "ferry_transit"),
     },
     "coast_watch": {
         "public": True,

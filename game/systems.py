@@ -260,6 +260,7 @@ from game.run_pressure import (
 )
 from game.service_runtime import (
     CASINO_GAME_SERVICE_IDS,
+    TRANSIT_SERVICE_IDS,
     _casino_game_title,
     _credit_amount_label,
     _overworld_discovery_profile,
@@ -272,6 +273,13 @@ from game.service_runtime import (
     _service_menu_option_label,
     _site_service_label,
     _storefront_service_profile,
+    _transit_inventory_label,
+    _transit_services_connecting_chunks,
+    _transit_service_log_prefix,
+    _transit_service_mode_label,
+    _transit_service_profile,
+    _transit_service_title,
+    _transit_token_amount_label,
     _vehicle_sale_stats_text,
 )
 from game.vehicles import (
@@ -6406,7 +6414,7 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                 },
             )
         if phase in {"shift_work", "steady_ops"}:
-            return (
+            events = [
                 {
                     "phase": "loading_push",
                     "label": "loading push",
@@ -6423,9 +6431,19 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                     "emphasis": "transit" if category == "transit" else "admin",
                     "perimeter_bonus": 1.1,
                 },
-            )
+            ]
+            if category == "transit":
+                events.append({
+                    "phase": "boarding_crush",
+                    "label": "boarding crush",
+                    "street_label": "fares and boarding calls bunching at the stop",
+                    "entry_sentence": "A boarding crush is turning the stop into a brief knot of fares, shouted destinations, and people trying not to miss the clean connection.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 3.0,
+                })
+            return tuple(events)
         if phase == "handoff":
-            return (
+            events = [
                 {
                     "phase": "shift_change",
                     "label": "shift change",
@@ -6442,7 +6460,17 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                     "emphasis": "admin",
                     "perimeter_bonus": 2.0,
                 },
-            )
+            ]
+            if category == "transit":
+                events.append({
+                    "phase": "arrival_handoff",
+                    "label": "arrival handoff",
+                    "street_label": "incoming riders and pickups meeting at the edge",
+                    "entry_sentence": "An arrival handoff is making the stop feel connected to somewhere farther out, with inbound riders, relief pickups, and quick onward directions all landing at once.",
+                    "emphasis": "transit",
+                    "perimeter_bonus": 2.4,
+                })
+            return tuple(events)
 
     if category == "medical":
         if phase == "intake":
@@ -6621,7 +6649,7 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
     return ()
 
 
-def _building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=None):
+def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=None):
     if sim is None:
         return {}
 
@@ -6691,7 +6719,33 @@ def _building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=No
     }
 
 
-def _building_pulse_snapshot(sim, prop=None, structure=None):
+def _building_regular_chunk_pulse_cache(sim):
+    state = getattr(sim, "building_regular_chunk_pulse_cache", None)
+    if not isinstance(state, dict):
+        state = {}
+        sim.building_regular_chunk_pulse_cache = state
+
+    try:
+        hour = int(_world_hour(sim)) % 24 if sim is not None else 0
+    except (TypeError, ValueError):
+        hour = 0
+    token = (
+        hour,
+        len(getattr(sim, "properties", {}) or {}),
+        int(_BUSINESS_EVENT_REGULAR_SCENE_CAP or 0),
+    )
+    if state.get("token") != token:
+        state.clear()
+        state["token"] = token
+        state["winners"] = {}
+    winners = state.get("winners")
+    if not isinstance(winners, dict):
+        winners = {}
+        state["winners"] = winners
+    return winners
+
+
+def _base_building_pulse_snapshot(sim, prop=None, structure=None):
     prop = prop if isinstance(prop, dict) else None
     structure = structure if isinstance(structure, dict) else None
     metadata = _property_metadata(prop)
@@ -6918,18 +6972,124 @@ def _building_pulse_snapshot(sim, prop=None, structure=None):
         "event_label": "",
         "perimeter_bonus": 0.0,
     }
-    event = _building_micro_event_snapshot(sim, prop=prop, structure=structure, base_pulse=pulse)
+    return pulse
+
+
+def _regular_building_micro_event_visible_property_ids(sim, chunk):
+    if sim is None or not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+        return ()
+    try:
+        chunk_key = (int(chunk[0]), int(chunk[1]))
+    except (TypeError, ValueError):
+        return ()
+
+    winners = _building_regular_chunk_pulse_cache(sim)
+    cached = winners.get(chunk_key)
+    if cached is not None:
+        return tuple(str(property_id or "").strip() for property_id in tuple(cached or ()) if str(property_id or "").strip())
+
+    candidates = []
+    for prop in getattr(sim, "properties", {}).values():
+        if not isinstance(prop, dict):
+            continue
+        if str(prop.get("kind", "") or "").strip().lower() != "building":
+            continue
+        try:
+            prop_chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+        except (TypeError, ValueError):
+            continue
+        if prop_chunk != chunk_key:
+            continue
+
+        base_pulse = _base_building_pulse_snapshot(sim, prop=prop)
+        event = _raw_building_micro_event_snapshot(sim, prop=prop, base_pulse=base_pulse)
+        event_phase = str(event.get("phase", "") or "").strip().lower()
+        if not event_phase or event_phase in _BUSINESS_EVENT_AFTERMATH_PHASES:
+            continue
+
+        category = str(base_pulse.get("category", "") or "").strip().lower()
+        if _business_event_scene_blueprint(prop, {"event_phase": event_phase, "category": category}) is None:
+            continue
+
+        property_id = str(prop.get("id", "") or "").strip()
+        if not property_id:
+            continue
+
+        score = float(event.get("perimeter_bonus", 0.0) or 0.0)
+        if _property_is_storefront(prop) or _property_is_public(prop):
+            score += 0.75
+        if _property_access_level(prop) == "public":
+            score += 0.35
+        candidates.append((
+            -score,
+            event_phase,
+            property_id,
+        ))
+
+    candidates.sort()
+    visible_count = max(0, int(_BUSINESS_EVENT_REGULAR_SCENE_CAP or 0))
+    visible_ids = tuple(
+        str(candidate[2] or "").strip()
+        for candidate in candidates[:visible_count]
+        if str(candidate[2] or "").strip()
+    )
+    winners[chunk_key] = visible_ids
+    return visible_ids
+
+
+def _building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=None, *, respect_chunk_cap=True):
+    event = _raw_building_micro_event_snapshot(sim, prop=prop, structure=structure, base_pulse=base_pulse)
+    if not event or not respect_chunk_cap:
+        return event
+
+    prop = prop if isinstance(prop, dict) else None
+    if prop is None or sim is None:
+        return event
+
+    event_phase = str(event.get("phase", "") or "").strip().lower()
+    if not event_phase or event_phase in _BUSINESS_EVENT_AFTERMATH_PHASES:
+        return event
+
+    category = str(((base_pulse or {}) if isinstance(base_pulse, dict) else {}).get("category", "") or "").strip().lower()
+    if _business_event_scene_blueprint(prop, {"event_phase": event_phase, "category": category}) is None:
+        return event
+
+    try:
+        prop_chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+    except (TypeError, ValueError):
+        return event
+
+    property_id = str(prop.get("id", "") or "").strip()
+    if not property_id:
+        return event
+    visible_ids = _regular_building_micro_event_visible_property_ids(sim, prop_chunk)
+    if visible_ids and property_id not in visible_ids:
+        return {}
+    return event
+
+
+def _building_pulse_snapshot(sim, prop=None, structure=None, *, respect_chunk_cap=True):
+    pulse = _base_building_pulse_snapshot(sim, prop=prop, structure=structure)
+    base_label = str(pulse.get("label", "") or "").strip()
+    base_entry_sentence = str(pulse.get("entry_sentence", "") or "").strip()
+    event = _building_micro_event_snapshot(
+        sim,
+        prop=prop,
+        structure=structure,
+        base_pulse=pulse,
+        respect_chunk_cap=respect_chunk_cap,
+    )
     if event:
         event_label = str(event.get("label", "") or "").strip()
         if event_label:
-            pulse["label"] = f"{label} + {event_label}"
+            pulse["label"] = f"{base_label} + {event_label}"
             pulse["event_label"] = event_label
         event_street = str(event.get("street_label", "") or "").strip()
         if event_street:
             pulse["street_label"] = event_street
         event_sentence = str(event.get("entry_sentence", "") or "").strip()
         if event_sentence:
-            pulse["entry_sentence"] = f"{entry_sentence} {event_sentence}".strip()
+            pulse["entry_sentence"] = f"{base_entry_sentence} {event_sentence}".strip()
         event_emphasis = str(event.get("emphasis", "") or "").strip().lower()
         if event_emphasis:
             pulse["emphasis"] = event_emphasis
@@ -7498,12 +7658,46 @@ def _home_property(sim, routine=None):
     return None
 
 
+def _property_chunk_key(sim, prop):
+    if not isinstance(prop, dict):
+        return None
+    try:
+        return sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _anchor_distance(left, right):
+    if not isinstance(left, (tuple, list)) or len(left) < 3:
+        return 999999
+    if not isinstance(right, (tuple, list)) or len(right) < 3:
+        return 999999
+    distance = _manhattan(int(left[0]), int(left[1]), int(right[0]), int(right[1]))
+    if int(left[2]) != int(right[2]):
+        distance += 8
+    return int(distance)
+
+
 _NEWCOMER_HOME_RETRY_TICKS = 120
 _NEWCOMER_JOB_RETRY_TICKS = 180
 _NEWCOMER_SOCIAL_RETRY_TICKS = 120
 _NEWCOMER_DRIFT_WINDOW_TICKS = 900
 _NEWCOMER_SPAWN_INTERVAL_TICKS = 900
 _NEWCOMER_LOCAL_CAP = 2
+_NPC_LIFE_REVIEW_TICKS = 1800
+_NPC_LIFE_MOVE_COOLDOWN_TICKS = 7200
+_NPC_LIFE_REMOTE_SEARCH_RADIUS = 8
+_NPC_LIFE_REMOTE_CANDIDATE_LIMIT = 4
+_NPC_LIFE_LOCAL_IMPROVEMENT_DELTA = 1.35
+_NPC_LIFE_LOCAL_JOB_SWITCH_DELTA = 0.8
+_NPC_LIFE_REMOTE_MOVE_DELTA = 3.4
+_NPC_LIFE_PLAYER_BUFFER = 10
+_NPC_LIFE_MEMORY_LOOKBACK_TICKS = 2400
+_NPC_LIFE_LOCAL_CONFLICT_MOVE_PRESSURE = 1.0
+_NPC_LIFE_REMOTE_TRANSIT_REQUIRED_DISTANCE = 2
+_NPC_LIFE_SETTLEMENT_TRANSIT_RADIUS = 2
+_NPC_LIFE_HOUSEHOLD_BOND_MIN = 0.72
+_NPC_LIFE_HOUSEHOLD_SPLIT_SCALE = 0.55
 
 
 def _newcomer_runtime_state(sim):
@@ -7745,8 +7939,8 @@ def _ensure_newcomer_component(
 ):
     settlements = sim.ecs.get(NPCSettlement)
     newcomer = settlements.get(eid)
+    current_tick = int(getattr(sim, "tick", 0) if arrived_tick is None else arrived_tick)
     if newcomer is None:
-        current_tick = int(getattr(sim, "tick", 0) if arrived_tick is None else arrived_tick)
         if drift_preferred is None:
             rng = random.Random(f"{getattr(sim, 'seed', 0)}:newcomer:{eid}:{origin}:{getattr(sim, 'tick', 0)}")
             drift_preferred = rng.random() < 0.22
@@ -7759,8 +7953,11 @@ def _ensure_newcomer_component(
             last_housing_tick=current_tick - _NEWCOMER_HOME_RETRY_TICKS,
             last_job_tick=current_tick - _NEWCOMER_JOB_RETRY_TICKS,
             last_social_tick=current_tick - _NEWCOMER_SOCIAL_RETRY_TICKS,
+            last_life_tick=current_tick - _NPC_LIFE_REVIEW_TICKS,
+            last_move_tick=current_tick - _NPC_LIFE_MOVE_COOLDOWN_TICKS,
             drift_preferred=bool(drift_preferred),
             story_id=_next_newcomer_story_id(sim),
+            life_goal="settling_in",
         )
         sim.ecs.add(eid, newcomer)
     else:
@@ -7778,6 +7975,12 @@ def _ensure_newcomer_component(
             newcomer.employment_status = str(employment_status).strip().lower() or newcomer.employment_status
         if not newcomer.story_id:
             newcomer.story_id = _next_newcomer_story_id(sim)
+        if not hasattr(newcomer, "last_life_tick"):
+            newcomer.last_life_tick = current_tick - _NPC_LIFE_REVIEW_TICKS
+        if not hasattr(newcomer, "last_move_tick"):
+            newcomer.last_move_tick = current_tick - _NPC_LIFE_MOVE_COOLDOWN_TICKS
+        if not hasattr(newcomer, "life_goal"):
+            newcomer.life_goal = "settling_in"
 
     occupation = sim.ecs.get(Occupation).get(eid)
     if occupation is None:
@@ -7911,6 +8114,1206 @@ class NPCSettlementSystem(System):
     def __init__(self, sim):
         super().__init__(sim)
         self.rng = random.Random(f"{sim.seed}:npc-settlement")
+        self._streaming_system = None
+        if not hasattr(self.sim, "chunk_saved_states"):
+            self.sim.chunk_saved_states = {}
+        if not hasattr(self.sim, "chunk_property_records"):
+            self.sim.chunk_property_records = {}
+        if not hasattr(self.sim, "chunk_ground_item_records"):
+            self.sim.chunk_ground_item_records = {}
+        if not hasattr(self.sim, "chunk_population_records"):
+            self.sim.chunk_population_records = {}
+
+    def _world_streaming_system(self):
+        current = self._streaming_system
+        if current is not None and current in getattr(self.sim, "systems", ()):
+            return current
+        for system in getattr(self.sim, "systems", ()):
+            if hasattr(system, "_ensure_chunk_properties") and hasattr(system, "_ensure_chunk_population"):
+                self._streaming_system = system
+                return system
+        return None
+
+    def _chunk_loaded(self, chunk):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            return False
+        key = (int(chunk[0]), int(chunk[1]))
+        return key in getattr(getattr(self.sim, "world", None), "loaded_chunks", {})
+
+    def _player_near_actor(self, pos):
+        if pos is None:
+            return False
+        player_eid = getattr(self.sim, "player_eid", None)
+        if player_eid is None:
+            return False
+        player_pos = self.sim.ecs.get(Position).get(player_eid)
+        if player_pos is None:
+            return False
+        if int(player_pos.z) != int(pos.z):
+            return False
+        return _manhattan(int(pos.x), int(pos.y), int(player_pos.x), int(player_pos.y)) <= _NPC_LIFE_PLAYER_BUFFER
+
+    def _eligible_life_actor(self, eid):
+        if self.sim.ecs.get(PlayerControlled).get(eid) is not None:
+            return False
+        pos = self.sim.ecs.get(Position).get(eid)
+        if pos is None:
+            return False
+        vitality = self.sim.ecs.get(Vitality).get(eid)
+        if vitality and bool(getattr(vitality, "downed", False)):
+            return False
+        identity = self.sim.ecs.get(CreatureIdentity).get(eid)
+        if identity is None or str(getattr(identity, "creature_type", "") or "").strip().lower() != "human":
+            return False
+        ai = self.sim.ecs.get(AI).get(eid)
+        role = str(getattr(ai, "role", "") or "").strip().lower()
+        if role in {"guard", "scout", "thief", "wildlife"}:
+            return False
+        player_eid = getattr(self.sim, "player_eid", None)
+        if player_eid is not None and actor_player_business_employment(self.sim, eid, owner_eid=player_eid) is not None:
+            return False
+        return True
+
+    def _settlement_chunk(self, pos=None, *, routine=None, occupation=None):
+        home_prop = _home_property(self.sim, routine=routine)
+        if home_prop is not None:
+            return _property_chunk_key(self.sim, home_prop)
+        work_prop = _workplace_property(self.sim, occupation=occupation, routine=routine)
+        if work_prop is not None:
+            return _property_chunk_key(self.sim, work_prop)
+        if pos is None:
+            return None
+        try:
+            return self.sim.chunk_coords(int(pos.x), int(pos.y))
+        except (TypeError, ValueError):
+            return None
+
+    def _settlement_label(self, chunk):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2 or getattr(self.sim, "world", None) is None:
+            return ""
+        descriptor = self.sim.world.overworld_descriptor(int(chunk[0]), int(chunk[1]))
+        label = str((descriptor or {}).get("settlement_name", "") or "").strip()
+        if label:
+            return label.lower()
+        district = self.sim.world.get_chunk(int(chunk[0]), int(chunk[1])).get("district", {})
+        district_type = str((district or {}).get("district_type", "") or "").strip()
+        if district_type:
+            return district_type.lower()
+        return str((descriptor or {}).get("area_type", "city") or "city").strip().lower()
+
+    def _settlement_name(self, chunk):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2 or getattr(self.sim, "world", None) is None:
+            return ""
+        descriptor = self.sim.world.overworld_descriptor(int(chunk[0]), int(chunk[1]))
+        return str((descriptor or {}).get("settlement_name", "") or "").strip().lower()
+
+    def _settlement_transit_chunks(self, chunk):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2 or getattr(self.sim, "world", None) is None:
+            return []
+        origin = (int(chunk[0]), int(chunk[1]))
+        settlement_name = self._settlement_name(origin)
+        if not settlement_name:
+            return [origin]
+        candidates = [origin]
+        seen = {origin}
+        radius = max(0, int(_NPC_LIFE_SETTLEMENT_TRANSIT_RADIUS))
+        for qy in range(origin[1] - radius, origin[1] + radius + 1):
+            for qx in range(origin[0] - radius, origin[0] + radius + 1):
+                candidate = (int(qx), int(qy))
+                if candidate in seen:
+                    continue
+                if self._settlement_name(candidate) != settlement_name:
+                    continue
+                seen.add(candidate)
+                candidates.append(candidate)
+        return candidates
+
+    def _bond_destination_chunks(self, social):
+        if social is None:
+            return []
+        weighted = []
+        positions = self.sim.ecs.get(Position)
+        routines = self.sim.ecs.get(NPCRoutine)
+        for other_eid, bond in tuple(getattr(social, "bonds", {}).items()):
+            other_routine = routines.get(other_eid)
+            other_pos = positions.get(other_eid)
+            other_chunk = self._settlement_chunk(other_pos, routine=other_routine)
+            if other_chunk is None:
+                continue
+            score = float(bond.get("closeness", 0.0) or 0.0) + (float(bond.get("trust", 0.0) or 0.0) * 0.6)
+            weighted.append((score, (int(other_chunk[0]), int(other_chunk[1]))))
+        weighted.sort(key=lambda row: (row[0], -abs(row[1][0]), -abs(row[1][1])), reverse=True)
+        ranked = []
+        seen = set()
+        for _score, chunk in weighted:
+            if chunk in seen:
+                continue
+            seen.add(chunk)
+            ranked.append(chunk)
+            if len(ranked) >= 3:
+                break
+        return ranked
+
+    def _social_support_score(self, eid, target_chunk, social=None):
+        if not isinstance(target_chunk, (tuple, list)) or len(target_chunk) < 2:
+            return 0.0
+        social = social if isinstance(social, NPCSocial) else self.sim.ecs.get(NPCSocial).get(eid)
+        if social is None:
+            return 0.0
+        target_chunk = (int(target_chunk[0]), int(target_chunk[1]))
+        target_label = self._settlement_label(target_chunk)
+        positions = self.sim.ecs.get(Position)
+        routines = self.sim.ecs.get(NPCRoutine)
+        total = 0.0
+        for other_eid, bond in tuple(getattr(social, "bonds", {}).items()):
+            other_routine = routines.get(other_eid)
+            other_pos = positions.get(other_eid)
+            other_chunk = self._settlement_chunk(other_pos, routine=other_routine)
+            if other_chunk is None:
+                continue
+            other_chunk = (int(other_chunk[0]), int(other_chunk[1]))
+            proximity = 0.0
+            if other_chunk == target_chunk:
+                proximity = 1.0
+            elif target_label and self._settlement_label(other_chunk) == target_label:
+                proximity = 0.65
+            if proximity <= 0.0:
+                continue
+            kind = str(bond.get("kind", "") or "").strip().lower()
+            relation_weight = {
+                "partner": 2.15,
+                "family": 1.8,
+                "friend": 1.15,
+                "coworker": 0.85,
+                "neighbor": 0.65,
+            }.get(kind, 0.55)
+            closeness = float(bond.get("closeness", 0.0) or 0.0)
+            trust = float(bond.get("trust", 0.0) or 0.0)
+            total += ((closeness * 0.8) + (trust * 0.4)) * relation_weight * proximity
+        return min(5.5, total)
+
+    def _household_bond_profile(self, first_eid, second_eid):
+        best = None
+        socials = self.sim.ecs.get(NPCSocial)
+        for source_eid, other_eid in ((first_eid, second_eid), (second_eid, first_eid)):
+            social = socials.get(source_eid)
+            if social is None:
+                continue
+            bond = social.bonds.get(other_eid)
+            if not isinstance(bond, dict):
+                continue
+            kind = str(bond.get("kind", "") or "").strip().lower()
+            if kind not in {"family", "partner"}:
+                continue
+            closeness = _clamp(float(bond.get("closeness", 0.0) or 0.0), lo=0.0, hi=1.0)
+            trust = _clamp(float(bond.get("trust", 0.0) or 0.0), lo=0.0, hi=1.0)
+            protectiveness = _clamp(float(bond.get("protectiveness", 0.0) or 0.0), lo=0.0, hi=1.0)
+            strength = ((closeness * 0.55) + (trust * 0.3) + (protectiveness * 0.15)) * (
+                1.06 if kind == "partner" else 1.0
+            )
+            if best is None or strength > best["strength"]:
+                best = {
+                    "kind": kind,
+                    "closeness": float(closeness),
+                    "trust": float(trust),
+                    "protectiveness": float(protectiveness),
+                    "strength": float(strength),
+                }
+        return best
+
+    def _household_cohort(self, eid, *, home_prop=None):
+        routine = self.sim.ecs.get(NPCRoutine).get(eid)
+        home_prop = home_prop if isinstance(home_prop, dict) else _home_property(self.sim, routine=routine)
+        property_id = str((home_prop or {}).get("id", "") or "").strip()
+        if not property_id:
+            return []
+        positions = self.sim.ecs.get(Position)
+        routines = self.sim.ecs.get(NPCRoutine)
+        same_home = []
+        for other_eid, other_routine in tuple(routines.items()):
+            if int(other_eid) == int(eid) or not self._eligible_life_actor(other_eid):
+                continue
+            other_home = _home_property(self.sim, routine=other_routine)
+            if not other_home or str(other_home.get("id", "") or "").strip() != property_id:
+                continue
+            if positions.get(other_eid) is None:
+                continue
+            same_home.append(int(other_eid))
+        if not same_home:
+            return []
+        household = []
+        visited = {int(eid)}
+        frontier = [int(eid)]
+        while frontier:
+            source_eid = frontier.pop(0)
+            for other_eid in same_home:
+                if other_eid in visited:
+                    continue
+                bond = self._household_bond_profile(source_eid, other_eid)
+                if bond is None or float(bond["strength"]) < _NPC_LIFE_HOUSEHOLD_BOND_MIN:
+                    continue
+                other_pos = positions.get(other_eid)
+                visited.add(other_eid)
+                frontier.append(other_eid)
+                household.append({
+                    "eid": int(other_eid),
+                    "kind": bond["kind"],
+                    "strength": float(bond["strength"]),
+                    "closeness": float(bond["closeness"]),
+                    "trust": float(bond["trust"]),
+                    "can_relocate": not self._player_near_actor(other_pos),
+                })
+        household.sort(key=lambda row: (row["strength"], -row["eid"]), reverse=True)
+        return household
+
+    def _portable_household_support(self, eid, household, *, relocatable_only=False):
+        if not household:
+            return 0.0
+        total = 0.0
+        for member in tuple(household):
+            if relocatable_only and not bool(member.get("can_relocate", False)):
+                continue
+            bond = self._household_bond_profile(eid, member.get("eid"))
+            if bond is None:
+                continue
+            relation_weight = 2.15 if bond["kind"] == "partner" else 1.8
+            total += ((bond["closeness"] * 0.8) + (bond["trust"] * 0.4)) * relation_weight
+        return min(4.8, total)
+
+    def _household_split_penalty(self, eid, household):
+        if not household:
+            return 0.0
+        portable_support = self._portable_household_support(eid, household)
+        penalty = (portable_support * _NPC_LIFE_HOUSEHOLD_SPLIT_SCALE) + (0.3 * len(tuple(household)))
+        return min(2.8, float(penalty))
+
+    def _transit_link_profile(self, current_chunk, target_chunk):
+        if not isinstance(current_chunk, (tuple, list)) or len(current_chunk) < 2:
+            return {"required": False, "connected": False, "score_bonus": 0.0, "service": ""}
+        if not isinstance(target_chunk, (tuple, list)) or len(target_chunk) < 2:
+            return {"required": False, "connected": False, "score_bonus": 0.0, "service": ""}
+        current_chunk = (int(current_chunk[0]), int(current_chunk[1]))
+        target_chunk = (int(target_chunk[0]), int(target_chunk[1]))
+        distance = _manhattan(current_chunk[0], current_chunk[1], target_chunk[0], target_chunk[1])
+        required = distance >= _NPC_LIFE_REMOTE_TRANSIT_REQUIRED_DISTANCE
+        if distance <= 0:
+            return {"required": False, "connected": True, "score_bonus": 0.0, "service": ""}
+        best = None
+        for origin_option in self._settlement_transit_chunks(current_chunk):
+            for target_option in self._settlement_transit_chunks(target_chunk):
+                services = _transit_services_connecting_chunks(self.sim, origin_option, target_option)
+                if not services:
+                    continue
+                local_leg = _manhattan(current_chunk[0], current_chunk[1], origin_option[0], origin_option[1]) + _manhattan(
+                    target_chunk[0],
+                    target_chunk[1],
+                    target_option[0],
+                    target_option[1],
+                )
+                for service in tuple(services):
+                    score_bonus = {
+                        "rail_transit": 0.95,
+                        "ferry_transit": 0.82,
+                        "bus_transit": 0.58,
+                        "shuttle_transit": 0.34,
+                    }.get(str(service).strip().lower(), 0.28) - (float(local_leg) * 0.08)
+                    if best is None or score_bonus > best["score_bonus"]:
+                        best = {
+                            "required": bool(required),
+                            "connected": True,
+                            "score_bonus": max(0.0, float(score_bonus)),
+                            "service": str(service).strip().lower(),
+                            "origin_chunk": origin_option,
+                            "target_chunk": target_option,
+                        }
+        if best is not None:
+            return best
+        return {"required": bool(required), "connected": False, "score_bonus": 0.0, "service": ""}
+
+    def _memory_entry_chunk(self, entry):
+        data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+        property_id = str(data.get("property_id", "") or "").strip()
+        if property_id:
+            prop = self.sim.properties.get(property_id)
+            chunk = _property_chunk_key(self.sim, prop)
+            if chunk is not None:
+                return (int(chunk[0]), int(chunk[1]))
+        if "x" in data and "y" in data:
+            try:
+                return self.sim.chunk_coords(int(data.get("x", 0)), int(data.get("y", 0)))
+            except (TypeError, ValueError):
+                pass
+        for actor_key in ("source_eid", "offender_eid", "against_eid", "ally_eid", "side_eid"):
+            actor_eid = data.get(actor_key)
+            pos = self.sim.ecs.get(Position).get(actor_eid)
+            if pos is None:
+                continue
+            try:
+                return self.sim.chunk_coords(int(pos.x), int(pos.y))
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _memory_pressure(self, eid, *, target_chunk=None, target_prop=None, memory=None):
+        memory = memory if isinstance(memory, NPCMemory) else self.sim.ecs.get(NPCMemory).get(eid)
+        if memory is None:
+            return 0.0
+        prop_id = str((target_prop or {}).get("id", "") or "").strip() if isinstance(target_prop, dict) else ""
+        if target_chunk is not None and isinstance(target_chunk, (tuple, list)) and len(target_chunk) >= 2:
+            target_chunk = (int(target_chunk[0]), int(target_chunk[1]))
+        else:
+            target_chunk = None
+        current_tick = int(getattr(self.sim, "tick", 0))
+        total = 0.0
+        for entry in tuple(getattr(memory, "entries", ()) or ()):
+            if not isinstance(entry, dict):
+                continue
+            kind = str(entry.get("kind", "")).strip().lower()
+            weight = {
+                "threat": 1.55,
+                "property_threat": 1.9,
+                "offense": 1.35,
+                "ally_threatened": 1.15,
+                "conflict_side": 1.0,
+            }.get(kind, 0.0)
+            if weight <= 0.0:
+                continue
+            age = max(0, current_tick - int(entry.get("tick", current_tick) or current_tick))
+            if age > _NPC_LIFE_MEMORY_LOOKBACK_TICKS:
+                continue
+            strength = _clamp(float(entry.get("strength", 0.0) or 0.0), lo=0.0, hi=1.0)
+            if strength <= 0.0:
+                continue
+            data = entry.get("data", {}) if isinstance(entry.get("data"), dict) else {}
+            match = 0.0
+            if prop_id and str(data.get("property_id", "") or "").strip() == prop_id:
+                match = 1.0
+            entry_chunk = self._memory_entry_chunk(entry)
+            if target_chunk is not None and entry_chunk == target_chunk:
+                match = max(match, 0.72)
+            if prop_id and "x" in data and "y" in data:
+                try:
+                    prop = _property_covering(self.sim, int(data.get("x", 0)), int(data.get("y", 0)), int(data.get("z", 0)))
+                except (TypeError, ValueError):
+                    prop = None
+                if isinstance(prop, dict) and str(prop.get("id", "") or "").strip() == prop_id:
+                    match = max(match, 0.92)
+            if match <= 0.0:
+                continue
+            age_mult = max(0.25, 1.0 - (age / float(_NPC_LIFE_MEMORY_LOOKBACK_TICKS + 1)))
+            total += float(weight) * strength * age_mult * match
+        return min(4.8, total)
+
+    def _housing_quality(self, prop):
+        kind = _newcomer_home_kind(prop)
+        if not kind:
+            return 0.0, ""
+        archetype = _property_archetype(prop)
+        score = {
+            "housing": 4.0,
+            "lodging": 2.7,
+            "shelter": 1.4,
+        }.get(kind, 0.0)
+        score += {
+            "apartment": 0.55,
+            "house": 0.42,
+            "tenement": 0.18,
+            "hotel": 0.05,
+            "flophouse": -0.18,
+            "ranger_hut": 0.12,
+            "field_camp": -0.05,
+            "ruin_shelter": -0.32,
+        }.get(archetype, 0.0)
+        return max(0.0, score), kind
+
+    def _actor_workplace_skill_fit(self, eid, category, archetype=""):
+        category = str(category or "").strip().lower()
+        archetype = str(archetype or "").strip().lower()
+        skill_sets = {
+            "retail": (("conversation", 0.45), ("perception", 0.3), ("streetwise", 0.25)),
+            "hospitality": (("conversation", 0.5), ("streetwise", 0.25), ("perception", 0.25)),
+            "industrial": (("mechanics", 0.52), ("athletics", 0.28), ("perception", 0.2)),
+            "office": (("conversation", 0.38), ("perception", 0.34), ("streetwise", 0.28)),
+            "medical": (("perception", 0.45), ("conversation", 0.35), ("mechanics", 0.2)),
+            "transit": (("streetwise", 0.34), ("perception", 0.31), ("athletics", 0.2), ("conversation", 0.15)),
+            "finance": (("conversation", 0.42), ("perception", 0.38), ("streetwise", 0.2)),
+            "general": (("conversation", 0.3), ("streetwise", 0.28), ("perception", 0.24), ("mechanics", 0.18)),
+            "secure": (("perception", 0.4), ("athletics", 0.32), ("intrusion", 0.28)),
+        }
+        total = 0.0
+        for skill_id, weight in skill_sets.get(category, skill_sets["general"]):
+            total += (float(_actor_skill(self.sim, eid, skill_id, default=5.0)) - 5.0) * float(weight)
+        if archetype in {"auto_garage", "hardware_store", "tool_depot", "repair_shop"}:
+            total += (float(_actor_skill(self.sim, eid, "mechanics", default=5.0)) - 5.0) * 0.12
+        elif archetype in {"bar", "cafe", "restaurant", "hotel", "corner_store"}:
+            total += (float(_actor_skill(self.sim, eid, "conversation", default=5.0)) - 5.0) * 0.1
+        elif archetype in {"freight_depot", "truck_stop", "relay_post", "metro_exchange"}:
+            total += (float(_actor_skill(self.sim, eid, "streetwise", default=5.0)) - 5.0) * 0.08
+        return _clamp(total * 0.42, lo=-0.95, hi=1.45)
+
+    def _chunk_context(self, chunk):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2 or getattr(self.sim, "world", None) is None:
+            return None, {}, {}, {}
+        cx, cy = int(chunk[0]), int(chunk[1])
+        world_chunk = self.sim.world.get_chunk(cx, cy)
+        district = world_chunk.get("district", {}) if isinstance(world_chunk.get("district"), dict) else {}
+        descriptor = self.sim.world.overworld_descriptor(cx, cy)
+        return {"cx": cx, "cy": cy, "district": district}, world_chunk, district, descriptor
+
+    def _workplace_quality(self, prop, chunk, *, eid=None, occupation=None):
+        if not isinstance(prop, dict):
+            return 0.0
+        chunk_context, _world_chunk, _district, _descriptor = self._chunk_context(chunk)
+        if chunk_context is None:
+            return 0.0
+        archetype = _property_archetype(prop)
+        if not archetype:
+            return 0.0
+        profile = chunk_economy_profile(self.sim, chunk_context)
+        category = _location_building_category(
+            archetype,
+            storefront=bool(_property_is_storefront(prop)),
+        )
+        score = 1.8 + float(workplace_archetype_weight(profile, archetype))
+        score += {
+            "retail": 0.9,
+            "hospitality": 0.85,
+            "industrial": 0.8,
+            "office": 0.7,
+            "medical": 0.68,
+            "transit": 0.72,
+            "finance": 0.62,
+            "general": 0.4,
+        }.get(category, 0.15)
+        if eid is not None:
+            score += self._actor_workplace_skill_fit(eid, category, archetype=archetype)
+        career = str(getattr(occupation, "career", "") or "").strip().lower().replace(" ", "_")
+        if career and getattr(getattr(self.sim, "world", None), "careers_for_building", None) is not None:
+            careers = {
+                str(option).strip().lower().replace(" ", "_")
+                for option in tuple(self.sim.world.careers_for_building(archetype) or ())
+                if str(option).strip()
+            }
+            if career in careers:
+                score += 0.85
+        if _property_is_storefront(prop) or _property_access_level(prop) == "public":
+            score += 0.18
+        return max(0.0, score)
+
+    def _life_score(self, eid, newcomer, *, home_prop=None, work_prop=None, target_chunk=None):
+        if target_chunk is None:
+            pos = self.sim.ecs.get(Position).get(eid)
+            routine = self.sim.ecs.get(NPCRoutine).get(eid)
+            occupation = self.sim.ecs.get(Occupation).get(eid)
+            target_chunk = self._settlement_chunk(pos, routine=routine, occupation=occupation)
+        if target_chunk is None:
+            return 0.0
+        occupation = self.sim.ecs.get(Occupation).get(eid)
+        memory = self.sim.ecs.get(NPCMemory).get(eid)
+        score = 0.0
+        housing_score, _home_kind = self._housing_quality(home_prop)
+        score += housing_score if home_prop is not None else -1.6
+        score += self._workplace_quality(work_prop, target_chunk, eid=eid, occupation=occupation) if work_prop is not None else -1.8
+        _chunk_context, _world_chunk, district, _descriptor = self._chunk_context(target_chunk)
+        try:
+            wealth = int(district.get("wealth", 5))
+        except (TypeError, ValueError):
+            wealth = 5
+        try:
+            security = int(district.get("security_level", 5))
+        except (TypeError, ValueError):
+            security = 5
+        try:
+            crime = int(district.get("crime_rate", 5))
+        except (TypeError, ValueError):
+            crime = 5
+        score += (wealth * 0.24) + (security * 0.36) - (crime * 0.28)
+        score += self._social_support_score(eid, target_chunk)
+        score -= self._memory_pressure(eid, target_chunk=target_chunk, memory=memory)
+        if home_prop is not None:
+            score -= self._memory_pressure(eid, target_prop=home_prop, memory=memory) * 0.65
+        if work_prop is not None:
+            score -= self._memory_pressure(eid, target_prop=work_prop, memory=memory) * 0.5
+        if home_prop is not None and work_prop is not None:
+            commute = _anchor_distance(_property_focus_position(home_prop), _property_focus_position(work_prop))
+            if commute < 999999:
+                score -= min(2.8, float(commute) / 10.0)
+        if str(getattr(newcomer, "housing_status", "") or "").strip().lower() in {"lodging", "shelter"}:
+            score -= 0.22
+        return float(score)
+
+    def _remote_move_cost(self, eid, newcomer, current_chunk, target_chunk):
+        if current_chunk == target_chunk:
+            return 0.0
+        cost = 1.7
+        if str(getattr(newcomer, "employment_status", "") or "").strip().lower() != "employed":
+            cost -= 0.45
+        if str(getattr(newcomer, "housing_status", "") or "").strip().lower() in {"unhoused", "drifting", "shelter", "lodging"}:
+            cost -= 0.4
+        needs = self.sim.ecs.get(NPCNeeds).get(eid)
+        if needs is not None and float(getattr(needs, "safety", 75.0) or 75.0) < 45.0:
+            cost -= 0.28
+        if self._social_support_score(eid, target_chunk) > (self._social_support_score(eid, current_chunk) + 0.6):
+            cost -= 0.35
+        return max(0.55, float(cost))
+
+    def _ensure_chunk_props_available(self, chunk):
+        chunk = (int(chunk[0]), int(chunk[1]))
+        if self._props_in_chunk(chunk):
+            return True
+        streamer = self._world_streaming_system()
+        if streamer is None:
+            return False
+        streamer._ensure_chunk_properties(chunk[0], chunk[1])
+        return bool(self._props_in_chunk(chunk))
+
+    def _props_in_chunk(self, chunk):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            return []
+        key = (int(chunk[0]), int(chunk[1]))
+        props = []
+        seen = set()
+        for record in tuple(getattr(self.sim, "chunk_property_records", {}).get(key, ()) or ()):
+            prop_id = str((record or {}).get("id", "") or "").strip()
+            if not prop_id:
+                continue
+            prop = self.sim.properties.get(prop_id)
+            if not isinstance(prop, dict):
+                continue
+            seen.add(prop_id)
+            props.append(prop)
+        for prop_id, prop in tuple(getattr(self.sim, "properties", {}).items()):
+            if prop_id in seen or not isinstance(prop, dict):
+                continue
+            if _property_chunk_key(self.sim, prop) == key:
+                props.append(prop)
+        return props
+
+    def _home_available_slots(self, prop, *, moving_eids=()):
+        capacity = _newcomer_home_capacity(prop)
+        if capacity <= 0:
+            return 0
+        load = _newcomer_home_load(self.sim, prop)
+        property_id = str((prop or {}).get("id", "") or "").strip()
+        if property_id and moving_eids:
+            routines = self.sim.ecs.get(NPCRoutine)
+            for eid in {int(value) for value in tuple(moving_eids or ())}:
+                routine = routines.get(eid)
+                current = _home_property(self.sim, routine=routine)
+                if current and str(current.get("id", "") or "").strip() == property_id:
+                    load = max(0, load - 1)
+        return max(0, int(capacity) - int(load))
+
+    def _home_can_fit_members(self, prop, member_eids):
+        member_eids = [int(value) for value in tuple(member_eids or ()) if value is not None]
+        if not member_eids:
+            return False
+        return self._home_available_slots(prop, moving_eids=member_eids) >= len(member_eids)
+
+    def _candidate_home_in_chunk(self, chunk, *, exclude_property_id="", required_capacity=1, moving_eids=()):
+        best_prop = None
+        best_kind = ""
+        best_score = float("-inf")
+        exclude_property_id = str(exclude_property_id or "").strip()
+        required_capacity = max(1, int(required_capacity or 1))
+        for prop in self._props_in_chunk(chunk):
+            if exclude_property_id and str(prop.get("id", "") or "").strip() == exclude_property_id:
+                continue
+            home_kind = _newcomer_home_kind(prop)
+            if not home_kind:
+                continue
+            if self._home_available_slots(prop, moving_eids=moving_eids) < required_capacity:
+                continue
+            score, _kind = self._housing_quality(prop)
+            if score > best_score or (
+                score == best_score
+                and str(prop.get("id", "") or "") < str((best_prop or {}).get("id", "") or "")
+            ):
+                best_prop = prop
+                best_kind = home_kind
+                best_score = score
+        if best_prop is None:
+            return None, "", 0.0
+        return best_prop, best_kind, float(best_score)
+
+    def _home_candidate_with_pressure(self, eid, chunk, current_home, *, memory=None, required_capacity=1, moving_eids=()):
+        current_home_id = str((current_home or {}).get("id", "") or "").strip()
+        home_choice, home_kind, home_score = self._candidate_home_in_chunk(
+            chunk,
+            required_capacity=required_capacity,
+            moving_eids=moving_eids,
+        )
+        if current_home is not None and str((home_choice or {}).get("id", "") or "").strip() == current_home_id:
+            if self._memory_pressure(eid, target_prop=current_home, memory=memory) >= _NPC_LIFE_LOCAL_CONFLICT_MOVE_PRESSURE:
+                alt_home, alt_kind, alt_score = self._candidate_home_in_chunk(
+                    chunk,
+                    exclude_property_id=current_home_id,
+                    required_capacity=required_capacity,
+                    moving_eids=moving_eids,
+                )
+                if alt_home is not None:
+                    return alt_home, alt_kind, alt_score
+        return home_choice, home_kind, home_score
+
+    def _candidate_workplace_in_chunk(self, chunk, *, eid=None, occupation=None, exclude_property_id=""):
+        best_prop = None
+        best_score = float("-inf")
+        exclude_property_id = str(exclude_property_id or "").strip()
+        for prop in self._props_in_chunk(chunk):
+            if exclude_property_id and str(prop.get("id", "") or "").strip() == exclude_property_id:
+                continue
+            capacity = _newcomer_work_capacity(self.sim, prop)
+            if capacity <= 0 or _newcomer_work_load(self.sim, prop) >= capacity:
+                continue
+            score = self._workplace_quality(prop, chunk, eid=eid, occupation=occupation)
+            if score > best_score or (
+                score == best_score
+                and str(prop.get("id", "") or "") < str((best_prop or {}).get("id", "") or "")
+            ):
+                best_prop = prop
+                best_score = score
+        if best_prop is None:
+            return None, 0.0
+        return best_prop, float(best_score)
+
+    def _candidate_life_chunks(self, eid, current_chunk, social=None):
+        if not isinstance(current_chunk, (tuple, list)) or len(current_chunk) < 2 or getattr(self.sim, "world", None) is None:
+            return []
+        current_chunk = (int(current_chunk[0]), int(current_chunk[1]))
+        candidates = [current_chunk]
+        seen = {current_chunk}
+        social = social if isinstance(social, NPCSocial) else self.sim.ecs.get(NPCSocial).get(eid)
+        for chunk in self._bond_destination_chunks(social):
+            if chunk in seen:
+                continue
+            descriptor = self.sim.world.overworld_descriptor(chunk[0], chunk[1])
+            district = self.sim.world.get_chunk(chunk[0], chunk[1]).get("district", {})
+            area_type = str((district or {}).get("area_type", (descriptor or {}).get("area_type", "city")) or "").strip().lower()
+            if area_type != "city":
+                continue
+            seen.add(chunk)
+            candidates.append(chunk)
+        prospect_chunks = []
+        for prop in tuple(getattr(self.sim, "properties", {}).values()):
+            chunk = _property_chunk_key(self.sim, prop)
+            if chunk is None or chunk in seen:
+                continue
+            if max(abs(int(chunk[0]) - current_chunk[0]), abs(int(chunk[1]) - current_chunk[1])) > _NPC_LIFE_REMOTE_SEARCH_RADIUS:
+                continue
+            descriptor = self.sim.world.overworld_descriptor(int(chunk[0]), int(chunk[1]))
+            if not _newcomer_home_kind(prop) and _newcomer_work_capacity(self.sim, prop) <= 0:
+                continue
+            district = self.sim.world.get_chunk(int(chunk[0]), int(chunk[1])).get("district", {})
+            area_type = str((district or {}).get("area_type", (descriptor or {}).get("area_type", "city")) or "").strip().lower()
+            if area_type != "city":
+                continue
+            try:
+                wealth = int(district.get("wealth", 5))
+            except (TypeError, ValueError):
+                wealth = 5
+            try:
+                security = int(district.get("security_level", 5))
+            except (TypeError, ValueError):
+                security = 5
+            try:
+                crime = int(district.get("crime_rate", 5))
+            except (TypeError, ValueError):
+                crime = 5
+            score = (wealth * 0.24) + (security * 0.5) - (crime * 0.32)
+            if _newcomer_home_kind(prop):
+                score += 0.8
+            if _newcomer_work_capacity(self.sim, prop) > 0:
+                score += 0.6
+            prospect_chunks.append((float(score), (int(chunk[0]), int(chunk[1]))))
+        prospect_chunks.sort(key=lambda row: (row[0], -abs(row[1][0] - current_chunk[0]), -abs(row[1][1] - current_chunk[1])), reverse=True)
+        for _score, chunk in prospect_chunks:
+            if chunk in seen:
+                continue
+            seen.add(chunk)
+            candidates.append(chunk)
+            if len(candidates) >= (1 + _NPC_LIFE_REMOTE_CANDIDATE_LIMIT):
+                return candidates
+        coarse = []
+        for qy in range(current_chunk[1] - _NPC_LIFE_REMOTE_SEARCH_RADIUS, current_chunk[1] + _NPC_LIFE_REMOTE_SEARCH_RADIUS + 1):
+            for qx in range(current_chunk[0] - _NPC_LIFE_REMOTE_SEARCH_RADIUS, current_chunk[0] + _NPC_LIFE_REMOTE_SEARCH_RADIUS + 1):
+                chunk = (int(qx), int(qy))
+                if chunk in seen:
+                    continue
+                descriptor = self.sim.world.overworld_descriptor(chunk[0], chunk[1])
+                district = self.sim.world.get_chunk(chunk[0], chunk[1]).get("district", {})
+                area_type = str((district or {}).get("area_type", (descriptor or {}).get("area_type", "city")) or "").strip().lower()
+                if area_type != "city":
+                    continue
+                try:
+                    wealth = int(district.get("wealth", 5))
+                except (TypeError, ValueError):
+                    wealth = 5
+                try:
+                    security = int(district.get("security_level", 5))
+                except (TypeError, ValueError):
+                    security = 5
+                try:
+                    crime = int(district.get("crime_rate", 5))
+                except (TypeError, ValueError):
+                    crime = 5
+                coarse_score = (wealth * 0.28) + (security * 0.48) - (crime * 0.34)
+                if str((descriptor or {}).get("path", "") or "").strip().lower() in {"road", "freeway"}:
+                    coarse_score += 0.3
+                coarse.append((float(coarse_score), chunk))
+        coarse.sort(key=lambda row: (row[0], -abs(row[1][0] - current_chunk[0]), -abs(row[1][1] - current_chunk[1])), reverse=True)
+        for _score, chunk in coarse:
+            if chunk in seen:
+                continue
+            seen.add(chunk)
+            candidates.append(chunk)
+            if len(candidates) >= (1 + _NPC_LIFE_REMOTE_CANDIDATE_LIMIT):
+                break
+        return candidates
+
+    def _ensure_actor_settlement(self, eid):
+        newcomer = self.sim.ecs.get(NPCSettlement).get(eid)
+        pos = self.sim.ecs.get(Position).get(eid)
+        if pos is None:
+            return newcomer
+        occupation = self.sim.ecs.get(Occupation).get(eid)
+        routine = _ensure_npc_routine(self.sim, eid)
+        home_prop = _home_property(self.sim, routine=routine)
+        work_prop = _workplace_property(self.sim, occupation=occupation, routine=routine)
+        chunk = self._settlement_chunk(pos, routine=routine, occupation=occupation)
+        if newcomer is None:
+            home_kind = _newcomer_home_kind(home_prop) or ("housing" if home_prop is not None else "unhoused")
+            newcomer = NPCSettlement(
+                arrived_tick=int(getattr(self.sim, "tick", 0)),
+                origin=self._settlement_label(chunk),
+                phase="settled" if home_prop and work_prop else ("settling" if home_prop else "arriving"),
+                housing_status=home_kind,
+                employment_status="employed" if work_prop is not None else "unemployed",
+                home_property_id=str((home_prop or {}).get("id", "") or "").strip(),
+                work_property_id=str((work_prop or {}).get("id", "") or "").strip(),
+                last_housing_tick=int(getattr(self.sim, "tick", 0)) - _NEWCOMER_HOME_RETRY_TICKS,
+                last_job_tick=int(getattr(self.sim, "tick", 0)) - _NEWCOMER_JOB_RETRY_TICKS,
+                last_social_tick=int(getattr(self.sim, "tick", 0)) - _NEWCOMER_SOCIAL_RETRY_TICKS,
+                last_life_tick=int(getattr(self.sim, "tick", 0)) - _NPC_LIFE_REVIEW_TICKS,
+                last_move_tick=int(getattr(self.sim, "tick", 0)) - _NPC_LIFE_MOVE_COOLDOWN_TICKS,
+                drift_preferred=str(getattr(occupation, "career", "") or "").strip().lower() == "drifter",
+                life_goal="holding_steady",
+            )
+            self.sim.ecs.add(eid, newcomer)
+        else:
+            if not hasattr(newcomer, "last_life_tick"):
+                newcomer.last_life_tick = int(getattr(self.sim, "tick", 0)) - _NPC_LIFE_REVIEW_TICKS
+            if not hasattr(newcomer, "last_move_tick"):
+                newcomer.last_move_tick = int(getattr(self.sim, "tick", 0)) - _NPC_LIFE_MOVE_COOLDOWN_TICKS
+            if not hasattr(newcomer, "life_goal"):
+                newcomer.life_goal = "holding_steady"
+            if not str(getattr(newcomer, "origin", "") or "").strip():
+                newcomer.origin = self._settlement_label(chunk)
+        self._refresh_status(eid, newcomer)
+        return newcomer
+
+    def _backfill_resident_settlements(self):
+        for eid in tuple(self.sim.ecs.get(AI).keys()):
+            if not self._eligible_life_actor(eid):
+                continue
+            self._ensure_actor_settlement(eid)
+
+    def _housing_upgrade_worthwhile(self, newcomer, current_prop, candidate_prop, candidate_kind, candidate_score):
+        if candidate_prop is None:
+            return False
+        current_score, current_kind = self._housing_quality(current_prop)
+        if current_prop is None:
+            return True
+        if current_kind in {"lodging", "shelter"} and candidate_kind == "housing":
+            return True
+        return float(candidate_score) >= float(current_score) + 0.85
+
+    def _home_move_worthwhile(self, eid, current_prop, candidate_prop, candidate_kind, candidate_score, *, memory=None):
+        if candidate_prop is None:
+            return False
+        if self._housing_upgrade_worthwhile(None, current_prop, candidate_prop, candidate_kind, candidate_score):
+            return True
+        current_score, _current_kind = self._housing_quality(current_prop)
+        if current_prop is None:
+            return True
+        if str(current_prop.get("id", "") or "").strip() == str(candidate_prop.get("id", "") or "").strip():
+            return False
+        conflict_pressure = self._memory_pressure(eid, target_prop=current_prop, memory=memory)
+        if conflict_pressure < _NPC_LIFE_LOCAL_CONFLICT_MOVE_PRESSURE:
+            return False
+        return float(candidate_score) >= float(current_score) - 0.25
+
+    def _workplace_upgrade_worthwhile(self, eid, current_prop, candidate_prop, current_score, candidate_score, *, memory=None):
+        if candidate_prop is None:
+            return False
+        if current_prop is None:
+            return True
+        if str(current_prop.get("id", "") or "").strip() == str(candidate_prop.get("id", "") or "").strip():
+            return False
+        current_category = _location_building_category(
+            _property_archetype(current_prop),
+            storefront=bool(_property_is_storefront(current_prop)),
+        )
+        candidate_category = _location_building_category(
+            _property_archetype(candidate_prop),
+            storefront=bool(_property_is_storefront(candidate_prop)),
+        )
+        if float(candidate_score) >= float(current_score) + _NPC_LIFE_LOCAL_JOB_SWITCH_DELTA:
+            return True
+        conflict_pressure = self._memory_pressure(eid, target_prop=current_prop, memory=memory)
+        if conflict_pressure >= _NPC_LIFE_LOCAL_CONFLICT_MOVE_PRESSURE and float(candidate_score) >= float(current_score) - 0.15:
+            return True
+        if current_category == "transit" and candidate_category in {"industrial", "retail", "office", "medical"} and float(candidate_score) >= float(current_score) + 0.35:
+            return True
+        if current_category in {"lodging", "hospitality", "general"} and candidate_category == "industrial" and float(candidate_score) >= float(current_score) + 0.35:
+            return True
+        return False
+
+    def _clear_work_assignment(self, eid):
+        occupation = self.sim.ecs.get(Occupation).get(eid)
+        routine = _ensure_npc_routine(self.sim, eid)
+        if occupation is not None:
+            occupation.workplace = None
+            occupation.shift_start = None
+            occupation.shift_end = None
+            if str(getattr(occupation, "career", "") or "").strip().lower() not in {"resident", "lodger", "drifter"}:
+                occupation.career = "unemployed"
+        routine.work = None
+
+    def _set_entity_position(self, eid, destination):
+        if not isinstance(destination, (tuple, list)) or len(destination) < 3:
+            return False
+        pos = self.sim.ecs.get(Position).get(eid)
+        if pos is None:
+            return False
+        nx, ny, nz = int(destination[0]), int(destination[1]), int(destination[2])
+        self.sim.tilemap.move_entity(
+            eid,
+            oldx=int(pos.x),
+            oldy=int(pos.y),
+            oldz=int(pos.z),
+            newx=nx,
+            newy=ny,
+            newz=nz,
+        )
+        pos.x = nx
+        pos.y = ny
+        pos.z = nz
+        return True
+
+    def _assign_household_home(self, member_eids, prop, home_kind, *, current_tick=None):
+        member_eids = [int(value) for value in tuple(member_eids or ()) if value is not None]
+        if not member_eids or not self._home_can_fit_members(prop, member_eids):
+            return False
+        current_tick = int(getattr(self.sim, "tick", 0) if current_tick is None else current_tick)
+        for member_eid in member_eids:
+            member_newcomer = self._ensure_actor_settlement(member_eid)
+            if member_newcomer is None or not self._assign_home(member_eid, member_newcomer, prop, home_kind):
+                return False
+            member_newcomer.last_housing_tick = current_tick
+            member_newcomer.last_life_tick = current_tick
+            member_newcomer.life_goal = "holding_steady"
+            self._refresh_status(member_eid, member_newcomer)
+        return True
+
+    def _relocate_actor_to_chunk(
+        self,
+        eid,
+        newcomer,
+        current_chunk,
+        target_chunk,
+        home_prop,
+        home_kind,
+        work_prop,
+        *,
+        unload_target_if_offscreen=True,
+    ):
+        current_tick = int(getattr(self.sim, "tick", 0))
+        home_anchor = _property_focus_position(home_prop)
+        work_anchor = _property_focus_position(work_prop) if isinstance(work_prop, dict) else None
+        if home_anchor is None:
+            return False
+        routine = _ensure_npc_routine(self.sim, eid)
+        old_chunk = current_chunk if isinstance(current_chunk, (tuple, list)) and len(current_chunk) >= 2 else None
+        arrival_tiles = _adjacent_street_tiles(self.sim, home_anchor)
+        arrival = arrival_tiles[0] if arrival_tiles else home_anchor
+        if not self._set_entity_position(eid, arrival):
+            return False
+        if isinstance(old_chunk, (tuple, list)) and len(old_chunk) >= 2:
+            records = list(getattr(self.sim, "chunk_population_records", {}).get((int(old_chunk[0]), int(old_chunk[1])), ()) or ())
+            self.sim.chunk_population_records[(int(old_chunk[0]), int(old_chunk[1]))] = [
+                value for value in records
+                if int(value) != int(eid)
+            ]
+        target_key = (int(target_chunk[0]), int(target_chunk[1]))
+        roster = [
+            int(value)
+            for value in tuple(getattr(self.sim, "chunk_population_records", {}).get(target_key, ()) or ())
+            if int(value) != int(eid)
+        ]
+        roster.append(int(eid))
+        self.sim.chunk_population_records[target_key] = roster
+        if work_prop is None:
+            self._clear_work_assignment(eid)
+        self._assign_home(eid, newcomer, home_prop, home_kind)
+        if work_prop is not None:
+            self._assign_workplace(eid, newcomer, work_prop)
+        else:
+            routine.work = None
+        routine.home = home_anchor
+        if work_anchor is not None:
+            routine.work = work_anchor
+        newcomer.origin = self._settlement_label(target_key)
+        newcomer.arrived_tick = current_tick
+        newcomer.phase = "settled"
+        newcomer.last_move_tick = current_tick
+        newcomer.last_life_tick = current_tick
+        newcomer.life_goal = "holding_steady"
+        self._refresh_status(eid, newcomer)
+        if unload_target_if_offscreen and not self._chunk_loaded(target_key):
+            unload_chunk_state(self.sim, target_key)
+        return True
+
+    def _relocate_household_to_chunk(self, eid, newcomer, target_chunk, home_prop, home_kind, work_prop, household):
+        member_eids = [int(eid)] + [int(row["eid"]) for row in tuple(household or ())]
+        if not self._home_can_fit_members(home_prop, member_eids):
+            return False
+        if not self._ensure_chunk_props_available(target_chunk):
+            return False
+        positions = self.sim.ecs.get(Position)
+        occupations = self.sim.ecs.get(Occupation)
+        for member_eid in member_eids:
+            member_pos = positions.get(member_eid)
+            if member_pos is None:
+                return False
+            member_newcomer = newcomer if int(member_eid) == int(eid) else self._ensure_actor_settlement(member_eid)
+            member_occupation = occupations.get(member_eid)
+            member_routine = _ensure_npc_routine(self.sim, member_eid)
+            member_chunk = self._settlement_chunk(member_pos, routine=member_routine, occupation=member_occupation)
+            member_work = work_prop if int(member_eid) == int(eid) else None
+            if not self._relocate_actor_to_chunk(
+                member_eid,
+                member_newcomer,
+                member_chunk,
+                target_chunk,
+                home_prop,
+                home_kind,
+                member_work,
+                unload_target_if_offscreen=False,
+            ):
+                return False
+        target_key = (int(target_chunk[0]), int(target_chunk[1]))
+        if not self._chunk_loaded(target_key):
+            unload_chunk_state(self.sim, target_key)
+        return True
+
+    def _consider_life_upgrade(self, eid, newcomer):
+        pos = self.sim.ecs.get(Position).get(eid)
+        if pos is None or self._player_near_actor(pos):
+            return
+        current_tick = int(getattr(self.sim, "tick", 0))
+        if current_tick - int(getattr(newcomer, "last_life_tick", 0) or 0) < _NPC_LIFE_REVIEW_TICKS:
+            return
+        newcomer.last_life_tick = current_tick
+        occupation = self.sim.ecs.get(Occupation).get(eid)
+        routine = _ensure_npc_routine(self.sim, eid)
+        social = self.sim.ecs.get(NPCSocial).get(eid)
+        memory = self.sim.ecs.get(NPCMemory).get(eid)
+        current_chunk = self._settlement_chunk(pos, routine=routine, occupation=occupation)
+        if current_chunk is None:
+            return
+        current_home = _home_property(self.sim, routine=routine)
+        current_work = _workplace_property(self.sim, occupation=occupation, routine=routine)
+        household = self._household_cohort(eid, home_prop=current_home)
+        household_eids = [int(eid)] + [int(row["eid"]) for row in tuple(household or ())]
+        household_can_relocate = bool(household) and all(bool(row.get("can_relocate", False)) for row in household)
+        household_split_penalty = self._household_split_penalty(eid, household)
+        portable_household_support = (
+            self._portable_household_support(eid, household, relocatable_only=True)
+            if household_can_relocate else 0.0
+        )
+        current_score = self._life_score(eid, newcomer, home_prop=current_home, work_prop=current_work, target_chunk=current_chunk)
+        solo_home_choice, solo_home_kind, solo_home_score = self._home_candidate_with_pressure(
+            eid,
+            current_chunk,
+            current_home,
+            memory=memory,
+        )
+        home_choice = solo_home_choice
+        home_kind = solo_home_kind
+        home_score = solo_home_score
+        home_choice_is_group = False
+        if household:
+            group_home_choice, group_home_kind, group_home_score = self._home_candidate_with_pressure(
+                eid,
+                current_chunk,
+                current_home,
+                memory=memory,
+                required_capacity=len(household_eids),
+                moving_eids=household_eids,
+            )
+            if group_home_choice is not None:
+                home_choice = group_home_choice
+                home_kind = group_home_kind
+                home_score = group_home_score
+                home_choice_is_group = True
+            elif current_home is not None and self._memory_pressure(eid, target_prop=current_home, memory=memory) < (
+                _NPC_LIFE_LOCAL_CONFLICT_MOVE_PRESSURE + household_split_penalty
+            ):
+                home_choice = None
+                home_kind = ""
+                home_score = 0.0
+        work_choice, work_score = self._candidate_workplace_in_chunk(current_chunk, eid=eid, occupation=occupation)
+        current_home_id = str((current_home or {}).get("id", "") or "").strip()
+        current_work_id = str((current_work or {}).get("id", "") or "").strip()
+        if current_work is not None and str((work_choice or {}).get("id", "") or "").strip() == current_work_id:
+            if self._memory_pressure(eid, target_prop=current_work, memory=memory) >= _NPC_LIFE_LOCAL_CONFLICT_MOVE_PRESSURE:
+                alt_work, alt_work_score = self._candidate_workplace_in_chunk(
+                    current_chunk,
+                    eid=eid,
+                    occupation=occupation,
+                    exclude_property_id=current_work_id,
+                )
+                if alt_work is not None:
+                    work_choice, work_score = alt_work, alt_work_score
+        current_work_score = self._workplace_quality(current_work, current_chunk, eid=eid, occupation=occupation) if current_work is not None else 0.0
+        local_changed = False
+        if self._home_move_worthwhile(eid, current_home, home_choice, home_kind, home_score, memory=memory):
+            if home_choice_is_group and self._assign_household_home(household_eids, home_choice, home_kind, current_tick=current_tick):
+                local_changed = True
+            elif self._assign_home(eid, newcomer, home_choice, home_kind):
+                newcomer.last_housing_tick = current_tick
+                local_changed = True
+        if self._workplace_upgrade_worthwhile(eid, current_work, work_choice, current_work_score, work_score, memory=memory):
+            self._assign_workplace(eid, newcomer, work_choice)
+            newcomer.last_job_tick = current_tick
+            local_changed = True
+        if local_changed:
+            current_home = _home_property(self.sim, routine=routine)
+            current_work = _workplace_property(self.sim, occupation=occupation, routine=routine)
+            current_chunk = self._settlement_chunk(pos, routine=routine, occupation=occupation)
+            current_score = self._life_score(eid, newcomer, home_prop=current_home, work_prop=current_work, target_chunk=current_chunk)
+            newcomer.life_goal = "holding_steady"
+            current_work_score = self._workplace_quality(current_work, current_chunk, eid=eid, occupation=occupation) if current_work is not None else 0.0
+        district = self.sim.world.get_chunk(int(current_chunk[0]), int(current_chunk[1])).get("district", {}) if getattr(self.sim, "world", None) is not None else {}
+        try:
+            security = int(district.get("security_level", 5))
+        except (TypeError, ValueError):
+            security = 5
+        try:
+            crime = int(district.get("crime_rate", 5))
+        except (TypeError, ValueError):
+            crime = 5
+        remote_trigger = (
+            str(getattr(newcomer, "employment_status", "") or "").strip().lower() != "employed"
+            or str(getattr(newcomer, "housing_status", "") or "").strip().lower() in {"unhoused", "drifting", "lodging", "shelter"}
+            or security <= 3
+            or crime >= 7
+            or self._social_support_score(eid, current_chunk, social=social) < 0.45
+            or self._memory_pressure(eid, target_chunk=current_chunk, memory=memory) >= 1.1
+            or self._memory_pressure(eid, target_prop=current_home, memory=memory) >= 1.1
+            or self._memory_pressure(eid, target_prop=current_work, memory=memory) >= 1.1
+        )
+        if not remote_trigger:
+            newcomer.life_goal = "holding_steady"
+            return
+        if current_tick - int(getattr(newcomer, "last_move_tick", 0) or 0) < _NPC_LIFE_MOVE_COOLDOWN_TICKS:
+            newcomer.life_goal = "holding_steady"
+            return
+        best = None
+        materialized = set()
+        for chunk in self._candidate_life_chunks(eid, current_chunk, social=social):
+            if chunk == current_chunk:
+                continue
+            if not self._chunk_loaded(chunk):
+                materialized.add((int(chunk[0]), int(chunk[1])))
+            if not self._ensure_chunk_props_available(chunk):
+                continue
+            transit_link = self._transit_link_profile(current_chunk, chunk)
+            if bool(transit_link.get("required")) and not bool(transit_link.get("connected")):
+                continue
+            household_move = False
+            if household_can_relocate:
+                group_home_prop, group_home_kind, _group_home_score = self._candidate_home_in_chunk(
+                    chunk,
+                    required_capacity=len(household_eids),
+                    moving_eids=household_eids,
+                )
+                if group_home_prop is not None:
+                    home_prop = group_home_prop
+                    remote_home_kind = group_home_kind
+                    household_move = True
+                else:
+                    home_prop, remote_home_kind, _remote_home_score = self._candidate_home_in_chunk(chunk)
+            else:
+                home_prop, remote_home_kind, _remote_home_score = self._candidate_home_in_chunk(chunk)
+            work_prop, _remote_work_score = self._candidate_workplace_in_chunk(chunk, occupation=occupation)
+            if home_prop is None or work_prop is None:
+                continue
+            candidate_score = self._life_score(
+                eid,
+                newcomer,
+                home_prop=home_prop,
+                work_prop=work_prop,
+                target_chunk=chunk,
+            ) - self._remote_move_cost(eid, newcomer, current_chunk, chunk)
+            candidate_score += float(transit_link.get("score_bonus", 0.0) or 0.0)
+            if household_move:
+                candidate_score += portable_household_support
+            if best is None or candidate_score > best["score"]:
+                best = {
+                    "chunk": (int(chunk[0]), int(chunk[1])),
+                    "home_prop": home_prop,
+                    "home_kind": remote_home_kind,
+                    "work_prop": work_prop,
+                    "score": float(candidate_score),
+                    "household_move": bool(household_move),
+                    "transit_service": str(transit_link.get("service", "") or "").strip().lower(),
+                }
+        for chunk in tuple(materialized):
+            if best is not None and chunk == best["chunk"]:
+                continue
+            unload_chunk_state(self.sim, chunk)
+        if best is None or float(best["score"]) < (float(current_score) + _NPC_LIFE_REMOTE_MOVE_DELTA):
+            if security <= 3 or crime >= 7:
+                newcomer.life_goal = "seeking_safer_ground"
+            elif str(getattr(newcomer, "employment_status", "") or "").strip().lower() != "employed":
+                newcomer.life_goal = "seeking_work"
+            else:
+                newcomer.life_goal = "holding_steady"
+            return
+        target_chunk = best["chunk"]
+        support_delta = self._social_support_score(eid, target_chunk, social=social) - self._social_support_score(eid, current_chunk, social=social)
+        if support_delta > 0.7:
+            newcomer.life_goal = "relocating_for_family"
+        elif security <= 3 or crime >= 7:
+            newcomer.life_goal = "relocating_for_safety"
+        else:
+            newcomer.life_goal = "relocating_for_work"
+        relocated = False
+        if bool(best.get("household_move")):
+            relocated = self._relocate_household_to_chunk(
+                eid,
+                newcomer,
+                target_chunk,
+                best["home_prop"],
+                best["home_kind"],
+                best["work_prop"],
+                household,
+            )
+        if not relocated:
+            relocated = self._relocate_actor_to_chunk(
+                eid,
+                newcomer,
+                current_chunk,
+                target_chunk,
+                best["home_prop"],
+                best["home_kind"],
+                best["work_prop"],
+            )
+        if relocated:
+            newcomer.last_move_tick = current_tick
+            newcomer.last_life_tick = current_tick
+            newcomer.life_goal = "holding_steady"
 
     def _active_chunk_coord(self):
         coord = getattr(self.sim, "active_chunk_coord", None)
@@ -8241,9 +9644,11 @@ class NPCSettlementSystem(System):
     def update(self):
         if int(self.sim.tick) % 30 != 0:
             return
+        self._backfill_resident_settlements()
         self._maybe_spawn_newcomer()
         for eid, newcomer in list(self.sim.ecs.get(NPCSettlement).items()):
             self._update_newcomer(eid, newcomer)
+            self._consider_life_upgrade(eid, newcomer)
 
 
 _BUSINESS_EVENT_SCENE_CAP = 3
@@ -8288,6 +9693,8 @@ _BUSINESS_EVENT_HOSPITALITY_PRESSURE_PHASES = {
 _BUSINESS_EVENT_OPERATIONAL_PRESSURE_PHASES = {
     "loading_push",
     "dispatch_surge",
+    "boarding_crush",
+    "arrival_handoff",
 }
 _BUSINESS_EVENT_AFTERMATH_PHASES = {
     "taped_off_front",
@@ -8900,6 +10307,36 @@ def _business_event_operational_pressure_blueprint(category, *, event_phase=""):
             "release_budget": 0,
             "drift_preferred": False,
         }
+    if event_phase == "boarding_crush":
+        return {
+            "scene_type": "shift",
+            "fixture_name": "Fare Rack",
+            "fixture_type": "fare_rack",
+            "fixture_glyph": "r",
+            "actor_specs": [
+                {"role": "worker", "career": "dispatcher", "linger_ticks": 12},
+                {"role": "worker", "career": "driver", "linger_ticks": 10},
+                {"role": "civilian", "career": "commuter", "linger_ticks": 14},
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    if event_phase == "arrival_handoff":
+        return {
+            "scene_type": "shift",
+            "fixture_name": "Transfer Clipboard",
+            "fixture_type": "transfer_clipboard",
+            "fixture_glyph": "c",
+            "actor_specs": [
+                {"role": "worker", "career": "dispatcher", "linger_ticks": 12},
+                {"role": "worker", "career": "driver", "linger_ticks": 10},
+                {"role": "civilian", "career": "specialist", "linger_ticks": 16},
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
     return None
 
 
@@ -9169,6 +10606,8 @@ def _business_event_item_pool(scene_type, category, actor_spec):
             return ("credstick_chip", "city_pass_token", "transit_daypass", "caff_shot")
         if career in {"loader", "dockhand"}:
             return ("pocket_multitool", "battery_pack", "caff_shot", "protein_wrap")
+        if career in {"commuter", "specialist", "traveler"}:
+            return ("city_pass_token", "transit_daypass", "protein_wrap", "bottled_water")
         if career == "driver":
             return ("city_pass_token", "transit_daypass", "caff_shot", "protein_wrap")
         if career in {"cleanup_crew", "sanitation_worker", "maintenance_tech"}:
@@ -9393,6 +10832,172 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
             "local_line": local_line,
             "detail_line": detail_line,
             "lead_kind": "access" if requirement else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "boarding_crush":
+        target_prop = _business_event_followup_target(
+            sim,
+            prop,
+            scene_type="shift",
+            category="transit" if category == "transit" else category,
+            rng=rng,
+        )
+        target_name = str(target_prop.get("name", target_prop.get("id", "the place"))).strip() if isinstance(target_prop, dict) else ""
+        target_property_id = str(target_prop.get("id", "") or "").strip() if isinstance(target_prop, dict) else ""
+        if target_property_id == str(prop.get("id", "") or "").strip():
+            target_name = ""
+            target_property_id = ""
+        time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(0, 2))
+        if career == "dispatcher":
+            local_line = (
+                f"We are trying to board {current_name} cleanly"
+                + (
+                    f" so the next connection for {target_name} holds at {time_text}."
+                    if target_name
+                    else " before the whole stop folds back on itself."
+                )
+            )
+        elif career == "commuter":
+            local_line = (
+                f"If this line at {current_name} stalls, half the people here miss the clean window"
+                + (f" for {target_name}." if target_name else ".")
+            )
+        else:
+            local_line = (
+                f"The stop only looks messy because {current_name} is trying to clear a boarding crush"
+                + (f" toward {target_name}." if target_name else " before the posted run slips.")
+            )
+        if target_name and hours_text and requirement:
+            detail_line = (
+                f"{current_name} is boarding hard during {hours_text}. Staff keep calling {target_name} for around {time_text}, "
+                f"but the stop still wants {requirement} while the line is hot."
+            )
+        elif target_name and hours_text:
+            detail_line = f"{current_name} is in a boarding crush during {hours_text}, with the clean next connection toward {target_name} getting called for around {time_text}."
+        elif target_name and requirement:
+            detail_line = f"They are trying to clear this boarding crush at {current_name} without losing the {target_name} connection around {time_text}, and the stop still wants {requirement}."
+        elif target_name:
+            detail_line = f"Fare talk at {current_name} keeps circling back to {target_name} as the next clean connection once this boarding crush finally clears."
+        elif hours_text and requirement:
+            detail_line = f"{current_name} is boarding hard during {hours_text}, and the stop still wants {requirement} while fares, bags, and shouted directions knot up at the edge."
+        elif hours_text:
+            detail_line = f"{current_name} is in a boarding crush during {hours_text}, all clipped departure calls, fare checks, and people trying to hit the line before it closes."
+        elif requirement:
+            detail_line = f"The boarding crush at {current_name} has fares and bags bunching at the edge, and the stop still wants {requirement} once the pressure breaks."
+        else:
+            detail_line = f"This is a boarding crush at {current_name}: fare checks, destination calls, and a stop suddenly honest about how many lives are trying to move through it."
+
+        opportunity = {}
+        if isinstance(target_prop, dict) and target_property_id:
+            target_chunk = sim.chunk_coords(int(target_prop.get("x", 0)), int(target_prop.get("y", 0)))
+            opportunity = {
+                "key": f"business_scene_followup:{scene_id}:{target_property_id}:boarding_crush",
+                "title": f"Connection Lead: {target_name}",
+                "summary": f"Boarding chatter at {current_name} points to a clean connection at {target_name} around {time_text}.",
+                "kind": "lead_followup",
+                "source": "business_scene",
+                "chunk": target_chunk,
+                "location": "lead",
+                "playstyles": ("social", "economic", "stealth"),
+                "reward": {"credits": 4, "intel": 2},
+                "risk": "low",
+                "pressure": "low",
+                "requirements": {
+                    "visit_chunk": target_chunk,
+                    "property_id": target_property_id,
+                },
+                "status": "active",
+                "seed_tick": int(getattr(sim, "tick", 0)),
+            }
+        return {
+            "property_id": str(prop.get("id", "") or "").strip(),
+            "target_property_id": target_property_id,
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "opportunity": opportunity,
+            "shared": False,
+        }
+
+    if event_phase == "arrival_handoff":
+        target_prop = _business_event_followup_target(
+            sim,
+            prop,
+            scene_type="delivery",
+            category=category,
+            rng=rng,
+        )
+        target_name = str(target_prop.get("name", target_prop.get("id", "the place"))).strip() if isinstance(target_prop, dict) else ""
+        target_property_id = str(target_prop.get("id", "") or "").strip() if isinstance(target_prop, dict) else ""
+        if target_property_id == str(prop.get("id", "") or "").strip():
+            target_name = ""
+            target_property_id = ""
+        target_controller = _property_access_controller(sim, target_prop) if isinstance(target_prop, dict) else None
+        target_hours_text = _dialogue_hours_text(target_controller.get("opening_window")) if isinstance(target_controller, dict) else ""
+        target_requirement = _controller_access_requirement_text(target_controller) if isinstance(target_controller, dict) else ""
+        time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(1, 3))
+        if career == "specialist":
+            local_line = (
+                f"I came through {current_name} because somebody farther in is short enough on hands to pay for the trip"
+                + (f" to {target_name}." if target_name else ".")
+            )
+        elif career == "dispatcher":
+            local_line = (
+                f"This arrival is not meant to stay at {current_name}; we are turning it onward"
+                + (f" to {target_name} once the handoff is clean." if target_name else " as soon as the handoff is clean.")
+            )
+        else:
+            local_line = (
+                f"They are meeting an incoming transfer at {current_name}"
+                + (f" and pointing it toward {target_name} before the frontage clogs." if target_name else " before the frontage clogs.")
+            )
+        if target_name and target_hours_text and target_requirement:
+            detail_line = f"The arrival board at {current_name} says the incoming relief for {target_name} should land around {time_text}. They usually move during {target_hours_text}, though they still want {target_requirement}."
+        elif target_name and target_hours_text:
+            detail_line = f"Transit chatter at {current_name} says the incoming transfer for {target_name} is supposed to land around {time_text}, and they usually receive it during {target_hours_text}."
+        elif target_name and target_requirement:
+            detail_line = f"Someone coming through {current_name} is supposed to push onward to {target_name} around {time_text}, but they still want {target_requirement} at the door."
+        elif target_name:
+            detail_line = f"Transit talk at {current_name} says this incoming handoff is bound for {target_name} around {time_text}, the kind of transfer that usually means somebody there is short on either staff or supplies."
+        elif hours_text and requirement:
+            detail_line = f"{current_name} is handling an arrival handoff during {hours_text}, and the stop still wants {requirement} while inbound riders, relief bags, and pickup chatter bunch at the edge."
+        elif hours_text:
+            detail_line = f"{current_name} is running an arrival handoff during {hours_text}, with incoming riders, quick greetings, and onward directions clipping the frontage."
+        elif requirement:
+            detail_line = f"Inbound riders and pickup chatter are bunching at {current_name}, and the stop still wants {requirement} once the handoff clears."
+        else:
+            detail_line = f"This is an arrival handoff at {current_name}: incoming riders, relief pickups, and the sense that somebody here came from farther out because they were needed."
+
+        opportunity = {}
+        if isinstance(target_prop, dict) and target_property_id:
+            target_chunk = sim.chunk_coords(int(target_prop.get("x", 0)), int(target_prop.get("y", 0)))
+            opportunity = {
+                "key": f"business_scene_followup:{scene_id}:{target_property_id}:arrival_handoff",
+                "title": f"Arrival Lead: {target_name}",
+                "summary": f"Transit chatter says an incoming transfer through {current_name} is headed to {target_name} around {time_text}.",
+                "kind": "lead_followup",
+                "source": "business_scene",
+                "chunk": target_chunk,
+                "location": "lead",
+                "playstyles": ("social", "economic", "stealth"),
+                "reward": {"credits": 5, "intel": 3},
+                "risk": "low",
+                "pressure": "low",
+                "requirements": {
+                    "visit_chunk": target_chunk,
+                    "property_id": target_property_id,
+                },
+                "status": "active",
+                "seed_tick": int(getattr(sim, "tick", 0)),
+            }
+        return {
+            "property_id": str(prop.get("id", "") or "").strip(),
+            "target_property_id": target_property_id,
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if target_requirement else "hours",
+            "opportunity": opportunity,
             "shared": False,
         }
 
@@ -10162,7 +11767,7 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
         ]
         if category in {"medical", "industrial", "transit"} or rng.random() < 0.45:
             item_count += 1
-    elif scene_type == "shift" and fixture_type in {"reset_cart", "turnover_tray", "barback_crate", "loading_dolly", "dispatch_satchel", "cleanup_cart"}:
+    elif scene_type == "shift" and fixture_type in {"reset_cart", "turnover_tray", "barback_crate", "loading_dolly", "dispatch_satchel", "cleanup_cart", "fare_rack", "transfer_clipboard"}:
         if fixture_type == "reset_cart" or event_phase == "reset_scramble":
             container_label = "Bus Tub"
             if hours_text and requirement:
@@ -10232,6 +11837,76 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             if category == "transit":
                 pool.extend(item_id for item_id in ("city_pass_token", "transit_daypass") if item_id in ITEM_CATALOG)
             read_only_reason = "You can pull something from the freight dolly, but using live load gear as your own stash would slow the crew down fast."
+        elif fixture_type == "fare_rack" or event_phase == "boarding_crush":
+            container_label = "Fare Rack"
+            boarding_target = _business_event_followup_target(
+                sim,
+                prop,
+                scene_type="shift",
+                category="transit" if category == "transit" else category,
+                rng=rng,
+            )
+            target_name = str(boarding_target.get("name", boarding_target.get("id", "the place"))).strip() if isinstance(boarding_target, dict) else ""
+            if str((boarding_target or {}).get("id", "") or "").strip() == str(prop.get("id", "") or "").strip():
+                target_name = ""
+            time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(0, 2))
+            if target_name and hours_text and requirement:
+                note = (
+                    f"Fare rack: {prop_name} is in a boarding crush during {hours_text}, with posted connections for {target_name} around {time_text}. "
+                    f"The stop still wants {requirement} while fares and bags knot up at the edge."
+                )
+            elif target_name and hours_text:
+                note = f"Fare rack: {prop_name} is boarding hard during {hours_text}, with clipped departure calls and the clean next connection toward {target_name} posted for around {time_text}."
+            elif target_name and requirement:
+                note = f"Fare rack: the line at {prop_name} is trying not to miss the {target_name} connection around {time_text}, and the stop still wants {requirement} while the crush is live."
+            elif target_name:
+                note = f"Fare rack: tokens, daypasses, and scratched route notes at {prop_name} keep circling back to {target_name} as the next clean connection once boarding clears."
+            elif hours_text and requirement:
+                note = f"Fare rack: {prop_name} is in a boarding crush during {hours_text}, and the stop still wants {requirement} while fares, bags, and shouted destinations bunch at the edge."
+            elif hours_text:
+                note = f"Fare rack: {prop_name} is boarding hard during {hours_text}, all fares, clipped calls, and people trying to hit the line before it slips."
+            elif requirement:
+                note = f"Fare rack: the stop at {prop_name} is under boarding pressure, and it still wants {requirement} once the line unclenches."
+            else:
+                note = f"Fare rack: {prop_name} is under a boarding crush, all tokens, passes, and route scribbles from people trying not to miss the clean run."
+            pool = [item_id for item_id in ("city_pass_token", "transit_daypass", "protein_wrap", "bottled_water") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can pocket something from the fare rack, but turning live boarding supplies into your personal stash would stall the stop fast."
+        elif fixture_type == "transfer_clipboard" or event_phase == "arrival_handoff":
+            container_label = "Transfer Clipboard"
+            arrival_target = _business_event_followup_target(
+                sim,
+                prop,
+                scene_type="delivery",
+                category=category,
+                rng=rng,
+            )
+            target_name = str(arrival_target.get("name", arrival_target.get("id", "the place"))).strip() if isinstance(arrival_target, dict) else ""
+            if str((arrival_target or {}).get("id", "") or "").strip() == str(prop.get("id", "") or "").strip():
+                target_name = ""
+            time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(1, 3))
+            if target_name and hours_text and requirement:
+                note = (
+                    f"Transfer clipboard: {prop_name} is handling an arrival handoff during {hours_text}, with an incoming relief run marked for {target_name} around {time_text}. "
+                    f"The stop still wants {requirement} while the pickup is live."
+                )
+            elif target_name and hours_text:
+                note = f"Transfer clipboard: {prop_name} is running an arrival handoff during {hours_text}, with an incoming rider or relief bag marked onward to {target_name} around {time_text}."
+            elif target_name and requirement:
+                note = f"Transfer clipboard: somebody coming through {prop_name} is tagged for {target_name} around {time_text}, and the stop still wants {requirement} while the handoff clears."
+            elif target_name:
+                note = f"Transfer clipboard: arrival notes at {prop_name} keep pointing toward {target_name} around {time_text}, the kind of onward handoff that usually means somebody there needs either staff or supplies."
+            elif hours_text and requirement:
+                note = f"Transfer clipboard: {prop_name} is handling an arrival handoff during {hours_text}, and the stop still wants {requirement} while inbound riders and pickup chatter bunch at the edge."
+            elif hours_text:
+                note = f"Transfer clipboard: {prop_name} is in an arrival handoff during {hours_text}, all incoming riders, clipped greetings, and onward directions."
+            elif requirement:
+                note = f"Transfer clipboard: inbound riders and pickup chatter are bunching at {prop_name}, and the stop still wants {requirement} once the handoff clears."
+            else:
+                note = f"Transfer clipboard: {prop_name} is handling an arrival handoff, all incoming names, onward notes, and the sense that somebody here came from farther out because they were needed."
+            pool = [item_id for item_id in ("credstick_chip", "city_pass_token", "transit_daypass", "bottled_water") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can pocket something from the transfer clipboard, but using live arrival paperwork as your own stash would get remembered fast."
         elif fixture_type == "cleanup_cart" or event_phase == "cleanup_detail":
             container_label = "Cleanup Cart"
             aftermath = _business_event_aftermath_entry(sim, prop) or {}
@@ -10935,7 +12610,7 @@ class BusinessPulseSceneSystem(System):
             if self.sim.detail_for_xy(int(prop.get("x", 0)), int(prop.get("y", 0))) == "unloaded":
                 continue
 
-            pulse = _building_pulse_snapshot(self.sim, prop=prop)
+            pulse = _building_pulse_snapshot(self.sim, prop=prop, respect_chunk_cap=False)
             blueprint = _business_event_scene_blueprint(prop, pulse)
             if blueprint is None:
                 continue
@@ -17081,6 +18756,46 @@ class NPCInteractionSystem(System):
             "offer_label": "lodging",
             "lead_kind": "service_rest",
         },
+        "service_transit": {
+            "services": tuple(TRANSIT_SERVICE_IDS),
+            "service_label": "transit stop",
+            "offer_label": "transit",
+            "lead_kind": "service_transit",
+            "local_summary": "In this chunk, {names_text} can put you onto the transit network.",
+            "near_summary": "Nearest transit stop I know is {distance_phrase} at {names_text}.",
+        },
+        "service_rail": {
+            "services": ("rail_transit",),
+            "service_label": "rail station",
+            "offer_label": "rail travel",
+            "lead_kind": "service_rail",
+            "local_summary": "In this chunk, {names_text} can put you on a rail line.",
+            "near_summary": "Nearest rail station I know is {distance_phrase} at {names_text}.",
+        },
+        "service_bus": {
+            "services": ("bus_transit",),
+            "service_label": "bus stop",
+            "offer_label": "bus travel",
+            "lead_kind": "service_bus",
+            "local_summary": "In this chunk, {names_text} posts bus routes.",
+            "near_summary": "Nearest bus stop I know is {distance_phrase} at {names_text}.",
+        },
+        "service_shuttle": {
+            "services": ("shuttle_transit",),
+            "service_label": "shuttle stop",
+            "offer_label": "shuttle travel",
+            "lead_kind": "service_shuttle",
+            "local_summary": "In this chunk, {names_text} posts shuttle transfers.",
+            "near_summary": "Nearest shuttle stop I know is {distance_phrase} at {names_text}.",
+        },
+        "service_ferry": {
+            "services": ("ferry_transit",),
+            "service_label": "ferry landing",
+            "offer_label": "ferry travel",
+            "lead_kind": "service_ferry",
+            "local_summary": "In this chunk, {names_text} posts ferry departures.",
+            "near_summary": "Nearest ferry landing I know is {distance_phrase} at {names_text}.",
+        },
         "service_intel": {
             "services": ("intel",),
             "service_label": "intel",
@@ -19886,6 +21601,8 @@ class NPCInteractionSystem(System):
 
         service_label = str(spec.get("service_label", "service")).strip() or "service"
         offer_label = str(spec.get("offer_label", service_label)).strip() or service_label
+        local_template = str(spec.get("local_summary", "")).strip()
+        near_template = str(spec.get("near_summary", "")).strip()
         rows = list(self._service_locator_rows(spec, radius=6))
         origin = self._player_current_chunk()
 
@@ -19908,16 +21625,33 @@ class NPCInteractionSystem(System):
                     break
             names_text = _dialogue_human_join(names)
             if best_chunk == origin:
+                if local_template:
+                    summary = local_template.format(
+                        names_text=names_text,
+                        offer_label=offer_label,
+                        service_label=service_label,
+                    )
+                else:
+                    summary = f"In this chunk, {names_text} can handle {offer_label}."
                 return {
-                    "summary": f"In this chunk, {names_text} can handle {offer_label}.",
+                    "summary": summary,
                     "service_label": service_label,
                     "lead_prop": lead_prop,
                 }
             distance = _manhattan(origin[0], origin[1], best_chunk[0], best_chunk[1])
             direction = self._dialogue_chunk_direction(origin, best_chunk)
             distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
+            if near_template:
+                summary = near_template.format(
+                    names_text=names_text,
+                    offer_label=offer_label,
+                    service_label=service_label,
+                    distance_phrase=distance_phrase,
+                )
+            else:
+                summary = f"Nearest {service_label} I know is {distance_phrase} at {names_text}."
             return {
-                "summary": f"Nearest {service_label} I know is {distance_phrase} at {names_text}.",
+                "summary": summary,
                 "service_label": service_label,
                 "lead_prop": lead_prop,
             }
@@ -19926,16 +21660,33 @@ class NPCInteractionSystem(System):
         if chunk_coord and names:
             names_text = _dialogue_human_join(names)
             if tuple(chunk_coord) == origin:
+                if local_template:
+                    summary = local_template.format(
+                        names_text=names_text,
+                        offer_label=offer_label,
+                        service_label=service_label,
+                    )
+                else:
+                    summary = f"In this chunk, {names_text} can handle {offer_label}."
                 return {
-                    "summary": f"In this chunk, {names_text} can handle {offer_label}.",
+                    "summary": summary,
                     "service_label": service_label,
                     "lead_prop": None,
                 }
             distance = _manhattan(origin[0], origin[1], int(chunk_coord[0]), int(chunk_coord[1]))
             direction = self._dialogue_chunk_direction(origin, chunk_coord)
             distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
+            if near_template:
+                summary = near_template.format(
+                    names_text=names_text,
+                    offer_label=offer_label,
+                    service_label=service_label,
+                    distance_phrase=distance_phrase,
+                )
+            else:
+                summary = f"Nearest {service_label} I know is {distance_phrase} at {names_text}."
             return {
-                "summary": f"Nearest {service_label} I know is {distance_phrase} at {names_text}.",
+                "summary": summary,
                 "service_label": service_label,
                 "lead_prop": None,
             }
@@ -44578,21 +46329,27 @@ class EventLogSystem(System):
             credits_spent = int(event.data.get("credits_spent", 0))
             self.sim.log.add(f"Vending: {prop_name} drops {item_name} into your bag (-{credits_spent}c).")
             return
-        if service == "rail_transit":
-            destination_name = str(event.data.get("destination_name", "the next station")).strip() or "the next station"
+        if service in TRANSIT_SERVICE_IDS:
+            profile = _transit_service_profile(service) or {}
+            title = _transit_service_log_prefix(service)
+            mode_label = _transit_service_mode_label(service)
+            destination_name = str(event.data.get("destination_name", "the next stop")).strip() or "the next stop"
             distance = max(1, int(event.data.get("distance", 0) or 0))
             fare_mode = str(event.data.get("fare_mode", "credits")).strip().lower() or "credits"
             credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            token_cost = int(event.data.get("token_cost", 0) or 0)
             time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0) or 0)
-            text = f"Rail: {prop_name} sends you to {destination_name} ({distance}c)."
+            text = f"{title}: {prop_name} sends you to {destination_name} ({distance}c)."
             if fare_mode == "transit_daypass":
                 text += " Ride covered by daypass."
             elif fare_mode == "city_pass_token":
-                text += " Ride covered by city token."
+                text += f" Ride covered by {_transit_token_amount_label(token_cost)}."
             else:
                 text += f" Fare -{credits_spent}c."
             if time_advanced_ticks > 0:
                 text += f" Travel time {_tick_duration_label(self.sim, time_advanced_ticks)}."
+            if not profile:
+                text = f"{title}: {prop_name} sends you to {destination_name} ({distance}c by {mode_label})."
             if skill_note:
                 text += f" {skill_note}"
             self.sim.log.add(text)
@@ -44681,14 +46438,21 @@ class EventLogSystem(System):
             ready_in = int(event.data.get("ready_in", 0))
             self.sim.log.add(f"{prop_name} cannot help with {_site_service_label(service)} again yet ({ready_in}t).")
             return
-        if reason == "no_destinations" and service == "rail_transit":
-            self.sim.log.add(f"Rail: {prop_name} has no outbound stations posted right now.")
+        if service in TRANSIT_SERVICE_IDS and reason == "no_destinations":
+            profile = _transit_service_profile(service) or {}
+            title = _transit_service_log_prefix(service)
+            line = str(
+                profile.get("no_destinations_line", "No outbound transit service is posted from {prop_name} right now.")
+            ).format(prop_name=prop_name)
+            self.sim.log.add(f"{title}: {line}")
             return
-        if reason == "invalid_destination" and service == "rail_transit":
-            self.sim.log.add(f"Rail: {prop_name} loses that departure off the board before you can board.")
+        if service in TRANSIT_SERVICE_IDS and reason == "invalid_destination":
+            title = _transit_service_log_prefix(service)
+            self.sim.log.add(f"{title}: {prop_name} loses that departure off the board before you can board.")
             return
-        if reason == "leave_vehicle" and service == "rail_transit":
-            self.sim.log.add(f"Rail: leave your vehicle before boarding at {prop_name}.")
+        if service in TRANSIT_SERVICE_IDS and reason == "leave_vehicle":
+            title = _transit_service_log_prefix(service)
+            self.sim.log.add(f"{title}: leave your vehicle before boarding at {prop_name}.")
             return
         if reason == "no_need" and service == "shelter":
             self.sim.log.add(f"You do not need to bunk at {prop_name} right now.")
@@ -44746,11 +46510,24 @@ class EventLogSystem(System):
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             self.sim.log.add(f"Vending: {item_name} costs {cost}c at {prop_name}; you only have {credits}c.")
             return
-        if reason == "no_credits" and service == "rail_transit":
+        if reason == "no_tokens" and service in TRANSIT_SERVICE_IDS:
+            title = _transit_service_log_prefix(service)
+            token_cost = int(event.data.get("token_cost", 0) or 0)
+            city_tokens = int(event.data.get("city_tokens", 0) or 0)
+            daypasses = int(event.data.get("daypasses", 0) or 0)
+            destination_name = str(event.data.get("destination_name", "that stop")).strip() or "that stop"
+            inventory_label = _transit_inventory_label(city_tokens=city_tokens, daypasses=daypasses)
+            self.sim.log.add(
+                f"{title}: fare to {destination_name} from {prop_name} is {_transit_token_amount_label(token_cost)}; "
+                f"you only have {inventory_label}."
+            )
+            return
+        if reason == "no_credits" and service in TRANSIT_SERVICE_IDS:
+            title = _transit_service_log_prefix(service)
             cost = int(event.data.get("cost", 0))
             credits = int(event.data.get("credits", 0))
-            destination_name = str(event.data.get("destination_name", "that station")).strip() or "that station"
-            self.sim.log.add(f"Rail: fare to {destination_name} from {prop_name} is {cost}c; you only have {credits}c.")
+            destination_name = str(event.data.get("destination_name", "that stop")).strip() or "that stop"
+            self.sim.log.add(f"{title}: fare to {destination_name} from {prop_name} is {cost}c; you only have {credits}c.")
             return
         if reason == "inventory_full" and service == "vending":
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"

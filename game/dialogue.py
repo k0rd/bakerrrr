@@ -26,6 +26,11 @@ TOPIC_ORDER = (
     "service_banking",
     "service_insurance",
     "service_rest",
+    "service_transit",
+    "service_rail",
+    "service_bus",
+    "service_shuttle",
+    "service_ferry",
     "service_intel",
     "service_trade",
     "service_used_cars",
@@ -148,6 +153,11 @@ TOPIC_DEFS = {
             "service_banking",
             "service_insurance",
             "service_rest",
+            "service_transit",
+            "service_rail",
+            "service_bus",
+            "service_shuttle",
+            "service_ferry",
             "service_intel",
             "service_trade",
             "service_used_cars",
@@ -178,6 +188,31 @@ TOPIC_DEFS = {
     },
     "service_rest": {
         "label": "Anywhere to sleep nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_transit": {
+        "label": "Any transit nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_rail": {
+        "label": "Where's the nearest station?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_bus": {
+        "label": "Where can I catch a bus?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_shuttle": {
+        "label": "Any shuttle stop around here?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_ferry": {
+        "label": "Any ferry landing around here?",
         "root": False,
         "unlocks": (),
     },
@@ -269,6 +304,11 @@ TOPIC_DEFS = {
             "service_banking",
             "service_insurance",
             "service_rest",
+            "service_transit",
+            "service_rail",
+            "service_bus",
+            "service_shuttle",
+            "service_ferry",
             "service_intel",
             "service_trade",
             "service_used_cars",
@@ -2685,6 +2725,16 @@ def topic_label(topic_id, context=None):
         return "Any insurer or claims desk nearby?"
     if topic_id == "service_rest":
         return "Anywhere to sleep nearby?"
+    if topic_id == "service_transit":
+        return "Any transit nearby?"
+    if topic_id == "service_rail":
+        return "Where's the nearest station?"
+    if topic_id == "service_bus":
+        return "Where can I catch a bus?"
+    if topic_id == "service_shuttle":
+        return "Any shuttle stop around here?"
+    if topic_id == "service_ferry":
+        return "Any ferry landing around here?"
     if topic_id == "service_intel":
         return "Anywhere selling intel nearby?"
     if topic_id == "service_trade":

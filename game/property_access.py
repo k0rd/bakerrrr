@@ -98,6 +98,7 @@ PUBLIC_HOURS_BY_ARCHETYPE = {
     "street_kitchen": (11, 23),
     "tavern": (14, 2),
     "theater": (14, 23),
+    "truck_stop": (0, 24),
     "tool_depot": (7, 19),
     "dock_shack": (6, 19),
     "ferry_post": (5, 20),
@@ -186,11 +187,17 @@ CONTROLLER_INTRUSION_PROFILES = {
 
 DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "casino": ("slots", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", "casino_holdem", "plinko", "twenty_one"),
+    "dock_shack": ("shuttle_transit", "ferry_transit"),
+    "ferry_post": ("intel", "ferry_transit"),
     "flophouse": ("rest",),
     "gaming_hall": ("video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker"),
     "hotel": ("rest",),
-    "metro_exchange": ("rail_transit",),
+    "metro_exchange": ("rail_transit", "bus_transit"),
+    "relay_post": ("bus_transit", "shuttle_transit"),
+    "roadhouse": ("shuttle_transit",),
     "tavern": ("intel",),
+    "tide_station": ("intel", "ferry_transit"),
+    "truck_stop": ("bus_transit", "shuttle_transit"),
 }
 OPTIONAL_SITE_SERVICES_BY_ARCHETYPE = {
     "tavern": {

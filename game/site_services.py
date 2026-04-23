@@ -17,6 +17,7 @@ from game.property_runtime import (
 from game.service_runtime import (
     CASINO_GAME_SERVICE_IDS,
     CASINO_PLINKO_LANE_COUNT,
+    TRANSIT_SERVICE_IDS,
     _casino_apply_round_result,
     _casino_game_profile,
     _casino_plinko_resolve,
@@ -28,13 +29,14 @@ from game.service_runtime import (
     _overworld_discovery_profile,
     _overworld_discovery_summary_bits,
     _overworld_legend_line,
-    _rail_transit_destinations,
-    _rail_transit_payment_profile,
-    _rail_transit_travel_ticks,
     _overworld_travel_profile,
     _overworld_travel_summary_bits,
     _site_service_roll_index,
     _site_service_state,
+    _transit_destinations as _shared_transit_destinations,
+    _transit_payment_profile,
+    _transit_service_profile,
+    _transit_travel_ticks as _shared_transit_travel_ticks,
     _vehicle_sale_lookup_offer,
     _vehicle_sale_quality,
     _vehicle_sale_remove_offer,
@@ -913,8 +915,8 @@ class SiteServiceSystem(System):
         if service == "repair":
             self._apply_repair_service(eid, prop, pos)
             return True
-        if service == "rail_transit":
-            self._apply_rail_transit(eid, prop, pos, request=request)
+        if service in TRANSIT_SERVICE_IDS:
+            self._apply_transit_service(eid, prop, pos, service, request=request)
             return True
         if service == "vehicle_sales_new":
             self._apply_vehicle_sale(eid, prop, pos, quality="new", request=request)
@@ -1078,8 +1080,23 @@ class SiteServiceSystem(System):
             time_advanced_ticks=advanced_ticks,
         ))
 
-    def _apply_rail_transit(self, eid, prop, pos, request=None):
+    def _transit_destinations(self, prop, service):
+        service = str(service or "").strip().lower()
+        if service not in TRANSIT_SERVICE_IDS:
+            return ()
+        return _shared_transit_destinations(self.sim, prop, service)
+
+    def _transit_travel_ticks(self, service, distance):
+        service = str(service or "").strip().lower()
+        if service not in TRANSIT_SERVICE_IDS:
+            service = "rail_transit"
+        return _shared_transit_travel_ticks(self.sim, service, distance)
+
+    def _apply_transit_service(self, eid, prop, pos, service, request=None):
         request = request if isinstance(request, dict) else {}
+        service = str(service or "").strip().lower()
+        profile = _transit_service_profile(service) or {}
+        title = str(profile.get("title", service)).strip() or str(service or "Transit").replace("_", " ").title()
         vehicle_state = self._vehicle_state_for(eid)
         if vehicle_state and bool(getattr(vehicle_state, "in_vehicle", False)):
             self.sim.emit(Event(
@@ -1087,19 +1104,19 @@ class SiteServiceSystem(System):
                 eid=eid,
                 property_id=prop["id"],
                 property_name=prop.get("name", prop["id"]),
-                service="rail_transit",
+                service=service,
                 reason="leave_vehicle",
             ))
             return
 
-        destinations = list(_rail_transit_destinations(self.sim, prop) or ())
+        destinations = list(self._transit_destinations(prop, service) or ())
         if not destinations:
             self.sim.emit(Event(
                 "site_service_blocked",
                 eid=eid,
                 property_id=prop["id"],
                 property_name=prop.get("name", prop["id"]),
-                service="rail_transit",
+                service=service,
                 reason="no_destinations",
             ))
             return
@@ -1112,12 +1129,17 @@ class SiteServiceSystem(System):
                 requested_chunk = None
         else:
             requested_chunk = None
+        requested_node_id = str(request.get("destination_node_id", "") or "").strip()
         requested_building_id = str(request.get("destination_building_id", "") or "").strip()
 
         selected = None
         for destination in destinations:
+            destination_node_id = str(destination.get("node_id", "") or "").strip()
             destination_chunk = tuple(destination.get("chunk", ()) or ())
             destination_building_id = str(destination.get("building_id", "") or "").strip()
+            if requested_node_id and destination_node_id == requested_node_id:
+                selected = destination
+                break
             if requested_building_id and destination_building_id == requested_building_id:
                 selected = destination
                 break
@@ -1130,7 +1152,7 @@ class SiteServiceSystem(System):
                 eid=eid,
                 property_id=prop["id"],
                 property_name=prop.get("name", prop["id"]),
-                service="rail_transit",
+                service=service,
                 reason="invalid_destination",
             ))
             return
@@ -1138,13 +1160,15 @@ class SiteServiceSystem(System):
         city_tokens = self._inventory_item_count(eid, "city_pass_token")
         daypasses = self._inventory_item_count(eid, "transit_daypass")
         skill_terms = _mobility_service_skill_terms(self.sim, eid)
-        payment = _rail_transit_payment_profile(
+        payment = _transit_payment_profile(
+            service,
             selected.get("distance", 1),
             price_mult=skill_terms.get("price_mult", 1.0),
             city_tokens=city_tokens,
             daypasses=daypasses,
         )
         fare_mode = str(payment.get("fare_mode", "credits")).strip().lower() or "credits"
+        token_cost = max(0, int(payment.get("token_cost", 0) or 0))
         assets = self._assets_for(eid)
         credits = int(getattr(assets, "credits", 0)) if assets else 0
         credits_spent = 0
@@ -1152,7 +1176,21 @@ class SiteServiceSystem(System):
         if fare_mode == "transit_daypass":
             self._consume_inventory_item(eid, "transit_daypass", quantity=1)
         elif fare_mode == "city_pass_token":
-            self._consume_inventory_item(eid, "city_pass_token", quantity=1)
+            if city_tokens < token_cost:
+                self.sim.emit(Event(
+                    "site_service_blocked",
+                    eid=eid,
+                    property_id=prop["id"],
+                    property_name=prop.get("name", prop["id"]),
+                    service=service,
+                    reason="no_tokens",
+                    token_cost=token_cost,
+                    city_tokens=city_tokens,
+                    daypasses=daypasses,
+                    destination_name=selected.get("destination_name", selected.get("station_name", "")),
+                ))
+                return
+            self._consume_inventory_item(eid, "city_pass_token", quantity=token_cost)
         else:
             fare_cost = int(payment.get("cost", 0) or 0)
             if credits < fare_cost:
@@ -1161,19 +1199,19 @@ class SiteServiceSystem(System):
                     eid=eid,
                     property_id=prop["id"],
                     property_name=prop.get("name", prop["id"]),
-                    service="rail_transit",
+                    service=service,
                     reason="no_credits",
                     cost=fare_cost,
                     credits=credits,
-                    destination_name=selected.get("station_name", ""),
+                    destination_name=selected.get("destination_name", selected.get("station_name", "")),
                 ))
                 return
             if assets:
                 assets.credits = max(0, int(assets.credits) - fare_cost)
             credits_spent = fare_cost
 
-        travel_ticks = _rail_transit_travel_ticks(self.sim, selected.get("distance", 1))
-        advanced_ticks = self._advance_time_for_service(eid, prop, "rail_transit", travel_ticks)
+        travel_ticks = self._transit_travel_ticks(service, selected.get("distance", 1))
+        advanced_ticks = self._advance_time_for_service(eid, prop, service, travel_ticks)
 
         dest_x = int(selected.get("entry_x", pos.x))
         dest_y = int(selected.get("entry_y", pos.y))
@@ -1181,13 +1219,13 @@ class SiteServiceSystem(System):
         self.sim.stream_world(dest_x, dest_y)
         self.sim.ensure_loaded_chunk_terrain()
         landing_x, landing_y = self._find_walkable_near(dest_x, dest_y, dest_z, radius=6)
-        self._move_entity(eid, pos, landing_x, landing_y, dest_z, reason="rail_transit")
+        self._move_entity(eid, pos, landing_x, landing_y, dest_z, reason=service)
 
         world_streamer = self._world_streamer()
         if world_streamer is not None:
             world_streamer.update()
             landing_x, landing_y = self._find_walkable_near(dest_x, dest_y, dest_z, radius=6)
-            self._move_entity(eid, pos, landing_x, landing_y, dest_z, reason="rail_transit")
+            self._move_entity(eid, pos, landing_x, landing_y, dest_z, reason=service)
 
         skill_note = ""
         if fare_mode == "credits" and int(payment.get("base_cost", 0) or 0) > int(payment.get("cost", 0) or 0):
@@ -1198,17 +1236,22 @@ class SiteServiceSystem(System):
             eid=eid,
             property_id=prop["id"],
             property_name=prop.get("name", prop["id"]),
-            service="rail_transit",
-            destination_name=str(selected.get("station_name", "") or "").strip() or "Transit Exchange",
+            service=service,
+            destination_name=str(selected.get("destination_name", selected.get("station_name", title))) or title,
             destination_chunk=tuple(selected.get("chunk", ()) or ()),
+            destination_node_id=str(selected.get("node_id", "") or "").strip(),
             destination_building_id=str(selected.get("building_id", "") or "").strip(),
             distance=int(selected.get("distance", 0) or 0),
             fare_mode=fare_mode,
             credits_spent=int(credits_spent),
+            token_cost=int(token_cost),
             base_credits_spent=int(payment.get("base_cost", 0) or 0),
             skill_note=skill_note,
             time_advanced_ticks=int(advanced_ticks),
         ))
+
+    def _apply_rail_transit(self, eid, prop, pos, request=None):
+        self._apply_transit_service(eid, prop, pos, "rail_transit", request=request)
 
     def _player_vehicle_properties(self, eid):
         assets = self._assets_for(eid)
