@@ -10665,19 +10665,89 @@ def _business_event_item_pool(scene_type, category, actor_spec):
     return ("street_ration", "city_pass_token", "protein_wrap", "bottled_water")
 
 
+def _business_event_followup_anchor_fields(sim, prop):
+    if not isinstance(prop, dict):
+        return {}
+    place_name = str(prop.get("name", prop.get("id", "the place"))).strip() or "the place"
+    metadata = prop.get("metadata", {}) if isinstance(prop.get("metadata", {}), dict) else {}
+    org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
+    organization_name = str(
+        (org_snapshot or {}).get("organization_name", "")
+        or metadata.get("organization_name", "")
+        or ""
+    ).strip()
+    return {
+        "anchor_site_name": place_name,
+        "organization_name": organization_name,
+    }
+
+
+def _business_event_followup_target_label(anchor_fields):
+    anchor_fields = anchor_fields if isinstance(anchor_fields, dict) else {}
+    place_name = str(anchor_fields.get("anchor_site_name", "")).strip() or "the place"
+    organization_name = str(anchor_fields.get("organization_name", "")).strip()
+    if organization_name and organization_name.lower() != place_name.lower():
+        return f"{place_name} for {organization_name}"
+    return place_name
+
+
+def _business_event_enrich_followup_opportunity(sim, opportunity, target_prop, *, contact_name="", contact_role=""):
+    if not isinstance(opportunity, dict):
+        return {}
+
+    enriched = dict(opportunity)
+    if isinstance(target_prop, dict):
+        anchor_fields = _business_event_followup_anchor_fields(sim, target_prop)
+        for key, value in anchor_fields.items():
+            clean = str(value or "").strip()
+            if clean and not str(enriched.get(key, "") or "").strip():
+                enriched[key] = clean
+
+        requirements = dict(enriched.get("requirements", {}) or {}) if isinstance(enriched.get("requirements", {}), dict) else {}
+        property_id = str(target_prop.get("id", "") or "").strip()
+        property_name = str(target_prop.get("name", property_id or "the place")).strip() or "the place"
+        if property_id and not str(requirements.get("property_id", "") or "").strip():
+            requirements["property_id"] = property_id
+        if property_name and not str(requirements.get("property_name", "") or "").strip():
+            requirements["property_name"] = property_name
+        if "visit_chunk" not in requirements:
+            chunk = tuple(enriched.get("chunk", ()) or ())
+            if len(chunk) >= 2:
+                try:
+                    requirements["visit_chunk"] = (int(chunk[0]), int(chunk[1]))
+                except (TypeError, ValueError):
+                    pass
+        if requirements:
+            enriched["requirements"] = requirements
+
+    contact_name = str(contact_name or "").strip()
+    contact_role = str(contact_role or "").strip().lower()
+    if contact_name and not str(enriched.get("contact_name", "") or "").strip():
+        enriched["contact_name"] = contact_name
+    if contact_role and not str(enriched.get("contact_role", "") or "").strip():
+        enriched["contact_role"] = contact_role
+    return enriched
+
+
 def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
     followup_seed_id = str((scene or {}).get("followup_seed_id", "") or "").strip()
     if followup_seed_id:
         seed = _business_event_seed_state(sim).get("active", {}).get(followup_seed_id)
         if isinstance(seed, dict):
+            target_property_id = str(seed.get("target_property_id", "") or "").strip()
+            target_prop = sim.properties.get(target_property_id) if target_property_id else None
             return {
                 "seed_id": str(seed.get("seed_id", "") or "").strip(),
                 "property_id": str(seed.get("source_property_id", "") or "").strip(),
-                "target_property_id": str(seed.get("target_property_id", "") or "").strip(),
+                "target_property_id": target_property_id,
                 "local_line": str(seed.get("local_line", "") or "").strip(),
                 "detail_line": str(seed.get("detail_line", "") or "").strip(),
                 "lead_kind": str(seed.get("lead_kind", "") or "").strip().lower(),
-                "opportunity": dict(seed.get("opportunity", {}) or {}),
+                "opportunity": _business_event_enrich_followup_opportunity(
+                    sim,
+                    dict(seed.get("opportunity", {}) or {}),
+                    target_prop,
+                ),
                 "shared": bool(seed.get("shared")),
             }
     if not isinstance(prop, dict):
@@ -10748,12 +10818,17 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
 
     if event_phase == "neighbors_lingering":
         neighborhood_target = _business_event_neighborhood_target(sim, prop, rng=rng)
+        target_anchor = _business_event_followup_anchor_fields(sim, neighborhood_target) if isinstance(neighborhood_target, dict) else {}
         target_name = ""
+        target_label = ""
         target_hours_text = ""
         target_requirement = ""
         target_property_id = ""
         if isinstance(neighborhood_target, dict):
-            target_name = str(neighborhood_target.get("name", neighborhood_target.get("id", "the place"))).strip() or "the place"
+            target_name = str(target_anchor.get("anchor_site_name", "")).strip() or (
+                str(neighborhood_target.get("name", neighborhood_target.get("id", "the place"))).strip() or "the place"
+            )
+            target_label = _business_event_followup_target_label(target_anchor)
             target_property_id = str(neighborhood_target.get("id", "") or "").strip()
             target_controller = _property_access_controller(sim, neighborhood_target)
             if isinstance(target_controller, dict):
@@ -10764,13 +10839,13 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
         else:
             local_line = f"Nobody on this stoop is in a hurry to head in yet, so the talk turns into neighborhood gossip and who's still open."
         if target_name and target_hours_text and target_requirement:
-            detail_line = f"If you need something nearby, people here keep pointing at {target_name}; they usually run during {target_hours_text}, though they still want {target_requirement}."
+            detail_line = f"If you need something nearby, people here keep pointing at {target_label or target_name}; they usually run during {target_hours_text}, though they still want {target_requirement}."
         elif target_name and target_hours_text:
-            detail_line = f"If you need something nearby, the stoop keeps recommending {target_name}. They are usually moving during {target_hours_text}."
+            detail_line = f"If you need something nearby, the stoop keeps recommending {target_label or target_name}. They are usually moving during {target_hours_text}."
         elif target_name and target_requirement:
-            detail_line = f"People here keep pointing at {target_name} for anything nearby, but they still want {target_requirement} when you hit the door."
+            detail_line = f"People here keep pointing at {target_label or target_name} for anything nearby, but they still want {target_requirement} when you hit the door."
         elif target_name:
-            detail_line = f"Most nights this little stoop circle ends up recommending {target_name} to anyone still looking for something nearby."
+            detail_line = f"Most nights this little stoop circle ends up recommending {target_label or target_name} to anyone still looking for something nearby."
         else:
             detail_line = f"This frontage only looks busy because the neighbors at {current_name} are stretching out the evening and swapping block gossip before they head upstairs."
         return {
@@ -10870,10 +10945,13 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
             category="transit" if category == "transit" else category,
             rng=rng,
         )
-        target_name = str(target_prop.get("name", target_prop.get("id", "the place"))).strip() if isinstance(target_prop, dict) else ""
+        target_anchor = _business_event_followup_anchor_fields(sim, target_prop) if isinstance(target_prop, dict) else {}
+        target_name = str(target_anchor.get("anchor_site_name", "")).strip() if target_anchor else ""
+        target_label = _business_event_followup_target_label(target_anchor) if target_anchor else target_name
         target_property_id = str(target_prop.get("id", "") or "").strip() if isinstance(target_prop, dict) else ""
         if target_property_id == str(prop.get("id", "") or "").strip():
             target_name = ""
+            target_label = ""
             target_property_id = ""
         time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(0, 2))
         if career == "dispatcher":
@@ -10897,15 +10975,15 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
             )
         if target_name and hours_text and requirement:
             detail_line = (
-                f"{current_name} is boarding hard during {hours_text}. Staff keep calling {target_name} for around {time_text}, "
+                f"{current_name} is boarding hard during {hours_text}. Staff keep calling {target_label or target_name} for around {time_text}, "
                 f"but the stop still wants {requirement} while the line is hot."
             )
         elif target_name and hours_text:
-            detail_line = f"{current_name} is in a boarding crush during {hours_text}, with the clean next connection toward {target_name} getting called for around {time_text}."
+            detail_line = f"{current_name} is in a boarding crush during {hours_text}, with the clean next connection toward {target_label or target_name} getting called for around {time_text}."
         elif target_name and requirement:
-            detail_line = f"They are trying to clear this boarding crush at {current_name} without losing the {target_name} connection around {time_text}, and the stop still wants {requirement}."
+            detail_line = f"They are trying to clear this boarding crush at {current_name} without losing the {target_label or target_name} connection around {time_text}, and the stop still wants {requirement}."
         elif target_name:
-            detail_line = f"Fare talk at {current_name} keeps circling back to {target_name} as the next clean connection once this boarding crush finally clears."
+            detail_line = f"Fare talk at {current_name} keeps circling back to {target_label or target_name} as the next clean connection once this boarding crush finally clears."
         elif hours_text and requirement:
             detail_line = f"{current_name} is boarding hard during {hours_text}, and the stop still wants {requirement} while fares, bags, and shouted directions knot up at the edge."
         elif hours_text:
@@ -10918,10 +10996,10 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
         opportunity = {}
         if isinstance(target_prop, dict) and target_property_id:
             target_chunk = sim.chunk_coords(int(target_prop.get("x", 0)), int(target_prop.get("y", 0)))
-            opportunity = {
+            opportunity = _business_event_enrich_followup_opportunity(sim, {
                 "key": f"business_scene_followup:{scene_id}:{target_property_id}:boarding_crush",
                 "title": f"Connection Lead: {target_name}",
-                "summary": f"Boarding chatter at {current_name} points to a clean connection at {target_name} around {time_text}.",
+                "summary": f"Boarding chatter at {current_name} points to a clean connection at {target_label or target_name} around {time_text}.",
                 "kind": "lead_followup",
                 "source": "business_scene",
                 "chunk": target_chunk,
@@ -10933,10 +11011,11 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
                 "requirements": {
                     "visit_chunk": target_chunk,
                     "property_id": target_property_id,
+                    "property_name": target_name,
                 },
                 "status": "active",
                 "seed_tick": int(getattr(sim, "tick", 0)),
-            }
+            }, target_prop)
         return {
             "property_id": str(prop.get("id", "") or "").strip(),
             "target_property_id": target_property_id,
@@ -10955,10 +11034,13 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
             category=category,
             rng=rng,
         )
-        target_name = str(target_prop.get("name", target_prop.get("id", "the place"))).strip() if isinstance(target_prop, dict) else ""
+        target_anchor = _business_event_followup_anchor_fields(sim, target_prop) if isinstance(target_prop, dict) else {}
+        target_name = str(target_anchor.get("anchor_site_name", "")).strip() if target_anchor else ""
+        target_label = _business_event_followup_target_label(target_anchor) if target_anchor else target_name
         target_property_id = str(target_prop.get("id", "") or "").strip() if isinstance(target_prop, dict) else ""
         if target_property_id == str(prop.get("id", "") or "").strip():
             target_name = ""
+            target_label = ""
             target_property_id = ""
         target_controller = _property_access_controller(sim, target_prop) if isinstance(target_prop, dict) else None
         target_hours_text = _dialogue_hours_text(target_controller.get("opening_window")) if isinstance(target_controller, dict) else ""
@@ -10980,13 +11062,13 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
                 + (f" and pointing it toward {target_name} before the frontage clogs." if target_name else " before the frontage clogs.")
             )
         if target_name and target_hours_text and target_requirement:
-            detail_line = f"The arrival board at {current_name} says the incoming relief for {target_name} should land around {time_text}. They usually move during {target_hours_text}, though they still want {target_requirement}."
+            detail_line = f"The arrival board at {current_name} says the incoming relief for {target_label or target_name} should land around {time_text}. They usually move during {target_hours_text}, though they still want {target_requirement}."
         elif target_name and target_hours_text:
-            detail_line = f"Transit chatter at {current_name} says the incoming transfer for {target_name} is supposed to land around {time_text}, and they usually receive it during {target_hours_text}."
+            detail_line = f"Transit chatter at {current_name} says the incoming transfer for {target_label or target_name} is supposed to land around {time_text}, and they usually receive it during {target_hours_text}."
         elif target_name and target_requirement:
-            detail_line = f"Someone coming through {current_name} is supposed to push onward to {target_name} around {time_text}, but they still want {target_requirement} at the door."
+            detail_line = f"Someone coming through {current_name} is supposed to push onward to {target_label or target_name} around {time_text}, but they still want {target_requirement} at the door."
         elif target_name:
-            detail_line = f"Transit talk at {current_name} says this incoming handoff is bound for {target_name} around {time_text}, the kind of transfer that usually means somebody there is short on either staff or supplies."
+            detail_line = f"Transit talk at {current_name} says this incoming handoff is bound for {target_label or target_name} around {time_text}, the kind of transfer that usually means somebody there is short on either staff or supplies."
         elif hours_text and requirement:
             detail_line = f"{current_name} is handling an arrival handoff during {hours_text}, and the stop still wants {requirement} while inbound riders, relief bags, and pickup chatter bunch at the edge."
         elif hours_text:
@@ -10999,10 +11081,10 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
         opportunity = {}
         if isinstance(target_prop, dict) and target_property_id:
             target_chunk = sim.chunk_coords(int(target_prop.get("x", 0)), int(target_prop.get("y", 0)))
-            opportunity = {
+            opportunity = _business_event_enrich_followup_opportunity(sim, {
                 "key": f"business_scene_followup:{scene_id}:{target_property_id}:arrival_handoff",
                 "title": f"Arrival Lead: {target_name}",
-                "summary": f"Transit chatter says an incoming transfer through {current_name} is headed to {target_name} around {time_text}.",
+                "summary": f"Transit chatter says an incoming transfer through {current_name} is headed to {target_label or target_name} around {time_text}.",
                 "kind": "lead_followup",
                 "source": "business_scene",
                 "chunk": target_chunk,
@@ -11014,10 +11096,11 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
                 "requirements": {
                     "visit_chunk": target_chunk,
                     "property_id": target_property_id,
+                    "property_name": target_name,
                 },
                 "status": "active",
                 "seed_tick": int(getattr(sim, "tick", 0)),
-            }
+            }, target_prop)
         return {
             "property_id": str(prop.get("id", "") or "").strip(),
             "target_property_id": target_property_id,
@@ -11036,7 +11119,9 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
             category=category,
             rng=rng,
         )
-        target_name = str(target_prop.get("name", target_prop.get("id", "the place"))).strip() if isinstance(target_prop, dict) else ""
+        target_anchor = _business_event_followup_anchor_fields(sim, target_prop) if isinstance(target_prop, dict) else {}
+        target_name = str(target_anchor.get("anchor_site_name", "")).strip() if target_anchor else ""
+        target_label = _business_event_followup_target_label(target_anchor) if target_anchor else target_name
         target_property_id = str(target_prop.get("id", "") or "").strip() if isinstance(target_prop, dict) else ""
         time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(1, 3))
         if career == "dispatcher":
@@ -11050,13 +11135,13 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
                 + (f"with another stop lined up at {target_name} around {time_text}." if target_name else "and nobody wanting to be the reason the line stalls.")
             )
         if target_name and hours_text and requirement:
-            detail_line = f"The dispatch board says {target_name} is the next useful stop after {current_name}, around {time_text}. Until then the front still wants {requirement}."
+            detail_line = f"The dispatch board says {target_label or target_name} is the next useful stop after {current_name}, around {time_text}. Until then the front still wants {requirement}."
         elif target_name and hours_text:
-            detail_line = f"Dispatch talk says the next useful handoff after {current_name} lands at {target_name} around {time_text}, while this window is still hot during {hours_text}."
+            detail_line = f"Dispatch talk says the next useful handoff after {current_name} lands at {target_label or target_name} around {time_text}, while this window is still hot during {hours_text}."
         elif target_name and requirement:
-            detail_line = f"They keep routing people from {current_name} toward {target_name} around {time_text}, but this frontage still wants {requirement} while the surge is live."
+            detail_line = f"They keep routing people from {current_name} toward {target_label or target_name} around {time_text}, but this frontage still wants {requirement} while the surge is live."
         elif target_name:
-            detail_line = f"The dispatch chatter here keeps circling back to {target_name} as the next handoff once {current_name} finishes clearing the current burst."
+            detail_line = f"The dispatch chatter here keeps circling back to {target_label or target_name} as the next handoff once {current_name} finishes clearing the current burst."
         elif hours_text and requirement:
             detail_line = f"{current_name} is running a dispatch surge during {hours_text}, and the front still wants {requirement} while traffic is clipping the edge of the site."
         elif hours_text:
@@ -11069,10 +11154,10 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
         opportunity = {}
         if isinstance(target_prop, dict) and target_property_id:
             target_chunk = sim.chunk_coords(int(target_prop.get("x", 0)), int(target_prop.get("y", 0)))
-            opportunity = {
+            opportunity = _business_event_enrich_followup_opportunity(sim, {
                 "key": f"business_scene_followup:{scene_id}:{target_property_id}:dispatch_surge",
                 "title": f"Dispatch Lead: {target_name}",
-                "summary": f"Dispatch chatter points to {target_name} around {time_text}.",
+                "summary": f"Dispatch chatter points to {target_label or target_name} around {time_text}.",
                 "kind": "lead_followup",
                 "source": "business_scene",
                 "chunk": target_chunk,
@@ -11084,10 +11169,11 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
                 "requirements": {
                     "visit_chunk": target_chunk,
                     "property_id": target_property_id,
+                    "property_name": target_name,
                 },
                 "status": "active",
                 "seed_tick": int(getattr(sim, "tick", 0)),
-            }
+            }, target_prop)
         return {
             "property_id": str(prop.get("id", "") or "").strip(),
             "target_property_id": target_property_id,
@@ -11223,7 +11309,11 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
     )
     if not isinstance(target_prop, dict):
         return {}
-    target_name = str(target_prop.get("name", target_prop.get("id", "the place"))).strip() or "the place"
+    target_anchor = _business_event_followup_anchor_fields(sim, target_prop)
+    target_name = str(target_anchor.get("anchor_site_name", "")).strip() or (
+        str(target_prop.get("name", target_prop.get("id", "the place"))).strip() or "the place"
+    )
+    target_label = _business_event_followup_target_label(target_anchor)
     time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(1, 3))
     org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
     org_name = str((org_snapshot or {}).get("organization_name", "") or "").strip()
@@ -11231,41 +11321,41 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
 
     if scene_type == "delivery":
         title = f"Next Drop: {target_name}"
-        summary = f"Courier chatter points to another delivery at {target_name} around {time_text}."
+        summary = f"Courier chatter points to another delivery at {target_label or target_name} around {time_text}."
         local_line = f"After this stop, somebody is supposed to hit {target_name} around {time_text}."
-        detail_line = f"They are running one more drop after {current_name}: {target_name} around {time_text}."
+        detail_line = f"They are running one more drop after {current_name}: {target_label or target_name} around {time_text}."
         lead_kind = "hours"
         reward = {"credits": 6, "intel": 2}
     elif scene_type == "queue":
         if category in {"hospitality", "entertainment"}:
             title = f"Follow-Up Meet: {target_name}"
-            summary = f"Crowd chatter around {current_name} points to a follow-up meet at {target_name} around {time_text}."
+            summary = f"Crowd chatter around {current_name} points to a follow-up meet at {target_label or target_name} around {time_text}."
             local_line = (
                 f"This crowd is riding a bigger win for {org_label}, and people keep pointing at {target_name} later."
             )
             detail_line = (
                 f"Word is {org_label} just landed something worth celebrating, and a follow-up meet is supposed to hit "
-                f"{target_name} around {time_text}."
+                f"{target_label or target_name} around {time_text}."
             )
         else:
             title = f"Spillover Lead: {target_name}"
-            summary = f"The line outside {current_name} sounds tied to another stop at {target_name} around {time_text}."
+            summary = f"The line outside {current_name} sounds tied to another stop at {target_label or target_name} around {time_text}."
             local_line = f"Some of this line is going to peel off toward {target_name} around {time_text}."
-            detail_line = f"People here keep saying the next useful stop after {current_name} is {target_name} around {time_text}."
+            detail_line = f"People here keep saying the next useful stop after {current_name} is {target_label or target_name} around {time_text}."
         lead_kind = "hours"
         reward = {"credits": 4, "intel": 2}
     elif scene_type == "shift":
         title = f"Shift Lead: {target_name}"
-        summary = f"Shift chatter says {target_name} gets the next handoff around {time_text}."
+        summary = f"Shift chatter says {target_label or target_name} gets the next handoff around {time_text}."
         local_line = f"People here keep talking about the next handoff at {target_name} around {time_text}."
-        detail_line = f"Supervisor talk says the next handoff or check-in lands at {target_name} around {time_text}."
+        detail_line = f"Supervisor talk says the next handoff or check-in lands at {target_label or target_name} around {time_text}."
         lead_kind = "access"
         reward = {"credits": 5, "intel": 2}
     else:
         return {}
 
     target_chunk = sim.chunk_coords(int(target_prop.get("x", 0)), int(target_prop.get("y", 0)))
-    opportunity = {
+    opportunity = _business_event_enrich_followup_opportunity(sim, {
         "key": f"business_scene_followup:{scene_id}:{target_prop.get('id') or target_name.lower()}:{event_phase or scene_type}",
         "title": title,
         "summary": summary,
@@ -11280,10 +11370,11 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
         "requirements": {
             "visit_chunk": target_chunk,
             "property_id": str(target_prop.get("id", "") or "").strip(),
+            "property_name": target_name,
         },
         "status": "active",
         "seed_tick": int(getattr(sim, "tick", 0)),
-    }
+    }, target_prop)
     return {
         "property_id": str(prop.get("id", "") or "").strip(),
         "target_property_id": str(target_prop.get("id", "") or "").strip(),
@@ -11338,15 +11429,19 @@ def _business_event_followup_seed(sim, scene, prop, *, rng):
         if str(target_prop.get("id", "") or "").strip() == str(prop.get("id", "") or "").strip():
             return None
         target_category = _business_event_property_category(sim, target_prop) or category
+        target_anchor = _business_event_followup_anchor_fields(sim, target_prop)
         offset_hours = 1 + rng.randint(0, 2)
         duration_ticks = max(90, _business_event_ticks_per_hour(sim) // 2)
         time_text = _business_event_time_point_text(sim, offset_hours=offset_hours)
-        target_name = str(target_prop.get("name", target_prop.get("id", "the place"))).strip() or "the place"
+        target_name = str(target_anchor.get("anchor_site_name", "")).strip() or (
+            str(target_prop.get("name", target_prop.get("id", "the place"))).strip() or "the place"
+        )
+        target_label = _business_event_followup_target_label(target_anchor)
         kind = "next_delivery"
         title = f"Next Drop: {target_name}"
-        summary = f"Courier chatter points to another delivery at {target_name} around {time_text}."
+        summary = f"Courier chatter points to another delivery at {target_label or target_name} around {time_text}."
         local_line = f"After this stop, somebody is supposed to hit {target_name} around {time_text}."
-        detail_line = f"They are running one more drop after {current_name}: {target_name} around {time_text}."
+        detail_line = f"They are running one more drop after {current_name}: {target_label or target_name} around {time_text}."
         reward = {"credits": 6, "intel": 2}
         blueprint = _business_event_delivery_blueprint(target_category)
     elif scene_type == "queue" and category in {"hospitality", "entertainment", "retail", "office", "finance"}:
@@ -11362,17 +11457,21 @@ def _business_event_followup_seed(sim, scene, prop, *, rng):
         if str(target_prop.get("id", "") or "").strip() == str(prop.get("id", "") or "").strip():
             return None
         target_category = _business_event_property_category(sim, target_prop) or category
+        target_anchor = _business_event_followup_anchor_fields(sim, target_prop)
         offset_hours = 2 + rng.randint(0, 3)
         duration_ticks = max(120, int(_business_event_ticks_per_hour(sim) * 0.75))
         time_text = _business_event_time_point_text(sim, offset_hours=offset_hours)
-        target_name = str(target_prop.get("name", target_prop.get("id", "the place"))).strip() or "the place"
+        target_name = str(target_anchor.get("anchor_site_name", "")).strip() or (
+            str(target_prop.get("name", target_prop.get("id", "the place"))).strip() or "the place"
+        )
+        target_label = _business_event_followup_target_label(target_anchor)
         kind = "celebration_meet"
         title = f"Celebration Meet: {target_name}"
-        summary = f"Crowd chatter around {current_name} points to a nearby meet at {target_name} around {time_text}."
+        summary = f"Crowd chatter around {current_name} points to a nearby meet at {target_label or target_name} around {time_text}."
         local_line = f"This crowd is riding a bigger win for {org_label}, and people keep pointing at {target_name} later."
         detail_line = (
             f"Word is {org_label} just landed something worth celebrating, and a follow-up meet is supposed to hit "
-            f"{target_name} around {time_text}."
+            f"{target_label or target_name} around {time_text}."
         )
         reward = {"credits": 5, "intel": 2}
         blueprint = _business_event_gathering_blueprint(target_category)
@@ -11407,7 +11506,7 @@ def _business_event_followup_seed(sim, scene, prop, *, rng):
         "shared": False,
         "blueprint": dict(blueprint),
         "priority_score": 18.0 if kind == "next_delivery" else 16.5,
-        "opportunity": {
+        "opportunity": _business_event_enrich_followup_opportunity(sim, {
             "key": f"business_scene_followup:{scene_id}:{target_property_id}:{kind}",
             "title": title,
             "summary": summary,
@@ -11422,10 +11521,11 @@ def _business_event_followup_seed(sim, scene, prop, *, rng):
             "requirements": {
                 "visit_chunk": target_chunk,
                 "property_id": target_property_id,
+                "property_name": target_name,
             },
             "status": "active",
             "seed_tick": seed_tick,
-        },
+        }, target_prop),
     }
 
 
@@ -11472,6 +11572,7 @@ def _business_event_consequence_seed(sim, scene, prop, seed, *, rng):
     start_tick = base_tick + (offset_hours * _business_event_ticks_per_hour(sim))
     end_tick = start_tick + max(60, int(duration_ticks))
     blueprint = _business_event_inspection_blueprint(consequence_category)
+    current_anchor = _business_event_followup_anchor_fields(sim, prop)
     return {
         "key": f"business_seed:{seed_id}:delivery_inspection:{target_property_id}:{category}",
         "source_scene_id": str(scene.get("scene_id", "") or "").strip(),
@@ -11492,10 +11593,10 @@ def _business_event_consequence_seed(sim, scene, prop, seed, *, rng):
         "blueprint": dict(blueprint),
         "priority_score": 17.4,
         "parent_seed_id": seed_id,
-        "opportunity": {
+        "opportunity": _business_event_enrich_followup_opportunity(sim, {
             "key": f"business_scene_followup:{seed_id}:{target_property_id}:delivery_inspection",
             "title": f"Inspection Check: {current_name}",
-            "summary": f"The recent drop at {current_name} is expected to draw a brief inspection around {time_text}.",
+            "summary": f"The recent drop at {_business_event_followup_target_label(current_anchor)} is expected to draw a brief inspection around {time_text}.",
             "kind": "lead_followup",
             "source": "business_scene",
             "chunk": sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0))),
@@ -11507,10 +11608,11 @@ def _business_event_consequence_seed(sim, scene, prop, seed, *, rng):
             "requirements": {
                 "visit_chunk": sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0))),
                 "property_id": target_property_id,
+                "property_name": current_name,
             },
             "status": "active",
             "seed_tick": int(getattr(sim, "tick", 0) or 0),
-        },
+        }, prop),
     }
 
 
@@ -11694,7 +11796,7 @@ def _property_runtime_container_entries(sim, property_id, *, container_kind="con
         if not isinstance(inventories, dict):
             sim.cache_inventories = {}
             inventories = sim.cache_inventories
-        return inventories.setdefault(property_id, [])
+        return _ensure_runtime_container_entry_instance_ids(sim, inventories.setdefault(property_id, []))
     inventories_by_kind = getattr(sim, "container_inventories", None)
     if not isinstance(inventories_by_kind, dict):
         sim.container_inventories = {}
@@ -11703,7 +11805,7 @@ def _property_runtime_container_entries(sim, property_id, *, container_kind="con
     if not isinstance(inventories, dict):
         inventories = {}
         inventories_by_kind[container_kind] = inventories
-    return inventories.setdefault(property_id, [])
+    return _ensure_runtime_container_entry_instance_ids(sim, inventories.setdefault(property_id, []))
 
 
 def _clear_property_runtime_container_state(sim, property_id):
@@ -11742,6 +11844,20 @@ def _clear_property_runtime_container_state(sim, property_id):
             "inspect_text": "",
             "note_text": "",
         })
+
+
+def _ensure_runtime_container_entry_instance_ids(sim, entries):
+    if not isinstance(entries, list):
+        return entries
+    for idx, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("instance_id", "") or "").strip():
+            continue
+        normalized = dict(entry)
+        normalized["instance_id"] = sim.new_item_instance_id()
+        entries[idx] = normalized
+    return entries
 
 
 def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type="", rng):
@@ -12209,6 +12325,7 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
     loot_entries = []
     for item_id in unique_pool[:max(1, min(len(unique_pool), item_count))]:
         loot_entries.append({
+            "instance_id": sim.new_item_instance_id(),
             "item_id": item_id,
             "quantity": 1,
             "name": item_display_name(item_id, item_catalog=ITEM_CATALOG),
@@ -12249,14 +12366,20 @@ def _business_event_seed_scene_actor_note(sim, scene, prop, actor_spec, *, rng):
             consequence_seed_id = str(current_seed.get("consequence_seed_id", "") or "").strip()
             consequence_seed = _business_event_seed_state(sim).get("active", {}).get(consequence_seed_id)
             if isinstance(consequence_seed, dict):
+                target_property_id = str(consequence_seed.get("target_property_id", "") or "").strip()
+                target_prop = sim.properties.get(target_property_id) if target_property_id else None
                 return {
                     "seed_id": consequence_seed_id,
                     "property_id": str(consequence_seed.get("source_property_id", "") or "").strip(),
-                    "target_property_id": str(consequence_seed.get("target_property_id", "") or "").strip(),
+                    "target_property_id": target_property_id,
                     "local_line": str(consequence_seed.get("local_line", "") or "").strip(),
                     "detail_line": str(consequence_seed.get("detail_line", "") or "").strip(),
                     "lead_kind": str(consequence_seed.get("lead_kind", "") or "").strip().lower(),
-                    "opportunity": dict(consequence_seed.get("opportunity", {}) or {}),
+                    "opportunity": _business_event_enrich_followup_opportunity(
+                        sim,
+                        dict(consequence_seed.get("opportunity", {}) or {}),
+                        target_prop,
+                    ),
                     "shared": bool(consequence_seed.get("shared")),
                 }
 
@@ -12939,12 +13062,22 @@ class BusinessPulseSceneSystem(System):
         else:
             intel_note = _business_event_followup_note(self.sim, scene, prop, actor_spec, rng=rng)
         if intel_note:
+            followup_property_id = str(intel_note.get("target_property_id", "") or "").strip()
+            followup_prop = self.sim.properties.get(followup_property_id) if followup_property_id else None
+            followup_contact_role = str(career or role or "").strip().lower()
+            followup_opportunity = _business_event_enrich_followup_opportunity(
+                self.sim,
+                dict(intel_note.get("opportunity", {}) or {}),
+                followup_prop,
+                contact_name=_entity_display_name(self.sim, eid, title_case=True),
+                contact_role=followup_contact_role,
+            )
             note.update({
                 "followup_seed_id": str(intel_note.get("seed_id", "") or "").strip(),
                 "local_line": str(intel_note.get("local_line", "") or "").strip(),
                 "detail_line": str(intel_note.get("detail_line", "") or "").strip(),
-                "followup_opportunity": dict(intel_note.get("opportunity", {}) or {}),
-                "followup_property_id": str(intel_note.get("target_property_id", "") or "").strip(),
+                "followup_opportunity": followup_opportunity,
+                "followup_property_id": followup_property_id,
                 "followup_lead_kind": str(intel_note.get("lead_kind", "") or "").strip().lower(),
                 "followup_shared": bool(intel_note.get("shared")),
             })
@@ -16713,8 +16846,7 @@ class InputSystem(System):
             if not isinstance(inventories, dict):
                 self.sim.cache_inventories = {}
                 inventories = self.sim.cache_inventories
-            items = inventories.setdefault(property_id, [])
-            return items
+            return _ensure_runtime_container_entry_instance_ids(self.sim, inventories.setdefault(property_id, []))
         inventories_by_kind = getattr(self.sim, "container_inventories", None)
         if not isinstance(inventories_by_kind, dict):
             self.sim.container_inventories = {}
@@ -16723,8 +16855,7 @@ class InputSystem(System):
         if not isinstance(inventories, dict):
             inventories = {}
             inventories_by_kind[container_kind] = inventories
-        items = inventories.setdefault(property_id, [])
-        return items
+        return _ensure_runtime_container_entry_instance_ids(self.sim, inventories.setdefault(property_id, []))
 
     def _inventory_panel_entries(self):
         if self._inventory_panel_kind() == "container":
@@ -17072,6 +17203,7 @@ class InputSystem(System):
 
         item_def = self.catalog.get(entry["item_id"], {})
         item_name = item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=self.catalog)
+        entry_instance_id = str(entry.get("instance_id", "") or "").strip() or None
         legal_status = item_def.get("legal_status", "legal")
         tags = list(item_def.get("tags", []))
         effects = list(item_def.get("effects", []))
@@ -17107,9 +17239,10 @@ class InputSystem(System):
             loadout = self.sim.ecs.get(WeaponLoadout).get(self.player_eid)
             equipped = bool(
                 loadout
+                and entry_instance_id
                 and loadout.current_weapon() == weapon_id
                 and isinstance(loadout.weapon_instances.get(weapon_id), dict)
-                and str(loadout.weapon_instances[weapon_id].get("inventory_instance_id", "")).strip() == str(entry["instance_id"])
+                and str(loadout.weapon_instances[weapon_id].get("inventory_instance_id", "")).strip() == entry_instance_id
             )
             weapon_bits = [f"weapon dmg {int(weapon.get('base_damage', 0))}", f"rng {int(weapon.get('range', 1))}"]
             ammo_type = _weapon_ammo_type_label(weapon)
@@ -17131,7 +17264,7 @@ class InputSystem(System):
             armor_loadout = self.sim.ecs.get(ArmorLoadout).get(self.player_eid)
             reduction = int(round(float(armor.get("damage_reduction", 0.0)) * 100.0))
             armor_label = f"armor {reduction}%"
-            if armor_loadout and armor_loadout.is_equipped(entry["instance_id"]):
+            if armor_loadout and entry_instance_id and armor_loadout.is_equipped(entry_instance_id):
                 armor_label += " equipped"
             effect_labels.append(armor_label)
 
@@ -17186,7 +17319,7 @@ class InputSystem(System):
             legal_status=legal_status,
             tags=tags,
             effects=effects,
-            instance_id=entry["instance_id"],
+            instance_id=entry_instance_id,
             inspect_text=state["inspect_text"],
             panel_kind=str(state.get("panel_kind", "inventory")).strip().lower() or "inventory",
             title=str(state.get("title", "Inventory")).strip() or "Inventory",
@@ -18401,6 +18534,7 @@ class QuestSystem(System):
             inventories = self.sim.cache_inventories
         cache_items = inventories.setdefault(cache_prop["id"], [])
         cache_items.append({
+            "instance_id": self.sim.new_item_instance_id(),
             "item_id": seed_item_id,
             "quantity": 1,
             "name": seed_name,
@@ -23350,6 +23484,90 @@ class NPCInteractionSystem(System):
             return distance_phrase
         return "nearby"
 
+    def _opportunity_followthrough_fields(self, row):
+        if not isinstance(row, dict):
+            return "", "", "", ""
+        place_name = str(row.get("anchor_site_name", "")).strip() or self._opportunity_anchor_name(row)
+        organization_name = str(row.get("organization_name", "")).strip()
+        contact_name = str(row.get("contact_name", "")).strip()
+        contact_role = str(row.get("contact_role", "")).strip().replace("_", " ")
+        return place_name, organization_name, contact_name, contact_role
+
+    def _opportunity_followthrough_detail_tier(self, row, *, quality=None):
+        if not isinstance(row, dict):
+            return 0
+        quality_mode = str((quality or {}).get("mode", "clear")).strip().lower() if isinstance(quality, dict) else "clear"
+        if quality_mode != "clear":
+            return 0
+        awareness = str(row.get("awareness_state", "heard")).strip().lower() or "heard"
+        source = str(row.get("source", "")).strip().lower()
+        try:
+            confidence = float(row.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        tier = 0
+        if source == "business_scene":
+            tier += 2
+        elif source == "specialty_theme":
+            tier += 1
+        if awareness == "confirmed":
+            tier += 1
+        if confidence >= 0.86:
+            tier += 2
+        elif confidence >= 0.72:
+            tier += 1
+        return tier
+
+    def _opportunity_followthrough_summary_tail(self, row, *, quality=None):
+        place_name, organization_name, contact_name, contact_role = self._opportunity_followthrough_fields(row)
+        tier = self._opportunity_followthrough_detail_tier(row, quality=quality)
+        if tier <= 0:
+            return ""
+        place_lc = place_name.lower()
+        org_lc = organization_name.lower()
+        if organization_name and place_name and org_lc and org_lc != place_lc and tier >= 2:
+            return f"{place_name} is running under {organization_name}."
+        if contact_role and place_name and organization_name and org_lc and org_lc != place_lc and tier >= 4:
+            return f"The {contact_role} at {place_name} answers to {organization_name}."
+        if contact_role and place_name and tier >= 3:
+            return f"The {contact_role} at {place_name} is the face that repeats."
+        if contact_name and place_name and organization_name and org_lc and org_lc != place_lc and tier >= 5:
+            return f"{contact_name} is the face there, working under {organization_name}."
+        if contact_name and place_name and tier >= 4:
+            return f"{contact_name} is the repeat face at {place_name}."
+        return ""
+
+    def _opportunity_followthrough_angle_tail(self, row, *, quality=None):
+        place_name, organization_name, contact_name, contact_role = self._opportunity_followthrough_fields(row)
+        tier = self._opportunity_followthrough_detail_tier(row, quality=quality)
+        if tier <= 0:
+            return ""
+        place_lc = place_name.lower()
+        org_lc = organization_name.lower()
+        if contact_name and place_name and tier >= 4:
+            return f"Start by reading {contact_name} at {place_name}; they set the rhythm."
+        if contact_role and place_name and tier >= 2:
+            return f"Start by reading the {contact_role} at {place_name}; they set the rhythm."
+        if organization_name and place_name and org_lc and org_lc != place_lc and tier >= 3:
+            return f"Read who is working that stop for {organization_name}, not just who drifts through it."
+        return ""
+
+    def _opportunity_followthrough_risk_tail(self, row, *, quality=None):
+        place_name, organization_name, contact_name, contact_role = self._opportunity_followthrough_fields(row)
+        tier = self._opportunity_followthrough_detail_tier(row, quality=quality)
+        if tier <= 0:
+            return ""
+        place_lc = place_name.lower()
+        org_lc = organization_name.lower()
+        if contact_name and place_name and tier >= 4:
+            return f"If {contact_name} remembers you for the wrong reason, the lane closes fast."
+        if contact_role and place_name and tier >= 3:
+            return f"If the {contact_role} at {place_name} clocks you wrong, the lane closes fast."
+        if organization_name and place_name and org_lc and org_lc != place_lc and tier >= 2:
+            return f"Once {organization_name} starts reading you as pressure instead of traffic, the room tightens."
+        return ""
+
     def _specialty_opportunity_summary_line(self, row, context, *, quality=None, retrieval=False):
         if not isinstance(row, dict):
             return ""
@@ -23361,6 +23579,7 @@ class NPCInteractionSystem(System):
         quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         anchor = self._opportunity_anchor_clause(row, context, preposition="around")
         summary = str(row.get("summary", "")).strip()
+        summary_tail = self._opportunity_followthrough_summary_tail(row, quality=quality)
 
         if kind == "layover_shuffle":
             if retrieval:
@@ -23368,12 +23587,14 @@ class NPCInteractionSystem(System):
                     return f"For the retrieval, I would lean on the layover churn {anchor}, but only after you sort the real travelers from the handoff traffic."
                 if quality_mode == "vague":
                     return f"For the retrieval, the layover churn {anchor} is worth a harder look."
-                return f"For the retrieval, the layover churn {anchor} is the strongest live lead. Traveler turnover there hides cover, favors, and the real handoff."
+                line = f"For the retrieval, the layover churn {anchor} is the strongest live lead. Traveler turnover there hides cover, favors, and the real handoff."
+                return f"{line} {summary_tail}".strip() if summary_tail else line
             if quality_mode == "guarded":
                 return f"The layover churn {anchor} is live, but faces turn over fast there, so verify it yourself."
             if quality_mode == "vague":
                 return f"There is layover churn {anchor} if you want a route that keeps moving."
-            return f"Layover traffic {anchor} is still working. {summary}".strip()
+            line = f"Layover traffic {anchor} is still working. {summary}".strip()
+            return f"{line} {summary_tail}".strip() if summary_tail else line
 
         if kind == "route_stash":
             if retrieval:
@@ -23381,12 +23602,14 @@ class NPCInteractionSystem(System):
                     return f"For the retrieval, I would check the route stash {anchor}, but only if you can read who is servicing it and who is only passing through."
                 if quality_mode == "vague":
                     return f"For the retrieval, the route stash {anchor} is worth a look."
-                return f"For the retrieval, the route stash {anchor} is the strongest live lead. Stash runners there tell you who keeps using the lane with purpose."
+                line = f"For the retrieval, the route stash {anchor} is the strongest live lead. Stash runners there tell you who keeps using the lane with purpose."
+                return f"{line} {summary_tail}".strip() if summary_tail else line
             if quality_mode == "guarded":
                 return f"The route stash {anchor} is still hot, but those little caches cool fast once the wrong face hangs around them."
             if quality_mode == "vague":
                 return f"There is a route stash {anchor} if you want something small and fast-moving."
-            return f"The route stash {anchor} is still hot. {summary}".strip()
+            line = f"The route stash {anchor} is still hot. {summary}".strip()
+            return f"{line} {summary_tail}".strip() if summary_tail else line
 
         if kind == "yard_strip":
             if retrieval:
@@ -23394,12 +23617,14 @@ class NPCInteractionSystem(System):
                     return f"For the retrieval, I would use the yard strip {anchor}, but only after you know which crew is working it and which crew is waiting to pounce."
                 if quality_mode == "vague":
                     return f"For the retrieval, the yard strip {anchor} is worth a look."
-                return f"For the retrieval, the yard strip {anchor} is the strongest live lead. Salvage traffic there exposes who needs discreet parts, quick fixes, and quiet exits."
+                line = f"For the retrieval, the yard strip {anchor} is the strongest live lead. Salvage traffic there exposes who needs discreet parts, quick fixes, and quiet exits."
+                return f"{line} {summary_tail}".strip() if summary_tail else line
             if quality_mode == "guarded":
                 return f"The yard strip {anchor} is still open, but salvage lanes turn territorial fast if you show up late or loud."
             if quality_mode == "vague":
                 return f"There is a yard strip {anchor} if you want a harder scrap lane."
-            return f"The yard strip {anchor} is still open. {summary}".strip()
+            line = f"The yard strip {anchor} is still open. {summary}".strip()
+            return f"{line} {summary_tail}".strip() if summary_tail else line
 
         if kind == "field_repair_call":
             if retrieval:
@@ -23407,12 +23632,14 @@ class NPCInteractionSystem(System):
                     return f"For the retrieval, I would lean on the repair call {anchor}, but make sure the desperate customer is the one you are reading, not the crew circling them."
                 if quality_mode == "vague":
                     return f"For the retrieval, the repair call {anchor} is worth a second look."
-                return f"For the retrieval, the repair call {anchor} is the strongest live lead. Quiet fixes there expose who needs a vehicle ready and who cannot afford public attention."
+                line = f"For the retrieval, the repair call {anchor} is the strongest live lead. Quiet fixes there expose who needs a vehicle ready and who cannot afford public attention."
+                return f"{line} {summary_tail}".strip() if summary_tail else line
             if quality_mode == "guarded":
                 return f"The repair call {anchor} is moving, but once that fix turns noisy the whole lane knows about it."
             if quality_mode == "vague":
                 return f"There is a quiet repair call {anchor} if you want a softer mechanical lane."
-            return f"The quiet repair call {anchor} is still moving. {summary}".strip()
+            line = f"The quiet repair call {anchor} is still moving. {summary}".strip()
+            return f"{line} {summary_tail}".strip() if summary_tail else line
 
         if kind == "sightline_check":
             if retrieval:
@@ -23420,12 +23647,14 @@ class NPCInteractionSystem(System):
                     return f"For the retrieval, I would use the sightline read {anchor}, but only if you can stay watcher instead of becoming the thing being watched."
                 if quality_mode == "vague":
                     return f"For the retrieval, the sightline read {anchor} is worth your time."
-                return f"For the retrieval, the sightline read {anchor} is the strongest live lead. Long views there tell you who crosses the dead ground and who owns the route."
+                line = f"For the retrieval, the sightline read {anchor} is the strongest live lead. Long views there tell you who crosses the dead ground and who owns the route."
+                return f"{line} {summary_tail}".strip() if summary_tail else line
             if quality_mode == "guarded":
                 return f"The sightline read {anchor} still pays, but good sightlines work both ways."
             if quality_mode == "vague":
                 return f"There is a sightline read {anchor} if you want a cleaner watch lane."
-            return f"The sightline read {anchor} is still paying. {summary}".strip()
+            line = f"The sightline read {anchor} is still paying. {summary}".strip()
+            return f"{line} {summary_tail}".strip() if summary_tail else line
 
         if kind == "relay_watch":
             if retrieval:
@@ -23433,12 +23662,14 @@ class NPCInteractionSystem(System):
                     return f"For the retrieval, I would lean on the relay watch {anchor}, but only after you know which repeat faces belong there and which ones mean trouble."
                 if quality_mode == "vague":
                     return f"For the retrieval, the relay watch {anchor} is worth a closer look."
-                return f"For the retrieval, the relay watch {anchor} is the strongest live lead. Repeat traffic there tells you who keeps using the chain with intent."
+                line = f"For the retrieval, the relay watch {anchor} is the strongest live lead. Repeat traffic there tells you who keeps using the chain with intent."
+                return f"{line} {summary_tail}".strip() if summary_tail else line
             if quality_mode == "guarded":
                 return f"The relay watch {anchor} is still live, but quiet chains remember patterns fast."
             if quality_mode == "vague":
                 return f"There is a relay watch {anchor} if you want a patient read."
-            return f"The relay watch {anchor} is still live. {summary}".strip()
+            line = f"The relay watch {anchor} is still live. {summary}".strip()
+            return f"{line} {summary_tail}".strip() if summary_tail else line
 
         if kind == "refuge_resupply":
             if retrieval:
@@ -23446,12 +23677,14 @@ class NPCInteractionSystem(System):
                     return f"For the retrieval, I would use the refuge resupply {anchor}, but only if you can tell real need from somebody running a lure."
                 if quality_mode == "vague":
                     return f"For the retrieval, the refuge resupply {anchor} might still open a quiet lane."
-                return f"For the retrieval, the refuge resupply {anchor} is the strongest live lead. Short shelter stops there tell you who keeps coming through with pressure on them."
+                line = f"For the retrieval, the refuge resupply {anchor} is the strongest live lead. Short shelter stops there tell you who keeps coming through with pressure on them."
+                return f"{line} {summary_tail}".strip() if summary_tail else line
             if quality_mode == "guarded":
                 return f"The refuge resupply {anchor} is still soft enough to work, but the room turns watchful the moment you read like pressure instead of help."
             if quality_mode == "vague":
                 return f"There is a refuge resupply {anchor} if you want a quieter lane."
-            return f"The refuge resupply {anchor} is still soft enough to work. {summary}".strip()
+            line = f"The refuge resupply {anchor} is still soft enough to work. {summary}".strip()
+            return f"{line} {summary_tail}".strip() if summary_tail else line
 
         if kind == "spring_run":
             if retrieval:
@@ -23459,12 +23692,14 @@ class NPCInteractionSystem(System):
                     return f"For the retrieval, I would lean on the spring run {anchor}, but only if you can stay useful without becoming memorable."
                 if quality_mode == "vague":
                     return f"For the retrieval, the spring run {anchor} could still open a quiet path."
-                return f"For the retrieval, the spring run {anchor} is the strongest live lead. Water legs there tell you who cannot miss the route and who keeps the refuge chain alive."
+                line = f"For the retrieval, the spring run {anchor} is the strongest live lead. Water legs there tell you who cannot miss the route and who keeps the refuge chain alive."
+                return f"{line} {summary_tail}".strip() if summary_tail else line
             if quality_mode == "guarded":
                 return f"The spring run {anchor} is still worth a walk, but once somebody misses water every stranger starts getting remembered."
             if quality_mode == "vague":
                 return f"There is a spring run {anchor} if you want a quieter cover lane."
-            return f"The spring run {anchor} is still worth a walk. {summary}".strip()
+            line = f"The spring run {anchor} is still worth a walk. {summary}".strip()
+            return f"{line} {summary_tail}".strip() if summary_tail else line
 
         return ""
 
@@ -23478,110 +23713,127 @@ class NPCInteractionSystem(System):
         quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "angle")
         quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+        angle_tail = self._opportunity_followthrough_angle_tail(row, quality=quality)
 
         if kind == "layover_shuffle":
             if retrieval:
-                return (
+                line = (
                     f"For the retrieval, start with the traveler turnover {anchor} and see who keeps treating the stop like a working handoff."
                     if quality_mode != "guarded"
                     else f"For the retrieval, start with the traveler turnover {anchor}, but make sure you sort the real regulars from the handoff traffic."
                 )
+                return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
             if quality_mode == "guarded":
                 return f"Start with the layover churn {anchor}, then make sure you can pass for one more traveler before you lean harder."
             if quality_mode == "vague":
                 return f"Start with the layover churn {anchor} before you touch anything fixed."
-            return f"Start with the layover churn {anchor}; if you look like one more traveler between legs, the real handoff has room to show itself."
+            line = f"Start with the layover churn {anchor}; if you look like one more traveler between legs, the real handoff has room to show itself."
+            return f"{line} {angle_tail}".strip() if angle_tail else line
 
         if kind == "route_stash":
             if retrieval:
-                return (
+                line = (
                     f"For the retrieval, start with the route stash {anchor} and watch who services it like clockwork."
                     if quality_mode != "guarded"
                     else f"For the retrieval, start with the route stash {anchor}, but confirm who is servicing it and who is only drifting past."
                 )
+                return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
             if quality_mode == "guarded":
                 return f"Start with the route stash {anchor}, then see who keeps servicing it before the lane turns over."
             if quality_mode == "vague":
                 return f"Start with the route stash {anchor} before the next line clears it."
-            return f"Start with the route stash {anchor}; whoever keeps it fed is the one moving with purpose."
+            line = f"Start with the route stash {anchor}; whoever keeps it fed is the one moving with purpose."
+            return f"{line} {angle_tail}".strip() if angle_tail else line
 
         if kind == "yard_strip":
             if retrieval:
-                return (
+                line = (
                     f"For the retrieval, start with the yard strip {anchor} and log which crew is still working the hot edge."
                     if quality_mode != "guarded"
                     else f"For the retrieval, start with the yard strip {anchor}, but know whose scrap lane you are stepping into before you show your face."
                 )
+                return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
             if quality_mode == "guarded":
                 return f"Start with the yard strip {anchor}, then work out which crew owns the lane before you move."
             if quality_mode == "vague":
                 return f"Start with the yard strip {anchor} before the regular crews clean it out."
-            return f"Start with the yard strip {anchor}; the crew working the hot edge tells you who still needs the lane quiet."
+            line = f"Start with the yard strip {anchor}; the crew working the hot edge tells you who still needs the lane quiet."
+            return f"{line} {angle_tail}".strip() if angle_tail else line
 
         if kind == "field_repair_call":
             if retrieval:
-                return (
+                line = (
                     f"For the retrieval, start with the repair call {anchor} and follow the person who cannot let the breakdown become public."
                     if quality_mode != "guarded"
                     else f"For the retrieval, start with the repair call {anchor}, but do not mistake the desperate customer for the whole crew behind them."
                 )
+                return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
             if quality_mode == "guarded":
                 return f"Start with the repair call {anchor}, then make sure the desperate customer is the one you follow."
             if quality_mode == "vague":
                 return f"Start with the repair call {anchor} before the fix gets folded back into normal traffic."
-            return f"Start with the repair call {anchor}; whoever cannot afford a public breakdown is the one who opens the lane."
+            line = f"Start with the repair call {anchor}; whoever cannot afford a public breakdown is the one who opens the lane."
+            return f"{line} {angle_tail}".strip() if angle_tail else line
 
         if kind == "sightline_check":
             if retrieval:
-                return (
+                line = (
                     f"For the retrieval, start with the sightline read {anchor} and map who crosses the dead ground with confidence."
                     if quality_mode != "guarded"
                     else f"For the retrieval, start with the sightline read {anchor}, but keep moving before you become the thing in the glass."
                 )
+                return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
             if quality_mode == "guarded":
                 return f"Start with the sightline read {anchor}, but keep it moving before the watch lane notices you back."
             if quality_mode == "vague":
                 return f"Start with the sightline read {anchor} before you touch the block itself."
-            return f"Start with the sightline read {anchor}; map who owns the dead ground before you commit to a route."
+            line = f"Start with the sightline read {anchor}; map who owns the dead ground before you commit to a route."
+            return f"{line} {angle_tail}".strip() if angle_tail else line
 
         if kind == "relay_watch":
             if retrieval:
-                return (
+                line = (
                     f"For the retrieval, start with the relay watch {anchor} and match the repeat faces that keep using the chain after dark."
                     if quality_mode != "guarded"
                     else f"For the retrieval, start with the relay watch {anchor}, but make sure the repeat face you choose is real and not the decoy everyone else already sees."
                 )
+                return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
             if quality_mode == "guarded":
                 return f"Start with the relay watch {anchor}, then separate the real repeat faces from the noise."
             if quality_mode == "vague":
                 return f"Start with the relay watch {anchor} after dark."
-            return f"Start with the relay watch {anchor}; the repeat face on that chain is the one worth following."
+            line = f"Start with the relay watch {anchor}; the repeat face on that chain is the one worth following."
+            return f"{line} {angle_tail}".strip() if angle_tail else line
 
         if kind == "refuge_resupply":
             if retrieval:
-                return (
+                line = (
                     f"For the retrieval, start with the refuge resupply {anchor} and see which stop is running short enough to talk."
                     if quality_mode != "guarded"
                     else f"For the retrieval, start with the refuge resupply {anchor}, but keep your help useful enough that nobody starts reading you as pressure."
                 )
+                return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
             if quality_mode == "guarded":
                 return f"Start with the refuge resupply {anchor}, then stay useful enough that the room does not turn on you."
             if quality_mode == "vague":
                 return f"Start with the refuge resupply {anchor} before you touch the harder lanes."
-            return f"Start with the refuge resupply {anchor}; the stop running shortest is the stop that talks first."
+            line = f"Start with the refuge resupply {anchor}; the stop running shortest is the stop that talks first."
+            return f"{line} {angle_tail}".strip() if angle_tail else line
 
         if kind == "spring_run":
             if retrieval:
-                return (
+                line = (
                     f"For the retrieval, start with the spring run {anchor} and see who cannot miss the water leg."
                     if quality_mode != "guarded"
                     else f"For the retrieval, start with the spring run {anchor}, but do not linger long enough to become the memorable stranger on the route."
                 )
+                return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
             if quality_mode == "guarded":
                 return f"Start with the spring run {anchor}, then move before the route starts remembering you."
             if quality_mode == "vague":
                 return f"Start with the spring run {anchor} before the refuge chain settles."
-            return f"Start with the spring run {anchor}; whoever cannot miss the water leg is the one who gives the chain away."
+            line = f"Start with the spring run {anchor}; whoever cannot miss the water leg is the one who gives the chain away."
+            return f"{line} {angle_tail}".strip() if angle_tail else line
 
         return ""
 
@@ -23595,62 +23847,71 @@ class NPCInteractionSystem(System):
         quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "risk")
         quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+        risk_tail = self._opportunity_followthrough_risk_tail(row, quality=quality)
 
         if kind == "layover_shuffle":
             if quality_mode == "vague":
                 return f"Traveler turnover {anchor} hides you until it decides you are the extra."
             if quality_mode == "guarded":
                 return f"Traveler turnover {anchor} gives you cover, but strangers there still remember the wrong face."
-            return f"Traveler turnover {anchor} gives you cover, but strangers there still remember the wrong face once you stop looking like you belong."
+            line = f"Traveler turnover {anchor} gives you cover, but strangers there still remember the wrong face once you stop looking like you belong."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
 
         if kind == "route_stash":
             if quality_mode == "vague":
                 return f"Route stashes {anchor} cool fast."
             if quality_mode == "guarded":
                 return f"Route stashes {anchor} cool fast, and hovering around one makes you the obvious extra."
-            return f"Route stashes {anchor} cool fast, and hovering around one makes you the obvious extra before the next line turns over."
+            line = f"Route stashes {anchor} cool fast, and hovering around one makes you the obvious extra before the next line turns over."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
 
         if kind == "yard_strip":
             if quality_mode == "vague":
                 return f"Salvage lanes {anchor} can turn rough quickly."
             if quality_mode == "guarded":
                 return f"Salvage lanes {anchor} turn territorial fast if you show up late or loud."
-            return f"Salvage lanes {anchor} turn territorial fast if you show up late, loud, or on the wrong crew's edge."
+            line = f"Salvage lanes {anchor} turn territorial fast if you show up late, loud, or on the wrong crew's edge."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
 
         if kind == "field_repair_call":
             if quality_mode == "vague":
                 return f"Quiet repair calls {anchor} stay quiet right up until they do not."
             if quality_mode == "guarded":
                 return f"Quiet repair calls {anchor} stay soft only until the fix goes noisy and everybody starts watching."
-            return f"Quiet repair calls {anchor} stay soft only until the fix goes noisy and everybody starts watching the same breakdown."
+            line = f"Quiet repair calls {anchor} stay soft only until the fix goes noisy and everybody starts watching the same breakdown."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
 
         if kind == "sightline_check":
             if quality_mode == "vague":
                 return f"Good sightlines {anchor} work both ways."
             if quality_mode == "guarded":
                 return f"Good sightlines {anchor} pay in reads, but they also make you easier to clock if you overstay."
-            return f"Good sightlines {anchor} pay in reads, but they also make you easier to clock if you overstay and become the thing being watched."
+            line = f"Good sightlines {anchor} pay in reads, but they also make you easier to clock if you overstay and become the thing being watched."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
 
         if kind == "relay_watch":
             if quality_mode == "vague":
                 return f"Quiet relay chains {anchor} remember patterns."
             if quality_mode == "guarded":
                 return f"Quiet relay chains {anchor} remember patterns, and one bad repeat can close the lane on you."
-            return f"Quiet relay chains {anchor} remember patterns, and one bad repeat can close the lane on you before you learn anything useful."
+            line = f"Quiet relay chains {anchor} remember patterns, and one bad repeat can close the lane on you before you learn anything useful."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
 
         if kind == "refuge_resupply":
             if quality_mode == "vague":
                 return f"Refuge stops {anchor} are soft until you read like pressure."
             if quality_mode == "guarded":
                 return f"Refuge stops {anchor} are grateful right up until you stop reading like help."
-            return f"Refuge stops {anchor} are grateful right up until you stop reading like help and start reading like pressure."
+            line = f"Refuge stops {anchor} are grateful right up until you stop reading like help and start reading like pressure."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
 
         if kind == "spring_run":
             if quality_mode == "vague":
                 return f"Water legs {anchor} get memorable fast when somebody misses one."
             if quality_mode == "guarded":
                 return f"Water legs {anchor} sound soft until somebody misses one and every stranger gets remembered."
-            return f"Water legs {anchor} sound soft until somebody misses one and every stranger on the route gets remembered."
+            line = f"Water legs {anchor} sound soft until somebody misses one and every stranger on the route gets remembered."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
 
         return ""
 
@@ -23687,6 +23948,7 @@ class NPCInteractionSystem(System):
         kind = str(row.get("kind", "")).strip().lower()
         summary = str(row.get("summary", "")).strip()
         anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+        summary_tail = self._opportunity_followthrough_summary_tail(row, quality=quality)
 
         specialty_line = self._specialty_opportunity_summary_line(row, context, quality=quality, retrieval=True)
         if specialty_line:
@@ -23750,8 +24012,9 @@ class NPCInteractionSystem(System):
 
         detail = summary or fallback_tail
         if detail:
-            return f"{clear_base} {detail}".strip()
-        return clear_base.strip()
+            line = f"{clear_base} {detail}".strip()
+            return f"{line} {summary_tail}".strip() if summary_tail else line
+        return f"{clear_base} {summary_tail}".strip() if summary_tail else clear_base.strip()
 
     def _opportunity_summary(self, context, *, quality=None):
         focus_lines = list(context.get("objective_focus_lines", ()) or ())
@@ -23781,6 +24044,7 @@ class NPCInteractionSystem(System):
             direction = str(row.get("direction", "HERE")).strip()
             risk = str(row.get("risk", "low")).strip().lower() or "low"
             requirement_fragment = self._opportunity_requirement_summary_fragment(row)
+            followthrough_tail = self._opportunity_followthrough_summary_tail(row, quality=quality)
 
             # Humanize distance with directional context (1 chunk = ~200m).
             distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
@@ -23855,6 +24119,8 @@ class NPCInteractionSystem(System):
 
             focus_line = str(focus_lines[0]).strip() if focus_lines else ""
             result = f"{base}{extra}".strip()
+            if followthrough_tail:
+                result = f"{result} {followthrough_tail}".strip()
             if focus_line:
                 result = f"{result} {focus_line}"
             return result
@@ -24149,6 +24415,7 @@ class NPCInteractionSystem(System):
         quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         kind = str(row.get("kind", "")).strip().lower()
         anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+        angle_tail = self._opportunity_followthrough_angle_tail(row, quality=quality)
 
         specialty_line = self._specialty_opportunity_angle_line(row, context, quality=quality, retrieval=True)
         if specialty_line:
@@ -24159,43 +24426,50 @@ class NPCInteractionSystem(System):
                 return f"Start with the service trouble {anchor} before you touch anything else."
             if quality_mode == "guarded":
                 return f"Start with the service trouble {anchor}, then confirm the timing yourself."
-            return f"Start with the complaint-heavy side {anchor}; delayed service is exposing timings and access habits."
+            line = f"Start with the complaint-heavy side {anchor}; delayed service is exposing timings and access habits."
+            return f"{line} {angle_tail}".strip() if angle_tail else line
         if kind == "missing_person":
             if quality_mode == "vague":
                 return f"Start with the missing-person trail {anchor}."
             if quality_mode == "guarded":
                 return f"Start with the missing-person trail {anchor}, then verify who is really moving because of it."
-            return f"Start with the people asking after the missing person {anchor}; search traffic shakes routine loose."
+            line = f"Start with the people asking after the missing person {anchor}; search traffic shakes routine loose."
+            return f"{line} {angle_tail}".strip() if angle_tail else line
         if kind == "property_dispute":
             if quality_mode == "vague":
                 return f"Start with the dispute {anchor}."
             if quality_mode == "guarded":
                 return f"Start with the dispute {anchor}, then make somebody prove which side is actually talking."
-            return f"Start with the split {anchor}; the side that feels squeezed is the side that talks."
+            line = f"Start with the split {anchor}; the side that feels squeezed is the side that talks."
+            return f"{line} {angle_tail}".strip() if angle_tail else line
         if kind == "lead_followup":
-            return (
+            line = (
                 f"Start by walking the follow-up lead {anchor} before it cools."
                 if quality_mode != "guarded"
                 else f"Start by walking the follow-up lead {anchor}, then confirm it before it turns back into rumor."
             )
+            return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
         if kind == "intel_scout":
-            return (
+            line = (
                 f"Start by scouting {anchor} until you know who belongs and who lingers."
                 if quality_mode != "guarded"
                 else f"Start by scouting {anchor}, but make the read yourself before you trust it."
             )
+            return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
         if kind == "landmark_survey":
-            return (
+            line = (
                 f"Start by watching {anchor} long enough to see who treats it like background."
                 if quality_mode != "guarded"
                 else f"Start by surveying {anchor}, but do not force the pattern before the place gives it to you."
             )
+            return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
         if kind == "district_contract":
-            return (
+            line = (
                 f"Start with the contract traffic {anchor}; it gives you a reason to be on the block."
                 if quality_mode != "guarded"
                 else f"Start with the contract traffic {anchor}, but make sure you still look like you belong in that lane."
             )
+            return f"{line} {angle_tail}".strip() if quality_mode == "clear" and angle_tail else line
         return ""
 
     def _final_operation_risk_line(self, context, *, quality=None):
@@ -24251,6 +24525,7 @@ class NPCInteractionSystem(System):
             summary = str(row.get("summary", "")).strip()
             distance = int(row.get("distance", 0))
             direction = str(row.get("direction", "HERE")).strip()
+            followthrough_angle = self._opportunity_followthrough_angle_tail(row, quality=quality)
             
             # Humanize distance with directional context (1 chunk = ~200m).
             distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
@@ -24270,6 +24545,8 @@ class NPCInteractionSystem(System):
                     line = f"{line} {requirement_line}"
                 if style_line:
                     line = f"{line} {style_line}"
+                if followthrough_angle:
+                    line = f"{line} {followthrough_angle}"
             lines.append(line)
         if not retrieval_objective:
             lines.extend(list(context.get("objective_focus_lines", ()) or ()))
@@ -24300,6 +24577,7 @@ class NPCInteractionSystem(System):
         quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         kind = str(row.get("kind", "")).strip().lower()
         anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+        risk_tail = self._opportunity_followthrough_risk_tail(row, quality=quality)
 
         specialty_line = self._specialty_opportunity_risk_line(row, context, quality=quality, retrieval=True)
         if specialty_line:
@@ -24310,43 +24588,50 @@ class NPCInteractionSystem(System):
                 return f"Service trouble {anchor} also means extra eyes if you handle it badly."
             if quality_mode == "guarded":
                 return f"Service trouble {anchor} can still pay, but irritated staff remember the wrong face."
-            return f"Service trouble {anchor} means more irritated staff, more complaints, and more people remembering the wrong face."
+            line = f"Service trouble {anchor} means more irritated staff, more complaints, and more people remembering the wrong face."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
         if kind == "missing_person":
             if quality_mode == "vague":
                 return f"A missing-person trail {anchor} brings extra eyes with it."
             if quality_mode == "guarded":
                 return f"A missing-person trail {anchor} means anxious people comparing notes about strangers."
-            return f"A missing-person trail {anchor} means anxious people comparing notes about strangers."
+            line = f"A missing-person trail {anchor} means anxious people comparing notes about strangers."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
         if kind == "property_dispute":
             if quality_mode == "vague":
                 return f"A dispute {anchor} can turn everybody jumpy fast."
             if quality_mode == "guarded":
                 return f"A dispute {anchor} means everybody is already expecting somebody to lie."
-            return f"A dispute {anchor} means everybody is already expecting somebody to lie."
+            line = f"A dispute {anchor} means everybody is already expecting somebody to lie."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
         if kind == "lead_followup":
             if quality_mode == "vague":
                 return f"That follow-up lead {anchor} will cool if you let the block settle."
             if quality_mode == "guarded":
                 return f"That follow-up lead {anchor} cools fast, and if you loiter without purpose you become the memorable part."
-            return f"That follow-up lead {anchor} cools fast, and if you loiter without purpose you become the memorable part."
+            line = f"That follow-up lead {anchor} cools fast, and if you loiter without purpose you become the memorable part."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
         if kind == "intel_scout":
             if quality_mode == "vague":
                 return f"A scout pass {anchor} is only clean if you keep moving."
             if quality_mode == "guarded":
                 return f"A scout pass {anchor} pays in sightlines, but it still tags you if you overstay it."
-            return f"A scout pass {anchor} pays in sightlines, but it still tags you if you overstay it."
+            line = f"A scout pass {anchor} pays in sightlines, but it still tags you if you overstay it."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
         if kind == "landmark_survey":
             if quality_mode == "vague":
                 return f"The risk {anchor} is becoming the person who watches a little too carefully."
             if quality_mode == "guarded":
                 return f"The risk {anchor} is becoming the person who watches a little too carefully."
-            return f"The risk {anchor} is becoming the person who watches a little too carefully."
+            line = f"The risk {anchor} is becoming the person who watches a little too carefully."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
         if kind == "district_contract":
             if quality_mode == "vague":
                 return f"Contract traffic {anchor} can cover you or expose you."
             if quality_mode == "guarded":
                 return f"Contract traffic {anchor} can cover you, but somebody will notice if you do not fit the lane."
-            return f"Contract traffic {anchor} can cover you, but somebody will notice if you do not fit the lane."
+            line = f"Contract traffic {anchor} can cover you, but somebody will notice if you do not fit the lane."
+            return f"{line} {risk_tail}".strip() if risk_tail else line
         return ""
 
     def _opportunity_risk_lines(self, context, *, quality=None, include_final_operation=True):
@@ -24368,6 +24653,7 @@ class NPCInteractionSystem(System):
             title = str(row.get("title", "Opportunity")).strip() or "Opportunity"
             risk = str(row.get("risk", "low")).strip() or "low"
             playstyles = [str(style).strip() for style in row.get("playstyles", ()) if str(style).strip()]
+            followthrough_risk = self._opportunity_followthrough_risk_tail(row, quality=quality)
 
             if quality_mode == "guarded":
                 lines.append(f"{title} can still pay, but expect less room to improvise than people say.")
@@ -24405,6 +24691,8 @@ class NPCInteractionSystem(System):
             requirement_risk = self._opportunity_requirement_risk_line(row)
             if requirement_risk:
                 parts.append(requirement_risk)
+            if followthrough_risk:
+                parts.append(followthrough_risk)
             lines.append(" ".join(parts))
         return [str(line).strip() for line in lines if str(line).strip()]
 
@@ -29029,7 +29317,7 @@ class PlayerActionSystem(System):
             if not isinstance(inventories, dict):
                 self.sim.cache_inventories = {}
                 inventories = self.sim.cache_inventories
-            return inventories.setdefault(prop_id, [])
+            return _ensure_runtime_container_entry_instance_ids(self.sim, inventories.setdefault(prop_id, []))
         inventories_by_kind = getattr(self.sim, "container_inventories", None)
         if not isinstance(inventories_by_kind, dict):
             self.sim.container_inventories = {}
@@ -29038,7 +29326,7 @@ class PlayerActionSystem(System):
         if not isinstance(inventories, dict):
             inventories = {}
             inventories_by_kind[container_kind] = inventories
-        return inventories.setdefault(prop_id, [])
+        return _ensure_runtime_container_entry_instance_ids(self.sim, inventories.setdefault(prop_id, []))
 
     def _cache_panel_mission_note(self, prop):
         if not isinstance(prop, dict):
@@ -29148,6 +29436,7 @@ class PlayerActionSystem(System):
         container_kind = str(container_kind or "container").strip().lower() or "container"
         container_label = str(container_label or self._container_label(container_kind)).strip() or self._container_label(container_kind)
         container_capacity = self.CACHE_MAX_STACKS if container_kind in {"cache", "bones"} else None
+        self._container_inventory_entries(prop.get("id"), container_kind=container_kind)
         inventory_ui.update({
             "panel_kind": "container",
             "title": str(prop.get("name", prop.get("id", container_label))).strip() or container_label,
@@ -42912,6 +43201,53 @@ class NPCSocialDynamicsSystem(System):
                 return str(prop.get("name", prop.get("id", "site"))).strip()
         return str(requirements.get("property_name", "")).strip()
 
+    def _opportunity_followthrough_chatter_tier(self, row):
+        if not isinstance(row, dict):
+            return 0
+        awareness = str(row.get("awareness_state", "heard")).strip().lower() or "heard"
+        source = str(row.get("source", "")).strip().lower()
+        try:
+            confidence = float(row.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        tier = 0
+        if source == "business_scene":
+            tier += 2
+        elif source == "specialty_theme":
+            tier += 1
+        if awareness == "confirmed":
+            tier += 1
+        if confidence >= 0.86:
+            tier += 2
+        elif confidence >= 0.74:
+            tier += 1
+        return tier
+
+    def _opportunity_followthrough_chatter_tail(self, row):
+        if not isinstance(row, dict):
+            return ""
+        place_name = str(row.get("anchor_site_name", "")).strip() or self._opportunity_chatter_anchor_name(row)
+        organization_name = str(row.get("organization_name", "")).strip()
+        contact_name = str(row.get("contact_name", "")).strip()
+        contact_role = str(row.get("contact_role", "")).strip().replace("_", " ")
+        tier = self._opportunity_followthrough_chatter_tier(row)
+        if tier <= 0:
+            return ""
+        place_lc = place_name.lower()
+        org_lc = organization_name.lower()
+        if organization_name and place_name and org_lc and org_lc != place_lc and tier >= 3:
+            return f"{place_name} runs under {organization_name}."
+        if contact_role and place_name and organization_name and org_lc and org_lc != place_lc and tier >= 4:
+            return f"The {contact_role} there answers to {organization_name}."
+        if contact_role and place_name and tier >= 3:
+            return f"The {contact_role} there is the face that repeats."
+        if contact_name and place_name and organization_name and org_lc and org_lc != place_lc and tier >= 5:
+            return f"{contact_name} is the face there for {organization_name}."
+        if contact_name and place_name and tier >= 4:
+            return f"{contact_name} is the repeat face at {place_name}."
+        return ""
+
     def _specialty_opportunity_chatter_summary(self, row):
         if not isinstance(row, dict):
             return ""
@@ -42922,23 +43258,25 @@ class NPCSocialDynamicsSystem(System):
         anchor_name = self._opportunity_chatter_anchor_name(row)
         anchor_text = f" around {anchor_name}" if anchor_name else ""
 
+        summary = ""
         if kind == "layover_shuffle":
-            return f"Traveler turnover{anchor_text} is still hiding small favors, cover, and quick handoffs."
-        if kind == "route_stash":
-            return f"A route stash{anchor_text} is still hot before the next line turns it over."
-        if kind == "yard_strip":
-            return f"The hot salvage edge{anchor_text} is still open, and the working crew has not cleaned it out yet."
-        if kind == "field_repair_call":
-            return f"A quiet repair call{anchor_text} is still moving because somebody cannot afford a public breakdown."
-        if kind == "sightline_check":
-            return f"The sightline read{anchor_text} is still paying if you want to know who owns the dead ground."
-        if kind == "relay_watch":
-            return f"The relay watch{anchor_text} is still live after dark if you want the repeat faces."
-        if kind == "refuge_resupply":
-            return f"Refuge stops{anchor_text} are still short enough that people will trade goodwill for basics."
-        if kind == "spring_run":
-            return f"The spring run{anchor_text} is still moving if you want to follow who cannot miss the water leg."
-        return ""
+            summary = f"Traveler turnover{anchor_text} is still hiding small favors, cover, and quick handoffs."
+        elif kind == "route_stash":
+            summary = f"A route stash{anchor_text} is still hot before the next line turns it over."
+        elif kind == "yard_strip":
+            summary = f"The hot salvage edge{anchor_text} is still open, and the working crew has not cleaned it out yet."
+        elif kind == "field_repair_call":
+            summary = f"A quiet repair call{anchor_text} is still moving because somebody cannot afford a public breakdown."
+        elif kind == "sightline_check":
+            summary = f"The sightline read{anchor_text} is still paying if you want to know who owns the dead ground."
+        elif kind == "relay_watch":
+            summary = f"The relay watch{anchor_text} is still live after dark if you want the repeat faces."
+        elif kind == "refuge_resupply":
+            summary = f"Refuge stops{anchor_text} are still short enough that people will trade goodwill for basics."
+        elif kind == "spring_run":
+            summary = f"The spring run{anchor_text} is still moving if you want to follow who cannot miss the water leg."
+        tail = self._opportunity_followthrough_chatter_tail(row)
+        return f"{summary} {tail}".strip() if summary and tail else summary
 
     def _opportunity_chatter_payload(self, speaker_eid, partner_eid, tone):
         rows = list(self._social_opportunity_rows_for(speaker_eid, limit=5))
@@ -42979,6 +43317,9 @@ class NPCSocialDynamicsSystem(System):
         summary = self._specialty_opportunity_chatter_summary(selected)
         if not summary:
             summary = str(selected.get("summary", "")).strip() or "might be worth a look"
+        followthrough_tail = self._opportunity_followthrough_chatter_tail(selected)
+        if followthrough_tail and followthrough_tail.lower() not in summary.lower():
+            summary = f"{summary} {followthrough_tail}".strip()
         distance_phrase = opportunity_distance_text(selected.get("distance", 0), selected.get("direction", "HERE"))
         quote = self._say_social(
             "chatter_opportunity",

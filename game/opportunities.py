@@ -113,6 +113,68 @@ SPECIALTY_OPPORTUNITY_THEMES = {
     "yard_strip": "parts_yard",
 }
 
+SPECIALTY_FOCUS_SITE_KINDS = {
+    "route_hub": (
+        "bait_shop",
+        "dock_shack",
+        "ferry_post",
+        "relay_post",
+        "roadhouse",
+        "tide_station",
+        "truck_stop",
+    ),
+    "parts_yard": (
+        "breaker_yard",
+        "dock_shack",
+        "drydock_yard",
+        "roadhouse",
+        "salvage_camp",
+        "truck_stop",
+        "work_shed",
+    ),
+    "watch_network": (
+        "beacon_house",
+        "coast_watch",
+        "firewatch_tower",
+        "inspection_shed",
+        "lookout_post",
+        "relay_post",
+        "survey_post",
+        "weather_station",
+    ),
+    "field_refuge": (
+        "field_camp",
+        "herbalist_camp",
+        "ranger_hut",
+        "ruin_shelter",
+    ),
+}
+
+SPECIALTY_CONTACT_ROLE_BY_SITE_KIND = {
+    "bait_shop": "bait runner",
+    "beacon_house": "beacon keeper",
+    "breaker_yard": "yard foreman",
+    "coast_watch": "watch captain",
+    "dock_shack": "dock clerk",
+    "drydock_yard": "yard foreman",
+    "ferry_post": "dispatcher",
+    "field_camp": "quartermaster",
+    "firewatch_tower": "watch keeper",
+    "herbalist_camp": "remedy keeper",
+    "inspection_shed": "inspector",
+    "lookout_post": "watch keeper",
+    "ranger_hut": "ranger",
+    "relay_post": "dispatcher",
+    "roadhouse": "counter manager",
+    "ruin_shelter": "caretaker",
+    "salvage_camp": "scrap runner",
+    "survey_post": "survey hand",
+    "tide_station": "tide reader",
+    "truck_stop": "night clerk",
+    "weather_station": "storm reader",
+    "work_shed": "fixer",
+}
+
 COURIER_ITEM_POOL = (
     "street_ration",
     "hydration_salts",
@@ -151,6 +213,87 @@ def _safe_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _text(value):
+    return str(value or "").strip()
+
+
+def _specialty_anchor_read(anchor_name, identity_label):
+    anchor_name = _text(anchor_name)
+    identity_label = _text(identity_label)
+    if anchor_name and identity_label and anchor_name.lower() != identity_label.lower():
+        return f"{anchor_name} on the {identity_label}"
+    return anchor_name or identity_label or "this stretch"
+
+
+def _specialty_anchor_for_sites(theme_id, sites, rng):
+    theme_id = _text(theme_id).lower()
+    focus_kinds = {
+        _text(kind).lower()
+        for kind in SPECIALTY_FOCUS_SITE_KINDS.get(theme_id, ())
+        if _text(kind)
+    }
+    weighted = []
+    for index, site in enumerate(tuple(sites or ())):
+        if not isinstance(site, dict):
+            continue
+        kind = _text(site.get("kind")).lower()
+        if focus_kinds and kind not in focus_kinds:
+            continue
+        site_name = _text(site.get("name")) or kind.replace("_", " ").title()
+        founder_name = _text(site.get("business_founder_name"))
+        organization_name = _text(site.get("business_name")) or site_name
+        contact_role = _text(SPECIALTY_CONTACT_ROLE_BY_SITE_KIND.get(kind))
+        score = 1.0
+        if founder_name:
+            score += 0.9
+        if organization_name and organization_name.lower() != site_name.lower():
+            score += 0.45
+        if contact_role:
+            score += 0.2
+        if bool(site.get("public")):
+            score += 0.1
+        weighted.append((score, int(index), site_name, organization_name, founder_name, contact_role, site))
+
+    if not weighted:
+        return {}
+
+    total = sum(weight for weight, *_rest in weighted)
+    pick = rng.uniform(0.0, total if total > 0.0 else 1.0)
+    running = 0.0
+    chosen = weighted[-1]
+    for weight, *rest in weighted:
+        running += weight
+        if pick <= running:
+            chosen = (weight, *rest)
+            break
+
+    _weight, _index, site_name, organization_name, founder_name, contact_role, site = chosen
+    kind = _text(site.get("kind")).lower()
+    return {
+        "anchor_site_name": site_name,
+        "anchor_site_kind": kind,
+        "anchor_site_id": _text(site.get("site_id")),
+        "organization_name": organization_name,
+        "contact_name": founder_name,
+        "contact_role": contact_role,
+    }
+
+
+def _specialty_anchor_requirements(anchor):
+    anchor = anchor if isinstance(anchor, dict) else {}
+    requirements = {}
+    property_name = _text(anchor.get("anchor_site_name"))
+    if property_name:
+        requirements["property_name"] = property_name
+    site_kind = _text(anchor.get("anchor_site_kind")).lower()
+    if site_kind:
+        requirements["site_kind"] = site_kind
+    site_id = _text(anchor.get("anchor_site_id"))
+    if site_id:
+        requirements["site_id"] = site_id
+    return requirements
 
 
 def _clamp(value, lo=0.0, hi=100.0):
@@ -826,7 +969,7 @@ def _reward_with_items(base_reward, *items):
     return reward
 
 
-def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", travel=None, discovery=None, rng=None):
+def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", travel=None, discovery=None, sites=None, rng=None):
     theme_id = str(theme_id or "").strip().lower()
     if not theme_id:
         return ()
@@ -836,6 +979,9 @@ def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", trav
     label = str(identity_label).strip() or "this stretch"
     discovery = discovery if isinstance(discovery, dict) else {}
     discovery_label = str(discovery.get("label", "")).strip()
+    anchor = _specialty_anchor_for_sites(theme_id, sites, rng)
+    anchor_read = _specialty_anchor_read(anchor.get("anchor_site_name"), label)
+    anchor_requirements = _specialty_anchor_requirements(anchor)
     candidates = []
 
     if theme_id == "route_hub":
@@ -845,25 +991,29 @@ def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", trav
                 "kind": "layover_shuffle",
                 "source": "specialty_theme",
                 "title": "Layover Shuffle",
-                "summary": f"Catch the turnover around {label} while travelers trade favors, cover, and small packets.",
+                "summary": f"Catch the turnover around {anchor_read} while travelers trade favors, cover, and small packets.",
                 "playstyles": ("social", "economic", "stealth"),
                 "reward": _reward_with_items(
                     {"credits": rng.randint(12, 26), "standing": 1},
                     rng.choice(("transit_daypass", "city_pass_token", "meal_voucher")),
                 ),
                 "weight": 1.24,
+                "requirements": dict(anchor_requirements),
+                **anchor,
             },
             {
                 "kind": "route_stash",
                 "source": "specialty_theme",
                 "title": "Route Stash",
-                "summary": f"A {route_cache} tucked into {label} can still pay before the next line turns over.",
+                "summary": f"A {route_cache} tucked into {anchor_read} can still pay before the next line turns over.",
                 "playstyles": ("economic", "stealth", "social"),
                 "reward": _reward_with_items(
                     {"credits": rng.randint(14, 28), "intel": 1},
                     rng.choice(("transit_daypass", "bottled_water", "meal_voucher")),
                 ),
                 "weight": 1.18,
+                "requirements": dict(anchor_requirements),
+                **anchor,
             },
         ))
     elif theme_id == "parts_yard":
@@ -872,25 +1022,29 @@ def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", trav
                 "kind": "yard_strip",
                 "source": "specialty_theme",
                 "title": "Yard Strip",
-                "summary": f"Work the salvage lanes around {label} before the regular crews strip them clean.",
+                "summary": f"Work the salvage lanes around {anchor_read} before the regular crews strip them clean.",
                 "playstyles": ("economic", "stealth", "combat"),
                 "reward": _reward_with_items(
                     {"credits": rng.randint(16, 32), "standing": 1},
                     rng.choice(("battery_pack", "scrap_circuit", "pocket_multitool")),
                 ),
                 "weight": 1.28,
+                "requirements": dict(anchor_requirements),
+                **anchor,
             },
             {
                 "kind": "field_repair_call",
                 "source": "specialty_theme",
                 "title": "Field Repair Call",
-                "summary": f"Someone working off {label} needs a quiet fix before a bad breakdown turns public.",
+                "summary": f"Someone working off {anchor_read} needs a quiet fix before a bad breakdown turns public.",
                 "playstyles": ("economic", "social", "stealth"),
                 "reward": _reward_with_items(
                     {"credits": rng.randint(14, 26), "standing": 1},
                     rng.choice(("pocket_multitool", "prybar", "battery_pack")),
                 ),
                 "weight": 1.16,
+                "requirements": dict(anchor_requirements),
+                **anchor,
             },
         ))
     elif theme_id == "watch_network":
@@ -899,25 +1053,29 @@ def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", trav
                 "kind": "sightline_check",
                 "source": "specialty_theme",
                 "title": "Sightline Check",
-                "summary": f"Use the long sightlines around {label} to map quiet movement, dead ground, and handoff windows.",
+                "summary": f"Use the long sightlines around {anchor_read} to map quiet movement, dead ground, and handoff windows.",
                 "playstyles": ("stealth", "social"),
                 "reward": _reward_with_items(
                     {"credits": rng.randint(8, 16), "intel": 2},
                     rng.choice(("hydration_salts", "med_gel", "city_pass_token")),
                 ),
                 "weight": 1.22,
+                "requirements": dict(anchor_requirements),
+                **anchor,
             },
             {
                 "kind": "relay_watch",
                 "source": "specialty_theme",
                 "title": "Relay Watch",
-                "summary": f"Somebody wants a clean read on who keeps using the {label} chain after dark.",
+                "summary": f"Somebody wants a clean read on who keeps using the {anchor_read} chain after dark.",
                 "playstyles": ("stealth", "social", "economic"),
                 "reward": _reward_with_items(
                     {"credits": rng.randint(10, 18), "intel": 2},
                     rng.choice(("credstick_chip", "hydration_salts")),
                 ),
                 "weight": 1.14,
+                "requirements": dict(anchor_requirements),
+                **anchor,
             },
         ))
     elif theme_id == "field_refuge":
@@ -926,25 +1084,29 @@ def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", trav
                 "kind": "refuge_resupply",
                 "source": "specialty_theme",
                 "title": "Refuge Resupply",
-                "summary": f"Quiet shelter points around {label} are short on basics and paying in goodwill, cover, or both.",
+                "summary": f"Quiet shelter points around {anchor_read} are short on basics and paying in goodwill, cover, or both.",
                 "playstyles": ("social", "economic", "stealth"),
                 "reward": _reward_with_items(
                     {"credits": rng.randint(10, 22), "energy": 4, "safety": 5},
                     rng.choice(("med_gel", "hydration_salts", "street_ration")),
                 ),
                 "weight": 1.18,
+                "requirements": dict(anchor_requirements),
+                **anchor,
             },
             {
                 "kind": "spring_run",
                 "source": "specialty_theme",
                 "title": "Spring Run",
-                "summary": f"Carry water and remedies between the rough refuge stops that hang off {label}.",
+                "summary": f"Carry water and remedies between the rough refuge stops that hang off {anchor_read}.",
                 "playstyles": ("social", "stealth", "economic"),
                 "reward": _reward_with_items(
                     {"credits": rng.randint(8, 18), "energy": 6, "safety": 3},
                     rng.choice(("bottled_water", "hydration_salts", "med_gel")),
                 ),
                 "weight": 1.12,
+                "requirements": dict(anchor_requirements),
+                **anchor,
             },
         ))
 
@@ -1588,6 +1750,7 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
                 identity_label=identity_label,
                 travel=travel,
                 discovery=discovery,
+                sites=tuple(chunk.get("sites", ()) or ()),
                 rng=rng,
             )
         )
@@ -1864,6 +2027,9 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
     requirements = chosen.get("requirements")
     if not isinstance(requirements, dict):
         requirements = {"visit_chunk": (int(cx), int(cy))}
+    elif "visit_chunk" not in requirements:
+        requirements = dict(requirements)
+        requirements["visit_chunk"] = (int(cx), int(cy))
     return {
         "key": key,
         "title": str(chosen.get("title", "Opportunity")).strip() or "Opportunity",
@@ -1882,6 +2048,12 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
         "risk": risk_label,
         "pressure": _risk_pressure(risk_label),
         "requirements": requirements,
+        "organization_name": _text(chosen.get("organization_name")),
+        "contact_name": _text(chosen.get("contact_name")),
+        "contact_role": _text(chosen.get("contact_role")),
+        "anchor_site_name": _text(chosen.get("anchor_site_name")),
+        "anchor_site_kind": _text(chosen.get("anchor_site_kind")).lower(),
+        "anchor_site_id": _text(chosen.get("anchor_site_id")),
         "status": "active",
         "seed_tick": int(getattr(sim, "tick", 0)),
     }
@@ -3642,6 +3814,12 @@ def evaluate_opportunity_facts(sim, player_eid, limit=3, observer_eid=None):
                 "requirements": dict(entry.get("requirements", {})) if isinstance(entry.get("requirements", {}), dict) else {},
                 "playstyles": playstyles,
                 "risk_score": risk_score,
+                "organization_name": _text(entry.get("organization_name")),
+                "contact_name": _text(entry.get("contact_name")),
+                "contact_role": _text(entry.get("contact_role")),
+                "anchor_site_name": _text(entry.get("anchor_site_name")),
+                "anchor_site_kind": _text(entry.get("anchor_site_kind")).lower(),
+                "anchor_site_id": _text(entry.get("anchor_site_id")),
                 "awareness_state": awareness,
                 "confidence": confidence,
                 "intel_source": intel_source,

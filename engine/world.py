@@ -408,6 +408,12 @@ class World:
     }
     NON_CITY_SPECIALTY_PROFILES = {
         "route_hub": {
+            "minimum_focus_sites": 2,
+            "bonus_site_kinds_by_identity": {
+                "ferry chain": ("ferry_post", "tide_station", "dock_shack"),
+                "relay corridor": ("relay_post", "truck_stop", "roadhouse"),
+                "working shore": ("dock_shack", "bait_shop"),
+            },
             "site_services_by_kind": {
                 "bait_shop": ("shelter",),
                 "dock_shack": ("shelter",),
@@ -434,6 +440,11 @@ class World:
             },
         },
         "parts_yard": {
+            "minimum_focus_sites": 2,
+            "bonus_site_kinds_by_identity": {
+                "drydock reach": ("drydock_yard", "dock_shack"),
+                "salvage belt": ("breaker_yard", "salvage_camp", "work_shed"),
+            },
             "site_services_by_kind": {
                 "breaker_yard": ("repair",),
                 "dock_shack": ("repair",),
@@ -467,6 +478,12 @@ class World:
             },
         },
         "watch_network": {
+            "minimum_focus_sites": 2,
+            "bonus_site_kinds_by_identity": {
+                "ridge watch": ("lookout_post", "firewatch_tower", "weather_station", "survey_post"),
+                "storm watch": ("coast_watch", "beacon_house", "weather_station"),
+                "watch strip": ("inspection_shed", "weather_station", "lookout_post"),
+            },
             "site_services_by_kind": {
                 "beacon_house": ("intel",),
                 "coast_watch": ("intel",),
@@ -495,6 +512,13 @@ class World:
             },
         },
         "field_refuge": {
+            "minimum_focus_sites": 2,
+            "bonus_site_kinds_by_identity": {
+                "broken reach": ("ruin_shelter",),
+                "deep green": ("field_camp", "ranger_hut"),
+                "marsh belt": ("herbalist_camp", "field_camp"),
+                "ruin tract": ("ruin_shelter", "field_camp"),
+            },
             "site_services_by_kind": {
                 "field_camp": ("shelter",),
                 "herbalist_camp": ("rest",),
@@ -1556,6 +1580,32 @@ class World:
             count += 1
         return max(0, min(2, count))
 
+    def _build_non_city_site_record(self, descriptor, kind, idx, used_site_names=None):
+        kind = str(kind or "").strip().lower()
+        if not kind:
+            return {}
+
+        descriptor = descriptor if isinstance(descriptor, dict) else {}
+        used_site_names = used_site_names if isinstance(used_site_names, set) else set()
+        site_name = self.NON_CITY_SITE_LABELS.get(kind, kind.replace("_", " ").title())
+        business_founder = None
+        if kind in self.NAMED_NON_CITY_SITE_KINDS:
+            name_rng = random.Random(
+                f"{self.seed}:non_city_site_name:{descriptor.get('cx')}:{descriptor.get('cy')}:{idx}:{kind}"
+            )
+            site_name, business_founder = self._non_city_site_name_for(kind, name_rng, used_site_names)
+
+        return {
+            "site_id": f"site:{int(idx)}",
+            "kind": kind,
+            "name": site_name,
+            "business_name": site_name if business_founder else None,
+            "business_founder_name": business_founder.get("full_name") if business_founder else None,
+            "business_founder_first_name": business_founder.get("first_name") if business_founder else None,
+            "business_founder_last_name": business_founder.get("last_name") if business_founder else None,
+            "public": kind in self.PUBLIC_NON_CITY_SITE_KINDS,
+        }
+
     def generate_non_city_sites(self, descriptor, rng):
         area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
         if area_type == "city":
@@ -1580,25 +1630,7 @@ class World:
                     kind = rng.choice(pool)
                     attempts += 1
             used_kinds.add(kind)
-
-            site_name = self.NON_CITY_SITE_LABELS.get(kind, kind.replace("_", " ").title())
-            business_founder = None
-            if kind in self.NAMED_NON_CITY_SITE_KINDS:
-                name_rng = random.Random(
-                    f"{self.seed}:non_city_site_name:{descriptor.get('cx')}:{descriptor.get('cy')}:{idx}:{kind}"
-                )
-                site_name, business_founder = self._non_city_site_name_for(kind, name_rng, used_site_names)
-
-            sites.append({
-                "site_id": f"site:{idx}",
-                "kind": kind,
-                "name": site_name,
-                "business_name": site_name if business_founder else None,
-                "business_founder_name": business_founder.get("full_name") if business_founder else None,
-                "business_founder_first_name": business_founder.get("first_name") if business_founder else None,
-                "business_founder_last_name": business_founder.get("last_name") if business_founder else None,
-                "public": kind in self.PUBLIC_NON_CITY_SITE_KINDS,
-            })
+            sites.append(self._build_non_city_site_record(descriptor, kind, idx, used_site_names))
 
         return self._apply_non_city_specialty(descriptor, sites)
 
@@ -1768,12 +1800,37 @@ class World:
             if cleaned:
                 discovery_overrides[key] = cleaned
 
+        bonus_site_kinds_by_identity = {}
+        for identity_key, kinds in dict(raw.get("bonus_site_kinds_by_identity", {})).items():
+            key = str(identity_key).strip().lower()
+            labels = self._ordered_unique_labels(kinds)
+            if key and labels:
+                bonus_site_kinds_by_identity[key] = labels
+
+        bonus_site_kinds = self._ordered_unique_labels(
+            tuple(bonus_site_kinds_by_identity.get(str(identity_label).strip().lower(), ()))
+            + tuple(raw.get("bonus_site_kinds", ()))
+        )
+        focus_site_kinds = self._ordered_unique_labels(
+            tuple(site_services_by_kind.keys())
+            + tuple(opportunity_tags_by_kind.keys())
+            + tuple(bonus_site_kinds)
+        )
+
+        try:
+            minimum_focus_sites = max(0, int(raw.get("minimum_focus_sites", 0)))
+        except (TypeError, ValueError):
+            minimum_focus_sites = 0
+
         return {
             "theme_id": theme_id,
             "identity_label": str(identity_label).strip(),
             "site_services_by_kind": site_services_by_kind,
             "opportunity_tags_by_kind": opportunity_tags_by_kind,
             "discovery_overrides": discovery_overrides,
+            "bonus_site_kinds": bonus_site_kinds,
+            "focus_site_kinds": focus_site_kinds,
+            "minimum_focus_sites": minimum_focus_sites,
         }
 
     def _apply_non_city_specialty(self, descriptor, sites):
@@ -1791,6 +1848,40 @@ class World:
         label = str((specialty or {}).get("identity_label", "") or "").strip()
         service_map = (specialty or {}).get("site_services_by_kind", {})
         opportunity_map = (specialty or {}).get("opportunity_tags_by_kind", {})
+        focus_kinds = {
+            str(kind).strip().lower()
+            for kind in tuple((specialty or {}).get("focus_site_kinds", ()))
+            if str(kind).strip()
+        }
+        bonus_kinds = [
+            str(kind).strip().lower()
+            for kind in tuple((specialty or {}).get("bonus_site_kinds", ()))
+            if str(kind).strip()
+        ]
+        minimum_focus_sites = int((specialty or {}).get("minimum_focus_sites", 0) or 0)
+
+        if theme_id and focus_kinds and bonus_kinds:
+            current_focus = {
+                kind
+                for kind in site_kinds
+                if kind in focus_kinds
+            }
+            if len(current_focus) < minimum_focus_sites:
+                used_kinds = {kind for kind in site_kinds if kind}
+                available_bonus = [kind for kind in bonus_kinds if kind not in used_kinds]
+                if available_bonus:
+                    bonus_rng = random.Random(
+                        f"{self.seed}:non_city_specialty_bonus:{descriptor.get('cx')}:{descriptor.get('cy')}:{theme_id}:{label}"
+                    )
+                    used_site_names = {
+                        str(site.get("name", "")).strip()
+                        for site in prepared
+                        if str(site.get("name", "")).strip()
+                    }
+                    bonus_kind = bonus_rng.choice(available_bonus)
+                    prepared.append(
+                        self._build_non_city_site_record(descriptor, bonus_kind, len(prepared), used_site_names)
+                    )
 
         enriched = []
         for site in prepared:
