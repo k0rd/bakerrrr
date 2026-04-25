@@ -26,6 +26,7 @@ from game.property_runtime import (
     property_covering,
     property_focus_position,
 )
+from game.service_runtime import _chunk_site_kinds
 
 
 MIN_ACTIVE_OPPORTUNITIES = 6
@@ -57,6 +58,10 @@ OBJECTIVE_PREFERENCES = {
         "medical_drop",
         "distance_delivery",
         "distance_delivery_procure",
+        "layover_shuffle",
+        "route_stash",
+        "yard_strip",
+        "field_repair_call",
     },
     "networked_extraction": {
         "contact_run",
@@ -72,6 +77,12 @@ OBJECTIVE_PREFERENCES = {
         "distance_delivery_procure",
         "distance_pickup",
         "dead_drop_return",
+        "layover_shuffle",
+        "route_stash",
+        "sightline_check",
+        "relay_watch",
+        "refuge_resupply",
+        "spring_run",
     },
     "high_value_retrieval": {
         "intel_scout",
@@ -84,7 +95,22 @@ OBJECTIVE_PREFERENCES = {
         "contact_run",
         "service_friction",
         "property_dispute",
+        "yard_strip",
+        "sightline_check",
+        "relay_watch",
+        "route_stash",
     },
+}
+
+SPECIALTY_OPPORTUNITY_THEMES = {
+    "field_repair_call": "parts_yard",
+    "layover_shuffle": "route_hub",
+    "refuge_resupply": "field_refuge",
+    "relay_watch": "watch_network",
+    "route_stash": "route_hub",
+    "sightline_check": "watch_network",
+    "spring_run": "field_refuge",
+    "yard_strip": "parts_yard",
 }
 
 COURIER_ITEM_POOL = (
@@ -800,6 +826,131 @@ def _reward_with_items(base_reward, *items):
     return reward
 
 
+def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", travel=None, discovery=None, rng=None):
+    theme_id = str(theme_id or "").strip().lower()
+    if not theme_id:
+        return ()
+    if not isinstance(rng, random.Random):
+        rng = random.Random(f"specialty:{theme_id}")
+
+    label = str(identity_label).strip() or "this stretch"
+    discovery = discovery if isinstance(discovery, dict) else {}
+    discovery_label = str(discovery.get("label", "")).strip()
+    candidates = []
+
+    if theme_id == "route_hub":
+        route_cache = discovery_label or "route stash"
+        candidates.extend((
+            {
+                "kind": "layover_shuffle",
+                "source": "specialty_theme",
+                "title": "Layover Shuffle",
+                "summary": f"Catch the turnover around {label} while travelers trade favors, cover, and small packets.",
+                "playstyles": ("social", "economic", "stealth"),
+                "reward": _reward_with_items(
+                    {"credits": rng.randint(12, 26), "standing": 1},
+                    rng.choice(("transit_daypass", "city_pass_token", "meal_voucher")),
+                ),
+                "weight": 1.24,
+            },
+            {
+                "kind": "route_stash",
+                "source": "specialty_theme",
+                "title": "Route Stash",
+                "summary": f"A {route_cache} tucked into {label} can still pay before the next line turns over.",
+                "playstyles": ("economic", "stealth", "social"),
+                "reward": _reward_with_items(
+                    {"credits": rng.randint(14, 28), "intel": 1},
+                    rng.choice(("transit_daypass", "bottled_water", "meal_voucher")),
+                ),
+                "weight": 1.18,
+            },
+        ))
+    elif theme_id == "parts_yard":
+        candidates.extend((
+            {
+                "kind": "yard_strip",
+                "source": "specialty_theme",
+                "title": "Yard Strip",
+                "summary": f"Work the salvage lanes around {label} before the regular crews strip them clean.",
+                "playstyles": ("economic", "stealth", "combat"),
+                "reward": _reward_with_items(
+                    {"credits": rng.randint(16, 32), "standing": 1},
+                    rng.choice(("battery_pack", "scrap_circuit", "pocket_multitool")),
+                ),
+                "weight": 1.28,
+            },
+            {
+                "kind": "field_repair_call",
+                "source": "specialty_theme",
+                "title": "Field Repair Call",
+                "summary": f"Someone working off {label} needs a quiet fix before a bad breakdown turns public.",
+                "playstyles": ("economic", "social", "stealth"),
+                "reward": _reward_with_items(
+                    {"credits": rng.randint(14, 26), "standing": 1},
+                    rng.choice(("pocket_multitool", "prybar", "battery_pack")),
+                ),
+                "weight": 1.16,
+            },
+        ))
+    elif theme_id == "watch_network":
+        candidates.extend((
+            {
+                "kind": "sightline_check",
+                "source": "specialty_theme",
+                "title": "Sightline Check",
+                "summary": f"Use the long sightlines around {label} to map quiet movement, dead ground, and handoff windows.",
+                "playstyles": ("stealth", "social"),
+                "reward": _reward_with_items(
+                    {"credits": rng.randint(8, 16), "intel": 2},
+                    rng.choice(("hydration_salts", "med_gel", "city_pass_token")),
+                ),
+                "weight": 1.22,
+            },
+            {
+                "kind": "relay_watch",
+                "source": "specialty_theme",
+                "title": "Relay Watch",
+                "summary": f"Somebody wants a clean read on who keeps using the {label} chain after dark.",
+                "playstyles": ("stealth", "social", "economic"),
+                "reward": _reward_with_items(
+                    {"credits": rng.randint(10, 18), "intel": 2},
+                    rng.choice(("credstick_chip", "hydration_salts")),
+                ),
+                "weight": 1.14,
+            },
+        ))
+    elif theme_id == "field_refuge":
+        candidates.extend((
+            {
+                "kind": "refuge_resupply",
+                "source": "specialty_theme",
+                "title": "Refuge Resupply",
+                "summary": f"Quiet shelter points around {label} are short on basics and paying in goodwill, cover, or both.",
+                "playstyles": ("social", "economic", "stealth"),
+                "reward": _reward_with_items(
+                    {"credits": rng.randint(10, 22), "energy": 4, "safety": 5},
+                    rng.choice(("med_gel", "hydration_salts", "street_ration")),
+                ),
+                "weight": 1.18,
+            },
+            {
+                "kind": "spring_run",
+                "source": "specialty_theme",
+                "title": "Spring Run",
+                "summary": f"Carry water and remedies between the rough refuge stops that hang off {label}.",
+                "playstyles": ("social", "stealth", "economic"),
+                "reward": _reward_with_items(
+                    {"credits": rng.randint(8, 18), "energy": 6, "safety": 3},
+                    rng.choice(("bottled_water", "hydration_salts", "med_gel")),
+                ),
+                "weight": 1.12,
+            },
+        ))
+
+    return tuple(candidates)
+
+
 def _run_objective_id(sim):
     traits = getattr(sim, "world_traits", {}) if sim is not None else {}
     if not isinstance(traits, dict):
@@ -1315,6 +1466,16 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
         interest=interest,
         travel=travel,
     )
+    site_kinds = _chunk_site_kinds(chunk)
+    identity = sim.world.overworld_identity_profile(
+        cx,
+        cy,
+        descriptor=desc,
+        interest=interest,
+        travel=travel,
+        discovery=discovery,
+        site_kinds=site_kinds,
+    )
     economy = chunk_economy_profile(sim, chunk)
     features = _chunk_features(chunk)
     support_tags = {
@@ -1326,6 +1487,8 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
     risk_label = str(travel.get("risk_label", "low")).strip().lower() or "low"
     area_type = str(desc.get("area_type", "city")).strip().lower() or "city"
     district_type = str(desc.get("district_type", "unknown")).strip().lower() or "unknown"
+    theme_id = str(identity.get("theme_id", "") or "").strip().lower()
+    identity_label = str(identity.get("label", "") or "").strip()
     context_label = str(economy.get("context_label", "")).strip()
     landmark = desc.get("landmark") or desc.get("nearest_landmark") or {}
     landmark_name = str(landmark.get("name", "")).strip()
@@ -1417,6 +1580,17 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
             "reward": _reward_with_items({"credits": rng.randint(6, 12), "intel": 2}, rng.choice(("hydration_salts", "med_gel"))),
             "weight": 1.16,
         })
+
+    if area_type != "city" and theme_id:
+        candidates.extend(
+            _specialty_chunk_opportunity_candidates(
+                theme_id,
+                identity_label=identity_label,
+                travel=travel,
+                discovery=discovery,
+                rng=rng,
+            )
+        )
 
     if features["has_storefront"] or "trade" in support_tags:
         candidates.append({
@@ -1670,7 +1844,7 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
         weight = float(candidate.get("weight", 1.0))
         if candidate.get("kind") in objective_prefs:
             weight += 1.15
-        if area_type != "city" and candidate.get("source") == "overworld_tag":
+        if area_type != "city" and candidate.get("source") in {"overworld_tag", "specialty_theme"}:
             weight += 0.35
         weighted.append((candidate, max(0.05, weight)))
 
@@ -3242,6 +3416,7 @@ def _objective_support_reason(objective_id, entry, current_chunk=None):
     current = _chunk_tuple(current_chunk) or (0, 0)
     chunk = _chunk_tuple(entry.get("chunk")) or current
     distance = _manhattan(current, chunk)
+    specialty_theme = SPECIALTY_OPPORTUNITY_THEMES.get(kind, "")
     reasons = []
 
     if objective_id == "debt_exit":
@@ -3249,6 +3424,10 @@ def _objective_support_reason(objective_id, entry, current_chunk=None):
             reasons.append("pays reserve credits")
         if kind in OBJECTIVE_PREFERENCES.get(objective_id, set()):
             reasons.append("fits a cash-building lane")
+        if specialty_theme == "route_hub":
+            reasons.append("uses traveler turnover")
+        elif specialty_theme == "parts_yard":
+            reasons.append("turns salvage into reserve")
     elif objective_id == "networked_extraction":
         if kind in {"contact_run", "paper_trail", "claims_chase", "records_pull"} or standing > 0:
             reasons.append("builds contacts")
@@ -3256,9 +3435,21 @@ def _objective_support_reason(objective_id, entry, current_chunk=None):
             reasons.append("adds reserve")
         if distance > 0:
             reasons.append("extends route scouting")
+        if specialty_theme == "route_hub":
+            reasons.append("builds route cover")
+        elif specialty_theme == "watch_network":
+            reasons.append("adds cleaner route reads")
+        elif specialty_theme == "field_refuge":
+            reasons.append("creates fallback cover")
     elif objective_id == "high_value_retrieval":
         if kind in {"intel_scout", "landmark_survey", "lead_followup", "records_pull", "watch_post"} or intel > 0:
             reasons.append("adds leads")
+        if specialty_theme == "route_hub":
+            reasons.append("tracks who moves through the route")
+        elif specialty_theme == "watch_network":
+            reasons.append("improves sightlines")
+        elif specialty_theme == "parts_yard":
+            reasons.append("marks discreet repair traffic")
         if distance > 0:
             reasons.append("extends scouting")
 

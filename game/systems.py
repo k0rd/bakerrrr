@@ -145,6 +145,7 @@ from game.objective_progress import (
 from game.npc_judgment import evaluate_opportunity_judgment
 from game.npc_names import generate_human_personal_name
 from game.opportunities import (
+    SPECIALTY_OPPORTUNITY_THEMES,
     append_external_opportunity,
     evaluate_opportunity_board,
     evaluate_opportunity_facts,
@@ -262,8 +263,10 @@ from game.service_runtime import (
     CASINO_GAME_SERVICE_IDS,
     TRANSIT_SERVICE_IDS,
     _casino_game_title,
+    _chunk_site_kinds,
     _credit_amount_label,
     _overworld_discovery_profile,
+    _overworld_identity_profile,
     _overworld_discovery_summary_bits,
     _overworld_legend_line,
     _overworld_render_style,
@@ -3710,6 +3713,20 @@ def _tile_render_style(sim, tile, x, y, z=0, revealed_building_id=""):
     return appearance.glyph, appearance.color
 
 
+def _player_tile_memory_state(sim):
+    state = getattr(sim, "visibility_state", None)
+    if not isinstance(state, dict):
+        return {}
+
+    memory = state.get("player_tile_memory")
+    if isinstance(memory, dict):
+        return memory
+
+    memory = {}
+    state["player_tile_memory"] = memory
+    return memory
+
+
 def _infrastructure_target_property(sim, prop):
     if not isinstance(prop, dict):
         return None
@@ -4699,6 +4716,7 @@ def _overworld_hud_lines(
     interest,
     travel,
     discovery,
+    identity=None,
     markers=(),
     active_vehicle_prop=None,
 ):
@@ -4706,6 +4724,7 @@ def _overworld_hud_lines(
     interest = interest if isinstance(interest, dict) else {}
     travel = travel if isinstance(travel, dict) else {}
     discovery = discovery if isinstance(discovery, dict) else {}
+    identity = identity if isinstance(identity, dict) else {}
     markers = list(markers or ())
 
     bold = getattr(curses, "A_BOLD", 0)
@@ -4719,6 +4738,8 @@ def _overworld_hud_lines(
     landmark_name = str((landmark or {}).get("name", "")).strip()
     interest_name = str(interest.get("detail", "")).strip()
     discovery_name = str(discovery.get("label", "")).strip()
+    identity_name = str(identity.get("label", "")).strip()
+    identity_hook = str(identity.get("hook", "")).strip()
     risk_name = str(travel.get("risk_label", "low")).strip() or "low"
     support_name = str(travel.get("support_label", "none")).strip() or "none"
     travel_tax = _overworld_travel_tax_text(travel)
@@ -4792,6 +4813,7 @@ def _overworld_hud_lines(
         line_two.append(_segment(str(value), color=value_color))
 
     _append_pair("Path", _title(path) if path != "-" else "-")
+    _append_pair("Identity", _title(identity_name))
     _append_pair("Risk", _title(risk_name))
     _append_pair("Support", _title(support_name))
     _append_pair("Travel", travel_tax, value_color="player")
@@ -4823,6 +4845,11 @@ def _overworld_hud_lines(
         lines.append(_rich_line(line_two))
     if line_three:
         lines.append(_rich_line(line_three))
+    if identity_hook:
+        lines.append(_rich_line([
+            _segment("Read ", color="human", attrs=bold),
+            _segment(identity_hook, color="player"),
+        ], text=f"Read {identity_hook}"))
     return lines
 
 
@@ -21594,6 +21621,76 @@ class NPCInteractionSystem(System):
                 return matches[0]
         return None, ()
 
+    def _service_locator_chunk_clause(self, spec, chunk_coord, *, lead_prop=None):
+        if not chunk_coord:
+            return ""
+
+        cx, cy = int(chunk_coord[0]), int(chunk_coord[1])
+        desc = self.sim.world.overworld_descriptor(cx, cy)
+        if str(desc.get("area_type", "city")).strip().lower() == "city":
+            return ""
+
+        lead_meta = _property_metadata(lead_prop) if isinstance(lead_prop, dict) else {}
+        extra_site_kinds = []
+        for field in ("site_kind", "archetype"):
+            label = str(lead_meta.get(field, "") or "").strip().lower()
+            if label:
+                extra_site_kinds.append(label)
+
+        chunk = self.sim.world.get_chunk(cx, cy)
+        site_kinds = _chunk_site_kinds(chunk, extra_site_kinds)
+        interest = self.sim.world.overworld_interest(cx, cy, descriptor=desc)
+        travel = self.sim.world.overworld_travel_profile(cx, cy, descriptor=desc, interest=interest)
+        discovery = self.sim.world.overworld_discovery_profile(cx, cy, descriptor=desc, interest=interest, travel=travel)
+        identity = _overworld_identity_profile(
+            self.sim,
+            cx,
+            cy,
+            desc=desc,
+            interest=interest,
+            travel=travel,
+            discovery=discovery,
+            site_kinds=site_kinds,
+        )
+        theme_id = str(identity.get("theme_id", "") or "").strip().lower()
+        label = str(identity.get("label", "") or "").strip()
+        if not theme_id or not label:
+            return ""
+
+        service_keys = self._service_locator_service_keys(spec)
+        if theme_id == "route_hub":
+            if service_keys & set(TRANSIT_SERVICE_IDS):
+                return f"That chunk carries a {label} read, so transit turnover stays active there."
+            if service_keys & {"rest", "shelter", "fuel", "repair", "trade", "vehicle_fetch"} or bool(spec.get("storefront")):
+                return f"That chunk carries a {label} read, so traveler services tend to bunch up there."
+            return f"That chunk carries a {label} read, so traffic turns over fast there."
+
+        if theme_id == "parts_yard":
+            if service_keys & {"repair", "fuel", "vehicle_fetch", "vehicle_sales_used", "vehicle_sales_new"}:
+                return f"That chunk carries a {label} read, so repair jobs and spare parts tend to collect there."
+            return f"That chunk carries a {label} read, so salvage crews leave useful scraps behind."
+
+        if theme_id == "watch_network":
+            return f"That chunk carries a {label} read, so lookout traffic and quiet watchers linger there."
+
+        if theme_id == "field_refuge":
+            if service_keys & {"rest", "shelter"}:
+                return f"That chunk carries a {label} read, so people lean on it for shelter and recovery."
+            return f"That chunk carries a {label} read, so water and quiet cover matter there."
+
+        return ""
+
+    def _service_locator_summary_with_chunk_clause(self, summary, spec, chunk_coord, *, lead_prop=None):
+        summary = str(summary or "").strip()
+        clause = self._service_locator_chunk_clause(spec, chunk_coord, lead_prop=lead_prop)
+        if not clause:
+            return summary
+        if not summary:
+            return clause
+        if summary[-1] not in ".!?":
+            summary = f"{summary}."
+        return f"{summary} {clause}"
+
     def _service_locator_summary(self, context, topic_id):
         spec = self._service_locator_spec(topic_id)
         if not isinstance(spec, dict):
@@ -21633,6 +21730,12 @@ class NPCInteractionSystem(System):
                     )
                 else:
                     summary = f"In this chunk, {names_text} can handle {offer_label}."
+                summary = self._service_locator_summary_with_chunk_clause(
+                    summary,
+                    spec,
+                    best_chunk,
+                    lead_prop=lead_prop,
+                )
                 return {
                     "summary": summary,
                     "service_label": service_label,
@@ -21650,6 +21753,12 @@ class NPCInteractionSystem(System):
                 )
             else:
                 summary = f"Nearest {service_label} I know is {distance_phrase} at {names_text}."
+            summary = self._service_locator_summary_with_chunk_clause(
+                summary,
+                spec,
+                best_chunk,
+                lead_prop=lead_prop,
+            )
             return {
                 "summary": summary,
                 "service_label": service_label,
@@ -21668,6 +21777,11 @@ class NPCInteractionSystem(System):
                     )
                 else:
                     summary = f"In this chunk, {names_text} can handle {offer_label}."
+                summary = self._service_locator_summary_with_chunk_clause(
+                    summary,
+                    spec,
+                    chunk_coord,
+                )
                 return {
                     "summary": summary,
                     "service_label": service_label,
@@ -21685,6 +21799,11 @@ class NPCInteractionSystem(System):
                 )
             else:
                 summary = f"Nearest {service_label} I know is {distance_phrase} at {names_text}."
+            summary = self._service_locator_summary_with_chunk_clause(
+                summary,
+                spec,
+                chunk_coord,
+            )
             return {
                 "summary": summary,
                 "service_label": service_label,
@@ -22521,7 +22640,7 @@ class NPCInteractionSystem(System):
             "fallout_rows": fallout_rows,
         }
         opportunity_summary = self._opportunity_summary(base_context)
-        opportunity_detail = opportunity_summary
+        opportunity_detail = self._opportunity_detail(base_context)
 
         # Evaluate NPC-level judgments for each opportunity row.
         opportunity_judgments = []
@@ -23231,6 +23350,332 @@ class NPCInteractionSystem(System):
             return distance_phrase
         return "nearby"
 
+    def _specialty_opportunity_summary_line(self, row, context, *, quality=None, retrieval=False):
+        if not isinstance(row, dict):
+            return ""
+        kind = str(row.get("kind", "")).strip().lower()
+        if kind not in SPECIALTY_OPPORTUNITY_THEMES:
+            return ""
+
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "opportunities")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+        summary = str(row.get("summary", "")).strip()
+
+        if kind == "layover_shuffle":
+            if retrieval:
+                if quality_mode == "guarded":
+                    return f"For the retrieval, I would lean on the layover churn {anchor}, but only after you sort the real travelers from the handoff traffic."
+                if quality_mode == "vague":
+                    return f"For the retrieval, the layover churn {anchor} is worth a harder look."
+                return f"For the retrieval, the layover churn {anchor} is the strongest live lead. Traveler turnover there hides cover, favors, and the real handoff."
+            if quality_mode == "guarded":
+                return f"The layover churn {anchor} is live, but faces turn over fast there, so verify it yourself."
+            if quality_mode == "vague":
+                return f"There is layover churn {anchor} if you want a route that keeps moving."
+            return f"Layover traffic {anchor} is still working. {summary}".strip()
+
+        if kind == "route_stash":
+            if retrieval:
+                if quality_mode == "guarded":
+                    return f"For the retrieval, I would check the route stash {anchor}, but only if you can read who is servicing it and who is only passing through."
+                if quality_mode == "vague":
+                    return f"For the retrieval, the route stash {anchor} is worth a look."
+                return f"For the retrieval, the route stash {anchor} is the strongest live lead. Stash runners there tell you who keeps using the lane with purpose."
+            if quality_mode == "guarded":
+                return f"The route stash {anchor} is still hot, but those little caches cool fast once the wrong face hangs around them."
+            if quality_mode == "vague":
+                return f"There is a route stash {anchor} if you want something small and fast-moving."
+            return f"The route stash {anchor} is still hot. {summary}".strip()
+
+        if kind == "yard_strip":
+            if retrieval:
+                if quality_mode == "guarded":
+                    return f"For the retrieval, I would use the yard strip {anchor}, but only after you know which crew is working it and which crew is waiting to pounce."
+                if quality_mode == "vague":
+                    return f"For the retrieval, the yard strip {anchor} is worth a look."
+                return f"For the retrieval, the yard strip {anchor} is the strongest live lead. Salvage traffic there exposes who needs discreet parts, quick fixes, and quiet exits."
+            if quality_mode == "guarded":
+                return f"The yard strip {anchor} is still open, but salvage lanes turn territorial fast if you show up late or loud."
+            if quality_mode == "vague":
+                return f"There is a yard strip {anchor} if you want a harder scrap lane."
+            return f"The yard strip {anchor} is still open. {summary}".strip()
+
+        if kind == "field_repair_call":
+            if retrieval:
+                if quality_mode == "guarded":
+                    return f"For the retrieval, I would lean on the repair call {anchor}, but make sure the desperate customer is the one you are reading, not the crew circling them."
+                if quality_mode == "vague":
+                    return f"For the retrieval, the repair call {anchor} is worth a second look."
+                return f"For the retrieval, the repair call {anchor} is the strongest live lead. Quiet fixes there expose who needs a vehicle ready and who cannot afford public attention."
+            if quality_mode == "guarded":
+                return f"The repair call {anchor} is moving, but once that fix turns noisy the whole lane knows about it."
+            if quality_mode == "vague":
+                return f"There is a quiet repair call {anchor} if you want a softer mechanical lane."
+            return f"The quiet repair call {anchor} is still moving. {summary}".strip()
+
+        if kind == "sightline_check":
+            if retrieval:
+                if quality_mode == "guarded":
+                    return f"For the retrieval, I would use the sightline read {anchor}, but only if you can stay watcher instead of becoming the thing being watched."
+                if quality_mode == "vague":
+                    return f"For the retrieval, the sightline read {anchor} is worth your time."
+                return f"For the retrieval, the sightline read {anchor} is the strongest live lead. Long views there tell you who crosses the dead ground and who owns the route."
+            if quality_mode == "guarded":
+                return f"The sightline read {anchor} still pays, but good sightlines work both ways."
+            if quality_mode == "vague":
+                return f"There is a sightline read {anchor} if you want a cleaner watch lane."
+            return f"The sightline read {anchor} is still paying. {summary}".strip()
+
+        if kind == "relay_watch":
+            if retrieval:
+                if quality_mode == "guarded":
+                    return f"For the retrieval, I would lean on the relay watch {anchor}, but only after you know which repeat faces belong there and which ones mean trouble."
+                if quality_mode == "vague":
+                    return f"For the retrieval, the relay watch {anchor} is worth a closer look."
+                return f"For the retrieval, the relay watch {anchor} is the strongest live lead. Repeat traffic there tells you who keeps using the chain with intent."
+            if quality_mode == "guarded":
+                return f"The relay watch {anchor} is still live, but quiet chains remember patterns fast."
+            if quality_mode == "vague":
+                return f"There is a relay watch {anchor} if you want a patient read."
+            return f"The relay watch {anchor} is still live. {summary}".strip()
+
+        if kind == "refuge_resupply":
+            if retrieval:
+                if quality_mode == "guarded":
+                    return f"For the retrieval, I would use the refuge resupply {anchor}, but only if you can tell real need from somebody running a lure."
+                if quality_mode == "vague":
+                    return f"For the retrieval, the refuge resupply {anchor} might still open a quiet lane."
+                return f"For the retrieval, the refuge resupply {anchor} is the strongest live lead. Short shelter stops there tell you who keeps coming through with pressure on them."
+            if quality_mode == "guarded":
+                return f"The refuge resupply {anchor} is still soft enough to work, but the room turns watchful the moment you read like pressure instead of help."
+            if quality_mode == "vague":
+                return f"There is a refuge resupply {anchor} if you want a quieter lane."
+            return f"The refuge resupply {anchor} is still soft enough to work. {summary}".strip()
+
+        if kind == "spring_run":
+            if retrieval:
+                if quality_mode == "guarded":
+                    return f"For the retrieval, I would lean on the spring run {anchor}, but only if you can stay useful without becoming memorable."
+                if quality_mode == "vague":
+                    return f"For the retrieval, the spring run {anchor} could still open a quiet path."
+                return f"For the retrieval, the spring run {anchor} is the strongest live lead. Water legs there tell you who cannot miss the route and who keeps the refuge chain alive."
+            if quality_mode == "guarded":
+                return f"The spring run {anchor} is still worth a walk, but once somebody misses water every stranger starts getting remembered."
+            if quality_mode == "vague":
+                return f"There is a spring run {anchor} if you want a quieter cover lane."
+            return f"The spring run {anchor} is still worth a walk. {summary}".strip()
+
+        return ""
+
+    def _specialty_opportunity_angle_line(self, row, context, *, quality=None, retrieval=False):
+        if not isinstance(row, dict):
+            return ""
+        kind = str(row.get("kind", "")).strip().lower()
+        if kind not in SPECIALTY_OPPORTUNITY_THEMES:
+            return ""
+
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "angle")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+
+        if kind == "layover_shuffle":
+            if retrieval:
+                return (
+                    f"For the retrieval, start with the traveler turnover {anchor} and see who keeps treating the stop like a working handoff."
+                    if quality_mode != "guarded"
+                    else f"For the retrieval, start with the traveler turnover {anchor}, but make sure you sort the real regulars from the handoff traffic."
+                )
+            if quality_mode == "guarded":
+                return f"Start with the layover churn {anchor}, then make sure you can pass for one more traveler before you lean harder."
+            if quality_mode == "vague":
+                return f"Start with the layover churn {anchor} before you touch anything fixed."
+            return f"Start with the layover churn {anchor}; if you look like one more traveler between legs, the real handoff has room to show itself."
+
+        if kind == "route_stash":
+            if retrieval:
+                return (
+                    f"For the retrieval, start with the route stash {anchor} and watch who services it like clockwork."
+                    if quality_mode != "guarded"
+                    else f"For the retrieval, start with the route stash {anchor}, but confirm who is servicing it and who is only drifting past."
+                )
+            if quality_mode == "guarded":
+                return f"Start with the route stash {anchor}, then see who keeps servicing it before the lane turns over."
+            if quality_mode == "vague":
+                return f"Start with the route stash {anchor} before the next line clears it."
+            return f"Start with the route stash {anchor}; whoever keeps it fed is the one moving with purpose."
+
+        if kind == "yard_strip":
+            if retrieval:
+                return (
+                    f"For the retrieval, start with the yard strip {anchor} and log which crew is still working the hot edge."
+                    if quality_mode != "guarded"
+                    else f"For the retrieval, start with the yard strip {anchor}, but know whose scrap lane you are stepping into before you show your face."
+                )
+            if quality_mode == "guarded":
+                return f"Start with the yard strip {anchor}, then work out which crew owns the lane before you move."
+            if quality_mode == "vague":
+                return f"Start with the yard strip {anchor} before the regular crews clean it out."
+            return f"Start with the yard strip {anchor}; the crew working the hot edge tells you who still needs the lane quiet."
+
+        if kind == "field_repair_call":
+            if retrieval:
+                return (
+                    f"For the retrieval, start with the repair call {anchor} and follow the person who cannot let the breakdown become public."
+                    if quality_mode != "guarded"
+                    else f"For the retrieval, start with the repair call {anchor}, but do not mistake the desperate customer for the whole crew behind them."
+                )
+            if quality_mode == "guarded":
+                return f"Start with the repair call {anchor}, then make sure the desperate customer is the one you follow."
+            if quality_mode == "vague":
+                return f"Start with the repair call {anchor} before the fix gets folded back into normal traffic."
+            return f"Start with the repair call {anchor}; whoever cannot afford a public breakdown is the one who opens the lane."
+
+        if kind == "sightline_check":
+            if retrieval:
+                return (
+                    f"For the retrieval, start with the sightline read {anchor} and map who crosses the dead ground with confidence."
+                    if quality_mode != "guarded"
+                    else f"For the retrieval, start with the sightline read {anchor}, but keep moving before you become the thing in the glass."
+                )
+            if quality_mode == "guarded":
+                return f"Start with the sightline read {anchor}, but keep it moving before the watch lane notices you back."
+            if quality_mode == "vague":
+                return f"Start with the sightline read {anchor} before you touch the block itself."
+            return f"Start with the sightline read {anchor}; map who owns the dead ground before you commit to a route."
+
+        if kind == "relay_watch":
+            if retrieval:
+                return (
+                    f"For the retrieval, start with the relay watch {anchor} and match the repeat faces that keep using the chain after dark."
+                    if quality_mode != "guarded"
+                    else f"For the retrieval, start with the relay watch {anchor}, but make sure the repeat face you choose is real and not the decoy everyone else already sees."
+                )
+            if quality_mode == "guarded":
+                return f"Start with the relay watch {anchor}, then separate the real repeat faces from the noise."
+            if quality_mode == "vague":
+                return f"Start with the relay watch {anchor} after dark."
+            return f"Start with the relay watch {anchor}; the repeat face on that chain is the one worth following."
+
+        if kind == "refuge_resupply":
+            if retrieval:
+                return (
+                    f"For the retrieval, start with the refuge resupply {anchor} and see which stop is running short enough to talk."
+                    if quality_mode != "guarded"
+                    else f"For the retrieval, start with the refuge resupply {anchor}, but keep your help useful enough that nobody starts reading you as pressure."
+                )
+            if quality_mode == "guarded":
+                return f"Start with the refuge resupply {anchor}, then stay useful enough that the room does not turn on you."
+            if quality_mode == "vague":
+                return f"Start with the refuge resupply {anchor} before you touch the harder lanes."
+            return f"Start with the refuge resupply {anchor}; the stop running shortest is the stop that talks first."
+
+        if kind == "spring_run":
+            if retrieval:
+                return (
+                    f"For the retrieval, start with the spring run {anchor} and see who cannot miss the water leg."
+                    if quality_mode != "guarded"
+                    else f"For the retrieval, start with the spring run {anchor}, but do not linger long enough to become the memorable stranger on the route."
+                )
+            if quality_mode == "guarded":
+                return f"Start with the spring run {anchor}, then move before the route starts remembering you."
+            if quality_mode == "vague":
+                return f"Start with the spring run {anchor} before the refuge chain settles."
+            return f"Start with the spring run {anchor}; whoever cannot miss the water leg is the one who gives the chain away."
+
+        return ""
+
+    def _specialty_opportunity_risk_line(self, row, context, *, quality=None, retrieval=False):
+        if not isinstance(row, dict):
+            return ""
+        kind = str(row.get("kind", "")).strip().lower()
+        if kind not in SPECIALTY_OPPORTUNITY_THEMES:
+            return ""
+
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "risk")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+        anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+
+        if kind == "layover_shuffle":
+            if quality_mode == "vague":
+                return f"Traveler turnover {anchor} hides you until it decides you are the extra."
+            if quality_mode == "guarded":
+                return f"Traveler turnover {anchor} gives you cover, but strangers there still remember the wrong face."
+            return f"Traveler turnover {anchor} gives you cover, but strangers there still remember the wrong face once you stop looking like you belong."
+
+        if kind == "route_stash":
+            if quality_mode == "vague":
+                return f"Route stashes {anchor} cool fast."
+            if quality_mode == "guarded":
+                return f"Route stashes {anchor} cool fast, and hovering around one makes you the obvious extra."
+            return f"Route stashes {anchor} cool fast, and hovering around one makes you the obvious extra before the next line turns over."
+
+        if kind == "yard_strip":
+            if quality_mode == "vague":
+                return f"Salvage lanes {anchor} can turn rough quickly."
+            if quality_mode == "guarded":
+                return f"Salvage lanes {anchor} turn territorial fast if you show up late or loud."
+            return f"Salvage lanes {anchor} turn territorial fast if you show up late, loud, or on the wrong crew's edge."
+
+        if kind == "field_repair_call":
+            if quality_mode == "vague":
+                return f"Quiet repair calls {anchor} stay quiet right up until they do not."
+            if quality_mode == "guarded":
+                return f"Quiet repair calls {anchor} stay soft only until the fix goes noisy and everybody starts watching."
+            return f"Quiet repair calls {anchor} stay soft only until the fix goes noisy and everybody starts watching the same breakdown."
+
+        if kind == "sightline_check":
+            if quality_mode == "vague":
+                return f"Good sightlines {anchor} work both ways."
+            if quality_mode == "guarded":
+                return f"Good sightlines {anchor} pay in reads, but they also make you easier to clock if you overstay."
+            return f"Good sightlines {anchor} pay in reads, but they also make you easier to clock if you overstay and become the thing being watched."
+
+        if kind == "relay_watch":
+            if quality_mode == "vague":
+                return f"Quiet relay chains {anchor} remember patterns."
+            if quality_mode == "guarded":
+                return f"Quiet relay chains {anchor} remember patterns, and one bad repeat can close the lane on you."
+            return f"Quiet relay chains {anchor} remember patterns, and one bad repeat can close the lane on you before you learn anything useful."
+
+        if kind == "refuge_resupply":
+            if quality_mode == "vague":
+                return f"Refuge stops {anchor} are soft until you read like pressure."
+            if quality_mode == "guarded":
+                return f"Refuge stops {anchor} are grateful right up until you stop reading like help."
+            return f"Refuge stops {anchor} are grateful right up until you stop reading like help and start reading like pressure."
+
+        if kind == "spring_run":
+            if quality_mode == "vague":
+                return f"Water legs {anchor} get memorable fast when somebody misses one."
+            if quality_mode == "guarded":
+                return f"Water legs {anchor} sound soft until somebody misses one and every stranger gets remembered."
+            return f"Water legs {anchor} sound soft until somebody misses one and every stranger on the route gets remembered."
+
+        return ""
+
+    def _opportunity_detail(self, context, *, quality=None):
+        rows = list(context.get("opportunity_rows", ()) or ())
+        if not rows:
+            return str(context.get("opportunity_summary", "")).strip()
+        row = rows[0]
+        summary = str(row.get("summary", "")).strip()
+        requirement_fragment = self._opportunity_requirement_summary_fragment(row)
+        quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "opportunities")
+        quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
+
+        detail = summary
+        if requirement_fragment and quality_mode != "vague":
+            if detail:
+                if detail[-1] not in ".!?":
+                    detail = f"{detail}."
+                detail = f"{detail} {requirement_fragment}."
+            else:
+                detail = requirement_fragment
+        if detail:
+            return detail.strip()
+        return self._opportunity_summary(context, quality=quality)
+
     def _retrieval_opportunity_summary(self, row, context, *, quality=None):
         if str(context.get("objective_id", "")).strip().lower() != "high_value_retrieval":
             return ""
@@ -23242,6 +23687,10 @@ class NPCInteractionSystem(System):
         kind = str(row.get("kind", "")).strip().lower()
         summary = str(row.get("summary", "")).strip()
         anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+
+        specialty_line = self._specialty_opportunity_summary_line(row, context, quality=quality, retrieval=True)
+        if specialty_line:
+            return specialty_line
 
         clear_base = ""
         fallback_tail = ""
@@ -23323,6 +23772,9 @@ class NPCInteractionSystem(System):
             retrieval_summary = self._retrieval_opportunity_summary(row, context, quality=quality)
             if retrieval_summary:
                 return retrieval_summary
+            specialty_summary = self._specialty_opportunity_summary_line(row, context, quality=quality)
+            if specialty_summary:
+                return specialty_summary
             title = str(row.get("title", "Opportunity")).strip() or "Opportunity"
             summary = str(row.get("summary", "")).strip()
             distance = int(row.get("distance", 0))
@@ -23470,6 +23922,55 @@ class NPCInteractionSystem(System):
         quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         kind = str(row.get("kind", "")).strip().lower()
         anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+
+        if kind == "layover_shuffle":
+            return (
+                f"Build the retrieval chain through the traveler turnover {anchor}; cover traffic there hides who is really moving with intent."
+                if quality_mode != "guarded"
+                else f"Lean on the traveler turnover {anchor}, but make sure you can sort the real handoff from the ordinary layover."
+            )
+        if kind == "route_stash":
+            return (
+                f"Build the retrieval chain through the route stash {anchor}; whoever keeps servicing it tells you who uses the lane on purpose."
+                if quality_mode != "guarded"
+                else f"Lean on the route stash {anchor}, but confirm who is servicing it before you trust the read."
+            )
+        if kind == "yard_strip":
+            return (
+                f"Build the retrieval chain through the yard strip {anchor}; salvage traffic there exposes who needs discreet parts and quiet exits."
+                if quality_mode != "guarded"
+                else f"Lean on the yard strip {anchor}, but do not mistake crew noise for the real route."
+            )
+        if kind == "field_repair_call":
+            return (
+                f"Build the retrieval chain through the repair call {anchor}; desperate fixes expose who needs a vehicle ready without attention."
+                if quality_mode != "guarded"
+                else f"Lean on the repair call {anchor}, but make the desperate customer prove they matter before you commit."
+            )
+        if kind == "sightline_check":
+            return (
+                f"Build the retrieval chain through the sightline read {anchor}; it tells you who owns the dead ground and who only crosses it."
+                if quality_mode != "guarded"
+                else f"Lean on the sightline read {anchor}, but keep moving before you become the obvious watcher."
+            )
+        if kind == "relay_watch":
+            return (
+                f"Build the retrieval chain through the relay watch {anchor}; repeat traffic there tells you who keeps using the chain with intent."
+                if quality_mode != "guarded"
+                else f"Lean on the relay watch {anchor}, but make sure the repeat face you pick is real and not the decoy."
+            )
+        if kind == "refuge_resupply":
+            return (
+                f"Build the retrieval chain through the refuge resupply {anchor}; short shelter stops expose who keeps leaning on the quiet route."
+                if quality_mode != "guarded"
+                else f"Lean on the refuge resupply {anchor}, but stay useful enough that nobody starts reading you as pressure."
+            )
+        if kind == "spring_run":
+            return (
+                f"Build the retrieval chain through the spring run {anchor}; water legs tell you who cannot afford to miss the route."
+                if quality_mode != "guarded"
+                else f"Lean on the spring run {anchor}, but do not linger long enough to become the memorable stranger."
+            )
 
         if kind == "service_friction":
             if quality_mode == "vague":
@@ -23649,6 +24150,10 @@ class NPCInteractionSystem(System):
         kind = str(row.get("kind", "")).strip().lower()
         anchor = self._opportunity_anchor_clause(row, context, preposition="around")
 
+        specialty_line = self._specialty_opportunity_angle_line(row, context, quality=quality, retrieval=True)
+        if specialty_line:
+            return specialty_line
+
         if kind == "service_friction":
             if quality_mode == "vague":
                 return f"Start with the service trouble {anchor} before you touch anything else."
@@ -23733,12 +24238,14 @@ class NPCInteractionSystem(System):
         final_operation_line = self._final_operation_angle_line(context, quality=quality)
         if include_final_operation and final_operation_line:
             lines.append(final_operation_line)
-        if not retrieval_objective:
-            lines.extend(list(context.get("objective_focus_lines", ()) or ()))
         for row in list(context.get("opportunity_rows", ()) or ()):
             retrieval_line = self._retrieval_opportunity_angle_line(row, context, quality=quality)
             if retrieval_line:
                 lines.append(retrieval_line)
+                continue
+            specialty_line = self._specialty_opportunity_angle_line(row, context, quality=quality)
+            if specialty_line:
+                lines.append(specialty_line)
                 continue
             title = str(row.get("title", "Opportunity")).strip() or "Opportunity"
             summary = str(row.get("summary", "")).strip()
@@ -23764,6 +24271,8 @@ class NPCInteractionSystem(System):
                 if style_line:
                     line = f"{line} {style_line}"
             lines.append(line)
+        if not retrieval_objective:
+            lines.extend(list(context.get("objective_focus_lines", ()) or ()))
         if retrieval_objective:
             lines.extend(list(context.get("objective_focus_lines", ()) or ()))
         lines.extend(list(context.get("objective_activity_lines", ()) or ()))
@@ -23791,6 +24300,10 @@ class NPCInteractionSystem(System):
         quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
         kind = str(row.get("kind", "")).strip().lower()
         anchor = self._opportunity_anchor_clause(row, context, preposition="around")
+
+        specialty_line = self._specialty_opportunity_risk_line(row, context, quality=quality, retrieval=True)
+        if specialty_line:
+            return specialty_line
 
         if kind == "service_friction":
             if quality_mode == "vague":
@@ -23847,6 +24360,10 @@ class NPCInteractionSystem(System):
             retrieval_line = self._retrieval_opportunity_risk_line(row, context, quality=quality)
             if retrieval_line:
                 lines.append(retrieval_line)
+                continue
+            specialty_line = self._specialty_opportunity_risk_line(row, context, quality=quality)
+            if specialty_line:
+                lines.append(specialty_line)
                 continue
             title = str(row.get("title", "Opportunity")).strip() or "Opportunity"
             risk = str(row.get("risk", "low")).strip() or "low"
@@ -29245,6 +29762,23 @@ class PlayerActionSystem(System):
         desc = self.sim.world.overworld_descriptor(target_chunk[0], target_chunk[1])
         interest = self.sim.world.overworld_interest(target_chunk[0], target_chunk[1], descriptor=desc)
         travel = _overworld_travel_profile(self.sim, target_chunk[0], target_chunk[1], desc=desc, interest=interest)
+        discovery = _overworld_discovery_profile(
+            self.sim,
+            target_chunk[0],
+            target_chunk[1],
+            desc=desc,
+            interest=interest,
+            travel=travel,
+        )
+        identity = _overworld_identity_profile(
+            self.sim,
+            target_chunk[0],
+            target_chunk[1],
+            desc=desc,
+            interest=interest,
+            travel=travel,
+            discovery=discovery,
+        )
 
         fuel_cost = self._vehicle_fuel_cost_for_chunk(vehicle_prop, desc=desc)
         fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
@@ -29307,6 +29841,8 @@ class PlayerActionSystem(System):
                 or nearest_landmark.get("name")
             ),
             interest=interest.get("detail"),
+            identity=identity.get("label"),
+            identity_hook=identity.get("hook"),
             risk=travel.get("risk_label"),
             support=travel.get("support_label"),
             energy_cost=energy_cost,
@@ -29528,6 +30064,15 @@ class PlayerActionSystem(System):
         interest = self.sim.world.overworld_interest(cx, cy, descriptor=desc)
         travel = _overworld_travel_profile(self.sim, cx, cy, desc=desc, interest=interest)
         discovery = _overworld_discovery_profile(self.sim, cx, cy, desc=desc, interest=interest, travel=travel)
+        identity = _overworld_identity_profile(
+            self.sim,
+            cx,
+            cy,
+            desc=desc,
+            interest=interest,
+            travel=travel,
+            discovery=discovery,
+        )
         area_type = str(desc.get("area_type", "city"))
         district_type = str(desc.get("district_type", "unknown"))
         terrain = str(desc.get("terrain", "plain")).replace("_", " ").strip()
@@ -29547,6 +30092,8 @@ class PlayerActionSystem(System):
             str(interest.get("detail", "")).strip(),
             travel,
             discovery,
+            str(identity.get("label", "")).strip(),
+            str(identity.get("hook", "")).strip(),
         )
 
     def _chunk_direction(self, from_chunk, to_chunk):
@@ -29582,12 +30129,16 @@ class PlayerActionSystem(System):
             interest_detail,
             travel,
             discovery,
+            identity_label,
+            identity_hook,
         ) = self._marker_descriptor((cx, cy))
         path_text = f" path:{path}" if path else ""
         landmark_text = f" landmark:{landmark}" if landmark else ""
         region_text = f" region:{region_name}" if region_name else ""
         settlement_text = f" city:{settlement_name}" if settlement_name else ""
         interest_text = f" poi:{interest_detail}" if interest_detail else ""
+        identity_text = f" id:{identity_label}" if identity_label else ""
+        hook_text = f" read:{identity_hook}" if identity_hook else ""
         summary_bits = list(_overworld_travel_summary_bits(travel)) + list(_overworld_discovery_summary_bits(discovery))
         travel_text = f" {' '.join(summary_bits)}" if summary_bits else ""
         label_text = f" [{label}]" if label else ""
@@ -29596,7 +30147,7 @@ class PlayerActionSystem(System):
             marker_id,
             f"M{marker_id}{label_text} ({cx},{cy}) {dist}c {direction} "
             f"{area_type}/{district_type} terr:{terrain}"
-            f"{path_text}{landmark_text}{interest_text}{region_text}{settlement_text}{travel_text}",
+            f"{path_text}{landmark_text}{identity_text}{interest_text}{region_text}{settlement_text}{travel_text}{hook_text}",
         )
 
     def _set_overworld_marker(self, eid, chunk, *, label="", property_id=None):
@@ -29633,7 +30184,20 @@ class PlayerActionSystem(System):
                 old_chunk = marker_chunk
                 break
 
-        area_type, district_type, terrain, path, landmark, region_name, settlement_name, interest_detail, travel, discovery = self._marker_descriptor(target_chunk)
+        (
+            area_type,
+            district_type,
+            terrain,
+            path,
+            landmark,
+            region_name,
+            settlement_name,
+            interest_detail,
+            travel,
+            discovery,
+            identity_label,
+            identity_hook,
+        ) = self._marker_descriptor(target_chunk)
         if existing is not None:
             existing["chunk"] = target_chunk
             existing["updated_tick"] = self.sim.tick
@@ -29661,6 +30225,8 @@ class PlayerActionSystem(System):
                 region_name=region_name,
                 settlement_name=settlement_name,
                 interest=interest_detail,
+                identity=identity_label,
+                identity_hook=identity_hook,
                 risk=travel.get("risk_label"),
                 support=travel.get("support_label"),
                 energy_cost=int(travel.get("energy_cost", 0)),
@@ -29695,6 +30261,8 @@ class PlayerActionSystem(System):
             region_name=region_name,
             settlement_name=settlement_name,
             interest=interest_detail,
+            identity=identity_label,
+            identity_hook=identity_hook,
             risk=travel.get("risk_label"),
             support=travel.get("support_label"),
             energy_cost=int(travel.get("energy_cost", 0)),
@@ -29972,6 +30540,15 @@ class PlayerActionSystem(System):
         interest = self.sim.world.overworld_interest(cx, cy, descriptor=desc)
         travel = _overworld_travel_profile(self.sim, cx, cy, desc=desc, interest=interest)
         discovery = _overworld_discovery_profile(self.sim, cx, cy, desc=desc, interest=interest, travel=travel)
+        identity = _overworld_identity_profile(
+            self.sim,
+            cx,
+            cy,
+            desc=desc,
+            interest=interest,
+            travel=travel,
+            discovery=discovery,
+        )
 
         marker_id = None
         for marker in self._overworld_markers_for(eid):
@@ -29995,11 +30572,17 @@ class PlayerActionSystem(System):
             bits.append(f"region:{region_name}")
         if settlement_name:
             bits.append(f"city:{settlement_name}")
+        identity_label = str(identity.get("label", "")).strip()
+        identity_hook = str(identity.get("hook", "")).strip()
+        if identity_label:
+            bits.append(f"id:{identity_label}")
         interest_detail = str(interest.get("detail", "")).strip()
         if interest_detail:
             bits.append(f"poi:{interest_detail}")
         bits.extend(_overworld_travel_summary_bits(travel))
         bits.extend(_overworld_discovery_summary_bits(discovery))
+        if identity_hook:
+            bits.append(f"read:{identity_hook}")
         if marker_id is not None:
             bits.append(f"marker:M{marker_id}")
 
@@ -30083,6 +30666,15 @@ class PlayerActionSystem(System):
                 interest = self.sim.world.overworld_interest(qx, qy, descriptor=desc)
                 travel = _overworld_travel_profile(self.sim, qx, qy, desc=desc, interest=interest)
                 discovery = _overworld_discovery_profile(self.sim, qx, qy, desc=desc, interest=interest, travel=travel)
+                identity = _overworld_identity_profile(
+                    self.sim,
+                    qx,
+                    qy,
+                    desc=desc,
+                    interest=interest,
+                    travel=travel,
+                    discovery=discovery,
+                )
                 terrain = str(desc.get("terrain", "plain")).replace("_", " ")
                 path = desc.get("path")
                 path_text = f" path:{str(path)}" if path else ""
@@ -30107,6 +30699,14 @@ class PlayerActionSystem(System):
                 interest_detail = str(interest.get("detail", "")).strip()
                 if interest_detail:
                     interest_text = f" poi:{interest_detail}"
+                identity_text = ""
+                identity_label = str(identity.get("label", "")).strip()
+                if identity_label:
+                    identity_text = f" id:{identity_label}"
+                hook_text = ""
+                identity_hook = str(identity.get("hook", "")).strip()
+                if identity_hook:
+                    hook_text = f" read:{identity_hook}"
                 lines.append(_overworld_legend_line(
                     self.sim,
                     qx,
@@ -30115,8 +30715,8 @@ class PlayerActionSystem(System):
                         f"{label} ({qx},{qy}) {district.get('area_type', 'city')}/"
                         f"{district.get('district_type', 'unknown')} "
                         f"sec {district.get('security_level', '?')} "
-                        f"terr:{terrain}{path_text}{lm_text}{interest_text}"
-                        f" {' '.join(_overworld_travel_summary_bits(travel) + _overworld_discovery_summary_bits(discovery))}{place_text}"
+                        f"terr:{terrain}{path_text}{lm_text}{identity_text}{interest_text}"
+                        f" {' '.join(_overworld_travel_summary_bits(travel) + _overworld_discovery_summary_bits(discovery))}{place_text}{hook_text}"
                     ),
                 ))
 
@@ -42301,6 +42901,45 @@ class NPCSocialDynamicsSystem(System):
             scoped.append(row)
         return tuple(scoped)
 
+    def _opportunity_chatter_anchor_name(self, row):
+        if not isinstance(row, dict):
+            return ""
+        requirements = dict(row.get("requirements", {}) or {})
+        property_id = str(requirements.get("property_id", "")).strip()
+        if property_id:
+            prop = self.sim.properties.get(property_id)
+            if isinstance(prop, dict):
+                return str(prop.get("name", prop.get("id", "site"))).strip()
+        return str(requirements.get("property_name", "")).strip()
+
+    def _specialty_opportunity_chatter_summary(self, row):
+        if not isinstance(row, dict):
+            return ""
+        kind = str(row.get("kind", "")).strip().lower()
+        if kind not in SPECIALTY_OPPORTUNITY_THEMES:
+            return ""
+
+        anchor_name = self._opportunity_chatter_anchor_name(row)
+        anchor_text = f" around {anchor_name}" if anchor_name else ""
+
+        if kind == "layover_shuffle":
+            return f"Traveler turnover{anchor_text} is still hiding small favors, cover, and quick handoffs."
+        if kind == "route_stash":
+            return f"A route stash{anchor_text} is still hot before the next line turns it over."
+        if kind == "yard_strip":
+            return f"The hot salvage edge{anchor_text} is still open, and the working crew has not cleaned it out yet."
+        if kind == "field_repair_call":
+            return f"A quiet repair call{anchor_text} is still moving because somebody cannot afford a public breakdown."
+        if kind == "sightline_check":
+            return f"The sightline read{anchor_text} is still paying if you want to know who owns the dead ground."
+        if kind == "relay_watch":
+            return f"The relay watch{anchor_text} is still live after dark if you want the repeat faces."
+        if kind == "refuge_resupply":
+            return f"Refuge stops{anchor_text} are still short enough that people will trade goodwill for basics."
+        if kind == "spring_run":
+            return f"The spring run{anchor_text} is still moving if you want to follow who cannot miss the water leg."
+        return ""
+
     def _opportunity_chatter_payload(self, speaker_eid, partner_eid, tone):
         rows = list(self._social_opportunity_rows_for(speaker_eid, limit=5))
         if not rows:
@@ -42337,7 +42976,9 @@ class NPCSocialDynamicsSystem(System):
                 break
 
         title = str(selected.get("title", "Opportunity")).strip() or "Opportunity"
-        summary = str(selected.get("summary", "")).strip() or "might be worth a look"
+        summary = self._specialty_opportunity_chatter_summary(selected)
+        if not summary:
+            summary = str(selected.get("summary", "")).strip() or "might be worth a look"
         distance_phrase = opportunity_distance_text(selected.get("distance", 0), selected.get("direction", "HERE"))
         quote = self._say_social(
             "chatter_opportunity",
@@ -48145,6 +48786,8 @@ class EventLogSystem(System):
         region_raw = event.data.get("region_name")
         settlement_raw = event.data.get("settlement_name")
         interest_raw = event.data.get("interest")
+        identity_raw = event.data.get("identity")
+        identity_hook_raw = event.data.get("identity_hook")
         risk_raw = event.data.get("risk")
         support_raw = event.data.get("support")
         energy_cost_raw = event.data.get("energy_cost", 0)
@@ -48160,6 +48803,8 @@ class EventLogSystem(System):
         region_name = str(region_raw).strip() if region_raw not in (None, "") else ""
         settlement_name = str(settlement_raw).strip() if settlement_raw not in (None, "") else ""
         interest = str(interest_raw).strip() if interest_raw not in (None, "") else ""
+        identity = str(identity_raw).strip() if identity_raw not in (None, "") else ""
+        identity_hook = str(identity_hook_raw).strip() if identity_hook_raw not in (None, "") else ""
         risk = str(risk_raw).strip() if risk_raw not in (None, "") else ""
         support = str(support_raw).strip() if support_raw not in (None, "") else ""
         cost_bits = []
@@ -48204,12 +48849,16 @@ class EventLogSystem(System):
             extras.append(f"path:{path}")
         if landmark:
             extras.append(f"landmark:{landmark}")
+        if identity:
+            extras.append(f"id:{identity}")
         if interest:
             extras.append(f"poi:{interest}")
         if risk:
             extras.append(f"risk:{risk}")
         if support:
             extras.append(f"support:{support}")
+        if identity_hook:
+            extras.append(f"read:{identity_hook}")
         if cost_bits:
             extras.append(f"tax:{'/'.join(cost_bits)}")
         if fuel_capacity > 0:
@@ -48268,6 +48917,8 @@ class EventLogSystem(System):
         region_name = str(event.data.get("region_name", "")).strip()
         settlement_name = str(event.data.get("settlement_name", "")).strip()
         interest = str(event.data.get("interest", "")).strip()
+        identity = str(event.data.get("identity", "")).strip()
+        identity_hook = str(event.data.get("identity_hook", "")).strip()
         risk = str(event.data.get("risk", "")).strip()
         support = str(event.data.get("support", "")).strip()
         discovery = str(event.data.get("discovery", "")).strip()
@@ -48282,12 +48933,16 @@ class EventLogSystem(System):
         extras = [f"terrain:{terrain}"] if terrain else []
         if landmark:
             extras.append(f"landmark:{landmark}")
+        if identity:
+            extras.append(f"id:{identity}")
         if interest:
             extras.append(f"poi:{interest}")
         if risk:
             extras.append(f"risk:{risk}")
         if support:
             extras.append(f"support:{support}")
+        if identity_hook:
+            extras.append(f"read:{identity_hook}")
         if cost_bits:
             extras.append(f"tax:{'/'.join(cost_bits)}")
         if discovery:
@@ -48311,16 +48966,22 @@ class EventLogSystem(System):
         retargeted = bool(event.data.get("retargeted", False))
         old_chunk = event.data.get("old_chunk")
         interest = str(event.data.get("interest", "")).strip()
+        identity = str(event.data.get("identity", "")).strip()
+        identity_hook = str(event.data.get("identity_hook", "")).strip()
         risk = str(event.data.get("risk", "")).strip()
         support = str(event.data.get("support", "")).strip()
         discovery = str(event.data.get("discovery", "")).strip()
         extras = []
+        if identity:
+            extras.append(f"id:{identity}")
         if interest:
             extras.append(f"poi:{interest}")
         if risk:
             extras.append(f"risk:{risk}")
         if support:
             extras.append(f"support:{support}")
+        if identity_hook:
+            extras.append(f"read:{identity_hook}")
         if discovery:
             extras.append(f"opp:{discovery}")
         if retargeted:
@@ -49464,12 +50125,23 @@ class RenderSystem(System):
             player_visible = set(player_visible or ())
         if not isinstance(player_explored, set):
             player_explored = set(player_explored or ())
+        player_tile_memory = _player_tile_memory_state(self.sim)
+        if player_tile_memory and player_explored:
+            stale_keys = [key for key in player_tile_memory.keys() if key not in player_explored]
+            for key in stale_keys:
+                player_tile_memory.pop(key, None)
 
         def _is_visible(x, y, z):
             return (int(x), int(y), int(z)) in player_visible
 
         def _is_explored(x, y, z):
             return (int(x), int(y), int(z)) in player_explored
+
+        def _remember_tile_appearance(x, y, z, appearance):
+            player_tile_memory[(int(x), int(y), int(z))] = appearance
+
+        def _remembered_tile_appearance(x, y, z):
+            return player_tile_memory.get((int(x), int(y), int(z)))
 
         lighting_state = _lighting_state(self.sim)
         if int(lighting_state.get("tick", -1)) != int(getattr(self.sim, "tick", 0)):
@@ -49910,8 +50582,12 @@ class RenderSystem(System):
                         revealed_building_id=revealed_building_id,
                     )
                     if visible_now:
+                        _remember_tile_appearance(wx, wy, active_z, appearance)
                         attrs = _ambient_attr(wx, wy, active_z)
                     else:
+                        remembered = _remembered_tile_appearance(wx, wy, active_z)
+                        if remembered is not None:
+                            appearance = remembered
                         attrs = getattr(curses, "A_DIM", 0)
                     if _appearance_prefers_floor_underlay(appearance):
                         floor_glyph = _district_floor_glyph(self.sim, wx, wy)
@@ -50322,6 +50998,15 @@ class RenderSystem(System):
             interest = self.sim.world.overworld_interest(current_chunk[0], current_chunk[1], descriptor=desc)
             travel = _overworld_travel_profile(self.sim, current_chunk[0], current_chunk[1], desc=desc, interest=interest)
             discovery = _overworld_discovery_profile(self.sim, current_chunk[0], current_chunk[1], desc=desc, interest=interest, travel=travel)
+            identity = _overworld_identity_profile(
+                self.sim,
+                current_chunk[0],
+                current_chunk[1],
+                desc=desc,
+                interest=interest,
+                travel=travel,
+                discovery=discovery,
+            )
             markers = self._player_overworld_markers()
             streamed_lines = _overworld_hud_lines(
                 self.sim,
@@ -50331,6 +51016,7 @@ class RenderSystem(System):
                 interest=interest,
                 travel=travel,
                 discovery=discovery,
+                identity=identity,
                 markers=markers,
                 active_vehicle_prop=active_vehicle_prop,
             )

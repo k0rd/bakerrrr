@@ -1,6 +1,7 @@
 import json
 import math
 import random
+from collections import Counter
 from pathlib import Path
 
 from engine.sites import site_gameplay_profile
@@ -381,6 +382,144 @@ class World:
             "intel_radius": 1,
         },
     }
+    NON_CITY_SITE_SERVICE_SUPPORTS = {
+        "bus_transit": ("services",),
+        "ferry_transit": ("services",),
+        "fuel": ("services",),
+        "intel": ("intel",),
+        "repair": ("services",),
+        "rest": ("shelter",),
+        "shelter": ("shelter",),
+        "shuttle_transit": ("services",),
+    }
+    NON_CITY_SPECIALTY_ALIASES = {
+        "broken reach": "field_refuge",
+        "deep green": "field_refuge",
+        "drydock reach": "parts_yard",
+        "ferry chain": "route_hub",
+        "marsh belt": "field_refuge",
+        "relay corridor": "route_hub",
+        "ridge watch": "watch_network",
+        "ruin tract": "field_refuge",
+        "salvage belt": "parts_yard",
+        "storm watch": "watch_network",
+        "watch strip": "watch_network",
+        "working shore": "route_hub",
+    }
+    NON_CITY_SPECIALTY_PROFILES = {
+        "route_hub": {
+            "site_services_by_kind": {
+                "bait_shop": ("shelter",),
+                "dock_shack": ("shelter",),
+                "ferry_post": ("shelter",),
+                "relay_post": ("intel",),
+                "roadhouse": ("rest",),
+                "tide_station": ("shelter",),
+                "truck_stop": ("rest",),
+            },
+            "opportunity_tags_by_kind": {
+                "bait_shop": ("supplies",),
+                "dock_shack": ("supplies",),
+                "ferry_post": ("supplies",),
+                "relay_post": ("supplies",),
+                "roadhouse": ("supplies",),
+                "tide_station": ("supplies",),
+                "truck_stop": ("supplies",),
+            },
+            "discovery_overrides": {
+                "supplies": {
+                    "label": "route stash",
+                    "item_pool": ("city_pass_token", "transit_daypass", "meal_voucher", "bottled_water"),
+                },
+            },
+        },
+        "parts_yard": {
+            "site_services_by_kind": {
+                "breaker_yard": ("repair",),
+                "dock_shack": ("repair",),
+                "drydock_yard": ("repair",),
+                "roadhouse": ("repair",),
+                "salvage_camp": ("repair",),
+                "truck_stop": ("repair",),
+                "work_shed": ("repair",),
+            },
+            "opportunity_tags_by_kind": {
+                "breaker_yard": ("salvage", "tools"),
+                "dock_shack": ("tools",),
+                "drydock_yard": ("salvage", "tools"),
+                "roadhouse": ("tools",),
+                "salvage_camp": ("salvage", "tools"),
+                "truck_stop": ("tools",),
+                "work_shed": ("tools",),
+            },
+            "discovery_overrides": {
+                "salvage": {
+                    "label": "salvage haul",
+                    "credits_min": 12,
+                    "credits_max": 24,
+                },
+                "tools": {
+                    "label": "parts cache",
+                    "credits_min": 8,
+                    "credits_max": 18,
+                    "item_pool": ("battery_pack", "lockpick_kit", "pocket_multitool", "prybar", "scrap_circuit", "signal_jammer"),
+                },
+            },
+        },
+        "watch_network": {
+            "site_services_by_kind": {
+                "beacon_house": ("intel",),
+                "coast_watch": ("intel",),
+                "firewatch_tower": ("intel",),
+                "inspection_shed": ("intel",),
+                "lookout_post": ("intel",),
+                "relay_post": ("intel",),
+                "survey_post": ("intel",),
+                "weather_station": ("intel",),
+            },
+            "opportunity_tags_by_kind": {
+                "beacon_house": ("landmark",),
+                "coast_watch": ("landmark",),
+                "firewatch_tower": ("landmark",),
+                "inspection_shed": ("landmark",),
+                "lookout_post": ("landmark",),
+                "relay_post": ("landmark",),
+                "survey_post": ("landmark",),
+                "weather_station": ("landmark",),
+            },
+            "discovery_overrides": {
+                "landmark": {
+                    "label": "watch vantage",
+                    "intel_radius": 3,
+                },
+            },
+        },
+        "field_refuge": {
+            "site_services_by_kind": {
+                "field_camp": ("shelter",),
+                "herbalist_camp": ("rest",),
+                "ranger_hut": ("rest",),
+                "ruin_shelter": ("rest",),
+            },
+            "opportunity_tags_by_kind": {
+                "field_camp": ("water", "supplies"),
+                "herbalist_camp": ("water", "supplies"),
+                "ranger_hut": ("water",),
+                "ruin_shelter": ("supplies",),
+            },
+            "discovery_overrides": {
+                "supplies": {
+                    "label": "remedy cache",
+                    "item_pool": ("med_gel", "hydration_salts", "bottled_water", "street_ration"),
+                },
+                "water": {
+                    "label": "field spring",
+                    "energy_gain": 6,
+                    "safety_gain": 5,
+                },
+            },
+        },
+    }
 
     CITY_TRAVEL_LABELS = {
         "industrial": "freight yards",
@@ -390,6 +529,22 @@ class World:
         "corporate": "tower campus",
         "military": "checkpoint zone",
         "entertainment": "venue strip",
+    }
+    OVERWORLD_SUPPORT_READS = {
+        "services": "service access",
+        "trade": "trade pull",
+        "shelter": "shelter cover",
+        "intel": "intel support",
+        "security": "checkpoint cover",
+        "social": "social cover",
+        "supplies": "supply access",
+    }
+    OVERWORLD_OPPORTUNITY_READS = {
+        "landmark": "vantage reads",
+        "salvage": "salvage chances",
+        "water": "water access",
+        "tools": "tool salvage",
+        "supplies": "supply finds",
     }
 
     FACTIONS = (
@@ -1445,7 +1600,7 @@ class World:
                 "public": kind in self.PUBLIC_NON_CITY_SITE_KINDS,
             })
 
-        return sites
+        return self._apply_non_city_specialty(descriptor, sites)
 
     def predict_non_city_sites(self, cx, cy, descriptor=None):
         cx = int(cx)
@@ -1468,6 +1623,305 @@ class World:
         if len(names) == 2:
             return f"{names[0]} + {names[1]}"
         return f"{names[0]} + {names[1]} +{len(names) - 2}"
+
+    @staticmethod
+    def _focus_join(labels):
+        cleaned = [str(label).strip() for label in labels or () if str(label).strip()]
+        if not cleaned:
+            return ""
+        if len(cleaned) == 1:
+            return cleaned[0]
+        return f"{cleaned[0]} + {cleaned[1]}"
+
+    @staticmethod
+    def _ordered_unique_labels(labels):
+        ordered = []
+        seen = set()
+        for raw in labels or ():
+            label = str(raw).strip().lower()
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            ordered.append(label)
+        return tuple(ordered)
+
+    def _city_identity_label(self, district_type):
+        district_type = str(district_type or "").strip().lower() or "unknown"
+        return str(
+            self.CITY_TRAVEL_LABELS.get(district_type, district_type.replace("_", " ").strip() or "city blocks")
+        ).strip() or "city blocks"
+
+    def _non_city_identity_label(self, area_type, *, terrain="", path="", landmark_id="", site_kinds=()):
+        area_type = str(area_type or "").strip().lower() or "frontier"
+        terrain = str(terrain or "").strip().lower()
+        path = str(path or "").strip().lower()
+        landmark_id = str(landmark_id or "").strip().lower()
+        site_kinds = {
+            str(kind).strip().lower()
+            for kind in tuple(site_kinds or ())
+            if str(kind).strip()
+        }
+
+        if area_type == "frontier":
+            if site_kinds.intersection({"relay_post", "truck_stop", "roadhouse"}) and path in {"road", "freeway"}:
+                return "relay corridor"
+            if site_kinds.intersection({"salvage_camp", "breaker_yard", "work_shed"}):
+                return "salvage belt"
+            if "inspection_shed" in site_kinds:
+                return "watch strip"
+            if "pump_house" in site_kinds:
+                return "pump line"
+            if terrain in {"badlands", "dunes"}:
+                return "dry reach"
+            if terrain == "ruins" or landmark_id == "shatter_ruins":
+                return "broken reach"
+            return "open frontier"
+
+        if area_type == "wilderness":
+            if terrain == "marsh" or "herbalist_camp" in site_kinds or landmark_id == "glass_marsh":
+                return "marsh belt"
+            if terrain == "ruins" or "ruin_shelter" in site_kinds or landmark_id == "shatter_ruins":
+                return "ruin tract"
+            if (
+                terrain == "hills"
+                or site_kinds.intersection({"firewatch_tower", "weather_station", "survey_post", "lookout_post"})
+                or landmark_id == "radio_spire"
+            ):
+                return "ridge watch"
+            if terrain == "forest" or site_kinds.intersection({"field_camp", "ranger_hut"}) or landmark_id == "ancient_grove":
+                return "deep green"
+            return "wild interior"
+
+        if area_type == "coastal":
+            if site_kinds.intersection({"ferry_post", "tide_station"}):
+                return "ferry chain"
+            if site_kinds.intersection({"coast_watch", "beacon_house"}) or landmark_id == "storm_break":
+                return "storm watch"
+            if "drydock_yard" in site_kinds:
+                return "drydock reach"
+            if site_kinds.intersection({"dock_shack", "net_house", "bait_shop"}):
+                return "working shore"
+            return "open coast"
+
+        return area_type.replace("_", " ").strip() or "outlands"
+
+    def non_city_specialty_profile(self, descriptor, *, site_kinds=()):
+        descriptor = descriptor if isinstance(descriptor, dict) else {}
+        area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
+        if area_type == "city":
+            return {}
+
+        terrain = str(descriptor.get("terrain", self.OVERWORLD_TERRAIN_DEFAULT.get(area_type, "plains"))).strip().lower()
+        path = str(descriptor.get("path", "")).strip().lower()
+        landmark = descriptor.get("landmark") or descriptor.get("nearest_landmark") or {}
+        landmark_id = str(landmark.get("id", "") or "").strip().lower()
+        identity_label = self._non_city_identity_label(
+            area_type,
+            terrain=terrain,
+            path=path,
+            landmark_id=landmark_id,
+            site_kinds=site_kinds,
+        )
+        theme_id = str(self.NON_CITY_SPECIALTY_ALIASES.get(identity_label, "") or "").strip().lower()
+        if not theme_id:
+            return {
+                "theme_id": "",
+                "identity_label": str(identity_label).strip(),
+                "site_services_by_kind": {},
+                "opportunity_tags_by_kind": {},
+                "discovery_overrides": {},
+            }
+
+        raw = self.NON_CITY_SPECIALTY_PROFILES.get(theme_id, {})
+        site_services_by_kind = {}
+        for kind, services in dict(raw.get("site_services_by_kind", {})).items():
+            key = str(kind).strip().lower()
+            labels = self._ordered_unique_labels(services)
+            if key and labels:
+                site_services_by_kind[key] = labels
+
+        opportunity_tags_by_kind = {}
+        for kind, tags in dict(raw.get("opportunity_tags_by_kind", {})).items():
+            key = str(kind).strip().lower()
+            labels = self._ordered_unique_labels(tags)
+            if key and labels:
+                opportunity_tags_by_kind[key] = labels
+
+        discovery_overrides = {}
+        for kind, payload in dict(raw.get("discovery_overrides", {})).items():
+            key = str(kind).strip().lower()
+            if not key or not isinstance(payload, dict):
+                continue
+            cleaned = {}
+            label = str(payload.get("label", "")).strip()
+            if label:
+                cleaned["label"] = label
+            item_pool = self._ordered_unique_labels(payload.get("item_pool", ()))
+            if item_pool:
+                cleaned["item_pool"] = item_pool
+            for field in ("credits_min", "credits_max", "energy_gain", "safety_gain", "social_gain", "intel_radius"):
+                if field in payload:
+                    try:
+                        cleaned[field] = int(payload.get(field, 0))
+                    except (TypeError, ValueError):
+                        continue
+            if cleaned:
+                discovery_overrides[key] = cleaned
+
+        return {
+            "theme_id": theme_id,
+            "identity_label": str(identity_label).strip(),
+            "site_services_by_kind": site_services_by_kind,
+            "opportunity_tags_by_kind": opportunity_tags_by_kind,
+            "discovery_overrides": discovery_overrides,
+        }
+
+    def _apply_non_city_specialty(self, descriptor, sites):
+        prepared = [dict(site) for site in tuple(sites or ()) if isinstance(site, dict)]
+        if not prepared:
+            return []
+
+        site_kinds = tuple(
+            str(site.get("kind", "") or "").strip().lower()
+            for site in prepared
+            if str(site.get("kind", "") or "").strip()
+        )
+        specialty = self.non_city_specialty_profile(descriptor, site_kinds=site_kinds)
+        theme_id = str((specialty or {}).get("theme_id", "") or "").strip().lower()
+        label = str((specialty or {}).get("identity_label", "") or "").strip()
+        service_map = (specialty or {}).get("site_services_by_kind", {})
+        opportunity_map = (specialty or {}).get("opportunity_tags_by_kind", {})
+
+        enriched = []
+        for site in prepared:
+            kind = str(site.get("kind", "") or "").strip().lower()
+            extra_services = tuple(service_map.get(kind, ())) if kind else ()
+            extra_opportunities = tuple(opportunity_map.get(kind, ())) if kind else ()
+            if extra_services:
+                site["site_services"] = list(
+                    self._ordered_unique_labels(tuple(site.get("site_services", ())) + tuple(extra_services))
+                )
+            if extra_opportunities:
+                site["opportunity_tags"] = list(
+                    self._ordered_unique_labels(tuple(site.get("opportunity_tags", ())) + tuple(extra_opportunities))
+                )
+            if theme_id:
+                site["specialty_theme"] = theme_id
+            if label:
+                site["specialty_label"] = label
+            enriched.append(site)
+        return enriched
+
+    def overworld_identity_profile(self, cx, cy, descriptor=None, interest=None, travel=None, discovery=None, site_kinds=None):
+        cx = int(cx)
+        cy = int(cy)
+        if descriptor is None:
+            descriptor = self.overworld_descriptor(cx, cy)
+        if interest is None:
+            interest = self.overworld_interest(cx, cy, descriptor=descriptor)
+        if travel is None:
+            travel = self.overworld_travel_profile(cx, cy, descriptor=descriptor, interest=interest)
+        if discovery is None:
+            discovery = self.overworld_discovery_profile(
+                cx,
+                cy,
+                descriptor=descriptor,
+                interest=interest,
+                travel=travel,
+            )
+
+        area_type = str(descriptor.get("area_type", "city")).strip().lower() or "city"
+        district_type = str(descriptor.get("district_type", "unknown")).strip().lower() or "unknown"
+        terrain = str(descriptor.get("terrain", self.OVERWORLD_TERRAIN_DEFAULT.get(area_type, "plains"))).strip().lower()
+        path = str(descriptor.get("path", "")).strip().lower()
+        landmark = descriptor.get("landmark") or descriptor.get("nearest_landmark") or {}
+        landmark_id = str(landmark.get("id", "") or "").strip().lower()
+        support_tags = tuple(
+            str(tag).strip().lower()
+            for tag in tuple((travel or {}).get("support_tags", ()) or ())
+            if str(tag).strip()
+        )
+        opportunity_tags = tuple(
+            str(tag).strip().lower()
+            for tag in tuple((travel or {}).get("opportunity_tags", ()) or ())
+            if str(tag).strip()
+        )
+        risk_label = str((travel or {}).get("risk_label", "low")).strip().lower() or "low"
+
+        if site_kinds is None:
+            sites = self.predict_non_city_sites(cx, cy, descriptor=descriptor) if area_type != "city" else ()
+            site_kinds = tuple(
+                sorted(
+                    {
+                        str((site or {}).get("kind", "") or "").strip().lower()
+                        for site in tuple(sites or ())
+                        if isinstance(site, dict) and str((site or {}).get("kind", "") or "").strip()
+                    }
+                )
+            )
+        else:
+            site_kinds = tuple(
+                sorted(
+                    {
+                        str(kind).strip().lower()
+                        for kind in tuple(site_kinds or ())
+                        if str(kind).strip()
+                    }
+                )
+            )
+
+        specialty = {}
+        if area_type != "city":
+            specialty = self.non_city_specialty_profile(descriptor, site_kinds=site_kinds)
+
+        if area_type == "city":
+            label = self._city_identity_label(district_type)
+        else:
+            label = self._non_city_identity_label(
+                area_type,
+                terrain=terrain,
+                path=path,
+                landmark_id=landmark_id,
+                site_kinds=site_kinds,
+            )
+
+        focus_bits = []
+        if area_type != "city" and path in {"freeway", "road", "trail"}:
+            focus_bits.append(f"{path}-linked")
+        support_focus = self._focus_join(self.OVERWORLD_SUPPORT_READS.get(tag, "") for tag in support_tags[:2])
+        if support_focus:
+            focus_bits.append(support_focus)
+        else:
+            opportunity_focus = self._focus_join(self.OVERWORLD_OPPORTUNITY_READS.get(tag, "") for tag in opportunity_tags[:2])
+            if opportunity_focus:
+                focus_bits.append(opportunity_focus)
+
+        if risk_label == "hazardous":
+            focus_bits.append("rougher travel")
+        elif risk_label == "exposed":
+            focus_bits.append("watchful travel")
+        elif risk_label == "low" and area_type != "city":
+            focus_bits.append("lighter travel")
+
+        hook = ", ".join(bit for bit in focus_bits[:3] if str(bit).strip())
+        detail = str(label).strip()
+        if hook:
+            detail = f"{detail}; {hook}"
+
+        return {
+            "label": str(label).strip(),
+            "hook": hook,
+            "detail": detail,
+            "theme_id": str((specialty or {}).get("theme_id", "") or "").strip().lower(),
+            "specialty_label": str((specialty or {}).get("identity_label", "") or "").strip(),
+            "site_kinds": site_kinds,
+            "support_tags": support_tags,
+            "opportunity_tags": opportunity_tags,
+            "region_name": str(descriptor.get("region_name", "") or "").strip(),
+            "settlement_name": str(descriptor.get("settlement_name", "") or "").strip(),
+            "interest_detail": str((interest or {}).get("detail", "") or "").strip(),
+            "discovery_label": str((discovery or {}).get("label", "") or "").strip(),
+        }
 
     def overworld_interest(self, cx, cy, descriptor=None):
         cx = int(cx)
@@ -1566,11 +2020,12 @@ class World:
         risk_score += int(terrain_mods.get("risk", 0))
 
         support_tags = set()
-        opportunity_tags = set()
+        opportunity_counts = Counter()
 
         if area_type == "city":
-            support_tags.update(self.CITY_TRAVEL_SUPPORT.get(district_type, ("services",)))
-            opportunity_tags.update(self.CITY_TRAVEL_SUPPORT.get(district_type, ("services",)))
+            city_support = tuple(self.CITY_TRAVEL_SUPPORT.get(district_type, ("services",)))
+            support_tags.update(city_support)
+            opportunity_counts.update(city_support)
 
             district = self.get_chunk(cx, cy).get("district", {})
             try:
@@ -1598,11 +2053,9 @@ class World:
                 if profile.get("is_storefront"):
                     support_tags.add("trade")
                 for service in profile.get("site_services", ()):
-                    if service == "intel":
-                        support_tags.add("intel")
-                    elif service == "shelter":
-                        support_tags.add("shelter")
-                opportunity_tags.update(self.NON_CITY_SITE_TRAVEL_OPPORTUNITIES.get(kind, ()))
+                    support_tags.update(self.NON_CITY_SITE_SERVICE_SUPPORTS.get(str(service).strip().lower(), ()))
+                opportunity_counts.update(self.NON_CITY_SITE_TRAVEL_OPPORTUNITIES.get(kind, ()))
+                opportunity_counts.update(profile.get("opportunity_tags", ()))
 
             if public_support:
                 safety_cost -= 1
@@ -1628,7 +2081,7 @@ class World:
         except (TypeError, ValueError):
             landmark_dist = 99
         if landmark_name and landmark_dist <= 2:
-            opportunity_tags.add("landmark")
+            opportunity_counts["landmark"] += 2 if area_type != "city" else 1
             if terrain in {"ruins", "industrial_waste", "badlands"}:
                 risk_score += 1
 
@@ -1664,7 +2117,10 @@ class World:
         support_label = "/".join(support_list[:2]) if support_list else "none"
 
         opportunity_order = ("landmark", "salvage", "water", "tools", "supplies")
-        opportunity_list = [tag for tag in opportunity_order if tag in opportunity_tags]
+        opportunity_list = sorted(
+            (tag for tag in opportunity_order if int(opportunity_counts.get(tag, 0)) > 0),
+            key=lambda tag: (-int(opportunity_counts.get(tag, 0)), opportunity_order.index(tag)),
+        )
 
         return {
             "risk_score": risk_score,
@@ -1672,6 +2128,11 @@ class World:
             "support_tags": tuple(support_list),
             "support_label": support_label,
             "opportunity_tags": tuple(opportunity_list),
+            "opportunity_counts": {
+                tag: int(opportunity_counts.get(tag, 0))
+                for tag in opportunity_order
+                if int(opportunity_counts.get(tag, 0)) > 0
+            },
             "energy_cost": energy_cost,
             "safety_cost": safety_cost,
             "social_cost": social_cost,
@@ -1688,16 +2149,22 @@ class World:
         if travel is None:
             travel = self.overworld_travel_profile(cx, cy, descriptor=descriptor, interest=interest)
 
+        area_type = str(descriptor.get("area_type", "city")).strip().lower() or "city"
         opportunity_tags = tuple(
             str(tag).strip().lower()
             for tag in travel.get("opportunity_tags", ())
             if str(tag).strip()
         )
         discovery_kind = ""
-        for candidate in ("salvage", "water", "supplies", "tools", "landmark"):
-            if candidate in opportunity_tags:
+        for candidate in opportunity_tags:
+            if candidate in self.OVERWORLD_DISCOVERY_PROFILES:
                 discovery_kind = candidate
                 break
+        if not discovery_kind:
+            for candidate in ("salvage", "water", "supplies", "tools", "landmark"):
+                if candidate in opportunity_tags:
+                    discovery_kind = candidate
+                    break
         if not discovery_kind:
             return {
                 "kind": "",
@@ -1712,16 +2179,30 @@ class World:
             }
 
         profile = dict(self.OVERWORLD_DISCOVERY_PROFILES.get(discovery_kind, {}))
+        specialty = {}
+        if area_type != "city":
+            sites = self.predict_non_city_sites(cx, cy, descriptor=descriptor)
+            site_kinds = tuple(
+                str((site or {}).get("kind", "") or "").strip().lower()
+                for site in tuple(sites or ())
+                if isinstance(site, dict) and str((site or {}).get("kind", "") or "").strip()
+            )
+            specialty = self.non_city_specialty_profile(descriptor, site_kinds=site_kinds)
+        override = {}
+        if isinstance(specialty, dict):
+            override = dict((specialty.get("discovery_overrides") or {}).get(discovery_kind, {}) or {})
+
+        item_pool = self._ordered_unique_labels(tuple(profile.get("item_pool", ())) + tuple(override.get("item_pool", ())))
         return {
             "kind": discovery_kind,
-            "label": str(profile.get("label", discovery_kind.replace("_", " "))).strip(),
-            "item_pool": tuple(profile.get("item_pool", ())),
-            "credits_min": int(profile.get("credits_min", 0)),
-            "credits_max": int(profile.get("credits_max", 0)),
-            "energy_gain": int(profile.get("energy_gain", 0)),
-            "safety_gain": int(profile.get("safety_gain", 0)),
-            "social_gain": int(profile.get("social_gain", 0)),
-            "intel_radius": int(profile.get("intel_radius", 0)),
+            "label": str(override.get("label", profile.get("label", discovery_kind.replace("_", " ")))).strip(),
+            "item_pool": item_pool,
+            "credits_min": int(override.get("credits_min", profile.get("credits_min", 0))),
+            "credits_max": int(override.get("credits_max", profile.get("credits_max", 0))),
+            "energy_gain": int(override.get("energy_gain", profile.get("energy_gain", 0))),
+            "safety_gain": int(override.get("safety_gain", profile.get("safety_gain", 0))),
+            "social_gain": int(override.get("social_gain", profile.get("social_gain", 0))),
+            "intel_radius": int(override.get("intel_radius", profile.get("intel_radius", 0))),
         }
 
     @staticmethod

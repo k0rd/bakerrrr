@@ -313,6 +313,152 @@ class SiteServiceSystem(System):
                         return nx, ny
         return x, y
 
+    def _entry_front_cell(self, entry):
+        if not isinstance(entry, dict):
+            return None
+        try:
+            x = int(entry.get("x"))
+            y = int(entry.get("y"))
+            z = int(entry.get("z", 0))
+        except (TypeError, ValueError):
+            return None
+
+        side = str(entry.get("side", "south") or "south").strip().lower() or "south"
+        deltas = {
+            "north": (0, -1),
+            "south": (0, 1),
+            "west": (-1, 0),
+            "east": (1, 0),
+        }
+        dx, dy = deltas.get(side, (0, 1))
+        return x + dx, y + dy, z
+
+    def _transit_destination_property(self, destination):
+        destination = destination if isinstance(destination, dict) else {}
+        property_id = str(destination.get("property_id", "") or "").strip()
+        if property_id:
+            prop = self.sim.properties.get(property_id)
+            if isinstance(prop, dict):
+                return prop
+
+        node_id = str(destination.get("node_id", "") or "").strip()
+        building_id = str(destination.get("building_id", "") or "").strip()
+        if not building_id and node_id.startswith("building:"):
+            building_id = str(node_id.partition(":")[2] or "").strip()
+        if building_id:
+            for prop in tuple(self.sim.properties.values()):
+                metadata = _property_metadata(prop)
+                if str(metadata.get("building_id", "") or "").strip() == building_id:
+                    return prop
+
+        if not node_id.startswith("site:"):
+            return None
+
+        parts = node_id.split(":", 4)
+        if len(parts) != 5:
+            return None
+
+        _prefix, chunk_x, chunk_y, site_kind, site_id = parts
+        try:
+            chunk = (int(chunk_x), int(chunk_y))
+        except (TypeError, ValueError):
+            return None
+
+        site_kind = str(site_kind or "").strip().lower()
+        site_id = str(site_id or "").strip()
+        if not site_kind or not site_id:
+            return None
+
+        for prop in tuple(self.sim.properties.values()):
+            metadata = _property_metadata(prop)
+            if tuple(metadata.get("chunk", ()) or ()) != chunk:
+                continue
+            prop_site_kind = str(metadata.get("site_kind", metadata.get("archetype", "")) or "").strip().lower()
+            if prop_site_kind != site_kind:
+                continue
+            if str(metadata.get("site_id", "") or "").strip() != site_id:
+                continue
+            return prop
+        return None
+
+    def _find_transit_landing_near(self, eid, x, y, z=0, radius=8, destination=None):
+        x = int(x)
+        y = int(y)
+        z = int(z)
+        radius = max(1, int(radius))
+
+        destination_prop = self._transit_destination_property(destination)
+        anchor_x = x
+        anchor_y = y
+        if isinstance(destination_prop, dict):
+            entry = dict(_property_metadata(destination_prop).get("entry", {}) or {})
+            front_cell = self._entry_front_cell(entry)
+            if front_cell is not None:
+                anchor_x = int(front_cell[0])
+                anchor_y = int(front_cell[1])
+                z = int(front_cell[2])
+
+        best = None
+        best_score = None
+        for ring in range(0, radius + 1):
+            for dy in range(-ring, ring + 1):
+                for dx in range(-ring, ring + 1):
+                    if ring and abs(dx) != ring and abs(dy) != ring:
+                        continue
+                    nx = anchor_x + dx
+                    ny = anchor_y + dy
+                    if self.sim.detail_for_xy(nx, ny) == "unloaded":
+                        continue
+                    if not self.sim.tilemap.is_walkable(nx, ny, z):
+                        continue
+
+                    covered = self.sim.property_covering(nx, ny, z)
+                    covered_access = None
+                    if covered is not None:
+                        covered_access = _evaluate_property_access(self.sim, eid, covered, x=nx, y=ny, z=z)
+
+                    destination_access = None
+                    if destination_prop is not None:
+                        destination_access = _evaluate_property_access(
+                            self.sim,
+                            eid,
+                            destination_prop,
+                            x=nx,
+                            y=ny,
+                            z=z,
+                        )
+
+                    severity_score = max(
+                        int(getattr(covered_access, "severity_score", 0) or 0),
+                        int(getattr(destination_access, "severity_score", 0) or 0),
+                    )
+                    inside_destination = bool(getattr(destination_access, "inside_bounds", False))
+                    inside_cover = bool(getattr(covered_access, "inside_bounds", False))
+                    occupied = any(
+                        int(other_eid) != int(eid)
+                        for other_eid in self.sim.tilemap.entities_at(nx, ny, z)
+                    )
+                    score = (
+                        1 if severity_score > 0 else 0,
+                        1 if inside_destination else 0,
+                        1 if inside_cover else 0,
+                        1 if self.sim.structure_at(nx, ny, z) is not None else 0,
+                        1 if covered is not None else 0,
+                        1 if occupied else 0,
+                        severity_score,
+                        _manhattan(anchor_x, anchor_y, nx, ny),
+                        _manhattan(x, y, nx, ny),
+                        int(ny),
+                        int(nx),
+                    )
+                    if best_score is None or score < best_score:
+                        best = (int(nx), int(ny))
+                        best_score = score
+
+        if best is not None:
+            return best
+        return self._find_walkable_near(x, y, z, radius=radius)
+
     def _move_entity(self, eid, pos, new_x, new_y, new_z, *, reason="site_service"):
         old_x = int(pos.x)
         old_y = int(pos.y)
@@ -1218,13 +1364,27 @@ class SiteServiceSystem(System):
         dest_z = int(selected.get("entry_z", 0))
         self.sim.stream_world(dest_x, dest_y)
         self.sim.ensure_loaded_chunk_terrain()
-        landing_x, landing_y = self._find_walkable_near(dest_x, dest_y, dest_z, radius=6)
+        landing_x, landing_y = self._find_transit_landing_near(
+            eid,
+            dest_x,
+            dest_y,
+            dest_z,
+            radius=6,
+            destination=selected,
+        )
         self._move_entity(eid, pos, landing_x, landing_y, dest_z, reason=service)
 
         world_streamer = self._world_streamer()
         if world_streamer is not None:
             world_streamer.update()
-            landing_x, landing_y = self._find_walkable_near(dest_x, dest_y, dest_z, radius=6)
+            landing_x, landing_y = self._find_transit_landing_near(
+                eid,
+                dest_x,
+                dest_y,
+                dest_z,
+                radius=6,
+                destination=selected,
+            )
             self._move_entity(eid, pos, landing_x, landing_y, dest_z, reason=service)
 
         skill_note = ""

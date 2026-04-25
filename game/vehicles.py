@@ -73,7 +73,6 @@ DEFAULT_CATALOG = {
             "auto_garage",
             "motor_pool",
             "freight_depot",
-            "metro_exchange",
         ),
         "used_sales": (
             "auto_garage",

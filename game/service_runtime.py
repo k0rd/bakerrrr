@@ -1062,6 +1062,44 @@ def _overworld_discovery_profile(sim, cx, cy, desc=None, interest=None, travel=N
     )
 
 
+def _chunk_site_kinds(chunk, *extra_kinds):
+    kinds = []
+    seen = set()
+
+    def _push(value):
+        label = str(value or "").strip().lower()
+        if not label or label in seen:
+            return
+        seen.add(label)
+        kinds.append(label)
+
+    if isinstance(chunk, dict):
+        for site in tuple(chunk.get("sites", ()) or ()):
+            if not isinstance(site, dict):
+                continue
+            _push(site.get("kind"))
+
+    for values in extra_kinds:
+        if isinstance(values, (list, tuple, set)):
+            for value in values:
+                _push(value)
+        else:
+            _push(values)
+    return tuple(kinds)
+
+
+def _overworld_identity_profile(sim, cx, cy, desc=None, interest=None, travel=None, discovery=None, site_kinds=None):
+    return sim.world.overworld_identity_profile(
+        cx,
+        cy,
+        descriptor=desc,
+        interest=interest,
+        travel=travel,
+        discovery=discovery,
+        site_kinds=site_kinds,
+    )
+
+
 def _overworld_travel_tax_text(profile):
     bits = []
     try:
@@ -4060,6 +4098,7 @@ __all__ = [
     "_casino_video_poker_normalize_session",
     "_casino_video_poker_start",
     "_casino_video_poker_toggle_hold",
+    "_chunk_site_kinds",
     "_clamp",
     "_credit_amount_label",
     "_int_or_default",

@@ -39,6 +39,11 @@ from game.property_runtime import (
 )
 from game.run_objectives import evaluate_run_objective
 from game.run_pressure import pressure_snapshot
+from game.service_runtime import (
+    _overworld_identity_profile,
+    _overworld_travel_profile,
+    _overworld_travel_tax_text,
+)
 
 
 def _segment(text, color=None, attrs=0, **extras):
@@ -804,7 +809,7 @@ def _known_location_coords_text(prop):
     return f"{int(x)},{int(y)}"
 
 
-def _known_location_summary_bits(prop, known):
+def _known_location_summary_bits(sim, prop, known):
     bits = []
     if bool((known or {}).get("anchored")):
         bits.append("confirmed")
@@ -842,6 +847,17 @@ def _known_location_summary_bits(prop, known):
     ]
     if services:
         bits.append("services " + ", ".join(services[:2]))
+
+    focus = property_focus_position(prop) or property_display_position(prop)
+    if focus is not None and getattr(sim, "world", None) is not None:
+        chunk = sim.chunk_coords(int(focus[0]), int(focus[1]))
+        desc = sim.world.overworld_descriptor(chunk[0], chunk[1])
+        interest = sim.world.overworld_interest(chunk[0], chunk[1], descriptor=desc)
+        travel = _overworld_travel_profile(sim, chunk[0], chunk[1], desc=desc, interest=interest)
+        identity = _overworld_identity_profile(sim, chunk[0], chunk[1], desc=desc, interest=interest, travel=travel)
+        identity_label = str(identity.get("label", "")).strip()
+        if identity_label:
+            bits.append(f"zone {identity_label}")
 
     return bits
 
@@ -957,7 +973,51 @@ def _known_location_fact_lines(
             continue
         seen.add(key)
         deduped.append(text)
-    return deduped[:4]
+
+    focus = property_focus_position(prop) or property_display_position(prop)
+    if focus is not None and getattr(sim, "world", None) is not None:
+        chunk = sim.chunk_coords(int(focus[0]), int(focus[1]))
+        desc = sim.world.overworld_descriptor(chunk[0], chunk[1])
+        interest = sim.world.overworld_interest(chunk[0], chunk[1], descriptor=desc)
+        travel = _overworld_travel_profile(sim, chunk[0], chunk[1], desc=desc, interest=interest)
+        identity = _overworld_identity_profile(sim, chunk[0], chunk[1], desc=desc, interest=interest, travel=travel)
+        identity_label = str(identity.get("label", "")).strip()
+        identity_hook = str(identity.get("hook", "")).strip()
+        region_name = str(desc.get("region_name", "")).strip()
+        settlement_name = str(desc.get("settlement_name", "")).strip()
+        place_name = settlement_name or region_name
+        if identity_label:
+            if place_name:
+                deduped.append(f"Chunk read: {identity_label} in {place_name}.")
+            else:
+                deduped.append(f"Chunk read: {identity_label}.")
+            macro_bits = []
+            if identity_hook:
+                macro_bits.append(identity_hook)
+            risk_label = str(travel.get("risk_label", "")).strip()
+            support_label = str(travel.get("support_label", "")).strip()
+            tax_text = _overworld_travel_tax_text(travel)
+            if risk_label:
+                macro_bits.append(f"risk {risk_label}")
+            if support_label:
+                macro_bits.append(f"support {support_label}")
+            if tax_text:
+                macro_bits.append(f"tax {tax_text}")
+            if macro_bits:
+                deduped.append(f"Macro read: {', '.join(macro_bits)}.")
+
+    final = []
+    final_seen = set()
+    for line in deduped:
+        text = str(line).strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in final_seen:
+            continue
+        final_seen.add(key)
+        final.append(text)
+    return final[:6]
 
 
 def _known_vehicle_report_row(
@@ -1148,7 +1208,7 @@ def build_known_locations_report(
             continue
 
         name = str(prop.get("name", prop.get("id", "location"))).strip() or "location"
-        summary_bits = _known_location_summary_bits(prop, known)
+        summary_bits = _known_location_summary_bits(sim, prop, known)
         fact_lines = _known_location_fact_lines(
             sim,
             player_eid,

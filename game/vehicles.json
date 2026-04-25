@@ -174,8 +174,7 @@
     "new_sales": [
       "auto_garage",
       "motor_pool",
-      "freight_depot",
-      "metro_exchange"
+      "freight_depot"
     ],
     "used_sales": [
       "auto_garage",

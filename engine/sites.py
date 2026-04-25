@@ -335,18 +335,69 @@ def site_gameplay_profile(site):
     if kind:
         profile.update(SITE_GAMEPLAY_PROFILES.get(kind, {}))
 
+    configured_finance_services = ()
+    configured_site_services = ()
+    configured_opportunity_tags = ()
+    specialty_label = ""
+    specialty_theme = ""
+    if isinstance(site, dict):
+        raw_finance_services = site.get("finance_services", ()) or ()
+        raw_site_services = site.get("site_services", ()) or ()
+        raw_opportunity_tags = site.get("opportunity_tags", ()) or ()
+        if isinstance(raw_finance_services, str):
+            configured_finance_services = (raw_finance_services,)
+        else:
+            configured_finance_services = tuple(raw_finance_services)
+        if isinstance(raw_site_services, str):
+            configured_site_services = (raw_site_services,)
+        else:
+            configured_site_services = tuple(raw_site_services)
+        if isinstance(raw_opportunity_tags, str):
+            configured_opportunity_tags = (raw_opportunity_tags,)
+        else:
+            configured_opportunity_tags = tuple(raw_opportunity_tags)
+        specialty_label = str(site.get("specialty_label", "") or "").strip()
+        specialty_theme = str(site.get("specialty_theme", "") or "").strip().lower()
+        if "is_storefront" in site:
+            profile["is_storefront"] = bool(site.get("is_storefront"))
+
     profile["public"] = bool(profile.get("public", site_is_public(site)))
     profile["is_storefront"] = bool(profile.get("is_storefront", False))
-    profile["finance_services"] = tuple(
-        str(service).strip().lower()
-        for service in profile.get("finance_services", ())
-        if str(service).strip()
-    )
-    profile["site_services"] = tuple(
-        str(service).strip().lower()
-        for service in profile.get("site_services", ())
-        if str(service).strip()
-    )
+
+    finance_services = []
+    seen = set()
+    for service in tuple(profile.get("finance_services", ())) + configured_finance_services:
+        label = str(service).strip().lower()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        finance_services.append(label)
+
+    site_services = []
+    seen = set()
+    for service in tuple(profile.get("site_services", ())) + configured_site_services:
+        label = str(service).strip().lower()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        site_services.append(label)
+
+    opportunity_tags = []
+    seen = set()
+    for tag in tuple(profile.get("opportunity_tags", ())) + configured_opportunity_tags:
+        label = str(tag).strip().lower()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        opportunity_tags.append(label)
+
+    profile["finance_services"] = tuple(finance_services)
+    profile["site_services"] = tuple(site_services)
+    profile["opportunity_tags"] = tuple(opportunity_tags)
+    if specialty_label:
+        profile["specialty_label"] = specialty_label
+    if specialty_theme:
+        profile["specialty_theme"] = specialty_theme
     return profile
 
 
