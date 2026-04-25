@@ -7941,6 +7941,205 @@ def _live_newcomer_count_in_chunk(sim, chunk):
     return total
 
 
+def _track_entity_in_chunk_population(sim, eid, *, chunk=None):
+    if eid is None:
+        return None
+    if not hasattr(sim, "chunk_population_records") or not isinstance(getattr(sim, "chunk_population_records", None), dict):
+        sim.chunk_population_records = {}
+    if not hasattr(sim, "chunk_population_baselines") or not isinstance(getattr(sim, "chunk_population_baselines", None), dict):
+        sim.chunk_population_baselines = {}
+
+    try:
+        int_eid = int(eid)
+    except (TypeError, ValueError):
+        return None
+
+    positions = sim.ecs.get(Position)
+    if chunk is None:
+        pos = positions.get(int_eid)
+        if pos is None:
+            return None
+        try:
+            chunk = sim.chunk_coords(int(pos.x), int(pos.y))
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+        return None
+    try:
+        key = (int(chunk[0]), int(chunk[1]))
+    except (TypeError, ValueError):
+        return None
+
+    rosters = sim.chunk_population_records
+    for other_key, roster in list(rosters.items()):
+        filtered = []
+        changed = False
+        for value in tuple(roster or ()):
+            try:
+                other_eid = int(value)
+            except (TypeError, ValueError):
+                changed = True
+                continue
+            if other_eid == int_eid:
+                changed = True
+                continue
+            if positions.get(other_eid) is None:
+                changed = True
+                continue
+            filtered.append(other_eid)
+        if not changed:
+            continue
+        if filtered:
+            rosters[other_key] = filtered
+        else:
+            rosters.pop(other_key, None)
+
+    target_roster = []
+    for value in tuple(rosters.get(key, ()) or ()):
+        try:
+            other_eid = int(value)
+        except (TypeError, ValueError):
+            continue
+        if positions.get(other_eid) is None:
+            continue
+        target_roster.append(other_eid)
+    if int_eid not in target_roster:
+        target_roster.append(int_eid)
+    rosters[key] = target_roster
+    return key
+
+
+def _business_scene_origin(newcomer):
+    if not isinstance(newcomer, NPCSettlement):
+        return ""
+    return str(getattr(newcomer, "origin", "") or "").strip().lower()
+
+
+def _is_business_scene_spillover(newcomer):
+    return _business_scene_origin(newcomer).startswith("business_scene:")
+
+
+def _business_scene_spillover_unsettled(newcomer):
+    if not isinstance(newcomer, NPCSettlement):
+        return False
+    return not (
+        str(getattr(newcomer, "home_property_id", "") or "").strip()
+        and str(getattr(newcomer, "work_property_id", "") or "").strip()
+    )
+
+
+def _active_business_scene_actor_ids(sim):
+    active = _business_event_scene_state(sim).get("active", {})
+    if not isinstance(active, dict):
+        return set()
+    active_actor_ids = set()
+    positions = sim.ecs.get(Position)
+    for scene in active.values():
+        if not isinstance(scene, dict):
+            continue
+        for eid in tuple(scene.get("spawned_entity_ids", ()) or ()):
+            try:
+                int_eid = int(eid)
+            except (TypeError, ValueError):
+                continue
+            if positions.get(int_eid) is None:
+                continue
+            active_actor_ids.add(int_eid)
+    return active_actor_ids
+
+
+def _chunk_entity_tallies(sim):
+    tallies = {}
+    positions = sim.ecs.get(Position)
+    ais = sim.ecs.get(AI)
+    vitalities = sim.ecs.get(Vitality)
+    settlements = sim.ecs.get(NPCSettlement)
+    active_actor_ids = _active_business_scene_actor_ids(sim)
+    player_eid = getattr(sim, "player_eid", None)
+
+    for eid, ai in tuple(ais.items()):
+        try:
+            int_eid = int(eid)
+        except (TypeError, ValueError):
+            continue
+        if player_eid is not None:
+            try:
+                if int(player_eid) == int_eid:
+                    continue
+            except (TypeError, ValueError):
+                if player_eid == eid:
+                    continue
+        pos = positions.get(int_eid)
+        if pos is None:
+            continue
+        vitality = vitalities.get(int_eid)
+        if vitality and bool(getattr(vitality, "downed", False)):
+            continue
+        role = str(getattr(ai, "role", "") or "").strip().lower()
+        if role == "wildlife":
+            continue
+        try:
+            chunk = sim.chunk_coords(int(pos.x), int(pos.y))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            continue
+        key = (int(chunk[0]), int(chunk[1]))
+        entry = tallies.setdefault(key, {
+            "live_entities": 0,
+            "persistent_entities": 0,
+            "active_scene_entities": 0,
+            "business_scene_spillovers": 0,
+            "business_scene_unsettled": 0,
+        })
+        entry["live_entities"] += 1
+        if int_eid in active_actor_ids:
+            entry["active_scene_entities"] += 1
+        else:
+            entry["persistent_entities"] += 1
+        newcomer = settlements.get(int_eid)
+        if _is_business_scene_spillover(newcomer):
+            entry["business_scene_spillovers"] += 1
+            if _business_scene_spillover_unsettled(newcomer):
+                entry["business_scene_unsettled"] += 1
+
+    sim.chunk_entity_tallies = tallies
+    return tallies
+
+
+def _business_event_chunk_population_target(sim, chunk):
+    if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+        return 0
+    try:
+        key = (int(chunk[0]), int(chunk[1]))
+    except (TypeError, ValueError):
+        return 0
+
+    baselines = getattr(sim, "chunk_population_baselines", None)
+    if isinstance(baselines, dict):
+        try:
+            baseline = int(baselines.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            baseline = 0
+        if baseline > 0:
+            return baseline
+
+    weight = 0
+    for prop in sim.properties.values():
+        if not isinstance(prop, dict):
+            continue
+        if str(prop.get("kind", "") or "").strip().lower() != "building":
+            continue
+        try:
+            prop_chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+        except (TypeError, ValueError):
+            continue
+        if prop_chunk != key:
+            continue
+        weight += 2 if _property_is_storefront(prop) or _property_is_public(prop) else 1
+    return max(_BUSINESS_EVENT_RELEASE_CAP, min(8, 1 + max(0, weight // 2)))
+
+
 def _newcomer_distance_to_property(pos, prop):
     if pos is None or not isinstance(prop, dict):
         return 999999
@@ -8033,6 +8232,7 @@ def _ensure_newcomer_component(
         ai.target_eid = None
     if routine and newcomer.housing_status in {"unhoused", "drifting"} and newcomer.home_property_id == "":
         routine.home = None
+    _track_entity_in_chunk_population(sim, eid)
     return newcomer
 
 
@@ -13477,7 +13677,95 @@ class BusinessPulseSceneSystem(System):
             will.target_eid = None
             will.last_tick = self.sim.tick
 
-    def _scene_release_targets(self, scene, *, preserve_modes=None):
+    def _chunk_population_target(self, chunk):
+        return max(0, int(_business_event_chunk_population_target(self.sim, chunk) or 0))
+
+    def _chunk_release_headroom(self, chunk, *, tallies=None):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            return 0
+        try:
+            key = (int(chunk[0]), int(chunk[1]))
+        except (TypeError, ValueError):
+            return 0
+        tallies = tallies if isinstance(tallies, dict) else _chunk_entity_tallies(self.sim)
+        tally = tallies.get(key, {}) if isinstance(tallies, dict) else {}
+        persistent_entities = max(0, int((tally or {}).get("persistent_entities", 0) or 0))
+        unsettled_spillover = max(0, int((tally or {}).get("business_scene_unsettled", 0) or 0))
+        population_headroom = max(0, self._chunk_population_target(key) - persistent_entities)
+        spillover_headroom = max(0, _BUSINESS_EVENT_RELEASE_CAP - unsettled_spillover)
+        return max(0, min(population_headroom, spillover_headroom))
+
+    def _chunk_spillover_cleanup_candidates(self, chunk):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            return []
+        try:
+            key = (int(chunk[0]), int(chunk[1]))
+        except (TypeError, ValueError):
+            return []
+
+        active_actor_ids = _active_business_scene_actor_ids(self.sim)
+        positions = self.sim.ecs.get(Position)
+        player_pos = self._player_pos()
+        candidates = []
+        for eid, newcomer in list(self.sim.ecs.get(NPCSettlement).items()):
+            if not _is_business_scene_spillover(newcomer) or not _business_scene_spillover_unsettled(newcomer):
+                continue
+            try:
+                int_eid = int(eid)
+            except (TypeError, ValueError):
+                continue
+            if int_eid in active_actor_ids:
+                continue
+            pos = positions.get(int_eid)
+            if pos is None:
+                continue
+            try:
+                actor_chunk = self.sim.chunk_coords(int(pos.x), int(pos.y))
+            except (TypeError, ValueError):
+                continue
+            if actor_chunk != key:
+                continue
+            if self._scene_actor_preservation_mode(int_eid):
+                continue
+            distance_to_player = 9999
+            if player_pos is not None and int(player_pos.z) == int(pos.z):
+                distance_to_player = _manhattan(int(pos.x), int(pos.y), int(player_pos.x), int(player_pos.y))
+                if distance_to_player <= 6:
+                    continue
+            candidates.append((
+                int(getattr(newcomer, "arrived_tick", 0) or 0),
+                -int(distance_to_player),
+                int_eid,
+            ))
+        candidates.sort()
+        return [eid for _arrived_tick, _neg_distance, eid in candidates]
+
+    def _prune_chunk_spillover(self, chunk, *, tallies=None):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            return
+        try:
+            key = (int(chunk[0]), int(chunk[1]))
+        except (TypeError, ValueError):
+            return
+        tallies = tallies if isinstance(tallies, dict) else _chunk_entity_tallies(self.sim)
+        tally = tallies.get(key, {}) if isinstance(tallies, dict) else {}
+        persistent_entities = max(0, int((tally or {}).get("persistent_entities", 0) or 0))
+        unsettled_spillover = max(0, int((tally or {}).get("business_scene_unsettled", 0) or 0))
+        if persistent_entities <= self._chunk_population_target(key) and unsettled_spillover <= _BUSINESS_EVENT_RELEASE_CAP:
+            return
+
+        trim_count = max(
+            max(0, persistent_entities - self._chunk_population_target(key)),
+            max(0, unsettled_spillover - _BUSINESS_EVENT_RELEASE_CAP),
+        )
+        if trim_count <= 0:
+            return
+
+        for eid in self._chunk_spillover_cleanup_candidates(key)[:trim_count]:
+            _business_event_actor_state(self.sim).pop(int(eid), None)
+            self.sim.remove_entity(int(eid))
+
+    def _scene_release_targets(self, scene, *, preserve_modes=None, chunk_tallies=None):
         actor_ids = [
             int(eid)
             for eid in list(scene.get("spawned_entity_ids", ()) or ())
@@ -13499,7 +13787,12 @@ class BusinessPulseSceneSystem(System):
             and int(eid) not in forced_release
         ]
 
-        budget = min(len(actor_ids), max(0, int(scene.get("release_budget", 0) or 0)))
+        release_headroom = self._chunk_release_headroom(scene.get("chunk"), tallies=chunk_tallies)
+        budget = min(
+            len(actor_ids),
+            max(0, int(scene.get("release_budget", 0) or 0)),
+            max(0, int(release_headroom)),
+        )
         if budget <= 0:
             return forced_release
 
@@ -13521,7 +13814,7 @@ class BusinessPulseSceneSystem(System):
         ranked.sort()
         return forced_release | {eid for *_score, eid in ranked[:budget]}
 
-    def _dematerialize_scene(self, scene):
+    def _dematerialize_scene(self, scene, *, chunk_tallies=None):
         property_id = str(scene.get("property_id", "") or "").strip()
         if property_id:
             _business_event_scene_state(self.sim).setdefault("cooldowns", {})[property_id] = int(self.sim.tick)
@@ -13536,7 +13829,7 @@ class BusinessPulseSceneSystem(System):
             int(eid): self._scene_actor_preservation_mode(eid)
             for eid in list(scene.get("spawned_entity_ids", ()) or ())
         }
-        release_targets = self._scene_release_targets(scene, preserve_modes=preserve_modes)
+        release_targets = self._scene_release_targets(scene, preserve_modes=preserve_modes, chunk_tallies=chunk_tallies)
         for eid in list(scene.get("spawned_entity_ids", ())):
             mode = str(preserve_modes.get(int(eid), "") or "").strip().lower()
             if mode.startswith("keep_"):
@@ -13601,11 +13894,13 @@ class BusinessPulseSceneSystem(System):
         player_pos = self._player_pos()
         state = _business_event_scene_state(self.sim)
         active = state.setdefault("active", {})
+        chunk_tallies = _chunk_entity_tallies(self.sim)
         _prune_business_event_seeds(self.sim, active_scene_ids=active.keys())
 
         if active_chunk is None or player_pos is None:
             for scene in list(active.values()):
-                self._dematerialize_scene(scene)
+                self._dematerialize_scene(scene, chunk_tallies=chunk_tallies)
+                chunk_tallies = _chunk_entity_tallies(self.sim)
             active.clear()
             _prune_business_event_seeds(self.sim, active_scene_ids=())
             return
@@ -13620,15 +13915,19 @@ class BusinessPulseSceneSystem(System):
             if scene is not None and self._scene_should_keep(scene):
                 continue
             scene = active.pop(scene_id)
-            self._dematerialize_scene(scene)
+            self._dematerialize_scene(scene, chunk_tallies=chunk_tallies)
+            chunk_tallies = _chunk_entity_tallies(self.sim)
 
         for spec in desired_specs:
             if spec["scene_id"] in active:
                 continue
             self._materialize_scene(spec)
 
+        chunk_tallies = _chunk_entity_tallies(self.sim)
         for scene in list(active.values()):
             self._update_scene_actor_routes(scene)
+        self._prune_chunk_spillover(active_chunk, tallies=chunk_tallies)
+        _chunk_entity_tallies(self.sim)
         _prune_business_event_seeds(self.sim, active_scene_ids=active.keys())
 
 

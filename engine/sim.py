@@ -1846,6 +1846,27 @@ class Simulation:
         if position is not None:
             self.tilemap.remove_entity(eid, position.x, position.y, position.z)
 
+        if hasattr(self, "chunk_population_records") and isinstance(getattr(self, "chunk_population_records", None), dict):
+            for key, roster in list(self.chunk_population_records.items()):
+                if not isinstance(roster, list):
+                    roster = list(roster or ())
+                filtered = []
+                changed = False
+                for value in roster:
+                    try:
+                        if int(value) == int(eid):
+                            changed = True
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                    filtered.append(value)
+                if not changed:
+                    continue
+                if filtered:
+                    self.chunk_population_records[key] = filtered
+                else:
+                    self.chunk_population_records.pop(key, None)
+
         removed = False
         for bucket in self.ecs.components.values():
             if bucket.pop(eid, None) is not None:

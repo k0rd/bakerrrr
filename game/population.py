@@ -537,6 +537,8 @@ def ensure_chunk_population_state(sim):
         sim.chunk_ground_item_records = {}
     if not hasattr(sim, "chunk_population_records"):
         sim.chunk_population_records = {}
+    if not hasattr(sim, "chunk_population_baselines"):
+        sim.chunk_population_baselines = {}
     return sim.chunk_ground_item_records, sim.chunk_population_records
 
 
@@ -2318,6 +2320,8 @@ def spawn_chunk_npcs(sim, chunk, property_records, reserved_property_ids=None):
             "work_property_id": workplace_prop.get("id") if isinstance(workplace_prop, dict) else None,
         }
 
+    baseline_population = len(spawned)
+
     wildlife_target_count = _wildlife_target_count(_chunk_descriptor(sim, chunk), rng)
     if wildlife_target_count > 0:
         spawned.extend(
@@ -2332,5 +2336,8 @@ def spawn_chunk_npcs(sim, chunk, property_records, reserved_property_ids=None):
 
     _seed_chunk_social_bonds(sim, actor_contexts)
     population_records[key] = list(spawned)
+    baselines = getattr(sim, "chunk_population_baselines", None)
+    if isinstance(baselines, dict):
+        baselines[key] = max(int(baselines.get(key, 0) or 0), int(baseline_population))
     sim.property_registry_dirty = True
     return list(spawned)
