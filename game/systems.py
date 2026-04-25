@@ -6313,6 +6313,14 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                     "emphasis": "admin",
                     "perimeter_bonus": 0.9,
                 },
+                {
+                    "phase": "help_wanted_board",
+                    "label": "help-wanted board",
+                    "street_label": "job seekers checking a notice board",
+                    "entry_sentence": "A small help-wanted knot has formed off the front, with people reading the posted shift needs before deciding whether to step in.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 1.7,
+                },
             )
         if phase == "rush":
             return (
@@ -6468,6 +6476,23 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                     "emphasis": "front",
                     "perimeter_bonus": 3.0,
                 })
+                events.append({
+                    "phase": "commuter_orientation",
+                    "label": "commuter orientation",
+                    "street_label": "new arrivals sorting routes by the edge",
+                    "entry_sentence": "A few new arrivals are sorting routes and work leads near the stop instead of committing to a direction yet.",
+                    "emphasis": "transit",
+                    "perimeter_bonus": 1.6,
+                })
+            else:
+                events.append({
+                    "phase": "day_labor_call",
+                    "label": "day-labor call",
+                    "street_label": "hands gathering around a crew list",
+                    "entry_sentence": "A day-labor call is pulling loose workers toward the edge of the site, all names, short terms, and people hoping the shift sticks.",
+                    "emphasis": "work",
+                    "perimeter_bonus": 1.5,
+                })
             return tuple(events)
         if phase == "handoff":
             events = [
@@ -6517,6 +6542,14 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                     "entry_sentence": "A chart handoff is pulling staff into short loops between the desk and the deeper rooms.",
                     "emphasis": "medical",
                     "perimeter_bonus": 0.6,
+                },
+                {
+                    "phase": "clinic_outreach",
+                    "label": "clinic outreach",
+                    "street_label": "walk-ins checking in at an outreach table",
+                    "entry_sentence": "An outreach table has made the front feel less like a door and more like a first safe stop for people trying to get steady.",
+                    "emphasis": "medical",
+                    "perimeter_bonus": 1.4,
                 },
             )
         if phase in {"treatment", "night_watch"}:
@@ -6643,6 +6676,22 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                     "entry_sentence": "A takeout arrival is briefly making the front edge feel more social than private.",
                     "emphasis": "front",
                     "perimeter_bonus": 1.2,
+                },
+                {
+                    "phase": "tenant_meetup",
+                    "label": "tenant meetup",
+                    "street_label": "a new tenant and neighbors comparing notes",
+                    "entry_sentence": "A new tenant meetup has brought a few people down to the stoop, half introductions and half practical advice about the building.",
+                    "emphasis": "residential",
+                    "perimeter_bonus": 1.4,
+                },
+                {
+                    "phase": "mutual_aid_table",
+                    "label": "mutual aid table",
+                    "street_label": "volunteers sharing supplies near the stoop",
+                    "entry_sentence": "A small mutual aid table is making the frontage feel like a soft landing spot instead of a pass-through.",
+                    "emphasis": "residential",
+                    "perimeter_bonus": 1.6,
                 },
             )
 
@@ -9912,6 +9961,14 @@ _BUSINESS_EVENT_RESIDENTIAL_SOCIAL_PHASES = {
     "school_run",
     "neighbors_lingering",
 }
+_BUSINESS_EVENT_SETTLEMENT_PHASES = {
+    "help_wanted_board",
+    "clinic_outreach",
+    "day_labor_call",
+    "commuter_orientation",
+    "tenant_meetup",
+    "mutual_aid_table",
+}
 _BUSINESS_EVENT_HOSPITALITY_PRESSURE_PHASES = {
     "reset_scramble",
     "table_turnover",
@@ -10502,6 +10559,102 @@ def _business_event_residential_social_blueprint(category, *, event_phase=""):
     return None
 
 
+def _business_event_settlement_blueprint(category, *, event_phase=""):
+    category = str(category or "").strip().lower()
+    event_phase = str(event_phase or "").strip().lower()
+    if event_phase == "help_wanted_board":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Help-Wanted Board",
+            "fixture_type": "help_wanted_board",
+            "fixture_glyph": "j",
+            "actor_specs": [
+                {"role": "civilian", "career": "job_seeker", "linger_ticks": 20, "site_affiliated": False},
+                {"role": "civilian", "career": "job_seeker", "linger_ticks": 18, "site_affiliated": False},
+                {"role": "worker", "career": "hiring_lead", "linger_ticks": 16, "site_affiliated": True},
+            ],
+            "keep_hours": 2,
+            "release_budget": 1,
+            "drift_preferred": False,
+        }
+    if event_phase == "clinic_outreach":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Outreach Table",
+            "fixture_type": "outreach_table",
+            "fixture_glyph": "o",
+            "actor_specs": [
+                {"role": "civilian", "career": "walk_in_patient", "linger_ticks": 20, "site_affiliated": False},
+                {"role": "civilian", "career": "caregiver", "linger_ticks": 18, "site_affiliated": False},
+                {"role": "worker", "career": "outreach_nurse", "linger_ticks": 16, "site_affiliated": True},
+            ],
+            "keep_hours": 2,
+            "release_budget": 1,
+            "drift_preferred": False,
+        }
+    if event_phase == "day_labor_call":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Crew Call Sheet",
+            "fixture_type": "crew_call_sheet",
+            "fixture_glyph": "w",
+            "actor_specs": [
+                {"role": "civilian", "career": "day_laborer", "linger_ticks": 20, "site_affiliated": False},
+                {"role": "civilian", "career": "day_laborer", "linger_ticks": 18, "site_affiliated": False},
+                {"role": "worker", "career": "crew_lead", "linger_ticks": 16, "site_affiliated": True},
+            ],
+            "keep_hours": 2,
+            "release_budget": 1,
+            "drift_preferred": False,
+        }
+    if event_phase == "commuter_orientation":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Route Welcome Board",
+            "fixture_type": "route_welcome_board",
+            "fixture_glyph": "r",
+            "actor_specs": [
+                {"role": "civilian", "career": "new_arrival", "linger_ticks": 20, "site_affiliated": False},
+                {"role": "civilian", "career": "commuter", "linger_ticks": 18, "site_affiliated": False},
+                {"role": "worker", "career": "station_guide", "linger_ticks": 16, "site_affiliated": True},
+            ],
+            "keep_hours": 2,
+            "release_budget": 1,
+            "drift_preferred": True,
+        }
+    if event_phase == "tenant_meetup":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Tenant Welcome Box",
+            "fixture_type": "tenant_welcome_box",
+            "fixture_glyph": "t",
+            "actor_specs": [
+                {"role": "civilian", "career": "new_tenant", "linger_ticks": 22, "site_affiliated": False},
+                {"role": "civilian", "career": "resident", "linger_ticks": 20, "site_affiliated": False},
+                {"role": "civilian", "career": "building_rep", "linger_ticks": 18, "site_affiliated": True},
+            ],
+            "keep_hours": 2,
+            "release_budget": 1,
+            "drift_preferred": False,
+        }
+    if event_phase == "mutual_aid_table":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Mutual Aid Table",
+            "fixture_type": "mutual_aid_table",
+            "fixture_glyph": "a",
+            "actor_specs": [
+                {"role": "civilian", "career": "new_arrival", "linger_ticks": 22, "site_affiliated": False},
+                {"role": "civilian", "career": "volunteer", "linger_ticks": 20, "site_affiliated": False},
+                {"role": "civilian", "career": "neighbor", "linger_ticks": 18, "site_affiliated": False},
+            ],
+            "keep_hours": 2,
+            "release_budget": 1,
+            "drift_preferred": True,
+        }
+    return None
+
+
 def _business_event_operational_pressure_blueprint(category, *, event_phase=""):
     category = str(category or "").strip().lower()
     event_phase = str(event_phase or "").strip().lower()
@@ -10849,6 +11002,16 @@ def _business_event_item_pool(scene_type, category, actor_spec):
             return ("caff_shot", "meal_voucher", "mint_strip", "protein_wrap")
         return ("city_pass_token", "meal_voucher", "caff_shot", "protein_wrap")
     if scene_type == "gathering":
+        if career in {"job_seeker", "hiring_lead"}:
+            return ("city_pass_token", "caff_shot", "protein_wrap", "focus_inhaler")
+        if career in {"walk_in_patient", "caregiver", "outreach_nurse"}:
+            return ("hydration_salts", "calm_patch", "med_gel", "bottled_water")
+        if career in {"day_laborer", "crew_lead"}:
+            return ("pocket_multitool", "battery_pack", "protein_wrap", "caff_shot")
+        if career in {"new_arrival", "commuter", "station_guide"}:
+            return ("city_pass_token", "transit_daypass", "protein_wrap", "bottled_water")
+        if career in {"new_tenant", "building_rep", "volunteer", "neighbor"}:
+            return ("meal_voucher", "city_pass_token", "bottled_water", "calm_patch")
         if career in {"guardian", "student"}:
             return ("meal_voucher", "city_pass_token", "protein_wrap", "bottled_water")
         if career in {"resident", "retiree", "smoker"}:
@@ -11054,6 +11217,81 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
             "local_line": local_line,
             "detail_line": detail_line,
             "lead_kind": "access" if target_requirement and not target_hours_text else "hours",
+            "shared": False,
+        }
+
+    if event_phase in _BUSINESS_EVENT_SETTLEMENT_PHASES:
+        lead_kind = "access" if requirement else "hours"
+        if event_phase == "help_wanted_board":
+            if career == "hiring_lead":
+                local_line = f"We posted what {current_name} needs because people keep asking if there is real work here."
+            else:
+                local_line = f"I am checking whether {current_name} has a shift that can turn into something steadier."
+            if hours_text and requirement:
+                detail_line = f"The help-wanted board at {current_name} is live during {hours_text}, but anyone stepping past the front still needs {requirement}."
+            elif hours_text:
+                detail_line = f"The help-wanted board at {current_name} is pulling job seekers through during {hours_text}."
+            elif requirement:
+                detail_line = f"The posted shift at {current_name} looks real, but the front still wants {requirement} before anyone gets inside."
+            else:
+                detail_line = f"The board at {current_name} is less gossip than offer: names, hours, and enough work for someone new to try staying."
+        elif event_phase == "clinic_outreach":
+            if career == "outreach_nurse":
+                local_line = f"We are catching walk-ins outside {current_name} before small problems turn into hard ones."
+            else:
+                local_line = f"The outreach table at {current_name} is the first place today that did not ask me to already be sorted."
+            if hours_text and requirement:
+                detail_line = f"{current_name} is running outreach during {hours_text}. After the table clears, the front still wants {requirement}."
+            elif hours_text:
+                detail_line = f"{current_name} is using this outreach window during {hours_text} to catch people who might otherwise keep drifting."
+            elif requirement:
+                detail_line = f"The outreach table is public-facing, but anything deeper inside {current_name} still wants {requirement}."
+            else:
+                detail_line = f"The outreach table at {current_name} is handing out enough care, water, and names that a few people may stick nearby."
+        elif event_phase == "day_labor_call":
+            if career == "crew_lead":
+                local_line = f"We are filling the crew list at {current_name}; anyone useful gets a name on the board."
+            else:
+                local_line = f"I am waiting to see if the crew list at {current_name} turns into a real shift."
+            if hours_text and requirement:
+                detail_line = f"{current_name} is calling hands during {hours_text}, though the gate still wants {requirement}."
+            elif hours_text:
+                detail_line = f"{current_name} is calling day labor through this window during {hours_text}, with loose hands trying to become regular faces."
+            elif requirement:
+                detail_line = f"The crew list at {current_name} is open enough to attract workers, but the gate still wants {requirement}."
+            else:
+                detail_line = f"The call sheet at {current_name} is turning idle hands into a temporary crew, and temporary is sometimes how people start belonging."
+        elif event_phase == "commuter_orientation":
+            if career == "station_guide":
+                local_line = f"We are helping new arrivals at {current_name} figure out which route leads to work, shelter, or somebody who owes them."
+            else:
+                local_line = f"I just came through {current_name}; I am still deciding whether this stop is where I start over."
+            if hours_text and requirement:
+                detail_line = f"{current_name} is orienting arrivals during {hours_text}, while the staffed side still wants {requirement}."
+            elif hours_text:
+                detail_line = f"The orientation board at {current_name} is active during {hours_text}, catching people before they drift past the useful exits."
+            elif requirement:
+                detail_line = f"The route board is public, but the staffed side of {current_name} still wants {requirement}."
+            else:
+                detail_line = f"The route board at {current_name} is catching new arrivals with enough directions that some of them may stop drifting."
+        elif event_phase == "tenant_meetup":
+            if career == "new_tenant":
+                local_line = f"I am new around {current_name}, so I am learning which door sticks and which neighbor actually knows things."
+            else:
+                local_line = f"The meetup at {current_name} is mostly names, keys, and people making sure the new face has somewhere to land."
+            detail_line = f"The stoop outside {current_name} is doing soft introductions right now, the kind that can turn a newcomer into a resident if the building has room."
+        else:
+            if career == "new_arrival":
+                local_line = f"I stopped at the table outside {current_name} because it looked like the first useful place to ask what happens next."
+            elif career == "volunteer":
+                local_line = f"We set up outside {current_name} because people who need help usually need it before they find the right door."
+            else:
+                local_line = f"The table outside {current_name} is small, but it is enough to make people pause instead of drifting past."
+            detail_line = f"The mutual aid table at {current_name} is moving food, water, names, and work tips through the frontage; some of those names may stay local."
+        return {
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": lead_kind,
             "shared": False,
         }
 
@@ -12074,6 +12312,7 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
         _BUSINESS_EVENT_GATHERING_PHASES
         | _BUSINESS_EVENT_MEDICAL_RESPONSE_PHASES
         | _BUSINESS_EVENT_RESIDENTIAL_SOCIAL_PHASES
+        | _BUSINESS_EVENT_SETTLEMENT_PHASES
         | _BUSINESS_EVENT_HOSPITALITY_PRESSURE_PHASES
         | _BUSINESS_EVENT_OPERATIONAL_PRESSURE_PHASES
         | _BUSINESS_EVENT_AFTERMATH_PHASES
@@ -12309,7 +12548,7 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             pool = [item_id for item_id in ("credstick_chip", "city_pass_token", "transit_daypass", "caff_shot") if item_id in ITEM_CATALOG]
             item_count += 1
             read_only_reason = "You can lift something from the dispatch satchel, but stuffing your own gear into live route paperwork would be a good way to get remembered."
-    elif scene_type == "gathering" and fixture_type in {"meeting_sign", "meeting_marker", "meeting_board", "inspection_packet", "admin_packet", "manifest_clipboard", "trauma_kit", "school_bags", "stoop_cooler", "incident_tape", "memorial_candles"}:
+    elif scene_type == "gathering" and fixture_type in {"meeting_sign", "meeting_marker", "meeting_board", "inspection_packet", "admin_packet", "manifest_clipboard", "trauma_kit", "school_bags", "stoop_cooler", "incident_tape", "memorial_candles", "help_wanted_board", "outreach_table", "crew_call_sheet", "route_welcome_board", "tenant_welcome_box", "mutual_aid_table"}:
         org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
         org_name = str((org_snapshot or {}).get("organization_name", "") or "").strip()
         org_label = org_name or prop_name
@@ -12323,6 +12562,18 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             container_label = "Memorial Candles"
         elif fixture_type == "trauma_kit" or event_phase == "street_triage":
             container_label = "Triage Kit" if category == "medical" else "Field Med Case"
+        elif fixture_type == "help_wanted_board" or event_phase == "help_wanted_board":
+            container_label = "Help-Wanted Board"
+        elif fixture_type == "outreach_table" or event_phase == "clinic_outreach":
+            container_label = "Outreach Table"
+        elif fixture_type == "crew_call_sheet" or event_phase == "day_labor_call":
+            container_label = "Crew Call Sheet"
+        elif fixture_type == "route_welcome_board" or event_phase == "commuter_orientation":
+            container_label = "Route Welcome Board"
+        elif fixture_type == "tenant_welcome_box" or event_phase == "tenant_meetup":
+            container_label = "Tenant Welcome Box"
+        elif fixture_type == "mutual_aid_table" or event_phase == "mutual_aid_table":
+            container_label = "Mutual Aid Table"
         elif fixture_type == "manifest_clipboard" or event_phase == "manifest_check":
             container_label = "Manifest Clipboard"
         elif fixture_type == "admin_packet" or event_phase == "paperwork_surge":
@@ -12401,6 +12652,42 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             note = f"Triage kit: the medic is stabilizing someone outside {prop_name}; once that clears, the front still wants {requirement}."
         elif event_phase == "street_triage":
             note = f"Triage kit: the frontage at {prop_name} is serving as a temporary treatment spot while a medic tries to stabilize the injured."
+        elif event_phase == "help_wanted_board" and hours_text and requirement:
+            note = f"Help-wanted board: {prop_name} is taking names during {hours_text}, but anyone stepping past the front still needs {requirement}."
+        elif event_phase == "help_wanted_board" and hours_text:
+            note = f"Help-wanted board: {prop_name} is taking names during {hours_text}, with job seekers checking whether a shift can become steady."
+        elif event_phase == "help_wanted_board" and requirement:
+            note = f"Help-wanted board: {prop_name} has work posted, but the front still wants {requirement} before anyone gets inside."
+        elif event_phase == "help_wanted_board":
+            note = f"Help-wanted board: {prop_name} has names, hours, and enough posted work for somebody new to try staying nearby."
+        elif event_phase == "clinic_outreach" and hours_text and requirement:
+            note = f"Outreach table: {prop_name} is catching walk-ins during {hours_text}. Deeper access still wants {requirement}."
+        elif event_phase == "clinic_outreach" and hours_text:
+            note = f"Outreach table: {prop_name} is catching walk-ins during {hours_text}, handing out enough care that people stop drifting for a minute."
+        elif event_phase == "clinic_outreach" and requirement:
+            note = f"Outreach table: {prop_name} is public-facing for now, but anything deeper still wants {requirement}."
+        elif event_phase == "clinic_outreach":
+            note = f"Outreach table: {prop_name} is moving care, water, and names through the frontage for people trying to get steady."
+        elif event_phase == "day_labor_call" and hours_text and requirement:
+            note = f"Crew call sheet: {prop_name} is filling a work list during {hours_text}, though the gate still wants {requirement}."
+        elif event_phase == "day_labor_call" and hours_text:
+            note = f"Crew call sheet: {prop_name} is calling hands during {hours_text}, with loose workers hoping the shift sticks."
+        elif event_phase == "day_labor_call" and requirement:
+            note = f"Crew call sheet: the work list at {prop_name} is open enough to draw laborers, but the gate still wants {requirement}."
+        elif event_phase == "day_labor_call":
+            note = f"Crew call sheet: {prop_name} is turning idle hands into a temporary crew, and temporary is sometimes how people start belonging."
+        elif event_phase == "commuter_orientation" and hours_text and requirement:
+            note = f"Route welcome board: {prop_name} is orienting arrivals during {hours_text}, while staffed access still wants {requirement}."
+        elif event_phase == "commuter_orientation" and hours_text:
+            note = f"Route welcome board: {prop_name} is catching new arrivals during {hours_text}, pointing them toward work, shelter, and onward routes."
+        elif event_phase == "commuter_orientation" and requirement:
+            note = f"Route welcome board: public route notes are open at {prop_name}, but staffed access still wants {requirement}."
+        elif event_phase == "commuter_orientation":
+            note = f"Route welcome board: {prop_name} is catching new arrivals with enough directions that some of them may stop drifting."
+        elif event_phase == "tenant_meetup":
+            note = f"Tenant welcome box: {prop_name} has a small stoop meetup going, all keys, names, repairs, and practical advice for someone new to the building."
+        elif event_phase == "mutual_aid_table":
+            note = f"Mutual aid table: {prop_name} is moving food, water, names, and work tips through the frontage; some of those names may stay local."
         elif event_phase == "paperwork_surge" and hours_text and requirement:
             note = (
                 f"Audit packet: {prop_name} is chewing through a paperwork surge during {hours_text}. "
@@ -12488,6 +12775,30 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             if category == "medical":
                 item_count += 1
             read_only_reason = "You can lift emergency supplies from the kit, but this treatment cache is not a safe place to stash your own gear."
+        elif event_phase == "help_wanted_board":
+            pool = [item_id for item_id in ("city_pass_token", "caff_shot", "protein_wrap", "focus_inhaler") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can take something clipped to the job board, but this is not a place to stash your own gear."
+        elif event_phase == "clinic_outreach":
+            pool = [item_id for item_id in ("hydration_salts", "calm_patch", "med_gel", "bottled_water") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can pull from the outreach table, but using public care supplies as your personal stash would get noticed."
+        elif event_phase == "day_labor_call":
+            pool = [item_id for item_id in ("pocket_multitool", "battery_pack", "protein_wrap", "caff_shot") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can lift something from the crew call sheet, but live work gear is not your personal locker."
+        elif event_phase == "commuter_orientation":
+            pool = [item_id for item_id in ("city_pass_token", "transit_daypass", "protein_wrap", "bottled_water") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can pocket something from the route board, but using arrival supplies as a stash would stall the guide table."
+        elif event_phase == "tenant_meetup":
+            pool = [item_id for item_id in ("meal_voucher", "city_pass_token", "bottled_water", "calm_patch") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can take something from the welcome box, but turning a tenant meetup into storage would sour the room fast."
+        elif event_phase == "mutual_aid_table":
+            pool = [item_id for item_id in ("meal_voucher", "bottled_water", "calm_patch", "city_pass_token") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can take from the aid table, but using it as a private stash would get remembered."
         elif event_phase == "paperwork_surge":
             packet_pool = ("credstick_chip", "city_pass_token", "focus_inhaler", "protein_wrap")
             pool = [item_id for item_id in packet_pool if item_id in ITEM_CATALOG]
@@ -12702,6 +13013,9 @@ def _business_event_scene_blueprint(prop, pulse):
 
     if event_phase in _BUSINESS_EVENT_RESIDENTIAL_SOCIAL_PHASES:
         return _business_event_residential_social_blueprint(category, event_phase=event_phase)
+
+    if event_phase in _BUSINESS_EVENT_SETTLEMENT_PHASES:
+        return _business_event_settlement_blueprint(category, event_phase=event_phase)
 
     if event_phase in _BUSINESS_EVENT_HOSPITALITY_PRESSURE_PHASES:
         return _business_event_hospitality_pressure_blueprint(category, event_phase=event_phase)
@@ -12986,6 +13300,8 @@ class BusinessPulseSceneSystem(System):
                 score += 0.75
             if _property_access_level(prop) == "public":
                 score += 0.35
+            if event_phase in _BUSINESS_EVENT_SETTLEMENT_PHASES and self._chunk_release_headroom(active_chunk) > 0:
+                score += 0.9
             score -= float(_manhattan(player_pos.x, player_pos.y, anchor[0], anchor[1])) * 0.045
             if scene_id in active:
                 score += 0.55
@@ -13410,14 +13726,19 @@ class BusinessPulseSceneSystem(System):
         actor_specs = list(blueprint.get("actor_specs", ()) or ())
         for index, actor_spec in enumerate(actor_specs):
             service_tiles = self._anchor_support_tiles(anchor, reserved=reserved, limit=6)
+            fallback_tile = cargo_tile or vehicle_tile or anchor
             if index == 0:
-                spawn_pos = service_tiles[0] if service_tiles else (cargo_tile or anchor)
-                route_points = [spawn_pos, anchor]
+                spawn_pos = service_tiles[0] if service_tiles else fallback_tile
+                route_points = [spawn_pos]
+                for point in service_tiles[1:3]:
+                    if point is not None and point not in route_points:
+                        route_points.append(point)
             else:
-                spawn_pos = cargo_tile or (service_tiles[0] if service_tiles else anchor)
-                route_points = [spawn_pos, anchor]
-                if vehicle_tile is not None:
-                    route_points.append(anchor)
+                spawn_pos = service_tiles[0] if service_tiles else fallback_tile
+                route_points = [spawn_pos]
+                for point in service_tiles[1:3]:
+                    if point is not None and point not in route_points:
+                        route_points.append(point)
             eid = self._spawn_scene_actor(scene, actor_spec, spawn_pos=spawn_pos, route_points=route_points, rng=rng)
             if eid is not None:
                 reserved.add((int(spawn_pos[0]), int(spawn_pos[1]), int(spawn_pos[2])))
