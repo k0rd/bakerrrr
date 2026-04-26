@@ -2038,7 +2038,7 @@ def _run_new_game(view, character_name):
     sim.log.add("City legend: world features use symbols, items are bright symbols, and NPCs are colored letters.")
     sim.log.add("Remote sites: relay/lookout/survey sites can provide intel; camps and huts can offer shelter.")
     sim.log.add(
-        "Overworld legend: in-vehicle macro-grid with terrain + routes. City districts use R/I/D/S/C/M/E, terrain uses letters (f forest, h hills, m marsh, d dunes, l lake, r ruins), routes use #(freeway), =(road), :(trail), landmarks use uppercase symbols, markers use + / !."
+        "Overworld legend: in-vehicle macro-grid with district or terrain center icons, route bands for travel lines, and marker badges for your notes. Bright chunks are currently loaded, dim chunks are distant."
     )
     sim.log.add("Overworld POIs: stronger frontier/wilderness/coastal chunks can replace the center glyph with a site initial.")
     sim.log.add("Finance: use B near banks/ATMs to open banking transfers, and N near banks or insurers to buy/renew policies. Bank balances do not accrue passive interest.")

@@ -4699,7 +4699,7 @@ def _overworld_center_semantic_id(cx, cy, area, district, terrain, landmark, int
     if interest.get("show_on_map") and interest.get("glyph"):
         return "overworld_interest"
     if area == "city":
-        if (int(cx), int(cy)) in loaded_chunks:
+        if district:
             return f"overworld_district_{district}"
         return "overworld_area_city"
     if terrain:
@@ -4933,7 +4933,7 @@ def _overworld_edge_legend_lines(
         _segment(f" markers:{len(markers)}  "),
         _segment("X", color="player", attrs=bold, inline_glyph=True, semantic_id="overworld_cursor"),
         _segment(" cursor  "),
-        _segment("upper=loaded lower=distant  "),
+        _segment("bright=loaded dim=distant  "),
         _segment("G drive  M mark  l list  N nearest  t exit"),
     ]
 
@@ -50609,19 +50609,19 @@ class RenderSystem(System):
         "coastal": "O",
     }
     OVERWORLD_DISTRICT_COLORS = {
-        "industrial": "guard",
-        "residential": "human",
-        "downtown": "player",
-        "slums": "cat_purple",
-        "corporate": "avian",
-        "military": "guard",
-        "entertainment": "cat_orange",
+        "industrial": "floor_industrial",
+        "residential": "floor_residential",
+        "downtown": "floor_downtown",
+        "slums": "floor_slums",
+        "corporate": "floor_corporate",
+        "military": "floor_military",
+        "entertainment": "floor_entertainment",
     }
     OVERWORLD_AREA_COLORS = {
-        "city": "human",
-        "frontier": "cat_tabby",
-        "wilderness": "insect",
-        "coastal": "avian",
+        "city": "floor_downtown",
+        "frontier": "floor_frontier",
+        "wilderness": "floor_wilderness",
+        "coastal": "floor_coastal",
     }
     OVERWORLD_TERRAIN_GLYPHS = {
         "urban": "u",
@@ -50642,22 +50642,22 @@ class RenderSystem(System):
         "ruins": "r",
     }
     OVERWORLD_TERRAIN_COLORS = {
-        "urban": "human",
-        "park": "insect",
-        "industrial_waste": "guard",
-        "scrub": "cat_tabby",
-        "plains": "human",
-        "badlands": "cat_orange",
-        "hills": "guard",
-        "forest": "insect",
-        "marsh": "insect",
-        "shore": "avian",
-        "shoals": "avian",
-        "dunes": "cat_orange",
-        "cliffs": "guard",
-        "salt_flats": "cat_gray",
-        "lake": "avian",
-        "ruins": "cat_purple",
+        "urban": "floor_downtown",
+        "park": "terrain_brush",
+        "industrial_waste": "building_fill",
+        "scrub": "floor_frontier",
+        "plains": "floor_frontier",
+        "badlands": "terrain_trail",
+        "hills": "terrain_rock",
+        "forest": "terrain_brush",
+        "marsh": "floor_wilderness",
+        "shore": "floor_coastal",
+        "shoals": "terrain_water",
+        "dunes": "terrain_salt",
+        "cliffs": "terrain_rock",
+        "salt_flats": "terrain_salt",
+        "lake": "terrain_water",
+        "ruins": "building_edge",
     }
     OVERWORLD_DISTRICT_FILL_GLYPHS = {
         "industrial": "=",
@@ -50698,9 +50698,9 @@ class RenderSystem(System):
         "trail": ":",
     }
     OVERWORLD_PATH_COLORS = {
-        "freeway": "player",
-        "road": "human",
-        "trail": "cat_tabby",
+        "freeway": "transit",
+        "road": "terrain_road",
+        "trail": "terrain_trail",
     }
     OVERWORLD_CELL_W = 4
     OVERWORLD_CELL_H = 3
@@ -50944,7 +50944,7 @@ class RenderSystem(System):
         if zoom_mode == "overworld":
             lines.append("In-vehicle map: t exit to on-foot, G drive to last marker, M add marker, l list markers, N nearest marker, O ops, Y locations, L log.")
             lines.append("Overworld POIs: stronger non-city chunks can replace the center glyph with a site initial.")
-            lines.append("Overworld centers: every chunk has a center icon; uppercase means loaded and lowercase means distant.")
+            lines.append("Overworld centers: each chunk keeps its district or terrain icon; bright means loaded and dim means distant.")
             lines.append("Overworld regions: soft boundary lines separate major outside regions.")
         if overlay_active:
             lines.append("Combat turn mode: each action consumes a turn until danger settles.")
@@ -51159,6 +51159,49 @@ class RenderSystem(System):
             half_h = grid_h // 2
             loaded = set(self.sim.world.loaded_chunks.keys())
             region_dim_attr = getattr(curses, "A_DIM", 0)
+            fill_attrs = getattr(curses, "A_DIM", 0)
+            path_attrs = 0
+            markers = self._player_overworld_markers()
+            nearest_marker_id = None
+            if markers:
+                nearest = min(
+                    markers,
+                    key=lambda marker: (
+                        _manhattan(
+                            center_cx,
+                            center_cy,
+                            marker["chunk"][0],
+                            marker["chunk"][1],
+                        ),
+                        marker["id"],
+                    ),
+                )
+                nearest_marker_id = nearest["id"]
+            cursor_active = bool(look_ui.get("active")) and str(look_ui.get("mode", "")).lower() == "overworld"
+            cursor_chunk = None
+            if cursor_active:
+                cursor_chunk = (
+                    int(look_ui.get("chunk_x", center_cx)),
+                    int(look_ui.get("chunk_y", center_cy)),
+                )
+            badge_chunks = {(center_cx, center_cy)}
+            badge_chunks.update(tuple(marker["chunk"]) for marker in markers)
+            if cursor_chunk is not None and cursor_chunk != (center_cx, center_cy):
+                badge_chunks.add(cursor_chunk)
+
+            def _overworld_cell_slots(cell_origin_x, cell_origin_y, *, reserve_badge=False):
+                center_y = cell_origin_y + (cell_h // 2)
+                center_x = cell_origin_x + (cell_w // 2)
+                if not reserve_badge or cell_w < 3:
+                    return center_x, center_y, center_x, center_y
+                inner_left = cell_origin_x + 1
+                inner_right = cell_origin_x + cell_w - 2
+                if inner_right <= inner_left:
+                    return center_x, center_y, center_x, center_y
+                icon_x = inner_left + ((inner_right - inner_left) // 2)
+                badge_x = inner_right
+                return icon_x, center_y, badge_x, center_y
+
             cell_data = {}
             for gy in range(grid_h):
                 for gx in range(grid_w):
@@ -51231,6 +51274,7 @@ class RenderSystem(System):
                                     screen_y,
                                     fill_glyph,
                                     color=fill_color,
+                                    attrs=fill_attrs,
                                     semantic_id=fill_semantic,
                                     layer="terrain",
                                     priority=-600,
@@ -51247,6 +51291,7 @@ class RenderSystem(System):
                                     mid_y,
                                     self.OVERWORLD_PATH_GLYPHS.get(path, "="),
                                     color=self.OVERWORLD_PATH_COLORS.get(path, "human"),
+                                    attrs=path_attrs,
                                     semantic_id=path_semantic,
                                     layer="ground_overlay",
                                     priority=-420,
@@ -51391,8 +51436,12 @@ class RenderSystem(System):
                             )
 
                     if glyph:
-                        screen_x = cell_origin_x + (cell_w // 2)
-                        screen_y = cell_origin_y + (cell_h // 2)
+                        reserve_badge = (cx, cy) in badge_chunks
+                        screen_x, screen_y, _badge_x, _badge_y = _overworld_cell_slots(
+                            cell_origin_x,
+                            cell_origin_y,
+                            reserve_badge=reserve_badge,
+                        )
                         if 0 <= screen_x < map_w and 0 <= screen_y < map_h:
                             glyph_attrs = 0
                             if (cx, cy) in loaded:
@@ -51420,31 +51469,19 @@ class RenderSystem(System):
                                 priority=-120,
                             )
 
-            markers = self._player_overworld_markers()
-            nearest_marker_id = None
-            if markers:
-                nearest = min(
-                    markers,
-                    key=lambda marker: (
-                        _manhattan(
-                            center_cx,
-                            center_cy,
-                            marker["chunk"][0],
-                            marker["chunk"][1],
-                        ),
-                        marker["id"],
-                    ),
-                )
-                nearest_marker_id = nearest["id"]
-
             for marker in markers:
                 cx, cy = marker["chunk"]
                 gx = half_w + (cx - center_cx)
                 gy = half_h + (cy - center_cy)
                 if not (0 <= gx < grid_w and 0 <= gy < grid_h):
                     continue
-                screen_x = origin_x + (gx * cell_w) + (cell_w // 2)
-                screen_y = origin_y + (gy * cell_h) + (cell_h // 2)
+                cell_origin_x = origin_x + (gx * cell_w)
+                cell_origin_y = origin_y + (gy * cell_h)
+                _icon_x, _icon_y, screen_x, screen_y = _overworld_cell_slots(
+                    cell_origin_x,
+                    cell_origin_y,
+                    reserve_badge=True,
+                )
                 if not (0 <= screen_x < map_w and 0 <= screen_y < map_h):
                     continue
                 is_nearest = marker["id"] == nearest_marker_id
@@ -51460,8 +51497,13 @@ class RenderSystem(System):
                     priority=40 if is_nearest else 30,
                 )
 
-            player_screen_x = origin_x + (half_w * cell_w) + (cell_w // 2)
-            player_screen_y = origin_y + (half_h * cell_h) + (cell_h // 2)
+            player_cell_origin_x = origin_x + (half_w * cell_w)
+            player_cell_origin_y = origin_y + (half_h * cell_h)
+            _player_icon_x, _player_icon_y, player_screen_x, player_screen_y = _overworld_cell_slots(
+                player_cell_origin_x,
+                player_cell_origin_y,
+                reserve_badge=True,
+            )
             if 0 <= player_screen_x < map_w and 0 <= player_screen_y < map_h:
                 self._draw(
                     player_screen_x,
@@ -51473,20 +51515,23 @@ class RenderSystem(System):
                     priority=50,
                 )
 
-            if look_ui.get("active") and str(look_ui.get("mode", "")).lower() == "overworld":
-                cursor_cx = int(look_ui.get("chunk_x", center_cx))
-                cursor_cy = int(look_ui.get("chunk_y", center_cy))
+            if cursor_chunk is not None and cursor_chunk != (center_cx, center_cy):
+                cursor_cx, cursor_cy = cursor_chunk
                 gx = half_w + (cursor_cx - center_cx)
                 gy = half_h + (cursor_cy - center_cy)
                 if 0 <= gx < grid_w and 0 <= gy < grid_h:
-                    cursor_x = origin_x + (gx * cell_w) + (cell_w // 2)
-                    cursor_y = origin_y + (gy * cell_h) + (cell_h // 2)
+                    cell_origin_x = origin_x + (gx * cell_w)
+                    cell_origin_y = origin_y + (gy * cell_h)
+                    _cursor_icon_x, _cursor_icon_y, cursor_x, cursor_y = _overworld_cell_slots(
+                        cell_origin_x,
+                        cell_origin_y,
+                        reserve_badge=True,
+                    )
                     if 0 <= cursor_x < map_w and 0 <= cursor_y < map_h:
-                        glyph = "@" if (cursor_cx, cursor_cy) == (center_cx, center_cy) else "X"
                         self._draw(
                             cursor_x,
                             cursor_y,
-                            glyph,
+                            "X",
                             color="player",
                             attrs=getattr(curses, "A_REVERSE", 0),
                             semantic_id="overworld_cursor",

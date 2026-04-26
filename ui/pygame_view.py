@@ -2884,16 +2884,17 @@ class PygameView:
             224,
         )
         shadow = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 116)
-        plate_fill = (12, 16, 22, 86)
-        plate_stroke = (255, 255, 255, 22)
-        plate_rect = self.pygame.Rect(
-            inset,
-            inset,
-            max(5, self.cell_px - (inset * 2)),
-            max(5, self.cell_px - (inset * 2)),
-        )
-        self.pygame.draw.rect(overlay, plate_fill, plate_rect, border_radius=max(2, self.cell_px // 6))
-        self.pygame.draw.rect(overlay, plate_stroke, plate_rect, max(1, self.cell_px // 28), border_radius=max(2, self.cell_px // 6))
+        if kind_key in {"landmark", "interest"}:
+            plate_fill = (12, 16, 22, 86)
+            plate_stroke = (255, 255, 255, 22)
+            plate_rect = self.pygame.Rect(
+                inset,
+                inset,
+                max(5, self.cell_px - (inset * 2)),
+                max(5, self.cell_px - (inset * 2)),
+            )
+            self.pygame.draw.rect(overlay, plate_fill, plate_rect, border_radius=max(2, self.cell_px // 6))
+            self.pygame.draw.rect(overlay, plate_stroke, plate_rect, max(1, self.cell_px // 28), border_radius=max(2, self.cell_px // 6))
 
         if kind_key == "landmark":
             points = [

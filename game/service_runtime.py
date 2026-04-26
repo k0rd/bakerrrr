@@ -941,19 +941,19 @@ OVERWORLD_AREA_GLYPHS = {
     "coastal": "O",
 }
 OVERWORLD_DISTRICT_COLORS = {
-    "industrial": "guard",
-    "residential": "human",
-    "downtown": "player",
-    "slums": "cat_purple",
-    "corporate": "avian",
-    "military": "guard",
-    "entertainment": "cat_orange",
+    "industrial": "floor_industrial",
+    "residential": "floor_residential",
+    "downtown": "floor_downtown",
+    "slums": "floor_slums",
+    "corporate": "floor_corporate",
+    "military": "floor_military",
+    "entertainment": "floor_entertainment",
 }
 OVERWORLD_AREA_COLORS = {
-    "city": "human",
-    "frontier": "cat_tabby",
-    "wilderness": "insect",
-    "coastal": "avian",
+    "city": "floor_downtown",
+    "frontier": "floor_frontier",
+    "wilderness": "floor_wilderness",
+    "coastal": "floor_coastal",
 }
 OVERWORLD_TERRAIN_GLYPHS = {
     "urban": "u",
@@ -974,22 +974,22 @@ OVERWORLD_TERRAIN_GLYPHS = {
     "ruins": "r",
 }
 OVERWORLD_TERRAIN_COLORS = {
-    "urban": "human",
-    "park": "insect",
-    "industrial_waste": "guard",
-    "scrub": "cat_tabby",
-    "plains": "human",
-    "badlands": "cat_orange",
-    "hills": "guard",
-    "forest": "insect",
-    "marsh": "insect",
-    "shore": "avian",
-    "shoals": "avian",
-    "dunes": "cat_orange",
-    "cliffs": "guard",
-    "salt_flats": "cat_gray",
-    "lake": "avian",
-    "ruins": "cat_purple",
+    "urban": "floor_downtown",
+    "park": "terrain_brush",
+    "industrial_waste": "building_fill",
+    "scrub": "floor_frontier",
+    "plains": "floor_frontier",
+    "badlands": "terrain_trail",
+    "hills": "terrain_rock",
+    "forest": "terrain_brush",
+    "marsh": "floor_wilderness",
+    "shore": "floor_coastal",
+    "shoals": "terrain_water",
+    "dunes": "terrain_salt",
+    "cliffs": "terrain_rock",
+    "salt_flats": "terrain_salt",
+    "lake": "terrain_water",
+    "ruins": "building_edge",
 }
 OVERWORLD_PATH_GLYPHS = {
     "freeway": "#",
@@ -997,9 +997,9 @@ OVERWORLD_PATH_GLYPHS = {
     "trail": ":",
 }
 OVERWORLD_PATH_COLORS = {
-    "freeway": "player",
-    "road": "human",
-    "trail": "cat_tabby",
+    "freeway": "transit",
+    "road": "terrain_road",
+    "trail": "terrain_trail",
 }
 
 
@@ -1008,9 +1008,9 @@ def _overworld_render_style(sim, cx, cy):
     area_type = str(desc.get("area_type", "city")).strip().lower() or "city"
     district_type = str(desc.get("district_type", "unknown")).strip().lower() or "unknown"
     terrain_key = str(desc.get("terrain", "plain")).strip().lower() or "plain"
-    path = str(desc.get("path", "")).strip().lower()
     landmark_here = desc.get("landmark")
     interest = sim.world.overworld_interest(cx, cy, descriptor=desc)
+    loaded_chunks = getattr(sim.world, "loaded_chunks", {}) or {}
 
     if isinstance(landmark_here, dict) and landmark_here.get("glyph"):
         glyph = str(landmark_here.get("glyph", "*"))[:1] or "*"
@@ -1018,16 +1018,15 @@ def _overworld_render_style(sim, cx, cy):
     elif interest.get("show_on_map") and interest.get("glyph"):
         glyph = str(interest.get("glyph", "?"))[:1] or "?"
         color = str(interest.get("color", "human") or "human")
-    elif path:
-        glyph = OVERWORLD_PATH_GLYPHS.get(path, "=")
-        color = OVERWORLD_PATH_COLORS.get(path, "human")
     elif area_type == "city":
-        if (cx, cy) in sim.world.loaded_chunks:
-            glyph = OVERWORLD_DISTRICT_GLYPHS.get(district_type, "X")
-            color = OVERWORLD_DISTRICT_COLORS.get(district_type, "human")
-        else:
-            glyph = OVERWORLD_AREA_GLYPHS.get("city", "X")
-            color = OVERWORLD_AREA_COLORS.get("city", "human")
+        glyph = OVERWORLD_DISTRICT_GLYPHS.get(
+            district_type,
+            OVERWORLD_AREA_GLYPHS.get("city", "X"),
+        )
+        color = OVERWORLD_DISTRICT_COLORS.get(
+            district_type,
+            OVERWORLD_AREA_COLORS.get("city", "human"),
+        )
     else:
         glyph = OVERWORLD_TERRAIN_GLYPHS.get(
             terrain_key,
@@ -1039,7 +1038,7 @@ def _overworld_render_style(sim, cx, cy):
         )
 
     if str(glyph).isalpha():
-        glyph = str(glyph).upper() if (cx, cy) in sim.world.loaded_chunks else str(glyph).lower()
+        glyph = str(glyph).upper() if (cx, cy) in loaded_chunks else str(glyph).lower()
     return glyph, color
 
 
