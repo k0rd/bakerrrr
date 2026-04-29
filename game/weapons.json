@@ -60,6 +60,26 @@
     "named_suffixes": ["Baton", "Reach", "Snap", "Tact" ]
   },
   {
+    "id": "trail_machete",
+    "name": "Trail Machete",
+    "glyph": "!",
+    "projectile_glyph": ".",
+    "trajectory": "ballistic",
+    "speed": 1.0,
+    "range": 1,
+    "pellets": 1,
+    "spread": 0,
+    "base_damage": 12,
+    "cooldown_ticks": 2,
+    "noise_radius": 3,
+    "explosion_radius": 0,
+    "aoe_falloff": 0.0,
+    "cover_penetration": 0.0,
+    "tags": ["melee", "blade", "field"],
+    "named_prefixes": ["Brush", "Trail", "Range", "Cedar"],
+    "named_suffixes": ["Cutter", "Path", "Hook", "Machete"]
+  },
+  {
     "id": "holdout_pistol",
     "name": "Holdout Pistol",
     "glyph": "!",

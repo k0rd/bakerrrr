@@ -6,6 +6,7 @@ from game.components import (
     Collider,
     CoverState,
     CreatureIdentity,
+    FinancialProfile,
     Inventory,
     ItemUseProfile,
     JusticeProfile,
@@ -31,7 +32,7 @@ from game.components import (
     WildlifeBehavior,
 )
 from game.economy import chunk_economy_profile, pick_career_for_workplace
-from game.items import ITEM_CATALOG, loot_table_for_property, roll_loot
+from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot
 from game.npc_names import generate_human_personal_name, human_descriptor
 from game.organizations import ensure_property_organization, sync_actor_organization_affiliations
 from game.property_access import property_is_open, property_is_public, property_is_storefront, world_hour
@@ -121,6 +122,7 @@ STOREFRONT_ARCHETYPES = {
     "bait_shop",
     "corner_store",
     "restaurant",
+    "outfitter",
     "pawn_shop",
     "backroom_clinic",
     "nightclub",
@@ -138,6 +140,7 @@ STOREFRONT_ARCHETYPES = {
     "theater",
     "music_venue",
     "gaming_hall",
+    "surplus_store",
     "truck_stop",
     "tool_depot",
     "bookshop",
@@ -614,7 +617,7 @@ def _shift_window_for(archetype, role, rng):
         return rng.choice(ROUND_CLOCK_SHIFT_WINDOWS)
     if archetype in TRANSIT_ARCHETYPES:
         return rng.choice(EARLY_SHIFT_WINDOWS + LATE_SHIFT_WINDOWS[:2])
-    if archetype in {"restaurant", "corner_store", "laundromat", "daycare", "soup_kitchen", "street_kitchen", "tool_depot", "hardware_store", "bookshop"}:
+    if archetype in {"restaurant", "corner_store", "laundromat", "daycare", "soup_kitchen", "street_kitchen", "tool_depot", "hardware_store", "bookshop", "outfitter", "surplus_store"}:
         return rng.choice(EARLY_SHIFT_WINDOWS + DAY_SHIFT_WINDOWS)
     return rng.choice(DAY_SHIFT_WINDOWS)
 
@@ -700,6 +703,139 @@ def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc"):
         owner_eid=eid,
         owner_tag=owner_tag,
         metadata={"ambient_spawn": True},
+    )
+    return bool(added)
+
+
+NPC_WALLET_DISTRICT_MULTS = {
+    "corporate": 1.35,
+    "downtown": 1.18,
+    "military": 1.16,
+    "industrial": 1.04,
+    "residential": 0.96,
+    "entertainment": 1.0,
+    "slums": 0.72,
+}
+NPC_WALLET_AREA_MULTS = {
+    "city": 1.0,
+    "frontier": 1.08,
+    "wilderness": 0.94,
+    "coastal": 1.02,
+}
+
+
+def _npc_wallet_range(role, *, career="", workplace_prop=None, home_prop=None, economy_profile=None):
+    role = str(role or "civilian").strip().lower() or "civilian"
+    career = str(career or "").strip().lower()
+    economy_profile = economy_profile if isinstance(economy_profile, dict) else {}
+    archetype = _property_archetype(workplace_prop) or _property_archetype(home_prop)
+    area_type = str(economy_profile.get("area_type", "city")).strip().lower() or "city"
+    district_type = str(economy_profile.get("district_type", "unknown")).strip().lower() or "unknown"
+
+    low, high = {
+        "guard": (30, 62),
+        "worker": (18, 42),
+        "civilian": (14, 34),
+        "thief": (16, 38),
+        "drunk": (6, 18),
+    }.get(role, (14, 32))
+
+    if archetype in SECURITY_ARCHETYPES:
+        low += 10
+        high += 20
+    elif archetype in INDUSTRIAL_ARCHETYPES:
+        low += 4
+        high += 8
+    elif archetype in MEDICAL_ARCHETYPES:
+        low += 6
+        high += 12
+    elif archetype in NIGHTLIFE_ARCHETYPES:
+        low += 2
+        high += 10
+    elif archetype in TRANSIT_ARCHETYPES:
+        low += 4
+        high += 12
+    elif archetype in STOREFRONT_ARCHETYPES:
+        low += 2
+        high += 8
+
+    if any(token in career for token in ("manager", "owner", "broker", "analyst", "director", "officer", "sergeant")):
+        low += 12
+        high += 24
+    elif any(token in career for token in ("guard", "corrections", "deputy", "bailiff", "armorer", "medic")):
+        low += 8
+        high += 16
+    elif any(token in career for token in ("operator", "machin", "tech", "driver", "dispatch")):
+        low += 4
+        high += 10
+
+    district_mult = float(NPC_WALLET_DISTRICT_MULTS.get(district_type, 1.0))
+    area_mult = float(NPC_WALLET_AREA_MULTS.get(area_type, 1.0))
+    price_mult = float(economy_profile.get("price_mult", 1.0) or 1.0)
+    scale = district_mult * area_mult * (0.92 + max(0.0, min(0.22, price_mult - 0.88)))
+
+    scaled_low = max(6, int(round(float(low) * scale)))
+    scaled_high = max(scaled_low, int(round(float(high) * scale)))
+    return scaled_low, min(160, scaled_high)
+
+
+def seed_npc_finance(
+    sim,
+    eid,
+    rng,
+    *,
+    role,
+    career="",
+    workplace_prop=None,
+    home_prop=None,
+    economy_profile=None,
+):
+    inventory = sim.ecs.get(Inventory).get(eid)
+    if not inventory:
+        return False
+
+    career = str(career or "").strip().lower()
+    assigned_job = bool(workplace_prop) or (career and career not in {"resident", "drunk", "thief"})
+    if not assigned_job:
+        return False
+
+    economy_profile = economy_profile if isinstance(economy_profile, dict) else chunk_economy_profile(sim)
+    low, high = _npc_wallet_range(
+        role,
+        career=career,
+        workplace_prop=workplace_prop,
+        home_prop=home_prop,
+        economy_profile=economy_profile,
+    )
+    wallet_credits = int(rng.randint(int(low), int(high)))
+    if wallet_credits <= 0:
+        return False
+
+    finances = sim.ecs.get(FinancialProfile)
+    profile = finances.get(eid)
+    if profile is None:
+        profile = FinancialProfile(
+            bank_balance=0,
+            wallet_buffer=max(24, min(140, int(round(wallet_credits * 0.8)))),
+            deposit_step=max(12, min(72, int(round(wallet_credits * 0.45)))),
+            withdraw_step=max(12, min(64, int(round(wallet_credits * 0.35)))),
+        )
+        sim.ecs.add(eid, profile)
+    else:
+        profile.wallet_buffer = max(int(profile.wallet_buffer), max(24, min(140, int(round(wallet_credits * 0.8)))))
+
+    item_def = ITEM_CATALOG.get(CREDSTICK_ITEM_ID, {})
+    added, _instance_id = inventory.add_item(
+        item_id=CREDSTICK_ITEM_ID,
+        quantity=1,
+        stack_max=max(1, int(item_def.get("stack_max", 1))),
+        instance_factory=sim.new_item_instance_id,
+        owner_eid=eid,
+        owner_tag="npc",
+        metadata={
+            "ambient_spawn": True,
+            "stored_credits": int(wallet_credits),
+        },
     )
     return bool(added)
 
@@ -1785,6 +1921,7 @@ def _spawn_human(
     shift_window=None,
     workplace_prop=None,
     home_prop=None,
+    economy_profile=None,
     personal_name=None,
 ):
     role = str(role or "civilian").strip().lower() or "civilian"
@@ -1831,7 +1968,7 @@ def _spawn_human(
             shift_end=shift_end,
         ) if career else Occupation(career="resident", workplace=None),
         needs,
-        _traits_for_role(rng, role),
+    _traits_for_role(rng, role),
         NPCWill(),
         NPCMemory(),
         NPCSocial(),
@@ -1858,6 +1995,16 @@ def _spawn_human(
         ),
     )
     sync_actor_organization_affiliations(sim, eid)
+    seed_npc_finance(
+        sim,
+        eid,
+        random.Random(f"{sim.seed}:npc_finance:{eid}:{career or 'resident'}"),
+        role=role,
+        career=career or "resident",
+        workplace_prop=workplace_prop,
+        home_prop=home_prop,
+        economy_profile=economy_profile if isinstance(economy_profile, dict) else chunk_economy_profile(sim),
+    )
     _seed_npc_inventory(sim, eid, rng, role, workplace_prop=workplace_prop, home_prop=home_prop)
     _seed_npc_gear(sim, eid, rng, role, workplace_prop=workplace_prop, home_prop=home_prop)
     return eid
@@ -2213,6 +2360,7 @@ def spawn_chunk_npcs(sim, chunk, property_records, reserved_property_ids=None):
             shift_window=shift_window,
             workplace_prop=workplace_prop,
             home_prop=home_prop,
+            economy_profile=economy_profile,
             personal_name=founder_name or None,
         )
         if founder_name:
@@ -2309,6 +2457,7 @@ def spawn_chunk_npcs(sim, chunk, property_records, reserved_property_ids=None):
             shift_window=shift_window,
             workplace_prop=workplace_prop,
             home_prop=home_prop,
+            economy_profile=economy_profile,
             personal_name=founder_name or None,
         )
         if founder_name and workplace_prop:
@@ -2336,6 +2485,13 @@ def spawn_chunk_npcs(sim, chunk, property_records, reserved_property_ids=None):
 
     _seed_chunk_social_bonds(sim, actor_contexts)
     population_records[key] = list(spawned)
+    memberships = getattr(sim, "chunk_population_membership", None)
+    if isinstance(memberships, dict):
+        for eid in tuple(spawned):
+            try:
+                memberships[int(eid)] = key
+            except (TypeError, ValueError):
+                continue
     baselines = getattr(sim, "chunk_population_baselines", None)
     if isinstance(baselines, dict):
         baselines[key] = max(int(baselines.get(key, 0) or 0), int(baseline_population))

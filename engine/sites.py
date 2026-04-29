@@ -49,9 +49,11 @@ WINDOWED_SITE_KINDS = {
     "ferry_post",
     "herbalist_camp",
     "net_house",
+    "outfitter",
     "ranger_hut",
     "relay_post",
     "roadhouse",
+    "surplus_store",
     "truck_stop",
     "survey_post",
     "tide_station",
@@ -67,6 +69,14 @@ SITE_GAMEPLAY_PROFILES = {
         "public": True,
         "is_storefront": True,
         "site_services": ("shuttle_transit",),
+    },
+    "outfitter": {
+        "public": True,
+        "is_storefront": True,
+    },
+    "surplus_store": {
+        "public": True,
+        "is_storefront": True,
     },
     "truck_stop": {
         "public": True,

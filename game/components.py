@@ -1,4 +1,4 @@
-from game.items import normalize_item_instance_metadata
+from game.items import merge_item_stack_metadata, prepare_item_stack_metadata, split_item_stack_metadata
 
 
 _UNCHANGED = object()
@@ -1203,6 +1203,8 @@ class Inventory:
             return False, None
 
         created_instance_id = None
+        remaining_metadata = prepare_item_stack_metadata(item_id, metadata=metadata, quantity=quantity)
+        remaining_quantity = int(quantity)
 
         if stack_max > 1:
             for entry in self.items:
@@ -1217,8 +1219,23 @@ class Inventory:
 
                 room = stack_max - entry["quantity"]
                 amount = min(room, quantity)
+                portion_metadata, remaining_metadata = split_item_stack_metadata(
+                    item_id,
+                    metadata=remaining_metadata,
+                    stack_quantity=remaining_quantity,
+                    removed_quantity=amount,
+                )
+                previous_quantity = int(entry["quantity"])
                 entry["quantity"] += amount
+                entry["metadata"] = merge_item_stack_metadata(
+                    item_id,
+                    existing_metadata=entry.get("metadata"),
+                    existing_quantity=previous_quantity,
+                    incoming_metadata=portion_metadata,
+                    incoming_quantity=amount,
+                )
                 quantity -= amount
+                remaining_quantity -= amount
                 created_instance_id = entry["instance_id"]
                 if quantity <= 0:
                     return True, created_instance_id
@@ -1228,6 +1245,12 @@ class Inventory:
                 return False, created_instance_id
 
             amount = min(stack_max, quantity)
+            portion_metadata, remaining_metadata = split_item_stack_metadata(
+                item_id,
+                metadata=remaining_metadata,
+                stack_quantity=remaining_quantity,
+                removed_quantity=amount,
+            )
             if instance_id and created_instance_id is None:
                 iid = instance_id
             elif instance_factory:
@@ -1241,12 +1264,13 @@ class Inventory:
                 "quantity": amount,
                 "owner_eid": owner_eid,
                 "owner_tag": owner_tag,
-                "metadata": normalize_item_instance_metadata(item_id, metadata=metadata),
+                "metadata": prepare_item_stack_metadata(item_id, metadata=portion_metadata, quantity=amount),
             })
 
             if created_instance_id is None:
                 created_instance_id = iid
             quantity -= amount
+            remaining_quantity -= amount
 
         return True, created_instance_id
 
@@ -1268,18 +1292,30 @@ class Inventory:
                 continue
 
             removed_qty = min(quantity, entry["quantity"])
+            removed_metadata, remaining_metadata = split_item_stack_metadata(
+                entry.get("item_id"),
+                metadata=entry.get("metadata"),
+                stack_quantity=entry.get("quantity", 1),
+                removed_quantity=removed_qty,
+            )
             removed = {
                 "instance_id": entry["instance_id"],
                 "item_id": entry["item_id"],
                 "quantity": removed_qty,
                 "owner_eid": entry.get("owner_eid"),
                 "owner_tag": entry.get("owner_tag"),
-                "metadata": dict(entry.get("metadata") or {}),
+                "metadata": removed_metadata,
             }
 
             entry["quantity"] -= removed_qty
             if entry["quantity"] <= 0:
                 self.items.pop(idx)
+            else:
+                entry["metadata"] = prepare_item_stack_metadata(
+                    entry["item_id"],
+                    metadata=remaining_metadata,
+                    quantity=entry["quantity"],
+                )
             return removed
         return None
 
@@ -1290,7 +1326,11 @@ class Inventory:
         updated = {} if replace else dict(target.get("metadata") or {})
         if metadata is not None:
             updated.update(dict(metadata))
-        target["metadata"] = normalize_item_instance_metadata(target["item_id"], metadata=updated)
+        target["metadata"] = prepare_item_stack_metadata(
+            target["item_id"],
+            metadata=updated,
+            quantity=target.get("quantity", 1),
+        )
         return target["metadata"]
 
     def first_usable(self, catalog):

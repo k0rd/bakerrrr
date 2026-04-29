@@ -385,18 +385,84 @@ class PropertyActionRuntime:
         )
         return True
 
-    def handle_interact_action(self, eid, pos):
+    def _emit_npc_interact(self, eid, npc_eid, pos):
+        self.sim.emit(Event(
+            "npc_interact",
+            eid=eid,
+            npc_eid=npc_eid,
+            x=pos.x,
+            y=pos.y,
+            z=pos.z,
+        ))
+
+    def _force_interact_in_last_direction(self, eid, pos):
+        support = self._support()
+        preferred_dir = self.action_system._player_interact_direction(eid)
+        if preferred_dir is None:
+            return False
+
+        candidate = support._door_interaction_candidate(
+            self.sim,
+            pos,
+            preferred_dir=preferred_dir,
+        )
+        if isinstance(candidate, dict):
+            step = support._normalized_direction(
+                int(candidate.get("x", pos.x)) - int(pos.x),
+                int(candidate.get("y", pos.y)) - int(pos.y),
+            )
+            if step == tuple(preferred_dir):
+                return self.handle_door_interaction(eid, pos)
+
+        npc_eid = self.action_system._npc_for_player_action(
+            eid,
+            pos,
+            radius=1,
+            preferred_dir=preferred_dir,
+            exact_direction=True,
+        )
+        if npc_eid is not None:
+            self._emit_npc_interact(eid, npc_eid, pos)
+            return True
+
+        vehicle_prop = self.action_system._vehicle_for_player_action(
+            eid=eid,
+            pos=pos,
+            radius=1,
+            preferred_dir=preferred_dir,
+            exact_direction=True,
+        )
+        if vehicle_prop is not None:
+            self.action_system._enter_vehicle(eid=eid, pos=pos, vehicle_prop=vehicle_prop)
+            return True
+
+        target_x = int(pos.x) + int(preferred_dir[0])
+        target_y = int(pos.y) + int(preferred_dir[1])
+        prop = self.sim.property_at(target_x, target_y, pos.z)
+        if not prop:
+            prop = _property_covering(self.sim, target_x, target_y, pos.z)
+        if not prop:
+            return False
+
+        self.remember_player_property_discovery(eid, prop, discovery_mode="interact")
+        self.sim.emit(Event(
+            "property_interact",
+            eid=eid,
+            property_id=prop["id"],
+            x=prop["x"],
+            y=prop["y"],
+            z=prop["z"],
+        ))
+        return True
+
+    def handle_interact_action(self, eid, pos, *, force_direction=False):
+        if force_direction and self._force_interact_in_last_direction(eid, pos):
+            return
+
         prop = self.active_interact_property_near(pos)
         npc_eid = None if prop else self.action_system._npc_for_player_action(eid, pos, radius=1)
         if npc_eid is not None:
-            self.sim.emit(Event(
-                "npc_interact",
-                eid=eid,
-                npc_eid=npc_eid,
-                x=pos.x,
-                y=pos.y,
-                z=pos.z,
-            ))
+            self._emit_npc_interact(eid, npc_eid, pos)
             return
 
         if self.handle_door_interaction(eid, pos):

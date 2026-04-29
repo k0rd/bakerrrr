@@ -86,7 +86,9 @@ BUSINESS_BASE_REVENUE = {
     "backroom_clinic": 10,
     "pharmacy": 10,
     "auto_garage": 10,
+    "outfitter": 10,
     "pawn_shop": 10,
+    "surplus_store": 10,
     "tool_depot": 10,
 }
 ROLE_WAGES = {
@@ -166,6 +168,7 @@ SECURE_ARCHETYPES = {
     "brokerage",
     "cold_storage",
     "pawn_shop",
+    "surplus_store",
     "warehouse",
 }
 

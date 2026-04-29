@@ -166,19 +166,11 @@ def _ground_item_chunk(sim, ground):
 
 def _entity_ids_in_chunk(sim, key):
     results = []
-    positions = sim.ecs.get(Position)
-    if not isinstance(positions, dict):
-        positions = {}
-
-    for eid, pos in positions.items():
+    for eid in tuple(getattr(sim, "entity_ids_in_chunk", lambda _key: ())((int(key[0]), int(key[1])))):
         if eid == getattr(sim, "player_eid", None):
             continue
-        try:
-            if sim.chunk_coords(int(pos.x), int(pos.y)) == key:
-                results.append(int(eid))
-        except (TypeError, ValueError):
-            continue
-    return sorted(set(results))
+        results.append(int(eid))
+    return results
 
 
 def _entity_snapshot(sim, eid):
@@ -328,6 +320,13 @@ def restore_chunk_state(sim, key):
         sim.chunk_ground_item_records[key] = copy.deepcopy(snapshot.get("ground_item_records", []))
     if "population_records" in snapshot:
         sim.chunk_population_records[key] = copy.deepcopy(snapshot.get("population_records", []))
+        memberships = getattr(sim, "chunk_population_membership", None)
+        if isinstance(memberships, dict):
+            for eid in tuple(sim.chunk_population_records[key] or ()):
+                try:
+                    memberships[int(eid)] = key
+                except (TypeError, ValueError):
+                    continue
 
     max_entity_id = 0
     for eid, component_map in snapshot.get("entities", {}).items():
@@ -378,6 +377,20 @@ def snapshot_simulation(sim):
                 state[key] = copy.deepcopy(value)
             finally:
                 value.default_tick_source = original_tick_source
+            continue
+        if key == "tilemap":
+            original_add = getattr(value, "on_add_entity", None)
+            original_move = getattr(value, "on_move_entity", None)
+            original_remove = getattr(value, "on_remove_entity", None)
+            value.on_add_entity = None
+            value.on_move_entity = None
+            value.on_remove_entity = None
+            try:
+                state[key] = copy.deepcopy(value)
+            finally:
+                value.on_add_entity = original_add
+                value.on_move_entity = original_move
+                value.on_remove_entity = original_remove
             continue
         state[key] = copy.deepcopy(value)
     log = state.get("log")

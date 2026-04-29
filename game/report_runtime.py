@@ -5,6 +5,7 @@ import curses
 from game.components import Inventory, PlayerAssets, Position, PropertyKnowledge, VehicleState
 from game.debug_overlay import current_or_nearby_property, organization_summary_rows
 from game.final_operation import evaluate_final_operation
+from game.justice_runtime import justice_summary_rows
 from game.objective_progress import (
     objective_progress_explain_delta,
     objective_progress_recent_history,
@@ -734,6 +735,15 @@ def build_progress_report(sim, player_eid, opportunity_limit=8):
     lines.append("")
     lines.append(_section_header_line("Pressure", color=_heat_color(pressure)))
     lines.append(_badge_line("Heat", _pressure_report_line(pressure), badge_color=_heat_color(pressure)))
+
+    justice_lines = justice_summary_rows(sim, player_eid)
+    lines.append("")
+    lines.append(_section_header_line("Legal", color="projectile"))
+    lines.extend(
+        _bullet_line(str(line).strip(), bullet="-", bullet_color="projectile")
+        for line in justice_lines
+        if str(line).strip()
+    )
 
     organization_lines = organization_summary_rows(
         sim,

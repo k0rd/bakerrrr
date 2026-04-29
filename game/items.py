@@ -7,6 +7,8 @@ from game.content_warnings import warn_content_fallback
 
 ITEMS_PATH = Path(__file__).resolve().parent / "items.json"
 LOOT_TABLES_PATH = Path(__file__).resolve().parent / "loot_tables.json"
+CREDSTICK_ITEM_ID = "credstick_chip"
+DEFAULT_CREDSTICK_VALUE = 20
 ITEM_QUALITY_TIERS = ("poor", "standard", "good", "excellent")
 ITEM_QUALITY_SCORE_BONUS = {
     "poor": -0.35,
@@ -49,6 +51,10 @@ def _string_tuple(values):
         if token:
             parsed.append(token)
     return tuple(parsed)
+
+
+def is_credstick_item(item_id):
+    return str(item_id or "").strip().lower() == CREDSTICK_ITEM_ID
 
 
 def _normalize_tool_profiles(value):
@@ -849,6 +855,78 @@ def normalize_item_instance_metadata(item_id, metadata=None, item_catalog=None):
         durability = _int_or_default(merged.get("item_durability"), max_durability)
         merged["item_max_durability"] = int(max_durability)
         merged["item_durability"] = max(0, min(int(max_durability), int(durability)))
+    if is_credstick_item(item_id) and "stored_credits" in merged:
+        merged["stored_credits"] = max(0, _int_or_default(merged.get("stored_credits"), DEFAULT_CREDSTICK_VALUE))
+    return merged
+
+
+def credstick_total_credits(quantity=1, metadata=None):
+    quantity = max(1, _int_or_default(quantity, 1))
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if "stored_credits" in metadata:
+        return max(0, _int_or_default(metadata.get("stored_credits"), DEFAULT_CREDSTICK_VALUE * quantity))
+    return int(DEFAULT_CREDSTICK_VALUE * quantity)
+
+
+def prepare_item_stack_metadata(item_id, metadata=None, quantity=1, item_catalog=None):
+    quantity = max(1, _int_or_default(quantity, 1))
+    prepared = normalize_item_instance_metadata(item_id, metadata=metadata, item_catalog=item_catalog)
+    if is_credstick_item(item_id):
+        prepared["stored_credits"] = int(credstick_total_credits(quantity=quantity, metadata=prepared))
+    return prepared
+
+
+def split_item_stack_metadata(item_id, metadata=None, stack_quantity=1, removed_quantity=1, item_catalog=None):
+    stack_quantity = max(1, _int_or_default(stack_quantity, 1))
+    removed_quantity = max(1, min(stack_quantity, _int_or_default(removed_quantity, 1)))
+    prepared = prepare_item_stack_metadata(item_id, metadata=metadata, quantity=stack_quantity, item_catalog=item_catalog)
+    remaining_quantity = max(0, stack_quantity - removed_quantity)
+
+    if not is_credstick_item(item_id):
+        removed_metadata = normalize_item_instance_metadata(item_id, metadata=prepared, item_catalog=item_catalog)
+        remaining_metadata = normalize_item_instance_metadata(item_id, metadata=prepared, item_catalog=item_catalog)
+        return removed_metadata, remaining_metadata
+
+    total_credits = credstick_total_credits(quantity=stack_quantity, metadata=prepared)
+    if removed_quantity >= stack_quantity:
+        removed_credits = int(total_credits)
+    else:
+        removed_credits = int(round(float(total_credits) * (float(removed_quantity) / float(stack_quantity))))
+        removed_credits = max(0, min(int(total_credits), removed_credits))
+        if total_credits > 0 and removed_credits <= 0:
+            removed_credits = 1
+        if removed_credits >= total_credits:
+            removed_credits = max(0, int(total_credits) - 1)
+    remaining_credits = max(0, int(total_credits) - int(removed_credits))
+
+    removed_metadata = dict(prepared)
+    removed_metadata["stored_credits"] = int(removed_credits)
+    remaining_metadata = dict(prepared)
+    remaining_metadata["stored_credits"] = int(remaining_credits)
+    if remaining_quantity <= 0:
+        remaining_metadata["stored_credits"] = 0
+    return removed_metadata, remaining_metadata
+
+
+def merge_item_stack_metadata(
+    item_id,
+    existing_metadata=None,
+    existing_quantity=1,
+    incoming_metadata=None,
+    incoming_quantity=1,
+    item_catalog=None,
+):
+    existing_quantity = max(0, _int_or_default(existing_quantity, 0))
+    incoming_quantity = max(0, _int_or_default(incoming_quantity, 0))
+    total_quantity = max(1, existing_quantity + incoming_quantity)
+    if not is_credstick_item(item_id):
+        source = existing_metadata if existing_metadata is not None else incoming_metadata
+        return prepare_item_stack_metadata(item_id, metadata=source, quantity=total_quantity, item_catalog=item_catalog)
+
+    existing_total = credstick_total_credits(quantity=max(1, existing_quantity or 1), metadata=existing_metadata) if existing_quantity > 0 else 0
+    incoming_total = credstick_total_credits(quantity=max(1, incoming_quantity or 1), metadata=incoming_metadata) if incoming_quantity > 0 else 0
+    merged = prepare_item_stack_metadata(item_id, metadata=existing_metadata or incoming_metadata, quantity=total_quantity, item_catalog=item_catalog)
+    merged["stored_credits"] = int(existing_total + incoming_total)
     return merged
 
 
@@ -923,6 +1001,10 @@ def item_display_name(item_id, metadata=None, item_catalog=None):
         if custom:
             return custom
     base = str(item_def.get("name", item_id)).strip() or str(item_id or "item")
+    if is_credstick_item(item_id) and isinstance(metadata, dict):
+        total = credstick_total_credits(quantity=1, metadata=metadata)
+        if total > 0:
+            return f"{base} ({int(total)}c)"
     condition = item_instance_condition(item_id, metadata=metadata, item_catalog=catalog)
     quality = str(condition.get("quality", "standard")).strip().lower()
     if quality and quality != "standard":

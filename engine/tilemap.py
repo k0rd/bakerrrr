@@ -107,6 +107,9 @@ class TileMap:
         # spatial index
         # maps (x,y,z) -> set(entity_ids)
         self.entities = {}
+        self.on_add_entity = None
+        self.on_move_entity = None
+        self.on_remove_entity = None
         # floor transition index:
         # maps (x,y,z,dz) -> {"x":tx, "y":ty, "z":tz, "kind":kind}
         self.floor_links = {}
@@ -183,6 +186,9 @@ class TileMap:
             self.entities[key] = set()
 
         self.entities[key].add(eid)
+        hook = self.on_add_entity
+        if callable(hook):
+            hook(eid, x, y, z)
 
     def move_entity(self, eid, oldx, oldy, newx, newy, oldz=0, newz=0):
 
@@ -198,6 +204,9 @@ class TileMap:
             self.entities[new] = set()
 
         self.entities[new].add(eid)
+        hook = self.on_move_entity
+        if callable(hook):
+            hook(eid, oldx, oldy, newx, newy, oldz, newz)
 
     def remove_entity(self, eid, x, y, z=0):
 
@@ -207,6 +216,9 @@ class TileMap:
             self.entities[key].discard(eid)
             if not self.entities[key]:
                 self.entities.pop(key)
+        hook = self.on_remove_entity
+        if callable(hook):
+            hook(eid, x, y, z)
 
     def entities_at(self, x, y, z=0):
 

@@ -64,6 +64,7 @@ from game.components import (
     NPCWill,
     NoiseProfile,
     Occupation,
+    OrganizationAffiliations,
     PlayerAssets,
     PlayerControlled,
     PlayerModeState,
@@ -108,7 +109,22 @@ from game.final_operation import (
 from game.debug_overlay import (
     build_debug_overlay as _build_debug_overlay,
 )
-from game.items import ITEM_CATALOG, apply_item_durability_loss, item_display_name
+from game.items import (
+    ITEM_CATALOG,
+    apply_item_durability_loss,
+    credstick_total_credits,
+    is_credstick_item,
+    item_display_name,
+    merge_item_stack_metadata,
+    prepare_item_stack_metadata,
+)
+from game.justice_runtime import (
+    decay_records as _decay_justice_records,
+    justice_snapshot as _justice_snapshot,
+    mark_in_custody as _mark_justice_in_custody,
+    record_incident as _record_justice_incident,
+    release_from_custody as _release_justice_from_custody,
+)
 from game.lighting import (
     ambient_snapshot as _lighting_ambient_snapshot,
     lighting_state as _lighting_state,
@@ -159,6 +175,7 @@ from game.opportunities import (
     resolve_external_opportunity,
     resolve_opportunities,
     seed_run_opportunities,
+    stage_active_opportunities,
 )
 from game.organizations import (
     ensure_property_organization,
@@ -392,6 +409,8 @@ PROPERTY_ARCHETYPE_DISPLAY = {
     "soup_kitchen": ("R", "building_roof_storefront"),
     "roadhouse": ("R", "building_roof_storefront"),
     "bait_shop": ("R", "building_roof_storefront"),
+    "outfitter": ("G", "building_roof_storefront"),
+    "surplus_store": ("G", "building_roof_storefront"),
     "auto_garage": ("V", "property_asset"),
     "truck_stop": ("V", "property_asset"),
     "dock_shack": ("V", "property_asset"),
@@ -5544,6 +5563,7 @@ BUILDING_STREET_LABELS = {
     "music_venue": "music venue",
     "nightclub": "nightclub frontage",
     "office": "office building",
+    "outfitter": "outfitter frontage",
     "pawn_shop": "pawn shop frontage",
     "pharmacy": "pharmacy frontage",
     "pump_house": "pump house",
@@ -5554,6 +5574,7 @@ BUILDING_STREET_LABELS = {
     "ranger_hut": "ranger hut",
     "salvage_camp": "salvage camp",
     "server_hub": "utility block",
+    "surplus_store": "surplus storefront",
     "survey_post": "survey post",
     "soup_kitchen": "soup kitchen",
     "tavern": "tavern frontage",
@@ -7064,6 +7085,22 @@ def _regular_building_micro_event_visible_property_ids(sim, chunk):
     if cached is not None:
         return tuple(str(property_id or "").strip() for property_id in tuple(cached or ()) if str(property_id or "").strip())
 
+    chance = _business_event_regular_chunk_hourly_chance(sim)
+    if chance <= 0.0:
+        winners[chunk_key] = ()
+        return ()
+
+    try:
+        hour = int(_world_hour(sim)) % 24 if sim is not None else 0
+    except (TypeError, ValueError):
+        hour = 0
+    activation_rng = random.Random(
+        f"{getattr(sim, 'seed', 0)}:building-regular-chunk-active:{chunk_key[0]}:{chunk_key[1]}:{hour}"
+    )
+    if activation_rng.random() > chance:
+        winners[chunk_key] = ()
+        return ()
+
     candidates = []
     for prop in getattr(sim, "properties", {}).values():
         if not isinstance(prop, dict):
@@ -7139,7 +7176,7 @@ def _building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=No
     if not property_id:
         return event
     visible_ids = _regular_building_micro_event_visible_property_ids(sim, prop_chunk)
-    if visible_ids and property_id not in visible_ids:
+    if property_id not in visible_ids:
         return {}
     return event
 
@@ -7760,6 +7797,7 @@ _NEWCOMER_SOCIAL_RETRY_TICKS = 120
 _NEWCOMER_DRIFT_WINDOW_TICKS = 900
 _NEWCOMER_SPAWN_INTERVAL_TICKS = 900
 _NEWCOMER_LOCAL_CAP = 2
+_NEWCOMER_DRIFTER_TIMEOUT_TICKS = 2400
 _NPC_LIFE_REVIEW_TICKS = 1800
 _NPC_LIFE_MOVE_COOLDOWN_TICKS = 7200
 _NPC_LIFE_REMOTE_SEARCH_RADIUS = 8
@@ -7976,17 +8014,15 @@ def _live_newcomer_count_in_chunk(sim, chunk):
         return 0
 
     total = 0
-    positions = sim.ecs.get(Position)
     vitalities = sim.ecs.get(Vitality)
-    for eid in sim.ecs.get(NPCSettlement):
-        pos = positions.get(eid)
-        if not pos:
+    settlements = sim.ecs.get(NPCSettlement)
+    for eid in getattr(sim, "entity_ids_in_chunk", lambda _chunk: ())((int(chunk[0]), int(chunk[1]))):
+        if eid not in settlements:
             continue
         vitality = vitalities.get(eid)
         if vitality and bool(getattr(vitality, "downed", False)):
             continue
-        if sim.chunk_coords(pos.x, pos.y) == chunk:
-            total += 1
+        total += 1
     return total
 
 
@@ -7997,65 +8033,10 @@ def _track_entity_in_chunk_population(sim, eid, *, chunk=None):
         sim.chunk_population_records = {}
     if not hasattr(sim, "chunk_population_baselines") or not isinstance(getattr(sim, "chunk_population_baselines", None), dict):
         sim.chunk_population_baselines = {}
-
-    try:
-        int_eid = int(eid)
-    except (TypeError, ValueError):
-        return None
-
-    positions = sim.ecs.get(Position)
-    if chunk is None:
-        pos = positions.get(int_eid)
-        if pos is None:
-            return None
-        try:
-            chunk = sim.chunk_coords(int(pos.x), int(pos.y))
-        except (TypeError, ValueError):
-            return None
-    if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
-        return None
-    try:
-        key = (int(chunk[0]), int(chunk[1]))
-    except (TypeError, ValueError):
-        return None
-
-    rosters = sim.chunk_population_records
-    for other_key, roster in list(rosters.items()):
-        filtered = []
-        changed = False
-        for value in tuple(roster or ()):
-            try:
-                other_eid = int(value)
-            except (TypeError, ValueError):
-                changed = True
-                continue
-            if other_eid == int_eid:
-                changed = True
-                continue
-            if positions.get(other_eid) is None:
-                changed = True
-                continue
-            filtered.append(other_eid)
-        if not changed:
-            continue
-        if filtered:
-            rosters[other_key] = filtered
-        else:
-            rosters.pop(other_key, None)
-
-    target_roster = []
-    for value in tuple(rosters.get(key, ()) or ()):
-        try:
-            other_eid = int(value)
-        except (TypeError, ValueError):
-            continue
-        if positions.get(other_eid) is None:
-            continue
-        target_roster.append(other_eid)
-    if int_eid not in target_roster:
-        target_roster.append(int_eid)
-    rosters[key] = target_roster
-    return key
+    tracker = getattr(sim, "track_population_entity", None)
+    if callable(tracker):
+        return tracker(eid, chunk=chunk)
+    return None
 
 
 def _business_scene_origin(newcomer):
@@ -8099,58 +8080,55 @@ def _active_business_scene_actor_ids(sim):
 
 def _chunk_entity_tallies(sim):
     tallies = {}
-    positions = sim.ecs.get(Position)
     ais = sim.ecs.get(AI)
     vitalities = sim.ecs.get(Vitality)
     settlements = sim.ecs.get(NPCSettlement)
     active_actor_ids = _active_business_scene_actor_ids(sim)
     player_eid = getattr(sim, "player_eid", None)
+    loaded_chunks = getattr(getattr(sim, "world", None), "loaded_chunks", {})
+    chunk_keys = {
+        (int(chunk[0]), int(chunk[1]))
+        for chunk in tuple(getattr(sim, "chunk_entity_index", {}).keys())
+    }
+    if isinstance(loaded_chunks, dict) and loaded_chunks:
+        loaded_keys = {(int(chunk[0]), int(chunk[1])) for chunk in loaded_chunks.keys()}
+        chunk_keys &= loaded_keys
 
-    for eid, ai in tuple(ais.items()):
-        try:
-            int_eid = int(eid)
-        except (TypeError, ValueError):
-            continue
-        if player_eid is not None:
-            try:
-                if int(player_eid) == int_eid:
-                    continue
-            except (TypeError, ValueError):
-                if player_eid == eid:
-                    continue
-        pos = positions.get(int_eid)
-        if pos is None:
-            continue
-        vitality = vitalities.get(int_eid)
-        if vitality and bool(getattr(vitality, "downed", False)):
-            continue
-        role = str(getattr(ai, "role", "") or "").strip().lower()
-        if role == "wildlife":
-            continue
-        try:
-            chunk = sim.chunk_coords(int(pos.x), int(pos.y))
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
-            continue
-        key = (int(chunk[0]), int(chunk[1]))
-        entry = tallies.setdefault(key, {
-            "live_entities": 0,
-            "persistent_entities": 0,
-            "active_scene_entities": 0,
-            "business_scene_spillovers": 0,
-            "business_scene_unsettled": 0,
-        })
-        entry["live_entities"] += 1
-        if int_eid in active_actor_ids:
-            entry["active_scene_entities"] += 1
-        else:
-            entry["persistent_entities"] += 1
-        newcomer = settlements.get(int_eid)
-        if _is_business_scene_spillover(newcomer):
-            entry["business_scene_spillovers"] += 1
-            if _business_scene_spillover_unsettled(newcomer):
-                entry["business_scene_unsettled"] += 1
+    for key in sorted(chunk_keys):
+        for int_eid in getattr(sim, "entity_ids_in_chunk", lambda _chunk: ())((int(key[0]), int(key[1]))):
+            ai = ais.get(int_eid)
+            if ai is None:
+                continue
+            if player_eid is not None:
+                try:
+                    if int(player_eid) == int_eid:
+                        continue
+                except (TypeError, ValueError):
+                    if player_eid == int_eid:
+                        continue
+            vitality = vitalities.get(int_eid)
+            if vitality and bool(getattr(vitality, "downed", False)):
+                continue
+            role = str(getattr(ai, "role", "") or "").strip().lower()
+            if role == "wildlife":
+                continue
+            entry = tallies.setdefault(key, {
+                "live_entities": 0,
+                "persistent_entities": 0,
+                "active_scene_entities": 0,
+                "business_scene_spillovers": 0,
+                "business_scene_unsettled": 0,
+            })
+            entry["live_entities"] += 1
+            if int_eid in active_actor_ids:
+                entry["active_scene_entities"] += 1
+            else:
+                entry["persistent_entities"] += 1
+            newcomer = settlements.get(int_eid)
+            if _is_business_scene_spillover(newcomer):
+                entry["business_scene_spillovers"] += 1
+                if _business_scene_spillover_unsettled(newcomer):
+                    entry["business_scene_unsettled"] += 1
 
     sim.chunk_entity_tallies = tallies
     return tallies
@@ -9314,20 +9292,10 @@ class NPCSettlementSystem(System):
         arrival = arrival_tiles[0] if arrival_tiles else home_anchor
         if not self._set_entity_position(eid, arrival):
             return False
-        if isinstance(old_chunk, (tuple, list)) and len(old_chunk) >= 2:
-            records = list(getattr(self.sim, "chunk_population_records", {}).get((int(old_chunk[0]), int(old_chunk[1])), ()) or ())
-            self.sim.chunk_population_records[(int(old_chunk[0]), int(old_chunk[1]))] = [
-                value for value in records
-                if int(value) != int(eid)
-            ]
         target_key = (int(target_chunk[0]), int(target_chunk[1]))
-        roster = [
-            int(value)
-            for value in tuple(getattr(self.sim, "chunk_population_records", {}).get(target_key, ()) or ())
-            if int(value) != int(eid)
-        ]
-        roster.append(int(eid))
-        self.sim.chunk_population_records[target_key] = roster
+        tracker = getattr(self.sim, "track_population_entity", None)
+        if callable(tracker):
+            tracker(eid, chunk=target_key)
         if work_prop is None:
             self._clear_work_assignment(eid)
         self._assign_home(eid, newcomer, home_prop, home_kind)
@@ -9900,6 +9868,13 @@ class NPCSettlementSystem(System):
         home_prop = _home_property(self.sim, routine=routine)
         work_prop = _workplace_property(self.sim, occupation=occupation, routine=routine)
 
+        housing_status = str(getattr(newcomer, "housing_status", "") or "").strip().lower()
+        employment_status = str(getattr(newcomer, "employment_status", "") or "").strip().lower()
+        is_unsettled = (housing_status in {"unhoused", "drifting"}) and employment_status != "employed"
+        if is_unsettled and int(self.sim.tick) - int(newcomer.arrived_tick) >= _NEWCOMER_DRIFTER_TIMEOUT_TICKS:
+            self.sim.remove_entity(eid)
+            return
+
         if not home_prop and int(self.sim.tick) - int(newcomer.last_housing_tick) >= _NEWCOMER_HOME_RETRY_TICKS:
             newcomer.last_housing_tick = int(self.sim.tick)
             home_choice, home_kind = self._candidate_home(newcomer, pos)
@@ -9927,7 +9902,7 @@ class NPCSettlementSystem(System):
             self._consider_life_upgrade(eid, newcomer)
 
 
-_BUSINESS_EVENT_SCENE_CAP = 3
+_BUSINESS_EVENT_SCENE_CAP = 1
 _BUSINESS_EVENT_REGULAR_SCENE_CAP = 1
 _BUSINESS_EVENT_RELEASE_CAP = _NEWCOMER_LOCAL_CAP + 1
 _BUSINESS_EVENT_DELIVERY_PHASES = {
@@ -9999,6 +9974,7 @@ _BUSINESS_EVENT_SHIFT_PHASES = {
 _BUSINESS_EVENT_RARE_PHASE_CHANCES = {
     "street_triage": 0.18,
 }
+_BUSINESS_EVENT_REGULAR_CHUNK_HOURLY_CHANCE = 0.16
 _BUSINESS_EVENT_SCENE_PROPERTY_COOLDOWN_HOURS = 4
 
 
@@ -10011,6 +9987,27 @@ def _business_event_scene_state(sim):
     state = {"active": {}, "cooldowns": {}}
     sim.business_event_scene_state = state
     return state
+
+
+def _business_event_overrides(sim):
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        return {}
+    overrides = traits.get("business_event_overrides")
+    if isinstance(overrides, dict):
+        return overrides
+    return {}
+
+
+def _business_event_regular_chunk_hourly_chance(sim):
+    chance = _BUSINESS_EVENT_REGULAR_CHUNK_HOURLY_CHANCE
+    overrides = _business_event_overrides(sim)
+    if isinstance(overrides, dict) and "regular_chunk_hourly_chance" in overrides:
+        try:
+            chance = float(overrides.get("regular_chunk_hourly_chance", chance))
+        except (TypeError, ValueError):
+            chance = _BUSINESS_EVENT_REGULAR_CHUNK_HOURLY_CHANCE
+    return max(0.0, min(1.0, float(chance)))
 
 
 def _business_event_actor_state(sim):
@@ -10317,7 +10314,7 @@ def _business_event_delivery_blueprint(category):
     actor_specs = [
         {"role": "worker", "career": "courier", "linger_ticks": 8},
     ]
-    if category in {"hospitality", "industrial", "medical", "transit"}:
+    if category in {"industrial", "medical", "transit"}:
         actor_specs.append({"role": "worker", "career": "receiver", "linger_ticks": 10})
     return {
         "scene_type": "delivery",
@@ -13247,6 +13244,49 @@ class BusinessPulseSceneSystem(System):
                 break
         return tiles
 
+    def _open_air_support_tiles(self, origin, *, reserved=None, min_radius=1, max_radius=4, limit=8):
+        if not isinstance(origin, (tuple, list)) or len(origin) < 3:
+            return []
+        reserved = {
+            (int(pos[0]), int(pos[1]), int(pos[2]))
+            for pos in (reserved or ())
+            if isinstance(pos, (tuple, list)) and len(pos) >= 3
+        }
+        ox, oy, oz = int(origin[0]), int(origin[1]), int(origin[2])
+        tiles = []
+        start_radius = max(int(min_radius), 1)
+        end_radius = max(int(max_radius), start_radius)
+        for radius in range(end_radius, start_radius - 1, -1):
+            ring_tiles = []
+            for dy in range(-radius, radius + 1):
+                for dx in range(-radius, radius + 1):
+                    if max(abs(dx), abs(dy)) != radius:
+                        continue
+                    nx, ny = ox + dx, oy + dy
+                    pos = (nx, ny, oz)
+                    if pos in reserved:
+                        continue
+                    if not self.sim.tilemap.is_walkable(nx, ny, oz):
+                        continue
+                    if self.sim.structure_at(nx, ny, oz):
+                        continue
+                    if self.sim.property_covering(nx, ny, oz):
+                        continue
+                    if self.sim.property_at(nx, ny, oz):
+                        continue
+                    if self.sim.tilemap.entities_at(nx, ny, oz):
+                        continue
+                    ring_tiles.append(pos)
+            for tile in sorted(
+                ring_tiles,
+                key=lambda pos: (-_manhattan(ox, oy, pos[0], pos[1]), pos[1], pos[0]),
+            ):
+                if tile not in tiles:
+                    tiles.append(tile)
+                if len(tiles) >= int(limit):
+                    return tiles
+        return tiles
+
     def _candidate_scene_specs(self):
         active_chunk = self._active_chunk_coord()
         player_pos = self._player_pos()
@@ -13290,6 +13330,10 @@ class BusinessPulseSceneSystem(System):
                 continue
             property_id = str(prop.get("id", "") or "").strip()
             event_phase = str((pulse or {}).get("event_phase", "") or "").strip().lower()
+            if event_phase and event_phase not in _BUSINESS_EVENT_AFTERMATH_PHASES:
+                visible_ids = _regular_building_micro_event_visible_property_ids(self.sim, active_chunk)
+                if property_id not in visible_ids:
+                    continue
             active_scene_id = active_scene_by_property.get(property_id, "")
             if active_scene_id and active_scene_id != scene_id:
                 continue
@@ -13661,6 +13705,27 @@ class BusinessPulseSceneSystem(System):
         self._decorate_scene_actor(scene, actor_spec, eid, rng=rng)
         return eid
 
+    def _set_scene_actor_route(self, scene, eid, points):
+        route = (scene.get("actor_routes", {}) if isinstance(scene, dict) else {}).get(eid)
+        if not isinstance(route, dict):
+            return
+        cleaned = []
+        for point in tuple(points or ()):
+            if not isinstance(point, (tuple, list)) or len(point) < 3:
+                continue
+            normalized = (int(point[0]), int(point[1]), int(point[2]))
+            if normalized not in cleaned:
+                cleaned.append(normalized)
+        if not cleaned:
+            return
+        route["points"] = cleaned
+        route["index"] = 0
+        route["next_switch_tick"] = int(self.sim.tick) + int(route.get("linger_ticks", 18) or 18)
+        ai = self.sim.ecs.get(AI).get(eid)
+        will = self.sim.ecs.get(NPCWill).get(eid)
+        if ai:
+            _sync_ai_intent(ai, will, self.sim.tick, "holding", target=cleaned[0], target_eid=None)
+
     def _scene_property_on_cooldown(self, property_id):
         property_id = str(property_id or "").strip()
         if not property_id:
@@ -13682,16 +13747,36 @@ class BusinessPulseSceneSystem(System):
 
     def _materialize_delivery_scene(self, scene, blueprint, rng):
         anchor = scene["anchor"]
+        scene_prop = self._scene_property(scene)
         reserved = {anchor}
-        nearby = self._anchor_support_tiles(anchor, reserved=reserved, limit=5)
-        vehicle_tile = nearby[0] if nearby else None
+
+        vehicle_tiles = self._open_air_support_tiles(
+            anchor,
+            reserved=reserved,
+            min_radius=3,
+            max_radius=6,
+            limit=8,
+        )
+        if not vehicle_tiles:
+            vehicle_tiles = self._anchor_support_tiles(anchor, reserved=reserved, limit=5)
+        vehicle_tile = vehicle_tiles[0] if vehicle_tiles else None
         if vehicle_tile is not None:
             self._register_scene_vehicle(scene, vehicle_tile, name=blueprint.get("vehicle_name", "Delivery Van"), rng=rng)
             reserved.add(vehicle_tile)
-        support_tiles = self._anchor_support_tiles(anchor, reserved=reserved, limit=6)
-        cargo_tile = support_tiles[0] if support_tiles else None
+
+        cargo_tiles = []
+        if vehicle_tile is not None:
+            cargo_tiles = self._open_air_support_tiles(
+                vehicle_tile,
+                reserved=reserved,
+                min_radius=1,
+                max_radius=2,
+                limit=4,
+            )
+        if not cargo_tiles:
+            cargo_tiles = self._anchor_support_tiles(anchor, reserved=reserved, limit=6)
+        cargo_tile = cargo_tiles[0] if cargo_tiles else None
         if cargo_tile is not None:
-            scene_prop = self._scene_property(scene)
             interaction = _business_event_scene_fixture_interaction(
                 self.sim,
                 scene,
@@ -13723,24 +13808,57 @@ class BusinessPulseSceneSystem(System):
                     container_entries[:] = loot_entries
             reserved.add(cargo_tile)
 
-        actor_specs = list(blueprint.get("actor_specs", ()) or ())
+        actor_specs = list(blueprint.get("actor_specs", ()) or ())[:2]
         for index, actor_spec in enumerate(actor_specs):
-            service_tiles = self._anchor_support_tiles(anchor, reserved=reserved, limit=6)
             fallback_tile = cargo_tile or vehicle_tile or anchor
-            if index == 0:
-                spawn_pos = service_tiles[0] if service_tiles else fallback_tile
-                route_points = [spawn_pos]
-                for point in service_tiles[1:3]:
-                    if point is not None and point not in route_points:
-                        route_points.append(point)
+            route_seed = -int((self.sim.tick * 10) + index + 1)
+            role = str((actor_spec or {}).get("role", "worker") or "worker").strip().lower() or "worker"
+            intent = "working" if role == "worker" else "waiting"
+            interior_target = (
+                _pick_property_roam_tile(self.sim, scene_prop, route_seed, role=role, intent=intent)
+                if scene_prop is not None
+                else None
+            )
+
+            if index == 0 and vehicle_tile is not None:
+                spawn_pos = vehicle_tile
+                route_points = []
+                if interior_target is not None and tuple(interior_target) != tuple(spawn_pos):
+                    route_points.append(interior_target)
+                if cargo_tile is not None and tuple(cargo_tile) != tuple(spawn_pos):
+                    route_points.append(cargo_tile)
+                route_points.append(vehicle_tile)
             else:
-                spawn_pos = service_tiles[0] if service_tiles else fallback_tile
-                route_points = [spawn_pos]
-                for point in service_tiles[1:3]:
-                    if point is not None and point not in route_points:
-                        route_points.append(point)
+                spawn_pos = interior_target if interior_target is not None else fallback_tile
+                route_points = []
+                if cargo_tile is not None:
+                    route_points.append(cargo_tile)
+                elif vehicle_tile is not None:
+                    route_points.append(vehicle_tile)
+                if interior_target is not None:
+                    route_points.append(interior_target)
+                elif not route_points:
+                    route_points.append(spawn_pos)
             eid = self._spawn_scene_actor(scene, actor_spec, spawn_pos=spawn_pos, route_points=route_points, rng=rng)
             if eid is not None:
+                if index == 0:
+                    courier_route = []
+                    if interior_target is not None:
+                        courier_route.append(interior_target)
+                    if cargo_tile is not None:
+                        courier_route.append(cargo_tile)
+                    if vehicle_tile is not None:
+                        courier_route.append(vehicle_tile)
+                    self._set_scene_actor_route(scene, eid, courier_route)
+                else:
+                    receiver_route = []
+                    if cargo_tile is not None:
+                        receiver_route.append(cargo_tile)
+                    elif vehicle_tile is not None:
+                        receiver_route.append(vehicle_tile)
+                    if interior_target is not None:
+                        receiver_route.append(interior_target)
+                    self._set_scene_actor_route(scene, eid, receiver_route)
                 reserved.add((int(spawn_pos[0]), int(spawn_pos[1]), int(spawn_pos[2])))
 
     def _materialize_queue_scene(self, scene, blueprint, rng):
@@ -14221,7 +14339,6 @@ class BusinessPulseSceneSystem(System):
         if active_chunk is None or player_pos is None:
             for scene in list(active.values()):
                 self._dematerialize_scene(scene, chunk_tallies=chunk_tallies)
-                chunk_tallies = _chunk_entity_tallies(self.sim)
             active.clear()
             _prune_business_event_seeds(self.sim, active_scene_ids=())
             return
@@ -14237,7 +14354,6 @@ class BusinessPulseSceneSystem(System):
                 continue
             scene = active.pop(scene_id)
             self._dematerialize_scene(scene, chunk_tallies=chunk_tallies)
-            chunk_tallies = _chunk_entity_tallies(self.sim)
 
         for spec in desired_specs:
             if spec["scene_id"] in active:
@@ -14248,7 +14364,6 @@ class BusinessPulseSceneSystem(System):
         for scene in list(active.values()):
             self._update_scene_actor_routes(scene)
         self._prune_chunk_spillover(active_chunk, tallies=chunk_tallies)
-        _chunk_entity_tallies(self.sim)
         _prune_business_event_seeds(self.sim, active_scene_ids=active.keys())
 
 
@@ -18481,6 +18596,10 @@ class InputSystem(System):
             self._emit_turn_action("interact")
             return
 
+        if key == ord("T"):
+            self._emit_turn_action("interact", force_direction=True)
+            return
+
         if key == ord("J"):
             self._emit_turn_action("side_entry")
             return
@@ -18867,7 +18986,10 @@ class WorldStreamingSystem(System):
 
         report = self.sim.stream_world(focus.x, focus.y)
         self.sim.ensure_loaded_chunk_terrain()
-        for loaded_cx, loaded_cy in self.sim.world.loaded_chunks.keys():
+        for (loaded_cx, loaded_cy), loaded_data in tuple(self.sim.world.loaded_chunks.items()):
+            detail = str((loaded_data or {}).get("detail", "coarse") or "").strip().lower() or "coarse"
+            if detail != "active":
+                continue
             self._ensure_chunk_properties(loaded_cx, loaded_cy)
             self._ensure_chunk_population(loaded_cx, loaded_cy)
         if not report.get("changed"):
@@ -21560,6 +21682,8 @@ class NPCInteractionSystem(System):
                     "pickup_chunk": origin_chunk,
                     "pickup_property_id": issuer_property_id,
                     "pickup_building_id": issuer_building_id,
+                    "pickup_interact_npc_eid": int(npc_eid),
+                    "pickup_interact_npc_name": issuer_name,
                     "delivery_chunk": remote_chunk,
                     "visit_chunk": remote_chunk,
                     "delivery_property_id": remote_property_id,
@@ -28801,13 +28925,16 @@ class PlayerActionSystem(System):
             return None
         return self._vehicle_property_by_id(state.active_vehicle_id)
 
-    def _vehicle_for_player_action(self, eid, pos, radius=1):
+    def _vehicle_for_player_action(self, eid, pos, radius=1, *, preferred_dir=None, exact_direction=False):
         candidates = []
         for prop in self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=radius):
             if not _property_is_vehicle(prop):
                 continue
             profile = _vehicle_profile_from_property(prop)
             if not profile or not profile.get("usable", True):
+                continue
+            step = _normalized_direction(int(prop.get("x", 0)) - int(pos.x), int(prop.get("y", 0)) - int(pos.y))
+            if preferred_dir is not None and exact_direction and step != _normalized_direction(preferred_dir[0], preferred_dir[1]):
                 continue
             owner_rank = 0
             if prop.get("owner_eid") == eid:
@@ -28816,16 +28943,24 @@ class PlayerActionSystem(System):
                 owner_rank = 2
             elif str(prop.get("owner_tag", "")).strip().lower() == "public":
                 owner_rank = 1
-            candidates.append((
-                (-owner_rank,) + self._interaction_target_sort_key(
+            if preferred_dir is not None:
+                sort_key = (-owner_rank,) + _interaction_target_order_key(
+                    pos.x,
+                    pos.y,
+                    int(prop.get("x", 0)),
+                    int(prop.get("y", 0)),
+                    preferred_dir=preferred_dir,
+                    stable_tiebreaker=(str(prop.get("id", "")),),
+                )
+            else:
+                sort_key = (-owner_rank,) + self._interaction_target_sort_key(
                     eid,
                     pos,
                     int(prop.get("x", 0)),
                     int(prop.get("y", 0)),
                     stable_tiebreaker=(str(prop.get("id", "")),),
-                ),
-                prop,
-            ))
+                )
+            candidates.append((sort_key, prop))
         if not candidates:
             return None
         candidates.sort(key=lambda row: row[0])
@@ -29476,7 +29611,7 @@ class PlayerActionSystem(System):
     def _handle_door_lock_toggle(self, eid, pos):
         return self.property_actions.handle_door_lock_toggle(eid, pos)
 
-    def _npc_for_player_action(self, eid, pos, radius=1):
+    def _npc_for_player_action(self, eid, pos, radius=1, *, preferred_dir=None, exact_direction=False):
         positions = self.sim.ecs.get(Position)
         ais = self.sim.ecs.get(AI)
         players = self.sim.ecs.get(PlayerControlled)
@@ -29498,16 +29633,31 @@ class PlayerActionSystem(System):
             if dist <= 0 or dist > radius:
                 continue
 
+            step = _normalized_direction(other_pos.x - pos.x, other_pos.y - pos.y)
+            if preferred_dir is not None and exact_direction and step != _normalized_direction(preferred_dir[0], preferred_dir[1]):
+                continue
+
             identity = identities.get(other_eid)
             humanish = int(bool(identity and identity.taxonomy_class == "hominid"))
             has_job = int(bool(occupations.get(other_eid)))
-            candidates.append((-humanish, -has_job, dist, other_eid))
+            if preferred_dir is not None:
+                sort_key = _interaction_target_order_key(
+                    pos.x,
+                    pos.y,
+                    other_pos.x,
+                    other_pos.y,
+                    preferred_dir=preferred_dir,
+                    stable_tiebreaker=(-humanish, -has_job, other_eid),
+                )
+                candidates.append((sort_key, other_eid))
+            else:
+                candidates.append(((-humanish, -has_job, dist, other_eid), other_eid))
 
         if not candidates:
             return None
 
-        candidates.sort()
-        return candidates[0][3]
+        candidates.sort(key=lambda row: row[0])
+        return candidates[0][1]
 
     def _is_protected_property(self, prop):
         if not prop:
@@ -30512,7 +30662,7 @@ class PlayerActionSystem(System):
                 reveals_done=state["reveals_done"],
             ))
 
-    def _handle_interact_action(self, eid, pos):
+    def _handle_interact_action(self, eid, pos, *, force_direction=False):
         sabotage_prop = self._nearest_sabotage_fixture(eid, pos)
         if sabotage_prop is not None:
             self._player_sabotage_fixture(eid, pos, sabotage_prop)
@@ -30533,7 +30683,7 @@ class PlayerActionSystem(System):
         if cache_prop is not None:
             self._player_interact_cache(eid, pos, cache_prop)
             return
-        return self.property_actions.handle_interact_action(eid, pos)
+        return self.property_actions.handle_interact_action(eid, pos, force_direction=force_direction)
 
     def _handle_purchase(self, eid, pos):
         return self.property_actions.handle_purchase(eid, pos)
@@ -32119,7 +32269,11 @@ class PlayerActionSystem(System):
             return
 
         if action == "interact":
-            self._handle_interact_action(eid, pos)
+            self._handle_interact_action(
+                eid,
+                pos,
+                force_direction=bool(event.data.get("force_direction")),
+            )
             return
 
         if action == "purchase_property":
@@ -32192,6 +32346,9 @@ class ItemSystem(System):
 
     def _inventory_for(self, eid):
         return self.sim.ecs.get(Inventory).get(eid)
+
+    def _assets_for(self, eid):
+        return self.sim.ecs.get(PlayerAssets).get(eid)
 
     def _status_for(self, eid):
         return self.sim.ecs.get(StatusEffects).get(eid)
@@ -32526,6 +32683,47 @@ class ItemSystem(System):
     def _apply_item_effects(self, eid, item_def):
         return _apply_item_effects_to_entity(self.sim, eid, item_def)
 
+    def _reconcile_player_credsticks(self):
+        inventory = self._inventory_for(self.player_eid)
+        assets = self._assets_for(self.player_eid)
+        if not inventory or not assets:
+            return 0
+
+        converted_credits = 0
+        converted_quantity = 0
+        for entry in list(getattr(inventory, "items", ()) or ()):
+            item_id = str(entry.get("item_id", "") or "").strip().lower()
+            if not is_credstick_item(item_id):
+                continue
+            quantity = max(1, int(entry.get("quantity", 1) or 1))
+            removed = inventory.remove_item(instance_id=entry.get("instance_id"), quantity=quantity)
+            if not removed:
+                continue
+            converted_quantity += max(1, int(removed.get("quantity", quantity) or quantity))
+            converted_credits += credstick_total_credits(
+                quantity=removed.get("quantity", quantity),
+                metadata=removed.get("metadata"),
+            )
+
+        if converted_credits > 0:
+            assets.credits = int(max(0, int(getattr(assets, "credits", 0)) + int(converted_credits)))
+            self.sim.emit(Event(
+                "item_picked_up",
+                eid=self.player_eid,
+                item_id="credstick_chip",
+                item_name=item_display_name(
+                    "credstick_chip",
+                    metadata={"stored_credits": int(converted_credits)},
+                    item_catalog=self.catalog,
+                ),
+                quantity=int(max(1, converted_quantity)),
+                instance_id=None,
+                cash_pickup=True,
+                credits_gained=int(converted_credits),
+                source="inventory_reconcile",
+            ))
+        return int(converted_credits)
+
     def _consume_item(self, eid, x, y, z, instance_id=None, reason="manual"):
         inventory = self._inventory_for(eid)
         if not inventory:
@@ -32653,15 +32851,85 @@ class ItemSystem(System):
 
         item_def = self._item_def(ground["item_id"])
         ground_metadata = ground.get("metadata") if isinstance(ground.get("metadata"), dict) else {}
+        is_theft = self._is_theft(eid, ground)
+        stolen_prop = _property_covering(self.sim, ground.get("x"), ground.get("y"), ground.get("z", z)) if is_theft else None
+        stolen_metadata = {
+            "justice_stolen": True,
+            "stolen_tick": int(getattr(self.sim, "tick", 0)),
+            "stolen_owner_eid": ground.get("owner_eid"),
+            "stolen_owner_tag": ground.get("owner_tag"),
+            "stolen_property_id": str((stolen_prop or {}).get("id", "")).strip(),
+        } if is_theft else {}
+        if eid == self.player_eid and is_credstick_item(ground["item_id"]):
+            assets = self._assets_for(eid)
+            if assets is not None:
+                credits_gained = credstick_total_credits(
+                    quantity=ground.get("quantity", 1),
+                    metadata=ground_metadata,
+                )
+                assets.credits = int(max(0, int(getattr(assets, "credits", 0)) + int(credits_gained)))
+                self.sim.remove_ground_item(ground["ground_item_id"])
+                self.sim.emit(Event(
+                    "item_picked_up",
+                    eid=eid,
+                    item_id=ground["item_id"],
+                    item_name=item_display_name(
+                        ground["item_id"],
+                        metadata={"stored_credits": int(credits_gained)},
+                        item_catalog=self.catalog,
+                    ),
+                    quantity=ground.get("quantity", 1),
+                    instance_id=ground.get("instance_id"),
+                    ground_item_id=ground["ground_item_id"],
+                    x=ground.get("x"),
+                    y=ground.get("y"),
+                    z=ground.get("z", 0),
+                    cash_pickup=True,
+                    credits_gained=int(credits_gained),
+                ))
+                if is_theft:
+                    self.sim.emit(Event(
+                        "item_stolen",
+                        offender_eid=eid,
+                        item_id=ground["item_id"],
+                        item_name=item_display_name(
+                            ground["item_id"],
+                            metadata={"stored_credits": int(credits_gained)},
+                            item_catalog=self.catalog,
+                        ),
+                        owner_eid=ground.get("owner_eid"),
+                        owner_tag=ground.get("owner_tag"),
+                        x=ground["x"],
+                        y=ground["y"],
+                        z=ground["z"],
+                    ))
+                    self._emit_action_offense(
+                        eid=eid,
+                        action="pickup_item",
+                        context="item_theft",
+                        x=ground["x"],
+                        y=ground["y"],
+                        z=ground["z"],
+                    )
+                else:
+                    self._emit_action_offense(
+                        eid=eid,
+                        action="pickup_item",
+                        context="ordinary",
+                        x=ground["x"],
+                        y=ground["y"],
+                        z=ground["z"],
+                    )
+                return
         added, instance_id = inventory.add_item(
             item_id=ground["item_id"],
             quantity=ground.get("quantity", 1),
-            stack_max=item_def.get("stack_max", 1),
+            stack_max=1 if is_theft else item_def.get("stack_max", 1),
             instance_id=ground.get("instance_id"),
             instance_factory=self.sim.new_item_instance_id,
             owner_eid=eid,
             owner_tag="player" if eid == self.player_eid else "npc",
-            metadata={**ground_metadata, "origin_ground_id": ground["ground_item_id"]},
+            metadata={**ground_metadata, "origin_ground_id": ground["ground_item_id"], **stolen_metadata},
         )
         if not added:
             self.sim.emit(Event(
@@ -32686,7 +32954,6 @@ class ItemSystem(System):
             z=ground.get("z", 0),
         ))
 
-        is_theft = self._is_theft(eid, ground)
         if is_theft:
             self.sim.emit(Event(
                 "item_stolen",
@@ -32830,12 +33097,16 @@ class ItemSystem(System):
                 reason="manual",
             )
 
+    def update(self):
+        self._reconcile_player_credsticks()
+
 
 class TradeSystem(System):
 
     STOREFRONT_ARCHETYPES = {
         "bait_shop",
         "corner_store",
+        "outfitter",
         "restaurant",
         "pawn_shop",
         "backroom_clinic",
@@ -32860,6 +33131,7 @@ class TradeSystem(System):
         "theater",
         "music_venue",
         "gaming_hall",
+        "surplus_store",
         "truck_stop",
         "karaoke_box",
         "pool_hall",
@@ -32923,6 +33195,7 @@ class TradeSystem(System):
         "shiv_knife": 72,
         "crowbar_club": 84,
         "telescopic_baton": 92,
+        "trail_machete": 88,
         "holdout_pistol": 108,
         "service_pistol": 146,
         "rust_revolver": 132,
@@ -32934,6 +33207,7 @@ class TradeSystem(System):
         "improvised_launcher": 284,
         "courier_mesh": 42,
         "padded_jacket": 54,
+        "field_vest": 74,
         "security_vest": 96,
         "riot_plates": 124,
         "ceramic_plate_rig": 158,
@@ -33256,6 +33530,62 @@ class TradeSystem(System):
                 ("bandage_roll", 10),
                 ("city_pass_token", 12),
                 ("street_ration", 10),
+            ),
+        },
+        "outfitter": {
+            "min_slots": 3,
+            "max_slots": 5,
+            "buy_mult_lo": 0.98,
+            "buy_mult_hi": 1.34,
+            "sell_ratio": 0.48,
+            "item_pool": (
+                ("light_ammo_box", 18),
+                ("shell_bandolier", 14),
+                ("rifle_mag_crate", 10),
+                ("trail_machete", 12),
+                ("holdout_pistol", 10),
+                ("service_pistol", 4),
+                ("alley_shotgun", 8),
+                ("hunting_rifle", 8),
+                ("padded_jacket", 12),
+                ("field_vest", 12),
+                ("courier_mesh", 10),
+                ("pocket_multitool", 8),
+                ("bandage_roll", 10),
+                ("field_dressing", 10),
+                ("energy_bar", 10),
+                ("bottled_water", 10),
+            ),
+        },
+        "surplus_store": {
+            "min_slots": 4,
+            "max_slots": 7,
+            "buy_mult_lo": 1.02,
+            "buy_mult_hi": 1.4,
+            "sell_ratio": 0.5,
+            "unlisted_sell_ratio": 0.34,
+            "item_pool": (
+                ("light_ammo_box", 20),
+                ("shell_bandolier", 18),
+                ("rifle_mag_crate", 16),
+                ("rocket_tube_pack", 4),
+                ("trail_machete", 14),
+                ("telescopic_baton", 10),
+                ("holdout_pistol", 10),
+                ("service_pistol", 14),
+                ("rust_revolver", 12),
+                ("alley_shotgun", 12),
+                ("hunting_rifle", 12),
+                ("patrol_carbine", 10),
+                ("padded_jacket", 10),
+                ("field_vest", 12),
+                ("courier_mesh", 8),
+                ("security_vest", 9),
+                ("riot_plates", 6),
+                ("ceramic_plate_rig", 4),
+                ("bandage_roll", 10),
+                ("field_dressing", 10),
+                ("battery_pack", 8),
             ),
         },
         "hotel": {
@@ -35258,8 +35588,11 @@ class WeaponSystem(System):
             npc_credits = 0
             if inv:
                 for entry in list(inv.items):
-                    if entry.get("item_id") == "credstick_chip":
-                        npc_credits += int(entry.get("quantity", 1)) * 20
+                    if is_credstick_item(entry.get("item_id")):
+                        npc_credits += credstick_total_credits(
+                            quantity=entry.get("quantity", 1),
+                            metadata=entry.get("metadata"),
+                        )
 
             p2p_bonus = 0
             if source_eid == self.player_eid and npc_credits > 0:
@@ -35274,7 +35607,7 @@ class WeaponSystem(System):
                         quantity=bonus_chips,
                         owner_eid=None,
                         owner_tag=None,
-                        metadata={"source": "p2p_transfer"},
+                        metadata={"source": "p2p_transfer", "stored_credits": bonus_chips * 20},
                     )
                     p2p_bonus = bonus_chips * 20
                     dropped_items.append({"item_id": "credstick_chip", "quantity": bonus_chips})
@@ -36402,6 +36735,7 @@ class OpportunitySystem(System):
         self.announced_opportunity_ids = set()
         self.seed_rng = random.Random(f"{self.sim.seed}:opportunity-system-seed")
         self.sim.events.subscribe("player_action", self.on_player_action)
+        self.sim.events.subscribe("property_interact", self.on_property_interact)
 
     def _ensure_seeded(self):
         return seed_run_opportunities(self.sim, player_eid=self.player_eid, rng=self.seed_rng)
@@ -36471,6 +36805,47 @@ class OpportunitySystem(System):
         if action == "opportunity_report":
             self._emit_report(limit=8)
 
+    def _remember_opportunity_property_interaction(self, property_id):
+        property_id = str(property_id or "").strip()
+        if not property_id:
+            return
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            self.sim.world_traits = {}
+            traits = self.sim.world_traits
+        current_tick = int(getattr(self.sim, "tick", 0))
+
+        recent_props = traits.get("recent_property_interactions")
+        if not isinstance(recent_props, dict):
+            recent_props = {}
+            traits["recent_property_interactions"] = recent_props
+        recent_props[property_id] = current_tick
+
+        prop = self.sim.properties.get(property_id) if hasattr(self.sim, "properties") else None
+        building_id = _building_id_from_property(prop) if isinstance(prop, dict) else ""
+        if building_id:
+            recent_buildings = traits.get("recent_building_interactions")
+            if not isinstance(recent_buildings, dict):
+                recent_buildings = {}
+                traits["recent_building_interactions"] = recent_buildings
+            recent_buildings[building_id] = current_tick
+        else:
+            recent_buildings = traits.get("recent_building_interactions")
+
+        cutoff = current_tick - 16
+        for raw_property_id, raw_tick in list(recent_props.items()):
+            if _int_or_default(raw_tick, default=-10_000) < cutoff:
+                recent_props.pop(raw_property_id, None)
+        if isinstance(recent_buildings, dict):
+            for raw_building_id, raw_tick in list(recent_buildings.items()):
+                if _int_or_default(raw_tick, default=-10_000) < cutoff:
+                    recent_buildings.pop(raw_building_id, None)
+
+    def on_property_interact(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._remember_opportunity_property_interaction(event.data.get("property_id"))
+
     def update(self):
         self._ensure_seeded()
         tick = int(getattr(self.sim, "tick", 0))
@@ -36478,6 +36853,8 @@ class OpportunitySystem(System):
             refresh_dynamic_opportunities(self.sim, self.player_eid)
             self.last_refresh_tick = tick
         self._emit_new_opportunity_log()
+        for notice in stage_active_opportunities(self.sim, self.player_eid):
+            self.sim.log.add(notice, channel="opportunity", priority="high")
 
         completed = resolve_opportunities(self.sim, self.player_eid)
         if not completed:
@@ -36898,7 +37275,7 @@ class RivalOperatorSystem(System):
 
         return True
 
-    def _add_rival_snapshot_item(self, rival, item_id, *, quantity=1):
+    def _add_rival_snapshot_item(self, rival, item_id, *, quantity=1, metadata=None):
         item_id = str(item_id or "").strip()
         item_def = ITEM_CATALOG.get(item_id)
         if not item_id or not item_def:
@@ -36919,6 +37296,13 @@ class RivalOperatorSystem(System):
                 if current >= stack_max:
                     continue
                 amount = min(stack_max - current, remaining)
+                entry["metadata"] = merge_item_stack_metadata(
+                    item_id,
+                    existing_metadata=entry.get("metadata"),
+                    existing_quantity=current,
+                    incoming_metadata=metadata,
+                    incoming_quantity=amount,
+                )
                 entry["quantity"] = current + amount
                 remaining -= amount
                 if remaining <= 0:
@@ -36933,7 +37317,7 @@ class RivalOperatorSystem(System):
                 "quantity": amount,
                 "owner_eid": None,
                 "owner_tag": "npc",
-                "metadata": {},
+                "metadata": prepare_item_stack_metadata(item_id, metadata=metadata, quantity=amount),
             })
             remaining -= amount
         return True
@@ -37321,7 +37705,7 @@ class RivalOperatorSystem(System):
         chooser = self._rival_rng(rival, "materialize")
         return chooser.choice(shortlist)
 
-    def _add_rival_item(self, eid, item_id, *, quantity=1):
+    def _add_rival_item(self, eid, item_id, *, quantity=1, metadata=None):
         inventory = self.sim.ecs.get(Inventory).get(eid)
         item_def = ITEM_CATALOG.get(item_id)
         if not inventory or not item_def:
@@ -37333,12 +37717,18 @@ class RivalOperatorSystem(System):
             instance_factory=self.sim.new_item_instance_id,
             owner_eid=eid,
             owner_tag="npc",
+            metadata=metadata,
         )
         return bool(added)
 
     def _seed_rival_inventory(self, rival, eid):
-        chips = max(1, min(4, int(rival.get("credits", 0) or 0) // 40))
-        self._add_rival_item(eid, "credstick_chip", quantity=max(1, chips))
+        starting_credits = max(12, int(rival.get("credits", 0) or 0))
+        self._add_rival_item(
+            eid,
+            "credstick_chip",
+            quantity=1,
+            metadata={"stored_credits": int(starting_credits)},
+        )
         if float(rival.get("discipline", 0.5)) >= 0.58 or float(rival.get("caution", 0.5)) >= 0.6:
             self._add_rival_item(eid, "lockpick_kit")
         if float(rival.get("charm", 0.5)) >= 0.62 or float(rival.get("honesty", 0.5)) <= 0.36:
@@ -37587,10 +37977,10 @@ class RivalOperatorSystem(System):
         reward = dict(reward or {})
         credits = max(0, int(reward.get("credits", 0) or 0))
         if credits > 0:
-            chip_qty = max(1, min(3, credits // 20))
-            self._add_rival_snapshot_item(rival, "credstick_chip", quantity=chip_qty)
+            metadata = {"stored_credits": int(credits)}
+            self._add_rival_snapshot_item(rival, "credstick_chip", quantity=1, metadata=metadata)
             if eid:
-                self._add_rival_item(eid, "credstick_chip", quantity=chip_qty)
+                self._add_rival_item(eid, "credstick_chip", quantity=1, metadata=metadata)
         if max(0, int(reward.get("intel", 0) or 0)) > 0:
             self._add_rival_snapshot_item(rival, "forged_badge")
             if eid:
@@ -38331,6 +38721,1349 @@ class ObjectiveProgressSystem(System):
             reason="opportunity_completion",
             source_event="opportunity_completed",
         )
+
+
+class CriminalJusticeSystem(System):
+
+    DETENTION_QUEUE_WINDOW = 30
+    DETENTION_RADIUS = 10
+    BOOKING_ARCHETYPES = ("jail", "courthouse")
+    NPC_CUSTODY_ARCHETYPES_BY_TIER = {
+        "questioning": ("jail",),
+        "wanted": ("jail",),
+        "arrest_on_sight": ("prison", "jail"),
+    }
+    CUSTODY_ROOM_KINDS_BY_ARCHETYPE = {
+        "jail": ("cell_block", "holding", "booking"),
+        "prison": ("cell_block", "holding", "intake"),
+        "courthouse": ("holding", "booking", "public_hall"),
+        "default": ("holding", "booking"),
+    }
+    RELEASE_ROOM_KINDS_BY_ARCHETYPE = {
+        "jail": ("visitation", "booking", "public_hall", "lobby"),
+        "prison": ("visitation", "intake", "booking", "public_hall"),
+        "courthouse": ("public_hall", "booking", "lobby", "visitation"),
+        "default": ("booking", "public_hall", "lobby"),
+    }
+    PLAYER_AUTO_ARREST_RADIUS_BY_TIER = {
+        "questioning": 1,
+        "wanted": 1,
+        "arrest_on_sight": 2,
+    }
+    BOOKING_HOURS_BY_TIER = {
+        "questioning": 1.0,
+        "wanted": 3.0,
+        "arrest_on_sight": 6.0,
+    }
+    NPC_BOOKING_HOURS_BY_TIER = {
+        "wanted": 4.0,
+        "arrest_on_sight": 8.0,
+    }
+
+    def __init__(self, sim, player_eid):
+        super().__init__(sim)
+        self.player_eid = player_eid
+        self.pending_detentions = {}
+        self.sim.events.subscribe("property_trespass", self.on_property_trespass)
+        self.sim.events.subscribe("property_tamper", self.on_property_tamper)
+        self.sim.events.subscribe("item_stolen", self.on_item_stolen)
+        self.sim.events.subscribe("action_offense", self.on_action_offense)
+        self.sim.events.subscribe("property_interact", self.on_property_interact)
+        self.sim.events.subscribe("npc_interact", self.on_npc_interact)
+        self.sim.events.subscribe("npc_surrendered", self.on_npc_surrendered)
+
+    def _emit_change_events(self, change, *, source_event="", reason=""):
+        if not isinstance(change, dict):
+            return
+        incident = change.get("incident") if isinstance(change.get("incident"), dict) else {}
+        jurisdiction_key = str(
+            incident.get("jurisdiction_key", change.get("jurisdiction_key", ""))
+            or ""
+        ).strip().lower()
+        jurisdiction_name = str(
+            incident.get("jurisdiction_name", change.get("jurisdiction_name", "Justice Office"))
+            or "Justice Office"
+        ).strip() or "Justice Office"
+        payload = {
+            "offender_eid": change.get("eid"),
+            "before_score": int(change.get("before_score", 0)),
+            "after_score": int(change.get("after_score", 0)),
+            "incident_count": int(change.get("incident_count", 0)),
+            "jurisdiction_key": jurisdiction_key,
+            "jurisdiction_name": jurisdiction_name,
+            "source_event": str(source_event or incident.get("source_event", "") or "").strip().lower(),
+            "reason": str(reason or incident.get("type", "") or "").strip().lower(),
+            "incident_type": str(incident.get("type", "") or "").strip().lower(),
+            "incident_label": str(incident.get("label", "") or "").strip(),
+            "property_id": str(incident.get("property_id", "") or "").strip(),
+            "note": str(incident.get("note", "") or "").strip(),
+            "tick": int(getattr(self.sim, "tick", 0)),
+        }
+        self.sim.emit(Event("justice_record_changed", **payload))
+        if bool(change.get("tier_changed")):
+            self.sim.emit(Event(
+                "justice_wanted_tier_changed",
+                **payload,
+                before_tier=str(change.get("before_tier", "clear")).strip().lower() or "clear",
+                after_tier=str(change.get("after_tier", "clear")).strip().lower() or "clear",
+            ))
+
+    def _justice_state(self):
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            self.sim.world_traits = {}
+            traits = self.sim.world_traits
+        state = traits.get("criminal_justice")
+        if not isinstance(state, dict):
+            state = {}
+            traits["criminal_justice"] = state
+        return state
+
+    def _npc_custody_records(self):
+        state = self._justice_state()
+        records = state.get("npc_custody")
+        if not isinstance(records, dict):
+            records = {}
+            state["npc_custody"] = records
+        return records
+
+    def _record_incident(
+        self,
+        offender_eid,
+        *,
+        incident_type,
+        severity=0,
+        source_event="",
+        property_id=None,
+        x=None,
+        y=None,
+        witnessed=False,
+        note="",
+    ):
+        change = _record_justice_incident(
+            self.sim,
+            offender_eid,
+            incident_type=incident_type,
+            severity=severity,
+            source_event=source_event,
+            property_id=property_id,
+            x=x,
+            y=y,
+            witnessed=witnessed,
+            note=note,
+        )
+        if change is not None:
+            self._emit_change_events(change, source_event=source_event, reason=incident_type)
+        return change
+
+    def _watchers_present(self, offender_eid, x, y, z):
+        if x is None or y is None or z is None:
+            return False
+        watchers = _watchers_for_position(
+            self.sim,
+            x,
+            y,
+            z,
+            exclude_eid=offender_eid,
+            offender_eid=offender_eid,
+        )
+        return bool(watchers)
+
+    def _position_for(self, eid):
+        return self.sim.ecs.get(Position).get(eid)
+
+    def _find_walkable_near(self, x, y, z=0, radius=8):
+        try:
+            tx = int(x)
+            ty = int(y)
+            tz = int(z)
+        except (TypeError, ValueError):
+            return 0, 0, 0
+        if self.sim.tilemap.is_walkable(tx, ty, tz):
+            return tx, ty, tz
+        for ring in range(1, max(1, int(radius)) + 1):
+            for dy in range(-ring, ring + 1):
+                for dx in range(-ring, ring + 1):
+                    if abs(dx) != ring and abs(dy) != ring:
+                        continue
+                    nx = tx + dx
+                    ny = ty + dy
+                    if self.sim.detail_for_xy(nx, ny) == "unloaded":
+                        continue
+                    if self.sim.tilemap.is_walkable(nx, ny, tz):
+                        return nx, ny, tz
+        return tx, ty, tz
+
+    def _teleport_entity(self, eid, pos, new_x, new_y, new_z, reason="teleport"):
+        old_x = pos.x
+        old_y = pos.y
+        old_z = pos.z
+        if (old_x, old_y, old_z) == (int(new_x), int(new_y), int(new_z)):
+            return
+        self.sim.tilemap.move_entity(
+            eid,
+            oldx=old_x,
+            oldy=old_y,
+            oldz=old_z,
+            newx=int(new_x),
+            newy=int(new_y),
+            newz=int(new_z),
+        )
+        pos.x = int(new_x)
+        pos.y = int(new_y)
+        pos.z = int(new_z)
+        self.sim.emit(Event(
+            "entity_moved",
+            eid=eid,
+            old_x=old_x,
+            old_y=old_y,
+            old_z=old_z,
+            x=pos.x,
+            y=pos.y,
+            z=pos.z,
+            reason=reason,
+        ))
+
+    def _ticks_per_hour(self):
+        world_traits = getattr(self.sim, "world_traits", {})
+        clock = world_traits.get("clock", {}) if isinstance(world_traits, dict) else {}
+        try:
+            ticks_per_hour = int(clock.get("ticks_per_hour", 600))
+        except (TypeError, ValueError, AttributeError):
+            ticks_per_hour = 600
+        return max(60, ticks_per_hour)
+
+    def _hours_to_ticks(self, hours):
+        try:
+            total_hours = float(hours)
+        except (TypeError, ValueError):
+            total_hours = 0.0
+        return max(0, int(round(total_hours * float(self._ticks_per_hour()))))
+
+    def _advance_time_for_booking(self, ticks, *, property_id=None, property_name="", held_by_eid=None):
+        ticks = max(0, int(ticks))
+        if ticks <= 0:
+            return 0
+        advanced_ticks = int(self.sim.advance_time(
+            ticks,
+            reason="justice_booking",
+            eid=self.player_eid,
+            property_id=property_id,
+            property_name=str(property_name or "Justice Office").strip() or "Justice Office",
+            held_by_eid=held_by_eid,
+        ))
+        effects_map = self.sim.ecs.get(StatusEffects)
+        for target_eid, effects in list(effects_map.items()):
+            expired = effects.advance(advanced_ticks)
+            for status in expired:
+                self.sim.emit(Event(
+                    "status_expired",
+                    eid=target_eid,
+                    status=status,
+                ))
+        return advanced_ticks
+
+    def _actor_is_enforcer(self, eid):
+        justices = self.sim.ecs.get(JusticeProfile)
+        occupations = self.sim.ecs.get(Occupation)
+        ais = self.sim.ecs.get(AI)
+        profile = justices.get(eid)
+        occupation = occupations.get(eid)
+        ai = ais.get(eid)
+        career = str(getattr(occupation, "career", "") or "").strip().lower()
+        role = str(getattr(ai, "role", "") or "").strip().lower()
+        if role == "wildlife":
+            return False, 0.0, 0
+
+        law_drive = 0.0
+        if profile:
+            if profile.corruption > 0.82 and not profile.enforce_all:
+                return False, 0.0, 0
+            law_drive = (_justice_level(profile) * 0.65) + (_crime_sensitivity(profile) * 0.35)
+
+        explicit_enforcer = bool(
+            (profile and profile.enforce_all)
+            or role == "guard"
+            or any(token in career for token in ("guard", "corrections", "deputy", "bailiff", "sergeant"))
+        )
+        if not explicit_enforcer and law_drive < 0.78:
+            return False, law_drive, 0
+
+        priority = 0
+        if profile and profile.enforce_all:
+            priority += 3
+        if role == "guard":
+            priority += 2
+        if any(token in career for token in ("corrections", "deputy", "bailiff", "sergeant")):
+            priority += 2
+        return True, law_drive, priority
+
+    def _player_bookable_snapshot(self):
+        snapshot = _justice_snapshot(self.sim, self.player_eid)
+        tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
+        if tier not in {"questioning", "wanted", "arrest_on_sight"}:
+            return None
+        if bool(snapshot.get("in_custody", False)):
+            return None
+        return snapshot
+
+    def _inventory_cash_total_from_entries(self, entries):
+        total = 0
+        for entry in list(entries or ()):
+            item_id = str(entry.get("item_id", "") or "").strip().lower()
+            if not is_credstick_item(item_id):
+                continue
+            total += credstick_total_credits(
+                quantity=entry.get("quantity", 1),
+                metadata=entry.get("metadata"),
+            )
+        return int(max(0, total))
+
+    def _snapshot_inventory_items(self, eid):
+        inventory = self.sim.ecs.get(Inventory).get(eid)
+        if not inventory:
+            return []
+        items = []
+        for entry in list(getattr(inventory, "items", ()) or ()):
+            items.append({
+                "instance_id": entry.get("instance_id"),
+                "item_id": entry.get("item_id"),
+                "quantity": int(max(1, int(entry.get("quantity", 1) or 1))),
+                "owner_eid": entry.get("owner_eid"),
+                "owner_tag": entry.get("owner_tag"),
+                "metadata": dict(entry.get("metadata") or {}),
+            })
+        return items
+
+    def _deduct_cash_from_inventory_entries(self, entries, amount):
+        remaining = max(0, int(amount or 0))
+        updated = []
+        for entry in list(entries or ()):
+            current = {
+                "instance_id": entry.get("instance_id"),
+                "item_id": entry.get("item_id"),
+                "quantity": int(max(1, int(entry.get("quantity", 1) or 1))),
+                "owner_eid": entry.get("owner_eid"),
+                "owner_tag": entry.get("owner_tag"),
+                "metadata": dict(entry.get("metadata") or {}),
+            }
+            item_id = str(current.get("item_id", "") or "").strip().lower()
+            if remaining > 0 and is_credstick_item(item_id):
+                total = credstick_total_credits(
+                    quantity=current.get("quantity", 1),
+                    metadata=current.get("metadata"),
+                )
+                paid = min(int(total), int(remaining))
+                remaining -= int(paid)
+                leftover = max(0, int(total) - int(paid))
+                if leftover > 0:
+                    current["metadata"] = prepare_item_stack_metadata(
+                        item_id,
+                        metadata={**current.get("metadata", {}), "stored_credits": int(leftover)},
+                        quantity=current.get("quantity", 1),
+                    )
+                    updated.append(current)
+                continue
+            updated.append(current)
+        fine_paid = max(0, int(amount or 0) - int(remaining))
+        return updated, int(fine_paid), self._inventory_cash_total_from_entries(updated)
+
+    def _deduct_cash_from_live_inventory(self, eid, amount):
+        remaining = max(0, int(amount or 0))
+        inventory = self.sim.ecs.get(Inventory).get(eid)
+        if not inventory or remaining <= 0:
+            snapshot_items = self._snapshot_inventory_items(eid)
+            return 0, self._inventory_cash_total_from_entries(snapshot_items), snapshot_items
+
+        for entry in list(getattr(inventory, "items", ()) or ()):
+            if remaining <= 0:
+                break
+            item_id = str(entry.get("item_id", "") or "").strip().lower()
+            if not is_credstick_item(item_id):
+                continue
+            total = credstick_total_credits(
+                quantity=entry.get("quantity", 1),
+                metadata=entry.get("metadata"),
+            )
+            if total <= 0:
+                continue
+            paid = min(int(total), int(remaining))
+            remaining -= int(paid)
+            leftover = max(0, int(total) - int(paid))
+            if leftover <= 0:
+                inventory.remove_item(
+                    instance_id=entry.get("instance_id"),
+                    quantity=int(entry.get("quantity", 1) or 1),
+                )
+                continue
+            inventory.update_item_metadata(
+                entry.get("instance_id"),
+                {"stored_credits": int(leftover)},
+                replace=False,
+            )
+
+        snapshot_items = self._snapshot_inventory_items(eid)
+        fine_paid = max(0, int(amount or 0) - int(remaining))
+        return int(fine_paid), self._inventory_cash_total_from_entries(snapshot_items), snapshot_items
+
+    def _npc_fine_amount(self, snapshot):
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
+        score = max(0, int(snapshot.get("active_score", 0) or 0))
+        base = {
+            "questioning": 8,
+            "wanted": 22,
+            "arrest_on_sight": 54,
+        }.get(tier, 12)
+        per_score = {
+            "questioning": 1.0,
+            "wanted": 1.5,
+            "arrest_on_sight": 2.0,
+        }.get(tier, 1.0)
+        return int(max(base, min(180, round(base + (score * per_score)))))
+
+    def _find_justice_property(self, *, allowed_archetypes=(), source_prop=None, origin_x=None, origin_y=None):
+        allowed = tuple(
+            str(archetype or "").strip().lower()
+            for archetype in tuple(allowed_archetypes or ())
+            if str(archetype or "").strip()
+        )
+        if not allowed:
+            return source_prop if isinstance(source_prop, dict) else None
+
+        allowed_set = set(allowed)
+        if isinstance(source_prop, dict) and _property_archetype(source_prop) in allowed_set:
+            return source_prop
+
+        try:
+            base_x = int(origin_x)
+            base_y = int(origin_y)
+        except (TypeError, ValueError):
+            pos = self._position_for(self.player_eid)
+            base_x = int(getattr(pos, "x", 0))
+            base_y = int(getattr(pos, "y", 0))
+        base_chunk = self.sim.chunk_coords(base_x, base_y)
+        archetype_rank = {label: index for index, label in enumerate(allowed)}
+        candidates = []
+        for prop in self.sim.properties.values():
+            archetype = _property_archetype(prop)
+            if archetype not in allowed_set:
+                continue
+            anchor = _property_focus_position(prop)
+            if not anchor:
+                anchor = (int(prop.get("x", 0)), int(prop.get("y", 0)), int(prop.get("z", 0)))
+            chunk = self.sim.chunk_coords(int(anchor[0]), int(anchor[1]))
+            same_chunk = 0 if tuple(chunk) == tuple(base_chunk) else 1
+            dist = _manhattan(base_x, base_y, int(anchor[0]), int(anchor[1]))
+            candidates.append((
+                same_chunk,
+                int(archetype_rank.get(archetype, len(archetype_rank))),
+                dist,
+                str(prop.get("id", "")),
+                prop,
+            ))
+        if not candidates:
+            return source_prop if isinstance(source_prop, dict) else None
+        candidates.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+        return candidates[0][4]
+
+    def _property_room_candidates(self, prop, *, preferred_room_kinds=()):
+        if not isinstance(prop, dict):
+            return []
+        cover_coords = getattr(self.sim, "_property_cover_coords", None)
+        if not callable(cover_coords):
+            return []
+
+        preferred = tuple(
+            str(room_kind or "").strip().lower()
+            for room_kind in tuple(preferred_room_kinds or ())
+            if str(room_kind or "").strip()
+        )
+        preferred_index = {room_kind: index for index, room_kind in enumerate(preferred)}
+        anchor = _property_focus_position(prop)
+        if not anchor:
+            anchor = (int(prop.get("x", 0)), int(prop.get("y", 0)), int(prop.get("z", 0)))
+        candidates = []
+        for x, y, z in tuple(cover_coords(prop) or ()):
+            try:
+                x = int(x)
+                y = int(y)
+                z = int(z)
+            except (TypeError, ValueError):
+                continue
+            if not self.sim.tilemap.is_walkable(x, y, z):
+                continue
+            covered = self.sim.property_covering(x, y, z)
+            if not (covered and covered.get("id") == prop.get("id")):
+                continue
+            structure = self.sim.structure_at(x, y, z) if hasattr(self.sim, "structure_at") else None
+            room_kind = str((structure or {}).get("room_kind", "") or "").strip().lower()
+            room_rank = preferred_index.get(room_kind, len(preferred_index))
+            candidates.append({
+                "pos": (x, y, z),
+                "room_kind": room_kind,
+                "room_rank": int(room_rank),
+                "dist": _manhattan(int(anchor[0]), int(anchor[1]), x, y),
+            })
+
+        if preferred:
+            matching = [candidate for candidate in candidates if candidate["room_rank"] < len(preferred)]
+            if matching:
+                return matching
+        return candidates
+
+    def _pick_property_room_tile(self, prop, *, preferred_room_kinds=(), exclude_eid=None, claim_prefix=""):
+        candidates = self._property_room_candidates(prop, preferred_room_kinds=preferred_room_kinds)
+        if not candidates:
+            x, y, z = self._booking_anchor(prop)
+            return int(x), int(y), int(z), ""
+
+        claims = Counter()
+        for record in self._npc_custody_records().values():
+            if not isinstance(record, dict) or not bool(record.get("active", False)):
+                continue
+            if str(record.get("claim_prefix", "") or "").strip().lower() != str(claim_prefix or "").strip().lower():
+                continue
+            tile = (
+                int(record.get("custody_x", 0) or 0),
+                int(record.get("custody_y", 0) or 0),
+                int(record.get("custody_z", 0) or 0),
+            )
+            claims[tile] += 1
+
+        best = None
+        best_rank = None
+        for candidate in candidates:
+            pos = candidate["pos"]
+            occupants = [
+                other_eid
+                for other_eid in tuple(self.sim.tilemap.entities_at(pos[0], pos[1], pos[2]) or ())
+                if exclude_eid is None or int(other_eid) != int(exclude_eid)
+            ]
+            rank = (
+                int(candidate.get("room_rank", 0) or 0),
+                int(claims.get(pos, 0)),
+                len(occupants),
+                int(candidate.get("dist", 0) or 0),
+                int(pos[2]),
+                int(pos[1]),
+                int(pos[0]),
+            )
+            if best_rank is None or rank < best_rank:
+                best = candidate
+                best_rank = rank
+
+        chosen = best or candidates[0]
+        pos = chosen["pos"]
+        return int(pos[0]), int(pos[1]), int(pos[2]), str(chosen.get("room_kind", "") or "").strip().lower()
+
+    def _custody_room_kinds_for(self, prop):
+        archetype = _property_archetype(prop)
+        return self.CUSTODY_ROOM_KINDS_BY_ARCHETYPE.get(archetype, self.CUSTODY_ROOM_KINDS_BY_ARCHETYPE["default"])
+
+    def _release_room_kinds_for(self, prop):
+        archetype = _property_archetype(prop)
+        return self.RELEASE_ROOM_KINDS_BY_ARCHETYPE.get(archetype, self.RELEASE_ROOM_KINDS_BY_ARCHETYPE["default"])
+
+    def _npc_release_anchor(self, offender_eid, *, origin_pos=None, custody_prop=None):
+        routine = self.sim.ecs.get(NPCRoutine).get(offender_eid)
+        newcomer = self.sim.ecs.get(NPCSettlement).get(offender_eid)
+        property_ids = []
+        if newcomer is not None:
+            property_ids.extend((
+                str(getattr(newcomer, "home_property_id", "") or "").strip(),
+                str(getattr(newcomer, "work_property_id", "") or "").strip(),
+            ))
+        for property_id in property_ids:
+            prop = self.sim.properties.get(property_id)
+            if not isinstance(prop, dict):
+                continue
+            anchor = _property_focus_position(prop)
+            if anchor:
+                return self._find_walkable_near(anchor[0], anchor[1], anchor[2], radius=8)
+        for anchor in (
+            getattr(routine, "home", None) if routine is not None else None,
+            getattr(routine, "work", None) if routine is not None else None,
+        ):
+            if isinstance(anchor, (tuple, list)) and len(anchor) >= 3:
+                return self._find_walkable_near(anchor[0], anchor[1], anchor[2], radius=8)
+        if origin_pos is not None:
+            return self._find_walkable_near(origin_pos.x, origin_pos.y, origin_pos.z, radius=8)
+        if isinstance(custody_prop, dict):
+            x, y, z, _room_kind = self._pick_property_room_tile(
+                custody_prop,
+                preferred_room_kinds=self._release_room_kinds_for(custody_prop),
+                claim_prefix="release",
+            )
+            return int(x), int(y), int(z)
+        return 0, 0, 0
+
+    def _custody_should_clear_employment(self, record):
+        if not isinstance(record, dict):
+            return False
+        archetype = str(record.get("custody_property_archetype", "") or "").strip().lower()
+        before_tier = str(record.get("before_tier", "") or "").strip().lower()
+        return archetype == "prison" or before_tier == "arrest_on_sight"
+
+    def _terminate_npc_employment_for_custody(self, offender_eid, record):
+        if not self._custody_should_clear_employment(record):
+            if isinstance(record, dict):
+                record["employment_terminated"] = False
+            return False
+
+        occupation = self.sim.ecs.get(Occupation).get(offender_eid)
+        routine = self.sim.ecs.get(NPCRoutine).get(offender_eid)
+        newcomer = self.sim.ecs.get(NPCSettlement).get(offender_eid)
+        ai = self.sim.ecs.get(AI).get(offender_eid)
+        workplace = getattr(occupation, "workplace", None) if occupation is not None else None
+        if not isinstance(workplace, dict):
+            if isinstance(record, dict):
+                record["employment_terminated"] = False
+            return False
+
+        former_property_id = str(workplace.get("property_id", "") or "").strip()
+        former_building_id = str(workplace.get("building_id", "") or "").strip()
+        former_career = str(getattr(occupation, "career", "") or "").strip().lower()
+        former_org_eid = None
+        raw_org_eid = workplace.get("organization_eid")
+        try:
+            former_org_eid = int(raw_org_eid) if raw_org_eid is not None else None
+        except (TypeError, ValueError):
+            former_org_eid = None
+
+        employment = actor_player_business_employment(
+            self.sim,
+            offender_eid,
+            owner_eid=getattr(self.sim, "player_eid", None),
+        )
+        if employment is not None:
+            fire_actor_from_player_business(
+                self.sim,
+                getattr(self.sim, "player_eid", None),
+                offender_eid,
+                prop=employment.get("prop"),
+            )
+        else:
+            if former_org_eid is not None:
+                affiliations = self.sim.ecs.get(OrganizationAffiliations).get(offender_eid)
+                membership = affiliations.memberships.get(int(former_org_eid)) if affiliations else None
+                if isinstance(membership, dict):
+                    site_property_id = str(membership.get("site_property_id", "") or "").strip()
+                    site_building_id = str(membership.get("site_building_id", "") or "").strip()
+                    if (
+                        (former_property_id and site_property_id == former_property_id)
+                        or (former_building_id and site_building_id == former_building_id)
+                    ):
+                        membership["active"] = False
+                        membership["site_property_id"] = None
+                        membership["site_building_id"] = None
+            occupation.workplace = None
+            occupation.shift_start = None
+            occupation.shift_end = None
+            if former_career not in {"resident", "lodger", "drifter"}:
+                occupation.career = "unemployed"
+            if routine is not None:
+                routine.work = None
+            if ai is not None and str(getattr(ai, "role", "") or "").strip().lower() in {"worker", "guard"}:
+                ai.role = "civilian"
+
+        if newcomer is not None:
+            newcomer.work_property_id = ""
+            newcomer.employment_status = "unemployed"
+            newcomer.last_job_tick = int(getattr(self.sim, "tick", 0))
+            if str(getattr(newcomer, "housing_status", "") or "").strip().lower() in {"housing"}:
+                newcomer.phase = "settling"
+            elif str(getattr(newcomer, "housing_status", "") or "").strip().lower() in {"lodging", "shelter"}:
+                newcomer.phase = "lodged"
+            else:
+                newcomer.phase = "drifting" if bool(getattr(newcomer, "drift_preferred", False)) else "arriving"
+
+        if isinstance(record, dict):
+            record["employment_terminated"] = True
+            record["former_work_property_id"] = former_property_id
+            record["former_work_building_id"] = former_building_id
+            record["former_work_organization_eid"] = former_org_eid
+            record["former_career"] = former_career
+        return True
+
+    def _move_npc_to_custody(self, offender_eid, record):
+        pos = self._position_for(offender_eid)
+        if pos is None or not isinstance(record, dict):
+            return False
+        self._teleport_entity(
+            offender_eid,
+            pos,
+            int(record.get("custody_x", pos.x)),
+            int(record.get("custody_y", pos.y)),
+            int(record.get("custody_z", pos.z)),
+            reason="npc_custody_transfer",
+        )
+        _track_entity_in_chunk_population(self.sim, offender_eid)
+
+        ai = self.sim.ecs.get(AI).get(offender_eid)
+        will = self.sim.ecs.get(NPCWill).get(offender_eid)
+        hold_target = (
+            int(record.get("custody_x", pos.x)),
+            int(record.get("custody_y", pos.y)),
+            int(record.get("custody_z", pos.z)),
+        )
+        if ai is not None and will is not None:
+            _sync_ai_intent(
+                ai,
+                will,
+                self.sim.tick,
+                "holding",
+                score=88.0,
+                target=hold_target,
+                target_eid=None,
+            )
+        else:
+            if ai is not None:
+                ai.state = "holding"
+                ai.target = hold_target
+                ai.target_eid = None
+            if will is not None:
+                will.intent = "holding"
+                will.score = 88.0
+                will.target = hold_target
+                will.target_eid = None
+                will.last_tick = self.sim.tick
+
+        suppression = self.sim.ecs.get(SuppressionState).get(offender_eid)
+        if suppression is not None:
+            suppression.surrendered = False
+            suppression.surrender_tick = -1
+        self._terminate_npc_employment_for_custody(offender_eid, record)
+        return True
+
+    def _release_npc_from_custody(self, offender_eid, record):
+        pos = self._position_for(offender_eid)
+        if pos is not None and isinstance(record, dict):
+            self._teleport_entity(
+                offender_eid,
+                pos,
+                int(record.get("release_x", pos.x)),
+                int(record.get("release_y", pos.y)),
+                int(record.get("release_z", pos.z)),
+                reason="npc_custody_release",
+            )
+            _track_entity_in_chunk_population(self.sim, offender_eid)
+
+        ai = self.sim.ecs.get(AI).get(offender_eid)
+        will = self.sim.ecs.get(NPCWill).get(offender_eid)
+        if ai is not None:
+            ai.state = "idle"
+            ai.target = None
+            ai.target_eid = None
+        if will is not None:
+            will.intent = "idle"
+            will.score = 0.0
+            will.target = None
+            will.target_eid = None
+            will.last_tick = self.sim.tick
+
+        suppression = self.sim.ecs.get(SuppressionState).get(offender_eid)
+        if suppression is not None:
+            suppression.surrendered = False
+            suppression.surrender_tick = -1
+        newcomer = self.sim.ecs.get(NPCSettlement).get(offender_eid)
+        if newcomer is not None and bool((record or {}).get("employment_terminated", False)):
+            newcomer.last_job_tick = int(getattr(self.sim, "tick", 0))
+        return pos is not None
+
+    def _store_npc_custody_record(self, offender_eid, snapshot, *, held_by_eid=None, pos=None):
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        tier = str(snapshot.get("wanted_tier", "wanted")).strip().lower() or "wanted"
+        if tier not in {"wanted", "arrest_on_sight"}:
+            tier = "wanted"
+        hold_ticks = self._hours_to_ticks(self.NPC_BOOKING_HOURS_BY_TIER.get(tier, 4.0))
+        if hold_ticks <= 0:
+            hold_ticks = self._hours_to_ticks(4.0)
+
+        origin_x = int(getattr(pos, "x", 0) if pos is not None else 0)
+        origin_y = int(getattr(pos, "y", 0) if pos is not None else 0)
+        custody_prop = self._find_justice_property(
+            allowed_archetypes=self.NPC_CUSTODY_ARCHETYPES_BY_TIER.get(tier, ("jail",)),
+            origin_x=origin_x,
+            origin_y=origin_y,
+        )
+        if custody_prop is None:
+            custody_prop = self._find_booking_property(origin_x=origin_x, origin_y=origin_y)
+        custody_x, custody_y, custody_z, custody_room_kind = self._pick_property_room_tile(
+            custody_prop,
+            preferred_room_kinds=self._custody_room_kinds_for(custody_prop),
+            exclude_eid=offender_eid,
+            claim_prefix="custody",
+        )
+        release_x, release_y, release_z = self._npc_release_anchor(
+            offender_eid,
+            origin_pos=pos,
+            custody_prop=custody_prop,
+        )
+        inventory_items = self._snapshot_inventory_items(offender_eid)
+        wallet_before = self._inventory_cash_total_from_entries(inventory_items)
+        record = {
+            "eid": int(offender_eid),
+            "active": True,
+            "start_tick": int(getattr(self.sim, "tick", 0)),
+            "hold_until_tick": int(getattr(self.sim, "tick", 0)) + int(hold_ticks),
+            "hold_ticks": int(hold_ticks),
+            "held_by_eid": held_by_eid,
+            "booking_property_id": (custody_prop or {}).get("id") if isinstance(custody_prop, dict) else None,
+            "booking_property_name": str((custody_prop or {}).get("name", "Justice Office") if isinstance(custody_prop, dict) else "Justice Office").strip() or "Justice Office",
+            "booking_x": int(custody_x),
+            "booking_y": int(custody_y),
+            "booking_z": int(custody_z),
+            "custody_property_id": (custody_prop or {}).get("id") if isinstance(custody_prop, dict) else None,
+            "custody_property_archetype": _property_archetype(custody_prop) if isinstance(custody_prop, dict) else "",
+            "custody_x": int(custody_x),
+            "custody_y": int(custody_y),
+            "custody_z": int(custody_z),
+            "custody_room_kind": str(custody_room_kind or "").strip().lower(),
+            "claim_prefix": "custody",
+            "origin_x": int(origin_x),
+            "origin_y": int(origin_y),
+            "origin_z": int(getattr(pos, "z", 0) if pos is not None else 0),
+            "release_x": int(release_x),
+            "release_y": int(release_y),
+            "release_z": int(release_z),
+            "before_tier": tier,
+            "before_score": int(snapshot.get("active_score", 0) or 0),
+            "release_score": int(self._booking_release_score(snapshot)),
+            "fine_due": int(self._npc_fine_amount(snapshot)),
+            "fine_paid": 0,
+            "wallet_credits_before": int(wallet_before),
+            "wallet_credits_after": int(wallet_before),
+            "inventory_items": inventory_items,
+        }
+        self._npc_custody_records()[str(int(offender_eid))] = record
+        return record
+
+    def _find_auto_arrest_enforcer(self, snapshot):
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
+        radius = int(self.PLAYER_AUTO_ARREST_RADIUS_BY_TIER.get(tier, 0))
+        if radius <= 0:
+            return None
+        player_pos = self._position_for(self.player_eid)
+        if player_pos is None or _entity_is_downed(self.sim, self.player_eid):
+            return None
+
+        positions = self.sim.ecs.get(Position)
+        best = None
+        best_rank = None
+        for eid, pos in positions.items():
+            if eid == self.player_eid or pos.z != player_pos.z:
+                continue
+            dist = _manhattan(pos.x, pos.y, player_pos.x, player_pos.y)
+            if dist <= 0 or dist > radius:
+                continue
+            enforcer, law_drive, priority = self._actor_is_enforcer(eid)
+            if not enforcer:
+                continue
+            if not _shared_observer_can_see_position(
+                self.sim,
+                observer_eid=eid,
+                observer_x=pos.x,
+                observer_y=pos.y,
+                observer_z=pos.z,
+                target_x=player_pos.x,
+                target_y=player_pos.y,
+                target_z=player_pos.z,
+                radius=max(4, radius + 2),
+            ):
+                continue
+            rank = (dist, -priority, -law_drive, int(eid))
+            if best_rank is None or rank < best_rank:
+                best = int(eid)
+                best_rank = rank
+        return best
+
+    def _booking_property_allowed(self, prop):
+        return isinstance(prop, dict) and _property_archetype(prop) in set(self.BOOKING_ARCHETYPES)
+
+    def _find_booking_property(self, *, source_prop=None, origin_x=None, origin_y=None):
+        return self._find_justice_property(
+            allowed_archetypes=self.BOOKING_ARCHETYPES,
+            source_prop=source_prop,
+            origin_x=origin_x,
+            origin_y=origin_y,
+        )
+
+    def _booking_anchor(self, prop, fallback_pos=None):
+        if isinstance(prop, dict):
+            anchor = _property_focus_position(prop)
+            if anchor:
+                return self._find_walkable_near(anchor[0], anchor[1], anchor[2], radius=8)
+            return self._find_walkable_near(
+                int(prop.get("x", 0)),
+                int(prop.get("y", 0)),
+                int(prop.get("z", 0)),
+                radius=8,
+            )
+        if fallback_pos is not None:
+            return self._find_walkable_near(fallback_pos.x, fallback_pos.y, fallback_pos.z, radius=4)
+        return 0, 0, 0
+
+    def _booking_release_score(self, snapshot):
+        tier = str((snapshot or {}).get("wanted_tier", "clear")).strip().lower() or "clear"
+        score = max(0, int((snapshot or {}).get("active_score", 0) or 0))
+        if tier == "questioning":
+            return 0
+        if tier == "wanted":
+            return min(score, 5)
+        if tier == "arrest_on_sight":
+            return min(score, 12)
+        return score
+
+    def _emit_removed_gear_events(self, eid, removed_entry, *, reason):
+        changes = _unlink_removed_item_from_gear(self.sim, eid, removed_entry, item_catalog=ITEM_CATALOG)
+        if changes.get("armor_name"):
+            self.sim.emit(Event(
+                "armor_removed",
+                eid=eid,
+                item_id=changes.get("armor_item_id"),
+                armor_name=changes["armor_name"],
+                reason=reason,
+            ))
+        if changes.get("weapon_id"):
+            self.sim.emit(Event(
+                "weapon_removed",
+                eid=eid,
+                weapon_id=changes["weapon_id"],
+                weapon_name=changes["weapon_name"],
+                reason=reason,
+            ))
+        if changes.get("disguise_name"):
+            self.sim.emit(Event(
+                "disguise_removed",
+                eid=eid,
+                item_id=changes.get("disguise_item_id"),
+                item_name=changes["disguise_name"],
+                reason=reason,
+            ))
+        if changes.get("container_name"):
+            self.sim.emit(Event(
+                "container_removed",
+                eid=eid,
+                item_id=changes.get("container_item_id"),
+                item_name=changes["container_name"],
+                reason=reason,
+            ))
+
+    def _confiscate_player_inventory(self):
+        inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
+        if not inventory:
+            return {
+                "confiscated_units": 0,
+                "illegal_units": 0,
+                "stolen_units": 0,
+                "labels": (),
+            }
+
+        confiscated_units = 0
+        illegal_units = 0
+        stolen_units = 0
+        labels = []
+        for entry in list(getattr(inventory, "items", ()) or ()):
+            item_id = str(entry.get("item_id", "") or "").strip().lower()
+            item_def = ITEM_CATALOG.get(item_id, {})
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            illegal = str(item_def.get("legal_status", "legal")).strip().lower() == "illegal"
+            stolen = bool(metadata.get("justice_stolen"))
+            if not illegal and not stolen:
+                continue
+
+            quantity = max(1, int(entry.get("quantity", 1) or 1))
+            removed = inventory.remove_item(instance_id=entry.get("instance_id"), quantity=quantity)
+            if not removed:
+                continue
+
+            removed_qty = max(1, int(removed.get("quantity", quantity) or quantity))
+            confiscated_units += removed_qty
+            if illegal:
+                illegal_units += removed_qty
+            if stolen:
+                stolen_units += removed_qty
+            labels.append(item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG))
+            self._emit_removed_gear_events(self.player_eid, removed, reason="confiscated")
+
+        deduped_labels = tuple(dict.fromkeys(label for label in labels if str(label).strip()))
+        return {
+            "confiscated_units": confiscated_units,
+            "illegal_units": illegal_units,
+            "stolen_units": stolen_units,
+            "labels": deduped_labels[:4],
+        }
+
+    def _book_player(self, *, by_eid=None, source_prop=None):
+        snapshot = self._player_bookable_snapshot()
+        player_pos = self._position_for(self.player_eid)
+        if snapshot is None or player_pos is None:
+            return False
+
+        starting_tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
+        custody_change = _mark_justice_in_custody(
+            self.sim,
+            self.player_eid,
+            held_by_eid=by_eid,
+            x=player_pos.x,
+            y=player_pos.y,
+        )
+        self._emit_change_events(custody_change, source_event="actor_detained", reason="custody")
+        self.sim.emit(Event(
+            "actor_detained",
+            eid=self.player_eid,
+            by_eid=by_eid,
+            x=player_pos.x,
+            y=player_pos.y,
+            z=player_pos.z,
+            before_tier=starting_tier,
+            after_tier=str((custody_change or {}).get("after_tier", "held")).strip().lower() or "held",
+            jurisdiction_key=str((custody_change or {}).get("jurisdiction_key", "") or "").strip().lower(),
+            jurisdiction_name=str((custody_change or {}).get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office",
+        ))
+
+        booking_prop = self._find_booking_property(
+            source_prop=source_prop,
+            origin_x=player_pos.x,
+            origin_y=player_pos.y,
+        )
+        booking_x, booking_y, booking_z = self._booking_anchor(booking_prop, fallback_pos=player_pos)
+        self._teleport_entity(
+            self.player_eid,
+            player_pos,
+            booking_x,
+            booking_y,
+            booking_z,
+            reason="justice_booking",
+        )
+
+        confiscation = self._confiscate_player_inventory()
+        hold_ticks = self._advance_time_for_booking(
+            self._hours_to_ticks(self.BOOKING_HOURS_BY_TIER.get(starting_tier, 1.0)),
+            property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
+            property_name=(booking_prop or {}).get("name", "Justice Office") if isinstance(booking_prop, dict) else "Justice Office",
+            held_by_eid=by_eid,
+        )
+        release_change = _release_justice_from_custody(
+            self.sim,
+            self.player_eid,
+            new_score=self._booking_release_score(snapshot),
+            x=booking_x,
+            y=booking_y,
+        )
+        self._emit_change_events(release_change, source_event="justice_booking_release", reason="booking_release")
+        self.sim.emit(Event(
+            "justice_booking_completed",
+            eid=self.player_eid,
+            property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
+            property_name=str((booking_prop or {}).get("name", "Justice Office") if isinstance(booking_prop, dict) else "Justice Office").strip() or "Justice Office",
+            held_by_eid=by_eid,
+            hold_ticks=int(hold_ticks),
+            hold_hours=round(float(hold_ticks) / float(self._ticks_per_hour()), 2) if hold_ticks > 0 else 0.0,
+            before_tier=starting_tier,
+            after_tier=str((release_change or {}).get("after_tier", "clear")).strip().lower() or "clear",
+            before_score=int(snapshot.get("active_score", 0) or 0),
+            after_score=int((release_change or {}).get("after_score", 0) or 0),
+            confiscated_item_count=int(confiscation.get("confiscated_units", 0) or 0),
+            illegal_item_count=int(confiscation.get("illegal_units", 0) or 0),
+            stolen_item_count=int(confiscation.get("stolen_units", 0) or 0),
+            confiscated_labels=tuple(confiscation.get("labels", ()) or ()),
+            x=booking_x,
+            y=booking_y,
+            z=booking_z,
+        ))
+        return True
+
+    def _find_detaining_enforcer(self, offender_eid):
+        positions = self.sim.ecs.get(Position)
+        offender_pos = positions.get(offender_eid)
+        if offender_pos is None:
+            return None
+
+        best = None
+        best_rank = None
+        for eid, pos in positions.items():
+            if eid == offender_eid or pos.z != offender_pos.z:
+                continue
+            dist = _manhattan(pos.x, pos.y, offender_pos.x, offender_pos.y)
+            if dist > int(self.DETENTION_RADIUS):
+                continue
+
+            enforcer, law_drive, priority = self._actor_is_enforcer(eid)
+            if not enforcer:
+                continue
+            rank = (dist, -priority, -law_drive, int(eid))
+            if best_rank is None or rank < best_rank:
+                best = int(eid)
+                best_rank = rank
+        return best
+
+    def on_property_trespass(self, event):
+        offender_eid = event.data.get("offender_eid")
+        if offender_eid is None:
+            return
+        witnessed = bool(event.data.get("witnessed", True))
+        ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
+        ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
+        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
+        if not witnessed and not _trespass_is_obvious_breach(
+            ingress_kind=ingress_kind,
+            ingress_method=ingress_method,
+            breach_severity=breach_severity,
+        ):
+            return
+        self._record_incident(
+            offender_eid,
+            incident_type="trespass",
+            severity=int(event.data.get("severity_score", 0) or 0),
+            source_event="property_trespass",
+            property_id=event.data.get("property_id"),
+            x=event.data.get("x"),
+            y=event.data.get("y"),
+            witnessed=witnessed,
+            note=str(event.data.get("severity_label", "trespass") or "").strip().lower(),
+        )
+
+    def on_property_tamper(self, event):
+        offender_eid = event.data.get("offender_eid")
+        if offender_eid is None:
+            return
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        prop = self.sim.properties.get(property_id) if property_id else None
+        witnessed = bool(event.data.get("witnessed", True))
+        if _quiet_unwitnessed_tamper(
+            prop,
+            witnessed=witnessed,
+            ingress_kind=str(event.data.get("ingress_kind", "") or "").strip().lower(),
+            ingress_method=str(event.data.get("ingress_method", "") or "").strip().lower(),
+            breach_severity=float(event.data.get("breach_severity", 0.0) or 0.0),
+        ):
+            return
+        self._record_incident(
+            offender_eid,
+            incident_type="tamper",
+            severity=int(event.data.get("severity_score", 0) or 0),
+            source_event="property_tamper",
+            property_id=property_id,
+            x=event.data.get("x"),
+            y=event.data.get("y"),
+            witnessed=witnessed,
+            note="property_tamper",
+        )
+
+    def on_item_stolen(self, event):
+        offender_eid = event.data.get("offender_eid")
+        if offender_eid is None:
+            return
+        x = event.data.get("x")
+        y = event.data.get("y")
+        z = event.data.get("z", 0)
+        if not self._watchers_present(offender_eid, x, y, z):
+            return
+        self._record_incident(
+            offender_eid,
+            incident_type="theft",
+            severity=72,
+            source_event="item_stolen",
+            x=x,
+            y=y,
+            witnessed=True,
+            note=str(event.data.get("item_name", event.data.get("item_id", "item")) or "").strip(),
+        )
+
+    def on_action_offense(self, event):
+        offender_eid = event.data.get("offender_eid")
+        if offender_eid is None:
+            return
+        context = str(event.data.get("context", "ordinary") or "").strip().lower() or "ordinary"
+        if context not in {"contraband_use", "armed_assault", "explosive_discharge"}:
+            return
+        if offender_eid != self.player_eid and context in {"armed_assault", "explosive_discharge"}:
+            # NPC violence needs lawful-force context before it can share the
+            # same consequences as the player. Keep first-pass NPC justice to
+            # clearer property and theft offenses.
+            return
+        x = event.data.get("x")
+        y = event.data.get("y")
+        z = event.data.get("z", 0)
+        if not self._watchers_present(offender_eid, x, y, z):
+            return
+        incident_type = {
+            "contraband_use": "contraband",
+            "armed_assault": "armed_assault",
+            "explosive_discharge": "explosive_discharge",
+        }.get(context, context)
+        self._record_incident(
+            offender_eid,
+            incident_type=incident_type,
+            severity=int(event.data.get("offense_score", 0) or 0),
+            source_event="action_offense",
+            x=x,
+            y=y,
+            witnessed=True,
+            note=f"{str(event.data.get('action', 'action') or '').strip().lower()}/{context}",
+        )
+
+    def on_property_interact(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if bool(event.data.get("handled")):
+            return
+        if self._player_bookable_snapshot() is None:
+            return
+        prop = self.sim.properties.get(event.data.get("property_id"))
+        if not self._booking_property_allowed(prop):
+            return
+        if self._book_player(source_prop=prop):
+            event.data["handled"] = True
+
+    def on_npc_interact(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if bool(event.data.get("handled")):
+            return
+        if self._player_bookable_snapshot() is None:
+            return
+        npc_eid = event.data.get("npc_eid")
+        if npc_eid is None:
+            return
+        enforcer, _law_drive, _priority = self._actor_is_enforcer(npc_eid)
+        if not enforcer:
+            return
+        if self._book_player(by_eid=npc_eid):
+            event.data["handled"] = True
+
+    def on_npc_surrendered(self, event):
+        offender_eid = event.data.get("eid")
+        if offender_eid in {None, self.player_eid}:
+            return
+        snapshot = _justice_snapshot(self.sim, offender_eid)
+        if bool(snapshot.get("in_custody", False)):
+            return
+        if str(snapshot.get("wanted_tier", "clear")).strip().lower() not in {"wanted", "arrest_on_sight"}:
+            return
+        self.pending_detentions[int(offender_eid)] = int(getattr(self.sim, "tick", 0)) + int(self.DETENTION_QUEUE_WINDOW)
+
+    def _process_pending_detentions(self):
+        positions = self.sim.ecs.get(Position)
+        tick = int(getattr(self.sim, "tick", 0))
+        for offender_eid, expires_at in list(self.pending_detentions.items()):
+            if tick > int(expires_at):
+                self.pending_detentions.pop(int(offender_eid), None)
+                continue
+            pos = positions.get(offender_eid)
+            if pos is None:
+                self.pending_detentions.pop(int(offender_eid), None)
+                continue
+            snapshot = _justice_snapshot(self.sim, offender_eid)
+            if bool(snapshot.get("in_custody", False)):
+                self.pending_detentions.pop(int(offender_eid), None)
+                continue
+            if str(snapshot.get("wanted_tier", "clear")).strip().lower() not in {"wanted", "arrest_on_sight"}:
+                self.pending_detentions.pop(int(offender_eid), None)
+                continue
+
+            held_by_eid = self._find_detaining_enforcer(offender_eid)
+            if held_by_eid is None:
+                continue
+
+            custody_change = _mark_justice_in_custody(
+                self.sim,
+                offender_eid,
+                held_by_eid=held_by_eid,
+                x=pos.x,
+                y=pos.y,
+            )
+            self._emit_change_events(custody_change, source_event="actor_detained", reason="custody")
+            self.sim.emit(Event(
+                "actor_detained",
+                eid=offender_eid,
+                by_eid=held_by_eid,
+                x=pos.x,
+                y=pos.y,
+                z=pos.z,
+                before_tier=str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear",
+                after_tier=str((custody_change or {}).get("after_tier", "held")).strip().lower() or "held",
+                jurisdiction_key=str((custody_change or {}).get("jurisdiction_key", "") or "").strip().lower(),
+                jurisdiction_name=str((custody_change or {}).get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office",
+            ))
+            self._store_npc_custody_record(
+                offender_eid,
+                snapshot,
+                held_by_eid=held_by_eid,
+                pos=pos,
+            )
+            record = self._npc_custody_records().get(str(int(offender_eid)))
+            if isinstance(record, dict):
+                self._move_npc_to_custody(offender_eid, record)
+            self.pending_detentions.pop(int(offender_eid), None)
+
+    def _process_guard_initiated_player_arrest(self):
+        snapshot = self._player_bookable_snapshot()
+        if snapshot is None:
+            return False
+        held_by_eid = self._find_auto_arrest_enforcer(snapshot)
+        if held_by_eid is None:
+            return False
+        return bool(self._book_player(by_eid=held_by_eid))
+
+    def _process_resolved_npc_custody(self):
+        tick = int(getattr(self.sim, "tick", 0))
+        for offender_key, record in list(self._npc_custody_records().items()):
+            if not isinstance(record, dict) or not bool(record.get("active", False)):
+                continue
+            if tick < int(record.get("hold_until_tick", tick + 1)):
+                continue
+            fine_paid, wallet_after, updated_items = self._deduct_cash_from_live_inventory(
+                int(record.get("eid", 0) or 0),
+                record.get("fine_due", 0),
+            )
+            if fine_paid <= 0 and int(record.get("fine_due", 0) or 0) > 0:
+                updated_items, fine_paid, wallet_after = self._deduct_cash_from_inventory_entries(
+                    record.get("inventory_items"),
+                    record.get("fine_due", 0),
+                )
+            record["inventory_items"] = updated_items
+            record["fine_paid"] = int(fine_paid)
+            record["wallet_credits_after"] = int(wallet_after)
+            record["released_tick"] = int(tick)
+            record["active"] = False
+
+            release_change = _release_justice_from_custody(
+                self.sim,
+                int(record.get("eid", 0) or 0),
+                new_score=int(record.get("release_score", 0) or 0),
+                x=record.get("booking_x"),
+                y=record.get("booking_y"),
+            )
+            self._release_npc_from_custody(int(record.get("eid", 0) or 0), record)
+            self._emit_change_events(release_change, source_event="npc_custody_release", reason="custody_release")
+            self.sim.emit(Event(
+                "npc_custody_resolved",
+                eid=int(record.get("eid", 0) or 0),
+                by_eid=record.get("held_by_eid"),
+                property_id=record.get("booking_property_id"),
+                property_name=str(record.get("booking_property_name", "Justice Office") or "Justice Office").strip() or "Justice Office",
+                hold_ticks=int(record.get("hold_ticks", 0) or 0),
+                fine_due=int(record.get("fine_due", 0) or 0),
+                fine_paid=int(fine_paid),
+                wallet_credits_before=int(record.get("wallet_credits_before", 0) or 0),
+                wallet_credits_after=int(wallet_after),
+                before_tier=str(record.get("before_tier", "wanted")).strip().lower() or "wanted",
+                after_tier=str((release_change or {}).get("after_tier", "clear")).strip().lower() or "clear",
+                release_x=int(record.get("release_x", 0) or 0),
+                release_y=int(record.get("release_y", 0) or 0),
+                release_z=int(record.get("release_z", 0) or 0),
+            ))
+
+    def update(self):
+        for change in _decay_justice_records(self.sim):
+            self._emit_change_events(change, source_event="justice_decay", reason=str(change.get("reason", "cooldown")))
+        self._process_guard_initiated_player_arrest()
+        self._process_pending_detentions()
+        self._process_resolved_npc_custody()
 
 
 class RunPressureSystem(System):
@@ -42371,6 +44104,87 @@ def _property_room_preference_score(
     return max(0.0, float(score))
 
 
+def _frontage_pool_bias(*, role="", intent="", pulse_emphasis="", perimeter_bonus=0.0):
+    role = str(role or "").strip().lower()
+    intent = str(intent or "").strip().lower()
+    pulse_emphasis = str(pulse_emphasis or "").strip().lower()
+    try:
+        perimeter_bonus = max(0.0, float(perimeter_bonus or 0.0))
+    except (TypeError, ValueError):
+        perimeter_bonus = 0.0
+
+    bias = 0.0
+    if role in {"guard", "scout"} and intent == "working":
+        bias += 0.08
+
+    if pulse_emphasis == "front":
+        bias += 0.12
+    elif pulse_emphasis in {"residential", "hospitality"} and intent == "lounging":
+        bias += 0.05
+
+    if bias > 0.0:
+        bias += min(0.12, perimeter_bonus * 0.04)
+    return max(0.0, min(0.42, float(bias)))
+
+
+def _frontage_capacity(*, role="", intent="", pulse_emphasis="", perimeter_bonus=0.0):
+    role = str(role or "").strip().lower()
+    intent = str(intent or "").strip().lower()
+    pulse_emphasis = str(pulse_emphasis or "").strip().lower()
+    try:
+        perimeter_bonus = max(0.0, float(perimeter_bonus or 0.0))
+    except (TypeError, ValueError):
+        perimeter_bonus = 0.0
+
+    capacity = 1
+    if role in {"guard", "scout"} and intent == "working":
+        capacity = max(capacity, 2)
+    if pulse_emphasis == "front" or perimeter_bonus >= 1.25:
+        capacity += 1
+    if perimeter_bonus >= 2.4:
+        capacity += 1
+    if perimeter_bonus >= 3.1:
+        capacity += 1
+    if intent == "lounging" and pulse_emphasis in {"residential", "hospitality"}:
+        capacity += 1
+    return max(1, min(4, int(capacity)))
+
+
+def _frontage_tile_claims(sim, tiles, *, exclude_eid=None):
+    cleaned_tiles = {
+        (int(tile[0]), int(tile[1]), int(tile[2]))
+        for tile in tuple(tiles or ())
+        if isinstance(tile, (tuple, list)) and len(tile) >= 3
+    }
+    if not cleaned_tiles:
+        return {}, 0
+
+    claims = {tile: set() for tile in cleaned_tiles}
+    positions = sim.ecs.get(Position)
+    ais = sim.ecs.get(AI)
+
+    for eid, pos in positions.items():
+        if exclude_eid is not None and int(eid) == int(exclude_eid):
+            continue
+        tile = (int(pos.x), int(pos.y), int(pos.z))
+        if tile in claims:
+            claims[tile].add(int(eid))
+
+    for eid, ai in ais.items():
+        if exclude_eid is not None and int(eid) == int(exclude_eid):
+            continue
+        target = getattr(ai, "target", None)
+        if not isinstance(target, (tuple, list)) or len(target) < 3:
+            continue
+        tile = (int(target[0]), int(target[1]), int(target[2]))
+        if tile in claims:
+            claims[tile].add(int(eid))
+
+    claim_counts = {tile: len(eids) for tile, eids in claims.items()}
+    total_claimed = len({eid for eids in claims.values() for eid in eids})
+    return claim_counts, total_claimed
+
+
 def _pick_property_roam_tile(sim, prop, eid, *, role="", intent=""):
     """Pick a random walkable tile inside or just outside the entrance of prop.
 
@@ -42384,6 +44198,7 @@ def _pick_property_roam_tile(sim, prop, eid, *, role="", intent=""):
     the property is empty.
     """
     rng = random.Random(f"{sim.seed}:{eid}:{sim.tick}:roam")
+    pool_rng = random.Random(f"{sim.seed}:{eid}:{sim.tick}:roam-pool")
     entry = _property_focus_position(prop)
     metadata = _property_metadata(prop)
     footprint = metadata.get("footprint")
@@ -42483,6 +44298,45 @@ def _pick_property_roam_tile(sim, prop, eid, *, role="", intent=""):
                 if covered and covered.get("id") == prop.get("id"):
                     continue  # inside, already in interior pool
                 perimeter_weighted.append(((nx, ny, ez), perimeter_weight))
+
+    if perimeter_weighted:
+        claim_counts, total_claimed = _frontage_tile_claims(
+            sim,
+            [tile for tile, _weight in perimeter_weighted],
+            exclude_eid=eid,
+        )
+        crowd_penalized = []
+        for tile, weight in perimeter_weighted:
+            crowd_penalty = 1.0 + (max(0, int(claim_counts.get(tile, 0))) * 1.4)
+            crowd_penalized.append((tile, float(weight) / crowd_penalty))
+        perimeter_weighted = crowd_penalized
+
+        if interior_weighted:
+            capacity = _frontage_capacity(
+                role=role,
+                intent=intent,
+                pulse_emphasis=pulse_emphasis,
+                perimeter_bonus=perimeter_bonus,
+            )
+            outside_bias = _frontage_pool_bias(
+                role=role,
+                intent=intent,
+                pulse_emphasis=pulse_emphasis,
+                perimeter_bonus=perimeter_bonus,
+            )
+            if total_claimed >= capacity:
+                outside_bias = 0.0
+            elif total_claimed == max(0, capacity - 1):
+                outside_bias *= 0.35
+
+            if outside_bias > 0.0 and pool_rng.random() < outside_bias:
+                chosen = _weighted_tile_choice(rng, perimeter_weighted)
+                if chosen is not None:
+                    return chosen
+
+            chosen = _weighted_tile_choice(rng, interior_weighted)
+            if chosen is not None:
+                return chosen
 
     chosen = _weighted_tile_choice(rng, interior_weighted + perimeter_weighted)
     return chosen or entry
@@ -46443,6 +48297,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("run_pressure_changed", self.on_run_pressure_changed)
         self.sim.events.subscribe("run_pressure_tier_changed", self.on_run_pressure_tier_changed)
         self.sim.events.subscribe("run_pressure_mitigated", self.on_run_pressure_mitigated)
+        self.sim.events.subscribe("justice_wanted_tier_changed", self.on_justice_wanted_tier_changed)
+        self.sim.events.subscribe("actor_detained", self.on_actor_detained)
+        self.sim.events.subscribe("justice_booking_completed", self.on_justice_booking_completed)
         self.sim.events.subscribe("organization_heat_tier_changed", self.on_organization_heat_tier_changed)
         self.sim.events.subscribe("organization_standing_tier_changed", self.on_organization_standing_tier_changed)
         self.sim.events.subscribe("skill_rating_changed", self.on_skill_rating_changed)
@@ -48433,8 +50290,13 @@ class EventLogSystem(System):
         eid = event.data.get("eid")
         item_name = event.data.get("item_name", event.data.get("item_id", "item"))
         qty = event.data.get("quantity", 1)
+        cash_pickup = bool(event.data.get("cash_pickup"))
+        credits_gained = int(event.data.get("credits_gained", 0) or 0)
 
         if eid == self.player_eid:
+            if cash_pickup and credits_gained > 0:
+                _log_player_feedback(self.sim, f"Pocketed {credits_gained} credits.", kind="pickup")
+                return
             if qty == 1:
                 _log_player_feedback(self.sim, f"Picked up {item_name}.", kind="pickup")
             else:
@@ -50411,6 +52273,98 @@ class EventLogSystem(System):
             priority="high",
         )
 
+    def on_justice_wanted_tier_changed(self, event):
+        if event.data.get("offender_eid") != self.player_eid:
+            return
+        jurisdiction = str(event.data.get("jurisdiction_name", "Justice Office")).strip() or "Justice Office"
+        after_tier = str(event.data.get("after_tier", "clear")).strip().lower() or "clear"
+        before_tier = str(event.data.get("before_tier", "clear")).strip().lower() or "clear"
+        after_score = int(event.data.get("after_score", 0))
+        if after_tier == "arrest_on_sight":
+            text = f"Law: {jurisdiction} wants you on sight ({after_score})."
+        elif after_tier == "wanted":
+            text = f"Law: {jurisdiction} marks you wanted ({after_score})."
+        elif after_tier == "questioning":
+            text = f"Law: {jurisdiction} wants to question you ({after_score})."
+        elif after_tier == "held":
+            text = f"Law: {jurisdiction} takes you into custody."
+        elif before_tier != after_tier:
+            text = f"Law: {jurisdiction} cools off ({after_score})."
+        else:
+            return
+        self._log(
+            text,
+            channel="mission",
+            priority="high",
+            dedupe_window=20,
+            dedupe_key=f"justice:{str(event.data.get('jurisdiction_key', jurisdiction)).strip().lower()}:{after_tier}",
+        )
+
+    def on_actor_detained(self, event):
+        eid = event.data.get("eid")
+        by_eid = event.data.get("by_eid")
+        jurisdiction = str(event.data.get("jurisdiction_name", "Justice Office")).strip() or "Justice Office"
+        if eid == self.player_eid:
+            self._log(f"{jurisdiction} takes you into custody.", channel="mission", priority="critical")
+            return
+        if not (
+            self._player_can_perceive_entity(eid)
+            or self._player_is_near_event_position(event, radius=8)
+        ):
+            return
+        name = self._npc_label(eid)
+        officer = self._npc_label(by_eid, fallback="an enforcer")
+        self._log_npc_message(
+            eid,
+            f"{name} is taken into custody by {officer}.",
+            channel="mission",
+            priority="high",
+            dedupe_window=12,
+            dedupe_key=f"detained:{eid}",
+        )
+
+    def on_justice_booking_completed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        property_name = str(event.data.get("property_name", "Justice Office")).strip() or "Justice Office"
+        hold_hours = float(event.data.get("hold_hours", 0.0) or 0.0)
+        after_tier = str(event.data.get("after_tier", "clear")).strip().lower() or "clear"
+        after_score = int(event.data.get("after_score", 0) or 0)
+        confiscated_count = int(event.data.get("confiscated_item_count", 0) or 0)
+        illegal_count = int(event.data.get("illegal_item_count", 0) or 0)
+        stolen_count = int(event.data.get("stolen_item_count", 0) or 0)
+        labels = [str(label).strip() for label in list(event.data.get("confiscated_labels", ()) or ()) if str(label).strip()]
+        status_text = {
+            "questioning": "wanted for questioning",
+            "wanted": "wanted",
+            "arrest_on_sight": "arrest on sight",
+            "clear": "clear",
+        }.get(after_tier, after_tier.replace("_", " ").strip() or "clear")
+        summary = f"Booking: processed at {property_name}."
+        if hold_hours > 0:
+            summary += f" Held about {hold_hours:g}h."
+        summary += f" Released {status_text} ({after_score})."
+        if confiscated_count > 0:
+            seized_bits = []
+            if illegal_count > 0:
+                seized_bits.append(f"illegal {illegal_count}")
+            if stolen_count > 0:
+                seized_bits.append(f"stolen {stolen_count}")
+            seized_text = ", ".join(seized_bits) if seized_bits else f"{confiscated_count}"
+            summary += f" Seized {confiscated_count} item(s)"
+            if seized_text:
+                summary += f" [{seized_text}]"
+            if labels:
+                summary += f": {', '.join(labels[:3])}"
+            summary += "."
+        self._log(
+            summary,
+            channel="mission",
+            priority="high",
+            dedupe_window=12,
+            dedupe_key=f"justice-booking:{str(event.data.get('property_id', property_name)).strip().lower()}:{after_tier}:{after_score}",
+        )
+
     def on_organization_heat_tier_changed(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -50925,7 +52879,7 @@ class RenderSystem(System):
             "",
             f"World seed: {self.sim.seed}",
             "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with . space or 5.",
-            "Observe: t interact/use/talk, Shift+E lock or unlock a nearby door, x scan, X or ; look cursor. Vehicle interact enters or exits overworld.",
+            "Observe: t interact/use/talk, Shift+T force interact in last move direction, Shift+E lock or unlock a nearby door, x scan, X or ; look cursor. Vehicle interact enters or exits overworld.",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
             "Ingress: Shift+J door breach, Shift+W window entry, Shift+K wall breach.",
             'Features: + closed door, \' open door, " window, / breach opening, > higher stairs, < lower stairs, : stair landing, E elevator.',

@@ -188,6 +188,8 @@ class World:
         "frontier": (
             "relay_post",
             "roadhouse",
+            "outfitter",
+            "surplus_store",
             "salvage_camp",
             "pump_house",
             "work_shed",
@@ -198,6 +200,7 @@ class World:
             "field_camp",
             "survey_post",
             "ranger_hut",
+            "outfitter",
             "ruin_shelter",
             "lookout_post",
         ),
@@ -216,6 +219,8 @@ class World:
     NON_CITY_SITE_LABELS = {
         "relay_post": "Relay Post",
         "roadhouse": "Roadhouse",
+        "outfitter": "Outfitter",
+        "surplus_store": "Surplus Store",
         "truck_stop": "Truck Stop",
         "inspection_shed": "Inspection Shed",
         "breaker_yard": "Breaker Yard",
@@ -243,6 +248,8 @@ class World:
     NON_CITY_SITE_GLYPHS = {
         "relay_post": "R",
         "roadhouse": "H",
+        "outfitter": "O",
+        "surplus_store": "S",
         "truck_stop": "T",
         "inspection_shed": "I",
         "breaker_yard": "B",
@@ -270,6 +277,8 @@ class World:
     NON_CITY_SITE_COLORS = {
         "relay_post": "player",
         "roadhouse": "cat_orange",
+        "outfitter": "cat_orange",
+        "surplus_store": "item_tool",
         "truck_stop": "cat_orange",
         "inspection_shed": "guard",
         "breaker_yard": "item_tool",
@@ -297,6 +306,8 @@ class World:
     PUBLIC_NON_CITY_SITE_KINDS = {
         "relay_post",
         "roadhouse",
+        "outfitter",
+        "surplus_store",
         "truck_stop",
         "inspection_shed",
         "dock_shack",
@@ -350,6 +361,8 @@ class World:
         "breaker_yard": ("salvage", "tools"),
         "pump_house": ("water",),
         "work_shed": ("tools",),
+        "outfitter": ("supplies", "tools"),
+        "surplus_store": ("supplies", "tools"),
         "truck_stop": ("supplies",),
         "net_house": ("supplies",),
         "bait_shop": ("supplies",),
@@ -592,11 +605,11 @@ class World:
 
     OPTIONAL_BUILDINGS_BY_DISTRICT = {
         "industrial": ("recycling_plant", "auto_garage", "freight_depot", "cold_storage", "tool_depot"),
-        "residential": ("daycare", "laundromat", "pharmacy", "bookshop", "hardware_store"),
-        "downtown": ("hotel", "courthouse", "jail", "jail", "metro_exchange", "courier_office", "gallery", "casino", "tavern"),
+        "residential": ("daycare", "laundromat", "pharmacy", "bookshop", "hardware_store", "outfitter", "outfitter", "surplus_store"),
+        "downtown": ("hotel", "courthouse", "jail", "jail", "metro_exchange", "courier_office", "gallery", "casino", "tavern", "outfitter"),
         "slums": ("chop_shop", "junk_market", "soup_kitchen", "flophouse", "street_kitchen", "jail"),
         "corporate": ("data_center", "co_working_hub", "biotech_clinic", "brokerage", "media_lab"),
-        "military": ("command_center", "motor_pool", "field_hospital", "recruitment_office", "supply_bunker", "prison"),
+        "military": ("command_center", "motor_pool", "field_hospital", "recruitment_office", "supply_bunker", "prison", "surplus_store"),
         "entertainment": ("theater", "music_venue", "gaming_hall", "karaoke_box", "pool_hall", "casino"),
     }
 
@@ -647,6 +660,8 @@ class World:
         "pharmacy": ("counter", "shelving", "dispensary", "storage"),
         "bookshop": ("front_table", "shelves", "reading_nook", "back_stock"),
         "hardware_store": ("counter", "aisles", "stock_room", "repair_bench"),
+        "outfitter": ("counter", "aisles", "stock_room", "storage"),
+        "surplus_store": ("sales", "stock_room", "secure_storage", "back_office"),
         "hotel": ("lobby", "guest_floor", "laundry", "service_office", "bar"),
         "courthouse": ("public_hall", "courtroom", "records_office", "holding", "judge_chambers"),
         "jail": ("booking", "holding", "cell_block", "visitation", "control_room"),
@@ -751,6 +766,7 @@ class World:
         "office",
         "pawn_shop",
         "pharmacy",
+        "surplus_store",
         "casino",
         "server_hub",
         "soup_kitchen",
@@ -767,6 +783,8 @@ class World:
         "bait_shop",
         "bar",
         "bookshop",
+        "outfitter",
+        "surplus_store",
         "tavern",
         "corner_store",
         "daycare",
@@ -862,6 +880,8 @@ class World:
         "pharmacy": ("pharmacist", "pharmacy_technician", "inventory_pharmacist", "front_counter_clerk", "insurance_biller"),
         "bookshop": ("bookseller", "inventory_clerk", "reading_host", "small_press_buyer"),
         "hardware_store": ("hardware_clerk", "repair_advisor", "stock_runner", "paint_mixer", "key_cutter"),
+        "outfitter": ("outfitter_clerk", "trail_supplier", "sporting_buyer", "stock_runner"),
+        "surplus_store": ("gear_clerk", "surplus_buyer", "stock_armorer", "counter_specialist"),
         "hotel": ("concierge", "housekeeper", "front_desk_agent", "night_auditor", "bellhop"),
         "courthouse": ("court_clerk", "bailiff", "records_archivist", "legal_aide"),
         "jail": ("corrections_officer", "booking_clerk", "transport_deputy", "detention_nurse", "records_sergeant"),
@@ -924,6 +944,8 @@ class World:
         "tool_depot",
         "bookshop",
         "hardware_store",
+        "outfitter",
+        "surplus_store",
         "gallery",
         "flophouse",
         "street_kitchen",
@@ -958,6 +980,8 @@ class World:
         "pharmacy",
         "bookshop",
         "hardware_store",
+        "outfitter",
+        "surplus_store",
         "hotel",
         "metro_exchange",
         "jail",
@@ -1007,6 +1031,8 @@ class World:
         "pharmacy": ("Pharmacy", "Apothecary", "Drugstore"),
         "bookshop": ("Bookshop", "Books", "Reading Room"),
         "hardware_store": ("Hardware", "Fix-It", "Supply"),
+        "outfitter": ("Outfitter", "Trail Supply", "Field Goods"),
+        "surplus_store": ("Surplus", "Supply Cache", "Kit House"),
         "hotel": ("Hotel", "Inn", "Suites"),
         "metro_exchange": ("Transit Exchange", "Terminal", "Station"),
         "jail": ("Jail", "Detention Center", "Holding House"),
@@ -1475,23 +1501,26 @@ class World:
 
         options = list(self.NON_CITY_SITE_POOLS.get(area_type, ()))
         if area_type == "frontier":
+            options.extend(("outfitter", "surplus_store"))
             if path in {"road", "freeway"}:
-                options.extend(("relay_post", "roadhouse", "truck_stop"))
+                options.extend(("relay_post", "roadhouse", "truck_stop", "outfitter", "surplus_store"))
             if path == "freeway" or (path == "road" and district_type in {"industrial", "military"}):
                 options.append("inspection_shed")
             if terrain in {"badlands", "dunes", "ruins"}:
-                options.extend(("salvage_camp", "work_shed", "breaker_yard"))
+                options.extend(("salvage_camp", "work_shed", "breaker_yard", "surplus_store"))
+            if terrain in {"forest", "hills"}:
+                options.append("outfitter")
         elif area_type == "wilderness":
             if terrain in {"ruins"} or landmark_id == "shatter_ruins":
                 options.extend(("ruin_shelter", "survey_post", "weather_station"))
             if terrain in {"forest", "marsh"}:
-                options.extend(("field_camp", "ranger_hut"))
+                options.extend(("field_camp", "ranger_hut", "outfitter"))
             if terrain == "marsh":
                 options.append("herbalist_camp")
             if landmark_id in {"ancient_grove", "glass_marsh"}:
-                options.extend(("field_camp", "ranger_hut", "herbalist_camp", "herbalist_camp"))
+                options.extend(("field_camp", "ranger_hut", "herbalist_camp", "herbalist_camp", "outfitter"))
             if terrain in {"hills"} or landmark_id == "radio_spire":
-                options.extend(("firewatch_tower", "weather_station"))
+                options.extend(("firewatch_tower", "weather_station", "outfitter"))
         elif area_type == "coastal":
             if terrain in {"shore", "shoals", "lake"}:
                 options.extend(("dock_shack", "ferry_post", "net_house", "bait_shop", "drydock_yard"))

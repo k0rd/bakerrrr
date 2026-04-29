@@ -64,7 +64,7 @@ from game.npc_names import (
     human_descriptor,
 )
 from game.organizations import ensure_property_organization, seed_property_organization_defaults, sync_actor_organization_affiliations
-from game.population import human_max_hp_for_role, seed_chunk_items, spawn_chunk_npcs
+from game.population import human_max_hp_for_role, seed_chunk_items, seed_npc_finance, spawn_chunk_npcs
 from game.player_businesses import PlayerBusinessSystem
 from game.vehicles import (
     generate_chunk_vehicle_records,
@@ -86,6 +86,7 @@ from game.systems import (
     BusinessPulseSceneSystem,
     CameraSystem,
     CoverSystem,
+    CriminalJusticeSystem,
     CombatPacingSystem,
     CreatureHazardSystem,
     DoorWaitSystem,
@@ -259,6 +260,7 @@ def _register_runtime_systems(sim, view, player):
     camera_system = CameraSystem(sim, player)
     skill_progression_system = SkillProgressionSystem(sim, player)
     item_system = ItemSystem(sim, player)
+    criminal_justice_system = CriminalJusticeSystem(sim, player)
     service_menu_system = ServiceMenuSystem(sim, player)
     trade_system = TradeSystem(sim, player)
     weapon_system = WeaponSystem(sim, player)
@@ -346,6 +348,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(business_pulse_scene_system)
     sim.register_system(npc_weapon_system)
     sim.register_system(suppression_system)
+    sim.register_system(criminal_justice_system)
     sim.register_system(npc_system)
 
     sim.register_system(opportunity_system)
@@ -1771,6 +1774,52 @@ def _run_new_game(view, character_name):
             career=sibling_b_career,
             jitter=0.22,
         ),
+    )
+
+    def _starter_workplace_prop(workplace):
+        if not isinstance(workplace, dict):
+            return None
+        property_id = str(workplace.get("property_id", "") or "").strip()
+        if not property_id:
+            return None
+        return sim.properties.get(property_id)
+
+    starter_economy_profile = chunk_economy_profile(sim, sim.active_chunk)
+    seed_npc_finance(
+        sim,
+        guard,
+        random.Random(f"{sim.seed}:starter_guard_finance"),
+        role="guard",
+        career=guard_career,
+        workplace_prop=_starter_workplace_prop(guard_workplace),
+        economy_profile=starter_economy_profile,
+    )
+    seed_npc_finance(
+        sim,
+        scout,
+        random.Random(f"{sim.seed}:starter_scout_finance"),
+        role="worker",
+        career=scout_career,
+        workplace_prop=_starter_workplace_prop(scout_workplace),
+        economy_profile=starter_economy_profile,
+    )
+    seed_npc_finance(
+        sim,
+        sibling_a,
+        random.Random(f"{sim.seed}:starter_sibling_a_finance"),
+        role="civilian",
+        career=sibling_a_career,
+        workplace_prop=_starter_workplace_prop(sibling_a_workplace),
+        economy_profile=starter_economy_profile,
+    )
+    seed_npc_finance(
+        sim,
+        sibling_b,
+        random.Random(f"{sim.seed}:starter_sibling_b_finance"),
+        role="civilian",
+        career=sibling_b_career,
+        workplace_prop=_starter_workplace_prop(sibling_b_workplace),
+        economy_profile=starter_economy_profile,
     )
 
     def _spawn_cat(name, coat_variant, pos, speed, target=None):

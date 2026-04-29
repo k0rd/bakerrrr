@@ -18,7 +18,7 @@ from game.components import (
     PropertyKnowledge,
 )
 from game.economy import chunk_economy_profile
-from game.items import ITEM_CATALOG, item_display_name
+from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
 from game.organization_reputation import apply_organization_reputation_delta
 from game.property_runtime import (
     building_id_from_property,
@@ -764,6 +764,36 @@ def _recent_npc_interactions(sim, freshness_ticks=4):
     return frozenset(active)
 
 
+def _recent_site_interactions(sim, freshness_ticks=8):
+    property_ids = set()
+    building_ids = set()
+    if sim is None:
+        return frozenset(), frozenset()
+
+    current_tick = int(getattr(sim, "tick", 0))
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        return frozenset(), frozenset()
+
+    recent_props = traits.get("recent_property_interactions")
+    if isinstance(recent_props, dict):
+        for raw_property_id, raw_tick in list(recent_props.items()):
+            property_id = str(raw_property_id or "").strip()
+            interacted_tick = _safe_int(raw_tick, default=-10_000)
+            if property_id and current_tick - interacted_tick <= int(max(1, freshness_ticks)):
+                property_ids.add(property_id)
+
+    recent_buildings = traits.get("recent_building_interactions")
+    if isinstance(recent_buildings, dict):
+        for raw_building_id, raw_tick in list(recent_buildings.items()):
+            building_id = str(raw_building_id or "").strip()
+            interacted_tick = _safe_int(raw_tick, default=-10_000)
+            if building_id and current_tick - interacted_tick <= int(max(1, freshness_ticks)):
+                building_ids.add(building_id)
+
+    return frozenset(property_ids), frozenset(building_ids)
+
+
 def _player_site_state(sim, player_eid):
     pos = sim.ecs.get(Position).get(player_eid) if sim is not None and player_eid is not None else None
     if not pos:
@@ -810,6 +840,7 @@ def _player_metrics(sim, player_eid):
         int(e) for e in (killed_raw if isinstance(killed_raw, (list, tuple, set)) else ())
         if e is not None
     )
+    recent_property_ids, recent_building_ids = _recent_site_interactions(sim)
     return {
         "wallet_credits": wallet,
         "bank_credits": bank,
@@ -822,6 +853,8 @@ def _player_metrics(sim, player_eid):
         "current_property_id": str(site_state.get("current_property_id", "") or "").strip(),
         "current_building_id": str(site_state.get("current_building_id", "") or "").strip(),
         "recent_npc_eids": _recent_npc_interactions(sim),
+        "recent_property_ids": recent_property_ids,
+        "recent_building_ids": recent_building_ids,
         "inventory_counts": _inventory_counts(inventory),
         "killed_npc_eids": killed_eids,
     }
@@ -887,6 +920,45 @@ def _matches_site_requirement(sim, metrics, *, property_id=None, building_id=Non
     if building_id and _matches_building_target(sim, metrics, building_id):
         return True
     return False
+
+
+def _matches_recent_site_interaction(metrics, *, property_id=None, building_id=None):
+    property_id = str(property_id or "").strip()
+    building_id = str(building_id or "").strip()
+    recent_property_ids = set(metrics.get("recent_property_ids", ()) or ())
+    recent_building_ids = set(metrics.get("recent_building_ids", ()) or ())
+    if property_id and property_id in recent_property_ids:
+        return True
+    if building_id and building_id in recent_building_ids:
+        return True
+    return False
+
+
+def _property_archetype(prop):
+    metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), dict) else {}
+    return str(metadata.get("archetype", "") or "").strip().lower()
+
+
+def _site_task_expected(requirements):
+    requirements = requirements if isinstance(requirements, dict) else {}
+    if _safe_int(requirements.get("kill_target_eid"), default=0) > 0:
+        return False
+    if _safe_int(requirements.get("interact_npc_eid"), default=0) > 0:
+        return False
+    if max(0, _safe_int(requirements.get("contact_count"), default=0)) > 0:
+        return False
+    if max(0, _safe_int(requirements.get("intel_leads"), default=0)) > 0:
+        return False
+    if max(0, _safe_int(requirements.get("reserve_credits"), default=0)) > 0:
+        return False
+    if str(requirements.get("require_item_id", "")).strip().lower():
+        return True
+    if any(
+        str(requirements.get(key, "")).strip()
+        for key in ("property_id", "building_id", "property_name", "site_kind", "site_id")
+    ):
+        return True
+    return _chunk_tuple(requirements.get("visit_chunk")) is not None
 
 
 def _chunk_features(chunk):
@@ -1147,6 +1219,265 @@ def _property_service_flags(prop):
         "finance_services": finance_services,
         "site_services": site_services,
     }
+
+
+def _property_site_tokens(prop):
+    metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), dict) else {}
+    tokens = set()
+    for raw in (
+        metadata.get("site_id"),
+        metadata.get("local_building_id"),
+        metadata.get("building_id"),
+        prop.get("id"),
+    ):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        tokens.add(lowered)
+        tokens.add(lowered.split(":")[-1])
+    return tokens
+
+
+def _properties_in_chunk(sim, chunk):
+    if sim is None or not isinstance(chunk, (tuple, list)) or len(chunk) != 2:
+        return []
+    try:
+        chunk_key = (int(chunk[0]), int(chunk[1]))
+    except (TypeError, ValueError):
+        return []
+    candidates = []
+    for prop in getattr(sim, "properties", {}).values():
+        if not isinstance(prop, dict):
+            continue
+        if str(prop.get("kind", "") or "").strip().lower() != "building":
+            continue
+        try:
+            prop_chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+        except (TypeError, ValueError):
+            continue
+        if prop_chunk == chunk_key:
+            candidates.append(prop)
+    return candidates
+
+
+def _property_matches_chunk_hint(prop, requirements):
+    requirements = requirements if isinstance(requirements, dict) else {}
+    prop_name = _property_label(prop, prop.get("id"))
+    prop_name_norm = prop_name.strip().lower()
+    score = 0.0
+
+    target_property_name = str(requirements.get("property_name", "") or "").strip().lower()
+    if target_property_name:
+        if prop_name_norm == target_property_name:
+            score += 6.0
+        elif target_property_name in prop_name_norm or prop_name_norm in target_property_name:
+            score += 4.0
+
+    target_site_kind = str(requirements.get("site_kind", "") or "").strip().lower()
+    if target_site_kind:
+        archetype = _property_archetype(prop)
+        if archetype == target_site_kind:
+            score += 5.0
+        elif target_site_kind in archetype:
+            score += 2.25
+
+    target_site_id = str(requirements.get("site_id", "") or "").strip().lower()
+    if target_site_id and target_site_id in _property_site_tokens(prop):
+        score += 4.5
+
+    flags = _property_service_flags(prop)
+    if flags.get("public") or flags.get("is_storefront"):
+        score += 0.65
+    if flags.get("finance_services") or flags.get("site_services"):
+        score += 0.35
+    if property_focus_position(prop) is not None:
+        score += 0.25
+    return score
+
+
+def _pick_task_property(sim, chunk, requirements, *, reserved_property_ids=None, rng_key=""):
+    reserved_property_ids = {
+        str(raw_id or "").strip()
+        for raw_id in (reserved_property_ids or ())
+        if str(raw_id or "").strip()
+    }
+    candidates = _properties_in_chunk(sim, chunk)
+    if not candidates:
+        return None
+
+    scored = []
+    for prop in candidates:
+        prop_id = str(prop.get("id", "") or "").strip()
+        if prop_id in reserved_property_ids:
+            continue
+        score = _property_matches_chunk_hint(prop, requirements)
+        scored.append((score, _property_label(prop, prop_id).lower(), prop_id, prop))
+
+    if not scored and reserved_property_ids:
+        for prop in candidates:
+            prop_id = str(prop.get("id", "") or "").strip()
+            score = _property_matches_chunk_hint(prop, requirements)
+            scored.append((score, _property_label(prop, prop_id).lower(), prop_id, prop))
+    if not scored:
+        return None
+
+    scored.sort(key=lambda row: (-float(row[0]), row[1], row[2]))
+    best_score = float(scored[0][0])
+    shortlist = [prop for score, _label, _prop_id, prop in scored if score >= best_score - 0.75][:4]
+    rng = random.Random(f"{getattr(sim, 'seed', 'seed')}:opp-stage:{rng_key}")
+    return rng.choice(shortlist) if shortlist else scored[0][3]
+
+
+def _site_target_for_requirements(sim, requirements, *, property_key, building_key, chunk=None):
+    requirements = requirements if isinstance(requirements, dict) else {}
+    property_id = str(requirements.get(property_key, "") or "").strip()
+    building_id = str(requirements.get(building_key, "") or "").strip()
+    if sim is None or not hasattr(sim, "properties"):
+        return None
+    if property_id:
+        prop = sim.properties.get(property_id)
+        if isinstance(prop, dict):
+            if chunk is None:
+                return prop
+            try:
+                prop_chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+            except (TypeError, ValueError):
+                prop_chunk = None
+            if prop_chunk == chunk:
+                return prop
+    if building_id:
+        for prop in sim.properties.values():
+            if not isinstance(prop, dict):
+                continue
+            if building_id_from_property(prop) != building_id:
+                continue
+            if chunk is None:
+                return prop
+            try:
+                prop_chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+            except (TypeError, ValueError):
+                prop_chunk = None
+            if prop_chunk == chunk:
+                return prop
+    return None
+
+
+def _stage_notice(entry, prop, *, stage_kind):
+    opp_id = int(entry.get("id", 0) or 0)
+    title = str(entry.get("title", "Opportunity")).strip() or "Opportunity"
+    site_name = _property_label(prop, prop.get("id"))
+    if stage_kind == "pickup":
+        return f"O{opp_id} {title}: pickup target staged at {site_name}. Interact there to make the pickup."
+    if stage_kind == "delivery":
+        return f"O{opp_id} {title}: handoff target staged at {site_name}. Interact there to complete the drop."
+    return f"O{opp_id} {title}: work target staged at {site_name}. Interact there to complete the job."
+
+
+def stage_active_opportunities(sim, player_eid):
+    state = _state(sim)
+    active = [entry for entry in state.get("active", ()) if isinstance(entry, dict)]
+    if not active:
+        return []
+
+    current_chunk = _player_chunk(sim, player_eid)
+    if current_chunk is None:
+        return []
+
+    inventory = sim.ecs.get(Inventory).get(player_eid) if sim is not None and player_eid is not None else None
+    inventory_counts = _inventory_counts(inventory)
+    reserved_property_ids = {
+        str(raw_id or "").strip()
+        for entry in active
+        for raw_id in (
+            (entry.get("requirements", {}) if isinstance(entry.get("requirements", {}), dict) else {}).get("property_id"),
+            (entry.get("requirements", {}) if isinstance(entry.get("requirements", {}), dict) else {}).get("pickup_property_id"),
+            (entry.get("requirements", {}) if isinstance(entry.get("requirements", {}), dict) else {}).get("delivery_property_id"),
+        )
+        if str(raw_id or "").strip()
+    }
+    notices = []
+
+    for entry in active:
+        requirements = entry.get("requirements", {}) if isinstance(entry.get("requirements", {}), dict) else {}
+        if not _site_task_expected(requirements):
+            continue
+
+        item_id = str(requirements.get("require_item_id", "")).strip().lower()
+        item_qty = max(1, _safe_int(requirements.get("require_item_qty"), default=1))
+        carried_qty = max(0, _safe_int(inventory_counts.get(item_id), default=0)) if item_id else 0
+
+        pickup_chunk = _chunk_tuple(requirements.get("pickup_chunk"))
+        if bool(requirements.get("provide_item")) and item_id and carried_qty < item_qty and pickup_chunk == current_chunk:
+            existing_pickup = _site_target_for_requirements(
+                sim,
+                requirements,
+                property_key="pickup_property_id",
+                building_key="pickup_building_id",
+                chunk=current_chunk,
+            )
+            if existing_pickup is None:
+                prop = _pick_task_property(
+                    sim,
+                    current_chunk,
+                    requirements,
+                    reserved_property_ids=reserved_property_ids,
+                    rng_key=f"pickup:{int(entry.get('id', 0) or 0)}:{current_chunk[0]}:{current_chunk[1]}",
+                )
+                if prop is not None:
+                    requirements["pickup_property_id"] = str(prop.get("id", "") or "").strip()
+                    requirements["pickup_building_id"] = building_id_from_property(prop)
+                    reserved_property_ids.add(str(prop.get("id", "") or "").strip())
+                    notices.append(_stage_notice(entry, prop, stage_kind="pickup"))
+
+        target_chunk = None
+        stage_kind = ""
+        if item_id:
+            if carried_qty >= item_qty or not bool(requirements.get("provide_item")):
+                target_chunk = _chunk_tuple(requirements.get("delivery_chunk")) or _chunk_tuple(requirements.get("visit_chunk"))
+                stage_kind = "delivery"
+        else:
+            target_chunk = _chunk_tuple(requirements.get("visit_chunk"))
+            stage_kind = "task"
+
+        if target_chunk != current_chunk or not stage_kind:
+            continue
+
+        property_key = "delivery_property_id" if stage_kind == "delivery" else "property_id"
+        building_key = "delivery_building_id" if stage_kind == "delivery" else "building_id"
+        existing_target = _site_target_for_requirements(
+            sim,
+            requirements,
+            property_key=property_key,
+            building_key=building_key,
+            chunk=current_chunk,
+        )
+        if existing_target is not None:
+            if stage_kind == "delivery" and not str(requirements.get("property_id", "")).strip():
+                requirements["property_id"] = str(existing_target.get("id", "") or "").strip()
+                requirements["building_id"] = building_id_from_property(existing_target)
+            continue
+
+        prop = _pick_task_property(
+            sim,
+            current_chunk,
+            requirements,
+            reserved_property_ids=reserved_property_ids,
+            rng_key=f"{stage_kind}:{int(entry.get('id', 0) or 0)}:{current_chunk[0]}:{current_chunk[1]}",
+        )
+        if prop is None:
+            continue
+        prop_id = str(prop.get("id", "") or "").strip()
+        building_id = building_id_from_property(prop)
+        requirements[property_key] = prop_id
+        requirements[building_key] = building_id
+        if stage_kind == "delivery":
+            requirements["property_id"] = prop_id
+            requirements["building_id"] = building_id
+        reserved_property_ids.add(prop_id)
+        notices.append(_stage_notice(entry, prop, stage_kind=stage_kind))
+
+    return notices
 
 
 def _contact_variant_candidate(sim, prop, property_id, entry, objective_id):
@@ -1962,7 +2293,7 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
             "key": f"medical_drop:{origin[0]}:{origin[1]}:{cx}:{cy}:{medical_item_id}",
             "weight": 1.0 + min(0.55, distance * 0.08),
         })
-        dead_drop_item_id = rng.choice(("credstick_chip", "light_ammo_box", "transit_daypass"))
+        dead_drop_item_id = rng.choice(("light_ammo_box", "transit_daypass", "access_badge"))
         dead_drop_item_label = _item_label(dead_drop_item_id)
         candidates.append({
             "kind": "dead_drop_return",
@@ -2857,8 +3188,6 @@ def _completion_detail(sim, opportunity, metrics):
     reasons = []
     if visit_chunk and visit_chunk not in visited and visit_chunk != current_chunk:
         return False, ""
-    if visit_chunk:
-        reasons.append(f"entered target chunk {visit_chunk}")
 
     target_property_id = str(requirements.get("property_id", "")).strip()
     target_building_id = str(requirements.get("building_id", "")).strip()
@@ -2869,8 +3198,6 @@ def _completion_detail(sim, opportunity, metrics):
         building_id=target_building_id,
     ):
         return False, ""
-    if target_property_id or target_building_id:
-        reasons.append("reached target site")
 
     min_contacts = _safe_int(requirements.get("contact_count"), default=0)
     if min_contacts > _safe_int(metrics.get("contact_count"), default=0):
@@ -2925,24 +3252,35 @@ def _completion_detail(sim, opportunity, metrics):
         else:
             delivery_property_id = str(requirements.get("delivery_property_id", "")).strip() or target_property_id
             delivery_building_id = str(requirements.get("delivery_building_id", "")).strip() or target_building_id
-            if delivery_property_id or delivery_building_id:
-                if not _matches_site_requirement(
-                    sim,
-                    metrics,
-                    property_id=delivery_property_id,
-                    building_id=delivery_building_id,
-                ):
-                    return False, ""
-                reasons.append("at delivery site")
+            if not (delivery_property_id or delivery_building_id):
+                return False, ""
+            if not _matches_site_requirement(
+                sim,
+                metrics,
+                property_id=delivery_property_id,
+                building_id=delivery_building_id,
+            ):
+                return False, ""
+            if not _matches_recent_site_interaction(
+                metrics,
+                property_id=delivery_property_id,
+                building_id=delivery_building_id,
+            ):
+                return False, ""
+            reasons.append("completed handoff at delivery site")
 
-        if (
-            delivery_chunk
-            and current_chunk != delivery_chunk
-            and not (target_property_id or target_building_id or _safe_int(requirements.get("interact_npc_eid"), default=0) > 0)
+        if delivery_chunk and current_chunk != delivery_chunk:
+            return False, ""
+    elif target_property_id or target_building_id:
+        if not _matches_recent_site_interaction(
+            metrics,
+            property_id=target_property_id,
+            building_id=target_building_id,
         ):
             return False, ""
-        if delivery_chunk:
-            reasons.append(f"at delivery chunk {delivery_chunk}")
+        reasons.append("completed work at target site")
+    elif _site_task_expected(requirements):
+        return False, ""
 
     kill_target_eid = _safe_int(requirements.get("kill_target_eid"), default=0)
     if kill_target_eid > 0:
@@ -3022,6 +3360,20 @@ def _ensure_provided_item(sim, player_eid, opportunity, metrics):
         property_id=pickup_property_id,
         building_id=pickup_building_id,
     ):
+        return
+    pickup_interact_npc_eid = _safe_int(requirements.get("pickup_interact_npc_eid"), default=0)
+    if pickup_interact_npc_eid > 0:
+        recent_npc_eids = metrics.get("recent_npc_eids", frozenset())
+        if pickup_interact_npc_eid not in recent_npc_eids:
+            return
+    elif pickup_property_id or pickup_building_id:
+        if not _matches_recent_site_interaction(
+            metrics,
+            property_id=pickup_property_id,
+            building_id=pickup_building_id,
+        ):
+            return
+    else:
         return
 
     inventory = sim.ecs.get(Inventory).get(player_eid) if sim is not None else None
@@ -3397,12 +3749,30 @@ def _apply_reward(sim, player_eid, reward, *, opportunity=None):
         raw_items = [raw_items]
     if isinstance(raw_items, (list, tuple)):
         reward_items = [item for item in raw_items if isinstance(item, dict)]
-    if reward_items and inventory:
+    if reward_items:
         granted = []
         for spec in reward_items:
             item_id = str(spec.get("item_id", "")).strip().lower()
             quantity = max(1, _safe_int(spec.get("quantity"), default=1))
             if not item_id or item_id not in ITEM_CATALOG:
+                continue
+            if is_credstick_item(item_id):
+                cash_value = credstick_total_credits(
+                    quantity=quantity,
+                    metadata={"stored_credits": max(0, _safe_int(spec.get("stored_credits"), default=0))} if "stored_credits" in spec else None,
+                )
+                if assets and cash_value > 0:
+                    assets.credits += cash_value
+                    applied["credits"] = int(applied.get("credits", 0)) + int(cash_value)
+                    granted.append({
+                        "item_id": item_id,
+                        "quantity": quantity,
+                        "item_label": _item_label(item_id),
+                        "auto_converted": True,
+                        "credits_gained": int(cash_value),
+                    })
+                continue
+            if not inventory:
                 continue
             added, _instance_id = inventory.add_item(
                 item_id=item_id,
@@ -3474,6 +3844,7 @@ def resolve_opportunities(sim, player_eid):
     if not active:
         return []
 
+    stage_active_opportunities(sim, player_eid)
     metrics = _player_metrics(sim, player_eid)
     completed = []
     remaining = []

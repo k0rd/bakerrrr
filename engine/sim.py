@@ -8,7 +8,8 @@ from .world import World
 from .eventlog import EventLog
 from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
-from game.items import normalize_item_instance_metadata
+from game.components import Position
+from game.items import prepare_item_stack_metadata
 
 class Simulation:
 
@@ -40,7 +41,10 @@ class Simulation:
         self.chunk_property_records = {}
         self.chunk_ground_item_records = {}
         self.chunk_population_records = {}
+        self.chunk_population_membership = {}
         self.chunk_saved_states = {}
+        self.chunk_entity_index = {}
+        self.entity_chunk_membership = {}
         self.property_registry_dirty = False
         self.properties = {}
         self.property_anchor_index = {}
@@ -133,6 +137,176 @@ class Simulation:
             self.equipped_container = None
         if not isinstance(getattr(self, "cache_inventories", None), dict):
             self.cache_inventories = {}
+        if not isinstance(getattr(self, "chunk_population_membership", None), dict):
+            self.chunk_population_membership = {}
+        if not isinstance(getattr(self, "chunk_entity_index", None), dict):
+            self.chunk_entity_index = {}
+        if not isinstance(getattr(self, "entity_chunk_membership", None), dict):
+            self.entity_chunk_membership = {}
+        self._bind_tilemap_runtime_state()
+
+    def _bind_tilemap_runtime_state(self):
+        tilemap = getattr(self, "tilemap", None)
+        if tilemap is None:
+            return
+        tilemap.on_add_entity = self._on_tilemap_add_entity
+        tilemap.on_move_entity = self._on_tilemap_move_entity
+        tilemap.on_remove_entity = self._on_tilemap_remove_entity
+
+    def _normalize_chunk_key(self, chunk):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            return None
+        try:
+            return (int(chunk[0]), int(chunk[1]))
+        except (TypeError, ValueError):
+            return None
+
+    def _track_chunk_entity(self, eid, chunk):
+        key = self._normalize_chunk_key(chunk)
+        try:
+            int_eid = int(eid)
+        except (TypeError, ValueError):
+            return None
+        if key is None:
+            return None
+
+        previous = self._normalize_chunk_key(self.entity_chunk_membership.get(int_eid))
+        if previous is not None and previous != key:
+            bucket = self.chunk_entity_index.get(previous)
+            if bucket:
+                bucket.discard(int_eid)
+                if not bucket:
+                    self.chunk_entity_index.pop(previous, None)
+
+        bucket = self.chunk_entity_index.setdefault(key, set())
+        bucket.add(int_eid)
+        self.entity_chunk_membership[int_eid] = key
+        return key
+
+    def _untrack_chunk_entity(self, eid, *, chunk=None):
+        try:
+            int_eid = int(eid)
+        except (TypeError, ValueError):
+            return None
+
+        key = self._normalize_chunk_key(chunk)
+        if key is None:
+            key = self._normalize_chunk_key(self.entity_chunk_membership.pop(int_eid, None))
+        else:
+            self.entity_chunk_membership.pop(int_eid, None)
+
+        if key is None:
+            return None
+
+        bucket = self.chunk_entity_index.get(key)
+        if bucket:
+            bucket.discard(int_eid)
+            if not bucket:
+                self.chunk_entity_index.pop(key, None)
+        return key
+
+    def _on_tilemap_add_entity(self, eid, x, y, z=0):
+        self._track_chunk_entity(eid, self.chunk_coords(int(x), int(y)))
+
+    def _on_tilemap_move_entity(self, eid, oldx, oldy, newx, newy, oldz=0, newz=0):
+        old_chunk = self.chunk_coords(int(oldx), int(oldy))
+        new_chunk = self.chunk_coords(int(newx), int(newy))
+        if old_chunk != new_chunk:
+            self._untrack_chunk_entity(eid, chunk=old_chunk)
+        self._track_chunk_entity(eid, new_chunk)
+
+    def _on_tilemap_remove_entity(self, eid, x, y, z=0):
+        self._untrack_chunk_entity(eid, chunk=self.chunk_coords(int(x), int(y)))
+
+    def entity_ids_in_chunk(self, chunk):
+        key = self._normalize_chunk_key(chunk)
+        if key is None:
+            return ()
+        return tuple(sorted(self.chunk_entity_index.get(key, ())))
+
+    def rebuild_chunk_entity_index(self):
+        self.chunk_entity_index = {}
+        self.entity_chunk_membership = {}
+        positions = self.ecs.get(Position)
+        for eid, pos in positions.items():
+            try:
+                key = self.chunk_coords(int(pos.x), int(pos.y))
+            except (TypeError, ValueError):
+                continue
+            self._track_chunk_entity(eid, key)
+
+    def track_population_entity(self, eid, *, chunk=None):
+        try:
+            int_eid = int(eid)
+        except (TypeError, ValueError):
+            return None
+
+        if chunk is None:
+            pos = self.ecs.get(Position).get(int_eid)
+            if pos is None:
+                return None
+            try:
+                chunk = self.chunk_coords(int(pos.x), int(pos.y))
+            except (TypeError, ValueError):
+                return None
+        key = self._normalize_chunk_key(chunk)
+        if key is None:
+            return None
+
+        previous = self._normalize_chunk_key(self.chunk_population_membership.get(int_eid))
+        if previous is not None and previous != key:
+            roster = [
+                int(value)
+                for value in tuple(self.chunk_population_records.get(previous, ()) or ())
+                if int(value) != int_eid
+            ]
+            if roster:
+                self.chunk_population_records[previous] = roster
+            else:
+                self.chunk_population_records.pop(previous, None)
+
+        roster = [
+            int(value)
+            for value in tuple(self.chunk_population_records.get(key, ()) or ())
+            if int(value) != int_eid
+        ]
+        roster.append(int_eid)
+        self.chunk_population_records[key] = roster
+        self.chunk_population_membership[int_eid] = key
+        return key
+
+    def untrack_population_entity(self, eid, *, chunk=None):
+        try:
+            int_eid = int(eid)
+        except (TypeError, ValueError):
+            return None
+
+        key = self._normalize_chunk_key(chunk)
+        if key is None:
+            key = self._normalize_chunk_key(self.chunk_population_membership.pop(int_eid, None))
+            if key is None:
+                pos = self.ecs.get(Position).get(int_eid)
+                if pos is not None:
+                    try:
+                        key = self.chunk_coords(int(pos.x), int(pos.y))
+                    except (TypeError, ValueError):
+                        key = None
+        else:
+            self.chunk_population_membership.pop(int_eid, None)
+
+        if key is None:
+            return None
+
+        roster = [
+            int(value)
+            for value in tuple(self.chunk_population_records.get(key, ()) or ())
+            if int(value) != int_eid
+        ]
+        if roster:
+            self.chunk_population_records[key] = roster
+        else:
+            self.chunk_population_records.pop(key, None)
+        return key
 
     def door_state_at(self, x, y, z=0):
         key = self._coord_key(x, y, z)
@@ -483,6 +657,7 @@ class Simulation:
             self.ground_item_order.pop(ground_item_id, None)
 
     def rebuild_spatial_indexes(self):
+        self.rebuild_chunk_entity_index()
         self.property_anchor_index = {}
         self.property_cover_index = {}
         self.property_order = {}
@@ -1786,7 +1961,7 @@ class Simulation:
             "z": z,
             "owner_eid": owner_eid,
             "owner_tag": owner_tag,
-            "metadata": normalize_item_instance_metadata(item_id, metadata=metadata),
+            "metadata": prepare_item_stack_metadata(item_id, metadata=metadata, quantity=quantity),
         }
         self._index_ground_item_record(ground_item_id, self.ground_items[ground_item_id])
         return ground_item_id
@@ -1836,36 +2011,12 @@ class Simulation:
         return self.projectiles.pop(projectile_id, None)
 
     def remove_entity(self, eid):
-        position = None
-        for bucket in self.ecs.components.values():
-            component = bucket.get(eid)
-            if component is not None and all(hasattr(component, attr) for attr in ("x", "y", "z")):
-                position = component
-                break
+        position = self.ecs.get(Position).get(eid)
 
         if position is not None:
             self.tilemap.remove_entity(eid, position.x, position.y, position.z)
 
-        if hasattr(self, "chunk_population_records") and isinstance(getattr(self, "chunk_population_records", None), dict):
-            for key, roster in list(self.chunk_population_records.items()):
-                if not isinstance(roster, list):
-                    roster = list(roster or ())
-                filtered = []
-                changed = False
-                for value in roster:
-                    try:
-                        if int(value) == int(eid):
-                            changed = True
-                            continue
-                    except (TypeError, ValueError):
-                        pass
-                    filtered.append(value)
-                if not changed:
-                    continue
-                if filtered:
-                    self.chunk_population_records[key] = filtered
-                else:
-                    self.chunk_population_records.pop(key, None)
+        self.untrack_population_entity(eid)
 
         removed = False
         for bucket in self.ecs.components.values():

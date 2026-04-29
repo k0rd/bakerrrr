@@ -692,6 +692,15 @@
     "effects": [],
     "weapon_id": "hunting_rifle"
   },
+  "trail_machete": {
+    "name": "Trail Machete",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": ["weapon", "melee", "blade", "legal"],
+    "legal_status": "legal",
+    "effects": [],
+    "weapon_id": "trail_machete"
+  },
   "improvised_launcher": {
     "name": "Improvised Launcher",
     "glyph": ")",
@@ -711,6 +720,18 @@
     "armor": {
       "slot": "body",
       "damage_reduction": 0.12
+    }
+  },
+  "field_vest": {
+    "name": "Field Vest",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": ["armor", "wearable", "legal"],
+    "legal_status": "legal",
+    "effects": [],
+    "armor": {
+      "slot": "body",
+      "damage_reduction": 0.16
     }
   },
   "courier_mesh": {
