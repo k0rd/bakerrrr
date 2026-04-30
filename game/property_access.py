@@ -66,6 +66,12 @@ RESTRICTED_ARCHETYPES = {
     "supply_bunker",
 }
 
+JUSTICE_CUSTODY_ARCHETYPES = {
+    "courthouse",
+    "jail",
+    "prison",
+}
+
 PUBLIC_HOURS_BY_ARCHETYPE = {
     "arcade": (11, 23),
     "auto_garage": (8, 19),
@@ -1535,6 +1541,35 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
     opening_window = property_open_window(sim, prop)
     currently_open = property_is_open(sim, prop, hour=hour)
     inside_bounds = _position_within_property(prop, x=x, y=y, z=z)
+    archetype = str((prop.get("metadata", {}) or {}).get("archetype", "")).strip().lower()
+
+    if inside_bounds and archetype in JUSTICE_CUSTODY_ARCHETYPES:
+        state = getattr(sim, "world_traits", None)
+        state = state.get("criminal_justice") if isinstance(state, dict) else None
+        offenders = state.get("offenders") if isinstance(state, dict) else None
+        try:
+            offender_key = str(int(actor_eid))
+        except (TypeError, ValueError):
+            offender_key = None
+        record = offenders.get(offender_key) if offender_key and isinstance(offenders, dict) else None
+        if isinstance(record, dict) and bool(record.get("in_custody", False)):
+            return PropertyAccessResult(
+                property_id=prop.get("id"),
+                access_level=access_level,
+                inside_bounds=True,
+                public_facing=access_level == "public",
+                current_hour=hour,
+                opening_window=opening_window,
+                currently_open=currently_open,
+                standing=1.0,
+                social_cover=0.0,
+                temporal_legitimacy=1.0,
+                standing_reason="lawful_custody",
+                permitted=True,
+                can_use_services=False,
+                severity_score=0,
+                severity_label="clear",
+            )
 
     standing = 0.0
     standing_reason = "none"

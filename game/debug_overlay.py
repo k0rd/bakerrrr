@@ -345,7 +345,8 @@ def build_debug_overlay(
         _section_header_line("Player / World", color="player"),
         (
             f"District {area_type}/{district_type} | Security {security} | "
-            f"Credits {assets.credits if assets else 0} | Bank {finance.bank_balance if finance else 0}"
+            f"Credits {assets.credits if assets else 0} | Bank {finance.bank_balance if finance else 0} | "
+            f"Debt {(finance.total_debt() if finance and hasattr(finance, 'total_debt') else getattr(finance, 'debt_balance', 0) if finance else 0)}"
         ),
         needs_summary,
     ])

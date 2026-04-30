@@ -1157,6 +1157,8 @@ class FinancialProfile:
     def __init__(
         self,
         bank_balance=0,
+        debt_balance=0,
+        debts=None,
         wallet_buffer=90,
         deposit_step=48,
         withdraw_step=40,
@@ -1164,6 +1166,22 @@ class FinancialProfile:
         interest_interval=120,
     ):
         self.bank_balance = int(max(0, bank_balance))
+        self.debt_balance = int(max(0, debt_balance))
+        self.debts = {}
+        if isinstance(debts, dict):
+            for key, amount in debts.items():
+                debt_key = str(key or "").strip().lower()
+                if not debt_key:
+                    continue
+                try:
+                    debt_amount = int(amount)
+                except (TypeError, ValueError):
+                    debt_amount = 0
+                if debt_amount > 0:
+                    self.debts[debt_key] = debt_amount
+        if self.debt_balance > 0 and "general" not in self.debts:
+            self.debts["general"] = int(self.debt_balance)
+        self.debt_balance = self.total_debt()
         self.wallet_buffer = int(max(0, wallet_buffer))
         self.deposit_step = int(max(1, deposit_step))
         self.withdraw_step = int(max(1, withdraw_step))
@@ -1176,6 +1194,64 @@ class FinancialProfile:
         self.policies = {}
         self.total_claims_paid = 0
         self.claim_count = 0
+
+    def _ensure_debts(self):
+        debts = getattr(self, "debts", None)
+        if isinstance(debts, dict):
+            cleaned = {}
+            for key, amount in debts.items():
+                debt_key = str(key or "").strip().lower()
+                if not debt_key:
+                    continue
+                try:
+                    debt_amount = int(amount)
+                except (TypeError, ValueError):
+                    debt_amount = 0
+                if debt_amount > 0:
+                    cleaned[debt_key] = debt_amount
+            self.debts = cleaned
+        else:
+            self.debts = {}
+        legacy_balance = int(max(0, getattr(self, "debt_balance", 0) or 0))
+        if legacy_balance > 0 and not self.debts:
+            self.debts["general"] = legacy_balance
+        self.debt_balance = int(sum(int(amount) for amount in self.debts.values()))
+        return self.debts
+
+    def total_debt(self):
+        self._ensure_debts()
+        return int(getattr(self, "debt_balance", 0) or 0)
+
+    def debt_amount(self, debt_key="general"):
+        debts = self._ensure_debts()
+        debt_key = str(debt_key or "general").strip().lower() or "general"
+        return int(max(0, debts.get(debt_key, 0) or 0))
+
+    def add_debt(self, debt_key, amount):
+        amount = int(max(0, amount or 0))
+        if amount <= 0:
+            return self.total_debt()
+        debts = self._ensure_debts()
+        debt_key = str(debt_key or "general").strip().lower() or "general"
+        debts[debt_key] = int(max(0, debts.get(debt_key, 0) or 0)) + amount
+        self.debt_balance = int(sum(int(value) for value in debts.values()))
+        return int(self.debt_balance)
+
+    def pay_debt(self, debt_key, amount):
+        amount = int(max(0, amount or 0))
+        if amount <= 0:
+            return 0
+        debts = self._ensure_debts()
+        debt_key = str(debt_key or "general").strip().lower() or "general"
+        current = int(max(0, debts.get(debt_key, 0) or 0))
+        paid = min(current, amount)
+        remaining = max(0, current - paid)
+        if remaining > 0:
+            debts[debt_key] = remaining
+        else:
+            debts.pop(debt_key, None)
+        self.debt_balance = int(sum(int(value) for value in debts.values()))
+        return int(paid)
 
 
 class Inventory:

@@ -143,6 +143,7 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     pressure = pressure_snapshot(sim)
     credits = int(getattr(assets, "credits", 0) or 0)
     bank_balance = int(getattr(finance, "bank_balance", 0) or 0)
+    debt_balance = int(finance.total_debt() if finance and hasattr(finance, "total_debt") else getattr(finance, "debt_balance", 0) or 0)
     owned = len(getattr(assets, "owned_property_ids", ()) or ())
     active_status_count = len(getattr(status_effects, "active", {}) or {})
     zoom_mode = str(getattr(sim, "zoom_mode", "city") or "city").strip().lower() or "city"
@@ -186,7 +187,7 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
 
     summary_lines = [
         "OVERVIEW",
-        f"Credits {credits} | Bank {bank_balance} | Owned props {owned}",
+        f"Credits {credits} | Bank {bank_balance} | Debt {debt_balance} | Owned props {owned}",
         f"HP {hp_text} | Heat {str(pressure.get('tier', 'low'))} {int(pressure.get('attention', 0))} | Status {active_status_count}",
         ]
     if needs is not None:

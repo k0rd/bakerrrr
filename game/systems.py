@@ -119,6 +119,7 @@ from game.items import (
     prepare_item_stack_metadata,
 )
 from game.justice_runtime import (
+    booking_anchor_for as _justice_booking_anchor_for,
     decay_records as _decay_justice_records,
     justice_snapshot as _justice_snapshot,
     mark_in_custody as _mark_justice_in_custody,
@@ -16889,6 +16890,18 @@ class InputSystem(System):
             self._help_state()["open"] = True
             return True
 
+        if dialog_kind == "justice_surrender":
+            if key in (27, ord("q"), ord("Q")):
+                self.sim.emit(Event(
+                    "justice_surrender_choice",
+                    eid=self.player_eid,
+                    npc_eid=state.get("npc_eid"),
+                    choice_id="resist",
+                ))
+                return True
+            if key in (ord("o"), ord("O"), ord("y"), ord("Y"), ord("L"), ord("D"), ord("m"), ord("M")):
+                return True
+
         if key in (27, ord("q"), ord("Q")):
             self._close_dialog_ui()
             return True
@@ -16984,6 +16997,14 @@ class InputSystem(System):
         if key in ENTER_KEYS or key in (ord("e"), ord("E")):
             topic = self._selected_dialog_topic()
             if topic:
+                if dialog_kind == "justice_surrender":
+                    self.sim.emit(Event(
+                        "justice_surrender_choice",
+                        eid=self.player_eid,
+                        npc_eid=state.get("npc_eid"),
+                        choice_id=topic.get("id"),
+                    ))
+                    return True
                 if dialog_kind == "service_menu":
                     self.sim.emit(Event(
                         "service_menu_execute_request",
@@ -38727,6 +38748,8 @@ class CriminalJusticeSystem(System):
 
     DETENTION_QUEUE_WINDOW = 30
     DETENTION_RADIUS = 10
+    JUSTICE_SITE_SEARCH_RADIUS = 24
+    SURRENDER_DIALOG_KIND = "justice_surrender"
     BOOKING_ARCHETYPES = ("jail", "courthouse")
     NPC_CUSTODY_ARCHETYPES_BY_TIER = {
         "questioning": ("jail",),
@@ -38764,6 +38787,8 @@ class CriminalJusticeSystem(System):
         super().__init__(sim)
         self.player_eid = player_eid
         self.pending_detentions = {}
+        self.player_surrender_prompt = None
+        self._streaming_system = None
         self.sim.events.subscribe("property_trespass", self.on_property_trespass)
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
@@ -38771,6 +38796,7 @@ class CriminalJusticeSystem(System):
         self.sim.events.subscribe("property_interact", self.on_property_interact)
         self.sim.events.subscribe("npc_interact", self.on_npc_interact)
         self.sim.events.subscribe("npc_surrendered", self.on_npc_surrendered)
+        self.sim.events.subscribe("justice_surrender_choice", self.on_justice_surrender_choice)
 
     def _emit_change_events(self, change, *, source_event="", reason=""):
         if not isinstance(change, dict):
@@ -39007,6 +39033,185 @@ class CriminalJusticeSystem(System):
             return None
         return snapshot
 
+    def _dialog_ui_state(self):
+        state = getattr(self.sim, "dialog_ui", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.dialog_ui = state
+        state.setdefault("open", False)
+        state.setdefault("kind", "conversation")
+        state.setdefault("npc_eid", None)
+        state.setdefault("property_id", None)
+        state.setdefault("title", "Conversation")
+        state.setdefault("subtitle", "")
+        state.setdefault("transcript", [])
+        state.setdefault("topics", [])
+        state.setdefault("selected_index", 0)
+        state.setdefault("scroll", 0)
+        state.setdefault("hint", "")
+        state.setdefault("new_topic_ids", [])
+        state.setdefault("close_pending", False)
+        state.setdefault("machine_action", None)
+        return state
+
+    def _reset_dialog_ui(self, state=None):
+        state = state if isinstance(state, dict) else self._dialog_ui_state()
+        state.update({
+            "open": False,
+            "kind": "conversation",
+            "npc_eid": None,
+            "property_id": None,
+            "title": "Conversation",
+            "subtitle": "",
+            "transcript": [],
+            "topics": [],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+        })
+        return state
+
+    def _player_surrender_prompt_open(self):
+        state = self._dialog_ui_state()
+        return bool(state.get("open")) and str(state.get("kind", "")).strip().lower() == self.SURRENDER_DIALOG_KIND
+
+    def _player_cash_on_hand(self):
+        return self._inventory_cash_total_from_entries(self._snapshot_inventory_items(self.player_eid))
+
+    def _player_assets(self, *, create=False):
+        assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+        if assets is None and create:
+            assets = PlayerAssets(credits=0)
+            self.sim.ecs.add(self.player_eid, assets)
+        return assets
+
+    def _player_finance_profile(self, *, create=False):
+        profile = self.sim.ecs.get(FinancialProfile).get(self.player_eid)
+        if profile is None and create:
+            profile = FinancialProfile(bank_balance=0)
+            self.sim.ecs.add(self.player_eid, profile)
+        return profile
+
+    def _player_wallet_credits(self):
+        assets = self._player_assets(create=False)
+        return int(max(0, getattr(assets, "credits", 0) or 0)) if assets is not None else 0
+
+    def _player_bank_balance(self):
+        profile = self._player_finance_profile(create=False)
+        return int(max(0, getattr(profile, "bank_balance", 0) or 0)) if profile is not None else 0
+
+    def _player_debt_balance(self):
+        profile = self._player_finance_profile(create=False)
+        if profile is None:
+            return 0
+        total_debt = getattr(profile, "total_debt", None)
+        if callable(total_debt):
+            return int(max(0, total_debt() or 0))
+        return int(max(0, getattr(profile, "debt_balance", 0) or 0))
+
+    def _player_funds_snapshot(self):
+        carried_credits = int(self._player_cash_on_hand())
+        wallet_credits = int(self._player_wallet_credits())
+        bank_balance = int(self._player_bank_balance())
+        debt_balance = int(self._player_debt_balance())
+        return {
+            "carried_credits": carried_credits,
+            "wallet_credits": wallet_credits,
+            "bank_balance": bank_balance,
+            "debt_balance": debt_balance,
+            "immediate_total": int(carried_credits + wallet_credits + bank_balance),
+        }
+
+    def _apply_player_finance_debt(self, amount, *, debt_key="justice_fines"):
+        amount = int(max(0, amount or 0))
+        if amount <= 0:
+            return 0, self._player_debt_balance()
+        profile = self._player_finance_profile(create=True)
+        before = int(self._player_debt_balance())
+        add_debt = getattr(profile, "add_debt", None)
+        if callable(add_debt):
+            add_debt(debt_key, amount)
+            return int(amount), int(self._player_debt_balance())
+        profile.debt_balance = int(max(0, getattr(profile, "debt_balance", 0) or 0)) + int(amount)
+        return int(profile.debt_balance - before), int(profile.debt_balance)
+
+    def _deduct_player_wallet_credits(self, amount):
+        amount = int(max(0, amount or 0))
+        assets = self._player_assets(create=False)
+        before = int(max(0, getattr(assets, "credits", 0) or 0)) if assets is not None else 0
+        if assets is None or amount <= 0 or before <= 0:
+            return 0, before, before
+        paid = min(before, amount)
+        assets.credits = int(max(0, before - paid))
+        return int(paid), before, int(assets.credits)
+
+    def _deduct_player_bank_balance(self, amount):
+        amount = int(max(0, amount or 0))
+        profile = self._player_finance_profile(create=False)
+        before = int(max(0, getattr(profile, "bank_balance", 0) or 0)) if profile is not None else 0
+        if profile is None or amount <= 0 or before <= 0:
+            return 0, before, before
+        paid = min(before, amount)
+        profile.bank_balance = int(max(0, before - paid))
+        return int(paid), before, int(profile.bank_balance)
+
+    def _collect_player_fine(self, amount):
+        amount = int(max(0, amount or 0))
+        inventory_before = int(self._player_cash_on_hand())
+        wallet_credit_before = int(self._player_wallet_credits())
+        bank_before = int(self._player_bank_balance())
+        debt_before = int(self._player_debt_balance())
+        if amount <= 0:
+            return {
+                "fine_due": 0,
+                "fine_paid": 0,
+                "cash_fine_paid": 0,
+                "wallet_fine_paid": 0,
+                "bank_fine_paid": 0,
+                "debt_added": 0,
+                "fine_outstanding": 0,
+                "wallet_credits_before": inventory_before,
+                "wallet_credits_after": inventory_before,
+                "asset_credits_before": wallet_credit_before,
+                "asset_credits_after": wallet_credit_before,
+                "bank_balance_before": bank_before,
+                "bank_balance_after": bank_before,
+                "debt_balance_before": debt_before,
+                "debt_balance_after": debt_before,
+            }
+
+        remaining = int(amount)
+        cash_paid, inventory_after, _snapshot_items = self._deduct_cash_from_live_inventory(self.player_eid, remaining)
+        remaining = max(0, remaining - int(cash_paid))
+        wallet_paid, _wallet_before, wallet_after = self._deduct_player_wallet_credits(remaining)
+        remaining = max(0, remaining - int(wallet_paid))
+        bank_paid, _bank_before, bank_after = self._deduct_player_bank_balance(remaining)
+        remaining = max(0, remaining - int(bank_paid))
+        debt_added = 0
+        debt_after = debt_before
+        if remaining > 0:
+            debt_added, debt_after = self._apply_player_finance_debt(remaining, debt_key="justice_fines")
+        return {
+            "fine_due": int(amount),
+            "fine_paid": int(cash_paid + wallet_paid + bank_paid),
+            "cash_fine_paid": int(cash_paid),
+            "wallet_fine_paid": int(wallet_paid),
+            "bank_fine_paid": int(bank_paid),
+            "debt_added": int(debt_added),
+            "fine_outstanding": int(max(0, amount - (cash_paid + wallet_paid + bank_paid))),
+            "wallet_credits_before": int(inventory_before),
+            "wallet_credits_after": int(inventory_after),
+            "asset_credits_before": int(wallet_credit_before),
+            "asset_credits_after": int(wallet_after),
+            "bank_balance_before": int(bank_before),
+            "bank_balance_after": int(bank_after),
+            "debt_balance_before": int(debt_before),
+            "debt_balance_after": int(debt_after),
+        }
+
     def _inventory_cash_total_from_entries(self, entries):
         total = 0
         for entry in list(entries or ()):
@@ -39122,6 +39327,352 @@ class CriminalJusticeSystem(System):
         }.get(tier, 1.0)
         return int(max(base, min(180, round(base + (score * per_score)))))
 
+    def _player_fine_amount(self, snapshot):
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
+        score = max(0, int(snapshot.get("active_score", 0) or 0))
+        base = {
+            "questioning": 10,
+            "wanted": 30,
+            "arrest_on_sight": 72,
+        }.get(tier, 12)
+        per_score = {
+            "questioning": 0.8,
+            "wanted": 1.4,
+            "arrest_on_sight": 2.1,
+        }.get(tier, 1.0)
+        return int(max(base, min(240, round(base + (score * per_score)))))
+
+    def _player_booking_anchor(self, fallback_pos):
+        if fallback_pos is None:
+            return None
+        anchor = _justice_booking_anchor_for(
+            self.sim,
+            self.player_eid,
+            fallback_x=fallback_pos.x,
+            fallback_y=fallback_pos.y,
+        )
+        if isinstance(anchor, dict):
+            return anchor
+        return {
+            "x": int(fallback_pos.x),
+            "y": int(fallback_pos.y),
+            "chunk": tuple(self.sim.chunk_coords(int(fallback_pos.x), int(fallback_pos.y))),
+            "incident": None,
+            "fallback": True,
+            "jurisdiction_key": "",
+            "jurisdiction_name": "Justice Office",
+            "settlement_name": "",
+            "region_name": "",
+        }
+
+    def _justice_anchor_place_label(self, anchor):
+        anchor = anchor if isinstance(anchor, dict) else {}
+        settlement_name = str(anchor.get("settlement_name", "") or "").strip()
+        region_name = str(anchor.get("region_name", "") or "").strip()
+        jurisdiction_name = str(anchor.get("jurisdiction_name", "") or "").strip()
+        if settlement_name:
+            return settlement_name
+        if region_name:
+            return region_name
+        if jurisdiction_name:
+            return jurisdiction_name
+        return "the local district"
+
+    def _justice_surrender_quote(self, npc_eid, anchor):
+        jurisdiction_name = str((anchor or {}).get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office"
+        place_label = self._justice_anchor_place_label(anchor)
+        incident = (anchor or {}).get("incident") if isinstance((anchor or {}).get("incident"), dict) else {}
+        incident_label = str(incident.get("label", "") or "").strip().lower() or "your record"
+        rng = random.Random(
+            f"{self.sim.seed}:justice-surrender:{int(npc_eid or 0)}:{jurisdiction_name}:{place_label}:{incident_label}"
+        )
+        templates = [
+            f"By order of {jurisdiction_name}, drop it and surrender now.",
+            f"Last warning. {place_label} law has you marked for {incident_label}.",
+            f"Hands clear and on your knees. {jurisdiction_name} is taking you in.",
+            f"Stand down. {place_label} justice wants you alive and compliant.",
+        ]
+        return rng.choice(templates)
+
+    def _resolve_prompt_source_property(self, source_prop=None):
+        if isinstance(source_prop, dict):
+            return source_prop
+        player_pos = self._position_for(self.player_eid)
+        if player_pos is None or not hasattr(self.sim, "property_covering"):
+            return None
+        return self.sim.property_covering(player_pos.x, player_pos.y, player_pos.z)
+
+    def _confiscation_summary_text(self, manifest):
+        manifest = manifest if isinstance(manifest, dict) else {}
+        weapon_units = int(manifest.get("weapon_units", 0) or 0)
+        contraband_units = int(manifest.get("contraband_units", 0) or 0)
+        stolen_units = int(manifest.get("stolen_units", 0) or 0)
+        labels = [str(label).strip() for label in list(manifest.get("labels", ()) or ()) if str(label).strip()]
+        if weapon_units <= 0 and contraband_units <= 0 and stolen_units <= 0:
+            return "Any weapons, contraband, or stolen goods on you will be seized during booking."
+
+        seized_bits = []
+        if weapon_units > 0:
+            seized_bits.append(f"{weapon_units} weapon" + ("s" if weapon_units != 1 else ""))
+        if contraband_units > 0:
+            seized_bits.append(f"{contraband_units} contraband item" + ("s" if contraband_units != 1 else ""))
+        if stolen_units > 0:
+            seized_bits.append(f"{stolen_units} stolen item" + ("s" if stolen_units != 1 else ""))
+        summary = "Booking seizure preview: " + ", ".join(seized_bits) + "."
+        if labels:
+            summary += f" Likely taken: {', '.join(labels[:3])}."
+        return summary
+
+    def _open_player_surrender_prompt(self, npc_eid, *, snapshot=None, source_prop=None):
+        try:
+            npc_eid = int(npc_eid)
+        except (TypeError, ValueError):
+            return False
+        snapshot = snapshot if isinstance(snapshot, dict) else self._player_bookable_snapshot()
+        player_pos = self._position_for(self.player_eid)
+        if snapshot is None or player_pos is None or _actor_in_live_combat(self.sim, self.player_eid):
+            return False
+
+        source_prop = self._resolve_prompt_source_property(source_prop)
+        anchor = self._player_booking_anchor(player_pos)
+        if not isinstance(anchor, dict):
+            return False
+        tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
+        hold_hours = float(self.BOOKING_HOURS_BY_TIER.get(tier, 1.0))
+        fine_due = int(self._player_fine_amount(snapshot))
+        funds = self._player_funds_snapshot()
+        manifest = self._player_confiscation_manifest(remove=False)
+        place_label = self._justice_anchor_place_label(anchor)
+        jurisdiction_name = str(anchor.get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office"
+        booking_line = f"If you surrender, {jurisdiction_name} will book you near {place_label} for about {hold_hours:g}h."
+        if fine_due > 0:
+            if int(funds.get("immediate_total", 0) or 0) > 0:
+                fund_bits = []
+                if int(funds.get("carried_credits", 0) or 0) > 0:
+                    fund_bits.append(f"carried {int(funds.get('carried_credits', 0) or 0)}c")
+                if int(funds.get("wallet_credits", 0) or 0) > 0:
+                    fund_bits.append(f"wallet {int(funds.get('wallet_credits', 0) or 0)}c")
+                if int(funds.get("bank_balance", 0) or 0) > 0:
+                    fund_bits.append(f"bank {int(funds.get('bank_balance', 0) or 0)}c")
+                booking_line += f" Fine estimate: {fine_due}c"
+                if fund_bits:
+                    booking_line += f" ({', '.join(fund_bits)})"
+                booking_line += "."
+            else:
+                booking_line += f" Fine estimate: {fine_due}c. Unpaid balance will be filed as debt."
+
+        state = self._dialog_ui_state()
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": self.SURRENDER_DIALOG_KIND,
+            "npc_eid": npc_eid,
+            "property_id": source_prop.get("id") if isinstance(source_prop, dict) else None,
+            "title": f"Justice Order: {_entity_display_name(self.sim, npc_eid, title_case=True) or 'Officer'}",
+            "subtitle": jurisdiction_name,
+            "transcript": [
+                self._justice_surrender_quote(npc_eid, anchor),
+                booking_line,
+                self._confiscation_summary_text(manifest),
+                "Refusal will provoke immediate force.",
+            ],
+            "topics": [
+                {"id": "surrender", "label": "Surrender now"},
+                {"id": "resist", "label": "Resist arrest"},
+            ],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Surrender accepts booking. Resist triggers violence.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+        })
+        self.player_surrender_prompt = {
+            "npc_eid": npc_eid,
+            "source_prop_id": source_prop.get("id") if isinstance(source_prop, dict) else None,
+            "opened_tick": int(getattr(self.sim, "tick", 0)),
+            "jurisdiction_key": str(anchor.get("jurisdiction_key", "") or "").strip().lower(),
+            "jurisdiction_name": jurisdiction_name,
+            "anchor_x": int(anchor.get("x", player_pos.x) or player_pos.x),
+            "anchor_y": int(anchor.get("y", player_pos.y) or player_pos.y),
+            "fallback": bool(anchor.get("fallback", False)),
+        }
+        return True
+
+    def _close_player_surrender_prompt(self):
+        state = self._dialog_ui_state()
+        if bool(state.get("open")) and str(state.get("kind", "")).strip().lower() == self.SURRENDER_DIALOG_KIND:
+            self.sim.set_time_paused(False, reason="dialog")
+            self._reset_dialog_ui(state)
+        self.player_surrender_prompt = None
+        return state
+
+    def _justice_enforcers_near_player(self, *, primary_eid=None, radius=None):
+        player_pos = self._position_for(self.player_eid)
+        if player_pos is None:
+            return []
+        radius = max(1, int(radius or max(self.DETENTION_RADIUS, 8)))
+        positions = self.sim.ecs.get(Position)
+        candidates = []
+        for eid, pos in positions.items():
+            if eid == self.player_eid or pos.z != player_pos.z:
+                continue
+            dist = _manhattan(pos.x, pos.y, player_pos.x, player_pos.y)
+            if dist <= 0 or dist > radius:
+                continue
+            enforcer, law_drive, priority = self._actor_is_enforcer(eid)
+            if not enforcer:
+                continue
+            if int(eid) != int(primary_eid or -1):
+                if not _shared_observer_can_see_position(
+                    self.sim,
+                    observer_eid=eid,
+                    observer_x=pos.x,
+                    observer_y=pos.y,
+                    observer_z=pos.z,
+                    target_x=player_pos.x,
+                    target_y=player_pos.y,
+                    target_z=player_pos.z,
+                    radius=max(4, radius + 2),
+                ):
+                    continue
+            candidates.append((0 if int(eid) == int(primary_eid or -1) else 1, dist, -priority, -law_drive, int(eid)))
+        candidates.sort()
+        return [eid for _primary, _dist, _priority, _law_drive, eid in candidates]
+
+    def _escalate_player_surrender_refusal(self, *, by_eid=None, source_prop=None, snapshot=None):
+        snapshot = snapshot if isinstance(snapshot, dict) else self._player_bookable_snapshot()
+        player_pos = self._position_for(self.player_eid)
+        if snapshot is None or player_pos is None:
+            return False
+        source_prop = self._resolve_prompt_source_property(source_prop)
+        severity = max(24, int(snapshot.get("active_score", 0) or 0) + 12)
+        self._record_incident(
+            self.player_eid,
+            incident_type="resisting_custody",
+            severity=severity,
+            source_event="justice_surrender_choice",
+            property_id=(source_prop or {}).get("id") if isinstance(source_prop, dict) else None,
+            x=player_pos.x,
+            y=player_pos.y,
+            witnessed=True,
+            note="player_refused_surrender",
+        )
+
+        target = (player_pos.x, player_pos.y, player_pos.z)
+        enforcers = self._justice_enforcers_near_player(primary_eid=by_eid, radius=max(self.DETENTION_RADIUS + 2, 10))
+        primary = int(by_eid) if by_eid is not None else (enforcers[0] if enforcers else None)
+        for enforcer_eid in enforcers:
+            ai = self.sim.ecs.get(AI).get(enforcer_eid)
+            will = self.sim.ecs.get(NPCWill).get(enforcer_eid)
+            if ai is not None and will is not None:
+                _sync_ai_intent(
+                    ai,
+                    will,
+                    self.sim.tick,
+                    "protecting",
+                    score=92.0,
+                    target=target,
+                    target_eid=self.player_eid,
+                )
+                continue
+            if ai is not None:
+                ai.state = "protecting"
+                ai.target = target
+                ai.target_eid = self.player_eid
+            if will is not None:
+                will.intent = "protecting"
+                will.score = 92.0
+                will.target = target
+                will.target_eid = self.player_eid
+                will.last_tick = self.sim.tick
+
+        if primary is not None:
+            self.sim.emit(Event(
+                "npc_defend_property",
+                npc_eid=primary,
+                offender_eid=self.player_eid,
+                property_id=(source_prop or {}).get("id") if isinstance(source_prop, dict) else None,
+                owner_eid=(source_prop or {}).get("owner_eid") if isinstance(source_prop, dict) else None,
+                defender_reason="law",
+                threat_type="justice_resistance",
+                severity_label="resisting_custody",
+                ingress_kind="custody_refusal",
+                aperture_kind="",
+                ingress_method="custody_refusal",
+            ))
+        return bool(enforcers)
+
+    def _world_streaming_system(self):
+        current = getattr(self, "_streaming_system", None)
+        if current is not None and hasattr(current, "_ensure_chunk_properties"):
+            return current
+        for system in getattr(self.sim, "systems", ()):
+            if hasattr(system, "_ensure_chunk_properties") and hasattr(system, "_ensure_chunk_population"):
+                self._streaming_system = system
+                return system
+        self._streaming_system = WorldStreamingSystem(self.sim, self.player_eid)
+        return self._streaming_system
+
+    def _props_in_chunk(self, chunk):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            return []
+        key = (int(chunk[0]), int(chunk[1]))
+        props = []
+        seen = set()
+        for record in tuple(getattr(self.sim, "chunk_property_records", {}).get(key, ()) or ()):
+            prop_id = str((record or {}).get("id", "") or "").strip()
+            if not prop_id:
+                continue
+            prop = self.sim.properties.get(prop_id)
+            if not isinstance(prop, dict):
+                continue
+            seen.add(prop_id)
+            props.append(prop)
+        for prop_id, prop in tuple(getattr(self.sim, "properties", {}).items()):
+            if prop_id in seen or not isinstance(prop, dict):
+                continue
+            if _property_chunk_key(self.sim, prop) == key:
+                props.append(prop)
+        return props
+
+    def _chunk_contains_archetype(self, chunk, allowed_archetypes):
+        if not isinstance(chunk, dict):
+            return False
+        allowed = {
+            str(archetype or "").strip().lower()
+            for archetype in tuple(allowed_archetypes or ())
+            if str(archetype or "").strip()
+        }
+        if not allowed:
+            return False
+        for block in tuple(chunk.get("blocks", ()) or ()):
+            if not isinstance(block, dict):
+                continue
+            for building in tuple(block.get("buildings", ()) or ()):
+                if not isinstance(building, dict):
+                    continue
+                archetype = str(building.get("archetype", "") or "").strip().lower()
+                if archetype in allowed:
+                    return True
+        for site in tuple(chunk.get("sites", ()) or ()):
+            if not isinstance(site, dict):
+                continue
+            kind = str(site.get("kind", "") or "").strip().lower()
+            if kind in allowed:
+                return True
+        return False
+
+    def _ensure_search_chunk_ready(self, chunk):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            return []
+        key = (int(chunk[0]), int(chunk[1]))
+        self.sim.ensure_chunk_terrain(key[0], key[1])
+        streamer = self._world_streaming_system()
+        streamer._ensure_chunk_properties(key[0], key[1])
+        return self._props_in_chunk(key)
+
     def _find_justice_property(self, *, allowed_archetypes=(), source_prop=None, origin_x=None, origin_y=None):
         allowed = tuple(
             str(archetype or "").strip().lower()
@@ -39144,25 +39695,48 @@ class CriminalJusticeSystem(System):
             base_y = int(getattr(pos, "y", 0))
         base_chunk = self.sim.chunk_coords(base_x, base_y)
         archetype_rank = {label: index for index, label in enumerate(allowed)}
-        candidates = []
-        for prop in self.sim.properties.values():
+        def _rank_candidate(prop):
             archetype = _property_archetype(prop)
             if archetype not in allowed_set:
-                continue
+                return None
             anchor = _property_focus_position(prop)
             if not anchor:
                 anchor = (int(prop.get("x", 0)), int(prop.get("y", 0)), int(prop.get("z", 0)))
             chunk = self.sim.chunk_coords(int(anchor[0]), int(anchor[1]))
             same_chunk = 0 if tuple(chunk) == tuple(base_chunk) else 1
             dist = _manhattan(base_x, base_y, int(anchor[0]), int(anchor[1]))
-            candidates.append((
+            return (
                 same_chunk,
                 int(archetype_rank.get(archetype, len(archetype_rank))),
                 dist,
                 str(prop.get("id", "")),
                 prop,
-            ))
+            )
+
+        candidates = []
+        for prop in self.sim.properties.values():
+            ranked = _rank_candidate(prop)
+            if ranked is not None:
+                candidates.append(ranked)
         if not candidates:
+            max_radius = max(0, int(self.JUSTICE_SITE_SEARCH_RADIUS))
+            for chunk_dist in range(0, max_radius + 1):
+                ring_candidates = []
+                for cx in range(int(base_chunk[0]) - chunk_dist, int(base_chunk[0]) + chunk_dist + 1):
+                    for cy in range(int(base_chunk[1]) - chunk_dist, int(base_chunk[1]) + chunk_dist + 1):
+                        if abs(cx - int(base_chunk[0])) + abs(cy - int(base_chunk[1])) != chunk_dist:
+                            continue
+                        key = (int(cx), int(cy))
+                        chunk = self.sim.world.get_chunk(key[0], key[1])
+                        if not self._chunk_contains_archetype(chunk, allowed_set):
+                            continue
+                        for prop in self._ensure_search_chunk_ready(key):
+                            ranked = _rank_candidate(prop)
+                            if ranked is not None:
+                                ring_candidates.append(ranked)
+                if ring_candidates:
+                    ring_candidates.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+                    return ring_candidates[0][4]
             return source_prop if isinstance(source_prop, dict) else None
         candidates.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
         return candidates[0][4]
@@ -39651,64 +40225,94 @@ class CriminalJusticeSystem(System):
                 reason=reason,
             ))
 
-    def _confiscate_player_inventory(self):
+    def _player_confiscation_manifest(self, *, remove=False):
         inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
         if not inventory:
             return {
                 "confiscated_units": 0,
                 "illegal_units": 0,
+                "restricted_units": 0,
+                "contraband_units": 0,
                 "stolen_units": 0,
+                "weapon_units": 0,
                 "labels": (),
             }
 
         confiscated_units = 0
         illegal_units = 0
+        restricted_units = 0
+        contraband_units = 0
         stolen_units = 0
+        weapon_units = 0
         labels = []
         for entry in list(getattr(inventory, "items", ()) or ()):
             item_id = str(entry.get("item_id", "") or "").strip().lower()
             item_def = ITEM_CATALOG.get(item_id, {})
             metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-            illegal = str(item_def.get("legal_status", "legal")).strip().lower() == "illegal"
+            legal_status = str(item_def.get("legal_status", "legal")).strip().lower() or "legal"
+            tags = _item_tags(item_def)
+            weapon = bool(_item_weapon_id(item_def)) or "weapon" in tags
+            illegal = legal_status == "illegal"
+            restricted = legal_status == "restricted"
+            contraband = illegal or restricted
             stolen = bool(metadata.get("justice_stolen"))
-            if not illegal and not stolen:
+            if not (weapon or contraband or stolen):
                 continue
 
             quantity = max(1, int(entry.get("quantity", 1) or 1))
-            removed = inventory.remove_item(instance_id=entry.get("instance_id"), quantity=quantity)
-            if not removed:
-                continue
-
+            removed = entry
+            if remove:
+                removed = inventory.remove_item(instance_id=entry.get("instance_id"), quantity=quantity)
+                if not removed:
+                    continue
             removed_qty = max(1, int(removed.get("quantity", quantity) or quantity))
             confiscated_units += removed_qty
             if illegal:
                 illegal_units += removed_qty
+            if restricted:
+                restricted_units += removed_qty
+            if contraband:
+                contraband_units += removed_qty
             if stolen:
                 stolen_units += removed_qty
+            if weapon:
+                weapon_units += removed_qty
             labels.append(item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG))
-            self._emit_removed_gear_events(self.player_eid, removed, reason="confiscated")
+            if remove:
+                self._emit_removed_gear_events(self.player_eid, removed, reason="confiscated")
 
         deduped_labels = tuple(dict.fromkeys(label for label in labels if str(label).strip()))
         return {
             "confiscated_units": confiscated_units,
             "illegal_units": illegal_units,
+            "restricted_units": restricted_units,
+            "contraband_units": contraband_units,
             "stolen_units": stolen_units,
+            "weapon_units": weapon_units,
             "labels": deduped_labels[:4],
         }
+
+    def _confiscate_player_inventory(self):
+        return self._player_confiscation_manifest(remove=True)
 
     def _book_player(self, *, by_eid=None, source_prop=None):
         snapshot = self._player_bookable_snapshot()
         player_pos = self._position_for(self.player_eid)
         if snapshot is None or player_pos is None:
             return False
+        if self._player_surrender_prompt_open():
+            self._close_player_surrender_prompt()
 
         starting_tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
+        anchor = self._player_booking_anchor(player_pos)
+        anchor_x = int((anchor or {}).get("x", player_pos.x) or player_pos.x)
+        anchor_y = int((anchor or {}).get("y", player_pos.y) or player_pos.y)
         custody_change = _mark_justice_in_custody(
             self.sim,
             self.player_eid,
             held_by_eid=by_eid,
-            x=player_pos.x,
-            y=player_pos.y,
+            x=anchor_x,
+            y=anchor_y,
         )
         self._emit_change_events(custody_change, source_event="actor_detained", reason="custody")
         self.sim.emit(Event(
@@ -39726,9 +40330,15 @@ class CriminalJusticeSystem(System):
 
         booking_prop = self._find_booking_property(
             source_prop=source_prop,
-            origin_x=player_pos.x,
-            origin_y=player_pos.y,
+            origin_x=anchor_x,
+            origin_y=anchor_y,
         )
+        if booking_prop is None and not bool((anchor or {}).get("fallback", False)):
+            booking_prop = self._find_booking_property(
+                source_prop=source_prop,
+                origin_x=player_pos.x,
+                origin_y=player_pos.y,
+            )
         booking_x, booking_y, booking_z = self._booking_anchor(booking_prop, fallback_pos=player_pos)
         self._teleport_entity(
             self.player_eid,
@@ -39740,6 +40350,8 @@ class CriminalJusticeSystem(System):
         )
 
         confiscation = self._confiscate_player_inventory()
+        fine_due = int(self._player_fine_amount(snapshot))
+        fine_result = self._collect_player_fine(fine_due)
         hold_ticks = self._advance_time_for_booking(
             self._hours_to_ticks(self.BOOKING_HOURS_BY_TIER.get(starting_tier, 1.0)),
             property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
@@ -39766,10 +40378,33 @@ class CriminalJusticeSystem(System):
             after_tier=str((release_change or {}).get("after_tier", "clear")).strip().lower() or "clear",
             before_score=int(snapshot.get("active_score", 0) or 0),
             after_score=int((release_change or {}).get("after_score", 0) or 0),
+            fine_due=int(fine_due),
+            fine_paid=int(fine_result.get("fine_paid", 0) or 0),
+            cash_fine_paid=int(fine_result.get("cash_fine_paid", 0) or 0),
+            wallet_fine_paid=int(fine_result.get("wallet_fine_paid", 0) or 0),
+            bank_fine_paid=int(fine_result.get("bank_fine_paid", 0) or 0),
+            debt_added=int(fine_result.get("debt_added", 0) or 0),
+            fine_outstanding=int(fine_result.get("fine_outstanding", 0) or 0),
+            wallet_credits_before=int(fine_result.get("wallet_credits_before", 0) or 0),
+            wallet_credits_after=int(fine_result.get("wallet_credits_after", 0) or 0),
+            asset_credits_before=int(fine_result.get("asset_credits_before", 0) or 0),
+            asset_credits_after=int(fine_result.get("asset_credits_after", 0) or 0),
+            bank_balance_before=int(fine_result.get("bank_balance_before", 0) or 0),
+            bank_balance_after=int(fine_result.get("bank_balance_after", 0) or 0),
+            debt_balance_before=int(fine_result.get("debt_balance_before", 0) or 0),
+            debt_balance_after=int(fine_result.get("debt_balance_after", 0) or 0),
             confiscated_item_count=int(confiscation.get("confiscated_units", 0) or 0),
             illegal_item_count=int(confiscation.get("illegal_units", 0) or 0),
+            restricted_item_count=int(confiscation.get("restricted_units", 0) or 0),
+            contraband_item_count=int(confiscation.get("contraband_units", 0) or 0),
             stolen_item_count=int(confiscation.get("stolen_units", 0) or 0),
+            weapon_item_count=int(confiscation.get("weapon_units", 0) or 0),
             confiscated_labels=tuple(confiscation.get("labels", ()) or ()),
+            booking_anchor_x=int(anchor_x),
+            booking_anchor_y=int(anchor_y),
+            booking_anchor_fallback=bool((anchor or {}).get("fallback", False)),
+            booking_anchor_jurisdiction_key=str((anchor or {}).get("jurisdiction_key", "") or "").strip().lower(),
+            booking_anchor_jurisdiction_name=str((anchor or {}).get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office",
             x=booking_x,
             y=booking_y,
             z=booking_z,
@@ -39924,7 +40559,8 @@ class CriminalJusticeSystem(System):
             return
         if bool(event.data.get("handled")):
             return
-        if self._player_bookable_snapshot() is None:
+        snapshot = self._player_bookable_snapshot()
+        if snapshot is None or _actor_in_live_combat(self.sim, self.player_eid):
             return
         npc_eid = event.data.get("npc_eid")
         if npc_eid is None:
@@ -39932,8 +40568,30 @@ class CriminalJusticeSystem(System):
         enforcer, _law_drive, _priority = self._actor_is_enforcer(npc_eid)
         if not enforcer:
             return
-        if self._book_player(by_eid=npc_eid):
+        npc_ai = self.sim.ecs.get(AI).get(npc_eid)
+        npc_will = self.sim.ecs.get(NPCWill).get(npc_eid)
+        if npc_ai is not None and str(npc_ai.state or "").strip().lower() in THREAT_STATES and npc_ai.target_eid == self.player_eid:
+            return
+        if npc_will is not None and str(npc_will.intent or "").strip().lower() in THREAT_STATES and npc_will.target_eid == self.player_eid:
+            return
+        if self._open_player_surrender_prompt(npc_eid, snapshot=snapshot):
             event.data["handled"] = True
+
+    def on_justice_surrender_choice(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if not self._player_surrender_prompt_open():
+            return
+        prompt = self.player_surrender_prompt if isinstance(self.player_surrender_prompt, dict) else {}
+        by_eid = prompt.get("npc_eid", event.data.get("npc_eid"))
+        source_prop = self.sim.properties.get(prompt.get("source_prop_id")) if prompt.get("source_prop_id") else None
+        snapshot = self._player_bookable_snapshot()
+        choice_id = str(event.data.get("choice_id", "") or "").strip().lower() or "resist"
+        self._close_player_surrender_prompt()
+        if choice_id == "surrender":
+            self._book_player(by_eid=by_eid, source_prop=source_prop)
+            return
+        self._escalate_player_surrender_refusal(by_eid=by_eid, source_prop=source_prop, snapshot=snapshot)
 
     def on_npc_surrendered(self, event):
         offender_eid = event.data.get("eid")
@@ -40004,10 +40662,14 @@ class CriminalJusticeSystem(System):
         snapshot = self._player_bookable_snapshot()
         if snapshot is None:
             return False
+        if self._player_surrender_prompt_open():
+            return False
+        if _actor_in_live_combat(self.sim, self.player_eid):
+            return False
         held_by_eid = self._find_auto_arrest_enforcer(snapshot)
         if held_by_eid is None:
             return False
-        return bool(self._book_player(by_eid=held_by_eid))
+        return bool(self._open_player_surrender_prompt(held_by_eid, snapshot=snapshot))
 
     def _process_resolved_npc_custody(self):
         tick = int(getattr(self.sim, "tick", 0))
@@ -40059,6 +40721,8 @@ class CriminalJusticeSystem(System):
             ))
 
     def update(self):
+        if self._player_surrender_prompt_open() and self._player_bookable_snapshot() is None:
+            self._close_player_surrender_prompt()
         for change in _decay_justice_records(self.sim):
             self._emit_change_events(change, source_event="justice_decay", reason=str(change.get("reason", "cooldown")))
         self._process_guard_initiated_player_arrest()
@@ -52330,9 +52994,18 @@ class EventLogSystem(System):
         hold_hours = float(event.data.get("hold_hours", 0.0) or 0.0)
         after_tier = str(event.data.get("after_tier", "clear")).strip().lower() or "clear"
         after_score = int(event.data.get("after_score", 0) or 0)
+        fine_due = int(event.data.get("fine_due", 0) or 0)
+        fine_paid = int(event.data.get("fine_paid", 0) or 0)
+        cash_fine_paid = int(event.data.get("cash_fine_paid", 0) or 0)
+        wallet_fine_paid = int(event.data.get("wallet_fine_paid", 0) or 0)
+        bank_fine_paid = int(event.data.get("bank_fine_paid", 0) or 0)
+        debt_added = int(event.data.get("debt_added", 0) or 0)
         confiscated_count = int(event.data.get("confiscated_item_count", 0) or 0)
         illegal_count = int(event.data.get("illegal_item_count", 0) or 0)
+        restricted_count = int(event.data.get("restricted_item_count", 0) or 0)
+        contraband_count = int(event.data.get("contraband_item_count", 0) or 0)
         stolen_count = int(event.data.get("stolen_item_count", 0) or 0)
+        weapon_count = int(event.data.get("weapon_item_count", 0) or 0)
         labels = [str(label).strip() for label in list(event.data.get("confiscated_labels", ()) or ()) if str(label).strip()]
         status_text = {
             "questioning": "wanted for questioning",
@@ -52343,11 +53016,38 @@ class EventLogSystem(System):
         summary = f"Booking: processed at {property_name}."
         if hold_hours > 0:
             summary += f" Held about {hold_hours:g}h."
+        if fine_due > 0:
+            if fine_paid > 0:
+                summary += f" Fine {fine_paid}c paid"
+                payment_bits = []
+                if cash_fine_paid > 0:
+                    payment_bits.append(f"{cash_fine_paid}c carried")
+                if wallet_fine_paid > 0:
+                    payment_bits.append(f"{wallet_fine_paid}c wallet")
+                if bank_fine_paid > 0:
+                    payment_bits.append(f"{bank_fine_paid}c bank")
+                if payment_bits:
+                    summary += f" ({', '.join(payment_bits)})"
+                if debt_added > 0:
+                    summary += f"; debt {debt_added}c filed"
+                elif fine_paid < fine_due:
+                    summary += f" on {fine_due}c due"
+                summary += "."
+            elif debt_added > 0:
+                summary += f" Fine converted to {debt_added}c debt."
+            else:
+                summary += f" Fine assessed: {fine_due}c."
         summary += f" Released {status_text} ({after_score})."
         if confiscated_count > 0:
             seized_bits = []
+            if weapon_count > 0:
+                seized_bits.append(f"weapons {weapon_count}")
+            if contraband_count > 0:
+                seized_bits.append(f"contraband {contraband_count}")
             if illegal_count > 0:
                 seized_bits.append(f"illegal {illegal_count}")
+            if restricted_count > 0:
+                seized_bits.append(f"restricted {restricted_count}")
             if stolen_count > 0:
                 seized_bits.append(f"stolen {stolen_count}")
             seized_text = ", ".join(seized_bits) if seized_bits else f"{confiscated_count}"
@@ -54618,6 +55318,8 @@ class RenderSystem(System):
             footer = " | ".join(footer_bits) if footer_bits else ""
             if close_pending:
                 action_tail = "Space close | Esc close | O ops | Y locations | L log | D debug | ? help"
+            elif dialog_kind == "justice_surrender":
+                action_tail = "E choose | Esc resist | ? help"
             elif dialog_kind == "service_menu":
                 has_machine_action = isinstance(dialog_ui.get("machine_action"), dict) and bool(dialog_ui.get("machine_action"))
                 action_tail = "E select | Esc close | M machine | O ops | Y locations | ? help" if has_machine_action else "E select | Esc close | O ops | Y locations | ? help"
@@ -54627,6 +55329,8 @@ class RenderSystem(System):
                 footer = f"{footer} | {action_tail}"
             else:
                 if close_pending:
+                    footer = action_tail
+                elif dialog_kind == "justice_surrender":
                     footer = action_tail
                 elif dialog_kind == "service_menu":
                     footer = f"{action_tail} | L log | D debug"

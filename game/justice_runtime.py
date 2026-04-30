@@ -17,6 +17,7 @@ INCIDENT_REPEAT_COOLDOWNS = {
     "tamper": 16,
     "theft": 16,
     "contraband": 14,
+    "resisting_custody": 14,
     "armed_assault": 18,
     "explosive_discharge": 22,
 }
@@ -26,6 +27,7 @@ INCIDENT_LABELS = {
     "tamper": "tampering",
     "theft": "theft",
     "contraband": "contraband use",
+    "resisting_custody": "resisting custody",
     "armed_assault": "armed assault",
     "explosive_discharge": "explosive discharge",
 }
@@ -227,6 +229,8 @@ def _incident_weight(incident_type, *, severity=0, witnessed=False):
         return min(18, 9 + (severity // 16) + witnessed_bonus)
     if incident_type == "contraband":
         return min(16, 7 + (severity // 14) + witnessed_bonus)
+    if incident_type == "resisting_custody":
+        return min(22, 10 + (severity // 12) + witnessed_bonus)
     if incident_type == "armed_assault":
         return min(26, 16 + (severity // 10) + witnessed_bonus)
     if incident_type == "explosive_discharge":
@@ -311,6 +315,23 @@ def record_incident(
         "region_name": _text(jurisdiction.get("region_name")),
         "note": _text(note),
     }
+    try:
+        incident_x = int(x)
+    except (TypeError, ValueError):
+        incident_x = None
+    try:
+        incident_y = int(y)
+    except (TypeError, ValueError):
+        incident_y = None
+    incident["x"] = incident_x
+    incident["y"] = incident_y
+    if incident_x is not None and incident_y is not None:
+        try:
+            incident["chunk"] = tuple(sim.chunk_coords(int(incident_x), int(incident_y)))
+        except Exception:
+            incident["chunk"] = None
+    else:
+        incident["chunk"] = None
     record["incidents"].append(incident)
     if len(record["incidents"]) > MAX_INCIDENT_HISTORY:
         del record["incidents"][:-MAX_INCIDENT_HISTORY]
@@ -429,6 +450,72 @@ def release_from_custody(sim, offender_eid, *, new_score=None, x=None, y=None):
         "tier_changed": before_tier != after_tier,
         "jurisdiction_key": _text(jurisdiction["key"]).lower(),
         "jurisdiction_name": _text(jurisdiction["name"]),
+    }
+
+
+def booking_anchor_for(sim, offender_eid, *, fallback_x=None, fallback_y=None):
+    state = _state(sim)
+    record = _offender_record(state, offender_eid, create=False)
+    best_incident = None
+    best_rank = None
+    if isinstance(record, dict):
+        for incident in tuple(record.get("incidents", ()) or ()):
+            if not isinstance(incident, dict):
+                continue
+            try:
+                incident_x = int(incident.get("x"))
+                incident_y = int(incident.get("y"))
+            except (TypeError, ValueError):
+                continue
+            rank = (
+                max(0, _safe_int(incident.get("weight"), default=0)),
+                max(0, _safe_int(incident.get("severity"), default=0)),
+                _safe_int(incident.get("tick"), default=-10_000),
+            )
+            if best_rank is None or rank > best_rank:
+                best_incident = dict(incident)
+                best_incident["x"] = int(incident_x)
+                best_incident["y"] = int(incident_y)
+                best_rank = rank
+
+    if isinstance(best_incident, dict):
+        x = int(best_incident.get("x", 0))
+        y = int(best_incident.get("y", 0))
+        chunk = best_incident.get("chunk")
+        if not (isinstance(chunk, (tuple, list)) and len(chunk) >= 2):
+            try:
+                chunk = tuple(sim.chunk_coords(x, y))
+            except Exception:
+                chunk = None
+        return {
+            "x": x,
+            "y": y,
+            "chunk": tuple(chunk) if isinstance(chunk, (tuple, list)) and len(chunk) >= 2 else None,
+            "incident": best_incident,
+            "fallback": False,
+            "jurisdiction_key": _text(best_incident.get("jurisdiction_key")).lower(),
+            "jurisdiction_name": _text(best_incident.get("jurisdiction_name")),
+            "settlement_name": _text(best_incident.get("settlement_name")),
+            "region_name": _text(best_incident.get("region_name")),
+        }
+
+    try:
+        x = int(fallback_x)
+        y = int(fallback_y)
+    except (TypeError, ValueError):
+        return None
+
+    jurisdiction = jurisdiction_for_position(sim, x=x, y=y)
+    return {
+        "x": x,
+        "y": y,
+        "chunk": tuple(jurisdiction.get("chunk", ())) if isinstance(jurisdiction.get("chunk"), (tuple, list)) else None,
+        "incident": None,
+        "fallback": True,
+        "jurisdiction_key": _text(jurisdiction.get("key")).lower(),
+        "jurisdiction_name": _text(jurisdiction.get("name")),
+        "settlement_name": _text(jurisdiction.get("settlement_name")),
+        "region_name": _text(jurisdiction.get("region_name")),
     }
 
 
