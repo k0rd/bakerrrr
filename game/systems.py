@@ -19649,6 +19649,10 @@ class NPCInteractionSystem(System):
     CONTRACTOR_DISTRACTION_TICKS = 24
     CONTRACTOR_RETURN_WAIT_TICKS = 20
     CONTRACTOR_KILL_SURCHARGE = 90
+    SERVICE_LOCATOR_SEARCH_RADIUS = 8
+    OUTFITTER_LOCATOR_ARCHETYPES = ("outfitter", "surplus_store")
+    JUSTICE_LOCATOR_ARCHETYPES = ("jail", "courthouse", "prison")
+    JUSTICE_LOCATOR_ROLE_TOKENS = ("guard", "corrections", "deputy", "bailiff", "sergeant")
     SERVICE_LOCATOR_TOPICS = {
         "service_fuel": {
             "services": ("fuel",),
@@ -19732,6 +19736,22 @@ class NPCInteractionSystem(System):
             "offer_label": "shopping",
             "lead_kind": "service_trade",
             "storefront": True,
+        },
+        "service_outfitter": {
+            "services": (),
+            "service_label": "outfitter",
+            "offer_label": "gear and clothing",
+            "lead_kind": "service_outfitter",
+            "archetypes": OUTFITTER_LOCATOR_ARCHETYPES,
+        },
+        "service_justice": {
+            "services": (),
+            "service_label": "justice site",
+            "offer_label": "booking or court business",
+            "lead_kind": "service_justice",
+            "archetypes": JUSTICE_LOCATOR_ARCHETYPES,
+            "local_summary": "In this chunk, {names_text} handles booking and court business.",
+            "near_summary": "Nearest justice site I know is {distance_phrase} at {names_text}.",
         },
         "service_used_cars": {
             "services": ("vehicle_sales_used",),
@@ -22346,6 +22366,38 @@ class NPCInteractionSystem(System):
     def _service_locator_spec(self, topic_id):
         return self.SERVICE_LOCATOR_TOPICS.get(str(topic_id or "").strip().lower())
 
+    def _justice_locator_topic_available(self, context):
+        if not isinstance(context, dict) or not bool(context.get("human", True)):
+            return False
+        occupation = context.get("occupation")
+        career = str(getattr(occupation, "career", "") or "").strip().lower()
+        role_id = str(context.get("role_id", "") or "").strip().lower()
+        organization_kind = str(context.get("organization_kind", "") or "").strip().lower()
+        workplace_archetype = _property_archetype(context.get("workplace_prop"))
+        owner_place_archetype = _property_archetype(context.get("owner_place"))
+        justice_archetypes = set(self.JUSTICE_LOCATOR_ARCHETYPES)
+        justice_contact = bool(
+            role_id == "guard"
+            or any(token in career for token in self.JUSTICE_LOCATOR_ROLE_TOKENS)
+            or organization_kind == "civic"
+            or workplace_archetype in justice_archetypes
+            or owner_place_archetype in justice_archetypes
+        )
+        player_snapshot = _justice_snapshot(self.sim, self.player_eid)
+        player_tier = str((player_snapshot or {}).get("wanted_tier", "clear")).strip().lower() or "clear"
+        player_flagged = player_tier in {"questioning", "wanted", "arrest_on_sight"} or bool((player_snapshot or {}).get("in_custody", False))
+        if bool(context.get("guarded")):
+            return justice_contact
+        return justice_contact or player_flagged
+
+    def _service_locator_topic_available(self, context, topic_id):
+        if not isinstance(context, dict) or not bool(context.get("human", True)):
+            return False
+        topic_id = str(topic_id or "").strip().lower()
+        if topic_id == "service_justice":
+            return self._justice_locator_topic_available(context)
+        return not bool(context.get("guarded"))
+
     def _service_locator_service_keys(self, spec):
         if not isinstance(spec, dict):
             return set()
@@ -22380,13 +22432,14 @@ class NPCInteractionSystem(System):
             return True
         return False
 
-    def _service_locator_rows(self, services, *, radius=6):
+    def _service_locator_rows(self, services, *, radius=None):
         spec = services if isinstance(services, dict) else {"services": tuple(services or ())}
         if not self._service_locator_service_keys(spec) and not bool(spec.get("storefront")) and not self._service_locator_archetypes(spec):
             return ()
         origin = self._player_current_chunk()
         if not origin:
             return ()
+        radius = int(self.SERVICE_LOCATOR_SEARCH_RADIUS if radius is None else radius)
         pos = self.sim.ecs.get(Position).get(self.player_eid)
         rows = []
         for prop in self.sim.properties.values():
@@ -22501,10 +22554,11 @@ class NPCInteractionSystem(System):
             deduped.append(str(name).strip())
         return tuple(deduped[: max(1, int(limit))])
 
-    def _nearest_service_locator_preview(self, services, *, radius=6, limit=3):
+    def _nearest_service_locator_preview(self, services, *, radius=None, limit=3):
         origin = self._player_current_chunk()
         if not origin:
             return None, ()
+        radius = int(self.SERVICE_LOCATOR_SEARCH_RADIUS if radius is None else radius)
         ox, oy = origin
         for dist in range(0, max(1, int(radius)) + 1):
             matches = []
@@ -22599,7 +22653,7 @@ class NPCInteractionSystem(System):
         offer_label = str(spec.get("offer_label", service_label)).strip() or service_label
         local_template = str(spec.get("local_summary", "")).strip()
         near_template = str(spec.get("near_summary", "")).strip()
-        rows = list(self._service_locator_rows(spec, radius=6))
+        rows = list(self._service_locator_rows(spec, radius=self.SERVICE_LOCATOR_SEARCH_RADIUS))
         origin = self._player_current_chunk()
 
         if rows:
@@ -22664,7 +22718,11 @@ class NPCInteractionSystem(System):
                 "lead_prop": lead_prop,
             }
 
-        chunk_coord, names = self._nearest_service_locator_preview(spec, radius=6, limit=3)
+        chunk_coord, names = self._nearest_service_locator_preview(
+            spec,
+            radius=self.SERVICE_LOCATOR_SEARCH_RADIUS,
+            limit=3,
+        )
         if chunk_coord and names:
             names_text = _dialogue_human_join(names)
             if tuple(chunk_coord) == origin:
@@ -23946,6 +24004,8 @@ class NPCInteractionSystem(System):
         organization_role = str(context.get("organization_role", "")).strip().lower()
         career_text = str(context.get("career_text", "")).strip()
         workplace_name = str(context.get("workplace_name", "")).strip()
+        owner_name = str(context.get("owner_name", "")).strip()
+        owner_source = str(context.get("owner_source", "")).strip().lower()
         scene_note = dict(context.get("scene_note", {}) or {})
         scene_type = str(scene_note.get("scene_type", "")).strip().lower()
         event_phase = str(scene_note.get("event_phase", "")).strip().lower()
@@ -23962,6 +24022,28 @@ class NPCInteractionSystem(System):
         if organization_role == "owner":
             return "Nobody over me. I work for myself."
         if organization_name_text:
+            if workplace_name and organization_name_text.lower() != workplace_name.lower():
+                if career_text:
+                    if organization_kind == "civic":
+                        return f"{workplace_name} runs under {organization_name_text}. I do {career_text} work on the public side."
+                    if organization_kind == "institution":
+                        return f"{workplace_name} runs under {organization_name_text}. I do {career_text} work under their chain."
+                    return f"{workplace_name} runs under {organization_name_text}. I do {career_text} work for them."
+                if organization_role == "manager":
+                    return f"{workplace_name} runs under {organization_name_text}. I manage it for them."
+                if organization_kind == "civic":
+                    return f"{workplace_name} sits on the {organization_name_text} side."
+                if organization_kind == "institution":
+                    return f"{workplace_name} answers up to {organization_name_text}."
+                return f"{workplace_name} runs under {organization_name_text}."
+            if workplace_name and career_text:
+                if organization_kind == "civic":
+                    return f"{organization_name_text} runs the place. I do {career_text} work on the public side."
+                if organization_kind == "institution":
+                    return f"{organization_name_text} runs the place. I do {career_text} work under their chain."
+                return f"{organization_name_text} runs the place. I do {career_text} work for them."
+            if workplace_name and organization_role == "manager":
+                return f"{organization_name_text} runs the place. I manage it for them."
             if career_text:
                 if organization_kind == "civic":
                     return f"{organization_name_text}. I do {career_text} work on the public side."
@@ -23975,10 +24057,23 @@ class NPCInteractionSystem(System):
             if organization_kind == "institution":
                 return f"It is {organization_name_text}. More chain of command than charm."
             return f"{organization_name_text}. That is the outfit I am with."
+        if owner_name and workplace_name:
+            if owner_source == "owner":
+                if career_text:
+                    return f"{owner_name} owns {workplace_name}. I do {career_text} work for them."
+                return f"{owner_name} owns {workplace_name}."
+            if owner_source == "founder":
+                if career_text:
+                    return f"{owner_name} founded {workplace_name}. I do {career_text} work here."
+                return f"{owner_name} founded {workplace_name}."
+            if owner_source == "tag":
+                if career_text:
+                    return f"{owner_name.title()} side, mostly. I do {career_text} work here."
+                return f"{owner_name.title()} side, mostly."
         if workplace_name and career_text:
-            return f"Mostly this place. I do {career_text} work here."
+            return f"No bigger outfit than {workplace_name} that I know. I do {career_text} work here."
         if workplace_name:
-            return f"Mostly this place. No bigger outfit than that."
+            return f"No bigger outfit than {workplace_name} that I know."
         return ""
 
     def _supervisor_summary(self, context):
@@ -26651,7 +26746,7 @@ class NPCInteractionSystem(System):
                 continue
             if door_topics and topic_id not in door_topics:
                 continue
-            if topic_id in self.SERVICE_LOCATOR_TOPICS and (bool(context.get("guarded")) or not bool(context.get("human", True))):
+            if topic_id in self.SERVICE_LOCATOR_TOPICS and not self._service_locator_topic_available(context, topic_id):
                 continue
             if topic_id in guarded_only and not context.get("guarded"):
                 continue
@@ -39673,6 +39768,59 @@ class CriminalJusticeSystem(System):
         streamer._ensure_chunk_properties(key[0], key[1])
         return self._props_in_chunk(key)
 
+    def _justice_search_chunk_bounds(self):
+        # City streaming can realize chunks well beyond the initial viewport,
+        # so the tilemap width/height are not reliable world bounds here.
+        return None
+
+    def _justice_search_max_radius(self, base_chunk, bounds):
+        base_radius = max(0, int(self.JUSTICE_SITE_SEARCH_RADIUS))
+        if not (isinstance(base_chunk, (tuple, list)) and len(base_chunk) >= 2 and isinstance(bounds, (tuple, list)) and len(bounds) >= 4):
+            return max(base_radius, base_radius * 2)
+        base_cx = int(base_chunk[0])
+        base_cy = int(base_chunk[1])
+        min_cx, max_cx, min_cy, max_cy = (
+            int(bounds[0]),
+            int(bounds[1]),
+            int(bounds[2]),
+            int(bounds[3]),
+        )
+        corners = (
+            (min_cx, min_cy),
+            (min_cx, max_cy),
+            (max_cx, min_cy),
+            (max_cx, max_cy),
+        )
+        return max(
+            0,
+            max(
+                _manhattan(base_cx, base_cy, corner_cx, corner_cy)
+                for corner_cx, corner_cy in corners
+            ),
+        )
+
+    def _justice_chunk_ring(self, base_chunk, chunk_dist, *, bounds=None):
+        if not isinstance(base_chunk, (tuple, list)) or len(base_chunk) < 2:
+            return
+        base_cx = int(base_chunk[0])
+        base_cy = int(base_chunk[1])
+        chunk_dist = max(0, int(chunk_dist))
+        min_cx = max_cx = min_cy = max_cy = None
+        if isinstance(bounds, (tuple, list)) and len(bounds) >= 4:
+            min_cx = int(bounds[0])
+            max_cx = int(bounds[1])
+            min_cy = int(bounds[2])
+            max_cy = int(bounds[3])
+        for cx in range(base_cx - chunk_dist, base_cx + chunk_dist + 1):
+            if min_cx is not None and (cx < min_cx or cx > max_cx):
+                continue
+            for cy in range(base_cy - chunk_dist, base_cy + chunk_dist + 1):
+                if min_cy is not None and (cy < min_cy or cy > max_cy):
+                    continue
+                if abs(cx - base_cx) + abs(cy - base_cy) != chunk_dist:
+                    continue
+                yield (int(cx), int(cy))
+
     def _find_justice_property(self, *, allowed_archetypes=(), source_prop=None, origin_x=None, origin_y=None):
         allowed = tuple(
             str(archetype or "").strip().lower()
@@ -39719,25 +39867,23 @@ class CriminalJusticeSystem(System):
             if ranked is not None:
                 candidates.append(ranked)
         if not candidates:
-            max_radius = max(0, int(self.JUSTICE_SITE_SEARCH_RADIUS))
+            bounds = self._justice_search_chunk_bounds()
+            local_radius = max(0, int(self.JUSTICE_SITE_SEARCH_RADIUS))
+            max_radius = max(local_radius, self._justice_search_max_radius(base_chunk, bounds))
             for chunk_dist in range(0, max_radius + 1):
                 ring_candidates = []
-                for cx in range(int(base_chunk[0]) - chunk_dist, int(base_chunk[0]) + chunk_dist + 1):
-                    for cy in range(int(base_chunk[1]) - chunk_dist, int(base_chunk[1]) + chunk_dist + 1):
-                        if abs(cx - int(base_chunk[0])) + abs(cy - int(base_chunk[1])) != chunk_dist:
-                            continue
-                        key = (int(cx), int(cy))
-                        chunk = self.sim.world.get_chunk(key[0], key[1])
-                        if not self._chunk_contains_archetype(chunk, allowed_set):
-                            continue
-                        for prop in self._ensure_search_chunk_ready(key):
-                            ranked = _rank_candidate(prop)
-                            if ranked is not None:
-                                ring_candidates.append(ranked)
+                for key in self._justice_chunk_ring(base_chunk, chunk_dist, bounds=bounds):
+                    chunk = self.sim.world.get_chunk(key[0], key[1])
+                    if not self._chunk_contains_archetype(chunk, allowed_set):
+                        continue
+                    for prop in self._ensure_search_chunk_ready(key):
+                        ranked = _rank_candidate(prop)
+                        if ranked is not None:
+                            ring_candidates.append(ranked)
                 if ring_candidates:
                     ring_candidates.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
                     return ring_candidates[0][4]
-            return source_prop if isinstance(source_prop, dict) else None
+            return source_prop if isinstance(source_prop, dict) and _property_archetype(source_prop) in allowed_set else None
         candidates.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
         return candidates[0][4]
 

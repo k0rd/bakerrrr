@@ -33,6 +33,8 @@ TOPIC_ORDER = (
     "service_ferry",
     "service_intel",
     "service_trade",
+    "service_outfitter",
+    "service_justice",
     "service_used_cars",
     "service_vehicle_fetch",
     "service_gaming",
@@ -160,6 +162,8 @@ TOPIC_DEFS = {
             "service_ferry",
             "service_intel",
             "service_trade",
+            "service_outfitter",
+            "service_justice",
             "service_used_cars",
             "service_vehicle_fetch",
             "service_gaming",
@@ -223,6 +227,16 @@ TOPIC_DEFS = {
     },
     "service_trade": {
         "label": "Any shopping around here?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_outfitter": {
+        "label": "Any outfitter nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_justice": {
+        "label": "Where's the nearest jail or courthouse?",
         "root": False,
         "unlocks": (),
     },
@@ -311,6 +325,8 @@ TOPIC_DEFS = {
             "service_ferry",
             "service_intel",
             "service_trade",
+            "service_outfitter",
+            "service_justice",
             "service_used_cars",
             "service_vehicle_fetch",
             "service_gaming",
@@ -2739,6 +2755,10 @@ def topic_label(topic_id, context=None):
         return "Anywhere selling intel nearby?"
     if topic_id == "service_trade":
         return "Any shopping around here?"
+    if topic_id == "service_outfitter":
+        return "Any outfitter nearby?"
+    if topic_id == "service_justice":
+        return "Where's the nearest jail or courthouse?"
     if topic_id == "service_used_cars":
         return "Any used cars nearby?"
     if topic_id == "service_vehicle_fetch":
