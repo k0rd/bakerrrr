@@ -492,55 +492,52 @@ class PropertyActionRuntime:
             z=prop["z"],
         ))
 
-    def handle_purchase(self, eid, pos):
-        prop = self.property_for_player_action(pos, radius=1, actor_eid=eid)
-        if not prop:
+    def handle_purchase(self, eid, pos, *, target_property_id=None):
+        context = self.purchase_context(eid, pos, target_property_id=target_property_id)
+        reason = str(context.get("reason", "") or "").strip().lower()
+        prop = context.get("prop")
+        if reason == "no_property":
             self.sim.emit(Event(
                 "property_purchase_blocked",
                 eid=eid,
                 reason="no_property",
             ))
-            return
+            return False
 
-        if str(prop.get("kind", "")).strip().lower() != "building":
+        if reason == "not_for_sale" and not isinstance(prop, dict):
             self.sim.emit(Event(
                 "property_purchase_blocked",
                 eid=eid,
                 reason="not_for_sale",
-                property_id=prop["id"],
             ))
-            return
+            return False
 
-        if self.player_owns_property(eid, prop):
+        if reason == "already_owner":
             self.sim.emit(Event(
                 "property_purchase_blocked",
                 eid=eid,
                 reason="already_owner",
-                property_id=prop["id"],
+                property_id=context.get("property_id"),
             ))
-            return
+            return False
 
-        assets = self.sim.ecs.get(PlayerAssets).get(eid)
-        if not assets:
+        if reason == "missing_assets":
             self.sim.emit(Event(
                 "property_purchase_blocked",
                 eid=eid,
                 reason="missing_assets",
-                property_id=prop["id"],
+                property_id=context.get("property_id"),
             ))
-            return
+            return False
 
-        owner_eid = prop.get("owner_eid")
-        owner_tag = prop.get("owner_tag")
-        for_sale = owner_eid is None or owner_tag in {None, "city"}
-        if not for_sale:
+        if reason == "not_for_sale":
             self.sim.emit(Event(
                 "property_purchase_blocked",
                 eid=eid,
                 reason="not_for_sale",
-                property_id=prop["id"],
-                owner_eid=owner_eid,
-                owner_tag=owner_tag,
+                property_id=context.get("property_id"),
+                owner_eid=context.get("owner_eid"),
+                owner_tag=context.get("owner_tag"),
             ))
             self.action_system._emit_action_offense(
                 eid=eid,
@@ -550,22 +547,31 @@ class PropertyActionRuntime:
                 y=prop["y"],
                 z=prop["z"],
             )
-            return
+            return False
 
-        metadata = prop.get("metadata", {})
-        price = max(1, int(metadata.get("purchase_cost", 150)))
-        if assets.credits < price:
+        if reason == "insufficient_funds":
             self.sim.emit(Event(
                 "property_purchase_blocked",
                 eid=eid,
                 reason="insufficient_funds",
-                property_id=prop["id"],
-                price=price,
-                credits=assets.credits,
+                property_id=context.get("property_id"),
+                price=int(context.get("price", 0) or 0),
+                credits=int(context.get("credits", 0) or 0),
             ))
-            return
+            return False
 
-        old_owner = owner_eid
+        assets = context.get("assets")
+        if assets is None or not isinstance(prop, dict):
+            self.sim.emit(Event(
+                "property_purchase_blocked",
+                eid=eid,
+                reason="missing_assets",
+                property_id=context.get("property_id"),
+            ))
+            return False
+
+        price = int(context.get("price", 0) or 0)
+        old_owner = context.get("owner_eid")
         assets.credits -= price
         self.sim.assign_property_owner(prop["id"], owner_eid=eid, owner_tag="player")
 
@@ -589,6 +595,65 @@ class PropertyActionRuntime:
             y=prop["y"],
             z=prop["z"],
         )
+        return True
+
+    def purchase_context(self, eid, pos, *, target_property_id=None):
+        prop = None
+        if target_property_id:
+            prop = self.sim.properties.get(target_property_id)
+        if not isinstance(prop, dict):
+            prop = self.property_for_player_action(pos, radius=1, actor_eid=eid)
+        if not isinstance(prop, dict):
+            return {
+                "allowed": False,
+                "reason": "no_property",
+                "prop": None,
+                "property_id": "",
+                "property_name": "",
+                "archetype": "",
+                "price": 0,
+                "credits": 0,
+                "owner_eid": None,
+                "owner_tag": "",
+                "assets": None,
+            }
+
+        property_id = str(prop.get("id", "") or "").strip()
+        metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+        archetype = str(metadata.get("archetype", prop.get("kind", "")) or "").strip().lower()
+        property_name = str(prop.get("name", property_id or "property")).strip() or property_id or "property"
+        assets = self.sim.ecs.get(PlayerAssets).get(eid)
+        credits = int(max(0, getattr(assets, "credits", 0) or 0)) if assets is not None else 0
+        owner_eid = prop.get("owner_eid")
+        owner_tag = prop.get("owner_tag")
+        price = max(1, int(metadata.get("purchase_cost", 150)))
+
+        if str(prop.get("kind", "")).strip().lower() != "building":
+            reason = "not_for_sale"
+        elif self.player_owns_property(eid, prop):
+            reason = "already_owner"
+        elif assets is None:
+            reason = "missing_assets"
+        elif not (owner_eid is None or owner_tag in {None, "city"}):
+            reason = "not_for_sale"
+        elif credits < price:
+            reason = "insufficient_funds"
+        else:
+            reason = ""
+
+        return {
+            "allowed": not bool(reason),
+            "reason": reason,
+            "prop": prop,
+            "property_id": property_id,
+            "property_name": property_name,
+            "archetype": archetype,
+            "price": int(price),
+            "credits": int(credits),
+            "owner_eid": owner_eid,
+            "owner_tag": str(owner_tag or "").strip(),
+            "assets": assets,
+        }
 
 
 __all__ = ["PropertyActionRuntime"]

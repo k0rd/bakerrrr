@@ -3271,7 +3271,7 @@ def _completion_detail(sim, opportunity, metrics):
 
         if delivery_chunk and current_chunk != delivery_chunk:
             return False, ""
-    elif target_property_id or target_building_id:
+    elif (target_property_id or target_building_id) and interact_npc_eid <= 0:
         if not _matches_recent_site_interaction(
             metrics,
             property_id=target_property_id,

@@ -121,10 +121,14 @@ from game.items import (
 from game.justice_runtime import (
     booking_anchor_for as _justice_booking_anchor_for,
     decay_records as _decay_justice_records,
+    held_property_snapshot as _justice_held_property_snapshot,
     justice_snapshot as _justice_snapshot,
+    justice_summary_rows as _justice_summary_rows,
     mark_in_custody as _mark_justice_in_custody,
     record_incident as _record_justice_incident,
+    replace_held_property as _replace_justice_held_property,
     release_from_custody as _release_justice_from_custody,
+    store_held_property as _store_justice_held_property,
 )
 from game.lighting import (
     ambient_snapshot as _lighting_ambient_snapshot,
@@ -16030,7 +16034,7 @@ class InputSystem(System):
             if reason == "arrived":
                 message = f"Arrived near {label}."
             elif reason == "blocked":
-                message = f"Could not keep walking to {label}."
+                message = f"Route to {label} is blocked."
             elif reason == "combat":
                 message = f"Stopped walking to {label}; combat started."
             _log_player_feedback(
@@ -16056,7 +16060,7 @@ class InputSystem(System):
             if reason == "arrived":
                 message = f"Arrived at {label}."
             elif reason == "blocked":
-                message = f"Could not keep driving to {label}."
+                message = f"Road to {label} is blocked."
             elif reason == "combat":
                 message = f"Stopped driving to {label}; combat started."
             _log_player_feedback(
@@ -28300,7 +28304,19 @@ class NPCInteractionSystem(System):
         state["scroll"] = max(0, len(list(state.get("transcript", ()) or ())) - 1)
         if response.get("open_trade"):
             self._close_dialog()
-            self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="buy", property_id=response.get("trade_property_id")))
+            trade_property_id = str(response.get("trade_property_id", "") or "").strip()
+            trade_prop = self.sim.properties.get(trade_property_id) if trade_property_id else None
+            if isinstance(trade_prop, dict):
+                self.sim.emit(Event(
+                    "property_interact",
+                    eid=self.player_eid,
+                    property_id=trade_prop.get("id"),
+                    x=trade_prop.get("x"),
+                    y=trade_prop.get("y"),
+                    z=trade_prop.get("z"),
+                ))
+            else:
+                self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="buy", property_id=trade_property_id))
             return
         if response.get("close"):
             self._hold_dialog_for_ack()
@@ -28852,6 +28868,7 @@ class PlayerActionSystem(System):
         self.property_actions = PropertyActionRuntime(self)
         self.property_ingress = PropertyIngressRuntime(self)
         self.sim.events.subscribe("player_action", self.on_player_action)
+        self.sim.events.subscribe("property_purchase_execute_request", self.on_property_purchase_execute_request)
         self.sim.events.subscribe("player_hidden_changed", self.on_player_hidden_changed)
         self.sim.events.subscribe("container_transfer_request", self.on_container_transfer_request)
         self.sim.events.subscribe("cache_transfer_request", self.on_cache_transfer_request)
@@ -29603,11 +29620,19 @@ class PlayerActionSystem(System):
                 reason="cover_hop",
             )
             if not moved:
+                blocked_prop = (
+                    self.sim.property_at(int(step_x), int(step_y), int(start_z))
+                    or _property_covering(self.sim, int(step_x), int(step_y), int(start_z))
+                )
                 self.sim.emit(Event(
                     "cover_blocked",
                     eid=eid,
                     reason="cover_hop_path_blocked",
                     block_reason=reason,
+                    block_x=int(step_x),
+                    block_y=int(step_y),
+                    block_z=int(start_z),
+                    property_id=(blocked_prop or {}).get("id"),
                 ))
                 return
 
@@ -30801,8 +30826,141 @@ class PlayerActionSystem(System):
             return
         return self.property_actions.handle_interact_action(eid, pos, force_direction=force_direction)
 
-    def _handle_purchase(self, eid, pos):
-        return self.property_actions.handle_purchase(eid, pos)
+    def _dialog_ui_state(self):
+        state = getattr(self.sim, "dialog_ui", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.dialog_ui = state
+        state.setdefault("open", False)
+        state.setdefault("kind", "conversation")
+        state.setdefault("npc_eid", None)
+        state.setdefault("property_id", None)
+        state.setdefault("title", "Conversation")
+        state.setdefault("subtitle", "")
+        state.setdefault("transcript", [])
+        state.setdefault("topics", [])
+        state.setdefault("selected_index", 0)
+        state.setdefault("scroll", 0)
+        state.setdefault("hint", "")
+        state.setdefault("new_topic_ids", [])
+        state.setdefault("close_pending", False)
+        state.setdefault("machine_action", None)
+        return state
+
+    def _finance_service_label(self, service):
+        return str(service or "").strip().replace("_", " ") or "service"
+
+    def _property_purchase_lines(self, context):
+        context = context if isinstance(context, dict) else {}
+        prop = context.get("prop") if isinstance(context.get("prop"), dict) else {}
+        archetype = str(context.get("archetype", "") or "").strip().replace("_", " ")
+        price = int(context.get("price", 0) or 0)
+        credits = int(context.get("credits", 0) or 0)
+        owner_eid = context.get("owner_eid")
+        owner_tag = str(context.get("owner_tag", "") or "").strip().lower()
+
+        services = []
+        if _property_is_storefront(prop):
+            services.append("shopping")
+        services.extend(
+            self._finance_service_label(service)
+            for service in _finance_services_for_property(prop)
+            if str(service).strip()
+        )
+        services.extend(
+            _site_service_label(service).strip().lower()
+            for service in _site_services_for_property(prop)
+            if str(service).strip()
+        )
+        deduped_services = [label for label in dict.fromkeys(label for label in services if str(label).strip())]
+        owner_line = "Seller: city listing." if owner_eid is None or owner_tag in {"", "city"} else f"Seller: {owner_tag} holder."
+        lines = [
+            owner_line,
+            f"Type: {archetype or 'building'}.",
+            f"Price: {_credit_amount_label(price)} | Wallet: {_credit_amount_label(credits)}.",
+        ]
+        if deduped_services:
+            lines.append(f"Known uses: {', '.join(deduped_services[:4])}.")
+        if bool(_property_is_public(prop)):
+            lines.append("Status: publicly accessible location.")
+        return lines
+
+    def _present_property_purchase_result(self, title, lines, *, property_id=None):
+        state = self._dialog_ui_state()
+        transcript = [str(line).strip() for line in list(lines or ()) if str(line).strip()]
+        if not transcript:
+            transcript = ["No sale details are available right now."]
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": property_id,
+            "title": str(title or "Property Purchase").strip() or "Property Purchase",
+            "subtitle": "",
+            "transcript": transcript,
+            "topics": [],
+            "selected_index": 0,
+            "scroll": max(0, len(transcript) - 1),
+            "hint": "Press Space to close.",
+            "new_topic_ids": [],
+            "close_pending": True,
+            "machine_action": None,
+            "service_menu_mode": "property_purchase_result",
+        })
+        return True
+
+    def _open_property_purchase_prompt(self, eid, pos, *, target_property_id=None):
+        context = self.property_actions.purchase_context(eid, pos, target_property_id=target_property_id)
+        reason = str(context.get("reason", "") or "").strip().lower()
+        prop = context.get("prop") if isinstance(context.get("prop"), dict) else None
+        if reason == "no_property" or prop is None:
+            self.property_actions.handle_purchase(eid, pos, target_property_id=target_property_id)
+            return False
+
+        property_id = str(context.get("property_id", "") or "").strip()
+        property_name = str(context.get("property_name", property_id or "Property") or property_id or "Property").strip() or "Property"
+        title = f"Property Purchase: {property_name}"
+        lines = self._property_purchase_lines(context)
+        if reason == "already_owner":
+            lines.append("You already own this property.")
+            return self._present_property_purchase_result(title, lines, property_id=property_id)
+        if reason == "not_for_sale":
+            lines.append("This property is not currently for sale.")
+            return self._present_property_purchase_result(title, lines, property_id=property_id)
+        if reason == "insufficient_funds":
+            lines.append("You do not have enough credits to close this purchase.")
+            return self._present_property_purchase_result(title, lines, property_id=property_id)
+        if reason == "missing_assets":
+            lines.append("No asset profile is available for this purchase.")
+            return self._present_property_purchase_result(title, lines, property_id=property_id)
+
+        state = self._dialog_ui_state()
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": property_id,
+            "title": title,
+            "subtitle": "",
+            "transcript": lines + ["Buy this property?"],
+            "topics": [
+                {"id": f"property_purchase:confirm:{property_id}", "label": f"Confirm purchase [{_credit_amount_label(int(context.get('price', 0) or 0))}]"},
+                {"id": f"property_purchase:cancel:{property_id}", "label": "Cancel"},
+            ],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Confirm to spend credits and transfer ownership.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": "property_purchase",
+        })
+        return True
+
+    def _handle_purchase(self, eid, pos, *, target_property_id=None):
+        return self.property_actions.handle_purchase(eid, pos, target_property_id=target_property_id)
 
     def _find_walkable_near(self, x, y, z=0, radius=8):
         if self.sim.tilemap.is_walkable(x, y, z):
@@ -32393,7 +32551,7 @@ class PlayerActionSystem(System):
             return
 
         if action == "purchase_property":
-            self._handle_purchase(eid, pos)
+            self._open_property_purchase_prompt(eid, pos)
             return
 
         if action == "toggle_cover":
@@ -32426,6 +32584,16 @@ class PlayerActionSystem(System):
                 step=1,
             ))
             return
+
+    def on_property_purchase_execute_request(self, event):
+        eid = event.data.get("eid")
+        if eid != getattr(self.sim, "player_eid", None):
+            return
+        pos = self.sim.ecs.get(Position).get(eid)
+        if not pos:
+            return
+        self._handle_purchase(eid, pos, target_property_id=event.data.get("property_id"))
+
 class ItemSystem(System):
 
     def __init__(self, sim, player_eid):
@@ -32852,6 +33020,7 @@ class ItemSystem(System):
             return False
 
         item_def = self._item_def(entry["item_id"])
+        item_name = item_display_name(item_def["id"], metadata=entry.get("metadata"), item_catalog=self.catalog)
         if _item_weapon_id(item_def):
             return self._toggle_weapon_item(
                 eid=eid,
@@ -32890,6 +33059,7 @@ class ItemSystem(System):
                 eid=eid,
                 reason="auto_only_item",
                 item_id=item_def["id"],
+                item_name=item_name,
             ))
             return False
 
@@ -32900,6 +33070,7 @@ class ItemSystem(System):
                 eid=eid,
                 reason="item_not_usable",
                 item_id=item_def["id"],
+                item_name=item_name,
             ))
             return False
 
@@ -32910,6 +33081,7 @@ class ItemSystem(System):
                 eid=eid,
                 reason="no_applicable_effect",
                 item_id=item_def["id"],
+                item_name=item_name,
             ))
             return False
 
@@ -32920,6 +33092,7 @@ class ItemSystem(System):
                 eid=eid,
                 reason="consume_failed",
                 item_id=item_def["id"],
+                item_name=item_name,
             ))
             return False
 
@@ -33053,6 +33226,7 @@ class ItemSystem(System):
                 eid=eid,
                 reason="inventory_full",
                 item_id=ground["item_id"],
+                item_name=item_display_name(ground["item_id"], metadata=ground_metadata, item_catalog=self.catalog),
             ))
             return
 
@@ -33111,9 +33285,22 @@ class ItemSystem(System):
             return
 
         target_instance_id = instance_id if instance_id else inventory.items[0]["instance_id"]
+        target_entry = inventory.find(instance_id=target_instance_id)
         removed = inventory.remove_item(instance_id=target_instance_id, quantity=1)
         if not removed:
-            self.sim.emit(Event("item_drop_blocked", eid=eid, reason="remove_failed"))
+            item_id = str((target_entry or {}).get("item_id", "") or "").strip().lower()
+            item_name = (
+                item_display_name(item_id, metadata=(target_entry or {}).get("metadata"), item_catalog=self.catalog)
+                if item_id
+                else ""
+            )
+            self.sim.emit(Event(
+                "item_drop_blocked",
+                eid=eid,
+                reason="remove_failed",
+                item_id=item_id,
+                item_name=item_name,
+            ))
             return
 
         self._emit_removed_gear_events(eid, removed, reason="dropped")
@@ -38844,8 +39031,10 @@ class CriminalJusticeSystem(System):
     DETENTION_QUEUE_WINDOW = 30
     DETENTION_RADIUS = 10
     JUSTICE_SITE_SEARCH_RADIUS = 24
+    SURRENDER_PROMPT_COOLDOWN_TICKS = 180
     SURRENDER_DIALOG_KIND = "justice_surrender"
     BOOKING_ARCHETYPES = ("jail", "courthouse")
+    JUSTICE_DEBT_KEY = "justice_fines"
     NPC_CUSTODY_ARCHETYPES_BY_TIER = {
         "questioning": ("jail",),
         "wanted": ("jail",),
@@ -38909,6 +39098,7 @@ class CriminalJusticeSystem(System):
             "offender_eid": change.get("eid"),
             "before_score": int(change.get("before_score", 0)),
             "after_score": int(change.get("after_score", 0)),
+            "score_delta": int(change.get("after_score", 0)) - int(change.get("before_score", 0)),
             "incident_count": int(change.get("incident_count", 0)),
             "jurisdiction_key": jurisdiction_key,
             "jurisdiction_name": jurisdiction_name,
@@ -38917,17 +39107,21 @@ class CriminalJusticeSystem(System):
             "incident_type": str(incident.get("type", "") or "").strip().lower(),
             "incident_label": str(incident.get("label", "") or "").strip(),
             "property_id": str(incident.get("property_id", "") or "").strip(),
+            "property_name": "",
             "note": str(incident.get("note", "") or "").strip(),
+            "incident_witnessed": bool(incident.get("witnessed", False)),
+            "before_tier": str(change.get("before_tier", "clear")).strip().lower() or "clear",
+            "after_tier": str(change.get("after_tier", "clear")).strip().lower() or "clear",
             "tick": int(getattr(self.sim, "tick", 0)),
         }
+        property_id = str(payload.get("property_id", "") or "").strip()
+        if property_id:
+            prop = self.sim.properties.get(property_id)
+            if isinstance(prop, dict):
+                payload["property_name"] = str(prop.get("name", prop.get("id", property_id)) or property_id).strip()
         self.sim.emit(Event("justice_record_changed", **payload))
         if bool(change.get("tier_changed")):
-            self.sim.emit(Event(
-                "justice_wanted_tier_changed",
-                **payload,
-                before_tier=str(change.get("before_tier", "clear")).strip().lower() or "clear",
-                after_tier=str(change.get("after_tier", "clear")).strip().lower() or "clear",
-            ))
+            self.sim.emit(Event("justice_wanted_tier_changed", **payload))
 
     def _justice_state(self):
         traits = getattr(self.sim, "world_traits", None)
@@ -38947,6 +39141,62 @@ class CriminalJusticeSystem(System):
             records = {}
             state["npc_custody"] = records
         return records
+
+    def _player_surrender_offer_records(self):
+        state = self._justice_state()
+        records = state.get("player_surrender_offers")
+        if not isinstance(records, dict):
+            records = {}
+            state["player_surrender_offers"] = records
+        return records
+
+    def _clear_player_surrender_offer_records(self):
+        records = self._player_surrender_offer_records()
+        records.clear()
+        return records
+
+    def _officer_surrender_offer_record(self, npc_eid, *, create=False):
+        try:
+            officer_id = int(npc_eid)
+        except (TypeError, ValueError):
+            return None
+        if officer_id <= 0:
+            return None
+        records = self._player_surrender_offer_records()
+        key = str(officer_id)
+        record = records.get(key)
+        if not isinstance(record, dict):
+            if not create:
+                return None
+            record = {}
+            records[key] = record
+        record.setdefault("last_prompt_tick", -10_000)
+        record.setdefault("cooldown_until_tick", -10_000)
+        return record
+
+    def _officer_surrender_offer_on_cooldown(self, npc_eid):
+        record = self._officer_surrender_offer_record(npc_eid, create=False)
+        if not isinstance(record, dict):
+            return False
+        tick = int(getattr(self.sim, "tick", 0))
+        return int(record.get("cooldown_until_tick", -10_000) or -10_000) > tick
+
+    def _mark_officer_surrender_prompt_opened(self, npc_eid):
+        record = self._officer_surrender_offer_record(npc_eid, create=True)
+        if not isinstance(record, dict):
+            return None
+        record["last_prompt_tick"] = int(getattr(self.sim, "tick", 0))
+        return record
+
+    def _mark_officer_surrender_offer_cooldown(self, npc_eid, *, ticks=None):
+        record = self._officer_surrender_offer_record(npc_eid, create=True)
+        if not isinstance(record, dict):
+            return None
+        tick = int(getattr(self.sim, "tick", 0))
+        cooldown_ticks = max(1, int(self.SURRENDER_PROMPT_COOLDOWN_TICKS if ticks is None else ticks))
+        record["last_prompt_tick"] = tick
+        record["cooldown_until_tick"] = int(tick + cooldown_ticks)
+        return record
 
     def _record_incident(
         self,
@@ -39207,6 +39457,140 @@ class CriminalJusticeSystem(System):
             return int(max(0, total_debt() or 0))
         return int(max(0, getattr(profile, "debt_balance", 0) or 0))
 
+    def _player_justice_debt_balance(self):
+        profile = self._player_finance_profile(create=False)
+        if profile is None:
+            return 0
+        debt_amount = getattr(profile, "debt_amount", None)
+        if callable(debt_amount):
+            return int(max(0, debt_amount(self.JUSTICE_DEBT_KEY) or 0))
+        return int(max(0, getattr(profile, "debt_balance", 0) or 0))
+
+    def _player_held_property_snapshot(self):
+        return _justice_held_property_snapshot(self.sim, self.player_eid)
+
+    def _present_justice_result(self, title, lines, *, property_id=None, subtitle=""):
+        state = self._dialog_ui_state()
+        cleaned = [str(line).strip() for line in list(lines or ()) if str(line).strip()]
+        if not cleaned:
+            cleaned = ["Nothing is on file right now."]
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": property_id,
+            "title": str(title or "Justice Desk").strip() or "Justice Desk",
+            "subtitle": str(subtitle or "").strip(),
+            "transcript": cleaned,
+            "topics": [],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Space closes. O opens your report.",
+            "new_topic_ids": [],
+            "close_pending": True,
+            "machine_action": None,
+            "service_menu_mode": "justice_result",
+            "casino_session": None,
+        })
+        return True
+
+    def _justice_item_hold_policy(self, entry):
+        entry = entry if isinstance(entry, dict) else {}
+        item_id = str(entry.get("item_id", "") or "").strip().lower()
+        item_def = ITEM_CATALOG.get(item_id, {})
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        legal_status = str(item_def.get("legal_status", "legal")).strip().lower() or "legal"
+        tags = _item_tags(item_def)
+        weapon = bool(_item_weapon_id(item_def)) or "weapon" in tags
+        illegal = legal_status == "illegal"
+        restricted = legal_status == "restricted"
+        contraband = illegal or restricted
+        stolen = bool(metadata.get("justice_stolen"))
+        objective_protected = bool(metadata.get("final_operation_target"))
+        if not objective_protected:
+            try:
+                objective_protected = int(metadata.get("quest_opportunity_id", 0) or 0) > 0
+            except (TypeError, ValueError):
+                objective_protected = False
+
+        hold_for_release = bool(objective_protected or ((weapon or restricted) and not (illegal or stolen)))
+        forfeit = bool((illegal or stolen) and not objective_protected)
+        seized = bool(weapon or contraband or stolen or objective_protected)
+        return {
+            "item_id": item_id,
+            "weapon": weapon,
+            "illegal": illegal,
+            "restricted": restricted,
+            "contraband": contraband,
+            "stolen": stolen,
+            "objective_protected": objective_protected,
+            "hold_for_release": hold_for_release,
+            "forfeit": forfeit,
+            "seized": seized,
+        }
+
+    def _inventory_can_accept_entry(self, inventory, entry):
+        if inventory is None or not isinstance(entry, dict):
+            return False
+        item_id = str(entry.get("item_id", "") or "").strip().lower()
+        if not item_id:
+            return False
+        item_def = ITEM_CATALOG.get(item_id, {})
+        quantity = max(1, int(entry.get("quantity", 1) or 1))
+        stack_max = max(1, int(item_def.get("stack_max", 1) or 1))
+        if stack_max <= 1:
+            needed_slots = quantity
+            return (int(inventory.slot_count()) + int(needed_slots)) <= int(getattr(inventory, "capacity", 0) or 0)
+
+        open_room = 0
+        for current in list(getattr(inventory, "items", ()) or ()):
+            if str(current.get("item_id", "") or "").strip().lower() != item_id:
+                continue
+            if current.get("owner_eid") != self.player_eid:
+                continue
+            if str(current.get("owner_tag", "") or "").strip().lower() != "player":
+                continue
+            current_qty = max(0, int(current.get("quantity", 0) or 0))
+            if current_qty >= stack_max:
+                continue
+            open_room += max(0, stack_max - current_qty)
+        remaining = max(0, quantity - open_room)
+        needed_slots = (remaining + stack_max - 1) // stack_max if remaining > 0 else 0
+        return (int(inventory.slot_count()) + int(needed_slots)) <= int(getattr(inventory, "capacity", 0) or 0)
+
+    def _restore_inventory_entry(self, inventory, entry):
+        if inventory is None or not isinstance(entry, dict):
+            return False
+        item_id = str(entry.get("item_id", "") or "").strip().lower()
+        if not item_id:
+            return False
+        item_def = ITEM_CATALOG.get(item_id, {})
+        added, _instance_id = inventory.add_item(
+            item_id=item_id,
+            quantity=max(1, int(entry.get("quantity", 1) or 1)),
+            stack_max=max(1, int(item_def.get("stack_max", 1) or 1)),
+            instance_id=entry.get("instance_id"),
+            owner_eid=self.player_eid,
+            owner_tag="player",
+            metadata=dict(entry.get("metadata") or {}),
+        )
+        return bool(added)
+
+    def _justice_status_lines(self, *, current_prop=None):
+        current_prop = current_prop if isinstance(current_prop, dict) else None
+        lines = list(_justice_summary_rows(self.sim, self.player_eid) or ())
+        debt_balance = int(self._player_justice_debt_balance())
+        held = self._player_held_property_snapshot()
+        held_site_name = str(held.get("property_name", "") or "").strip()
+        held_site_id = str(held.get("property_id", "") or "").strip()
+        current_property_id = str(current_prop.get("id", "") or "").strip() if current_prop else ""
+        if held_site_id and held_site_name and current_property_id and held_site_id != current_property_id:
+            lines.append(f"Released property is logged at {held_site_name}.")
+        if debt_balance > 0:
+            lines.append("Any banking service can take a justice-debt payment.")
+        return [str(line).strip() for line in lines if str(line).strip()]
+
     def _player_funds_snapshot(self):
         carried_credits = int(self._player_cash_on_hand())
         wallet_credits = int(self._player_wallet_credits())
@@ -39223,12 +39607,19 @@ class CriminalJusticeSystem(System):
     def _apply_player_finance_debt(self, amount, *, debt_key="justice_fines"):
         amount = int(max(0, amount or 0))
         if amount <= 0:
+            if str(debt_key or "").strip().lower() == self.JUSTICE_DEBT_KEY:
+                return 0, self._player_justice_debt_balance()
             return 0, self._player_debt_balance()
         profile = self._player_finance_profile(create=True)
-        before = int(self._player_debt_balance())
+        if str(debt_key or "").strip().lower() == self.JUSTICE_DEBT_KEY:
+            before = int(self._player_justice_debt_balance())
+        else:
+            before = int(self._player_debt_balance())
         add_debt = getattr(profile, "add_debt", None)
         if callable(add_debt):
             add_debt(debt_key, amount)
+            if str(debt_key or "").strip().lower() == self.JUSTICE_DEBT_KEY:
+                return int(amount), int(self._player_justice_debt_balance())
             return int(amount), int(self._player_debt_balance())
         profile.debt_balance = int(max(0, getattr(profile, "debt_balance", 0) or 0)) + int(amount)
         return int(profile.debt_balance - before), int(profile.debt_balance)
@@ -39258,7 +39649,7 @@ class CriminalJusticeSystem(System):
         inventory_before = int(self._player_cash_on_hand())
         wallet_credit_before = int(self._player_wallet_credits())
         bank_before = int(self._player_bank_balance())
-        debt_before = int(self._player_debt_balance())
+        debt_before = int(self._player_justice_debt_balance())
         if amount <= 0:
             return {
                 "fine_due": 0,
@@ -39519,10 +39910,12 @@ class CriminalJusticeSystem(System):
             summary += f" Likely taken: {', '.join(labels[:3])}."
         return summary
 
-    def _open_player_surrender_prompt(self, npc_eid, *, snapshot=None, source_prop=None):
+    def _open_player_surrender_prompt(self, npc_eid, *, snapshot=None, source_prop=None, respect_cooldown=False):
         try:
             npc_eid = int(npc_eid)
         except (TypeError, ValueError):
+            return False
+        if respect_cooldown and self._officer_surrender_offer_on_cooldown(npc_eid):
             return False
         snapshot = snapshot if isinstance(snapshot, dict) else self._player_bookable_snapshot()
         player_pos = self._position_for(self.player_eid)
@@ -39593,6 +39986,7 @@ class CriminalJusticeSystem(System):
             "anchor_y": int(anchor.get("y", player_pos.y) or player_pos.y),
             "fallback": bool(anchor.get("fallback", False)),
         }
+        self._mark_officer_surrender_prompt_opened(npc_eid)
         return True
 
     def _close_player_surrender_prompt(self):
@@ -39641,6 +40035,8 @@ class CriminalJusticeSystem(System):
         player_pos = self._position_for(self.player_eid)
         if snapshot is None or player_pos is None:
             return False
+        if by_eid is not None:
+            self._mark_officer_surrender_offer_cooldown(by_eid)
         source_prop = self._resolve_prompt_source_property(source_prop)
         severity = max(24, int(snapshot.get("active_score", 0) or 0) + 12)
         self._record_incident(
@@ -40376,33 +40772,36 @@ class CriminalJusticeSystem(System):
         if not inventory:
             return {
                 "confiscated_units": 0,
+                "held_units": 0,
+                "forfeited_units": 0,
                 "illegal_units": 0,
                 "restricted_units": 0,
                 "contraband_units": 0,
                 "stolen_units": 0,
                 "weapon_units": 0,
+                "held_entries": (),
+                "forfeited_entries": (),
                 "labels": (),
+                "held_labels": (),
+                "forfeited_labels": (),
             }
 
         confiscated_units = 0
+        held_units = 0
+        forfeited_units = 0
         illegal_units = 0
         restricted_units = 0
         contraband_units = 0
         stolen_units = 0
         weapon_units = 0
         labels = []
+        held_labels = []
+        forfeited_labels = []
+        held_entries = []
+        forfeited_entries = []
         for entry in list(getattr(inventory, "items", ()) or ()):
-            item_id = str(entry.get("item_id", "") or "").strip().lower()
-            item_def = ITEM_CATALOG.get(item_id, {})
-            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-            legal_status = str(item_def.get("legal_status", "legal")).strip().lower() or "legal"
-            tags = _item_tags(item_def)
-            weapon = bool(_item_weapon_id(item_def)) or "weapon" in tags
-            illegal = legal_status == "illegal"
-            restricted = legal_status == "restricted"
-            contraband = illegal or restricted
-            stolen = bool(metadata.get("justice_stolen"))
-            if not (weapon or contraband or stolen):
+            hold_policy = self._justice_item_hold_policy(entry)
+            if not bool(hold_policy.get("seized")):
                 continue
 
             quantity = max(1, int(entry.get("quantity", 1) or 1))
@@ -40412,34 +40811,162 @@ class CriminalJusticeSystem(System):
                 if not removed:
                     continue
             removed_qty = max(1, int(removed.get("quantity", quantity) or quantity))
+            item_id = str(removed.get("item_id", entry.get("item_id", "")) or "").strip().lower()
+            metadata = removed.get("metadata") if isinstance(removed.get("metadata"), dict) else {}
+            item_name = item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG)
             confiscated_units += removed_qty
-            if illegal:
+            if bool(hold_policy.get("hold_for_release")):
+                held_units += removed_qty
+                held_entries.append({
+                    "instance_id": removed.get("instance_id"),
+                    "item_id": item_id,
+                    "quantity": removed_qty,
+                    "owner_eid": removed.get("owner_eid"),
+                    "owner_tag": removed.get("owner_tag"),
+                    "metadata": dict(metadata),
+                })
+                held_labels.append(item_name)
+            if bool(hold_policy.get("forfeit")):
+                forfeited_units += removed_qty
+                forfeited_entries.append({
+                    "instance_id": removed.get("instance_id"),
+                    "item_id": item_id,
+                    "quantity": removed_qty,
+                    "owner_eid": removed.get("owner_eid"),
+                    "owner_tag": removed.get("owner_tag"),
+                    "metadata": dict(metadata),
+                })
+                forfeited_labels.append(item_name)
+            if bool(hold_policy.get("illegal")):
                 illegal_units += removed_qty
-            if restricted:
+            if bool(hold_policy.get("restricted")):
                 restricted_units += removed_qty
-            if contraband:
+            if bool(hold_policy.get("contraband")):
                 contraband_units += removed_qty
-            if stolen:
+            if bool(hold_policy.get("stolen")):
                 stolen_units += removed_qty
-            if weapon:
+            if bool(hold_policy.get("weapon")):
                 weapon_units += removed_qty
-            labels.append(item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG))
+            labels.append(item_name)
             if remove:
                 self._emit_removed_gear_events(self.player_eid, removed, reason="confiscated")
 
         deduped_labels = tuple(dict.fromkeys(label for label in labels if str(label).strip()))
+        deduped_held_labels = tuple(dict.fromkeys(label for label in held_labels if str(label).strip()))
+        deduped_forfeited_labels = tuple(dict.fromkeys(label for label in forfeited_labels if str(label).strip()))
         return {
             "confiscated_units": confiscated_units,
+            "held_units": held_units,
+            "forfeited_units": forfeited_units,
             "illegal_units": illegal_units,
             "restricted_units": restricted_units,
             "contraband_units": contraband_units,
             "stolen_units": stolen_units,
             "weapon_units": weapon_units,
+            "held_entries": tuple(held_entries),
+            "forfeited_entries": tuple(forfeited_entries),
             "labels": deduped_labels[:4],
+            "held_labels": deduped_held_labels[:4],
+            "forfeited_labels": deduped_forfeited_labels[:4],
         }
 
-    def _confiscate_player_inventory(self):
-        return self._player_confiscation_manifest(remove=True)
+    def _confiscate_player_inventory(self, *, booking_prop=None):
+        manifest = self._player_confiscation_manifest(remove=True)
+        held_entries = tuple(manifest.get("held_entries", ()) or ())
+        if held_entries:
+            _store_justice_held_property(
+                self.sim,
+                self.player_eid,
+                property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
+                property_name=(booking_prop or {}).get("name") if isinstance(booking_prop, dict) else None,
+                entries=held_entries,
+            )
+        return manifest
+
+    def _reclaim_player_held_property(self, *, current_prop=None):
+        current_prop = current_prop if isinstance(current_prop, dict) else None
+        held = self._player_held_property_snapshot()
+        entries = [
+            dict(entry)
+            for entry in list(held.get("entries", ()) or ())
+            if isinstance(entry, dict)
+        ]
+        if not entries:
+            return {
+                "claimed_entries": (),
+                "remaining_entries": (),
+                "claimed_units": 0,
+                "remaining_units": 0,
+                "claimed_labels": (),
+                "remaining_labels": (),
+                "blocked_reason": "no_property",
+                "property_id": "",
+                "property_name": "",
+            }
+
+        inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
+        if inventory is None:
+            return {
+                "claimed_entries": (),
+                "remaining_entries": tuple(entries),
+                "claimed_units": 0,
+                "remaining_units": int(sum(max(1, int(entry.get("quantity", 1) or 1)) for entry in entries)),
+                "claimed_labels": (),
+                "remaining_labels": tuple(
+                    dict.fromkeys(
+                        item_display_name(
+                            entry.get("item_id"),
+                            metadata=entry.get("metadata"),
+                            item_catalog=ITEM_CATALOG,
+                        )
+                        for entry in entries
+                    )
+                )[:4],
+                "blocked_reason": "missing_inventory",
+                "property_id": str(held.get("property_id", "") or "").strip(),
+                "property_name": str(held.get("property_name", "") or "").strip(),
+            }
+
+        claimed_entries = []
+        remaining_entries = []
+        claimed_labels = []
+        remaining_labels = []
+        claimed_units = 0
+        remaining_units = 0
+        for entry in entries:
+            item_name = item_display_name(
+                entry.get("item_id"),
+                metadata=entry.get("metadata"),
+                item_catalog=ITEM_CATALOG,
+            )
+            quantity = max(1, int(entry.get("quantity", 1) or 1))
+            if self._inventory_can_accept_entry(inventory, entry) and self._restore_inventory_entry(inventory, entry):
+                claimed_entries.append(dict(entry))
+                claimed_labels.append(item_name)
+                claimed_units += quantity
+                continue
+            remaining_entries.append(dict(entry))
+            remaining_labels.append(item_name)
+            remaining_units += quantity
+
+        _replace_justice_held_property(
+            self.sim,
+            self.player_eid,
+            property_id=(current_prop or {}).get("id") if isinstance(current_prop, dict) else held.get("property_id"),
+            property_name=(current_prop or {}).get("name") if isinstance(current_prop, dict) else held.get("property_name"),
+            entries=remaining_entries,
+        )
+        return {
+            "claimed_entries": tuple(claimed_entries),
+            "remaining_entries": tuple(remaining_entries),
+            "claimed_units": int(claimed_units),
+            "remaining_units": int(remaining_units),
+            "claimed_labels": tuple(dict.fromkeys(label for label in claimed_labels if str(label).strip()))[:4],
+            "remaining_labels": tuple(dict.fromkeys(label for label in remaining_labels if str(label).strip()))[:4],
+            "blocked_reason": "inventory_full" if remaining_entries and not claimed_entries else "",
+            "property_id": str(held.get("property_id", "") or "").strip(),
+            "property_name": str(held.get("property_name", "") or "").strip(),
+        }
 
     def _book_player(self, *, by_eid=None, source_prop=None):
         snapshot = self._player_bookable_snapshot()
@@ -40495,7 +41022,7 @@ class CriminalJusticeSystem(System):
             reason="justice_booking",
         )
 
-        confiscation = self._confiscate_player_inventory()
+        confiscation = self._confiscate_player_inventory(booking_prop=booking_prop)
         fine_due = int(self._player_fine_amount(snapshot))
         fine_result = self._collect_player_fine(fine_due)
         hold_ticks = self._advance_time_for_booking(
@@ -40540,12 +41067,18 @@ class CriminalJusticeSystem(System):
             debt_balance_before=int(fine_result.get("debt_balance_before", 0) or 0),
             debt_balance_after=int(fine_result.get("debt_balance_after", 0) or 0),
             confiscated_item_count=int(confiscation.get("confiscated_units", 0) or 0),
+            held_item_count=int(confiscation.get("held_units", 0) or 0),
+            forfeited_item_count=int(confiscation.get("forfeited_units", 0) or 0),
             illegal_item_count=int(confiscation.get("illegal_units", 0) or 0),
             restricted_item_count=int(confiscation.get("restricted_units", 0) or 0),
             contraband_item_count=int(confiscation.get("contraband_units", 0) or 0),
             stolen_item_count=int(confiscation.get("stolen_units", 0) or 0),
             weapon_item_count=int(confiscation.get("weapon_units", 0) or 0),
             confiscated_labels=tuple(confiscation.get("labels", ()) or ()),
+            held_labels=tuple(confiscation.get("held_labels", ()) or ()),
+            forfeited_labels=tuple(confiscation.get("forfeited_labels", ()) or ()),
+            held_property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
+            held_property_name=str((booking_prop or {}).get("name", "Justice Office") if isinstance(booking_prop, dict) else "Justice Office").strip() or "Justice Office",
             booking_anchor_x=int(anchor_x),
             booking_anchor_y=int(anchor_y),
             booking_anchor_fallback=bool((anchor or {}).get("fallback", False)),
@@ -40692,13 +41225,80 @@ class CriminalJusticeSystem(System):
             return
         if bool(event.data.get("handled")):
             return
-        if self._player_bookable_snapshot() is None:
-            return
         prop = self.sim.properties.get(event.data.get("property_id"))
         if not self._booking_property_allowed(prop):
             return
-        if self._book_player(source_prop=prop):
-            event.data["handled"] = True
+        snapshot = self._player_bookable_snapshot()
+        if snapshot is not None:
+            if self._book_player(source_prop=prop):
+                event.data["handled"] = True
+            return
+
+        justice_snapshot = _justice_snapshot(self.sim, self.player_eid)
+        held = self._player_held_property_snapshot()
+        held_count = int(held.get("item_count", 0) or 0)
+        debt_balance = int(self._player_justice_debt_balance())
+        active_score = int(justice_snapshot.get("active_score", 0) or 0)
+        incident_count = int(justice_snapshot.get("incident_count", 0) or 0)
+        if held_count <= 0 and debt_balance <= 0 and active_score <= 0 and incident_count <= 0:
+            return
+
+        event.data["handled"] = True
+        prop_name = str(prop.get("name", "Justice Desk") or "Justice Desk").strip() or "Justice Desk"
+        current_property_id = str(prop.get("id", "") or "").strip()
+        held_property_id = str(held.get("property_id", "") or "").strip()
+        held_property_name = str(held.get("property_name", "") or "").strip()
+        title = f"Justice Desk: {prop_name}"
+
+        if held_count > 0 and held_property_id and held_property_id != current_property_id:
+            lines = [
+                "This desk is not holding your seized property.",
+                *self._justice_status_lines(current_prop=prop),
+            ]
+            if held_property_name:
+                if debt_balance > 0:
+                    lines.append(f"Settle the debt, then report to {held_property_name} for release.")
+                else:
+                    lines.append(f"Report to {held_property_name} for release.")
+            self._present_justice_result(title, lines, property_id=prop.get("id"))
+            return
+
+        if held_count > 0 and debt_balance > 0:
+            lines = [
+                "Release is blocked until your justice debt is cleared.",
+                *self._justice_status_lines(current_prop=prop),
+            ]
+            self._present_justice_result(title, lines, property_id=prop.get("id"))
+            return
+
+        if held_count > 0:
+            reclaim = self._reclaim_player_held_property(current_prop=prop)
+            claimed_units = int(reclaim.get("claimed_units", 0) or 0)
+            remaining_units = int(reclaim.get("remaining_units", 0) or 0)
+            claimed_labels = [str(label).strip() for label in list(reclaim.get("claimed_labels", ()) or ()) if str(label).strip()]
+            remaining_labels = [str(label).strip() for label in list(reclaim.get("remaining_labels", ()) or ()) if str(label).strip()]
+            lines = []
+            if claimed_units > 0:
+                lines.append(f"Released {claimed_units} held item(s) from the property locker.")
+                if claimed_labels:
+                    lines.append(f"Recovered: {', '.join(claimed_labels[:3])}.")
+            if remaining_units > 0:
+                if str(reclaim.get("blocked_reason", "")).strip().lower() == "missing_inventory":
+                    lines.append("No inventory is available to receive the remaining property.")
+                else:
+                    lines.append(f"{remaining_units} item(s) remain in holding until you make room.")
+                if remaining_labels:
+                    lines.append(f"Still held: {', '.join(remaining_labels[:3])}.")
+            if not lines:
+                lines.append("No held property was released.")
+            self._present_justice_result(title, lines, property_id=prop.get("id"))
+            return
+
+        self._present_justice_result(
+            title,
+            self._justice_status_lines(current_prop=prop),
+            property_id=prop.get("id"),
+        )
 
     def on_npc_interact(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -40720,7 +41320,7 @@ class CriminalJusticeSystem(System):
             return
         if npc_will is not None and str(npc_will.intent or "").strip().lower() in THREAT_STATES and npc_will.target_eid == self.player_eid:
             return
-        if self._open_player_surrender_prompt(npc_eid, snapshot=snapshot):
+        if self._open_player_surrender_prompt(npc_eid, snapshot=snapshot, respect_cooldown=False):
             event.data["handled"] = True
 
     def on_justice_surrender_choice(self, event):
@@ -40815,7 +41415,7 @@ class CriminalJusticeSystem(System):
         held_by_eid = self._find_auto_arrest_enforcer(snapshot)
         if held_by_eid is None:
             return False
-        return bool(self._open_player_surrender_prompt(held_by_eid, snapshot=snapshot))
+        return bool(self._open_player_surrender_prompt(held_by_eid, snapshot=snapshot, respect_cooldown=True))
 
     def _process_resolved_npc_custody(self):
         tick = int(getattr(self.sim, "tick", 0))
@@ -40869,6 +41469,8 @@ class CriminalJusticeSystem(System):
     def update(self):
         if self._player_surrender_prompt_open() and self._player_bookable_snapshot() is None:
             self._close_player_surrender_prompt()
+        if self._player_bookable_snapshot() is None:
+            self._clear_player_surrender_offer_records()
         for change in _decay_justice_records(self.sim):
             self._emit_change_events(change, source_event="justice_decay", reason=str(change.get("reason", "cooldown")))
         self._process_guard_initiated_player_arrest()
@@ -41113,6 +41715,9 @@ class RunPressureSystem(System):
                 "offense_score": int(offense_score),
                 "offense_tier": str(event.data.get("offense_tier", _offense_tier(offense_score))),
                 "context": context,
+                "x": event.data.get("x"),
+                "y": event.data.get("y"),
+                "z": event.data.get("z"),
             },
         )
 
@@ -41120,6 +41725,8 @@ class RunPressureSystem(System):
         if event.data.get("offender_eid") != self.player_eid:
             return
 
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        prop = self.sim.properties.get(property_id) if property_id else None
         severity_label = str(event.data.get("severity_label", "trespass")).strip().lower()
         severity_score = max(0, int(event.data.get("severity_score", 0)))
         witnessed = bool(event.data.get("witnessed", True))
@@ -41145,6 +41752,8 @@ class RunPressureSystem(System):
                 source_event="property_trespass",
                 category="escalation",
                 extra={
+                    "property_id": property_id,
+                    "property_name": str((prop or {}).get("name", "") or "").strip(),
                     "severity_label": severity_label,
                     "severity_score": severity_score,
                     "ingress_kind": ingress_kind,
@@ -41173,6 +41782,8 @@ class RunPressureSystem(System):
             source_event="property_trespass",
             category="escalation",
             extra={
+                "property_id": property_id,
+                "property_name": str((prop or {}).get("name", "") or "").strip(),
                 "severity_label": severity_label,
                 "severity_score": severity_score,
                 "ingress_kind": ingress_kind,
@@ -41217,9 +41828,12 @@ class RunPressureSystem(System):
             source_event="property_tamper",
             category="escalation",
             extra={
+                "property_id": property_id,
+                "property_name": str((prop or {}).get("name", "") or "").strip(),
                 "severity_score": severity_score,
                 "ingress_kind": ingress_kind,
                 "ingress_method": ingress_method,
+                "witnessed": witnessed,
             },
         )
 
@@ -41253,6 +41867,8 @@ class RunPressureSystem(System):
             return
         tactic = str(event.data.get("tactic", "dialogue")).strip().lower() or "dialogue"
         outcome = str(event.data.get("outcome", "wary")).strip().lower() or "wary"
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        prop = self.sim.properties.get(property_id) if property_id else None
         self._emit_pressure(
             delta=delta,
             source="dialogue",
@@ -41261,6 +41877,8 @@ class RunPressureSystem(System):
             category="mitigation" if delta < 0 else "escalation",
             extra={
                 "npc_eid": event.data.get("npc_eid"),
+                "property_id": property_id,
+                "property_name": str((prop or {}).get("name", "") or "").strip(),
                 "tactic": tactic,
                 "outcome": outcome,
             },
@@ -41281,7 +41899,11 @@ class RunPressureSystem(System):
             reason="lay_low",
             source_event="site_service_used",
             category="mitigation",
-            extra={"service": service},
+            extra={
+                "service": service,
+                "property_id": str(event.data.get("property_id", "") or "").strip(),
+                "property_name": str(event.data.get("property_name", "") or "").strip(),
+            },
         )
 
     def on_bank_transaction(self, event):
@@ -41301,7 +41923,12 @@ class RunPressureSystem(System):
             reason=f"{kind}_paperwork",
             source_event="bank_transaction",
             category="mitigation",
-            extra={"transaction_kind": kind},
+            extra={
+                "transaction_kind": kind,
+                "property_id": str(event.data.get("property_id", "") or "").strip(),
+                "provider_name": str(event.data.get("provider_name", "") or "").strip(),
+                "account_kind": str(event.data.get("account_kind", "") or "").strip().lower(),
+            },
         )
 
     def on_insurance_policy_purchased(self, event):
@@ -41318,7 +41945,12 @@ class RunPressureSystem(System):
             reason="policy_cover",
             source_event="insurance_policy_purchased",
             category="mitigation",
-            extra={"policy_key": str(event.data.get("policy_key", ""))},
+            extra={
+                "policy_key": str(event.data.get("policy_key", "")),
+                "policy_name": str(event.data.get("policy_name", "") or "").strip(),
+                "property_id": str(event.data.get("property_id", "") or "").strip(),
+                "provider_name": str(event.data.get("provider_name", "") or "").strip(),
+            },
         )
 
     def on_player_action(self, event):
@@ -49061,6 +49693,12 @@ class EventLogSystem(System):
         self.sim.events.subscribe("player_business_staff_hired", self.on_player_business_staff_hired)
         self.sim.events.subscribe("player_business_staff_fired", self.on_player_business_staff_fired)
         self.sim.events.subscribe("property_purchase_blocked", self.on_property_purchase_blocked)
+        self.sim.events.subscribe("quest_available", self.on_quest_available)
+        self.sim.events.subscribe("quest_accepted", self.on_quest_accepted)
+        self.sim.events.subscribe("quest_completed", self.on_quest_completed)
+        self.sim.events.subscribe("quest_accept_blocked", self.on_quest_accept_blocked)
+        self.sim.events.subscribe("quest_none_available", self.on_quest_none_available)
+        self.sim.events.subscribe("quest_turn_in_noop", self.on_quest_turn_in_noop)
         self.sim.events.subscribe("trade_bought", self.on_trade_bought)
         self.sim.events.subscribe("trade_buy_blocked", self.on_trade_buy_blocked)
         self.sim.events.subscribe("trade_sold", self.on_trade_sold)
@@ -49107,6 +49745,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("run_pressure_changed", self.on_run_pressure_changed)
         self.sim.events.subscribe("run_pressure_tier_changed", self.on_run_pressure_tier_changed)
         self.sim.events.subscribe("run_pressure_mitigated", self.on_run_pressure_mitigated)
+        self.sim.events.subscribe("justice_record_changed", self.on_justice_record_changed)
         self.sim.events.subscribe("justice_wanted_tier_changed", self.on_justice_wanted_tier_changed)
         self.sim.events.subscribe("actor_detained", self.on_actor_detained)
         self.sim.events.subscribe("justice_booking_completed", self.on_justice_booking_completed)
@@ -49152,6 +49791,229 @@ class EventLogSystem(System):
         if name and str(name).strip().lower() != "entity":
             return name
         return f"NPC {eid}"
+
+    def _property_name(self, property_id, fallback="property"):
+        property_id = str(property_id or "").strip()
+        if property_id:
+            prop = self.sim.properties.get(property_id)
+            if isinstance(prop, dict):
+                name = str(prop.get("name", prop.get("id", property_id)) or property_id).strip()
+                if name:
+                    return name
+        return str(fallback or "property")
+
+    def _property_name_if_known(self, property_id):
+        property_id = str(property_id or "").strip()
+        if not property_id:
+            return ""
+        prop = self.sim.properties.get(property_id)
+        if not isinstance(prop, dict):
+            return ""
+        return str(prop.get("name", prop.get("id", property_id)) or property_id).strip()
+
+    def _event_property_name(self, event, fallback="property"):
+        property_name = str(event.data.get("property_name", "") or "").strip()
+        if property_name:
+            return property_name
+        return self._property_name(event.data.get("property_id"), fallback=fallback)
+
+    def _event_site_name(self, event):
+        property_name = str(event.data.get("property_name", "") or "").strip()
+        if property_name:
+            return property_name
+        x = event.data.get("x")
+        y = event.data.get("y")
+        z = event.data.get("z")
+        try:
+            if x is None or y is None or z is None:
+                raise ValueError
+            prop = self.sim.property_at(int(x), int(y), int(z)) or _property_covering(self.sim, int(x), int(y), int(z))
+        except (TypeError, ValueError):
+            prop = None
+        if isinstance(prop, dict):
+            return str(prop.get("name", prop.get("id", "property")) or "property").strip() or "property"
+        return ""
+
+    def _event_place_name(self, event):
+        property_name = str(event.data.get("property_name", "") or "").strip()
+        if property_name:
+            return property_name
+        provider_name = str(event.data.get("provider_name", "") or "").strip()
+        if provider_name:
+            return provider_name
+        property_name = self._property_name_if_known(event.data.get("property_id"))
+        if property_name:
+            return property_name
+        return self._event_site_name(event)
+
+    def _event_item_label(self, event, *, fallback="item"):
+        item_name = str(event.data.get("item_name", "") or "").strip()
+        if item_name:
+            return item_name
+        item_id = str(event.data.get("item_id", "") or "").strip().lower()
+        if item_id:
+            return item_display_name(item_id, item_catalog=ITEM_CATALOG)
+        return str(fallback or "item")
+
+    def _action_event_label(self, action, *, fallback="action"):
+        action = str(action or "").strip().lower()
+        labels = {
+            "fire_weapon": "gunfire",
+            "melee_attack": "an assault",
+            "use_item": "item use",
+            "purchase_property": "an illegal purchase attempt",
+            "forced_breach": "a forced breach",
+            "window_entry": "a window entry",
+            "side_entry": "a side entry",
+            "toggle_door_lock": "lock tampering",
+        }
+        if action in labels:
+            return labels[action]
+        if action:
+            return action.replace("_", " ")
+        return str(fallback or "action")
+
+    def _justice_incident_cause_text(self, event):
+        incident_type = str(event.data.get("incident_type", "") or "").strip().lower()
+        incident_label = str(event.data.get("incident_label", incident_type.replace("_", " ")) or "").strip()
+        note = str(event.data.get("note", "") or "").strip()
+        property_name = self._event_property_name(event, fallback="").strip()
+        witnessed = bool(event.data.get("incident_witnessed", True))
+        unseen_prefix = "unseen " if not witnessed else ""
+
+        if incident_type == "trespass":
+            severity = note.replace("_", " ").strip() or incident_label or "trespass"
+            if property_name:
+                return f"{unseen_prefix}{severity} at {property_name}"
+            return f"{unseen_prefix}{severity}"
+        if incident_type == "tamper":
+            return f"{unseen_prefix}tampering at {property_name}" if property_name else f"{unseen_prefix}tampering"
+        if incident_type == "theft":
+            item_name = note or incident_label or "theft"
+            if property_name:
+                return f"theft of {item_name} at {property_name}"
+            return f"theft of {item_name}"
+        if incident_type == "contraband":
+            if property_name:
+                return f"visible contraband use at {property_name}"
+            return "visible contraband use"
+        if incident_type in {"armed_assault", "explosive_discharge"}:
+            action_slug = note.split("/", 1)[0].strip().lower() if note else ""
+            action_text = self._action_event_label(action_slug, fallback=incident_label or "violence")
+            if property_name:
+                return f"{action_text} at {property_name}"
+            return action_text
+        if incident_label and property_name:
+            return f"{incident_label} at {property_name}"
+        return incident_label or property_name or "an incident"
+
+    def _objective_progress_channel_label(self, channel):
+        channel = str(channel or "").strip().lower()
+        labels = {
+            "talk": "conversation",
+            "contact": "new contacts",
+            "trade": "trade",
+            "site_service": "local services",
+            "site_intel": "site intel",
+            "discovery": "scouting",
+            "opportunity": "side work",
+        }
+        if channel in labels:
+            return labels[channel]
+        if channel:
+            return channel.replace("_", " ")
+        return "field work"
+
+    def _current_objective_title(self):
+        objective_eval = evaluate_run_objective(self.sim, self.player_eid)
+        if not isinstance(objective_eval, dict):
+            return ""
+        return str(objective_eval.get("title", "") or "").strip()
+
+    def _quest_reward_text(self, reward):
+        reward = dict(reward or {}) if isinstance(reward, dict) else {}
+        bits = []
+        credits = int(reward.get("credits", 0) or 0)
+        intel = int(reward.get("intel", 0) or 0)
+        if credits > 0:
+            bits.append(f"+{credits}c")
+        if intel > 0:
+            bits.append(f"intel +{intel}")
+        return ", ".join(bits)
+
+    def _opportunity_completion_text(self, completion_reason):
+        text = str(completion_reason or "").strip()
+        if not text:
+            return "you met the local handoff conditions"
+        normalized = text.replace("_", " ").strip()
+        if normalized.startswith("entered target chunk"):
+            return "you reached the target area"
+        if normalized == "requirements met":
+            return "you met the local handoff conditions"
+        return normalized
+
+    def _pressure_cause_text(self, event):
+        source = str(event.data.get("source", "pressure") or "pressure").strip().lower()
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        place_name = self._event_place_name(event)
+        place_suffix = f" at {place_name}" if place_name else ""
+        witnessed = bool(event.data.get("witnessed", True))
+        unseen_prefix = "unseen " if not witnessed else ""
+
+        if source == "offense":
+            action_key = reason.split("/", 1)[0].strip().lower()
+            context = str(event.data.get("context", "") or "").strip().lower()
+            if context == "contraband_use":
+                return f"visible contraband{place_suffix}" if place_name else "visible contraband"
+            action_text = self._action_event_label(action_key, fallback="trouble")
+            return f"{action_text}{place_suffix}" if place_name else action_text
+        if source == "trespass":
+            severity = str(event.data.get("severity_label", reason or "trespass") or "trespass").replace("_", " ").strip()
+            if place_name:
+                return f"{unseen_prefix}{severity} at {place_name}"
+            return f"{unseen_prefix}{severity}".strip()
+        if source == "tamper":
+            if place_name:
+                return f"{unseen_prefix}tampering at {place_name}"
+            return f"{unseen_prefix}tampering".strip()
+        if source == "dialogue":
+            tactic = str(event.data.get("tactic", "dialogue") or "dialogue").strip().lower()
+            outcome = str(event.data.get("outcome", "wary") or "wary").strip().lower()
+            if outcome == "deescalated":
+                detail = "talking a guard down"
+            elif outcome == "aggravated":
+                detail = "pushing a guard the wrong way"
+            else:
+                detail = f"a tense {tactic.replace('_', ' ')} with a guard"
+            return f"{detail}{place_suffix}" if place_name else detail
+        if source == "shelter":
+            return f"lying low{place_suffix}" if place_name else "lying low"
+        if source == "banking":
+            kind = str(
+                event.data.get("transaction_kind", event.data.get("kind", "transaction")) or "transaction"
+            ).strip().lower()
+            if kind == "debt_payment":
+                detail = "paying down justice debt"
+            else:
+                detail = "fresh banking paperwork"
+            return f"{detail}{place_suffix}" if place_name else detail
+        if source == "insurance":
+            policy_name = str(event.data.get("policy_name", "") or "").strip()
+            detail = f"buying {policy_name}" if policy_name else "buying cover"
+            return f"{detail}{place_suffix}" if place_name else detail
+        if source == "lay_low":
+            return "keeping your head down"
+        if source == "passive_decay":
+            return "letting time pass without new trouble"
+        if source == "warning":
+            return f"drawing a warning{place_suffix}" if place_name else "drawing a warning"
+        if source == "defense":
+            return f"triggering a defense response{place_suffix}" if place_name else "triggering a defense response"
+        if reason:
+            return reason.replace("_", " ")
+        if place_name:
+            return f"{source.replace('_', ' ')} at {place_name}"
+        return source.replace("_", " ")
 
     def _log_npc_message(self, eid, text, *, channel="social", priority="normal", dedupe_window=None, dedupe_key=None):
         message = str(text or "").strip()
@@ -49224,6 +50086,46 @@ class EventLogSystem(System):
 
         if reason == "out_of_bounds":
             return "You cannot go that way."
+        return "You cannot walk there."
+
+    def _movement_blocked_message(self, *, reason, x=None, y=None, z=None, property_id=None, floor_context=False):
+        reason = str(reason or "").strip().lower()
+
+        prop = None
+        if property_id is not None:
+            prop = self.sim.properties.get(property_id)
+        if prop is None and None not in {x, y, z}:
+            prop = self.sim.property_at(x, y, z) or _property_covering(self.sim, x, y, z)
+
+        if reason == "locked_property":
+            name = str((prop or {}).get("name", (prop or {}).get("id", "The property"))).strip() or "The property"
+            controller = _property_access_controller(self.sim, prop) if prop else {}
+            requirement = _controller_access_requirement_text(controller)
+            return f"{name} is secured. You need {requirement}, a lockpick kit, or exceptional intrusion skill."
+        if reason == "closed_property":
+            name = str((prop or {}).get("name", (prop or {}).get("id", "The place"))).strip() or "The place"
+            return f"{name} is closed."
+        if reason == "lock_override_failed":
+            name = str((prop or {}).get("name", (prop or {}).get("id", "the lock"))).strip() or "the lock"
+            controller = _property_access_controller(self.sim, prop) if prop else {}
+            fixture = str(controller.get("fixture_label", "") or "lock").strip() or "lock"
+            return f"You fail to defeat the {fixture} at {name}."
+        if reason == "lock_override_fumble":
+            name = str((prop or {}).get("name", (prop or {}).get("id", "the lock"))).strip() or "the lock"
+            controller = _property_access_controller(self.sim, prop) if prop else {}
+            fixture = str(controller.get("fixture_label", "") or "lock").strip() or "lock"
+            return f"Your hand slips on the {fixture} at {name}; the override attempt fumbles."
+        if reason == "door_access_denied":
+            if floor_context:
+                if isinstance(prop, dict):
+                    name = str(prop.get("name", prop.get("id", "that floor"))).strip() or "that floor"
+                    return f"You cannot access {name} from here."
+                return "You cannot access that floor connection."
+            return "You cannot open that door."
+        if None not in {x, y, z}:
+            return self._move_blocked_phrase(x, y, z, reason)
+        if floor_context:
+            return "That route to another floor is blocked."
         return "You cannot walk there."
 
     def _player_has_los_to_position(self, x, y, z):
@@ -49956,54 +50858,14 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         reason = str(event.data.get("reason", "")).strip().lower()
-        if reason == "locked_property":
-            prop = self.sim.properties.get(event.data.get("property_id"))
-            name = str(prop.get("name", prop.get("id", "property"))).strip() if prop else "The property"
-            controller = _property_access_controller(self.sim, prop) if prop else {}
-            requirement = _controller_access_requirement_text(controller)
-            _log_player_feedback(
-                self.sim,
-                f"{name} is secured. You need {requirement}, a lockpick kit, or exceptional intrusion skill.",
-                kind="movement",
-            )
-            return
-        if reason == "closed_property":
-            prop = (
-                self.sim.properties.get(event.data.get("property_id"))
-                or self.sim.property_at(event.data.get("x"), event.data.get("y"), event.data.get("z"))
-                or _property_covering(self.sim, event.data.get("x"), event.data.get("y"), event.data.get("z"))
-            )
-            name = str(prop.get("name", prop.get("id", "place"))).strip() if prop else "The place"
-            _log_player_feedback(self.sim, f"{name} is closed.", kind="movement")
-            return
-        if reason == "lock_override_failed":
-            prop = self.sim.properties.get(event.data.get("property_id"))
-            name = str(prop.get("name", prop.get("id", "property"))).strip() if prop else "the lock"
-            controller = _property_access_controller(self.sim, prop) if prop else {}
-            fixture = str(controller.get("fixture_label", "") or "lock").strip() or "lock"
-            _log_player_feedback(self.sim, f"You fail to defeat the {fixture} at {name}.", kind="movement")
-            return
-        if reason == "lock_override_fumble":
-            prop = self.sim.properties.get(event.data.get("property_id"))
-            name = str(prop.get("name", prop.get("id", "property"))).strip() if prop else "the lock"
-            controller = _property_access_controller(self.sim, prop) if prop else {}
-            fixture = str(controller.get("fixture_label", "") or "lock").strip() or "lock"
-            _log_player_feedback(
-                self.sim,
-                f"Your hand slips on the {fixture} at {name}; the override attempt fumbles.",
-                kind="movement",
-            )
-            return
-        if reason == "door_access_denied":
-            _log_player_feedback(self.sim, "You cannot open that door.", kind="movement")
-            return
         _log_player_feedback(
             self.sim,
-            self._move_blocked_phrase(
-                event.data.get("x"),
-                event.data.get("y"),
-                event.data.get("z"),
-                reason,
+            self._movement_blocked_message(
+                reason=reason,
+                x=event.data.get("x"),
+                y=event.data.get("y"),
+                z=event.data.get("z"),
+                property_id=event.data.get("property_id"),
             ),
             kind="movement",
         )
@@ -50038,7 +50900,45 @@ class EventLogSystem(System):
     def on_floor_change_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
             return
-        _log_player_feedback(self.sim, "No stairs/elevator connection here.", kind="movement")
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        if reason == "overworld_mode":
+            _log_player_feedback(self.sim, "Floor changes are unavailable in the overworld map.", kind="movement")
+            return
+        if reason == "no_transition":
+            _log_player_feedback(self.sim, "No stairs/elevator connection here.", kind="movement")
+            return
+
+        try:
+            x = int(event.data.get("x"))
+            y = int(event.data.get("y"))
+            z = int(event.data.get("z"))
+            dz = int(event.data.get("dz", 0))
+        except (TypeError, ValueError):
+            x = y = z = dz = None
+
+        floor_link = self.sim.tilemap.floor_transition(x, y, z, dz) if None not in {x, y, z, dz} else None
+        target_x = int(floor_link.get("x", x or 0)) if isinstance(floor_link, dict) else x
+        target_y = int(floor_link.get("y", y or 0)) if isinstance(floor_link, dict) else y
+        target_z = int(floor_link.get("z", z or 0)) if isinstance(floor_link, dict) else z
+        target_prop = None
+        if target_x is not None and target_y is not None and target_z is not None:
+            target_prop = (
+                self.sim.property_at(target_x, target_y, target_z)
+                or _property_covering(self.sim, target_x, target_y, target_z)
+            )
+
+        _log_player_feedback(
+            self.sim,
+            self._movement_blocked_message(
+                reason=reason,
+                x=target_x,
+                y=target_y,
+                z=target_z,
+                property_id=(target_prop or {}).get("id") if isinstance(target_prop, dict) else None,
+                floor_context=True,
+            ),
+            kind="movement",
+        )
 
     def on_entity_changed_floor(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -50268,13 +51168,16 @@ class EventLogSystem(System):
         intrusion_label = str(event.data.get("intrusion_label", "")).strip() or "intrusion"
 
         if reason == "offline":
-            self.sim.log.add(f"{panel_name} has no live link.")
+            if target_name and target_name != "property":
+                self.sim.log.add(f"{panel_name} has no live link to {target_name}.")
+            else:
+                self.sim.log.add(f"{panel_name} has no live link.")
             return
         if reason == "panel_intrusion_failed":
-            self.sim.log.add(f"You fail to land the {intrusion_label} on {panel_name}.")
+            self.sim.log.add(f"You fail to land the {intrusion_label} on {panel_name}; {target_name} stays secured.")
             return
         if reason == "panel_intrusion_fumble":
-            self.sim.log.add(f"You fumble the {intrusion_label} on {panel_name}.")
+            self.sim.log.add(f"You fumble the {intrusion_label} on {panel_name}; {target_name} stays secured.")
             return
         if reason == "lock_override_failed":
             self.sim.log.add(f"You fail to defeat the {panel_name} guarding {target_name}.")
@@ -50285,7 +51188,7 @@ class EventLogSystem(System):
         if reason == "locked_property":
             self.sim.log.add(f"{panel_name} rejects you. You need {requirement}, a lockpick kit, or exceptional intrusion skill.")
             return
-        self.sim.log.add(f"{panel_name} blocks access to {target_name}.")
+        self.sim.log.add(f"{panel_name} blocks access to {target_name} right now.")
 
     def on_property_interact(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -50701,7 +51604,7 @@ class EventLogSystem(System):
             self.sim.log.add(f"{_casino_game_title(service)}: {prop_name} refuses that stake. Pick one of the posted bets.")
             return
         if reason == "invalid_round" and service in CASINO_GAME_SERVICE_IDS:
-            self.sim.log.add(f"{_casino_game_title(service)}: {prop_name} cannot resolve that hand. Start a fresh round.")
+            self.sim.log.add(f"{_casino_game_title(service)}: {prop_name} loses the round state. Start a fresh round.")
             return
         if reason == "cooldown":
             ready_in = int(event.data.get("ready_in", 0))
@@ -50802,13 +51705,28 @@ class EventLogSystem(System):
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             self.sim.log.add(f"Vending: no room for {item_name}. Free an inventory slot first.")
             return
+        if reason == "power_cut":
+            self.sim.log.add(f"{prop_name} is offline. Power is out.")
+            return
+        if reason == "unavailable":
+            if service == "vending":
+                self.sim.log.add(f"Vending: {prop_name} does not dispense anything right now.")
+                return
+            if service in {"vehicle_sales_new", "vehicle_sales_used"}:
+                quality = "new" if service.endswith("_new") else "used"
+                self.sim.log.add(f"Vehicles: the posted {quality} offer at {prop_name} is gone.")
+                return
+            self.sim.log.add(f"{prop_name} is not offering {_site_service_label(service)} right now.")
+            return
         if reason == "no_credits":
             cost = int(event.data.get("cost", 0))
             credits = int(event.data.get("credits", 0))
-            self.sim.log.add(f"{prop_name} service blocked: need {cost}c, have {credits}c.")
+            self.sim.log.add(
+                f"{_site_service_label(service).title()}: {prop_name} needs {cost}c; you only have {credits}c."
+            )
             return
         if reason == "no_space" and service in {"vehicle_sales_new", "vehicle_sales_used"}:
-            self.sim.log.add(f"{prop_name} cannot place a vehicle near you right now.")
+            self.sim.log.add(f"Vehicles: no clear spot near {prop_name} to place the purchase.")
             return
         if reason == "key_storage_full" and service in {"vehicle_sales_new", "vehicle_sales_used"}:
             self.sim.log.add("You need a free inventory slot for the vehicle key.")
@@ -50816,7 +51734,7 @@ class EventLogSystem(System):
         if reason == "no_vehicle" and service == "vehicle_fetch":
             self.sim.log.add(f"Fetch: you don't own any vehicles for {prop_name} to retrieve.")
             return
-        self.sim.log.add(f"{prop_name} cannot provide {_site_service_label(service)} right now.")
+        self.sim.log.add(f"{prop_name} is not offering {_site_service_label(service)} right now.")
 
     def on_site_intel_report(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -51062,23 +51980,31 @@ class EventLogSystem(System):
         tier = event.data.get("offense_tier", _offense_tier(offense_score))
         action = event.data.get("action", "action")
         context = event.data.get("context", "ordinary")
+        site_name = self._event_site_name(event)
+        site_text = f" at {site_name}" if site_name else ""
+        action_label = self._action_event_label(action)
         if context == "contraband_use":
+            summary = f"Contraband exposed{site_text}: {action_label}."
             self._warn_once(
                 "contraband",
                 "Warning: obvious contraband use can alarm nearby people and provoke a harsher response.",
             )
         elif context == "armed_assault":
+            summary = f"Violence witnessed{site_text}: {action_label}."
             self._warn_once(
                 "shooting",
                 "Warning: shooting is an overtly threatening action and can trigger immediate violence.",
             )
         elif context == "explosive_discharge":
+            summary = f"Explosion witnessed{site_text}: {action_label}."
             self._warn_once(
                 "explosives",
                 "Warning: explosives are openly hostile and can trigger immediate violent response.",
             )
+        else:
+            summary = f"Offense witnessed{site_text}: {action_label}."
         self._log(
-            f"Action offense [{tier}] {action}/{context} (score {offense_score}).",
+            f"{summary} Risk {tier} ({offense_score}).",
             channel="alerts",
             priority="high",
             dedupe_window=4,
@@ -51130,12 +52056,15 @@ class EventLogSystem(System):
             return
 
         reason = event.data.get("reason")
-        if reason == "no_item_nearby":
+        item_name = self._event_item_label(event)
+        if reason == "no_inventory":
+            _log_player_feedback(self.sim, "You have no inventory access right now.", kind="pickup")
+        elif reason == "no_item_nearby":
             _log_player_feedback(self.sim, "No item on or next to you to pick up.", kind="pickup")
         elif reason == "inventory_full":
-            _log_player_feedback(self.sim, "Inventory is full.", kind="pickup")
+            _log_player_feedback(self.sim, f"Inventory is full. Cannot pick up {item_name}.", kind="pickup")
         else:
-            _log_player_feedback(self.sim, "Could not pick up item.", kind="pickup")
+            _log_player_feedback(self.sim, f"You cannot pick up {item_name} right now.", kind="pickup")
 
     def on_item_dropped(self, event):
         eid = event.data.get("eid")
@@ -51159,10 +52088,15 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         reason = event.data.get("reason")
-        if reason == "inventory_empty":
+        item_name = self._event_item_label(event)
+        if reason == "no_inventory":
+            _log_player_feedback(self.sim, "You have no inventory access right now.", kind="interaction")
+        elif reason == "inventory_empty":
             _log_player_feedback(self.sim, "Inventory is empty.", kind="interaction")
+        elif reason == "remove_failed":
+            _log_player_feedback(self.sim, f"{item_name} would not leave your inventory.", kind="interaction")
         else:
-            _log_player_feedback(self.sim, "Could not drop item.", kind="interaction")
+            _log_player_feedback(self.sim, f"You cannot drop {item_name} right now.", kind="interaction")
 
     def on_item_used(self, event):
         eid = event.data.get("eid")
@@ -51333,16 +52267,21 @@ class EventLogSystem(System):
             return
 
         reason = event.data.get("reason")
-        if reason == "no_usable_item":
+        item_name = self._event_item_label(event, fallback="that item")
+        if reason == "no_inventory":
+            _log_player_feedback(self.sim, "You have no inventory access right now.", kind="interaction")
+        elif reason == "no_usable_item":
             _log_player_feedback(self.sim, "No usable item in inventory.", kind="interaction")
         elif reason == "auto_only_item":
-            _log_player_feedback(self.sim, "That device only fires automatically in a critical state.", kind="interaction")
+            _log_player_feedback(self.sim, f"{item_name} only triggers automatically in a critical state.", kind="interaction")
         elif reason == "item_not_usable":
-            _log_player_feedback(self.sim, "That item cannot be used.", kind="interaction")
+            _log_player_feedback(self.sim, f"{item_name} cannot be used.", kind="interaction")
         elif reason == "no_applicable_effect":
-            _log_player_feedback(self.sim, "Item has no effect right now.", kind="interaction")
+            _log_player_feedback(self.sim, f"{item_name} has no effect right now.", kind="interaction")
+        elif reason == "consume_failed":
+            _log_player_feedback(self.sim, f"{item_name} failed before it took effect.", kind="interaction")
         else:
-            _log_player_feedback(self.sim, "Could not use item.", kind="interaction")
+            _log_player_feedback(self.sim, f"You cannot use {item_name} right now.", kind="interaction")
 
     def on_item_stolen(self, event):
         if event.data.get("offender_eid") != self.player_eid:
@@ -51423,16 +52362,17 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         reason = event.data.get("reason")
+        store_name = self._event_property_name(event, fallback="That storefront")
         if reason == "no_store":
-            self.sim.log.add("No storefront nearby for trading.")
+            self.sim.log.add("No storefront nearby for shopping.")
             return
         if reason == "no_machine_store":
             self.sim.log.add("No unattended machine nearby. Use E at a staffed counter.")
             return
         if reason == "no_staff":
-            self.sim.log.add("No clerk is serving this storefront right now.")
+            self.sim.log.add(f"{store_name} has no clerk on the counter right now.")
             return
-        self.sim.log.add("Could not open trade panel.")
+        self.sim.log.add(f"No shopping counter is ready at {store_name} right now.")
 
     def on_cover_taken(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -51507,16 +52447,26 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         reason = event.data.get("reason", "blocked")
-        if reason == "no_cover_object":
-            self.sim.log.add("No nearby cover object.")
+        if reason == "missing_cover_state":
+            self.sim.log.add("You are not braced to take cover right now.")
+        elif reason == "no_cover_object":
+            self.sim.log.add("Nothing solid nearby to use as cover.")
         elif reason == "cover_hop_requires_cover":
-            self.sim.log.add("You need active cover before hopping.")
+            self.sim.log.add("You need to be in cover before hopping.")
         elif reason == "no_cover_hop_target":
             self.sim.log.add("No reachable cover to hop into.")
         elif reason == "cover_hop_path_blocked":
-            self.sim.log.add("Cover hop blocked on the way.")
+            block_reason = str(event.data.get("block_reason", "") or "").strip().lower()
+            detail = self._movement_blocked_message(
+                reason=block_reason or "blocked",
+                x=event.data.get("block_x"),
+                y=event.data.get("block_y"),
+                z=event.data.get("block_z"),
+                property_id=event.data.get("property_id"),
+            )
+            self.sim.log.add(f"Cover hop blocked. {detail}")
         else:
-            self.sim.log.add("Could not take cover.")
+            self.sim.log.add("You cannot settle into cover from here.")
 
     def on_rumor_shared(self, event):
         if event.data.get("offender_eid") != self.player_eid:
@@ -51631,7 +52581,7 @@ class EventLogSystem(System):
     def on_weapon_cycle_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
             return
-        self.sim.log.add("No weapon available to equip.")
+        self.sim.log.add("No weapon in your loadout to equip.")
 
     def on_weapon_fired(self, event):
         eid = event.data.get("eid")
@@ -51771,6 +52721,9 @@ class EventLogSystem(System):
         if reason == "cooldown":
             self._log(f"Weapon cooling down ({event.data.get('ready_in', 0)}t).", channel="combat", priority="high")
             return
+        if reason == "no_loadout":
+            self.sim.log.add("No weapon or attack setup is ready.")
+            return
         if reason == "no_target":
             self.sim.log.add("No target in range.")
             return
@@ -51792,7 +52745,11 @@ class EventLogSystem(System):
         if reason == "downed":
             self.sim.log.add("You are too hurt to fire.")
             return
-        self._log("Could not fire weapon.", channel="combat", priority="high")
+        weapon_name = str(event.data.get("weapon_name", "") or "").strip()
+        if weapon_name:
+            self._log(f"{weapon_name} will not fire.", channel="combat", priority="high")
+            return
+        self._log("Your weapon will not fire.", channel="combat", priority="high")
 
     def on_entity_damaged(self, event):
         target = event.data.get("target_eid")
@@ -52037,14 +52994,15 @@ class EventLogSystem(System):
     def on_property_owner_changed(self, event):
         if event.data.get("new_owner_eid") != self.player_eid:
             return
-        self.sim.log.add(f"You now own property {event.data['property_id']}.")
+        property_name = self._property_name(event.data.get("property_id"))
+        self.sim.log.add(f"You now own {property_name}.")
 
     def on_property_purchased(self, event):
         if event.data.get("eid") != self.player_eid:
             return
-        prop = event.data.get("property_id")
+        prop = self._property_name(event.data.get("property_id"))
         price = event.data.get("price", 0)
-        self.sim.log.add(f"Purchased property {prop} for {price} credits.")
+        self.sim.log.add(f"Purchased {prop} for {price} credits.")
 
     def on_player_business_acquired(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -52089,18 +53047,94 @@ class EventLogSystem(System):
             return
 
         reason = event.data.get("reason")
+        property_name = self._event_property_name(event, fallback="That property")
         if reason == "no_property":
             self.sim.log.add("No property nearby to purchase.")
         elif reason == "already_owner":
-            self.sim.log.add("You already own that property.")
+            self.sim.log.add(f"You already own {property_name}.")
         elif reason == "not_for_sale":
-            self.sim.log.add("That property is not for sale.")
+            owner_tag = str(event.data.get("owner_tag", "") or "").strip().lower()
+            if owner_tag and owner_tag not in {"", "city"}:
+                self.sim.log.add(f"{property_name} is already held privately and is not on the market.")
+            else:
+                self.sim.log.add(f"{property_name} is not currently for sale.")
         elif reason == "insufficient_funds":
             price = event.data.get("price", 0)
             credits = event.data.get("credits", 0)
-            self.sim.log.add(f"Not enough credits ({credits}/{price}).")
+            self.sim.log.add(f"{property_name} costs {price} credits; you have {credits}.")
+        elif reason == "missing_assets":
+            self.sim.log.add(f"Cannot purchase {property_name} because your wallet is not accessible right now.")
         else:
-            self.sim.log.add("Property purchase blocked.")
+            self.sim.log.add(f"Purchase of {property_name} could not be finalized.")
+
+    def on_quest_available(self, event):
+        quest_id = int(event.data.get("quest_id", 0) or 0)
+        title = str(event.data.get("title", "Quest")).strip() or "Quest"
+        difficulty = max(1, int(event.data.get("difficulty", 1) or 1))
+        label = f"Q{quest_id} {title}" if quest_id > 0 else title
+        self._log(
+            f"Quest posted: {label} (difficulty {difficulty}).",
+            channel="mission",
+            priority="high",
+            dedupe_window=10,
+            dedupe_key=f"quest-available:{quest_id}:{title.lower()}",
+        )
+
+    def on_quest_accepted(self, event):
+        quest_id = int(event.data.get("quest_id", 0) or 0)
+        title = str(event.data.get("title", "Quest")).strip() or "Quest"
+        difficulty = max(1, int(event.data.get("difficulty", 1) or 1))
+        label = f"Q{quest_id} {title}" if quest_id > 0 else title
+        self._log(
+            f"Quest accepted: {label} (difficulty {difficulty}).",
+            channel="mission",
+            priority="high",
+        )
+
+    def on_quest_completed(self, event):
+        quest_id = int(event.data.get("quest_id", 0) or 0)
+        title = str(event.data.get("title", "Quest")).strip() or "Quest"
+        label = f"Q{quest_id} {title}" if quest_id > 0 else title
+        reward_text = self._quest_reward_text(event.data.get("reward", {}))
+        if reward_text:
+            self._log(
+                f"Quest complete: {label}. Reward {reward_text}.",
+                channel="mission",
+                priority="high",
+            )
+            return
+        self._log(
+            f"Quest complete: {label}.",
+            channel="mission",
+            priority="high",
+        )
+
+    def on_quest_accept_blocked(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        if reason == "max_active":
+            self._log(
+                "Quest board full: finish one of your active quests first.",
+                channel="mission",
+                priority="high",
+            )
+            return
+        self._log("This quest board cannot issue a new contract right now.", channel="mission", priority="high")
+
+    def on_quest_none_available(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._log("No quests are available right now.", channel="mission", priority="high")
+
+    def on_quest_turn_in_noop(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._log(
+            "No manual turn-in needed. Quest rewards land as soon as the work is done.",
+            channel="mission",
+            priority="high",
+        )
 
     def on_trade_bought(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -52119,21 +53153,32 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         reason = event.data.get("reason")
+        store_name = self._event_property_name(event, fallback="That storefront")
+        item_name = self._event_item_label(event)
         if reason == "no_store":
-            self.sim.log.add("No storefront nearby.")
+            self.sim.log.add("No storefront nearby to buy from.")
+            return
+        if reason == "no_assets":
+            self.sim.log.add("Cannot buy right now: your wallet is not accessible.")
+            return
+        if reason == "no_inventory":
+            self.sim.log.add("Cannot buy right now: you have nowhere to carry the purchase.")
             return
         if reason == "store_empty":
-            self.sim.log.add("Store is out of stock.")
+            self.sim.log.add(f"{store_name} is out of stock.")
+            return
+        if reason == "item_unavailable":
+            self.sim.log.add(f"{store_name} does not have {item_name} available right now.")
             return
         if reason == "insufficient_funds":
             cheapest = int(event.data.get("cheapest_price", 0))
             credits = int(event.data.get("credits", 0))
-            self.sim.log.add(f"Cannot buy: {credits}/{cheapest} credits.")
+            self.sim.log.add(f"Cannot buy from {store_name}: you have {credits} credits and need {cheapest}.")
             return
         if reason == "inventory_full":
-            self.sim.log.add("Cannot buy: inventory is full.")
+            self.sim.log.add(f"Cannot buy {item_name}: inventory is full.")
             return
-        self.sim.log.add("Purchase blocked.")
+        self.sim.log.add(f"Purchase of {item_name} at {store_name} could not be finalized.")
 
     def on_trade_sold(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -52151,11 +53196,25 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         reason = event.data.get("reason")
+        store_name = self._event_property_name(event, fallback="That storefront")
+        item_name = self._event_item_label(event)
         if reason == "no_store":
-            self.sim.log.add("No storefront nearby.")
+            self.sim.log.add("No storefront nearby to sell to.")
+            return
+        if reason == "no_assets":
+            self.sim.log.add("Cannot sell right now: your wallet is not accessible.")
+            return
+        if reason == "no_inventory":
+            self.sim.log.add("Cannot sell right now: your carried inventory is not accessible.")
             return
         if reason == "inventory_empty":
             self.sim.log.add("Nothing to sell.")
+            return
+        if reason == "no_sellable_item":
+            self.sim.log.add(f"{store_name} has nothing to buy from what you're carrying.")
+            return
+        if reason == "item_not_found":
+            self.sim.log.add(f"That sale item is no longer available in your inventory.")
             return
         if reason == "vehicle_not_in_chunk":
             vehicle_name = str(event.data.get("vehicle_name", "vehicle") or "vehicle").strip()
@@ -52170,12 +53229,20 @@ class EventLogSystem(System):
         if reason == "invalid_vehicle_key":
             self.sim.log.add("That key is not tied to a vehicle record.")
             return
-        self.sim.log.add("Sale blocked.")
+        if reason == "missing_sale_state":
+            self.sim.log.add(f"Cannot price a sale at {store_name} right now.")
+            return
+        if reason == "remove_failed":
+            self.sim.log.add(f"The sale of {item_name} stalled before it left your inventory.")
+            return
+        self.sim.log.add(f"Sale of {item_name} at {store_name} could not be finalized.")
 
     def on_bank_transaction(self, event):
         if event.data.get("eid") != self.player_eid:
             return
         kind = event.data.get("kind", "deposit")
+        provider_name = self._event_place_name(event)
+        place_note = f" at {provider_name}" if provider_name else ""
         account_kind = str(event.data.get("account_kind", "personal")).strip().lower() or "personal"
         amount = int(event.data.get("amount", 0))
         wallet = int(event.data.get("wallet_credits", 0))
@@ -52185,65 +53252,90 @@ class EventLogSystem(System):
             business_balance = int(event.data.get("business_balance", 0))
             if kind == "withdraw":
                 self.sim.log.add(
-                    f"Withdrew {amount} credits from {business_name}. Wallet {wallet} | {business_name} {business_balance}."
+                    f"Withdrew {amount} credits from {business_name}{place_note}. Wallet {wallet} | {business_name} {business_balance}."
                 )
                 return
             self.sim.log.add(
-                f"Deposited {amount} credits into {business_name}. Wallet {wallet} | {business_name} {business_balance}."
+                f"Deposited {amount} credits into {business_name}{place_note}. Wallet {wallet} | {business_name} {business_balance}."
+            )
+            return
+        if kind == "debt_payment":
+            debt_balance = int(event.data.get("debt_balance", 0))
+            self.sim.log.add(
+                f"Paid {amount}c toward justice debt{place_note}. Wallet {wallet}c | Bank {bank}c | Debt {debt_balance}c."
             )
             return
         if kind == "withdraw":
-            self.sim.log.add(f"Withdrew {amount} credits. Wallet {wallet} | Bank {bank}.")
+            self.sim.log.add(f"Withdrew {amount} credits{place_note}. Wallet {wallet} | Bank {bank}.")
             return
-        self.sim.log.add(f"Deposited {amount} credits. Wallet {wallet} | Bank {bank}.")
+        self.sim.log.add(f"Deposited {amount} credits{place_note}. Wallet {wallet} | Bank {bank}.")
 
     def on_banking_action_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
             return
         reason = event.data.get("reason")
+        provider_name = self._event_place_name(event) or "the bank"
         if reason == "no_banking_service":
-            self.sim.log.add("No banking service nearby.")
+            self.sim.log.add("No bank or teller nearby.")
             return
         if reason == "no_business_account":
-            self.sim.log.add("No owned business account is available from here.")
+            self.sim.log.add(f"No owned business account is available through {provider_name}.")
             return
         if reason == "no_bank_balance":
-            self.sim.log.add("Bank account is empty.")
+            self.sim.log.add(f"Bank account at {provider_name} is empty.")
             return
         if reason == "missing_finance_profile":
-            self.sim.log.add("No finance profile available.")
+            self.sim.log.add(f"{provider_name} cannot verify your account record right now.")
+            return
+        if reason == "no_debt_balance":
+            self.sim.log.add("No justice debt is currently on the books.")
+            return
+        if reason == "insufficient_liquid_funds":
+            available = int(event.data.get("available_liquid", 0))
+            debt_balance = int(event.data.get("debt_balance", 0))
+            self.sim.log.add(
+                f"Cannot clear justice debt through {provider_name} ({available}c liquid on hand vs {debt_balance}c due)."
+            )
             return
         if reason == "deposit_not_needed":
-            self.sim.log.add("Wallet reserve is already above the current bank target.")
+            self.sim.log.add(f"{provider_name} does not need a wallet-topoff deposit right now.")
             return
         if reason == "no_funds_to_manage":
-            self.sim.log.add("No funds are available to move right now.")
+            self.sim.log.add(f"No funds are available to move through {provider_name} right now.")
             return
         if reason == "insufficient_business_balance":
             amount = int(event.data.get("amount", 0))
             business_balance = int(event.data.get("business_balance", 0))
             business_name = str(event.data.get("business_name", "Business")).strip() or "Business"
-            self.sim.log.add(f"Cannot withdraw {amount}c ({business_name} holds {business_balance}c).")
+            self.sim.log.add(
+                f"{provider_name} cannot withdraw {amount}c from {business_name} ({business_balance}c available)."
+            )
             return
         if reason == "insufficient_bank_balance":
             amount = int(event.data.get("amount", 0))
             bank_balance = int(event.data.get("bank_balance", 0))
-            self.sim.log.add(f"Cannot withdraw {amount}c ({bank_balance}c in bank).")
+            self.sim.log.add(f"{provider_name} cannot cover a withdrawal of {amount}c ({bank_balance}c in bank).")
             return
         if reason == "insufficient_wallet_funds":
             amount = int(event.data.get("amount", 0))
             credits = int(event.data.get("credits", 0))
-            self.sim.log.add(f"Cannot deposit {amount}c ({credits}c in wallet).")
+            self.sim.log.add(f"{provider_name} cannot deposit {amount}c from your wallet ({credits}c on hand).")
             return
         if reason == "invalid_amount":
-            self.sim.log.add("Choose a non-zero banking amount.")
+            kind = str(event.data.get("kind", "")).strip().lower()
+            if kind == "pay_justice_debt":
+                self.sim.log.add(f"Choose a non-zero justice-debt payment for {provider_name}.")
+            else:
+                self.sim.log.add(f"Choose a non-zero banking amount for {provider_name}.")
             return
-        self.sim.log.add("Banking action blocked.")
+        self.sim.log.add(f"{provider_name} cannot process that banking request right now.")
 
     def on_insurance_policy_purchased(self, event):
         if event.data.get("eid") != self.player_eid:
             return
         policy_name = event.data.get("policy_name", "policy")
+        provider_name = self._event_place_name(event)
+        provider_note = f" from {provider_name}" if provider_name else ""
         premium = int(event.data.get("premium", 0))
         base_premium = int(event.data.get("base_premium", premium))
         channel = event.data.get("channel", "insurance")
@@ -52253,27 +53345,37 @@ class EventLogSystem(System):
         contact_note = str(event.data.get("contact_note", "")).strip()
         if contact_note and premium != base_premium:
             self.sim.log.add(
-                f"Purchased {policy_name} via {channel} (-{premium} credits, covers {duration_text}, expires t{expires_tick}). {contact_note}."
+                f"Purchased {policy_name}{provider_note} via {channel} (-{premium} credits, covers {duration_text}, expires t{expires_tick}). {contact_note}."
             )
             return
         self.sim.log.add(
-            f"Purchased {policy_name} via {channel} (-{premium} credits, covers {duration_text}, expires t{expires_tick})."
+            f"Purchased {policy_name}{provider_note} via {channel} (-{premium} credits, covers {duration_text}, expires t{expires_tick})."
         )
 
     def on_insurance_action_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
             return
         reason = event.data.get("reason")
+        provider_name = self._event_place_name(event) or "the insurer"
         if reason == "no_insurance_service":
-            self.sim.log.add("No insurance provider nearby.")
+            self.sim.log.add("No insurer nearby.")
             return
         if reason == "insufficient_funds":
             premium = int(event.data.get("premium", 0))
             credits = int(event.data.get("credits", 0))
             policy_name = event.data.get("policy_name", "policy")
-            self.sim.log.add(f"Need {premium} credits for {policy_name} ({credits} available).")
+            self.sim.log.add(f"{provider_name} wants {premium} credits for {policy_name} ({credits} available).")
             return
-        self.sim.log.add("Insurance action blocked.")
+        if reason == "provider_no_products":
+            self.sim.log.add(f"{provider_name} has no policies on the board right now.")
+            return
+        if reason == "no_offer":
+            self.sim.log.add(f"{provider_name} has nothing to underwrite for you right now.")
+            return
+        if reason == "missing_finance_profile":
+            self.sim.log.add(f"{provider_name} cannot verify your customer record right now.")
+            return
+        self.sim.log.add(f"{provider_name} cannot issue or update coverage right now.")
 
     def on_insurance_policy_expired(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -52295,9 +53397,12 @@ class EventLogSystem(System):
         policy_name = event.data.get("policy_name", "policy")
         reason = event.data.get("reason", "blocked")
         if reason == "policy_depleted":
-            self.sim.log.add(f"{policy_name} is depleted.")
+            self.sim.log.add(f"{policy_name} is depleted and cannot pay out anymore.")
             return
-        self.sim.log.add(f"{policy_name} claim blocked.")
+        if reason == "claim_zero":
+            self.sim.log.add(f"{policy_name} does not pay out on a loss this small.")
+            return
+        self.sim.log.add(f"{policy_name} will not pay that claim right now.")
 
     def on_insurance_item_saved(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -52343,9 +53448,16 @@ class EventLogSystem(System):
             return
         if reason == "overworld_action_restricted":
             action = str(event.data.get("action", "action")).replace("_", " ")
-            self.sim.log.add(f"{action.title()} unavailable in in-vehicle map.")
+            self.sim.log.add(f"{action.title()} only works on foot.")
             return
-        self.sim.log.add("Zoom mode change blocked.")
+        mode = str(event.data.get("mode", "map") or "map").strip().lower()
+        if mode == "overworld":
+            self.sim.log.add("Cannot switch to the overworld map right now.")
+            return
+        if mode == "city":
+            self.sim.log.add("Cannot switch back to the city map right now.")
+            return
+        self.sim.log.add("Cannot change map view right now.")
 
     def on_vehicle_entered(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -52379,6 +53491,12 @@ class EventLogSystem(System):
         if reason == "vehicle_required":
             self.sim.log.add("You need a usable vehicle for overworld travel.")
             return
+        if reason == "no_vehicle_state":
+            self.sim.log.add("You are not linked to a usable vehicle right now.")
+            return
+        if reason == "invalid_vehicle":
+            self.sim.log.add("That vehicle is no longer available to use.")
+            return
         if reason == "missing_key":
             name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             self.sim.log.add(f"You own {name}, but you don't have its key on hand.")
@@ -52405,7 +53523,11 @@ class EventLogSystem(System):
             )
             self.sim.log.add(self._service_recovery_hint("fuel", on_foot=False))
             return
-        self.sim.log.add("Vehicle action blocked.")
+        name = str(event.data.get("vehicle_name", "") or "").strip()
+        if name:
+            self.sim.log.add(f"{name} does not respond to your controls right now.")
+            return
+        self.sim.log.add("No vehicle responds to your controls right now.")
 
     def on_overworld_travelled(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -52676,14 +53798,17 @@ class EventLogSystem(System):
             source_key in {"overworld_tag", "property_service", "economy_profile"}
             and completion_reason.startswith("entered target chunk")
         )
-        headline = "Discovery complete" if is_discovery_style else "Opportunity complete"
-        if completion_reason:
-            trigger_text = f"trigger: {completion_reason}"
+        completion_text = self._opportunity_completion_text(completion_reason)
+        label = f"O{opp_id} {title}" if opp_id > 0 else title
+        location = f" @ {chunk}" if isinstance(chunk, (list, tuple)) and len(chunk) == 2 else ""
+        headline = "Lead confirmed" if is_discovery_style else "Opportunity complete"
+        if completion_text:
+            headline_text = f"{headline}: {label}{location} after {completion_text}."
         else:
-            trigger_text = "trigger: requirements met"
+            headline_text = f"{headline}: {label}{location}."
 
         self._log(
-            f"{headline} O{opp_id}: {title} @ {chunk} ({trigger_text}).",
+            headline_text,
             channel="opportunity",
             priority="high",
         )
@@ -52692,9 +53817,9 @@ class EventLogSystem(System):
             self.sim.log.add(f"  {summary}")
 
         source_text = opportunity_source_label(source, short=False)
-        details = [f"source:{source_text}"]
+        details = [f"Source {source_text}"]
         if reward_text:
-            details.append(f"reward:{reward_text}")
+            details.append(f"Reward {reward_text}")
         details.append(f"{active_remaining} active remain")
         details.append("Press O for report")
         self.sim.log.add("  " + " | ".join(details) + ".")
@@ -52904,7 +54029,7 @@ class EventLogSystem(System):
     def on_objective_progress_awarded(self, event):
         if event.data.get("eid") != self.player_eid:
             return
-        channel = str(event.data.get("channel", "action")).strip().replace("_", " ")
+        channel = self._objective_progress_channel_label(event.data.get("channel", "action"))
         delta = dict(event.data.get("delta", {}) or {})
         objective_id = str(event.data.get("objective_id", "")).strip().lower()
         bits = objective_progress_explain_delta(objective_id, delta)
@@ -52912,9 +54037,10 @@ class EventLogSystem(System):
             return
 
         reason = str(event.data.get("reason", "")).strip().replace("_", " ")
+        objective_title = self._current_objective_title() or "Run objective"
         suffix = f" ({reason})" if reason else ""
         self._log(
-            f"Objective support via {channel}: {', '.join(bits)}{suffix}.",
+            f"{objective_title} advances: {', '.join(bits)} via {channel}{suffix}.",
             channel="mission",
             priority="high",
         )
@@ -53034,13 +54160,19 @@ class EventLogSystem(System):
         if delta < 8:
             return
 
-        source = str(event.data.get("source", "pressure")).strip().replace("_", " ")
+        cause = self._pressure_cause_text(event)
         tier = str(event.data.get("tier", "low")).strip().lower()
         after = int(event.data.get("after", 0))
+        verb = "spikes" if delta >= 12 else "jumps" if delta >= 9 else "rises"
         self._log(
-            f"Attention +{delta} ({source}) -> {after} [{tier}].",
+            f"Attention {verb} by {delta} after {cause}. Pressure now {after} ({tier}).",
             channel="mission",
             priority="high",
+            dedupe_window=10,
+            dedupe_key=(
+                f"run-pressure-up:{str(event.data.get('source', '')).strip().lower()}:"
+                f"{str(event.data.get('reason', '')).strip().lower()}:{str(event.data.get('property_id', '')).strip().lower()}"
+            ),
         )
 
     def on_run_pressure_tier_changed(self, event):
@@ -53048,24 +54180,42 @@ class EventLogSystem(System):
             return
         tier = str(event.data.get("tier", "low")).strip().lower()
         after = int(event.data.get("after", 0))
+        delta = int(event.data.get("delta", 0))
+        cause = self._pressure_cause_text(event)
         if tier == "high":
             self._log(
-                f"Attention HIGH ({after}): city response hardens and services tighten.",
+                f"Attention HIGH at {after} after {cause}. City response hardens and services tighten.",
                 channel="mission",
                 priority="high",
+                dedupe_window=10,
+                dedupe_key=f"run-pressure-tier:high:{str(event.data.get('source', '')).strip().lower()}",
             )
             return
         if tier == "medium":
+            if delta < 0:
+                text = (
+                    f"Attention drops to MEDIUM at {after} after {cause}. "
+                    "The city eases off a notch, but scrutiny is still up."
+                )
+            else:
+                text = (
+                    f"Attention MEDIUM at {after} after {cause}. "
+                    "Scrutiny rises and goodwill drops."
+                )
             self._log(
-                f"Attention MEDIUM ({after}): scrutiny rises and goodwill drops.",
+                text,
                 channel="mission",
                 priority="high",
+                dedupe_window=10,
+                dedupe_key=f"run-pressure-tier:medium:{str(event.data.get('source', '')).strip().lower()}",
             )
             return
         self._log(
-            f"Attention LOW ({after}): local pressure has cooled.",
+            f"Attention LOW at {after} after {cause}. Local pressure has cooled.",
             channel="mission",
             priority="high",
+            dedupe_window=10,
+            dedupe_key=f"run-pressure-tier:low:{str(event.data.get('source', '')).strip().lower()}",
         )
 
     def on_run_pressure_mitigated(self, event):
@@ -53074,13 +54224,54 @@ class EventLogSystem(System):
         delta = int(event.data.get("delta", 0))
         if delta >= 0:
             return
-        source = str(event.data.get("source", "mitigation")).strip().replace("_", " ")
+        source = str(event.data.get("source", "mitigation")).strip().lower()
+        if source == "dialogue":
+            return
+        cause = self._pressure_cause_text(event)
         after = int(event.data.get("after", 0))
         tier = str(event.data.get("tier", "low")).strip().lower()
+        amount = abs(delta)
+        if source == "passive_decay":
+            text = f"Attention eases by {amount} as time passes without new trouble. Pressure now {after} ({tier})."
+            dedupe_window = 24
+        else:
+            text = f"Attention eases by {amount} after {cause}. Pressure now {after} ({tier})."
+            dedupe_window = 12
         self._log(
-            f"Attention {delta} via {source} -> {after} [{tier}].",
+            text,
             channel="mission",
             priority="high",
+            dedupe_window=dedupe_window,
+            dedupe_key=(
+                f"run-pressure-down:{source}:{str(event.data.get('reason', '')).strip().lower()}:"
+                f"{str(event.data.get('property_id', '')).strip().lower()}"
+            ),
+        )
+
+    def on_justice_record_changed(self, event):
+        if event.data.get("offender_eid") != self.player_eid:
+            return
+        before_tier = str(event.data.get("before_tier", "clear") or "clear").strip().lower() or "clear"
+        after_tier = str(event.data.get("after_tier", "clear") or "clear").strip().lower() or "clear"
+        if before_tier != after_tier:
+            return
+
+        delta = int(event.data.get("score_delta", 0) or 0)
+        if delta <= 0:
+            return
+
+        jurisdiction = str(event.data.get("jurisdiction_name", "Justice Office")).strip() or "Justice Office"
+        after_score = int(event.data.get("after_score", 0) or 0)
+        cause = self._justice_incident_cause_text(event)
+        self._log(
+            f"Law pressure +{delta} in {jurisdiction} ({after_score}) after {cause}.",
+            channel="mission",
+            priority="high",
+            dedupe_window=10,
+            dedupe_key=(
+                f"justice-record:{str(event.data.get('jurisdiction_key', jurisdiction)).strip().lower()}:"
+                f"{str(event.data.get('incident_type', '')).strip().lower()}:{str(event.data.get('property_id', '')).strip().lower()}"
+            ),
         )
 
     def on_justice_wanted_tier_changed(self, event):
@@ -53090,12 +54281,13 @@ class EventLogSystem(System):
         after_tier = str(event.data.get("after_tier", "clear")).strip().lower() or "clear"
         before_tier = str(event.data.get("before_tier", "clear")).strip().lower() or "clear"
         after_score = int(event.data.get("after_score", 0))
+        cause = self._justice_incident_cause_text(event)
         if after_tier == "arrest_on_sight":
-            text = f"Law: {jurisdiction} wants you on sight ({after_score})."
+            text = f"Law: {jurisdiction} wants you on sight ({after_score}) after {cause}."
         elif after_tier == "wanted":
-            text = f"Law: {jurisdiction} marks you wanted ({after_score})."
+            text = f"Law: {jurisdiction} marks you wanted ({after_score}) after {cause}."
         elif after_tier == "questioning":
-            text = f"Law: {jurisdiction} wants to question you ({after_score})."
+            text = f"Law: {jurisdiction} wants to question you ({after_score}) after {cause}."
         elif after_tier == "held":
             text = f"Law: {jurisdiction} takes you into custody."
         elif before_tier != after_tier:
@@ -53147,12 +54339,17 @@ class EventLogSystem(System):
         bank_fine_paid = int(event.data.get("bank_fine_paid", 0) or 0)
         debt_added = int(event.data.get("debt_added", 0) or 0)
         confiscated_count = int(event.data.get("confiscated_item_count", 0) or 0)
+        held_count = int(event.data.get("held_item_count", 0) or 0)
+        forfeited_count = int(event.data.get("forfeited_item_count", 0) or 0)
         illegal_count = int(event.data.get("illegal_item_count", 0) or 0)
         restricted_count = int(event.data.get("restricted_item_count", 0) or 0)
         contraband_count = int(event.data.get("contraband_item_count", 0) or 0)
         stolen_count = int(event.data.get("stolen_item_count", 0) or 0)
         weapon_count = int(event.data.get("weapon_item_count", 0) or 0)
         labels = [str(label).strip() for label in list(event.data.get("confiscated_labels", ()) or ()) if str(label).strip()]
+        held_labels = [str(label).strip() for label in list(event.data.get("held_labels", ()) or ()) if str(label).strip()]
+        forfeited_labels = [str(label).strip() for label in list(event.data.get("forfeited_labels", ()) or ()) if str(label).strip()]
+        held_property_name = str(event.data.get("held_property_name", property_name)).strip() or property_name
         status_text = {
             "questioning": "wanted for questioning",
             "wanted": "wanted",
@@ -53202,6 +54399,16 @@ class EventLogSystem(System):
                 summary += f" [{seized_text}]"
             if labels:
                 summary += f": {', '.join(labels[:3])}"
+            summary += "."
+        if held_count > 0:
+            summary += f" Held for release at {held_property_name}: {held_count} item(s)"
+            if held_labels:
+                summary += f" ({', '.join(held_labels[:3])})"
+            summary += "."
+        if forfeited_count > 0:
+            summary += f" Forfeited as evidence/contraband: {forfeited_count} item(s)"
+            if forfeited_labels:
+                summary += f" ({', '.join(forfeited_labels[:3])})"
             summary += "."
         self._log(
             summary,

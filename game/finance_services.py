@@ -228,6 +228,26 @@ class FinanceSystem(System):
     def _profile_for(self, eid):
         return self.sim.ecs.get(FinancialProfile).get(eid)
 
+    def _profile_debt_amount(self, profile, debt_key="general"):
+        if not profile:
+            return 0
+        debt_amount = getattr(profile, "debt_amount", None)
+        if callable(debt_amount):
+            return int(max(0, debt_amount(debt_key) or 0))
+        return int(max(0, getattr(profile, "debt_balance", 0) or 0))
+
+    def _pay_profile_debt(self, profile, debt_key, amount):
+        amount = int(max(0, amount or 0))
+        if not profile or amount <= 0:
+            return 0
+        pay_debt = getattr(profile, "pay_debt", None)
+        if callable(pay_debt):
+            return int(max(0, pay_debt(debt_key, amount) or 0))
+        current = int(max(0, getattr(profile, "debt_balance", 0) or 0))
+        paid = min(current, amount)
+        profile.debt_balance = int(max(0, current - paid))
+        return int(paid)
+
     def _position_for(self, eid):
         return self.sim.ecs.get(Position).get(eid)
 
@@ -357,8 +377,15 @@ class FinanceSystem(System):
     def _buy_or_renew_policy(self, eid, provider_prop):
         assets = self._assets_for(eid)
         profile = self._profile_for(eid)
+        provider_name = provider_prop.get("name", provider_prop["id"])
         if not assets or not profile:
-            self.sim.emit(Event("insurance_action_blocked", eid=eid, reason="missing_finance_profile"))
+            self.sim.emit(Event(
+                "insurance_action_blocked",
+                eid=eid,
+                reason="missing_finance_profile",
+                property_id=provider_prop["id"],
+                provider_name=provider_name,
+            ))
             return
 
         offers = self._offer_book_for_property(provider_prop)
@@ -369,13 +396,20 @@ class FinanceSystem(System):
                     eid=eid,
                     reason="provider_no_products",
                     property_id=provider_prop["id"],
+                    provider_name=provider_name,
                 )
             )
             return
 
         offer = self._pick_offer(profile, offers)
         if not offer:
-            self.sim.emit(Event("insurance_action_blocked", eid=eid, reason="no_offer"))
+            self.sim.emit(Event(
+                "insurance_action_blocked",
+                eid=eid,
+                reason="no_offer",
+                property_id=provider_prop["id"],
+                provider_name=provider_name,
+            ))
             return
 
         terms = self._insurance_terms(eid, provider_prop)
@@ -386,6 +420,8 @@ class FinanceSystem(System):
                 "insurance_action_blocked",
                 eid=eid,
                 reason="insufficient_funds",
+                property_id=provider_prop["id"],
+                provider_name=provider_name,
                 premium=premium,
                 credits=assets.credits,
                 policy_name=offer["name"],
@@ -435,8 +471,15 @@ class FinanceSystem(System):
 
     def _bank_transaction(self, eid, provider_prop, *, kind=None, amount=None, account_kind=None, business_property_id=None):
         assets = self._assets_for(eid)
+        provider_name = provider_prop.get("name", provider_prop["id"])
         if not assets:
-            self.sim.emit(Event("banking_action_blocked", eid=eid, reason="missing_finance_profile"))
+            self.sim.emit(Event(
+                "banking_action_blocked",
+                eid=eid,
+                reason="missing_finance_profile",
+                property_id=provider_prop["id"],
+                provider_name=provider_name,
+            ))
             return
 
         requested_kind = str(kind or "").strip().lower()
@@ -459,6 +502,7 @@ class FinanceSystem(System):
                     "banking_action_blocked",
                     eid=eid,
                     property_id=provider_prop["id"],
+                    provider_name=provider_name,
                     reason="no_business_account",
                 ))
                 return
@@ -472,6 +516,7 @@ class FinanceSystem(System):
                     "banking_action_blocked",
                     eid=eid,
                     property_id=provider_prop["id"],
+                    provider_name=provider_name,
                     reason="invalid_amount",
                     kind=requested_kind,
                     amount=requested_amount,
@@ -485,6 +530,7 @@ class FinanceSystem(System):
                     "banking_action_blocked",
                     eid=eid,
                     property_id=provider_prop["id"],
+                    provider_name=provider_name,
                     reason="invalid_amount",
                     kind=requested_kind,
                     amount=requested_amount,
@@ -500,6 +546,7 @@ class FinanceSystem(System):
                         "banking_action_blocked",
                         eid=eid,
                         property_id=provider_prop["id"],
+                        provider_name=provider_name,
                         reason="insufficient_business_balance",
                         kind=requested_kind,
                         amount=requested_amount,
@@ -532,6 +579,7 @@ class FinanceSystem(System):
                     "banking_action_blocked",
                     eid=eid,
                     property_id=provider_prop["id"],
+                    provider_name=provider_name,
                     reason="insufficient_wallet_funds",
                     kind=requested_kind,
                     amount=requested_amount,
@@ -561,7 +609,81 @@ class FinanceSystem(System):
 
         profile = self._profile_for(eid)
         if not profile:
-            self.sim.emit(Event("banking_action_blocked", eid=eid, reason="missing_finance_profile"))
+            self.sim.emit(Event(
+                "banking_action_blocked",
+                eid=eid,
+                reason="missing_finance_profile",
+                property_id=provider_prop["id"],
+                provider_name=provider_name,
+            ))
+            return
+
+        if requested_kind == "pay_justice_debt":
+            requested_amount = max(0, requested_amount)
+            debt_key = "justice_fines"
+            debt_balance = self._profile_debt_amount(profile, debt_key)
+            liquid_funds = int(max(0, getattr(assets, "credits", 0) or 0)) + int(max(0, getattr(profile, "bank_balance", 0) or 0))
+            if debt_balance <= 0:
+                self.sim.emit(Event(
+                    "banking_action_blocked",
+                    eid=eid,
+                    property_id=provider_prop["id"],
+                    provider_name=provider_name,
+                    reason="no_debt_balance",
+                    kind=requested_kind,
+                    debt_key=debt_key,
+                    debt_balance=debt_balance,
+                ))
+                return
+            if requested_amount <= 0:
+                self.sim.emit(Event(
+                    "banking_action_blocked",
+                    eid=eid,
+                    property_id=provider_prop["id"],
+                    provider_name=provider_name,
+                    reason="invalid_amount",
+                    kind=requested_kind,
+                    debt_key=debt_key,
+                    debt_balance=debt_balance,
+                ))
+                return
+            if liquid_funds <= 0:
+                self.sim.emit(Event(
+                    "banking_action_blocked",
+                    eid=eid,
+                    property_id=provider_prop["id"],
+                    provider_name=provider_name,
+                    reason="insufficient_liquid_funds",
+                    kind=requested_kind,
+                    debt_key=debt_key,
+                    debt_balance=debt_balance,
+                    available_liquid=liquid_funds,
+                ))
+                return
+
+            payment = min(requested_amount, debt_balance, liquid_funds)
+            wallet_paid = min(int(max(0, getattr(assets, "credits", 0) or 0)), payment)
+            assets.credits -= wallet_paid
+            remaining = max(0, payment - wallet_paid)
+            bank_paid = min(int(max(0, getattr(profile, "bank_balance", 0) or 0)), remaining)
+            profile.bank_balance -= bank_paid
+            debt_paid = self._pay_profile_debt(profile, debt_key, wallet_paid + bank_paid)
+            self.sim.emit(Event(
+                    "bank_transaction",
+                    eid=eid,
+                    property_id=provider_prop["id"],
+                    provider_name=provider_name,
+                    kind="debt_payment",
+                amount=debt_paid,
+                requested_amount=requested_amount,
+                wallet_debt_paid=wallet_paid,
+                bank_debt_paid=bank_paid,
+                wallet_credits=assets.credits,
+                bank_balance=profile.bank_balance,
+                debt_key=debt_key,
+                debt_balance=self._profile_debt_amount(profile, debt_key),
+                account_kind="personal",
+            ))
             return
 
         if requested_kind in {"deposit", "withdraw"}:
@@ -570,6 +692,8 @@ class FinanceSystem(System):
                 self.sim.emit(Event(
                     "banking_action_blocked",
                     eid=eid,
+                    property_id=provider_prop["id"],
+                    provider_name=provider_name,
                     reason="invalid_amount",
                     kind=requested_kind,
                     amount=requested_amount,
@@ -580,6 +704,8 @@ class FinanceSystem(System):
                     self.sim.emit(Event(
                         "banking_action_blocked",
                         eid=eid,
+                        property_id=provider_prop["id"],
+                        provider_name=provider_name,
                         reason="insufficient_bank_balance",
                         kind=requested_kind,
                         amount=requested_amount,
@@ -592,7 +718,7 @@ class FinanceSystem(System):
                     "bank_transaction",
                     eid=eid,
                     property_id=provider_prop["id"],
-                    provider_name=provider_prop.get("name", provider_prop["id"]),
+                    provider_name=provider_name,
                     kind="withdraw",
                     amount=requested_amount,
                     wallet_credits=assets.credits,
@@ -605,6 +731,8 @@ class FinanceSystem(System):
                 self.sim.emit(Event(
                     "banking_action_blocked",
                     eid=eid,
+                    property_id=provider_prop["id"],
+                    provider_name=provider_name,
                     reason="insufficient_wallet_funds",
                     kind=requested_kind,
                     amount=requested_amount,
@@ -617,7 +745,7 @@ class FinanceSystem(System):
                 "bank_transaction",
                 eid=eid,
                 property_id=provider_prop["id"],
-                provider_name=provider_prop.get("name", provider_prop["id"]),
+                provider_name=provider_name,
                 kind="deposit",
                 amount=requested_amount,
                 wallet_credits=assets.credits,
@@ -632,7 +760,13 @@ class FinanceSystem(System):
         if low_wallet and profile.bank_balance > 0:
             amount = min(profile.withdraw_step, profile.bank_balance)
             if amount <= 0:
-                self.sim.emit(Event("banking_action_blocked", eid=eid, reason="no_bank_balance"))
+                self.sim.emit(Event(
+                    "banking_action_blocked",
+                    eid=eid,
+                    reason="no_bank_balance",
+                    property_id=provider_prop["id"],
+                    provider_name=provider_name,
+                ))
                 return
             profile.bank_balance -= amount
             assets.credits += amount
@@ -640,7 +774,7 @@ class FinanceSystem(System):
                 "bank_transaction",
                 eid=eid,
                 property_id=provider_prop["id"],
-                provider_name=provider_prop.get("name", provider_prop["id"]),
+                provider_name=provider_name,
                 kind="withdraw",
                 amount=amount,
                 wallet_credits=assets.credits,
@@ -652,7 +786,13 @@ class FinanceSystem(System):
         if assets.credits > floor_target + 10:
             amount = min(profile.deposit_step, assets.credits - floor_target)
             if amount <= 0:
-                self.sim.emit(Event("banking_action_blocked", eid=eid, reason="deposit_not_needed"))
+                self.sim.emit(Event(
+                    "banking_action_blocked",
+                    eid=eid,
+                    reason="deposit_not_needed",
+                    property_id=provider_prop["id"],
+                    provider_name=provider_name,
+                ))
                 return
             assets.credits -= amount
             profile.bank_balance += amount
@@ -660,7 +800,7 @@ class FinanceSystem(System):
                 "bank_transaction",
                 eid=eid,
                 property_id=provider_prop["id"],
-                provider_name=provider_prop.get("name", provider_prop["id"]),
+                provider_name=provider_name,
                 kind="deposit",
                 amount=amount,
                 wallet_credits=assets.credits,
@@ -677,7 +817,7 @@ class FinanceSystem(System):
                 "bank_transaction",
                 eid=eid,
                 property_id=provider_prop["id"],
-                provider_name=provider_prop.get("name", provider_prop["id"]),
+                provider_name=provider_name,
                 kind="withdraw",
                 amount=amount,
                 wallet_credits=assets.credits,
@@ -686,7 +826,13 @@ class FinanceSystem(System):
             ))
             return
 
-        self.sim.emit(Event("banking_action_blocked", eid=eid, reason="no_funds_to_manage"))
+        self.sim.emit(Event(
+            "banking_action_blocked",
+            eid=eid,
+            reason="no_funds_to_manage",
+            property_id=provider_prop["id"],
+            provider_name=provider_name,
+        ))
 
     def _try_item_loss_roll(self, eid):
         profile = self._profile_for(eid)
@@ -937,7 +1083,13 @@ class FinanceSystem(System):
 
         services = set(_finance_services_for_property(prop))
         if service not in services:
-            self.sim.emit(Event(event_name, eid=eid, reason=blocked_reason))
+            self.sim.emit(Event(
+                event_name,
+                eid=eid,
+                reason=blocked_reason,
+                property_id=prop["id"],
+                provider_name=prop.get("name", prop["id"]),
+            ))
             return
 
         pos = self._position_for(eid)
@@ -951,7 +1103,13 @@ class FinanceSystem(System):
                 z=pos.z,
             )
             if not access.can_use_services:
-                self.sim.emit(Event(event_name, eid=eid, reason=blocked_reason))
+                self.sim.emit(Event(
+                    event_name,
+                    eid=eid,
+                    reason=blocked_reason,
+                    property_id=prop["id"],
+                    provider_name=prop.get("name", prop["id"]),
+                ))
                 return
 
         if service == "banking":

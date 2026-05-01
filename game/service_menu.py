@@ -2,6 +2,7 @@ from engine.events import Event
 from engine.systems import System
 from game.components import FinancialProfile, Inventory, PlayerAssets, Position
 from game.finance_services import _nearest_property_with_finance_service
+from game.justice_runtime import held_property_snapshot as _justice_held_property_snapshot
 from game.player_businesses import (
     player_business_account_balance,
     player_business_customer_policy,
@@ -828,17 +829,18 @@ class ServiceMenuSystem(System):
             self._open_holdem_table(prop, session)
             return
 
-        self._present_service_result("Casino", ["That game is not available right now."], property_id=prop.get("id"))
+        self._present_service_result("Casino", ["That game is not running on this floor right now."], property_id=prop.get("id"))
 
     def _handle_active_casino_option(self, prop, option_id):
         session = self._casino_session()
         if not session:
             return False
+        service = str(session.get("service", "")).strip().lower()
         if not isinstance(prop, dict):
-            self._present_service_result("Casino", ["That table is not available right now."], property_id=prop.get("id") if isinstance(prop, dict) else None)
+            title, lines = self._stale_service_option_lines(service or option_id)
+            self._present_service_result(title, lines, property_id=prop.get("id") if isinstance(prop, dict) else None)
             return True
 
-        service = str(session.get("service", "")).strip().lower()
         if service == "plinko" and option_id.startswith("plinko:lane:"):
             try:
                 lane = int(option_id.rsplit(":", 1)[-1])
@@ -869,7 +871,11 @@ class ServiceMenuSystem(System):
         if service == "video_poker" and option_id == "video_poker:draw":
             round_result = _casino_video_poker_draw(session)
             if not round_result:
-                self._present_service_result("Video Poker", ["That hand cannot be resolved cleanly right now."], property_id=prop.get("id"))
+                self._present_service_result(
+                    "Video Poker",
+                    ["That round lost sync with the table.", "Start a fresh round."],
+                    property_id=prop.get("id"),
+                )
                 return True
             self._emit_casino_round(prop, service, round_result)
             return True
@@ -910,7 +916,7 @@ class ServiceMenuSystem(System):
                 return True
             round_result = _casino_keno_draw(current)
             if not round_result:
-                self._open_keno_table(prop, current, notice="The ticket could not be resolved cleanly. Try that draw again.")
+                self._open_keno_table(prop, current, notice="That ticket lost sync with the board. Try that draw again.")
                 return True
             self._emit_casino_round(prop, service, round_result)
             return True
@@ -963,7 +969,7 @@ class ServiceMenuSystem(System):
             if bet_kind:
                 round_result = _casino_roulette_resolve(current, bet_kind, bet_value)
                 if not round_result:
-                    self._open_roulette_table(prop, current or session, notice="That bet could not be resolved cleanly. Try another spin.")
+                    self._open_roulette_table(prop, current or session, notice="That spin lost sync with the wheel. Try another spin.")
                     return True
                 self._emit_casino_round(prop, service, round_result)
                 return True
@@ -971,7 +977,7 @@ class ServiceMenuSystem(System):
         if service == "craps" and option_id.startswith("craps:view:"):
             current = _casino_craps_normalize_session(session)
             if not current:
-                self._present_service_result("Craps", ["That table is not available right now."], property_id=prop.get("id"))
+                self._present_service_result("Craps", ["That table lost the round state.", "Start a fresh round."], property_id=prop.get("id"))
                 return True
             next_view = option_id.rsplit(":", 1)[-1]
             current["view"] = next_view
@@ -988,7 +994,7 @@ class ServiceMenuSystem(System):
         if service == "craps":
             current = _casino_craps_normalize_session(session)
             if not current:
-                self._present_service_result("Craps", ["That table is not available right now."], property_id=prop.get("id"))
+                self._present_service_result("Craps", ["That table lost the round state.", "Start a fresh round."], property_id=prop.get("id"))
                 return True
             bet_kind = ""
             bet_value = None
@@ -1033,7 +1039,7 @@ class ServiceMenuSystem(System):
                     current["stake"] = int(current.get("stake", current.get("wager", 0))) + odds_extra
                 round_result = _casino_craps_resolve(current, bet_kind, bet_value)
                 if not round_result:
-                    self._open_craps_table(prop, current, notice="That roll sequence could not be resolved cleanly. Try another shooter.")
+                    self._open_craps_table(prop, current, notice="That roll sequence lost sync with the table. Try another shooter.")
                     return True
                 self._emit_casino_round(prop, service, round_result)
                 return True
@@ -1041,12 +1047,12 @@ class ServiceMenuSystem(System):
         if service == "baccarat" and option_id in {"baccarat:player", "baccarat:banker", "baccarat:tie"}:
             current = _casino_baccarat_normalize_session(session)
             if not current:
-                self._present_service_result("Baccarat", ["That shoe is not available right now."], property_id=prop.get("id"))
+                self._present_service_result("Baccarat", ["That shoe lost the round state.", "Start a fresh round."], property_id=prop.get("id"))
                 return True
             bet_side = option_id.rsplit(":", 1)[-1]
             round_result = _casino_baccarat_resolve(current, bet_side)
             if not round_result:
-                self._open_baccarat_table(prop, current, notice="That wager could not be resolved cleanly. Try another hand.")
+                self._open_baccarat_table(prop, current, notice="That hand lost sync with the shoe. Try another hand.")
                 return True
             self._emit_casino_round(prop, service, round_result)
             return True
@@ -1054,7 +1060,7 @@ class ServiceMenuSystem(System):
         if service == "three_card_poker" and option_id in {"three_card_poker:play", "three_card_poker:fold"}:
             current = _casino_three_card_poker_normalize_session(session)
             if not current:
-                self._present_service_result("Three-Card Poker", ["That table is not available right now."], property_id=prop.get("id"))
+                self._present_service_result("Three-Card Poker", ["That table lost the round state.", "Start a fresh round."], property_id=prop.get("id"))
                 return True
             action = option_id.rsplit(":", 1)[-1]
             if action == "play":
@@ -1066,7 +1072,7 @@ class ServiceMenuSystem(System):
                 current["stake"] = int(current.get("stake", wager)) + wager
             round_result = _casino_three_card_poker_resolve(current, action)
             if not round_result:
-                self._open_three_card_poker_table(prop, current, notice="That hand could not be resolved cleanly. Try another deal.")
+                self._open_three_card_poker_table(prop, current, notice="That hand lost sync with the table. Try another deal.")
                 return True
             self._emit_casino_round(prop, service, round_result)
             return True
@@ -1391,6 +1397,23 @@ class ServiceMenuSystem(System):
             })
         return contexts
 
+    def _justice_banking_context(self, eid):
+        profile = self._profile_for(eid)
+        debt_balance = 0
+        if profile is not None:
+            debt_amount = getattr(profile, "debt_amount", None)
+            if callable(debt_amount):
+                debt_balance = int(max(0, debt_amount("justice_fines") or 0))
+            else:
+                debt_balance = int(max(0, getattr(profile, "debt_balance", 0) or 0))
+        held = _justice_held_property_snapshot(self.sim, eid)
+        return {
+            "debt_balance": int(debt_balance),
+            "held_count": int(held.get("item_count", 0) or 0),
+            "held_property_name": str(held.get("property_name", "") or "").strip(),
+            "held_property_id": str(held.get("property_id", "") or "").strip(),
+        }
+
     def _business_status_lines(self, business_context):
         if not isinstance(business_context, dict):
             return []
@@ -1568,6 +1591,15 @@ class ServiceMenuSystem(System):
                 options.append({
                     "id": f"banking:deposit:{int(amount)}",
                     "label": f"Deposit {_credit_amount_label(amount)}",
+                })
+            justice_context = self._justice_banking_context(eid)
+            debt_balance = int(justice_context.get("debt_balance", 0) or 0)
+            liquid_funds = int(max(0, getattr(assets, "credits", 0) or 0)) + int(max(0, getattr(profile, "bank_balance", 0) or 0))
+            payable_cap = min(debt_balance, liquid_funds)
+            for amount in self._bank_amount_choices(payable_cap, profile.withdraw_step):
+                options.append({
+                    "id": f"banking:pay_justice_debt:{int(amount)}",
+                    "label": f"Pay justice debt {_credit_amount_label(amount)}",
                 })
 
         for business_context in list(business_contexts or ()):
@@ -1806,6 +1838,37 @@ class ServiceMenuSystem(System):
             return service
         return None
 
+    def _storefront_blocked_lines(self, prop, storefront_service):
+        prop_name = str((prop or {}).get("name", (prop or {}).get("id", "Storefront"))).strip() or "Storefront"
+        storefront_service = storefront_service if isinstance(storefront_service, dict) else {}
+        reason = str(storefront_service.get("blocked_reason", "")).strip().lower()
+        if reason == "no_staff":
+            return f"Shopping: {prop_name}", [
+                f"No clerk is serving {prop_name} right now.",
+                "Try again when counter staff are present, or use M at unattended self-serve kiosks.",
+            ]
+        return f"Shopping: {prop_name}", [f"No shopping counter is ready at {prop_name} right now."]
+
+    def _open_property_service_surface(self, prop):
+        if not isinstance(prop, dict):
+            return False
+        pos = self._position_for(self.player_eid)
+        if not pos:
+            return False
+        options, storefront_service = self._service_menu_options(self.player_eid, prop, pos)
+        if options:
+            option_ids = [str(option.get("id", "")).strip().lower() for option in options]
+            if _property_infrastructure_role(prop) == "service_terminal" and option_ids == ["banking"]:
+                self._open_banking_menu(prop)
+            else:
+                self._open_service_menu(prop, options, storefront_service=storefront_service)
+            return True
+        if _property_is_storefront(prop) and isinstance(storefront_service, dict) and storefront_service.get("blocked_reason") and not self._machine_service_profile(prop):
+            title, lines = self._storefront_blocked_lines(prop, storefront_service)
+            self._present_service_result(title, lines, property_id=prop.get("id"))
+            return True
+        return False
+
     def _service_menu_options(self, eid, prop, pos):
         access = _evaluate_property_access(
             self.sim,
@@ -1853,6 +1916,7 @@ class ServiceMenuSystem(System):
         assets = self._assets_for(self.player_eid)
         profile = self._profile_for(self.player_eid)
         business_contexts = self._business_banking_contexts(self.player_eid)
+        justice_context = self._justice_banking_context(self.player_eid)
         wallet_credits = int(getattr(assets, "credits", 0)) if assets else 0
         bank_balance = int(getattr(profile, "bank_balance", 0)) if profile else 0
         options = self._bank_menu_options(self.player_eid, business_contexts=business_contexts)
@@ -1860,6 +1924,20 @@ class ServiceMenuSystem(System):
             f"Choose how much to move at {prop_name}.",
             f"Wallet {_credit_amount_label(wallet_credits)} | Bank {_credit_amount_label(bank_balance)}.",
         ]
+        justice_debt = int(justice_context.get("debt_balance", 0) or 0)
+        held_count = int(justice_context.get("held_count", 0) or 0)
+        held_property_name = str(justice_context.get("held_property_name", "") or "").strip()
+        if justice_debt > 0:
+            transcript.append(f"Justice debt: {_credit_amount_label(justice_debt)}.")
+        if held_count > 0:
+            if justice_debt > 0:
+                transcript.append(
+                    f"Held property: {held_count} item(s) at {held_property_name or 'the justice desk'}; release waits on debt."
+                )
+            else:
+                transcript.append(
+                    f"Held property: {held_count} item(s) at {held_property_name or 'the justice desk'} ready for release."
+                )
         if business_contexts:
             transcript.append(
                 f"Business accounts: {len(business_contexts)} available from any banking service."
@@ -1884,7 +1962,7 @@ class ServiceMenuSystem(System):
         if not profile and not business_contexts:
             self._present_service_result(
                 f"Banking: {prop_name}",
-                ["No finance profile available."],
+                ["No verified account record is available."],
                 property_id=prop.get("id"),
             )
             return
@@ -1925,7 +2003,7 @@ class ServiceMenuSystem(System):
         self._clear_casino_session()
         profile = _casino_game_profile(service)
         if not profile:
-            self._present_service_result("Casino", ["That game is not available right now."], property_id=prop.get("id"))
+            self._present_service_result("Casino", ["That game is not running on this floor right now."], property_id=prop.get("id"))
             return
 
         prop_name = str(prop.get("name", prop.get("id", "Casino"))).strip() or "Casino"
@@ -2250,6 +2328,31 @@ class ServiceMenuSystem(System):
             ]
         return f"Service: {prop_name}", [f"{prop_name} provides {_site_service_label(service)}."]
 
+    def _stale_service_option_lines(self, option_id):
+        option_id = str(option_id or "").strip().lower()
+        for service in TRANSIT_SERVICE_IDS:
+            if option_id == service:
+                title = _transit_service_title(service)
+                service_name = str(title or "transit").strip().lower() or "transit"
+                return title, [f"No active {service_name} departures are posted here."]
+            if option_id.startswith(f"{service}:dest:"):
+                title = _transit_service_title(service)
+                return title, ["That departure is no longer posted here.", "Pick a fresh stop from the board."]
+        if option_id in {"vehicle_sales_new", "vehicle_sales_used"}:
+            return "Vehicles", ["Vehicle sales are no longer being offered here."]
+        if option_id.startswith("vehicle_sales_new:offer:") or option_id.startswith("vehicle_sales_used:offer:"):
+            return "Vehicles", ["That vehicle listing is no longer on the lot."]
+        if option_id.startswith("banking_business_status:"):
+            return "Business status", ["That business record is no longer available through this terminal."]
+        if option_id.startswith("banking_business_policy:"):
+            return "Business policy", ["That business record is no longer available through this terminal."]
+        if option_id.startswith("banking_business_hours:"):
+            return "Business hours", ["That business record is no longer available through this terminal."]
+        for service in CASINO_GAME_SERVICE_IDS:
+            if option_id == service or option_id.startswith(f"{service}:"):
+                return _casino_game_title(service), ["That table is no longer open.", "Pick another seat or start a fresh round."]
+        return "Service", ["That service listing is no longer available here."]
+
     def _site_service_blocked_lines(self, event):
         service = str(event.data.get("service", "")).strip().lower()
         prop_name = str(event.data.get("property_name", self._pending_property_name("Service"))).strip() or self._pending_property_name("Service")
@@ -2258,7 +2361,7 @@ class ServiceMenuSystem(System):
         if reason == "invalid_wager" and service in CASINO_GAME_SERVICE_IDS:
             return f"{_casino_game_title(service)}: {prop_name}", ["The house refuses that stake.", "Choose one of the posted wager sizes."]
         if reason == "invalid_round" and service in CASINO_GAME_SERVICE_IDS:
-            return title, ["That hand cannot be resolved cleanly right now.", "Step away and try a fresh round."]
+            return title, ["That round lost sync with the table.", "Start a fresh round."]
         if reason == "cooldown":
             ready_in = int(event.data.get("ready_in", 0))
             return title, [f"{_site_service_label(service).title()} is not available again yet.", f"Ready in {ready_in}t."]
@@ -2390,17 +2493,35 @@ class ServiceMenuSystem(System):
                 f"No room for {item_name}.",
                 "Free up an inventory slot and try again.",
             ]
+        if reason == "power_cut":
+            return title, [
+                f"{prop_name} is offline.",
+                "Power is out, so this service cannot run.",
+            ]
+        if reason == "unavailable":
+            if service == "vending":
+                return f"Vending: {prop_name}", [
+                    f"{prop_name} does not dispense anything right now.",
+                    "The machine looks empty or offline.",
+                ]
+            if service in {"vehicle_sales_new", "vehicle_sales_used"}:
+                quality = "new" if service.endswith("_new") else "used"
+                return f"Vehicles: {prop_name}", [
+                    f"The posted {quality} vehicle offer is gone.",
+                    "Check the listings again for a fresh offer.",
+                ]
+            return title, [f"{prop_name} is not offering {_site_service_label(service)} right now."]
         if reason == "no_credits":
             cost = int(event.data.get("cost", 0))
             credits = int(event.data.get("credits", 0))
             return title, [f"Need {_credit_amount_label(cost)} for this service.", f"You have {_credit_amount_label(credits)} on hand."]
         if reason == "no_space" and service in {"vehicle_sales_new", "vehicle_sales_used"}:
-            return f"Vehicles: {prop_name}", ["There is no clear space nearby to place a vehicle."]
+            return f"Vehicles: {prop_name}", [f"No clear spot near {prop_name} to place the purchase."]
         if reason == "key_storage_full" and service in {"vehicle_sales_new", "vehicle_sales_used"}:
             return f"Vehicles: {prop_name}", ["You need a free inventory slot for the vehicle key."]
         if reason == "no_vehicle" and service == "vehicle_fetch":
             return f"Fetch: {prop_name}", [f"You do not own a vehicle for {prop_name} to retrieve."]
-        return title, [f"{prop_name} cannot provide {_site_service_label(service)} right now."]
+        return title, [f"{prop_name} is not offering {_site_service_label(service)} right now."]
 
     def _bank_transaction_lines(self, event):
         provider_name = str(event.data.get("provider_name", self._pending_property_name("Banking"))).strip() or self._pending_property_name("Banking")
@@ -2411,6 +2532,22 @@ class ServiceMenuSystem(System):
         bank = int(event.data.get("bank_balance", 0))
         business_balance = int(event.data.get("business_balance", 0))
         business_name = str(event.data.get("business_name", "Business")).strip() or "Business"
+        if kind == "debt_payment":
+            debt_balance = int(event.data.get("debt_balance", 0))
+            wallet_paid = int(event.data.get("wallet_debt_paid", 0))
+            bank_paid = int(event.data.get("bank_debt_paid", 0))
+            payment_bits = []
+            if wallet_paid > 0:
+                payment_bits.append(f"{_credit_amount_label(wallet_paid)} wallet")
+            if bank_paid > 0:
+                payment_bits.append(f"{_credit_amount_label(bank_paid)} bank")
+            detail = f"Paid {_credit_amount_label(amount)} toward justice debt."
+            if payment_bits:
+                detail += f" ({', '.join(payment_bits)})"
+            return f"Banking: {provider_name}", [
+                detail,
+                f"Wallet {_credit_amount_label(wallet)} | Bank {_credit_amount_label(bank)} | Justice debt {_credit_amount_label(debt_balance)}.",
+            ]
         verb = "Withdrew" if kind == "withdraw" else "Deposited"
         if account_kind == "business":
             return f"Banking: {provider_name}", [
@@ -2424,15 +2561,25 @@ class ServiceMenuSystem(System):
 
     def _bank_blocked_lines(self, event):
         reason = str(event.data.get("reason", "")).strip().lower()
-        title = f"Banking: {self._pending_property_name('Banking')}"
+        provider_name = str(event.data.get("provider_name", self._pending_property_name("Banking"))).strip() or self._pending_property_name("Banking")
+        title = f"Banking: {provider_name}"
         if reason == "no_banking_service":
-            return title, ["No banking service is nearby."]
+            return title, ["No bank or teller is nearby."]
         if reason == "no_business_account":
             return title, ["No owned business account is available."]
         if reason == "no_bank_balance":
             return title, ["Bank account is empty."]
         if reason == "missing_finance_profile":
-            return title, ["No finance profile is available."]
+            return title, ["No verified account record is available."]
+        if reason == "no_debt_balance":
+            return title, ["No justice debt is currently on the books."]
+        if reason == "insufficient_liquid_funds":
+            debt_balance = int(event.data.get("debt_balance", 0))
+            available_liquid = int(event.data.get("available_liquid", 0))
+            return title, [
+                f"Cannot pay justice debt right now.",
+                f"Liquid funds {_credit_amount_label(available_liquid)} | Justice debt {_credit_amount_label(debt_balance)}.",
+            ]
         if reason == "deposit_not_needed":
             return title, ["Wallet reserve is already above the current bank target."]
         if reason == "no_funds_to_manage":
@@ -2451,8 +2598,11 @@ class ServiceMenuSystem(System):
             credits = int(event.data.get("credits", 0))
             return title, [f"Cannot deposit {_credit_amount_label(amount)}.", f"Wallet holds {_credit_amount_label(credits)}."]
         if reason == "invalid_amount":
+            kind = str(event.data.get("kind", "")).strip().lower()
+            if kind == "pay_justice_debt":
+                return title, ["Choose a non-zero payment toward justice debt."]
             return title, ["Choose a non-zero banking amount."]
-        return title, ["Banking action blocked."]
+        return title, [f"{provider_name} cannot process that banking request right now."]
 
     def _insurance_purchased_lines(self, event):
         provider_name = str(event.data.get("provider_name", self._pending_property_name("Insurance"))).strip() or self._pending_property_name("Insurance")
@@ -2472,21 +2622,22 @@ class ServiceMenuSystem(System):
 
     def _insurance_blocked_lines(self, event):
         reason = str(event.data.get("reason", "")).strip().lower()
-        title = f"Insurance: {self._pending_property_name('Insurance')}"
+        provider_name = str(event.data.get("provider_name", self._pending_property_name("Insurance"))).strip() or self._pending_property_name("Insurance")
+        title = f"Insurance: {provider_name}"
         if reason == "no_insurance_service":
-            return title, ["No insurance provider is nearby."]
+            return title, ["No insurer is nearby."]
         if reason == "insufficient_funds":
             premium = int(event.data.get("premium", 0))
             credits = int(event.data.get("credits", 0))
             policy_name = str(event.data.get("policy_name", "policy")).strip() or "policy"
             return title, [f"Need {_credit_amount_label(premium)} for {policy_name}.", f"You have {_credit_amount_label(credits)} on hand."]
         if reason == "provider_no_products":
-            return title, ["This provider has no policies to offer right now."]
+            return title, [f"{provider_name} has no policies to offer right now."]
         if reason == "no_offer":
-            return title, ["No policy offer is available right now."]
+            return title, [f"{provider_name} has nothing better to write right now."]
         if reason == "missing_finance_profile":
-            return title, ["No finance profile is available."]
-        return title, ["Insurance action blocked."]
+            return title, ["No verified customer record is available for underwriting."]
+        return title, [f"{provider_name} cannot issue or update coverage right now."]
 
     def on_property_interact(self, event):
         eid = event.data.get("eid")
@@ -2505,17 +2656,8 @@ class ServiceMenuSystem(System):
         pos = self._position_for(eid)
         if not pos:
             return
-
-        options, storefront_service = self._service_menu_options(eid, prop, pos)
-        if not options:
-            return
-
-        event.data["handled"] = True
-        option_ids = [str(option.get("id", "")).strip().lower() for option in options]
-        if infrastructure_role == "service_terminal" and option_ids == ["banking"]:
-            self._open_banking_menu(prop)
-            return
-        self._open_service_menu(prop, options, storefront_service=storefront_service)
+        if self._open_property_service_surface(prop):
+            event.data["handled"] = True
 
     def on_player_action(self, event):
         eid = event.data.get("eid")
@@ -2533,7 +2675,8 @@ class ServiceMenuSystem(System):
         prop = self._nearest_property_with_service(pos, "banking", radius=2)
         event.data["handled"] = True
         if not prop:
-            self._present_service_result("Banking", ["No banking service is nearby."])
+            title, lines = self._bank_blocked_lines(Event("banking_action_blocked", eid=eid, reason="no_banking_service"))
+            self._present_service_result(title, lines)
             return
         self._open_banking_menu(prop)
 
@@ -2574,19 +2717,22 @@ class ServiceMenuSystem(System):
             if isinstance(prop, dict):
                 self._open_banking_menu(prop)
             else:
-                self._present_service_result("Banking", ["No banking service is available right now."])
+                title, lines = self._bank_blocked_lines(Event("banking_action_blocked", eid=self.player_eid, reason="no_banking_service"))
+                self._present_service_result(title, lines)
             return
         if option_id in TRANSIT_SERVICE_IDS:
             if isinstance(prop, dict):
                 self._open_transit_menu(prop, option_id)
             else:
-                self._present_service_result(_transit_service_title(option_id), ["That transit service is not available right now."])
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
             return
         if option_id in {"vehicle_sales_new", "vehicle_sales_used"}:
             if isinstance(prop, dict):
                 self._open_vehicle_sale_menu(prop, "new" if option_id == "vehicle_sales_new" else "used")
             else:
-                self._present_service_result("Vehicles", ["That vehicle service is not available right now."])
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
             return
         transit_service = next(
             (
@@ -2597,9 +2743,9 @@ class ServiceMenuSystem(System):
             "",
         )
         if transit_service:
-            title = _transit_service_title(transit_service)
             if not isinstance(prop, dict):
-                self._present_service_result(title, ["That transit destination is not available right now."])
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
                 return
             selected = next(
                 (
@@ -2610,8 +2756,10 @@ class ServiceMenuSystem(System):
                 None,
             )
             if not isinstance(selected, dict):
-                self._present_service_result(title, ["That transit destination could not be resolved cleanly."])
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
                 return
+            title = _transit_service_title(transit_service)
             prop_name = prop.get("name", property_id)
             self._begin_pending_service_result(
                 channel="site",
@@ -2639,7 +2787,8 @@ class ServiceMenuSystem(System):
             service, _sep, offering_id = option_id.partition(":offer:")
             service = str(service or "").strip().lower()
             if service not in {"vehicle_sales_new", "vehicle_sales_used"} or not isinstance(prop, dict):
-                self._present_service_result("Vehicles", ["That vehicle offering is not available right now."])
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
                 return
             offering_id = str(offering_id or "").strip().lower()
             if not offering_id:
@@ -2667,14 +2816,15 @@ class ServiceMenuSystem(System):
                 self._present_service_result("Banking", ["That banking option is invalid."])
                 return
             if not isinstance(prop, dict):
-                self._present_service_result("Banking", ["No banking service is available right now."])
+                title, lines = self._bank_blocked_lines(Event("banking_action_blocked", eid=self.player_eid, reason="no_banking_service"))
+                self._present_service_result(title, lines)
                 return
             transfer_kind = str(parts[1]).strip().lower()
             try:
                 amount = int(parts[2])
             except (TypeError, ValueError):
                 amount = 0
-            if transfer_kind not in {"deposit", "withdraw"} or amount <= 0:
+            if transfer_kind not in {"deposit", "withdraw", "pay_justice_debt"} or amount <= 0:
                 self._present_service_result("Banking", ["That banking option is invalid."])
                 return
             self._begin_pending_service_result(
@@ -2692,13 +2842,31 @@ class ServiceMenuSystem(System):
                 amount=amount,
             ))
             return
+        if option_id.startswith("property_purchase:"):
+            parts = option_id.split(":")
+            action = str(parts[1] if len(parts) >= 2 else "").strip().lower()
+            purchase_property_id = str(parts[2] if len(parts) >= 3 else property_id or "").strip()
+            if action == "cancel":
+                self._close_service_menu()
+                return
+            if action != "confirm" or not purchase_property_id:
+                self._present_service_result("Property Purchase", ["That purchase option is invalid."], property_id=property_id)
+                return
+            self._close_service_menu()
+            self.sim.emit(Event(
+                "property_purchase_execute_request",
+                eid=self.player_eid,
+                property_id=purchase_property_id,
+            ))
+            return
         if option_id.startswith("banking_business:"):
             parts = option_id.split(":")
             if len(parts) != 4:
                 self._present_service_result("Banking", ["That business banking option is invalid."])
                 return
             if not isinstance(prop, dict):
-                self._present_service_result("Banking", ["No banking service is available right now."])
+                title, lines = self._bank_blocked_lines(Event("banking_action_blocked", eid=self.player_eid, reason="no_banking_service"))
+                self._present_service_result(title, lines)
                 return
             transfer_kind = str(parts[1]).strip().lower()
             try:
@@ -2733,7 +2901,8 @@ class ServiceMenuSystem(System):
                 return
             business_prop = self.sim.properties.get(business_property_id)
             if not isinstance(business_prop, dict):
-                self._present_service_result("Business status", ["That business is not available right now."])
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
                 return
             lines = self._business_status_lines({"prop": business_prop})
             business_name = str(business_prop.get("metadata", {}).get("business_name", business_prop.get("name", "Business"))).strip() or "Business"
@@ -2755,7 +2924,8 @@ class ServiceMenuSystem(System):
                 return
             business_prop = self.sim.properties.get(business_property_id)
             if not isinstance(business_prop, dict):
-                self._present_service_result("Business policy", ["That business is not available right now."])
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
                 return
             policy = player_business_set_customer_policy(business_prop, next_policy)
             business_name = str(business_prop.get("metadata", {}).get("business_name", business_prop.get("name", "Business"))).strip() or "Business"
@@ -2777,7 +2947,8 @@ class ServiceMenuSystem(System):
                 return
             business_prop = self.sim.properties.get(business_property_id)
             if not isinstance(business_prop, dict):
-                self._present_service_result("Business hours", ["That business is not available right now."])
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
                 return
             result = player_business_set_hours_mode(self.sim, business_prop, next_mode)
             business_name = str(business_prop.get("metadata", {}).get("business_name", business_prop.get("name", "Business"))).strip() or "Business"
@@ -2788,6 +2959,10 @@ class ServiceMenuSystem(System):
             )
             return
         if option_id == "insurance":
+            if not isinstance(prop, dict):
+                title, lines = self._insurance_blocked_lines(Event("insurance_action_blocked", eid=self.player_eid, reason="no_insurance_service"))
+                self._present_service_result(title, lines)
+                return
             prop_name = prop.get("name", property_id) if isinstance(prop, dict) else property_id
             self._begin_pending_service_result(
                 channel="insurance",
@@ -2808,14 +2983,16 @@ class ServiceMenuSystem(System):
             if isinstance(prop, dict):
                 self._open_casino_game_menu(prop, option_id)
             else:
-                self._present_service_result("Casino", ["That table is not available right now."])
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
             return
         for service in CASINO_GAME_SERVICE_IDS:
             prefix = f"{service}:bet:"
             if not option_id.startswith(prefix):
                 continue
             if not isinstance(prop, dict):
-                self._present_service_result(_casino_game_title(service), ["That table is not available right now."])
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
                 return
             try:
                 wager = int(option_id.rsplit(":", 1)[-1])

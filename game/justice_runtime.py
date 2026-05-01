@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from game.components import FinancialProfile
+
 
 MAX_ACTIVE_SCORE = 100
 MAX_INCIDENT_HISTORY = 24
@@ -123,6 +125,10 @@ def _offender_record(state, offender_eid, *, create=False):
             "in_custody": False,
             "custody_tick": -10_000,
             "held_by_eid": None,
+            "held_property_site_id": "",
+            "held_property_site_name": "",
+            "held_property_entries": [],
+            "held_property_updated_tick": -10_000,
         }
         offenders[offender_key] = record
 
@@ -151,6 +157,31 @@ def _offender_record(state, offender_eid, *, create=False):
         record["held_by_eid"] = int(held_by) if held_by is not None else None
     except (TypeError, ValueError):
         record["held_by_eid"] = None
+    record["held_property_site_id"] = _text(record.get("held_property_site_id"))
+    record["held_property_site_name"] = _text(record.get("held_property_site_name"))
+    held_entries = record.get("held_property_entries")
+    if not isinstance(held_entries, list):
+        held_entries = []
+    cleaned_entries = []
+    for entry in held_entries:
+        if not isinstance(entry, dict):
+            continue
+        item_id = _text(entry.get("item_id")).lower()
+        instance_id = _text(entry.get("instance_id"))
+        quantity = max(1, _safe_int(entry.get("quantity"), default=1))
+        if not item_id or not instance_id:
+            continue
+        metadata = entry.get("metadata")
+        cleaned_entries.append({
+            "instance_id": instance_id,
+            "item_id": item_id,
+            "quantity": quantity,
+            "owner_eid": entry.get("owner_eid"),
+            "owner_tag": _text(entry.get("owner_tag")),
+            "metadata": dict(metadata) if isinstance(metadata, dict) else {},
+        })
+    record["held_property_entries"] = cleaned_entries
+    record["held_property_updated_tick"] = _safe_int(record.get("held_property_updated_tick"), default=-10_000)
     return record
 
 
@@ -197,6 +228,9 @@ def justice_snapshot(sim, offender_eid):
             "in_custody": False,
             "held_by_eid": None,
             "latest_incident": None,
+            "held_property_count": 0,
+            "held_property_site_id": "",
+            "held_property_site_name": "",
         }
     incidents = record.get("incidents", [])
     latest = incidents[-1] if incidents else None
@@ -214,7 +248,87 @@ def justice_snapshot(sim, offender_eid):
         "in_custody": bool(record.get("in_custody", False)),
         "held_by_eid": record.get("held_by_eid"),
         "latest_incident": dict(latest) if isinstance(latest, dict) else None,
+        "held_property_count": int(sum(max(1, _safe_int(entry.get("quantity"), default=1)) for entry in record.get("held_property_entries", ()) if isinstance(entry, dict))),
+        "held_property_site_id": _text(record.get("held_property_site_id")),
+        "held_property_site_name": _text(record.get("held_property_site_name")),
     }
+
+
+def held_property_snapshot(sim, offender_eid):
+    state = _state(sim)
+    record = _offender_record(state, offender_eid, create=False)
+    if not isinstance(record, dict):
+        return {
+            "property_id": "",
+            "property_name": "",
+            "entry_count": 0,
+            "item_count": 0,
+            "entries": (),
+            "updated_tick": -10_000,
+        }
+    entries = tuple(
+        dict(entry)
+        for entry in tuple(record.get("held_property_entries", ()) or ())
+        if isinstance(entry, dict)
+    )
+    return {
+        "property_id": _text(record.get("held_property_site_id")),
+        "property_name": _text(record.get("held_property_site_name")),
+        "entry_count": len(entries),
+        "item_count": int(sum(max(1, _safe_int(entry.get("quantity"), default=1)) for entry in entries)),
+        "entries": entries,
+        "updated_tick": int(record.get("held_property_updated_tick", -10_000)),
+    }
+
+
+def replace_held_property(sim, offender_eid, *, property_id=None, property_name=None, entries=()):
+    state = _state(sim)
+    record = _offender_record(state, offender_eid, create=True)
+    if not isinstance(record, dict):
+        return None
+    record["held_property_site_id"] = _text(property_id or record.get("held_property_site_id"))
+    record["held_property_site_name"] = _text(property_name or record.get("held_property_site_name"))
+    normalized = []
+    for entry in tuple(entries or ()):
+        if not isinstance(entry, dict):
+            continue
+        item_id = _text(entry.get("item_id")).lower()
+        instance_id = _text(entry.get("instance_id"))
+        quantity = max(1, _safe_int(entry.get("quantity"), default=1))
+        if not item_id or not instance_id:
+            continue
+        metadata = entry.get("metadata")
+        normalized.append({
+            "instance_id": instance_id,
+            "item_id": item_id,
+            "quantity": quantity,
+            "owner_eid": entry.get("owner_eid"),
+            "owner_tag": _text(entry.get("owner_tag")),
+            "metadata": dict(metadata) if isinstance(metadata, dict) else {},
+        })
+    record["held_property_entries"] = normalized
+    record["held_property_updated_tick"] = _safe_int(getattr(sim, "tick", 0), default=0)
+    if not normalized:
+        record["held_property_site_id"] = ""
+        record["held_property_site_name"] = ""
+    return held_property_snapshot(sim, offender_eid)
+
+
+def store_held_property(sim, offender_eid, *, property_id=None, property_name=None, entries=()):
+    current = held_property_snapshot(sim, offender_eid)
+    combined = list(current.get("entries", ()) or ())
+    combined.extend(
+        dict(entry)
+        for entry in tuple(entries or ())
+        if isinstance(entry, dict)
+    )
+    return replace_held_property(
+        sim,
+        offender_eid,
+        property_id=property_id,
+        property_name=property_name,
+        entries=combined,
+    )
 
 
 def _incident_weight(incident_type, *, severity=0, witnessed=False):
@@ -527,20 +641,35 @@ def justice_summary_rows(sim, offender_eid):
     jurisdiction = _text(snapshot.get("last_jurisdiction_name")) or "Local Justice Office"
     latest = snapshot.get("latest_incident") if isinstance(snapshot.get("latest_incident"), dict) else {}
     latest_label = _text(latest.get("label")) or "incident"
+    held = held_property_snapshot(sim, offender_eid)
+    held_count = max(0, _safe_int(held.get("item_count"), default=0))
+    held_site = _text(held.get("property_name")) or _text(snapshot.get("held_property_site_name")) or jurisdiction
+    finance = sim.ecs.get(FinancialProfile).get(offender_eid) if sim is not None else None
+    justice_debt = int(finance.debt_amount("justice_fines")) if finance and hasattr(finance, "debt_amount") else 0
 
+    lines = []
     if status == "held":
-        return [
+        lines.extend([
             f"Held in custody by {jurisdiction}.",
             f"Recorded incidents {incident_count}; latest {latest_label}.",
-        ]
-    if score <= 0 and incident_count <= 0:
-        return ["Legal clear. No active justice attention."]
-
-    if status == "clear":
-        lead = f"Legal attention is cooling in {jurisdiction}."
+        ])
+    elif score <= 0 and incident_count <= 0:
+        lines.append("Legal clear. No active justice attention.")
     else:
-        lead = f"Status {wanted_label(status)} in {jurisdiction}."
-    return [
-        lead,
-        f"Legal pressure {score} | recorded incidents {incident_count} | latest {latest_label}.",
-    ]
+        if status == "clear":
+            lead = f"Legal attention is cooling in {jurisdiction}."
+        else:
+            lead = f"Status {wanted_label(status)} in {jurisdiction}."
+        lines.extend([
+            lead,
+            f"Legal pressure {score} | recorded incidents {incident_count} | latest {latest_label}.",
+        ])
+
+    if justice_debt > 0:
+        lines.append(f"Justice debt {justice_debt}c is on the books.")
+    if held_count > 0:
+        if justice_debt > 0:
+            lines.append(f"Held property at {held_site}: {held_count} item(s); release waits on justice debt.")
+        else:
+            lines.append(f"Held property at {held_site}: {held_count} item(s) ready for release.")
+    return lines
