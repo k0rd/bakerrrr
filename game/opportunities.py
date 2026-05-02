@@ -100,6 +100,20 @@ OBJECTIVE_PREFERENCES = {
         "relay_watch",
         "route_stash",
     },
+    "neighborhood_control": {
+        "trade_loop",
+        "district_contract",
+        "contact_run",
+        "property_dispute",
+        "service_friction",
+        "paper_trail",
+        "claims_chase",
+        "backroom_buyback",
+        "supply_shortage",
+        "tool_procurement",
+        "tool_pickup",
+        "supply_grab",
+    },
 }
 
 SPECIALTY_OPPORTUNITY_THEMES = {
@@ -148,6 +162,164 @@ SPECIALTY_FOCUS_SITE_KINDS = {
         "ranger_hut",
         "ruin_shelter",
     ),
+}
+
+OPPORTUNITY_ROUTE_DEFAULTS = {
+    "salvage_sweep": {
+        "recent_activity_tags": ("discovery_salvage",),
+    },
+    "parts_recovery": {
+        "recent_activity_tags": ("discovery_salvage",),
+    },
+    "water_run": {
+        "recent_activity_tags": ("discovery_water",),
+    },
+    "tool_pickup": {
+        "recent_activity_tags": ("discovery_tools",),
+    },
+    "tool_procurement": {
+        "recent_activity_tags": ("discovery_tools", "trade", "contact"),
+        "prefer_storefront": True,
+        "prefer_public": True,
+    },
+    "supply_grab": {
+        "recent_activity_tags": ("discovery_supplies",),
+    },
+    "trade_loop": {
+        "recent_activity_tags": ("trade", "contact"),
+        "prefer_storefront": True,
+        "prefer_public": True,
+    },
+    "paper_trail": {
+        "recent_activity_tags": ("finance", "service", "intel"),
+        "prefer_finance_services": True,
+        "prefer_site_services": True,
+        "prefer_public": True,
+    },
+    "backroom_buyback": {
+        "recent_activity_tags": ("trade", "contact"),
+        "prefer_storefront": True,
+        "prefer_public": True,
+    },
+    "debt_marker": {
+        "recent_activity_tags": ("contact", "finance", "trade"),
+        "prefer_storefront": True,
+        "prefer_finance_services": True,
+        "prefer_public": True,
+    },
+    "supply_shortage": {
+        "recent_activity_tags": ("trade", "service", "contact"),
+        "prefer_storefront": True,
+        "prefer_site_services": True,
+        "prefer_public": True,
+    },
+    "contact_run": {
+        "recent_activity_tags": ("contact",),
+        "prefer_storefront": True,
+        "prefer_public": True,
+    },
+    "missing_person": {
+        "recent_activity_tags": ("contact", "intel"),
+        "prefer_public": True,
+    },
+    "property_dispute": {
+        "recent_activity_tags": ("contact", "intel"),
+        "prefer_public": True,
+    },
+    "claims_chase": {
+        "recent_activity_tags": ("finance", "service", "trade", "contact"),
+        "prefer_finance_services": True,
+    },
+    "records_pull": {
+        "recent_activity_tags": ("intel", "service", "finance"),
+        "prefer_finance_services": True,
+        "prefer_site_services": True,
+    },
+    "watch_post": {
+        "recent_activity_tags": ("stakeout", "intel"),
+        "prefer_public": True,
+        "prefer_site_services": True,
+    },
+    "service_friction": {
+        "recent_activity_tags": ("service", "trade", "contact", "intel"),
+        "prefer_storefront": True,
+        "prefer_site_services": True,
+        "prefer_public": True,
+    },
+    "intel_scout": {
+        "recent_activity_tags": ("intel", "stakeout"),
+        "prefer_site_services": True,
+        "prefer_public": True,
+    },
+    "shelter_stop": {
+        "recent_activity_tags": ("service",),
+        "prefer_site_services": True,
+        "prefer_public": True,
+    },
+    "district_contract": {
+        "recent_activity_tags": ("trade", "service", "finance", "contact"),
+        "prefer_storefront": True,
+        "prefer_finance_services": True,
+        "prefer_site_services": True,
+        "prefer_public": True,
+    },
+    "landmark_survey": {
+        "recent_activity_tags": ("discovery_landmark", "intel", "stakeout"),
+        "prefer_public": True,
+    },
+    "layover_shuffle": {
+        "recent_activity_tags": ("contact", "trade", "finance"),
+        "prefer_public": True,
+    },
+    "route_stash": {
+        "recent_activity_tags": ("contact", "trade", "intel"),
+        "prefer_public": True,
+    },
+    "yard_strip": {
+        "recent_activity_tags": ("discovery_salvage", "contact", "trade"),
+        "prefer_public": True,
+    },
+    "field_repair_call": {
+        "recent_activity_tags": ("discovery_tools", "contact", "trade", "service"),
+        "prefer_public": True,
+    },
+    "sightline_check": {
+        "recent_activity_tags": ("discovery_landmark", "stakeout", "intel"),
+        "prefer_public": True,
+    },
+    "relay_watch": {
+        "recent_activity_tags": ("stakeout", "intel"),
+        "prefer_public": True,
+    },
+    "refuge_resupply": {
+        "recent_activity_tags": ("service", "contact", "discovery_supplies"),
+        "prefer_site_services": True,
+        "prefer_public": True,
+    },
+    "spring_run": {
+        "recent_activity_tags": ("discovery_water", "service", "contact"),
+        "prefer_site_services": True,
+        "prefer_public": True,
+    },
+    "lead_followup": {
+        "recent_activity_tags": ("intel", "stakeout", "contact", "service", "finance"),
+        "prefer_public": True,
+    },
+}
+
+OPPORTUNITY_ACTIVITY_REASON_LABELS = {
+    "contact": "made local contact",
+    "intel": "pulled intel on the site",
+    "service": "worked the site's services",
+    "trade": "worked the local counter",
+    "finance": "worked the local finance desk",
+    "stakeout": "held a quiet watch on the site",
+    "discovery": "surveyed the target area",
+    "discovery_landmark": "surveyed the landmark route",
+    "discovery_salvage": "worked the salvage route",
+    "discovery_water": "worked the water route",
+    "discovery_tools": "worked the tool route",
+    "discovery_supplies": "worked the supply route",
 }
 
 SPECIALTY_CONTACT_ROLE_BY_SITE_KIND = {
@@ -309,6 +481,26 @@ def _chunk_tuple(value):
         return None
     try:
         return (int(value[0]), int(value[1]))
+    except (TypeError, ValueError):
+        return None
+
+
+def _chunk_key(chunk):
+    normalized = _chunk_tuple(chunk)
+    if normalized is None:
+        return ""
+    return f"{int(normalized[0])},{int(normalized[1])}"
+
+
+def _chunk_from_key(raw):
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    left, sep, right = text.partition(",")
+    if not sep:
+        return None
+    try:
+        return (int(left), int(right))
     except (TypeError, ValueError):
         return None
 
@@ -794,6 +986,95 @@ def _recent_site_interactions(sim, freshness_ticks=8):
     return frozenset(property_ids), frozenset(building_ids)
 
 
+def _recent_opportunity_activities(sim, freshness_ticks=18):
+    property_tags = {}
+    building_tags = {}
+    chunk_tags = {}
+    if sim is None:
+        return property_tags, building_tags, chunk_tags
+
+    current_tick = int(getattr(sim, "tick", 0))
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        return property_tags, building_tags, chunk_tags
+
+    state = traits.get("recent_opportunity_actions")
+    if not isinstance(state, dict):
+        return property_tags, building_tags, chunk_tags
+
+    max_age = int(max(1, freshness_ticks))
+    for bucket_key, target in (("properties", property_tags), ("buildings", building_tags), ("chunks", chunk_tags)):
+        bucket = state.get(bucket_key)
+        if not isinstance(bucket, dict):
+            continue
+        for raw_site_id, raw_tags in list(bucket.items()):
+            if bucket_key == "chunks":
+                site_id = _chunk_from_key(raw_site_id)
+            else:
+                site_id = str(raw_site_id or "").strip()
+            if not site_id or not isinstance(raw_tags, dict):
+                bucket.pop(raw_site_id, None)
+                continue
+            active_tags = set()
+            for raw_tag, raw_tick in list(raw_tags.items()):
+                tag = str(raw_tag or "").strip().lower()
+                tick = _safe_int(raw_tick, default=-10_000)
+                if not tag or current_tick - tick > max_age:
+                    raw_tags.pop(raw_tag, None)
+                    continue
+                active_tags.add(tag)
+            if active_tags:
+                target[site_id] = frozenset(active_tags)
+                continue
+            bucket.pop(raw_site_id, None)
+
+    return property_tags, building_tags, chunk_tags
+
+
+def _normalize_activity_tags(raw_tags):
+    if isinstance(raw_tags, str):
+        raw_tags = (raw_tags,)
+    normalized = []
+    for raw_tag in tuple(raw_tags or ()):
+        tag = str(raw_tag or "").strip().lower()
+        if tag and tag not in normalized:
+            normalized.append(tag)
+    return tuple(normalized)
+
+
+def _opportunity_requirements(opportunity):
+    if not isinstance(opportunity, dict):
+        return {}
+
+    requirements = opportunity.get("requirements")
+    if not isinstance(requirements, dict):
+        requirements = {}
+        opportunity["requirements"] = requirements
+
+    kind = str(opportunity.get("kind", "") or "").strip().lower()
+    defaults = OPPORTUNITY_ROUTE_DEFAULTS.get(kind)
+    if not isinstance(defaults, dict):
+        return requirements
+
+    if (
+        _safe_int(requirements.get("interact_npc_eid"), default=0) > 0
+        or _safe_int(requirements.get("kill_target_eid"), default=0) > 0
+        or str(requirements.get("require_item_id", "")).strip().lower()
+    ):
+        return requirements
+
+    recent_activity_tags = _normalize_activity_tags(requirements.get("recent_activity_tags"))
+    if not recent_activity_tags:
+        recent_activity_tags = _normalize_activity_tags(defaults.get("recent_activity_tags"))
+        if recent_activity_tags:
+            requirements["recent_activity_tags"] = recent_activity_tags
+
+    for flag in ("prefer_storefront", "prefer_finance_services", "prefer_site_services", "prefer_public"):
+        if flag not in requirements and flag in defaults:
+            requirements[flag] = bool(defaults.get(flag))
+    return requirements
+
+
 def _player_site_state(sim, player_eid):
     pos = sim.ecs.get(Position).get(player_eid) if sim is not None and player_eid is not None else None
     if not pos:
@@ -841,6 +1122,7 @@ def _player_metrics(sim, player_eid):
         if e is not None
     )
     recent_property_ids, recent_building_ids = _recent_site_interactions(sim)
+    recent_activity_property_tags, recent_activity_building_tags, recent_activity_chunk_tags = _recent_opportunity_activities(sim)
     return {
         "wallet_credits": wallet,
         "bank_credits": bank,
@@ -855,6 +1137,9 @@ def _player_metrics(sim, player_eid):
         "recent_npc_eids": _recent_npc_interactions(sim),
         "recent_property_ids": recent_property_ids,
         "recent_building_ids": recent_building_ids,
+        "recent_activity_property_tags": recent_activity_property_tags,
+        "recent_activity_building_tags": recent_activity_building_tags,
+        "recent_activity_chunk_tags": recent_activity_chunk_tags,
         "inventory_counts": _inventory_counts(inventory),
         "killed_npc_eids": killed_eids,
     }
@@ -934,6 +1219,77 @@ def _matches_recent_site_interaction(metrics, *, property_id=None, building_id=N
     return False
 
 
+def _match_recent_opportunity_activity(metrics, *, property_id=None, building_id=None, chunk=None, accepted_tags=()):
+    property_id = str(property_id or "").strip()
+    building_id = str(building_id or "").strip()
+    chunk = _chunk_tuple(chunk)
+    tags = _normalize_activity_tags(accepted_tags)
+    if not tags:
+        return ""
+
+    property_tags = (
+        metrics.get("recent_activity_property_tags", {})
+        if isinstance(metrics.get("recent_activity_property_tags", {}), dict)
+        else {}
+    )
+    building_tags = (
+        metrics.get("recent_activity_building_tags", {})
+        if isinstance(metrics.get("recent_activity_building_tags", {}), dict)
+        else {}
+    )
+    chunk_tags = (
+        metrics.get("recent_activity_chunk_tags", {})
+        if isinstance(metrics.get("recent_activity_chunk_tags", {}), dict)
+        else {}
+    )
+
+    if property_id:
+        current_tags = set(property_tags.get(property_id, ()) or ())
+        for tag in tags:
+            if tag in current_tags:
+                return tag
+    if building_id:
+        current_tags = set(building_tags.get(building_id, ()) or ())
+        for tag in tags:
+            if tag in current_tags:
+                return tag
+    if chunk:
+        current_tags = set(chunk_tags.get(chunk, ()) or ())
+        for tag in tags:
+            if tag in current_tags:
+                return tag
+    return ""
+
+
+def _opportunity_activity_instruction(requirements):
+    requirements = requirements if isinstance(requirements, dict) else {}
+    tags = set(_normalize_activity_tags(requirements.get("recent_activity_tags")))
+    discovery_tags = {tag for tag in tags if tag == "discovery" or tag.startswith("discovery_")}
+    if not tags:
+        return "Interact there to complete the job."
+    if tags == {"contact"}:
+        return "Talk to someone there to work the lead."
+    if discovery_tags and discovery_tags == tags:
+        return "Survey the chunk itself to work the lead."
+    if discovery_tags and tags <= (discovery_tags | {"intel", "stakeout"}):
+        return "Survey the chunk or pull a quiet read there to work the lead."
+    if tags <= {"stakeout", "intel"}:
+        if "stakeout" in tags:
+            return "Hold a quiet watch or pull intel there to work the lead."
+        return "Pull intel there to work the lead."
+    if tags & {"contact"} and tags & {"service", "trade", "finance"}:
+        return "Talk to someone there or work the local counter/services to move the job."
+    if tags & {"contact"} and tags & {"intel", "stakeout"}:
+        return "Talk to someone there or work the lead quietly on site."
+    if tags & {"finance"} and not (tags & {"contact", "intel", "stakeout"}):
+        return "Work the local finance desk there to move the job."
+    if tags & {"service", "trade", "finance"} and not (tags & {"contact", "intel", "stakeout"}):
+        return "Use the local counter or services there to work the job."
+    if tags & {"intel", "stakeout"} and tags & {"service", "trade", "finance"}:
+        return "Work the site through intel, a quiet watch, or local services."
+    return "Work the site there to complete the job."
+
+
 def _property_archetype(prop):
     metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), dict) else {}
     return str(metadata.get("archetype", "") or "").strip().lower()
@@ -1006,6 +1362,22 @@ def _pick_courier_item(rng):
     return str(rng.choice(pool)).strip().lower()
 
 
+def _discovery_item_pool(discovery, fallback_ids):
+    discovery = discovery if isinstance(discovery, dict) else {}
+    pool = [
+        str(candidate).strip().lower()
+        for candidate in tuple(discovery.get("item_pool", ()) or ())
+        if str(candidate).strip().lower() in ITEM_CATALOG
+    ]
+    if pool:
+        return pool
+    return [
+        str(item_id).strip().lower()
+        for item_id in tuple(fallback_ids or ())
+        if str(item_id).strip().lower() in ITEM_CATALOG
+    ]
+
+
 def _item_label(item_id):
     return item_display_name(str(item_id or "item").strip().lower(), item_catalog=ITEM_CATALOG)
 
@@ -1041,13 +1413,14 @@ def _reward_with_items(base_reward, *items):
     return reward
 
 
-def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", travel=None, discovery=None, sites=None, rng=None):
+def _specialty_chunk_opportunity_candidates(theme_id, *, chunk=None, identity_label="", travel=None, discovery=None, sites=None, rng=None):
     theme_id = str(theme_id or "").strip().lower()
     if not theme_id:
         return ()
     if not isinstance(rng, random.Random):
         rng = random.Random(f"specialty:{theme_id}")
 
+    chunk_key = _chunk_tuple(chunk)
     label = str(identity_label).strip() or "this stretch"
     discovery = discovery if isinstance(discovery, dict) else {}
     discovery_label = str(discovery.get("label", "")).strip()
@@ -1058,6 +1431,13 @@ def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", trav
 
     if theme_id == "route_hub":
         route_cache = discovery_label or "route stash"
+        stash_item_pool = tuple(
+            item_id
+            for item_id in ("transit_daypass", "city_pass_token", "meal_voucher", "bottled_water")
+            if item_id in ITEM_CATALOG
+        )
+        stash_item_id = str(rng.choice(stash_item_pool)).strip().lower() if stash_item_pool else "transit_daypass"
+        stash_item_label = _item_label(stash_item_id)
         candidates.extend((
             {
                 "kind": "layover_shuffle",
@@ -1077,18 +1457,37 @@ def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", trav
                 "kind": "route_stash",
                 "source": "specialty_theme",
                 "title": "Route Stash",
-                "summary": f"A {route_cache} tucked into {anchor_read} can still pay before the next line turns over.",
+                "summary": (
+                    f"A {route_cache} tucked into {anchor_read} is holding {stash_item_label}; "
+                    "lift it clean and walk it to a quiet local handoff before the next line turns over."
+                ),
                 "playstyles": ("economic", "stealth", "social"),
                 "reward": _reward_with_items(
                     {"credits": rng.randint(14, 28), "intel": 1},
                     rng.choice(("transit_daypass", "bottled_water", "meal_voucher")),
                 ),
                 "weight": 1.18,
-                "requirements": dict(anchor_requirements),
+                "requirements": {
+                    **dict(anchor_requirements),
+                    **({"pickup_chunk": chunk_key, "delivery_chunk": chunk_key, "visit_chunk": chunk_key} if chunk_key else {}),
+                    "require_item_id": stash_item_id,
+                    "require_item_qty": 1,
+                    "consume_item": True,
+                    "provide_item": True,
+                    "item_label": stash_item_label,
+                    "acquisition_hint": "pickup",
+                },
                 **anchor,
             },
         ))
     elif theme_id == "parts_yard":
+        repair_item_pool = tuple(
+            item_id
+            for item_id in ("pocket_multitool", "prybar", "battery_pack")
+            if item_id in ITEM_CATALOG
+        )
+        repair_item_id = str(rng.choice(repair_item_pool)).strip().lower() if repair_item_pool else "pocket_multitool"
+        repair_item_label = _item_label(repair_item_id)
         candidates.extend((
             {
                 "kind": "yard_strip",
@@ -1108,14 +1507,22 @@ def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", trav
                 "kind": "field_repair_call",
                 "source": "specialty_theme",
                 "title": "Field Repair Call",
-                "summary": f"Someone working off {anchor_read} needs a quiet fix before a bad breakdown turns public.",
+                "summary": f"Someone working off {anchor_read} needs {repair_item_label} before a bad breakdown turns public.",
                 "playstyles": ("economic", "social", "stealth"),
                 "reward": _reward_with_items(
                     {"credits": rng.randint(14, 26), "standing": 1},
                     rng.choice(("pocket_multitool", "prybar", "battery_pack")),
                 ),
                 "weight": 1.16,
-                "requirements": dict(anchor_requirements),
+                "requirements": {
+                    **dict(anchor_requirements),
+                    "require_item_id": repair_item_id,
+                    "require_item_qty": 1,
+                    "consume_item": True,
+                    "provide_item": False,
+                    "item_label": repair_item_label,
+                    "acquisition_hint": "buy_or_find",
+                },
                 **anchor,
             },
         ))
@@ -1151,6 +1558,13 @@ def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", trav
             },
         ))
     elif theme_id == "field_refuge":
+        spring_item_pool = tuple(
+            item_id
+            for item_id in ("bottled_water", "hydration_salts", "med_gel")
+            if item_id in ITEM_CATALOG
+        )
+        spring_item_id = str(rng.choice(spring_item_pool)).strip().lower() if spring_item_pool else "hydration_salts"
+        spring_item_label = _item_label(spring_item_id)
         candidates.extend((
             {
                 "kind": "refuge_resupply",
@@ -1170,14 +1584,22 @@ def _specialty_chunk_opportunity_candidates(theme_id, *, identity_label="", trav
                 "kind": "spring_run",
                 "source": "specialty_theme",
                 "title": "Spring Run",
-                "summary": f"Carry water and remedies between the rough refuge stops that hang off {anchor_read}.",
+                "summary": f"Carry {spring_item_label} between the rough refuge stops that hang off {anchor_read}.",
                 "playstyles": ("social", "stealth", "economic"),
                 "reward": _reward_with_items(
                     {"credits": rng.randint(8, 18), "energy": 6, "safety": 3},
                     rng.choice(("bottled_water", "hydration_salts", "med_gel")),
                 ),
                 "weight": 1.12,
-                "requirements": dict(anchor_requirements),
+                "requirements": {
+                    **dict(anchor_requirements),
+                    "require_item_id": spring_item_id,
+                    "require_item_qty": 1,
+                    "consume_item": True,
+                    "provide_item": False,
+                    "item_label": spring_item_label,
+                    "acquisition_hint": "buy_or_find",
+                },
                 **anchor,
             },
         ))
@@ -1287,6 +1709,14 @@ def _property_matches_chunk_hint(prop, requirements):
         score += 4.5
 
     flags = _property_service_flags(prop)
+    if bool(requirements.get("prefer_storefront")) and flags.get("is_storefront"):
+        score += 4.0
+    if bool(requirements.get("prefer_finance_services")) and flags.get("finance_services"):
+        score += 4.2
+    if bool(requirements.get("prefer_site_services")) and flags.get("site_services"):
+        score += 3.6
+    if bool(requirements.get("prefer_public")) and flags.get("public"):
+        score += 1.4
     if flags.get("public") or flags.get("is_storefront"):
         score += 0.65
     if flags.get("finance_services") or flags.get("site_services"):
@@ -1367,11 +1797,12 @@ def _stage_notice(entry, prop, *, stage_kind):
     opp_id = int(entry.get("id", 0) or 0)
     title = str(entry.get("title", "Opportunity")).strip() or "Opportunity"
     site_name = _property_label(prop, prop.get("id"))
+    requirements = _opportunity_requirements(entry)
     if stage_kind == "pickup":
         return f"O{opp_id} {title}: pickup target staged at {site_name}. Interact there to make the pickup."
     if stage_kind == "delivery":
         return f"O{opp_id} {title}: handoff target staged at {site_name}. Interact there to complete the drop."
-    return f"O{opp_id} {title}: work target staged at {site_name}. Interact there to complete the job."
+    return f"O{opp_id} {title}: work target staged at {site_name}. {_opportunity_activity_instruction(requirements)}"
 
 
 def stage_active_opportunities(sim, player_eid):
@@ -1399,7 +1830,7 @@ def stage_active_opportunities(sim, player_eid):
     notices = []
 
     for entry in active:
-        requirements = entry.get("requirements", {}) if isinstance(entry.get("requirements", {}), dict) else {}
+        requirements = _opportunity_requirements(entry)
         if not _site_task_expected(requirements):
             continue
 
@@ -1504,6 +1935,12 @@ def _contact_variant_candidate(sim, prop, property_id, entry, objective_id):
             pool.extend(["claims_chase", "records_pull"])
         if standing >= 0.66:
             pool.append("watch_post")
+    elif objective_id == "neighborhood_control":
+        pool = ["property_dispute", "contact_run", "service_friction", "supply_shortage"]
+        if finance_services:
+            pool.extend(["claims_chase", "paper_trail"])
+        if is_storefront or site_services:
+            pool.append("backroom_buyback")
     elif objective_id == "high_value_retrieval":
         pool = ["service_friction", "property_dispute"]
         if finance_services or "intel" in site_services:
@@ -1736,6 +2173,7 @@ def _intel_variant_candidate(sim, prop, property_id, entry, objective_id):
         pools = {
             "debt_exit": ("debt_marker", "supply_shortage", "lead_followup", "claims_chase"),
             "networked_extraction": ("property_dispute", "missing_person", "lead_followup", "contact_run", "records_pull"),
+            "neighborhood_control": ("property_dispute", "contact_run", "service_friction", "claims_chase", "paper_trail"),
             "high_value_retrieval": ("missing_person", "service_friction", "lead_followup", "records_pull", "watch_post"),
         }
         pool = pools.get(objective_id, ("lead_followup", "missing_person", "property_dispute", "service_friction"))
@@ -1988,10 +2426,23 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
     location = f"{area_type}/{district_type}"
     origin = _chunk_tuple(origin_chunk) or (0, 0)
     distance = _manhattan(origin, (cx, cy))
+    can_stage_local_handoff = bool(
+        tuple(chunk.get("sites", ()) or ())
+        or site_kinds
+        or features["has_storefront"]
+        or features["has_finance"]
+        or features["site_services"]
+    )
 
     candidates = []
 
     if discovery_kind == "salvage":
+        salvage_item_pool = _discovery_item_pool(
+            discovery,
+            ("battery_pack", "scrap_circuit", "pocket_multitool", "prybar"),
+        )
+        parts_item_id = str(rng.choice(salvage_item_pool)).strip().lower() if salvage_item_pool else "battery_pack"
+        parts_item_label = _item_label(parts_item_id)
         candidates.append({
             "kind": "salvage_sweep",
             "source": "overworld_tag",
@@ -2005,48 +2456,137 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
             "kind": "parts_recovery",
             "source": "overworld_tag",
             "title": "Parts Recovery",
-            "summary": "Strip the workable parts before the scrappers get there first.",
-            "playstyles": ("economic", "stealth", "combat"),
+            "summary": (
+                f"A local buyer wants {parts_item_label} off the salvage route "
+                "before the scrappers get there first."
+            ) if can_stage_local_handoff else "Strip the workable parts before the scrappers get there first.",
+            "playstyles": ("economic", "stealth", "social") if can_stage_local_handoff else ("economic", "stealth", "combat"),
             "reward": _reward_with_items({"credits": rng.randint(14, 28), "intel": 1}, rng.choice(("light_ammo_box", "pocket_multitool"))),
+            **({
+                "requirements": {
+                    "delivery_chunk": (int(cx), int(cy)),
+                    "visit_chunk": (int(cx), int(cy)),
+                    "require_item_id": parts_item_id,
+                    "require_item_qty": 1,
+                    "consume_item": True,
+                    "provide_item": False,
+                    "item_label": parts_item_label,
+                    "acquisition_hint": "buy_or_find",
+                },
+            } if can_stage_local_handoff else {}),
             "weight": 1.28,
         })
     elif discovery_kind == "water":
+        water_item_pool = _discovery_item_pool(
+            discovery,
+            ("bottled_water", "hydration_salts", "street_ration"),
+        )
+        water_item_id = str(rng.choice(water_item_pool)).strip().lower() if water_item_pool else "bottled_water"
+        water_item_label = _item_label(water_item_id)
         candidates.append({
             "kind": "water_run",
             "source": "overworld_tag",
             "title": "Water Relay",
-            "summary": "Use the water route for recovery and side deals.",
+            "summary": (
+                f"Carry {water_item_label} along the water route before the people leaning on it run dry."
+            ) if can_stage_local_handoff else "Use the water route for recovery and side deals.",
             "playstyles": ("social", "economic", "stealth"),
             "reward": {"credits": rng.randint(8, 16), "energy": 6, "safety": 4},
+            **({
+                "requirements": {
+                    "delivery_chunk": (int(cx), int(cy)),
+                    "visit_chunk": (int(cx), int(cy)),
+                    "require_item_id": water_item_id,
+                    "require_item_qty": 1,
+                    "consume_item": True,
+                    "provide_item": False,
+                    "item_label": water_item_label,
+                    "acquisition_hint": "buy_or_find",
+                },
+            } if can_stage_local_handoff else {}),
             "weight": 1.2,
         })
     elif discovery_kind == "tools":
+        tool_item_pool = _discovery_item_pool(
+            discovery,
+            ("lockpick_kit", "pocket_multitool"),
+        )
+        tool_pickup_item_id = str(rng.choice(tool_item_pool)).strip().lower() if tool_item_pool else "lockpick_kit"
+        tool_pickup_item_label = _item_label(tool_pickup_item_id)
+        tool_procure_item_id = str(rng.choice(tool_item_pool)).strip().lower() if tool_item_pool else "lockpick_kit"
+        tool_procure_item_label = _item_label(tool_procure_item_id)
         candidates.append({
             "kind": "tool_pickup",
             "source": "overworld_tag",
             "title": "Tool Pickup",
-            "summary": "Find workable tools and move them to buyers.",
-            "playstyles": ("economic", "stealth"),
+            "summary": (
+                f"A local cache is holding {tool_pickup_item_label}; make the pickup and walk it to a buyer before the district notices the gap."
+            ) if can_stage_local_handoff else "Find workable tools and move them to buyers.",
+            "playstyles": ("economic", "stealth", "social") if can_stage_local_handoff else ("economic", "stealth"),
             "reward": _reward_with_items({"credits": rng.randint(12, 26), "intel": 1}, rng.choice(("lockpick_kit", "pocket_multitool"))),
+            **({
+                "requirements": {
+                    "pickup_chunk": (int(cx), int(cy)),
+                    "delivery_chunk": (int(cx), int(cy)),
+                    "visit_chunk": (int(cx), int(cy)),
+                    "require_item_id": tool_pickup_item_id,
+                    "require_item_qty": 1,
+                    "consume_item": True,
+                    "provide_item": True,
+                    "item_label": tool_pickup_item_label,
+                    "acquisition_hint": "pickup",
+                },
+            } if can_stage_local_handoff else {}),
             "weight": 1.25,
         })
         candidates.append({
             "kind": "tool_procurement",
             "source": "overworld_tag",
             "title": "Tool Procurement",
-            "summary": "A local buyer wants fresh tools before the district notices the gap.",
+            "summary": f"A local buyer wants {tool_procure_item_label} before the district notices the gap.",
             "playstyles": ("economic", "stealth", "social"),
             "reward": _reward_with_items({"credits": rng.randint(14, 28), "standing": 1}, rng.choice(("lockpick_kit", "pocket_multitool"))),
+            "requirements": {
+                "delivery_chunk": (int(cx), int(cy)),
+                "visit_chunk": (int(cx), int(cy)),
+                "require_item_id": tool_procure_item_id,
+                "require_item_qty": 1,
+                "consume_item": True,
+                "provide_item": False,
+                "item_label": tool_procure_item_label,
+                "acquisition_hint": "buy_or_find",
+            },
             "weight": 1.18,
         })
     elif discovery_kind == "supplies":
+        supply_item_pool = _discovery_item_pool(
+            discovery,
+            ("med_gel", "hydration_salts", "street_ration", "bottled_water"),
+        )
+        supply_item_id = str(rng.choice(supply_item_pool)).strip().lower() if supply_item_pool else "med_gel"
+        supply_item_label = _item_label(supply_item_id)
         candidates.append({
             "kind": "supply_grab",
             "source": "overworld_tag",
             "title": "Supply Grab",
-            "summary": "Leverage local supply caches.",
+            "summary": (
+                f"A cache nearby is holding {supply_item_label}; make the pickup and move it before the locals strip it clean."
+            ) if can_stage_local_handoff else "Leverage local supply caches.",
             "playstyles": ("economic", "social", "stealth"),
             "reward": _reward_with_items({"credits": rng.randint(10, 22), "energy": 4, "safety": 2}, rng.choice(("med_gel", "hydration_salts"))),
+            **({
+                "requirements": {
+                    "pickup_chunk": (int(cx), int(cy)),
+                    "delivery_chunk": (int(cx), int(cy)),
+                    "visit_chunk": (int(cx), int(cy)),
+                    "require_item_id": supply_item_id,
+                    "require_item_qty": 1,
+                    "consume_item": True,
+                    "provide_item": True,
+                    "item_label": supply_item_label,
+                    "acquisition_hint": "pickup",
+                },
+            } if can_stage_local_handoff else {}),
             "weight": 1.15,
         })
     elif discovery_kind == "landmark":
@@ -2078,6 +2618,7 @@ def _chunk_opportunity_candidate(sim, cx, cy, objective_id, rng, origin_chunk=No
         candidates.extend(
             _specialty_chunk_opportunity_candidates(
                 theme_id,
+                chunk=(cx, cy),
                 identity_label=identity_label,
                 travel=travel,
                 discovery=discovery,
@@ -3181,7 +3722,7 @@ def refresh_dynamic_opportunities(sim, player_eid, rng=None):
 
 
 def _completion_detail(sim, opportunity, metrics):
-    requirements = opportunity.get("requirements", {}) if isinstance(opportunity.get("requirements", {}), dict) else {}
+    requirements = _opportunity_requirements(opportunity)
     visit_chunk = _chunk_tuple(requirements.get("visit_chunk"))
     current_chunk = _chunk_tuple(metrics.get("current_chunk"))
     visited = set(metrics.get("visited_chunks", ()))
@@ -3220,6 +3761,7 @@ def _completion_detail(sim, opportunity, metrics):
     interact_npc_eid = _safe_int(requirements.get("interact_npc_eid"), default=0)
     interaction_requirement = str(requirements.get("interaction_requirement", "contact")).strip().lower() or "contact"
     interact_name = str(requirements.get("interact_npc_name", "the contact")).strip() or "the contact"
+    recent_activity_tags = _normalize_activity_tags(requirements.get("recent_activity_tags"))
     require_item_id = str(requirements.get("require_item_id", "")).strip().lower()
     if interact_npc_eid > 0 and not require_item_id:
         recent_npc_eids = metrics.get("recent_npc_eids", frozenset())
@@ -3271,6 +3813,17 @@ def _completion_detail(sim, opportunity, metrics):
 
         if delivery_chunk and current_chunk != delivery_chunk:
             return False, ""
+    elif recent_activity_tags:
+        matched_tag = _match_recent_opportunity_activity(
+            metrics,
+            property_id=target_property_id,
+            building_id=target_building_id,
+            chunk=visit_chunk or current_chunk,
+            accepted_tags=recent_activity_tags,
+        )
+        if not matched_tag:
+            return False, ""
+        reasons.append(OPPORTUNITY_ACTIVITY_REASON_LABELS.get(matched_tag, "worked the site"))
     elif (target_property_id or target_building_id) and interact_npc_eid <= 0:
         if not _matches_recent_site_interaction(
             metrics,
@@ -3340,7 +3893,7 @@ def _inventory_counts(inventory):
 
 
 def _ensure_provided_item(sim, player_eid, opportunity, metrics):
-    requirements = opportunity.get("requirements", {}) if isinstance(opportunity.get("requirements", {}), dict) else {}
+    requirements = _opportunity_requirements(opportunity)
     if not bool(requirements.get("provide_item")):
         return
 
@@ -3400,7 +3953,7 @@ def _ensure_provided_item(sim, player_eid, opportunity, metrics):
 
 
 def _consume_required_item(sim, player_eid, opportunity):
-    requirements = opportunity.get("requirements", {}) if isinstance(opportunity.get("requirements", {}), dict) else {}
+    requirements = _opportunity_requirements(opportunity)
     if not bool(requirements.get("consume_item")):
         return None
 
@@ -3995,6 +4548,15 @@ def _objective_support_reason(objective_id, entry, current_chunk=None):
             reasons.append("marks discreet repair traffic")
         if distance > 0:
             reasons.append("extends scouting")
+    elif objective_id == "neighborhood_control":
+        if credits > 0:
+            reasons.append("funds nearby expansion")
+        if kind in {"property_dispute", "contact_run", "service_friction", "paper_trail"} or standing > 0:
+            reasons.append("builds local leverage")
+        if distance <= 2:
+            reasons.append("keeps you working the same block")
+        elif distance > 2:
+            reasons.append("is farther from your core holdings")
 
     seen = []
     for reason in reasons:
@@ -4043,6 +4605,10 @@ def objective_focus_facts(sim, player_eid, objective_id, limit=3):
             score += min(2.0, standing)
             score += min(2.0, credits / 20.0)
             score += min(1.5, distance * 0.18)
+        elif objective_id == "neighborhood_control":
+            score += min(2.4, credits / 16.0)
+            score += min(1.2, standing)
+            score += max(0.0, 1.8 - (distance * 0.35))
         elif objective_id == "high_value_retrieval":
             score += min(2.5, intel * 1.25)
             score += min(1.5, distance * 0.16)

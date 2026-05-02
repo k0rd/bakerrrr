@@ -37039,6 +37039,15 @@ class OpportunitySystem(System):
         self.seed_rng = random.Random(f"{self.sim.seed}:opportunity-system-seed")
         self.sim.events.subscribe("player_action", self.on_player_action)
         self.sim.events.subscribe("property_interact", self.on_property_interact)
+        self.sim.events.subscribe("npc_interacted", self.on_npc_interacted)
+        self.sim.events.subscribe("site_service_used", self.on_site_service_used)
+        self.sim.events.subscribe("site_intel_report", self.on_site_intel_report)
+        self.sim.events.subscribe("trade_bought", self.on_trade_bought)
+        self.sim.events.subscribe("trade_sold", self.on_trade_sold)
+        self.sim.events.subscribe("bank_transaction", self.on_bank_transaction)
+        self.sim.events.subscribe("insurance_policy_purchased", self.on_insurance_policy_purchased)
+        self.sim.events.subscribe("stakeout_intel_gained", self.on_stakeout_intel_gained)
+        self.sim.events.subscribe("overworld_discovery_found", self.on_overworld_discovery_found)
 
     def _ensure_seeded(self):
         return seed_run_opportunities(self.sim, player_eid=self.player_eid, rng=self.seed_rng)
@@ -37108,6 +37117,103 @@ class OpportunitySystem(System):
         if action == "opportunity_report":
             self._emit_report(limit=8)
 
+    def _ensure_activity_state(self):
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            self.sim.world_traits = {}
+            traits = self.sim.world_traits
+        state = traits.get("recent_opportunity_actions")
+        if not isinstance(state, dict):
+            state = {"properties": {}, "buildings": {}, "chunks": {}}
+            traits["recent_opportunity_actions"] = state
+        return state
+
+    def _remember_opportunity_activity(self, *, property_id=None, building_id=None, chunk=None, tag=""):
+        tag = str(tag or "").strip().lower()
+        property_id = str(property_id or "").strip()
+        building_id = str(building_id or "").strip()
+        if isinstance(chunk, (list, tuple)) and len(chunk) == 2:
+            try:
+                chunk = (int(chunk[0]), int(chunk[1]))
+            except (TypeError, ValueError):
+                chunk = None
+        else:
+            chunk = None
+        if not tag or (not property_id and not building_id and chunk is None):
+            return
+
+        state = self._ensure_activity_state()
+        current_tick = int(getattr(self.sim, "tick", 0))
+        for bucket_key, site_id in (("properties", property_id), ("buildings", building_id)):
+            if not site_id:
+                continue
+            bucket = state.get(bucket_key)
+            if not isinstance(bucket, dict):
+                bucket = {}
+                state[bucket_key] = bucket
+            tag_ticks = bucket.get(site_id)
+            if not isinstance(tag_ticks, dict):
+                tag_ticks = {}
+                bucket[site_id] = tag_ticks
+            tag_ticks[tag] = current_tick
+        if chunk is not None:
+            chunk_key = f"{int(chunk[0])},{int(chunk[1])}"
+            chunk_bucket = state.get("chunks")
+            if not isinstance(chunk_bucket, dict):
+                chunk_bucket = {}
+                state["chunks"] = chunk_bucket
+            tag_ticks = chunk_bucket.get(chunk_key)
+            if not isinstance(tag_ticks, dict):
+                tag_ticks = {}
+                chunk_bucket[chunk_key] = tag_ticks
+            tag_ticks[tag] = current_tick
+
+        cutoff = current_tick - 24
+        for bucket_key in ("properties", "buildings", "chunks"):
+            bucket = state.get(bucket_key)
+            if not isinstance(bucket, dict):
+                continue
+            for raw_site_id, tag_ticks in list(bucket.items()):
+                if not isinstance(tag_ticks, dict):
+                    bucket.pop(raw_site_id, None)
+                    continue
+                for raw_tag, raw_tick in list(tag_ticks.items()):
+                    if _int_or_default(raw_tick, default=-10_000) < cutoff:
+                        tag_ticks.pop(raw_tag, None)
+                if not tag_ticks:
+                    bucket.pop(raw_site_id, None)
+
+    def _remember_opportunity_activity_for_property(self, property_id, tag):
+        property_id = str(property_id or "").strip()
+        if not property_id:
+            return
+        prop = self.sim.properties.get(property_id) if hasattr(self.sim, "properties") else None
+        building_id = _building_id_from_property(prop) if isinstance(prop, dict) else ""
+        chunk = None
+        if isinstance(prop, dict):
+            try:
+                chunk = self.sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+            except (TypeError, ValueError):
+                chunk = None
+        self._remember_opportunity_activity(property_id=property_id, building_id=building_id, chunk=chunk, tag=tag)
+
+    def _remember_opportunity_activity_at_player_site(self, tag):
+        pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if not pos:
+            return
+        prop = _property_covering(self.sim, pos.x, pos.y, pos.z) or self.sim.property_at(pos.x, pos.y, pos.z)
+        if not isinstance(prop, dict):
+            return
+        self._remember_opportunity_activity(
+            property_id=prop.get("id"),
+            building_id=_building_id_from_property(prop),
+            chunk=self.sim.chunk_coords(int(pos.x), int(pos.y)),
+            tag=tag,
+        )
+
+    def _remember_opportunity_chunk_activity(self, chunk, tag):
+        self._remember_opportunity_activity(chunk=chunk, tag=tag)
+
     def _remember_opportunity_property_interaction(self, property_id):
         property_id = str(property_id or "").strip()
         if not property_id:
@@ -37148,6 +37254,73 @@ class OpportunitySystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         self._remember_opportunity_property_interaction(event.data.get("property_id"))
+
+    def on_npc_interacted(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if bool(event.data.get("dialog_modal")):
+            return
+        self._remember_opportunity_activity_at_player_site("contact")
+
+    def on_site_service_used(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        property_id = event.data.get("property_id")
+        self._remember_opportunity_activity_for_property(property_id, "service")
+        if str(event.data.get("service", "")).strip().lower() == "intel":
+            self._remember_opportunity_activity_for_property(property_id, "intel")
+
+    def on_site_intel_report(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._remember_opportunity_activity_for_property(event.data.get("property_id"), "intel")
+
+    def on_trade_bought(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._remember_opportunity_activity_for_property(event.data.get("property_id"), "trade")
+
+    def on_trade_sold(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._remember_opportunity_activity_for_property(event.data.get("property_id"), "trade")
+
+    def on_bank_transaction(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._remember_opportunity_activity_for_property(event.data.get("property_id"), "finance")
+
+    def on_insurance_policy_purchased(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._remember_opportunity_activity_for_property(event.data.get("property_id"), "finance")
+
+    def on_stakeout_intel_gained(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        property_id = event.data.get("property_id")
+        self._remember_opportunity_activity_for_property(property_id, "stakeout")
+        self._remember_opportunity_activity_for_property(property_id, "intel")
+
+    def on_overworld_discovery_found(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        raw_chunk = event.data.get("chunk")
+        if isinstance(raw_chunk, (list, tuple)) and len(raw_chunk) == 2:
+            try:
+                chunk = (int(raw_chunk[0]), int(raw_chunk[1]))
+            except (TypeError, ValueError):
+                chunk = None
+        else:
+            chunk = None
+        if chunk is None:
+            return
+        self._remember_opportunity_chunk_activity(chunk, "discovery")
+        kind = str(event.data.get("kind", "")).strip().lower()
+        if kind:
+            self._remember_opportunity_chunk_activity(chunk, f"discovery_{kind}")
+        if kind == "landmark":
+            self._remember_opportunity_chunk_activity(chunk, "intel")
 
     def update(self):
         self._ensure_seeded()

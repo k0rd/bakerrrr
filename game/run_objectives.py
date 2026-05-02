@@ -15,6 +15,69 @@ def _safe_nonzero(value, default=1):
     return max(1, _safe_int(value, default=default))
 
 
+def _manhattan(a, b):
+    if not isinstance(a, (tuple, list)) or not isinstance(b, (tuple, list)):
+        return 0
+    return abs(_safe_int(a[0]) - _safe_int(b[0])) + abs(_safe_int(a[1]) - _safe_int(b[1]))
+
+
+def _owned_property_cluster_metrics(sim, player_eid):
+    owned_ids = set()
+    assets = sim.ecs.get(PlayerAssets).get(player_eid) if sim is not None else None
+    if assets:
+        owned_ids.update(
+            str(raw_id or "").strip()
+            for raw_id in getattr(assets, "owned_property_ids", set()) or set()
+            if str(raw_id or "").strip()
+        )
+
+    owned_props = []
+    for prop_id, prop in getattr(sim, "properties", {}).items():
+        if not isinstance(prop, dict):
+            continue
+        current_id = str(prop_id or prop.get("id") or "").strip()
+        if not current_id:
+            continue
+        if prop.get("owner_eid") == player_eid:
+            owned_ids.add(current_id)
+        if current_id not in owned_ids:
+            continue
+        owned_props.append(prop)
+
+    chunk_counts = {}
+    for prop in owned_props:
+        try:
+            chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+        except (TypeError, ValueError):
+            continue
+        chunk_counts[chunk] = chunk_counts.get(chunk, 0) + 1
+
+    best_anchor = None
+    best_cluster = 0
+    best_chunks = 0
+    for anchor in chunk_counts:
+        cluster_total = 0
+        cluster_chunks = 0
+        for chunk, count in chunk_counts.items():
+            if _manhattan(anchor, chunk) <= 1:
+                cluster_total += int(count)
+                cluster_chunks += 1
+        if cluster_total > best_cluster or (
+            cluster_total == best_cluster and cluster_chunks > best_chunks
+        ):
+            best_anchor = anchor
+            best_cluster = cluster_total
+            best_chunks = cluster_chunks
+
+    return {
+        "owned_property_count": len(owned_ids),
+        "owned_property_chunks": len(chunk_counts),
+        "largest_property_cluster": int(best_cluster),
+        "largest_property_cluster_chunks": int(best_chunks),
+        "largest_property_cluster_anchor": best_anchor,
+    }
+
+
 def _player_metrics(sim, player_eid, objective_id=""):
     assets = sim.ecs.get(PlayerAssets).get(player_eid) if sim is not None else None
     finance = sim.ecs.get(FinancialProfile).get(player_eid) if sim is not None else None
@@ -44,6 +107,7 @@ def _player_metrics(sim, player_eid, objective_id=""):
         "intel_leads": int(intel_leads),
         "chunks_visited": int(chunks_visited),
     }
+    metrics.update(_owned_property_cluster_metrics(sim, player_eid))
     bonuses = objective_metric_bonuses(sim, objective_id=objective_id)
     for key in ("reserve_credits", "contact_count", "intel_leads"):
         bonus = max(0, _safe_int(bonuses.get(key), default=0))
@@ -229,6 +293,65 @@ def _objective_eval_high_value_retrieval(objective, metrics):
     }
 
 
+def _objective_eval_neighborhood_control(objective, metrics):
+    targets = dict(objective.get("targets", {}))
+    owned_target = _safe_nonzero(targets.get("owned_property_count"), default=5)
+    cluster_target = _safe_nonzero(targets.get("largest_property_cluster"), default=4)
+
+    owned_now = max(0, _safe_int(metrics.get("owned_property_count"), default=0))
+    cluster_now = max(0, _safe_int(metrics.get("largest_property_cluster"), default=0))
+    cluster_chunks = max(0, _safe_int(metrics.get("largest_property_cluster_chunks"), default=0))
+    anchor = metrics.get("largest_property_cluster_anchor")
+    anchor_text = ""
+    if isinstance(anchor, (tuple, list)) and len(anchor) == 2:
+        anchor_text = f" around chunk ({_safe_int(anchor[0])}, {_safe_int(anchor[1])})"
+
+    owned_ok = owned_now >= owned_target
+    cluster_ok = cluster_now >= cluster_target
+    done = owned_ok and cluster_ok
+
+    if not cluster_ok:
+        next_step = "Buy adjacent properties and tighten your local footprint."
+    elif not owned_ok:
+        next_step = "Add one more property without scattering too far from your core block."
+    else:
+        next_step = "Local footprint is secure. Turn it into real neighborhood control."
+
+    progress = (
+        _ratio(owned_now, owned_target)
+        + _ratio(cluster_now, cluster_target)
+    ) / 2.0
+    summary_line = (
+        "Objective Neighborhood Control: "
+        f"owned {owned_now}/{owned_target} "
+        f"cluster {cluster_now}/{cluster_target}"
+    )
+    if cluster_chunks > 0:
+        summary_line = f"{summary_line} ({cluster_chunks} local chunks{anchor_text})"
+
+    why_lines = (
+        "This run is about turning scattered assets into a block you can actually lean on and defend.",
+    )
+    how_lines = (
+        f"Owned properties = {owned_now}. Total holdings still matter, but they do not prove local control on their own.",
+        f"Neighborhood cluster = {cluster_now}. It counts the densest owned patch inside a 3x3 local chunk spread{anchor_text}.",
+        "Scattered purchases help the total, but only nearby holdings push the control cluster forward.",
+    )
+    activity_lines = (
+        "Best routes now: cash-positive local work, nearby service leads, and property buys that sit close to what you already own.",
+        "If a purchase would sit far from your current cluster, it is growth, but not the fastest control progress.",
+    )
+    return {
+        "completed": done,
+        "progress_ratio": progress,
+        "summary_line": summary_line,
+        "next_step": next_step,
+        "why_lines": why_lines,
+        "how_lines": how_lines,
+        "activity_lines": activity_lines,
+    }
+
+
 def evaluate_run_objective(sim, player_eid, objective=None):
     if not isinstance(objective, dict):
         traits = getattr(sim, "world_traits", {}) if sim is not None else {}
@@ -250,6 +373,8 @@ def evaluate_run_objective(sim, player_eid, objective=None):
         result = _objective_eval_networked_extraction(objective, metrics)
     elif objective_id == "high_value_retrieval":
         result = _objective_eval_high_value_retrieval(objective, metrics)
+    elif objective_id == "neighborhood_control":
+        result = _objective_eval_neighborhood_control(objective, metrics)
     else:
         return None
 
@@ -273,7 +398,7 @@ def seed_run_objective(sim, rng):
         rng = random.Random(str(rng))
 
     objective_roll = rng.choice(
-        ("debt_exit", "networked_extraction", "high_value_retrieval")
+        ("debt_exit", "networked_extraction", "high_value_retrieval", "neighborhood_control")
     )
 
     if objective_roll == "debt_exit":
@@ -294,6 +419,16 @@ def seed_run_objective(sim, rng):
                 "contact_count": rng.randint(3, 5),
                 "reserve_credits": rng.randint(180, 320),
                 "chunks_visited": rng.randint(5, 8),
+            },
+        }
+    elif objective_roll == "neighborhood_control":
+        objective = {
+            "id": "neighborhood_control",
+            "title": "Neighborhood Control",
+            "summary": "Assemble a tight local cluster of owned properties instead of scattered holdings.",
+            "targets": {
+                "owned_property_count": rng.randint(4, 6),
+                "largest_property_cluster": rng.randint(3, 5),
             },
         }
     else:
