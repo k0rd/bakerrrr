@@ -173,7 +173,7 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "legal",
         "effects": [
             {"type": "modify_need", "need": "energy", "delta": 18},
-            {"type": "status", "status": "well_fed", "duration": 22, "modifiers": {"energy_tick_delta": 0.08}},
+            {"type": "status", "status": "well_fed", "duration": 22, "modifiers": {"energy_tick_delta": 0.08, "move_speed_mult": 0.04}},
         ],
     },
     "caff_shot": {
@@ -184,7 +184,7 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "restricted",
         "effects": [
             {"type": "modify_need", "need": "energy", "delta": 24},
-            {"type": "status", "status": "wired", "duration": 16, "modifiers": {"energy_tick_delta": 0.1, "safety_tick_delta": -0.12, "move_speed_mult": 0.22}},
+            {"type": "status", "status": "wired", "duration": 16, "modifiers": {"energy_tick_delta": 0.1, "safety_tick_delta": -0.12, "move_speed_mult": 0.22, "weapon_cooldown_mult": -0.18, "ranged_accuracy_mult": -0.1, "incoming_damage_mult": 0.05}},
         ],
     },
     "calm_patch": {
@@ -195,7 +195,7 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "legal",
         "effects": [
             {"type": "modify_need", "need": "safety", "delta": 20},
-            {"type": "status", "status": "calm", "duration": 24, "modifiers": {"safety_tick_delta": 0.09, "move_speed_mult": -0.1}},
+            {"type": "status", "status": "calm", "duration": 24, "modifiers": {"safety_tick_delta": 0.09, "move_speed_mult": -0.06, "suppression_resist_mult": 0.35, "ranged_accuracy_mult": 0.1, "projectile_spread_mod": -1}},
         ],
     },
     "spark_brew": {
@@ -206,7 +206,7 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "legal",
         "effects": [
             {"type": "modify_need", "need": "social", "delta": 16},
-            {"type": "status", "status": "buzzed", "duration": 20, "modifiers": {"social_tick_delta": 0.08, "safety_tick_delta": -0.04, "move_speed_mult": 0.12}},
+            {"type": "status", "status": "buzzed", "duration": 20, "modifiers": {"social_tick_delta": 0.08, "safety_tick_delta": -0.04, "ranged_accuracy_mult": -0.18, "melee_damage_mult": 0.06, "retreat_bias_delta": -0.06}},
         ],
     },
     "med_gel": {
@@ -227,7 +227,7 @@ DEFAULT_ITEM_CATALOG = {
         "tags": ["consumable", "discipline", "restricted"],
         "legal_status": "restricted",
         "effects": [
-            {"type": "status", "status": "focused", "duration": 28, "modifiers": {"energy_tick_delta": 0.06, "social_tick_delta": -0.05, "move_speed_mult": 0.08}},
+            {"type": "status", "status": "focused", "duration": 28, "modifiers": {"energy_tick_delta": 0.06, "social_tick_delta": -0.05, "ranged_accuracy_mult": 0.18, "projectile_spread_mod": -1, "weapon_cooldown_mult": -0.35, "suppression_resist_mult": 0.22}},
         ],
     },
     "black_market_stim": {
@@ -239,7 +239,7 @@ DEFAULT_ITEM_CATALOG = {
         "effects": [
             {"type": "modify_need", "need": "energy", "delta": 30},
             {"type": "modify_need", "need": "safety", "delta": -10},
-            {"type": "status", "status": "agitated", "duration": 20, "modifiers": {"safety_tick_delta": -0.12, "energy_tick_delta": -0.06, "move_speed_mult": 0.35}},
+            {"type": "status", "status": "agitated", "duration": 20, "modifiers": {"safety_tick_delta": -0.12, "energy_tick_delta": -0.06, "move_speed_mult": 0.16, "weapon_cooldown_mult": -0.28, "melee_damage_mult": 0.22, "ranged_accuracy_mult": -0.16, "incoming_damage_mult": 0.14, "assault_bias_delta": 0.18, "retreat_bias_delta": -0.12}},
         ],
     },
     "protein_wrap": {
@@ -261,7 +261,7 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "legal",
         "effects": [
             {"type": "modify_need", "need": "energy", "delta": 16},
-            {"type": "status", "status": "warm_meal", "duration": 16, "modifiers": {"energy_tick_delta": 0.05}},
+            {"type": "status", "status": "warm_meal", "duration": 16, "modifiers": {"energy_tick_delta": 0.05, "safety_tick_delta": 0.03, "hp_tick_delta": 0.12}},
         ],
     },
     "hydration_salts": {
@@ -273,7 +273,7 @@ DEFAULT_ITEM_CATALOG = {
         "effects": [
             {"type": "modify_need", "need": "safety", "delta": 12},
             {"type": "modify_need", "need": "energy", "delta": 8},
-            {"type": "status", "status": "hydrated", "duration": 20, "modifiers": {"safety_tick_delta": 0.05, "energy_tick_delta": 0.04}},
+            {"type": "status", "status": "hydrated", "duration": 20, "modifiers": {"safety_tick_delta": 0.05, "energy_tick_delta": 0.04, "move_speed_mult": 0.05, "suppression_resist_mult": 0.12}},
         ],
     },
     "micro_medkit": {
@@ -296,7 +296,7 @@ DEFAULT_ITEM_CATALOG = {
         "effects": [
             {"type": "restore_hp", "delta": 30},
             {"type": "modify_need", "need": "safety", "delta": 24},
-            {"type": "status", "status": "patched_up", "duration": 18, "modifiers": {"safety_tick_delta": 0.08, "move_speed_mult": -0.08}},
+            {"type": "status", "status": "patched_up", "duration": 18, "modifiers": {"safety_tick_delta": 0.08, "move_speed_mult": -0.08, "incoming_damage_mult": -0.16, "hp_tick_delta": 0.34}},
         ],
     },
     "trauma_autoinjector": {
@@ -308,7 +308,7 @@ DEFAULT_ITEM_CATALOG = {
         "effects": [
             {"type": "restore_hp", "delta": 14},
             {"type": "modify_need", "need": "safety", "delta": 10},
-            {"type": "status", "status": "trauma_shocked", "duration": 22, "modifiers": {"safety_tick_delta": -0.06, "move_speed_mult": -0.2}},
+            {"type": "status", "status": "trauma_shocked", "duration": 22, "modifiers": {"safety_tick_delta": -0.06, "move_speed_mult": -0.2, "incoming_damage_mult": 0.18, "ranged_accuracy_mult": -0.14, "retreat_bias_delta": 0.12}},
         ],
     },
     "synth_focus_tabs": {
@@ -318,7 +318,7 @@ DEFAULT_ITEM_CATALOG = {
         "tags": ["consumable", "discipline", "restricted"],
         "legal_status": "restricted",
         "effects": [
-            {"type": "status", "status": "steady_hands", "duration": 22, "modifiers": {"energy_tick_delta": 0.05, "move_speed_mult": 0.07}},
+            {"type": "status", "status": "steady_hands", "duration": 22, "modifiers": {"energy_tick_delta": 0.05, "move_speed_mult": 0.07, "ranged_accuracy_mult": 0.12, "projectile_spread_mod": -1, "weapon_cooldown_mult": -0.22}},
         ],
     },
     "smoke_tab": {
@@ -330,7 +330,7 @@ DEFAULT_ITEM_CATALOG = {
         "effects": [
             {"type": "modify_need", "need": "social", "delta": 10},
             {"type": "modify_need", "need": "safety", "delta": -4},
-            {"type": "status", "status": "hazy", "duration": 18, "modifiers": {"social_tick_delta": 0.07, "safety_tick_delta": -0.08}},
+            {"type": "status", "status": "hazy", "duration": 18, "modifiers": {"social_tick_delta": 0.07, "safety_tick_delta": -0.08, "ranged_accuracy_mult": -0.22, "weapon_cooldown_mult": 0.08, "retreat_bias_delta": 0.08}},
         ],
     },
     "credstick_chip": {

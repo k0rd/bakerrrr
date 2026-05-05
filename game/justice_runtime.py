@@ -101,6 +101,75 @@ def _state(sim):
     return state
 
 
+def _release_grace_records(state):
+    records = state.get("release_grace")
+    if not isinstance(records, dict):
+        records = {}
+        state["release_grace"] = records
+    return records
+
+
+def _release_grace_property_key(property_id):
+    if isinstance(property_id, dict):
+        property_id = property_id.get("id")
+    return _text(property_id)
+
+
+def grant_custody_release_grace(sim, offender_eid, property_id, *, duration=18, reason="custody_release"):
+    try:
+        offender_key = str(int(offender_eid))
+    except (TypeError, ValueError):
+        return False
+    property_key = _release_grace_property_key(property_id)
+    if not property_key:
+        return False
+
+    state = _state(sim)
+    records = _release_grace_records(state)
+    actor_records = records.get(offender_key)
+    if not isinstance(actor_records, dict):
+        actor_records = {}
+        records[offender_key] = actor_records
+
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    actor_records[property_key] = {
+        "property_id": property_key,
+        "granted_tick": tick,
+        "expires_tick": tick + max(1, _safe_int(duration, default=18)),
+        "reason": _text(reason).lower() or "custody_release",
+    }
+    return True
+
+
+def custody_release_grace_active(sim, offender_eid, property_id):
+    try:
+        offender_key = str(int(offender_eid))
+    except (TypeError, ValueError):
+        return False
+    property_key = _release_grace_property_key(property_id)
+    if not property_key:
+        return False
+
+    state = _state(sim)
+    records = _release_grace_records(state)
+    actor_records = records.get(offender_key)
+    if not isinstance(actor_records, dict):
+        return False
+
+    entry = actor_records.get(property_key)
+    if not isinstance(entry, dict):
+        return False
+
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    expires_tick = _safe_int(entry.get("expires_tick"), default=-1)
+    if expires_tick < tick:
+        actor_records.pop(property_key, None)
+        if not actor_records:
+            records.pop(offender_key, None)
+        return False
+    return True
+
+
 def _offender_record(state, offender_eid, *, create=False):
     try:
         offender_key = str(int(offender_eid))

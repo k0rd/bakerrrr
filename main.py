@@ -82,6 +82,7 @@ from game.site_services import SiteServiceSystem
 from game.skill_progression import SkillProgressionSystem
 from game.skills import seed_skill_profile
 from game.systems import (
+    AnimalSocialSystem,
     BusinessPulseAftermathSystem,
     BusinessPulseSceneSystem,
     CameraSystem,
@@ -281,6 +282,7 @@ def _register_runtime_systems(sim, view, player):
     property_defense_system = PropertyDefenseSystem(sim)
 
     npc_memory_system = NPCMemorySystem(sim)
+    animal_social_system = AnimalSocialSystem(sim)
     rumor_system = RumorSystem(sim)
     npc_needs_system = NPCNeedsSystem(sim)
     npc_settlement_system = NPCSettlementSystem(sim)
@@ -333,6 +335,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(property_defense_system)
 
     sim.register_system(npc_memory_system)
+    sim.register_system(animal_social_system)
     sim.register_system(rumor_system)
     sim.register_system(npc_needs_system)
     sim.register_system(npc_settlement_system)

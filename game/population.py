@@ -2,11 +2,17 @@ import random
 
 from game.components import (
     AI,
+    AnimalBehaviorContext,
+    AnimalMemory,
+    AnimalPhysicalProfile,
+    AnimalSocialProfile,
     ArmorLoadout,
     Collider,
     CoverState,
     CreatureIdentity,
+    EcologyProfile,
     FinancialProfile,
+    HumanWildlifePresence,
     Inventory,
     ItemUseProfile,
     JusticeProfile,
@@ -29,6 +35,7 @@ from game.components import (
     WeaponLoadout,
     WeaponUseProfile,
     SuppressionState,
+    WildlifeSocialState,
     WildlifeBehavior,
 )
 from game.economy import chunk_economy_profile, pick_career_for_workplace
@@ -336,6 +343,59 @@ AMBIENT_CREATURE_PROFILES = (
         "max_hp": (30, 42),
         "speed": (0.92, 1.16),
         "noise_radius": 3,
+        "physical_profile": {"size_score": 48.0, "speed_score": 52.0},
+        "ecology_profile": {
+            "species": "dog",
+            "predator_score": 48.0,
+            "prey_score": 22.0,
+            "scavenger_score": 38.0,
+            "territorial_score": 34.0,
+            "pack_score": 58.0,
+            "flee_bias": 38.0,
+            "chase_bias": 60.0,
+        },
+        "social_profile": {
+            "sociability": 62.0,
+            "same_species_affinity": 54.0,
+            "human_affinity": 42.0,
+            "domesticity": 68.0,
+            "companionship_drive": 72.0,
+            "follow_drive": 74.0,
+        },
+    },
+    {
+        "id": "alley_cat",
+        "taxonomy_class": "feline",
+        "species": "felis catus",
+        "common_names": ("alley cat", "street cat", "tom cat"),
+        "areas": {"city": 1.55, "frontier": 0.45, "coastal": 0.4},
+        "districts": {"residential": 0.32, "slums": 0.34, "industrial": 0.18},
+        "terrains": {"urban": 0.24, "park": 0.14, "shore": 0.08},
+        "spawn_zones": ("frontage", "street", "perimeter"),
+        "archetypes": ("house", "tenement", "corner_store", "restaurant", "junk_market", "dock_shack"),
+        "color": "feline",
+        "max_hp": (18, 28),
+        "speed": (1.02, 1.22),
+        "noise_radius": 2,
+        "physical_profile": {"size_score": 20.0, "speed_score": 58.0},
+        "ecology_profile": {
+            "species": "cat",
+            "predator_score": 35.0,
+            "prey_score": 45.0,
+            "scavenger_score": 25.0,
+            "territorial_score": 35.0,
+            "pack_score": 10.0,
+            "flee_bias": 65.0,
+            "chase_bias": 55.0,
+        },
+        "social_profile": {
+            "sociability": 34.0,
+            "same_species_affinity": 18.0,
+            "human_affinity": 24.0,
+            "domesticity": 56.0,
+            "companionship_drive": 48.0,
+            "follow_drive": 24.0,
+        },
     },
     {
         "id": "alley_pigeon",
@@ -351,6 +411,14 @@ AMBIENT_CREATURE_PROFILES = (
         "max_hp": (16, 24),
         "speed": (1.0, 1.26),
         "noise_radius": 2,
+        "social_profile": {
+            "sociability": 44.0,
+            "same_species_affinity": 54.0,
+            "human_affinity": 4.0,
+            "domesticity": 8.0,
+            "companionship_drive": 26.0,
+            "follow_drive": 8.0,
+        },
     },
     {
         "id": "sewer_rat",
@@ -366,6 +434,25 @@ AMBIENT_CREATURE_PROFILES = (
         "max_hp": (14, 22),
         "speed": (1.02, 1.28),
         "noise_radius": 2,
+        "physical_profile": {"size_score": 5.0, "speed_score": 60.0},
+        "ecology_profile": {
+            "species": "rat",
+            "predator_score": 6.0,
+            "prey_score": 52.0,
+            "scavenger_score": 34.0,
+            "territorial_score": 8.0,
+            "pack_score": 44.0,
+            "flee_bias": 84.0,
+            "chase_bias": 10.0,
+        },
+        "social_profile": {
+            "sociability": 38.0,
+            "same_species_affinity": 46.0,
+            "human_affinity": 0.0,
+            "domesticity": 0.0,
+            "companionship_drive": 18.0,
+            "follow_drive": 0.0,
+        },
     },
     {
         "id": "roach_swarm",
@@ -441,6 +528,25 @@ AMBIENT_CREATURE_PROFILES = (
         "max_hp": (34, 48),
         "speed": (0.96, 1.18),
         "noise_radius": 3,
+        "physical_profile": {"size_score": 72.0, "speed_score": 62.0},
+        "ecology_profile": {
+            "species": "deer",
+            "predator_score": 0.0,
+            "prey_score": 58.0,
+            "scavenger_score": 4.0,
+            "territorial_score": 24.0,
+            "pack_score": 62.0,
+            "flee_bias": 82.0,
+            "chase_bias": 4.0,
+        },
+        "social_profile": {
+            "sociability": 52.0,
+            "same_species_affinity": 62.0,
+            "human_affinity": 0.0,
+            "domesticity": 0.0,
+            "companionship_drive": 36.0,
+            "follow_drive": 4.0,
+        },
     },
     {
         "id": "tree_frog",
@@ -516,6 +622,51 @@ AMBIENT_CREATURE_PROFILES = (
         "max_hp": (14, 22),
         "speed": (1.04, 1.28),
         "noise_radius": 2,
+        "physical_profile": {"size_score": 6.0, "speed_score": 61.0},
+        "ecology_profile": {
+            "species": "rat",
+            "predator_score": 6.0,
+            "prey_score": 54.0,
+            "scavenger_score": 38.0,
+            "territorial_score": 9.0,
+            "pack_score": 46.0,
+            "flee_bias": 86.0,
+            "chase_bias": 10.0,
+        },
+    },
+    {
+        "id": "raccoon",
+        "taxonomy_class": "other",
+        "species": "procyon lotor",
+        "common_names": ("raccoon", "alley raccoon", "bin raccoon"),
+        "areas": {"city": 1.1, "frontier": 0.85, "coastal": 0.6},
+        "districts": {"residential": 0.22, "slums": 0.2, "industrial": 0.12},
+        "terrains": {"urban": 0.16, "park": 0.22, "shore": 0.1, "forest": 0.08},
+        "spawn_zones": ("frontage", "street", "perimeter"),
+        "archetypes": ("house", "tenement", "restaurant", "junk_market", "bait_shop", "salvage_camp"),
+        "color": "other",
+        "max_hp": (20, 30),
+        "speed": (0.94, 1.14),
+        "noise_radius": 2,
+        "physical_profile": {"size_score": 28.0, "speed_score": 45.0},
+        "ecology_profile": {
+            "species": "raccoon",
+            "predator_score": 18.0,
+            "prey_score": 24.0,
+            "scavenger_score": 72.0,
+            "territorial_score": 40.0,
+            "pack_score": 18.0,
+            "flee_bias": 58.0,
+            "chase_bias": 18.0,
+        },
+        "social_profile": {
+            "sociability": 24.0,
+            "same_species_affinity": 20.0,
+            "human_affinity": 6.0,
+            "domesticity": 12.0,
+            "companionship_drive": 14.0,
+            "follow_drive": 6.0,
+        },
     },
     {
         "id": "alley_possum",
@@ -531,6 +682,25 @@ AMBIENT_CREATURE_PROFILES = (
         "max_hp": (18, 28),
         "speed": (0.92, 1.14),
         "noise_radius": 2,
+        "physical_profile": {"size_score": 24.0, "speed_score": 38.0},
+        "ecology_profile": {
+            "species": "possum",
+            "predator_score": 6.0,
+            "prey_score": 30.0,
+            "scavenger_score": 68.0,
+            "territorial_score": 18.0,
+            "pack_score": 10.0,
+            "flee_bias": 70.0,
+            "chase_bias": 8.0,
+        },
+        "social_profile": {
+            "sociability": 18.0,
+            "same_species_affinity": 14.0,
+            "human_affinity": 4.0,
+            "domesticity": 10.0,
+            "companionship_drive": 10.0,
+            "follow_drive": 4.0,
+        },
     },
 )
 
@@ -1968,7 +2138,7 @@ def _spawn_human(
             shift_end=shift_end,
         ) if career else Occupation(career="resident", workplace=None),
         needs,
-    _traits_for_role(rng, role),
+        _traits_for_role(rng, role),
         NPCWill(),
         NPCMemory(),
         NPCSocial(),
@@ -1981,6 +2151,15 @@ def _spawn_human(
         CoverState(),
         SuppressionState(),
         _item_use_profile_for(role, workplace_prop=workplace_prop),
+        HumanWildlifePresence(
+            perceived_predator_score=72.0 if role in {"guard", "scout"} else 60.0,
+            firearm_threat_bonus=36.0 if role in {"guard", "scout"} else 30.0,
+            calm_animal_skill=8.0 if role in {"resident", "worker"} else 3.0,
+            hunting_intent=False,
+            companionship_openness=34.0 if role in {"resident", "worker"} else (18.0 if role in {"civilian", "drunk"} else 6.0),
+            gentle_presence=26.0 if role in {"resident", "worker"} else (12.0 if role in {"civilian", "drunk"} else 4.0),
+        ),
+        WildlifeSocialState(),
         NPCRoutine(home=home, work=work),
         PropertyKnowledge(),
         PropertyPortfolio(),
@@ -2041,6 +2220,96 @@ def _wildlife_behavior_for_profile(profile):
     return WildlifeBehavior(**behavior)
 
 
+def _animal_physical_profile_for_profile(profile):
+    profile = profile if isinstance(profile, dict) else {}
+    taxonomy = str(profile.get("taxonomy_class", "other")).strip().lower() or "other"
+    defaults = {
+        "canine": {"size_score": 45.0, "speed_score": 50.0},
+        "feline": {"size_score": 20.0, "speed_score": 56.0},
+        "rodent": {"size_score": 5.0, "speed_score": 58.0},
+        "ungulate": {"size_score": 70.0, "speed_score": 60.0},
+        "avian": {"size_score": 10.0, "speed_score": 64.0},
+        "insect": {"size_score": 2.0, "speed_score": 48.0},
+        "reptile": {"size_score": 12.0, "speed_score": 34.0},
+        "amphibian": {"size_score": 8.0, "speed_score": 28.0},
+        "other": {"size_score": 18.0, "speed_score": 32.0},
+    }
+    payload = dict(defaults.get(taxonomy, defaults["other"]))
+    authored = profile.get("physical_profile") if isinstance(profile.get("physical_profile"), dict) else {}
+    payload.update(authored)
+    return AnimalPhysicalProfile(
+        size_score=float(payload.get("size_score", defaults["other"]["size_score"])),
+        speed_score=float(payload.get("speed_score", defaults["other"]["speed_score"])),
+        injury_score=float(payload.get("injury_score", 0.0) or 0.0),
+        juvenile=bool(payload.get("juvenile", False)),
+    )
+
+
+def _ecology_profile_for_profile(profile):
+    profile = profile if isinstance(profile, dict) else {}
+    taxonomy = str(profile.get("taxonomy_class", "other")).strip().lower() or "other"
+    default_species = str(profile.get("id", taxonomy)).strip().lower() or taxonomy
+    defaults = {
+        "canine": {"predator_score": 42.0, "prey_score": 24.0, "scavenger_score": 34.0, "territorial_score": 28.0, "pack_score": 54.0, "flee_bias": 38.0, "chase_bias": 52.0},
+        "feline": {"predator_score": 34.0, "prey_score": 42.0, "scavenger_score": 22.0, "territorial_score": 34.0, "pack_score": 8.0, "flee_bias": 62.0, "chase_bias": 54.0},
+        "rodent": {"predator_score": 5.0, "prey_score": 48.0, "scavenger_score": 32.0, "territorial_score": 8.0, "pack_score": 40.0, "flee_bias": 82.0, "chase_bias": 10.0},
+        "ungulate": {"predator_score": 0.0, "prey_score": 56.0, "scavenger_score": 4.0, "territorial_score": 22.0, "pack_score": 60.0, "flee_bias": 80.0, "chase_bias": 4.0},
+        "avian": {"predator_score": 8.0, "prey_score": 34.0, "scavenger_score": 28.0, "territorial_score": 16.0, "pack_score": 48.0, "flee_bias": 76.0, "chase_bias": 20.0},
+        "other": {"predator_score": 10.0, "prey_score": 24.0, "scavenger_score": 28.0, "territorial_score": 18.0, "pack_score": 18.0, "flee_bias": 58.0, "chase_bias": 18.0},
+    }
+    payload = {"species": default_species}
+    payload.update(defaults.get(taxonomy, defaults["other"]))
+    authored = profile.get("ecology_profile") if isinstance(profile.get("ecology_profile"), dict) else {}
+    payload.update(authored)
+    return EcologyProfile(
+        species=str(payload.get("species", default_species)).strip().lower() or default_species,
+        predator_score=float(payload.get("predator_score", 0.0) or 0.0),
+        prey_score=float(payload.get("prey_score", 0.0) or 0.0),
+        scavenger_score=float(payload.get("scavenger_score", 0.0) or 0.0),
+        territorial_score=float(payload.get("territorial_score", 0.0) or 0.0),
+        pack_score=float(payload.get("pack_score", 0.0) or 0.0),
+        flee_bias=float(payload.get("flee_bias", 0.0) or 0.0),
+        chase_bias=float(payload.get("chase_bias", 0.0) or 0.0),
+    )
+
+
+def _animal_context_for_profile(profile):
+    profile = profile if isinstance(profile, dict) else {}
+    authored = profile.get("animal_context") if isinstance(profile.get("animal_context"), dict) else {}
+    return AnimalBehaviorContext(
+        hunger=float(authored.get("hunger", 50.0) or 50.0),
+        territorial_context=bool(authored.get("territorial_context", False)),
+        cornered=bool(authored.get("cornered", False)),
+        trained_restraint=float(authored.get("trained_restraint", 0.0) or 0.0),
+        leashed=bool(authored.get("leashed", False)),
+        bonded_to_eid=authored.get("bonded_to_eid"),
+    )
+
+
+def _animal_social_profile_for_profile(profile):
+    profile = profile if isinstance(profile, dict) else {}
+    taxonomy = str(profile.get("taxonomy_class", "other")).strip().lower() or "other"
+    defaults = {
+        "canine": {"sociability": 48.0, "same_species_affinity": 44.0, "human_affinity": 22.0, "domesticity": 42.0, "companionship_drive": 54.0, "follow_drive": 58.0},
+        "feline": {"sociability": 24.0, "same_species_affinity": 14.0, "human_affinity": 12.0, "domesticity": 28.0, "companionship_drive": 30.0, "follow_drive": 14.0},
+        "rodent": {"sociability": 34.0, "same_species_affinity": 38.0, "human_affinity": 0.0, "domesticity": 0.0, "companionship_drive": 14.0, "follow_drive": 0.0},
+        "ungulate": {"sociability": 46.0, "same_species_affinity": 54.0, "human_affinity": 0.0, "domesticity": 0.0, "companionship_drive": 24.0, "follow_drive": 0.0},
+        "avian": {"sociability": 38.0, "same_species_affinity": 46.0, "human_affinity": 2.0, "domesticity": 6.0, "companionship_drive": 18.0, "follow_drive": 6.0},
+        "other": {"sociability": 20.0, "same_species_affinity": 18.0, "human_affinity": 2.0, "domesticity": 4.0, "companionship_drive": 10.0, "follow_drive": 4.0},
+    }
+    payload = dict(defaults.get(taxonomy, defaults["other"]))
+    authored = profile.get("social_profile") if isinstance(profile.get("social_profile"), dict) else {}
+    payload.update(authored)
+    return AnimalSocialProfile(
+        sociability=float(payload.get("sociability", 20.0) or 20.0),
+        same_species_affinity=float(payload.get("same_species_affinity", 28.0) or 28.0),
+        human_affinity=float(payload.get("human_affinity", 0.0) or 0.0),
+        domesticity=float(payload.get("domesticity", 0.0) or 0.0),
+        companionship_drive=float(payload.get("companionship_drive", 0.0) or 0.0),
+        follow_drive=float(payload.get("follow_drive", 0.0) or 0.0),
+    )
+
+
 def _spawn_wildlife(sim, rng, profile, position):
     taxonomy = str(profile.get("taxonomy_class", "other")).strip().lower() or "other"
     common_names = tuple(
@@ -2092,6 +2361,12 @@ def _spawn_wildlife(sim, rng, profile, position):
         StatusEffects(),
         Vitality(max_hp=max(6, max_hp)),
         CoverState(),
+        _animal_physical_profile_for_profile(profile),
+        _ecology_profile_for_profile(profile),
+        _animal_context_for_profile(profile),
+        _animal_social_profile_for_profile(profile),
+        AnimalMemory(),
+        WildlifeSocialState(),
         ItemUseProfile(
             willingness=0.0,
             risk_tolerance=0.08,

@@ -2,6 +2,7 @@ import random
 from dataclasses import dataclass
 
 from game.components import ContactLedger, Inventory, NPCSocial, NPCRoutine, Occupation, PlayerAssets, PropertyPortfolio
+from game.justice_runtime import custody_release_grace_active as _custody_release_grace_active
 from game.organizations import occupation_targets_property, property_org_members, workplace_targets_property
 from game.property_keys import inventory_matching_property_credential, property_lock_state
 
@@ -1565,6 +1566,24 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
                 social_cover=0.0,
                 temporal_legitimacy=1.0,
                 standing_reason="lawful_custody",
+                permitted=True,
+                can_use_services=False,
+                severity_score=0,
+                severity_label="clear",
+            )
+        if _custody_release_grace_active(sim, actor_eid, prop.get("id")):
+            return PropertyAccessResult(
+                property_id=prop.get("id"),
+                access_level=access_level,
+                inside_bounds=True,
+                public_facing=access_level == "public",
+                current_hour=hour,
+                opening_window=opening_window,
+                currently_open=currently_open,
+                standing=1.0,
+                social_cover=0.0,
+                temporal_legitimacy=1.0,
+                standing_reason="custody_release",
                 permitted=True,
                 can_use_services=False,
                 severity_score=0,

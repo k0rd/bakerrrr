@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from game.items import merge_item_stack_metadata, prepare_item_stack_metadata, split_item_stack_metadata
 
 
@@ -629,9 +631,12 @@ class MovementThrottle:
     DEFAULT_STATE_COOLDOWNS = {
         "investigating": 2,
         "protecting": 1,
+        "chasing": 1,
+        "scavenging": 2,
         "following": 1,
         "holding": 1,
         "seeking_social": 2,
+        "seeking_companionship": 2,
         "seeking_safety": 1,
         "patrolling": 3,
         "resting": 4,
@@ -837,6 +842,122 @@ class WildlifeBehavior:
         except (TypeError, ValueError):
             rest_bias = 0.3
         self.rest_bias = max(0.0, min(1.0, rest_bias))
+
+
+@dataclass
+class AnimalPhysicalProfile:
+    size_score: float
+    speed_score: float
+    injury_score: float = 0.0
+    juvenile: bool = False
+
+
+@dataclass
+class EcologyProfile:
+    species: str
+    predator_score: float = 0.0
+    prey_score: float = 0.0
+    scavenger_score: float = 0.0
+    territorial_score: float = 0.0
+    pack_score: float = 0.0
+    flee_bias: float = 0.0
+    chase_bias: float = 0.0
+
+
+@dataclass
+class AnimalBehaviorContext:
+    hunger: float = 50.0
+    territorial_context: bool = False
+    cornered: bool = False
+    trained_restraint: float = 0.0
+    leashed: bool = False
+    bonded_to_eid: int | None = None
+
+
+@dataclass
+class HumanWildlifePresence:
+    perceived_predator_score: float = 60.0
+    firearm_threat_bonus: float = 30.0
+    calm_animal_skill: float = 0.0
+    hunting_intent: bool = False
+    companionship_openness: float = 0.0
+    gentle_presence: float = 0.0
+
+
+@dataclass
+class AnimalSocialProfile:
+    sociability: float = 20.0
+    same_species_affinity: float = 28.0
+    human_affinity: float = 0.0
+    domesticity: float = 0.0
+    companionship_drive: float = 0.0
+    follow_drive: float = 0.0
+
+
+class AnimalMemory:
+    def __init__(self, max_entries=24):
+        self.max_entries = max(4, int(max_entries or 24))
+        self.entries = []
+
+    def remember(self, tick, kind, strength=1.0, **data):
+        self.entries.append({
+            "tick": int(tick or 0),
+            "kind": str(kind or "").strip().lower(),
+            "strength": float(strength),
+            "data": data,
+        })
+        if len(self.entries) > self.max_entries:
+            self.entries = self.entries[-self.max_entries:]
+
+    def strongest(self, kind):
+        kind = str(kind or "").strip().lower()
+        best = None
+        for entry in self.entries:
+            if str(entry.get("kind", "")).strip().lower() != kind:
+                continue
+            if best is None or float(entry.get("strength", 0.0) or 0.0) > float(best.get("strength", 0.0) or 0.0):
+                best = entry
+        return best
+
+    def decay(self, amount=0.02, by_kind=None):
+        rates = by_kind if isinstance(by_kind, dict) else {}
+        keep = []
+        for entry in self.entries:
+            kind = str(entry.get("kind", "")).strip().lower()
+            decay_amount = float(rates.get(kind, amount) or amount)
+            entry["strength"] = max(0.0, float(entry.get("strength", 0.0) or 0.0) - decay_amount)
+            if float(entry.get("strength", 0.0) or 0.0) > 0.05:
+                keep.append(entry)
+        self.entries = keep
+
+
+class WildlifeSocialState:
+    def __init__(self):
+        self.bonds = {}
+
+    def add_bond(self, other_eid, kind="companion", closeness=0.25, trust=0.25, comfort=0.25):
+        self.bonds[other_eid] = {
+            "kind": str(kind or "companion").strip().lower() or "companion",
+            "closeness": float(closeness),
+            "trust": float(trust),
+            "comfort": float(comfort),
+        }
+
+    def strongest_bond(self, min_closeness=0.0, min_trust=0.0):
+        best_eid = None
+        best = None
+
+        for eid, bond in self.bonds.items():
+            closeness = float(bond.get("closeness", 0.0) or 0.0)
+            trust = float(bond.get("trust", 0.0) or 0.0)
+            if closeness < float(min_closeness) or trust < float(min_trust):
+                continue
+            score = (closeness * 0.48) + (trust * 0.34) + (float(bond.get("comfort", 0.0) or 0.0) * 0.18)
+            if best is None or score > best:
+                best = score
+                best_eid = eid
+
+        return best_eid
 
 
 class Occupation:

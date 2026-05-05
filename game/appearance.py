@@ -138,7 +138,7 @@ PROPERTY_FIXTURE_SEMANTICS = {
 
 SPECIAL_TILE_RENDER_STYLES = {
     "B": ("#", "building_edge"),
-    "b": ("=", "building_fill"),
+    "b": (".", "building_fill"),
     "#": ("#", "terrain_block"),
     ",": (",", "terrain_brush"),
     "^": ("^", "terrain_rock"),
@@ -609,20 +609,45 @@ def tile_render_snapshot(sim, tile, x, y, z=0, revealed_building_id="", catalog=
     if not tile:
         return district_floor_snapshot(sim, x, y, catalog=catalog)
 
-    if tile.walkable and str(tile.glyph)[:1] == "." and not has_explicit_style:
-        return district_floor_snapshot(sim, x, y, catalog=catalog)
+    glyph = str(tile.glyph)[:1] or "?"
+    structure = sim.structure_at(x, y, z) if hasattr(sim, "structure_at") else None
+    building_id = building_id_from_structure(structure)
+    is_building_floor = (
+        tile.walkable
+        and glyph == "."
+        and bool(building_id)
+    )
+    if is_building_floor and building_id != str(revealed_building_id or ""):
+        base = _semantic_snapshot(
+            "#",
+            color=_building_roof_style(structure),
+            catalog=catalog,
+            preferred_categories=("terrain", "properties"),
+        )
+        return _merge_snapshots(base, explicit)
 
-    if str(tile.glyph)[:1] == "b":
-        structure = sim.structure_at(x, y, z) if hasattr(sim, "structure_at") else None
-        building_id = building_id_from_structure(structure)
-        if building_id and building_id != str(revealed_building_id or ""):
-            base = _semantic_snapshot(
-                "#",
-                color=_building_roof_style(structure),
-                catalog=catalog,
-                preferred_categories=("terrain", "properties"),
-            )
-            return _merge_snapshots(base, explicit)
+    if bool(building_id) and not tile.walkable and glyph == "#":
+        base = _semantic_snapshot(
+            "#",
+            color="building_edge",
+            semantic_id="wall_building",
+            catalog=catalog,
+            preferred_categories=("properties", "terrain"),
+        )
+        return _merge_snapshots(base, explicit)
+
+    if is_building_floor:
+        base = _semantic_snapshot(
+            ".",
+            color="building_fill",
+            semantic_id="floor_building_fill",
+            catalog=catalog,
+            preferred_categories=("properties", "terrain"),
+        )
+        return _merge_snapshots(base, explicit)
+
+    if tile.walkable and glyph == "." and not has_explicit_style and not is_building_floor:
+        return district_floor_snapshot(sim, x, y, catalog=catalog)
 
     feature_style = feature_tile_style(sim, tile, x, y, z)
     if feature_style:
@@ -634,7 +659,6 @@ def tile_render_snapshot(sim, tile, x, y, z=0, revealed_building_id="", catalog=
         )
         return _merge_snapshots(base, explicit)
 
-    glyph = str(tile.glyph)[:1] or "?"
     style = SPECIAL_TILE_RENDER_STYLES.get(glyph)
     if style:
         base = _semantic_snapshot(

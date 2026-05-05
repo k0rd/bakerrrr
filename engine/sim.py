@@ -1193,11 +1193,11 @@ class Simulation:
                     edge = (x in (left, right)) or (y in (top, bottom))
                 interior_wall = (int(x), int(y), int(z)) in interior_wall_cells
                 wall = edge or interior_wall
-                glyph = "B" if edge else "b"
+                glyph = "#" if edge else "."
                 walkable = not wall
                 transparent = not wall
                 if interior_wall:
-                    glyph = "B"
+                    glyph = "#"
 
                 aperture = aperture_map.get((int(x), int(y), int(z)))
                 if aperture:
@@ -1214,6 +1214,8 @@ class Simulation:
                         walkable=walkable,
                         transparent=transparent,
                         glyph=glyph,
+                        color="building_edge" if wall else "building_fill",
+                        semantic_id="wall_building" if wall else "floor_building_fill",
                     ),
                     z=z,
                 )
