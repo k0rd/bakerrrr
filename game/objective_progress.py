@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from engine.events import Event
+from engine.systems import System
+
 
 MAX_RESERVE_BONUS = 420
 MAX_NETWORK_MARKS = 36
@@ -231,3 +234,218 @@ def objective_progress_explain_delta(objective_id, delta):
         return bits
 
     return bits
+
+
+class ObjectiveProgressSystem(System):
+
+    def __init__(self, sim, player_eid):
+        super().__init__(sim)
+        self.player_eid = player_eid
+        self.sim.events.subscribe("npc_interacted", self.on_npc_interacted)
+        self.sim.events.subscribe("dialogue_opportunity_hint", self.on_dialogue_opportunity_hint)
+        self.sim.events.subscribe("eavesdrop_opportunity_hint", self.on_eavesdrop_opportunity_hint)
+        self.sim.events.subscribe("contact_learned", self.on_contact_learned)
+        self.sim.events.subscribe("trade_bought", self.on_trade_bought)
+        self.sim.events.subscribe("trade_sold", self.on_trade_sold)
+        self.sim.events.subscribe("site_service_used", self.on_site_service_used)
+        self.sim.events.subscribe("site_intel_report", self.on_site_intel_report)
+        self.sim.events.subscribe("overworld_discovery_found", self.on_overworld_discovery_found)
+        self.sim.events.subscribe("opportunity_completed", self.on_opportunity_completed)
+
+    def _emit_award(
+        self,
+        *,
+        channel,
+        reserve_bonus_credits=0,
+        network_marks=0,
+        intel_marks=0,
+        reason="",
+        source_event="",
+    ):
+        awarded = award_objective_progress(
+            self.sim,
+            channel=channel,
+            reserve_bonus_credits=reserve_bonus_credits,
+            network_marks=network_marks,
+            intel_marks=intel_marks,
+            reason=reason,
+            source_event=source_event,
+        )
+        if not awarded:
+            return
+        self.sim.emit(Event(
+            "objective_progress_awarded",
+            eid=self.player_eid,
+            channel=str(awarded.get("channel", channel)),
+            objective_id=str(awarded.get("objective_id", "")).strip(),
+            delta=dict(awarded.get("delta", {})),
+            totals=dict(awarded.get("totals", {})),
+            reason=str(awarded.get("reason", reason)).strip(),
+            source_event=str(awarded.get("source_event", source_event)).strip(),
+        ))
+
+    def on_npc_interacted(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if bool(event.data.get("guarded")):
+            return
+        self._emit_award(
+            channel="talk",
+            network_marks=1,
+            reason="conversation",
+            source_event="npc_interacted",
+        )
+
+    def on_contact_learned(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._emit_award(
+            channel="contact",
+            network_marks=2,
+            intel_marks=1,
+            reason="new_contact",
+            source_event="contact_learned",
+        )
+
+    def on_dialogue_opportunity_hint(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        detail = str(event.data.get("detail", "")).strip()
+        self._emit_award(
+            channel="talk",
+            intel_marks=2 if detail else 1,
+            network_marks=1,
+            reason="dialogue_opportunity_hint",
+            source_event="dialogue_opportunity_hint",
+        )
+
+    def on_eavesdrop_opportunity_hint(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        detail = str(event.data.get("detail", "")).strip()
+        self._emit_award(
+            channel="talk",
+            intel_marks=2 if detail else 1,
+            network_marks=0,
+            reason="eavesdrop_opportunity_hint",
+            source_event="eavesdrop_opportunity_hint",
+        )
+
+    def on_trade_bought(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        try:
+            price = int(event.data.get("price", 0))
+        except (TypeError, ValueError):
+            price = 0
+        network_marks = 1 if price >= 20 else 0
+        if network_marks <= 0:
+            return
+        self._emit_award(
+            channel="trade",
+            network_marks=network_marks,
+            reason="logistics_purchase",
+            source_event="trade_bought",
+        )
+
+    def on_trade_sold(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        try:
+            price = int(event.data.get("price", 0))
+        except (TypeError, ValueError):
+            price = 0
+        reserve_bonus = max(0, min(18, price // 3))
+        if reserve_bonus <= 0:
+            return
+        self._emit_award(
+            channel="trade",
+            reserve_bonus_credits=reserve_bonus,
+            reason="sale_margin",
+            source_event="trade_sold",
+        )
+
+    def on_site_service_used(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        service = str(event.data.get("service", "")).strip().lower()
+        if service == "shelter":
+            self._emit_award(
+                channel="site_service",
+                network_marks=1,
+                reason="shelter_stop",
+                source_event="site_service_used",
+            )
+            return
+        if service == "intel":
+            self._emit_award(
+                channel="site_service",
+                intel_marks=2,
+                reason="site_intel",
+                source_event="site_service_used",
+            )
+
+    def on_site_intel_report(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        lines = list(event.data.get("lines", ()) or ())
+        base_intel_marks = max(1, min(3, (len(lines) // 2) + 1))
+        detail_level = max(0, _safe_int(event.data.get("detail_level"), default=0))
+        intel_marks = min(3, base_intel_marks + (1 if detail_level >= 1 else 0))
+        self._emit_award(
+            channel="site_intel",
+            intel_marks=intel_marks,
+            reason="intel_report",
+            source_event="site_intel_report",
+        )
+
+    def on_overworld_discovery_found(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        try:
+            credits_gain = int(event.data.get("credits_gain", 0))
+        except (TypeError, ValueError):
+            credits_gain = 0
+        reserve_bonus = max(0, min(16, credits_gain // 2))
+        kind = str(event.data.get("kind", "")).strip().lower()
+        intel_lines = list(event.data.get("intel_lines", ()) or ())
+        intel_marks = 0
+        if intel_lines:
+            intel_marks = max(intel_marks, 1)
+        if kind == "landmark":
+            intel_marks = max(intel_marks, 2)
+        self._emit_award(
+            channel="discovery",
+            reserve_bonus_credits=reserve_bonus,
+            intel_marks=intel_marks,
+            reason=kind or "discovery",
+            source_event="overworld_discovery_found",
+        )
+
+    def on_opportunity_completed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        reward = dict(event.data.get("reward", {}) or {})
+        try:
+            credits = int(reward.get("credits", 0))
+        except (TypeError, ValueError):
+            credits = 0
+        try:
+            standing = int(reward.get("standing", 0))
+        except (TypeError, ValueError):
+            standing = 0
+        try:
+            intel = int(reward.get("intel", 0))
+        except (TypeError, ValueError):
+            intel = 0
+        reserve_bonus = max(0, min(18, credits // 2))
+        network_marks = max(0, min(2, standing))
+        intel_marks = max(0, min(3, intel))
+        self._emit_award(
+            channel="opportunity",
+            reserve_bonus_credits=reserve_bonus,
+            network_marks=network_marks,
+            intel_marks=intel_marks,
+            reason="opportunity_completion",
+            source_event="opportunity_completed",
+        )

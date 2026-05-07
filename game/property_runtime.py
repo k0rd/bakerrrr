@@ -5,7 +5,7 @@ This module holds the pure helper cluster that used to live inside
 main behavior file as a dumping ground for every property-adjacent utility.
 """
 
-from game.components import Inventory, Position
+from game.components import Inventory, Position, PropertyKnowledge
 from game.property_access import (
     controller_intrusion_access_for_actor as _controller_intrusion_access_for_actor,
     finance_services_for_property as _finance_services_for_property_base,
@@ -394,3 +394,112 @@ def property_access_level(prop):
 
 def property_status_text(sim, prop, hour=None):
     return _property_status_text(sim, prop, hour=hour)
+
+
+def remember_property_lead_for_actor(sim, viewer_eid, prop, *, source_eid=None, lead_kind=None, confidence=0.5):
+    if viewer_eid is None or not prop:
+        return False
+    knowledge = sim.ecs.get(PropertyKnowledge).get(viewer_eid)
+    if not knowledge:
+        return False
+    existing = knowledge.known.get(prop["id"])
+    prior_conf = float(existing.get("confidence", 0.0)) if existing else 0.0
+    prior_source = existing.get("source_eid") if existing else None
+    prior_kind = str(existing.get("lead_kind", "") or "").strip().lower() if existing else ""
+    knowledge.remember(
+        prop["id"],
+        owner_eid=prop.get("owner_eid"),
+        owner_tag=prop.get("owner_tag"),
+        confidence=confidence,
+        tick=int(getattr(sim, "tick", 0)),
+        source_eid=source_eid,
+        lead_kind=lead_kind,
+    )
+    return (
+        existing is None
+        or prior_conf + 0.04 < float(confidence)
+        or prior_source != source_eid
+        or prior_kind != str(lead_kind or "").strip().lower()
+    )
+
+
+def ensure_runtime_container_entry_instance_ids(sim, entries):
+    if not isinstance(entries, list):
+        return entries
+    for idx, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("instance_id", "") or "").strip():
+            continue
+        normalized = dict(entry)
+        normalized["instance_id"] = sim.new_item_instance_id()
+        entries[idx] = normalized
+    return entries
+
+
+def property_runtime_container_entries(sim, property_id, *, container_kind="container"):
+    property_id = str(property_id or "").strip()
+    if not property_id:
+        return []
+    container_kind = str(container_kind or "container").strip().lower() or "container"
+    if container_kind == "cache":
+        inventories = getattr(sim, "cache_inventories", None)
+        if not isinstance(inventories, dict):
+            sim.cache_inventories = {}
+            inventories = sim.cache_inventories
+        return ensure_runtime_container_entry_instance_ids(sim, inventories.setdefault(property_id, []))
+    inventories_by_kind = getattr(sim, "container_inventories", None)
+    if not isinstance(inventories_by_kind, dict):
+        sim.container_inventories = {}
+        inventories_by_kind = sim.container_inventories
+    inventories = inventories_by_kind.setdefault(container_kind, {})
+    if not isinstance(inventories, dict):
+        inventories = {}
+        inventories_by_kind[container_kind] = inventories
+    return ensure_runtime_container_entry_instance_ids(sim, inventories.setdefault(property_id, []))
+
+
+def property_runtime_container_entry_snapshot(sim, property_id, *, container_kind="container"):
+    return list(property_runtime_container_entries(sim, property_id, container_kind=container_kind))
+
+
+def property_runtime_container_entry_count(sim, property_id, *, container_kind="container"):
+    return len(property_runtime_container_entries(sim, property_id, container_kind=container_kind))
+
+
+def clear_property_runtime_container_state(sim, property_id):
+    property_id = str(property_id or "").strip()
+    if not property_id:
+        return
+
+    inventories = getattr(sim, "cache_inventories", None)
+    if isinstance(inventories, dict):
+        inventories.pop(property_id, None)
+
+    inventories_by_kind = getattr(sim, "container_inventories", None)
+    if isinstance(inventories_by_kind, dict):
+        for store in inventories_by_kind.values():
+            if isinstance(store, dict):
+                store.pop(property_id, None)
+
+    inventory_ui = getattr(sim, "inventory_ui", None)
+    if (
+        isinstance(inventory_ui, dict)
+        and str(inventory_ui.get("panel_kind", "")).strip().lower() == "container"
+        and str(inventory_ui.get("property_id", "") or "").strip() == property_id
+    ):
+        inventory_ui.update({
+            "open": False,
+            "panel_kind": "inventory",
+            "title": "Inventory",
+            "property_id": None,
+            "container_kind": None,
+            "container_label": "Container",
+            "container_instance_id": None,
+            "container_capacity": None,
+            "container_view": "pack",
+            "cache_view": "pack",
+            "selected_index": 0,
+            "inspect_text": "",
+            "note_text": "",
+        })

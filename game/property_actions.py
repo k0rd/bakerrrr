@@ -7,6 +7,15 @@ interaction, and purchase logic can evolve on a focused seam.
 
 from engine.events import Event
 from game.components import PlayerAssets, PropertyKnowledge
+from game.property_door_wait import _door_knock_attempt
+from game.property_doors import (
+    _door_action_text,
+    _door_close_attempt,
+    _door_interaction_candidate,
+    _door_lock_action_text,
+    _door_open_attempt,
+    _set_property_locked_override,
+)
 from game.property_access import property_access_controller as _property_access_controller
 from game.property_keys import property_lock_state
 from game.property_runtime import (
@@ -15,7 +24,14 @@ from game.property_runtime import (
     property_display_position as _property_display_position,
     property_focus_position as _property_focus_position,
     property_infrastructure_role as _property_infrastructure_role,
+    remember_property_lead_for_actor as _remember_property_lead_for_actor,
 )
+from game.system_support.interaction_ordering import (
+    _interaction_target_order_key,
+    _manhattan,
+    _normalized_direction,
+)
+from game.system_support.player_feedback import _log_player_feedback
 
 
 class PropertyActionRuntime:
@@ -24,13 +40,6 @@ class PropertyActionRuntime:
     def __init__(self, action_system):
         self.action_system = action_system
         self.sim = action_system.sim
-
-    def _support(self):
-        # Late import keeps the seam usable while several support helpers still
-        # live in ``game.systems``.
-        from game import systems as _systems
-
-        return _systems
 
     def player_owns_property(self, eid, prop):
         if not prop:
@@ -51,11 +60,10 @@ class PropertyActionRuntime:
         if not nearby:
             return None
 
-        support = self._support()
         preferred_dir = self.action_system._player_interact_direction(actor_eid) if actor_eid is not None else None
         nearby = sorted(
             nearby,
-            key=lambda current: support._interaction_target_order_key(
+            key=lambda current: _interaction_target_order_key(
                 pos.x,
                 pos.y,
                 int(current.get("x", 0)),
@@ -111,7 +119,6 @@ class PropertyActionRuntime:
         return None
 
     def remember_player_property_discovery(self, eid, prop, *, discovery_mode="sight", confidence=None):
-        support = self._support()
         if eid != getattr(self.sim, "player_eid", None):
             return False
         if not self.counts_as_known_location(prop):
@@ -140,7 +147,7 @@ class PropertyActionRuntime:
         if prior_confidence + 0.01 >= confidence:
             return False
 
-        support._remember_property_lead_for_actor(
+        _remember_property_lead_for_actor(
             self.sim,
             eid,
             prop,
@@ -180,13 +187,12 @@ class PropertyActionRuntime:
                 continue
 
             focus = _property_focus_position(prop)
-            if focus and self._support()._manhattan(pos.x, pos.y, focus[0], focus[1]) <= 1:
+            if focus and _manhattan(pos.x, pos.y, focus[0], focus[1]) <= 1:
                 return prop
         return None
 
     def handle_door_interaction(self, eid, pos):
-        support = self._support()
-        candidate = support._door_interaction_candidate(
+        candidate = _door_interaction_candidate(
             self.sim,
             pos,
             preferred_dir=self.action_system._player_interact_direction(eid),
@@ -205,15 +211,15 @@ class PropertyActionRuntime:
         is_open = bool(state.get("open", False))
 
         if is_open:
-            success, reason = support._door_close_attempt(self.sim, eid, x, y, z)
-            support._log_player_feedback(
+            success, reason = _door_close_attempt(self.sim, eid, x, y, z)
+            _log_player_feedback(
                 self.sim,
-                support._door_action_text(reason, opening=False),
+                _door_action_text(reason, opening=False),
                 kind="interaction",
             )
             return bool(success or reason)
 
-        success, reason = support._door_open_attempt(
+        success, reason = _door_open_attempt(
             self.sim,
             eid,
             x,
@@ -222,7 +228,7 @@ class PropertyActionRuntime:
             allow_override=False,
         )
         if not success and str(reason or "").strip().lower() in {"locked_property", "closed_property", "door_access_denied"}:
-            knock = support._door_knock_attempt(
+            knock = _door_knock_attempt(
                 self.sim,
                 eid,
                 x,
@@ -232,28 +238,27 @@ class PropertyActionRuntime:
                 source="interact",
             )
             if bool((knock or {}).get("handled")):
-                support._log_player_feedback(
+                _log_player_feedback(
                     self.sim,
-                    str((knock or {}).get("message", "")).strip() or support._door_action_text(reason, opening=True),
+                    str((knock or {}).get("message", "")).strip() or _door_action_text(reason, opening=True),
                     kind="interaction",
                 )
                 return True
-        support._log_player_feedback(
+        _log_player_feedback(
             self.sim,
-            support._door_action_text(reason, opening=True),
+            _door_action_text(reason, opening=True),
             kind="interaction",
         )
         return bool(success or reason)
 
     def handle_door_lock_toggle(self, eid, pos):
-        support = self._support()
-        candidate = support._door_interaction_candidate(
+        candidate = _door_interaction_candidate(
             self.sim,
             pos,
             preferred_dir=self.action_system._player_interact_direction(eid),
         )
         if not candidate:
-            support._log_player_feedback(
+            _log_player_feedback(
                 self.sim,
                 "No door nearby to lock.",
                 kind="interaction",
@@ -264,9 +269,9 @@ class PropertyActionRuntime:
         if prop:
             self.remember_player_property_discovery(eid, prop, discovery_mode="interact")
         if not isinstance(prop, dict):
-            support._log_player_feedback(
+            _log_player_feedback(
                 self.sim,
-                support._door_lock_action_text("not_property_door"),
+                _door_lock_action_text("not_property_door"),
                 kind="interaction",
             )
             return True
@@ -284,39 +289,39 @@ class PropertyActionRuntime:
         if bool(state.get("open", False)):
             if not access_entry:
                 controller = _property_access_controller(self.sim, prop)
-                support._log_player_feedback(
+                _log_player_feedback(
                     self.sim,
-                    support._door_lock_action_text(
+                    _door_lock_action_text(
                         "lock_access_denied",
                         requirement=_controller_access_requirement_text(controller),
                     ),
                     kind="interaction",
                 )
                 return True
-            success, reason = support._door_close_attempt(self.sim, eid, x, y, z)
+            success, reason = _door_close_attempt(self.sim, eid, x, y, z)
             if not success:
-                support._log_player_feedback(
+                _log_player_feedback(
                     self.sim,
-                    support._door_lock_action_text(reason),
+                    _door_lock_action_text(reason),
                     kind="interaction",
                 )
                 return True
             if currently_locked:
-                support._log_player_feedback(
+                _log_player_feedback(
                     self.sim,
-                    support._door_lock_action_text("closed_locked"),
+                    _door_lock_action_text("closed_locked"),
                     kind="interaction",
                 )
                 return True
-            success = support._set_property_locked_override(
+            success = _set_property_locked_override(
                 prop,
                 locked=True,
                 tick=self.sim.tick,
                 method=f"{access_mode}_manual_lock",
             )
-            support._log_player_feedback(
+            _log_player_feedback(
                 self.sim,
-                support._door_lock_action_text("closed_then_locked" if success else "not_property_door"),
+                _door_lock_action_text("closed_then_locked" if success else "not_property_door"),
                 kind="interaction",
             )
             return True
@@ -331,40 +336,40 @@ class PropertyActionRuntime:
                     target_z=z,
                 )
                 if success:
-                    support._log_player_feedback(
+                    _log_player_feedback(
                         self.sim,
-                        support._door_lock_action_text("unlocked"),
+                        _door_lock_action_text("unlocked"),
                         kind="interaction",
                     )
                     return True
                 controller = _property_access_controller(self.sim, prop)
-                support._log_player_feedback(
+                _log_player_feedback(
                     self.sim,
-                    support._door_lock_action_text(
+                    _door_lock_action_text(
                         reason,
                         requirement=_controller_access_requirement_text(controller),
                     ),
                     kind="interaction",
                 )
                 return True
-            success = support._set_property_locked_override(
+            success = _set_property_locked_override(
                 prop,
                 locked=False,
                 tick=self.sim.tick,
                 method=f"{access_mode}_manual_unlock",
             )
-            support._log_player_feedback(
+            _log_player_feedback(
                 self.sim,
-                support._door_lock_action_text("unlocked" if success else "not_property_door"),
+                _door_lock_action_text("unlocked" if success else "not_property_door"),
                 kind="interaction",
             )
             return True
 
         if not access_entry:
             controller = _property_access_controller(self.sim, prop)
-            support._log_player_feedback(
+            _log_player_feedback(
                 self.sim,
-                support._door_lock_action_text(
+                _door_lock_action_text(
                     "lock_access_denied",
                     requirement=_controller_access_requirement_text(controller),
                 ),
@@ -372,15 +377,15 @@ class PropertyActionRuntime:
             )
             return True
 
-        success = support._set_property_locked_override(
+        success = _set_property_locked_override(
             prop,
             locked=True,
             tick=self.sim.tick,
             method=f"{access_mode}_manual_lock",
         )
-        support._log_player_feedback(
+        _log_player_feedback(
             self.sim,
-            support._door_lock_action_text("locked" if success else "not_property_door"),
+            _door_lock_action_text("locked" if success else "not_property_door"),
             kind="interaction",
         )
         return True
@@ -396,18 +401,17 @@ class PropertyActionRuntime:
         ))
 
     def _force_interact_in_last_direction(self, eid, pos):
-        support = self._support()
         preferred_dir = self.action_system._player_interact_direction(eid)
         if preferred_dir is None:
             return False
 
-        candidate = support._door_interaction_candidate(
+        candidate = _door_interaction_candidate(
             self.sim,
             pos,
             preferred_dir=preferred_dir,
         )
         if isinstance(candidate, dict):
-            step = support._normalized_direction(
+            step = _normalized_direction(
                 int(candidate.get("x", pos.x)) - int(pos.x),
                 int(candidate.get("y", pos.y)) - int(pos.y),
             )

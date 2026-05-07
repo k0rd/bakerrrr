@@ -10,6 +10,7 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
+from game.system_support.actor_runtime import _detail_tick_allowed, _entity_is_downed
 
 AI = _systems.AI
 AnimalBehaviorContext = _systems.AnimalBehaviorContext
@@ -29,8 +30,6 @@ WildlifeSocialState = _systems.WildlifeSocialState
 WeaponLoadout = _systems.WeaponLoadout
 _actor_is_animal_or_wildlife = _systems._actor_is_animal_or_wildlife
 _clamp = _systems._clamp
-_detail_tick_allowed = _systems._detail_tick_allowed
-_entity_is_downed = _systems._entity_is_downed
 _grid_distance = _systems._grid_distance
 _has_line_of_sight = _systems._has_line_of_sight
 _manhattan = _systems._manhattan

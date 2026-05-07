@@ -8,6 +8,8 @@ instead of living only as inline player-action code.
 from engine.events import Event
 from engine.tilemap import Tile
 from game.components import Position
+from game.movement_runtime import try_move_entity
+from game.property_doors import _set_door_open_state
 from game.property_access import (
     PropertyIngressResult,
     _boundary_tile as _property_boundary_tile,
@@ -21,6 +23,36 @@ from game.property_runtime import (
     property_covering as _property_covering,
 )
 from game.skills import actor_skill as _actor_skill
+from game.system_support.access_runtime import _attempt_locked_property_entry_with_sim
+from game.system_support.awareness_runtime import _watchers_for_position
+from game.system_support.access_checks import (
+    _maybe_damage_access_tool,
+    _resolve_access_skill_check,
+)
+from game.system_support.intrusion_runtime import (
+    _ingress_method_label,
+    _ingress_mode_label,
+    _is_side_aperture,
+    _is_window_aperture,
+    _trespass_label_from_score,
+)
+from game.system_support.player_feedback import _log_player_feedback
+
+
+def _standing_reason_label(reason):
+    reason = str(reason or "").strip().lower()
+    mapping = {
+        "owner": "owner",
+        "employee": "staff",
+        "resident": "resident",
+        "contact": "contact",
+        "family": "family",
+        "partner": "partner",
+        "neighbor": "neighbor",
+        "coworker": "coworker",
+        "relationship": "relation",
+    }
+    return mapping.get(reason, reason.replace("_", " "))
 
 
 class PropertyIngressRuntime:
@@ -29,13 +61,6 @@ class PropertyIngressRuntime:
     def __init__(self, action_system):
         self.action_system = action_system
         self.sim = action_system.sim
-
-    def _support(self):
-        # Late import keeps this extraction seam usable while the remaining
-        # ingress-adjacent helpers still live in ``game.systems``.
-        from game import systems as _systems
-
-        return _systems
 
     def locked_ordinary_entry_property(self, eid, pos, target_x, target_y, target_z):
         prop = _property_covering(self.sim, target_x, target_y, target_z)
@@ -62,8 +87,7 @@ class PropertyIngressRuntime:
         return prop
 
     def attempt_locked_property_entry(self, eid, prop, *, target_x, target_y, target_z):
-        support = self._support()
-        return support._attempt_locked_property_entry_with_sim(
+        return _attempt_locked_property_entry_with_sim(
             self.sim,
             eid,
             prop,
@@ -73,7 +97,6 @@ class PropertyIngressRuntime:
         )
 
     def ingress_method_profile(self, eid, prop, ingress, claim_reason):
-        support = self._support()
         modes = self.action_system._mode_state_for(eid)
         sneak_active = bool(modes and modes.sneak)
         ingress_kind = str(getattr(ingress, "ingress_kind", "") or "").strip().lower()
@@ -81,7 +104,7 @@ class PropertyIngressRuntime:
         side_entry_terms = self.action_system._access_tool_terms_for(eid, prop, context="side_entry")
         door_like_ingress = (
             ingress_kind == "ordinary_entry"
-            or (ingress_kind == "alternate_aperture" and support._is_side_aperture(aperture_kind))
+            or (ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind))
         )
 
         if ingress_kind == "deep_breach":
@@ -89,7 +112,7 @@ class PropertyIngressRuntime:
         if ingress_kind == "boundary_breach":
             return "forced_breach", 8, 10
 
-        if ingress_kind == "alternate_aperture" and support._is_window_aperture(aperture_kind):
+        if ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
             if side_entry_terms.get("enabled") and sneak_active:
                 return "quiet_window_entry", 2, 4
             if sneak_active:
@@ -114,7 +137,6 @@ class PropertyIngressRuntime:
         return "forced_side_entry", 5, 7
 
     def ingress_attempt_profile(self, eid, prop, ingress, claim_reason):
-        support = self._support()
         ingress_method, severity_bonus, offense_bonus = self.ingress_method_profile(
             eid,
             prop,
@@ -150,7 +172,7 @@ class PropertyIngressRuntime:
         breach_severity = max(0.0, float(getattr(ingress, "breach_severity", 0.0) or 0.0))
         athletics = _actor_skill(self.sim, eid, "athletics")
 
-        if ingress_kind == "alternate_aperture" and support._is_window_aperture(aperture_kind):
+        if ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
             score += max(0.0, athletics - 5.0) * 0.24
             if ingress_method == "quiet_window_entry":
                 score += 0.35
@@ -178,7 +200,7 @@ class PropertyIngressRuntime:
         profile["context"] = context
         profile["channel"] = channel
         profile["tool_terms"] = tool_terms
-        profile["attempt"] = support._resolve_access_skill_check(
+        profile["attempt"] = _resolve_access_skill_check(
             self.sim,
             eid=eid,
             prop=prop,
@@ -192,7 +214,6 @@ class PropertyIngressRuntime:
         return profile
 
     def failed_ingress_attempt_text(self, ingress_mode, ingress_method, prop, *, fumbled=False, eid=None):
-        support = self._support()
         prop_name = str((prop or {}).get("name", (prop or {}).get("id", "property"))).strip() or "property"
         method = str(ingress_method or "").strip().lower()
 
@@ -201,7 +222,7 @@ class PropertyIngressRuntime:
         elif method in {"forced_breach", "deep_breach"}:
             base = f"You {'botch' if fumbled else 'fail'} the wall breach at {prop_name}."
         else:
-            mode_text = support._ingress_mode_label(ingress_mode)
+            mode_text = _ingress_mode_label(ingress_mode)
             if fumbled:
                 base = f"You botch the {mode_text} at {prop_name}."
             else:
@@ -213,7 +234,6 @@ class PropertyIngressRuntime:
         return base
 
     def emit_failed_ingress_attempt(self, eid, candidate, prop, ingress, ingress_method, *, severity_bonus=0, offense_bonus=0):
-        support = self._support()
         access = _evaluate_property_access(
             self.sim,
             eid,
@@ -223,7 +243,7 @@ class PropertyIngressRuntime:
             z=candidate["z"],
             breach_severity=ingress.breach_severity,
         )
-        witnesses = support._watchers_for_position(
+        witnesses = _watchers_for_position(
             self.sim,
             candidate["x"],
             candidate["y"],
@@ -248,7 +268,7 @@ class PropertyIngressRuntime:
             witnesses=tuple(witnesses[:4]),
             access_level=access.access_level,
             severity_score=severity_score,
-            severity_label=support._trespass_label_from_score(severity_score),
+            severity_label=_trespass_label_from_score(severity_score),
             standing_reason=access.standing_reason,
             ingress_kind=ingress.ingress_kind,
             aperture_kind=ingress.aperture_kind,
@@ -272,7 +292,6 @@ class PropertyIngressRuntime:
         )
 
     def ingress_mode_matches(self, candidate, ingress_mode):
-        support = self._support()
         ingress_mode = str(ingress_mode or "").strip().lower()
         ingress = candidate.get("ingress")
         aperture_kind = str(getattr(ingress, "aperture_kind", "") or "").strip().lower()
@@ -280,10 +299,10 @@ class PropertyIngressRuntime:
 
         if ingress_mode == "side_entry":
             return ingress_kind == "ordinary_entry" or (
-                ingress_kind == "alternate_aperture" and support._is_side_aperture(aperture_kind)
+                ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind)
             )
         if ingress_mode == "window_entry":
-            return ingress_kind == "alternate_aperture" and support._is_window_aperture(aperture_kind)
+            return ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind)
         if ingress_mode == "forced_breach":
             return ingress_kind in {"boundary_breach", "deep_breach"}
         return True
@@ -394,16 +413,15 @@ class PropertyIngressRuntime:
         return candidates
 
     def authorized_side_entry_reason(self, eid, candidate):
-        support = self._support()
         pos = self.sim.ecs.get(Position).get(eid)
         prop = candidate["prop"]
         ingress = candidate["ingress"]
         aperture_kind = str(ingress.aperture_kind or "").strip().lower()
-        if support._is_window_aperture(aperture_kind):
+        if _is_window_aperture(aperture_kind):
             return ""
         if not (
             str(ingress.ingress_kind or "").strip().lower() == "ordinary_entry"
-            or support._is_side_aperture(aperture_kind)
+            or _is_side_aperture(aperture_kind)
         ):
             return ""
 
@@ -431,7 +449,6 @@ class PropertyIngressRuntime:
         return claim_reason
 
     def open_ingress_tile(self, candidate, hostile=False):
-        support = self._support()
         tile = candidate.get("tile")
         if tile and tile.walkable:
             return
@@ -440,9 +457,9 @@ class PropertyIngressRuntime:
         aperture_kind = str(ingress.aperture_kind or "").strip().lower()
         if (
             str(ingress.ingress_kind or "").strip().lower() == "ordinary_entry"
-            or (ingress.ingress_kind == "alternate_aperture" and support._is_side_aperture(aperture_kind))
+            or (ingress.ingress_kind == "alternate_aperture" and _is_side_aperture(aperture_kind))
         ):
-            if support._set_door_open_state(
+            if _set_door_open_state(
                 self.sim,
                 int(candidate["x"]),
                 int(candidate["y"]),
@@ -450,7 +467,7 @@ class PropertyIngressRuntime:
                 True,
             ):
                 return
-        if not hostile and ingress.ingress_kind == "alternate_aperture" and support._is_window_aperture(aperture_kind):
+        if not hostile and ingress.ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
             glyph = '"'
         elif not hostile and ingress.ingress_kind == "alternate_aperture":
             glyph = "+"
@@ -487,8 +504,7 @@ class PropertyIngressRuntime:
         return "No adjacent ingress point."
 
     def ingress_blocked_text(self, reason, ingress_mode, prop, *, eid=None):
-        support = self._support()
-        mode_text = support._ingress_mode_label(ingress_mode)
+        mode_text = _ingress_mode_label(ingress_mode)
         prop_name = str((prop or {}).get("name", (prop or {}).get("id", "property"))).strip() or "property"
         reason_key = str(reason or "").strip().lower()
 
@@ -507,12 +523,11 @@ class PropertyIngressRuntime:
         return base
 
     def handle_ingress_action(self, eid, pos, ingress_mode):
-        support = self._support()
         cover = self.action_system._cover_state_for(eid)
         had_cover = bool(cover and cover.active)
         candidates = self.adjacent_ingress_candidates(pos, ingress_mode=ingress_mode)
         if not candidates:
-            support._log_player_feedback(
+            _log_player_feedback(
                 self.sim,
                 self.missing_ingress_text(ingress_mode, eid=eid),
                 kind="movement",
@@ -542,7 +557,7 @@ class PropertyIngressRuntime:
                     severity_bonus=severity_bonus,
                     offense_bonus=offense_bonus,
                 )
-                support._maybe_damage_access_tool(
+                _maybe_damage_access_tool(
                     self.sim,
                     eid,
                     ingress_profile.get("tool_terms") or {},
@@ -553,7 +568,7 @@ class PropertyIngressRuntime:
                     channel=ingress_profile.get("channel") or "ingress_attempt",
                     fumbled=bool(attempt.get("fumbled")),
                 )
-                support._log_player_feedback(
+                _log_player_feedback(
                     self.sim,
                     self.failed_ingress_attempt_text(
                         ingress_mode,
@@ -571,7 +586,7 @@ class PropertyIngressRuntime:
             hostile=bool(hostile or ingress_method == "forced_side_entry"),
         )
 
-        moved, reason = support.try_move_entity(
+        moved, reason = try_move_entity(
             self.sim,
             eid=eid,
             new_x=candidate["x"],
@@ -580,7 +595,7 @@ class PropertyIngressRuntime:
             reason=str(ingress_mode or "ingress"),
         )
         if not moved:
-            support._log_player_feedback(
+            _log_player_feedback(
                 self.sim,
                 self.ingress_blocked_text(reason, ingress_mode, prop, eid=eid),
                 kind="movement",
@@ -597,7 +612,7 @@ class PropertyIngressRuntime:
             z=candidate["z"],
             breach_severity=ingress.breach_severity,
         )
-        witnesses = support._watchers_for_position(
+        witnesses = _watchers_for_position(
             self.sim,
             candidate["x"],
             candidate["y"],
@@ -611,7 +626,7 @@ class PropertyIngressRuntime:
                 int(access.severity_score) + int(round(float(ingress.breach_severity) * 12.0)),
             )
             severity_score = min(100, severity_score + int(max(0, severity_bonus)))
-            severity_label = support._trespass_label_from_score(severity_score)
+            severity_label = _trespass_label_from_score(severity_score)
             self.sim.emit(Event(
                 "property_tamper",
                 offender_eid=eid,
@@ -653,7 +668,7 @@ class PropertyIngressRuntime:
                 int(access.severity_score) + int(round(float(ingress.breach_severity) * 10.0)),
             )
             severity_score = min(100, severity_score + int(max(0, severity_bonus)))
-            severity_label = support._trespass_label_from_score(severity_score)
+            severity_label = _trespass_label_from_score(severity_score)
             self.sim.emit(Event(
                 "property_trespass",
                 offender_eid=eid,
@@ -696,30 +711,30 @@ class PropertyIngressRuntime:
             )
         else:
             name = prop.get("name", prop.get("id", "property"))
-            reason_text = support._standing_reason_label(claim_reason)
-            mode_text = support._ingress_mode_label(ingress_mode)
-            method_text = support._ingress_method_label(ingress_method)
+            reason_text = _standing_reason_label(claim_reason)
+            mode_text = _ingress_mode_label(ingress_mode)
+            method_text = _ingress_method_label(ingress_method)
             if reason_text:
                 if method_text and method_text != "authorized":
-                    support._log_player_feedback(
+                    _log_player_feedback(
                         self.sim,
                         f"Used {mode_text} into {name} ({reason_text}, {method_text}).",
                         kind="movement",
                     )
                 else:
-                    support._log_player_feedback(
+                    _log_player_feedback(
                         self.sim,
                         f"Used {mode_text} into {name} ({reason_text}).",
                         kind="movement",
                     )
             else:
                 if method_text and method_text != "authorized":
-                    support._log_player_feedback(
+                    _log_player_feedback(
                         self.sim,
                         f"Used {mode_text} into {name} ({method_text}).",
                         kind="movement",
                     )
                 else:
-                    support._log_player_feedback(self.sim, f"Used {mode_text} into {name}.", kind="movement")
+                    _log_player_feedback(self.sim, f"Used {mode_text} into {name}.", kind="movement")
 
         self.action_system._refresh_cover_after_move(eid, new_pos, had_cover=had_cover)

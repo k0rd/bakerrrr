@@ -11,6 +11,7 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
+from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
 
 AI = _systems.AI
 CreatureIdentity = _systems.CreatureIdentity
@@ -23,7 +24,6 @@ Occupation = _systems.Occupation
 Position = _systems.Position
 PropertyKnowledge = _systems.PropertyKnowledge
 SPECIALTY_OPPORTUNITY_THEMES = _systems.SPECIALTY_OPPORTUNITY_THEMES
-_apply_downed_actor_state = _systems._apply_downed_actor_state
 _controller_access_requirement_text = _systems._controller_access_requirement_text
 _dialogue_hours_text = _systems._dialogue_hours_text
 _dialogue_human_join = _systems._dialogue_human_join
@@ -31,7 +31,6 @@ _dialogue_lower_start = _systems._dialogue_lower_start
 _dialogue_security_tier_text = _systems._dialogue_security_tier_text
 _dialogue_speaker_style = _systems._dialogue_speaker_style
 _entity_display_name = _systems._entity_display_name
-_entity_is_downed = _systems._entity_is_downed
 _home_property = _systems._home_property
 _int_or_default = _systems._int_or_default
 _manhattan = _systems._manhattan

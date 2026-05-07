@@ -1200,12 +1200,20 @@ class Simulation:
                     glyph = "#"
 
                 aperture = aperture_map.get((int(x), int(y), int(z)))
+                tile_color = "building_edge" if wall else "building_fill"
+                tile_semantic = "wall_building" if wall else "floor_building_fill"
                 if aperture:
                     kind = aperture.get("kind", "door")
                     ordinary = bool(aperture.get("ordinary"))
                     glyph = '"' if kind in {"window", "skylight"} else "+"
                     walkable = ordinary and kind == "door"
                     transparent = bool(walkable or kind in {"window", "skylight"})
+                    if kind in {"window", "skylight"}:
+                        tile_color = "feature_window"
+                        tile_semantic = "feature_window"
+                    else:
+                        tile_color = "feature_door"
+                        tile_semantic = "feature_door"
 
                 self.tilemap.set_tile(
                     x,
@@ -1214,8 +1222,8 @@ class Simulation:
                         walkable=walkable,
                         transparent=transparent,
                         glyph=glyph,
-                        color="building_edge" if wall else "building_fill",
-                        semantic_id="wall_building" if wall else "floor_building_fill",
+                        color=tile_color,
+                        semantic_id=tile_semantic,
                     ),
                     z=z,
                 )

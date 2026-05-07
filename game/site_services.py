@@ -42,6 +42,7 @@ from game.service_runtime import (
     _vehicle_sale_remove_offer,
 )
 from game.skills import intel_skill_terms as _intel_skill_terms, mobility_service_skill_terms as _mobility_service_skill_terms
+from game.system_support.player_feedback import _log_player_feedback
 from game.vehicles import vehicle_metadata
 
 
@@ -1033,7 +1034,6 @@ class SiteServiceSystem(System):
                 service=service,
                 reason="power_cut",
             ))
-            from game.systems import _log_player_feedback
             _log_player_feedback(
                 self.sim,
                 f"The {prop.get('name', 'terminal')} is offline — power is out.",

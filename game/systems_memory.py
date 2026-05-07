@@ -10,6 +10,11 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
+from game.system_support.actor_runtime import _detail_tick_allowed
+from game.system_support.offense_runtime import (
+    _offense_notice_radius,
+    _offense_tier,
+)
 
 AI = _systems.AI
 JusticeProfile = _systems.JusticeProfile
@@ -22,7 +27,6 @@ PropertyKnowledge = _systems.PropertyKnowledge
 _clamp = _systems._clamp
 _crime_sensitivity = _systems._crime_sensitivity
 _degrade_player_disguise = _systems._degrade_player_disguise
-_detail_tick_allowed = _systems._detail_tick_allowed
 _justice_level = _systems._justice_level
 _manhattan = _systems._manhattan
 _noise_merits_attention = _systems._noise_merits_attention
@@ -31,8 +35,6 @@ _npc_disguise_scrutiny_profile = _systems._npc_disguise_scrutiny_profile
 _npc_recognizes_player = _systems._npc_recognizes_player
 _observer_can_notice_position = _systems._observer_can_notice_position
 _observer_turns_blind_eye_to_offense = _systems._observer_turns_blind_eye_to_offense
-_offense_notice_radius = _systems._offense_notice_radius
-_offense_tier = _systems._offense_tier
 _pressure_effects = _systems._pressure_effects
 _property_claim_reason = _systems._property_claim_reason
 _property_covering = _systems._property_covering

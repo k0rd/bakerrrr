@@ -5,6 +5,7 @@ import random
 from engine.persistence import append_bones_record, load_bones_archive
 from game.components import Inventory, PlayerAssets, Position
 from game.items import ITEM_CATALOG
+from game.property_runtime import property_runtime_container_entries
 
 BONES_MAX_STASH_ITEMS = 5
 BONES_MAX_SPAWNS_PER_RUN = 2
@@ -370,12 +371,8 @@ def maybe_seed_bones_for_chunk(sim, chunk, *, force=False):
     )
     _append_chunk_property_record(sim, chunk_key, stash_id, "asset", stash_pos[0], stash_pos[1], stash_pos[2], "bones_stash")
 
-    inventories_by_kind = getattr(sim, "container_inventories", None)
-    if not isinstance(inventories_by_kind, dict):
-        sim.container_inventories = {}
-        inventories_by_kind = sim.container_inventories
-    bones_inventories = inventories_by_kind.setdefault("bones", {})
-    bones_inventories[stash_id] = [
+    stash_entries = property_runtime_container_entries(sim, stash_id, container_kind="bones")
+    stash_entries[:] = [
         {
             "item_id": _text(entry.get("item_id")).lower(),
             "quantity": max(1, _safe_int(entry.get("quantity"), default=1)),

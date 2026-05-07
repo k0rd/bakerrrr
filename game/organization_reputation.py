@@ -1,6 +1,15 @@
 from __future__ import annotations
 
+from engine.events import Event
+from engine.systems import System
+
 from game.organizations import organization_profile, property_organization_eid
+from game.property_access import property_access_level as _property_access_level
+from game.property_runtime import property_covering as _property_covering
+from game.system_support.intrusion_runtime import (
+    _quiet_unwitnessed_tamper,
+    _trespass_is_obvious_breach,
+)
 
 
 MAX_HISTORY = 64
@@ -403,3 +412,327 @@ def decay_organization_heat(sim, *, interval=120, idle_ticks=90, amount=1):
         if change is not None:
             changes.append(change)
     return changes
+
+
+class OrganizationReputationSystem(System):
+
+    HEAT_DECAY_INTERVAL = 60
+    HEAT_DECAY_IDLE_TICKS = 90
+    BANKING_STANDING_COOLDOWN = 120
+    BANKING_STANDING_MIN_AMOUNT = 20
+
+    def __init__(self, sim, player_eid):
+        super().__init__(sim)
+        self.player_eid = player_eid
+        self.last_banking_standing_tick = {}
+        self.sim.events.subscribe("property_trespass", self.on_property_trespass)
+        self.sim.events.subscribe("property_tamper", self.on_property_tamper)
+        self.sim.events.subscribe("item_stolen", self.on_item_stolen)
+        self.sim.events.subscribe("trade_bought", self.on_trade_bought)
+        self.sim.events.subscribe("trade_sold", self.on_trade_sold)
+        self.sim.events.subscribe("bank_transaction", self.on_bank_transaction)
+        self.sim.events.subscribe("insurance_policy_purchased", self.on_insurance_policy_purchased)
+        self.sim.events.subscribe("site_service_used", self.on_site_service_used)
+
+    def _property_from_event(self, event):
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        if property_id:
+            prop = self.sim.properties.get(property_id)
+            if isinstance(prop, dict):
+                return prop
+
+        try:
+            x = int(event.data.get("x"))
+            y = int(event.data.get("y"))
+            z = int(event.data.get("z", 0))
+        except (TypeError, ValueError):
+            return None
+
+        prop = _property_covering(self.sim, x, y, z)
+        if prop is None:
+            prop = self.sim.property_at(x, y, z)
+        return prop if isinstance(prop, dict) else None
+
+    def _emit_org_change_events(self, change, *, property_id=None):
+        if not isinstance(change, dict):
+            return
+
+        base_payload = {
+            "eid": self.player_eid,
+            "organization_eid": change.get("organization_eid"),
+            "organization_key": str(change.get("organization_key", "")).strip(),
+            "organization_name": str(change.get("organization_name", "Organization")).strip() or "Organization",
+            "organization_kind": str(change.get("organization_kind", "organization")).strip().lower() or "organization",
+            "property_id": property_id,
+            "source": str(change.get("source", "unknown")).strip().lower() or "unknown",
+            "reason": str(change.get("reason", "")).strip().lower(),
+            "source_event": str(change.get("source_event", "")).strip().lower(),
+            "tick": int(change.get("tick", getattr(self.sim, "tick", 0))),
+            "heat_delta": int(change.get("heat_delta", 0)),
+            "standing_delta": float(change.get("standing_delta", 0.0)),
+            "before_heat": int(change.get("before_heat", 0)),
+            "after_heat": int(change.get("after_heat", 0)),
+            "before_standing": float(change.get("before_standing", 0.0)),
+            "after_standing": float(change.get("after_standing", 0.0)),
+        }
+        self.sim.emit(Event("organization_reputation_changed", **base_payload))
+
+        if bool(change.get("heat_tier_changed")):
+            self.sim.emit(Event(
+                "organization_heat_tier_changed",
+                **base_payload,
+                before_tier=str(change.get("before_heat_tier", "quiet")).strip().lower() or "quiet",
+                after_tier=str(change.get("after_heat_tier", "quiet")).strip().lower() or "quiet",
+            ))
+
+        if bool(change.get("standing_tier_changed")):
+            self.sim.emit(Event(
+                "organization_standing_tier_changed",
+                **base_payload,
+                before_tier=str(change.get("before_standing_tier", "neutral")).strip().lower() or "neutral",
+                after_tier=str(change.get("after_standing_tier", "neutral")).strip().lower() or "neutral",
+            ))
+
+    def _banking_standing_key(self, prop):
+        snapshot = organization_snapshot(self.sim, prop=prop, ensure=True)
+        org_key = str((snapshot or {}).get("organization_key", "") or "").strip().lower()
+        if org_key:
+            return f"org:{org_key}"
+        property_id = str(prop.get("id", "") or "").strip()
+        if property_id:
+            return f"prop:{property_id}"
+        return "banking"
+
+    def _banking_standing_ready(self, prop, event):
+        try:
+            amount = int(event.data.get("amount", 0))
+        except (TypeError, ValueError):
+            amount = 0
+        if amount < int(self.BANKING_STANDING_MIN_AMOUNT):
+            return False
+
+        key = self._banking_standing_key(prop)
+        tick = int(getattr(self.sim, "tick", 0))
+        last_tick = int(self.last_banking_standing_tick.get(key, -10_000))
+        if tick - last_tick < int(self.BANKING_STANDING_COOLDOWN):
+            return False
+
+        self.last_banking_standing_tick[key] = tick
+        if len(self.last_banking_standing_tick) > 256:
+            stale_before = tick - (int(self.BANKING_STANDING_COOLDOWN) * 4)
+            self.last_banking_standing_tick = {
+                bank_key: int(bank_tick)
+                for bank_key, bank_tick in self.last_banking_standing_tick.items()
+                if int(bank_tick) >= stale_before
+            }
+        return True
+
+    def _apply_org_delta(
+        self,
+        prop,
+        *,
+        heat_delta=0,
+        standing_delta=0.0,
+        source,
+        reason="",
+        source_event="",
+    ):
+        if not isinstance(prop, dict):
+            return None
+        change = apply_organization_reputation_delta(
+            self.sim,
+            prop=prop,
+            heat_delta=heat_delta,
+            standing_delta=standing_delta,
+            source=source,
+            reason=reason,
+            source_event=source_event,
+        )
+        if change is not None:
+            self._emit_org_change_events(change, property_id=prop.get("id"))
+        return change
+
+    def on_property_trespass(self, event):
+        if event.data.get("offender_eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+
+        severity_label = str(event.data.get("severity_label", "trespass")).strip().lower() or "trespass"
+        access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
+        witnessed = bool(event.data.get("witnessed", True))
+        ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
+        ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
+        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
+        obvious_breach = _trespass_is_obvious_breach(
+            ingress_kind=ingress_kind,
+            ingress_method=ingress_method,
+            breach_severity=breach_severity,
+        )
+        if not witnessed and not obvious_breach:
+            return
+        heat_delta = 2 if severity_label == "suspicious" else 4
+        standing_delta = -0.03 if severity_label == "suspicious" else -0.06
+        if severity_label == "serious_trespass":
+            heat_delta = 7
+            standing_delta = -0.12
+        if witnessed:
+            heat_delta += 2
+            standing_delta -= 0.02
+        if access_level == "restricted":
+            heat_delta += 2
+            standing_delta -= 0.02
+        self._apply_org_delta(
+            prop,
+            heat_delta=min(18, heat_delta),
+            standing_delta=max(-0.24, standing_delta),
+            source="trespass",
+            reason=severity_label,
+            source_event="property_trespass",
+        )
+
+    def on_property_tamper(self, event):
+        if event.data.get("offender_eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
+        severity_score = max(0, int(event.data.get("severity_score", 0)))
+        witnessed = bool(event.data.get("witnessed", True))
+        ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
+        ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
+        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
+        prop_kind = str(prop.get("kind", "") or "").strip().lower()
+        if _quiet_unwitnessed_tamper(
+            prop,
+            witnessed=witnessed,
+            ingress_kind=ingress_kind,
+            ingress_method=ingress_method,
+            breach_severity=breach_severity,
+        ):
+            if prop_kind in {"fixture", "vehicle"}:
+                heat_delta = 1
+                standing_delta = -0.01
+            else:
+                heat_delta = 2 + max(0, severity_score // 60)
+                standing_delta = -0.03
+        else:
+            heat_delta = 6 + max(0, severity_score // 30)
+            standing_delta = -0.1
+            if access_level == "restricted":
+                heat_delta += 2
+                standing_delta -= 0.03
+        self._apply_org_delta(
+            prop,
+            heat_delta=min(20, heat_delta),
+            standing_delta=max(-0.28, standing_delta),
+            source="tamper",
+            reason="property_tamper",
+            source_event="property_tamper",
+        )
+
+    def on_item_stolen(self, event):
+        if event.data.get("offender_eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        self._apply_org_delta(
+            prop,
+            heat_delta=5,
+            standing_delta=-0.08,
+            source="theft",
+            reason="item_stolen",
+            source_event="item_stolen",
+        )
+
+    def on_trade_bought(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        self._apply_org_delta(
+            prop,
+            standing_delta=0.025,
+            source="trade",
+            reason="bought_goods",
+            source_event="trade_bought",
+        )
+
+    def on_trade_sold(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        self._apply_org_delta(
+            prop,
+            standing_delta=0.02,
+            source="trade",
+            reason="sold_goods",
+            source_event="trade_sold",
+        )
+
+    def on_bank_transaction(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        if not self._banking_standing_ready(prop, event):
+            return
+        self._apply_org_delta(
+            prop,
+            standing_delta=0.02,
+            source="banking",
+            reason=str(event.data.get("kind", "transaction")).strip().lower() or "transaction",
+            source_event="bank_transaction",
+        )
+
+    def on_insurance_policy_purchased(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        self._apply_org_delta(
+            prop,
+            standing_delta=0.04,
+            source="insurance",
+            reason=str(event.data.get("policy_key", "policy")).strip().lower() or "policy",
+            source_event="insurance_policy_purchased",
+        )
+
+    def on_site_service_used(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        prop = self._property_from_event(event)
+        if not isinstance(prop, dict):
+            return
+        service = str(event.data.get("service", "")).strip().lower()
+        standing_delta = 0.015
+        if service in {"rest", "fuel", "repair", "vehicle_fetch"}:
+            standing_delta = 0.02
+        elif service.startswith("vehicle_sales_"):
+            standing_delta = 0.04
+        elif service in {"banking", "insurance"}:
+            standing_delta = 0.03
+        self._apply_org_delta(
+            prop,
+            standing_delta=standing_delta,
+            source="service",
+            reason=service or "site_service",
+            source_event="site_service_used",
+        )
+
+    def update(self):
+        for change in decay_organization_heat(
+            self.sim,
+            interval=self.HEAT_DECAY_INTERVAL,
+            idle_ticks=self.HEAT_DECAY_IDLE_TICKS,
+            amount=1,
+        ):
+            self._emit_org_change_events(change)
