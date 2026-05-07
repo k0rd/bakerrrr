@@ -328,6 +328,7 @@ from game.property_runtime import (
     property_linked_property_id as _property_linked_property_id,
     property_aperture_at as _property_aperture_at,
     property_covering as _property_covering,
+    property_enclosing_structure as _property_enclosing_structure,
     property_display_position as _property_display_position,
     property_distance as _property_distance,
     property_focus_position as _property_focus_position,
@@ -392,6 +393,7 @@ from game.system_support.actor_runtime import (
     _detail_tick_allowed,
     _entity_is_downed,
 )
+from game.system_support.entity_naming import _entity_display_name
 from game.system_support.combat_pacing_runtime import (
     _combat_overlay_state,
     _combat_turn_pacing_active,
@@ -425,6 +427,13 @@ from game.system_support.offense_runtime import (
     _offense_tier,
 )
 from game.system_support.player_feedback import _log_player_feedback
+from game.system_support.status_runtime import (
+    _npc_status_metric_args,
+    _status_int_offset,
+    _status_modifier_total,
+    _status_multiplier,
+    _status_tick_step,
+)
 from game.service_runtime import (
     CASINO_GAME_SERVICE_IDS,
     TRANSIT_SERVICE_IDS,
@@ -2188,6 +2197,13 @@ def _emit_move_access_events(
             if _enc is not None:
                 prop = _enc
                 break
+    prop = _property_enclosing_structure(
+        sim,
+        target_x,
+        target_y,
+        target_z,
+        prop=prop,
+    )
     trespass_triggered = False
     if prop:
         ingress = _property_ingress_context(
@@ -6320,24 +6336,6 @@ def _storefront_illegal_goods_signal(sim, prop):
         "source": "market_profile",
         "archetype": archetype,
     }
-
-
-def _entity_display_name(sim, eid, title_case=False):
-    identity = sim.ecs.get(CreatureIdentity).get(eid)
-    ai = sim.ecs.get(AI).get(eid)
-
-    if identity:
-        label = str(identity.display_name()).replace("_", " ").strip()
-    elif ai:
-        label = str(ai.role or "entity").replace("_", " ").strip()
-    else:
-        label = "entity"
-
-    if not label:
-        label = "entity"
-    return label.title() if title_case else label
-
-
 def _career_label(occupation, title_case=False):
     if not occupation:
         return ""
@@ -6521,9 +6519,17 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
     district_label = _hud_status_label(district_type, fallback="")
     floor_text = _floor_label(active_z, long=True)
 
+    view_only = False
+    if zoom_mode == "overworld":
+        records = getattr(sim, "overworld_view_only_by_eid", {})
+        try:
+            view_only = bool(records.get(int(getattr(sim, "player_eid", 0) or 0), False))
+        except (TypeError, ValueError):
+            view_only = False
+
     status_chunks = [
-        "In Vehicle" if zoom_mode == "overworld" else "On Foot",
-        "Overworld" if zoom_mode == "overworld" else floor_text,
+        "Map View" if zoom_mode == "overworld" and view_only else "In Vehicle" if zoom_mode == "overworld" else "On Foot",
+        "Overworld Map" if zoom_mode == "overworld" and view_only else "Overworld" if zoom_mode == "overworld" else floor_text,
         f"Chunk {chunk_text}",
         f"Area {area_label}",
     ]
@@ -6624,58 +6630,6 @@ def _resolve_ai_target(sim, ai):
             ai.target = (target_pos.x, target_pos.y, target_pos.z)
 
     return ai.target
-
-
-def _status_effects_for(sim, eid):
-    if sim is None or eid is None:
-        return None
-    effects_map = sim.ecs.get(StatusEffects)
-    if not effects_map:
-        return None
-    return effects_map.get(eid)
-
-
-def _status_modifiers_for(sim, eid):
-    effects = _status_effects_for(sim, eid)
-    if not effects:
-        return {}
-    try:
-        modifiers = effects.modifiers_sum()
-    except AttributeError:
-        return {}
-    return modifiers if isinstance(modifiers, dict) else {}
-
-
-def _status_modifier_total(sim, eid, key, default=0.0):
-    modifiers = _status_modifiers_for(sim, eid)
-    if not modifiers:
-        return float(default)
-    return _float_or_default(modifiers.get(key, default), default)
-
-
-def _status_multiplier(sim, eid, key, *, base=1.0, minimum=0.0, maximum=3.0):
-    factor = float(base) + _status_modifier_total(sim, eid, key, default=0.0)
-    return max(float(minimum), min(float(maximum), float(factor)))
-
-
-def _status_int_offset(sim, eid, key, default=0):
-    return int(round(_status_modifier_total(sim, eid, key, default=default)))
-
-
-def _status_tick_step(effects, key, delta):
-    delta = _float_or_default(delta, 0.0)
-    if abs(delta) <= 0.0001:
-        return 0
-
-    banks = getattr(effects, "_tick_banks", None)
-    if not isinstance(banks, dict):
-        banks = {}
-        setattr(effects, "_tick_banks", banks)
-
-    total = _float_or_default(banks.get(key, 0.0), 0.0) + delta
-    whole = math.floor(total) if total >= 0.0 else math.ceil(total)
-    banks[key] = total - float(whole)
-    return int(whole)
 
 
 def _status_modifier_brief_label(key, value):
@@ -6784,16 +6738,6 @@ def _active_status_summary(effects, *, max_names=1, title=False):
     visible = labels[:max_names]
     visible.append(f"+{len(labels) - max_names}")
     return " ".join(visible)
-
-
-def _npc_status_metric_args(sim, eid):
-    steady = _status_modifier_total(sim, eid, "suppression_resist_mult", default=0.0)
-    return {
-        "pressure_mult": max(0.2, min(1.8, 1.0 - steady)),
-        "retreat_bias_delta": _status_modifier_total(sim, eid, "retreat_bias_delta", default=0.0),
-        "assault_bias_delta": _status_modifier_total(sim, eid, "assault_bias_delta", default=0.0),
-    }
-
 
 def _entity_status_move_speed_multiplier(sim, eid, *, base=1.0, minimum=0.2, maximum=3.0):
     try:
@@ -20037,7 +19981,6 @@ class PlayerActionSystem(System):
             security_fixture_is_online=_security_fixture_is_online,
             access_prep_detail_lines=_access_prep_detail_lines,
             entity_status_move_speed_multiplier=_entity_status_move_speed_multiplier,
-            entity_display_name=_entity_display_name,
             world_trait_claim_value=_world_trait_claim_value,
             world_trait_claim_text=_world_trait_claim_text,
         )
@@ -20890,6 +20833,9 @@ class PlayerActionSystem(System):
     def _handle_overworld_travel(self, eid, pos, dx, dy):
         return self.player_travel._handle_overworld_travel(eid, pos, dx, dy)
 
+    def _overworld_view_only_for(self, eid):
+        return self.player_travel._overworld_view_only_for(eid)
+
     def _overworld_visit_state_for(self, eid):
         return _player_overworld_visit_state(self.sim, eid)
 
@@ -20998,21 +20944,16 @@ class PlayerActionSystem(System):
 
         if action == "zoom_overworld":
             self._set_sneak_mode(eid, False, reason="zoom")
-            vehicle_state = self._vehicle_state_for(eid)
-            if not vehicle_state or not vehicle_state.in_vehicle:
-                self.sim.emit(Event(
-                    "zoom_mode_blocked",
-                    eid=eid,
-                    reason="vehicle_required",
-                    mode="overworld",
-                ))
-                return
             self._set_zoom_mode(eid=eid, pos=pos, mode="overworld")
             return
 
         if action == "zoom_city_enter":
             if zoom_mode == "overworld":
-                self._exit_vehicle(eid=eid, pos=pos)
+                vehicle_state = self._vehicle_state_for(eid)
+                if vehicle_state and vehicle_state.in_vehicle and not self._overworld_view_only_for(eid):
+                    self._exit_vehicle(eid=eid, pos=pos)
+                else:
+                    self._set_zoom_mode(eid=eid, pos=pos, mode="city")
                 return
             self._set_zoom_mode(eid=eid, pos=pos, mode="city")
             return
@@ -21230,21 +21171,14 @@ _combat_systems_module._float_or_default = _float_or_default
 _combat_systems_module._grid_distance = _grid_distance
 _combat_systems_module._clamp = _clamp
 _combat_systems_module._dir_label = _dir_label
-_combat_systems_module._entity_display_name = _entity_display_name
 _combat_systems_module._first_targetable_entity_at = _first_targetable_entity_at
 _combat_systems_module._manual_fire_preview = _manual_fire_preview
 _combat_systems_module._projectile_path_points = _projectile_path_points
 _combat_systems_module._shatter_window_for_projectile = _shatter_window_for_projectile
-_combat_systems_module._status_int_offset = _status_int_offset
-_combat_systems_module._status_modifier_total = _status_modifier_total
-_combat_systems_module._status_multiplier = _status_multiplier
-_combat_systems_module._status_tick_step = _status_tick_step
 _combat_systems_module._weapon_target_viability = _weapon_target_viability
 _combat_systems_module._weapon_is_melee = _weapon_is_melee
 _combat_systems_module._npc_combat_metrics = _npc_combat_metrics
-_combat_systems_module._npc_status_metric_args = _npc_status_metric_args
 _perception_systems_module.QUIET_NOISE_CAUSES = QUIET_NOISE_CAUSES
-_perception_systems_module._entity_display_name = _entity_display_name
 
 
 class WeaponSystem(_WeaponSystemExtracted):
@@ -23298,6 +23232,7 @@ class CriminalJusticeSystem(System):
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
         self.sim.events.subscribe("action_offense", self.on_action_offense)
+        self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
         self.sim.events.subscribe("property_interact", self.on_property_interact)
         self.sim.events.subscribe("npc_interact", self.on_npc_interact)
         self.sim.events.subscribe("npc_surrendered", self.on_npc_surrendered)
@@ -25453,6 +25388,32 @@ class CriminalJusticeSystem(System):
             note=f"{str(event.data.get('action', 'action') or '').strip().lower()}/{context}",
         )
 
+    def on_camera_alerted(self, event):
+        offender_eid = event.data.get("eid")
+        if offender_eid is None:
+            return
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        severity_score = int(event.data.get("severity_score", 0) or 0)
+        severity_label = str(event.data.get("severity_label", "clear") or "").strip().lower() or "clear"
+        if not property_id or severity_score <= 0 or severity_label == "clear":
+            return
+        x = event.data.get("x")
+        y = event.data.get("y")
+        z = event.data.get("z", 0)
+        if self._watchers_present(offender_eid, x, y, z):
+            return
+        self._record_incident(
+            offender_eid,
+            incident_type="trespass",
+            severity=severity_score,
+            source_event="camera_alerted",
+            property_id=property_id,
+            x=x,
+            y=y,
+            witnessed=True,
+            note=f"camera_{severity_label}",
+        )
+
     def on_property_interact(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -26758,19 +26719,29 @@ class CameraSystem(System):
             # LOS check from camera to player.
             if not _shared_has_line_of_sight(self.sim, cam_x, cam_y, cam_z, px, py, pz):
                 continue
-            # Only trigger offense when the player has no legitimate access.
-            covering_prop = _property_covering(self.sim, px, py, pz)
-            if covering_prop:
-                access = _evaluate_property_access(
-                    self.sim,
-                    self.player_eid,
-                    covering_prop,
-                    x=px,
-                    y=py,
-                    z=pz,
-                )
-                if access.permitted:
-                    continue
+            # Cameras only escalate inside an enclosing structure where the
+            # player's access state is meaningfully criminal.
+            covering_prop = _property_enclosing_structure(
+                self.sim,
+                px,
+                py,
+                pz,
+                prop=_property_covering(self.sim, px, py, pz),
+            )
+            if not covering_prop:
+                self._set_camera_scrutiny(cam_id, 0.0, tick=tick)
+                continue
+            access = _evaluate_property_access(
+                self.sim,
+                self.player_eid,
+                covering_prop,
+                x=px,
+                y=py,
+                z=pz,
+            )
+            if access.permitted or not access.inside_bounds or access.severity_score <= 0:
+                self._set_camera_scrutiny(cam_id, 0.0, tick=tick)
+                continue
             disguise_profile = _camera_disguise_scrutiny_profile(self.sim, covering_prop)
             camera_name = str(cam_prop.get("name", "camera") or "camera").strip() or "camera"
             if disguise_profile:
@@ -26803,6 +26774,12 @@ class CameraSystem(System):
                 camera_property_id=cam_id,
                 camera_name=camera_name,
                 property_id=covering_prop.get("id") if isinstance(covering_prop, dict) else None,
+                x=px,
+                y=py,
+                z=pz,
+                access_level=access.access_level,
+                severity_score=access.severity_score,
+                severity_label=access.severity_label,
                 disguise_role=disguise_profile.get("role_id") if disguise_profile else None,
                 disguise_failed=bool(disguise_profile),
             ))
@@ -32726,6 +32703,9 @@ class EventLogSystem(System):
         mode = str(event.data.get("mode", "city")).lower()
         chunk = event.data.get("chunk")
         if mode == "overworld":
+            if bool(event.data.get("view_only")):
+                self.sim.log.add(f"Opened the view-only overworld map at chunk {chunk}.")
+                return
             self.sim.log.add(f"Entered in-vehicle map at chunk {chunk}.")
             return
         area = str(event.data.get("area_type", "local")).strip().lower() or "local"

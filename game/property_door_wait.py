@@ -35,6 +35,7 @@ from game.property_runtime import (
     property_is_storefront as _property_is_storefront,
 )
 from game.system_support.actor_runtime import _entity_is_downed
+from game.system_support.entity_naming import _entity_display_name
 from game.system_support.interaction_ordering import _manhattan
 
 
@@ -388,8 +389,7 @@ def _door_wait_feedback_text(sim, caller_eid, responder_eid, disposition, *, exi
     if caller_eid != player_eid:
         return ""
 
-    support = _support()
-    responder_name = support._entity_display_name(sim, responder_eid, title_case=True) or "Someone"
+    responder_name = _entity_display_name(sim, responder_eid, title_case=True) or "Someone"
     mood = str((disposition or {}).get("mood", "neutral") or "neutral").strip().lower() or "neutral"
     if existing:
         return f"You knock. {responder_name} is already coming to the door."

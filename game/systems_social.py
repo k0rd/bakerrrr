@@ -12,6 +12,7 @@ from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
+from game.system_support.entity_naming import _entity_display_name
 
 AI = _systems.AI
 CreatureIdentity = _systems.CreatureIdentity
@@ -30,7 +31,6 @@ _dialogue_human_join = _systems._dialogue_human_join
 _dialogue_lower_start = _systems._dialogue_lower_start
 _dialogue_security_tier_text = _systems._dialogue_security_tier_text
 _dialogue_speaker_style = _systems._dialogue_speaker_style
-_entity_display_name = _systems._entity_display_name
 _home_property = _systems._home_property
 _int_or_default = _systems._int_or_default
 _manhattan = _systems._manhattan

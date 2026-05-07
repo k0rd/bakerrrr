@@ -14,11 +14,11 @@ from game.system_support.cover_runtime import (
     _is_cover_state_valid,
     _threat_positions_for_entity,
 )
+from game.system_support.entity_naming import _entity_display_name
 from game.system_support.interaction_ordering import _manhattan
 from game.system_support.stealth_runtime import _player_hidden_status
 
 QUIET_NOISE_CAUSES = None
-_entity_display_name = None
 
 
 class CoverSystem(System):
@@ -390,10 +390,6 @@ class StealthSystem(System):
         self.player_eid = player_eid
 
     def update(self):
-        entity_display_name = _entity_display_name
-        if entity_display_name is None:
-            raise RuntimeError("perception_systems helper _entity_display_name was not configured")
-
         modes = self.sim.ecs.get(PlayerModeState).get(self.player_eid)
         pos = self.sim.ecs.get(Position).get(self.player_eid)
         if not modes or not pos:
@@ -412,7 +408,7 @@ class StealthSystem(System):
             pos.z,
         )
         witness_labels = tuple(
-            entity_display_name(self.sim, watcher_eid, title_case=False)
+            _entity_display_name(self.sim, watcher_eid, title_case=False)
             for watcher_eid in watchers[:2]
         )
         self.sim.player_stealth_state = {

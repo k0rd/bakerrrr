@@ -85,6 +85,32 @@ class PlayerTravelRuntime:
     def _vehicle_state_for(self, eid):
         return self.sim.ecs.get(VehicleState).get(eid)
 
+    def _overworld_view_only_records(self):
+        records = getattr(self.sim, "overworld_view_only_by_eid", None)
+        if not isinstance(records, dict):
+            records = {}
+            self.sim.overworld_view_only_by_eid = records
+        return records
+
+    def _overworld_view_only_for(self, eid):
+        try:
+            key = int(eid)
+        except (TypeError, ValueError):
+            return False
+        return bool(self._overworld_view_only_records().get(key, False))
+
+    def _set_overworld_view_only(self, eid, active):
+        try:
+            key = int(eid)
+        except (TypeError, ValueError):
+            return False
+        records = self._overworld_view_only_records()
+        if active:
+            records[key] = True
+        else:
+            records.pop(key, None)
+        return bool(active)
+
     def _vehicle_property_by_id(self, vehicle_id):
         if not vehicle_id:
             return None
@@ -405,23 +431,18 @@ class PlayerTravelRuntime:
         if mode == "overworld":
             state = self._vehicle_state_for(eid)
             vehicle_prop = self._active_vehicle_property(eid)
-            if not state or not state.in_vehicle or not vehicle_prop:
-                self.sim.emit(Event(
-                    "zoom_mode_blocked",
-                    eid=eid,
-                    reason="vehicle_required",
-                    mode=mode,
-                ))
-                return
+            view_only = not bool(state and state.in_vehicle and vehicle_prop)
 
             self.sim.city_anchor_by_chunk[current_chunk] = (pos.x, pos.y, pos.z)
             self.sim.zoom_mode = "overworld"
+            self._set_overworld_view_only(eid, view_only)
             tx, ty = self._chunk_center(current_chunk)
             self.sim.stream_world(tx, ty)
             self.sim.ensure_loaded_chunk_terrain()
             tx, ty = self._find_walkable_near(tx, ty, z=0, radius=6)
             self._teleport_entity(eid, pos, tx, ty, 0, reason="zoom_overworld")
-            self._sync_vehicle_property_position(vehicle_prop, tx, ty, 0)
+            if not view_only and vehicle_prop:
+                self._sync_vehicle_property_position(vehicle_prop, tx, ty, 0)
             self.action_system._clear_cover(eid, reason="zoom")
             desc = self.sim.world.overworld_descriptor(current_chunk[0], current_chunk[1])
             interest = self.sim.world.overworld_interest(current_chunk[0], current_chunk[1], descriptor=desc)
@@ -458,6 +479,7 @@ class PlayerTravelRuntime:
                 eid=eid,
                 mode="overworld",
                 chunk=current_chunk,
+                view_only=view_only,
             ))
             return
 
@@ -465,6 +487,7 @@ class PlayerTravelRuntime:
         district = chunk.get("district", {})
         area_type = str(district.get("area_type", "city")).lower()
         self.sim.zoom_mode = "city"
+        self._set_overworld_view_only(eid, False)
         anchor = self.sim.city_anchor_by_chunk.get(current_chunk)
         if not anchor:
             ax, ay = self._chunk_center(current_chunk)

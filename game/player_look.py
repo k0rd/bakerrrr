@@ -34,6 +34,7 @@ from game.property_runtime import (
     viewer_revealed_building_id as _viewer_revealed_building_id,
 )
 from game.service_runtime import _int_or_default, _legend_line
+from game.system_support.entity_naming import _entity_display_name
 from game.system_support.interaction_ordering import _manhattan
 
 
@@ -68,7 +69,6 @@ class PlayerLookRuntime:
         security_fixture_is_online,
         access_prep_detail_lines,
         entity_status_move_speed_multiplier,
-        entity_display_name,
         world_trait_claim_value,
         world_trait_claim_text,
     ):
@@ -100,7 +100,6 @@ class PlayerLookRuntime:
         self._security_fixture_is_online = security_fixture_is_online
         self._access_prep_detail_lines = access_prep_detail_lines
         self._entity_status_move_speed_multiplier = entity_status_move_speed_multiplier
-        self._entity_display_name = entity_display_name
         self._world_trait_claim_value = world_trait_claim_value
         self._world_trait_claim_text = world_trait_claim_text
 
@@ -503,7 +502,7 @@ class PlayerLookRuntime:
             if npc_identity:
                 taxonomy = str(npc_identity.taxonomy_class).title()
                 species = str(npc_identity.species)
-                type_text = self._entity_display_name(self.sim, npc_eid, title_case=True)
+                type_text = _entity_display_name(self.sim, npc_eid, title_case=True)
                 glyph_code = npc_identity.taxonomy_glyph(fallback="N")
                 coat = str(npc_identity.coat_variant or "").replace("_", " ").strip()
             else:

@@ -90,6 +90,16 @@ def _player_overworld_visit_state(sim, eid):
     return rebuilt
 
 
+def _overworld_view_only_for(sim, eid):
+    records = getattr(sim, "overworld_view_only_by_eid", None)
+    if not isinstance(records, dict):
+        return False
+    try:
+        return bool(records.get(int(eid), False))
+    except (TypeError, ValueError):
+        return False
+
+
 def _overworld_chunk_memory_state(sim, eid):
     state_by_eid = getattr(sim, "overworld_chunk_memory_by_eid", None)
     if not isinstance(state_by_eid, dict):
@@ -362,7 +372,10 @@ def _overworld_chunk_knowledge(sim, eid, *, current_chunk=None):
     known_chunks.add(current)
     live_adjacent = set()
 
-    if str(getattr(sim, "zoom_mode", "")).strip().lower() == "overworld":
+    if (
+        str(getattr(sim, "zoom_mode", "")).strip().lower() == "overworld"
+        and not _overworld_view_only_for(sim, eid)
+    ):
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
                 if dx == 0 and dy == 0:

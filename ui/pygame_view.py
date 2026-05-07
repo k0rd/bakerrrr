@@ -2465,6 +2465,9 @@ class PygameView:
         elif glyph_key == "\\":
             start = (mid_x - trail, mid_y - trail)
             end = (mid_x + trail, mid_y + trail)
+        elif glyph_key == ",":
+            start = (mid_x - max(1, trail // 2), mid_y + max(1, trail // 4))
+            end = (mid_x + trail, mid_y - max(1, trail // 3))
         else:
             start = (mid_x - trail, mid_y)
             end = (mid_x + trail, mid_y)

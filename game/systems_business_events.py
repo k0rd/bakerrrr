@@ -13,6 +13,7 @@ from game.property_runtime import (
     property_runtime_container_entries as _property_runtime_container_entries,
 )
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
+from game.system_support.entity_naming import _entity_display_name
 from game import systems as _systems
 
 _REQUIRED_SYSTEM_EXPORTS = (
@@ -45,7 +46,6 @@ _REQUIRED_SYSTEM_EXPORTS = (
     "_clamp",
     "_controller_access_requirement_text",
     "_dialogue_hours_text",
-    "_entity_display_name",
     "_give_item",
     "_is_business_scene_spillover",
     "_manhattan",

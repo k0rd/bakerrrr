@@ -2,7 +2,7 @@ import random
 
 from engine.events import Event
 from engine.systems import System
-from game.components import AI, ContactLedger, CreatureIdentity, FinancialProfile, Inventory, PlayerAssets, Position, Vitality
+from game.components import ContactLedger, FinancialProfile, Inventory, PlayerAssets, Position, Vitality
 from game.player_businesses import (
     player_owned_businesses_for_actor as _player_owned_businesses_for_actor,
     player_business_state as _player_business_state,
@@ -19,6 +19,7 @@ from game.property_runtime import (
 )
 from game.run_pressure import pressure_snapshot as _pressure_snapshot
 from game.skills import insurance_skill_terms as _insurance_skill_terms
+from game.system_support.entity_naming import _entity_display_name
 
 
 def _finance_property_contact_entry(sim, viewer_eid, prop):
@@ -29,24 +30,6 @@ def _finance_property_contact_entry(sim, viewer_eid, prop):
     if not ledger:
         return None
     return ledger.property_entry(prop["id"])
-
-
-def _finance_entity_display_name(sim, eid, title_case=False):
-    identity = sim.ecs.get(CreatureIdentity).get(eid)
-    ai = sim.ecs.get(AI).get(eid)
-
-    if identity:
-        label = str(identity.display_name()).replace("_", " ").strip()
-    elif ai:
-        label = str(ai.role or "entity").replace("_", " ").strip()
-    else:
-        label = "entity"
-
-    if not label:
-        label = "entity"
-    return label.title() if title_case else label
-
-
 def _insurance_contact_terms(sim, viewer_eid, prop):
     entry = _finance_property_contact_entry(sim, viewer_eid, prop)
     pressure = _pressure_snapshot(sim)
@@ -99,7 +82,7 @@ def _insurance_contact_terms(sim, viewer_eid, prop):
             * float(org_terms.get("premium_mult", 1.0)),
         ),
     )
-    source_name = _finance_entity_display_name(sim, source_eid, title_case=True) if source_eid is not None else "Local contact"
+    source_name = _entity_display_name(sim, source_eid, title_case=True) if source_eid is not None else "Local contact"
     note_bits = [f"{source_name}: policy rate eased"]
     if skill_note:
         note_bits.append(skill_note)

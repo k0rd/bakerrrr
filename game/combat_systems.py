@@ -30,6 +30,7 @@ from game.system_support.actor_runtime import (
     _entity_is_downed,
 )
 from game.system_support.cover_runtime import _effective_cover_value
+from game.system_support.entity_naming import _entity_display_name
 from game.system_support.interaction_ordering import _direction_step, _manhattan
 from game.system_support.item_runtime import (
     _apply_item_effects_to_entity,
@@ -42,6 +43,13 @@ from game.system_support.offense_runtime import (
     ACTION_OFFENSE_CONTEXT_BONUS,
     _offense_notice_radius,
     _offense_tier,
+)
+from game.system_support.status_runtime import (
+    _npc_status_metric_args,
+    _status_int_offset,
+    _status_modifier_total,
+    _status_multiplier,
+    _status_tick_step,
 )
 from game.weapons import weapon_by_id
 
@@ -58,19 +66,13 @@ _float_or_default = _unconfigured_helper('_float_or_default')
 _grid_distance = _unconfigured_helper('_grid_distance')
 _clamp = _unconfigured_helper('_clamp')
 _dir_label = _unconfigured_helper('_dir_label')
-_entity_display_name = _unconfigured_helper('_entity_display_name')
 _first_targetable_entity_at = _unconfigured_helper('_first_targetable_entity_at')
 _manual_fire_preview = _unconfigured_helper('_manual_fire_preview')
 _projectile_path_points = _unconfigured_helper('_projectile_path_points')
 _shatter_window_for_projectile = _unconfigured_helper('_shatter_window_for_projectile')
-_status_int_offset = _unconfigured_helper('_status_int_offset')
-_status_modifier_total = _unconfigured_helper('_status_modifier_total')
-_status_multiplier = _unconfigured_helper('_status_multiplier')
-_status_tick_step = _unconfigured_helper('_status_tick_step')
 _weapon_target_viability = _unconfigured_helper('_weapon_target_viability')
 _weapon_is_melee = _unconfigured_helper('_weapon_is_melee')
 _npc_combat_metrics = _unconfigured_helper('_npc_combat_metrics')
-_npc_status_metric_args = _unconfigured_helper('_npc_status_metric_args')
 
 
 class WeaponSystem(System):

@@ -12,7 +12,7 @@ from collections import Counter
 
 from engine.buildings import layout_chunk_building, world_building_id
 from engine.sites import layout_chunk_site
-from game.components import AI, CreatureIdentity, NPCNeeds, Occupation, PlayerAssets, Position
+from game.components import AI, NPCNeeds, Occupation, PlayerAssets, Position
 from game.organizations import occupation_targets_property, property_org_members
 from game.population import work_shift_active
 from game.property_runtime import (
@@ -21,6 +21,7 @@ from game.property_runtime import (
     property_is_storefront as _property_is_storefront,
     storefront_service_mode as _storefront_service_mode,
 )
+from game.system_support.entity_naming import _entity_display_name
 from game.vehicles import roll_vehicle_paint_key, roll_vehicle_profile
 
 
@@ -1142,24 +1143,6 @@ def _overworld_discovery_summary_bits(profile):
     if not label:
         return ()
     return (f"opp:{label}",)
-
-
-def _entity_display_name(sim, eid, title_case=False):
-    identity = sim.ecs.get(CreatureIdentity).get(eid)
-    ai = sim.ecs.get(AI).get(eid)
-
-    if identity:
-        label = str(identity.display_name()).replace("_", " ").strip()
-    elif ai:
-        label = str(ai.role or "entity").replace("_", " ").strip()
-    else:
-        label = "entity"
-
-    if not label:
-        label = "entity"
-    return label.title() if title_case else label
-
-
 def _storefront_service_role_priority(role):
     role = str(role or "").strip().lower()
     return {

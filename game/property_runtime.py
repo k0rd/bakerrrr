@@ -277,6 +277,54 @@ def property_covering(sim, x, y, z=0):
     return sim.property_at(x, y, z)
 
 
+def property_enclosing_structure(sim, x, y, z=0, *, prop=None):
+    try:
+        key = (int(x), int(y), int(z))
+    except (TypeError, ValueError):
+        return None
+
+    def _is_structured(candidate):
+        if not isinstance(candidate, dict):
+            return False
+        kind = str(candidate.get("kind", "") or "").strip().lower()
+        if kind == "building":
+            return True
+        metadata = property_metadata(candidate)
+        if isinstance(metadata.get("footprint"), dict):
+            return True
+        footprint_cells = metadata.get("footprint_cells")
+        return isinstance(footprint_cells, (list, tuple, set, frozenset)) and bool(footprint_cells)
+
+    seen = set()
+    candidates = []
+    for candidate in (prop, property_covering(sim, key[0], key[1], key[2])):
+        if not isinstance(candidate, dict):
+            continue
+        candidate_id = str(candidate.get("id", "") or "").strip()
+        if candidate_id and candidate_id in seen:
+            continue
+        if candidate_id:
+            seen.add(candidate_id)
+        candidates.append(candidate)
+
+    for candidate in candidates:
+        if _is_structured(candidate):
+            return candidate
+
+    cover_index = getattr(sim, "property_cover_index", {})
+    if not isinstance(cover_index, dict):
+        return None
+
+    for property_id in tuple(cover_index.get(key, ()) or ()):
+        candidate = getattr(sim, "properties", {}).get(property_id)
+        candidate_id = str((candidate or {}).get("id", "") or "").strip()
+        if candidate_id and candidate_id in seen:
+            continue
+        if _is_structured(candidate):
+            return candidate
+    return None
+
+
 def property_distance(x, y, prop):
     focus = property_focus_position(prop)
     if focus is not None:
