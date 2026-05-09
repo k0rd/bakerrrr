@@ -1,7 +1,9 @@
 #BAKERRRR
 ## The Game:
 
-<img width="1920" height="1080" alt="Screenshot_20260509_040007" src="https://github.com/user-attachments/assets/702f1ecd-bc56-45d1-b182-f9f7dacbc6e2" />
+
+<img width="1501" height="554" alt="Screenshot_20260509_040007-1" src="https://github.com/user-attachments/assets/1045b273-4d26-4650-8541-ef7cbeea5afc" />
+
 
 
 ### BAKERRRR is a terminal-native systemic urban roguelike prototype about moving through a procedurally generated society.
