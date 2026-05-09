@@ -44,7 +44,6 @@ from game.system_support.offense_runtime import (
     _offense_notice_radius,
     _offense_tier,
 )
-from game.checks import justice_level as _justice_level
 from game.system_support.status_runtime import (
     _npc_status_metric_args,
     _status_int_offset,
@@ -63,6 +62,11 @@ def _unconfigured_helper(name):
     return _missing
 
 
+def _int_or_default(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
 _float_or_default = _unconfigured_helper('_float_or_default')
 _grid_distance = _unconfigured_helper('_grid_distance')
 _clamp = _unconfigured_helper('_clamp')
