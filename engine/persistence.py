@@ -11,6 +11,24 @@ from .sim import Simulation
 from game.appearance import AppearanceManager
 from game.components import Position
 
+
+def _inventory_item_instance_ids_from_sim(sim):
+    ids = []
+    components = getattr(getattr(sim, "ecs", None), "components", {})
+    if not isinstance(components, dict):
+        return ids
+    for component_map in components.values():
+        if not isinstance(component_map, dict):
+            continue
+        for component in component_map.values():
+            items = getattr(component, "items", None)
+            if not isinstance(items, list):
+                continue
+            for entry in items:
+                if isinstance(entry, dict):
+                    ids.append(entry.get("instance_id"))
+    return ids
+
 SAVE_VERSION = 1
 SAVE_DIR = Path(__file__).resolve().parents[1] / "saves"
 BONES_ARCHIVE_PATH = SAVE_DIR / "bones.json"
@@ -354,7 +372,8 @@ def restore_chunk_state(sim, key):
     sim.next_item_instance_id = max(
         int(sim.next_item_instance_id),
         _max_numeric_suffix(
-            [ground.get("instance_id") for ground in sim.ground_items.values()],
+            [ground.get("instance_id") for ground in sim.ground_items.values()]
+            + _inventory_item_instance_ids_from_sim(sim),
             "item-",
         ) + 1,
     )

@@ -27533,6 +27533,16 @@ class NPCWillSystem(System):
                 will.last_tick = self.sim.tick
                 continue
 
+            # Observed incident response intents are assigned by
+            # ObservedIncidentResponseSystem. Preserve them here so the
+            # ordinary needs/duty planner does not immediately stomp them.
+            if ai.state in {"reporting_incident", "helping_victim", "warning"} and ai.target:
+                will.intent = ai.state
+                will.target = ai.target
+                will.target_eid = ai.target_eid
+                will.last_tick = self.sim.tick
+                continue
+
             if ai.state == "protecting" and ai.target:
                 recent_threat = memory.strongest("ally_threatened") if memory else None
                 recent_property = _strongest_memory_entry(
@@ -27919,6 +27929,9 @@ class NPCInvestigateSystem(System):
     DEFAULT_MOVE_COOLDOWNS = {
         "investigating": 2,
         "protecting": 1,
+        "helping_victim": 1,
+        "reporting_incident": 2,
+        "warning": 1,
         "chasing": 1,
         "scavenging": 2,
         "following": 1,
@@ -28027,6 +28040,9 @@ class NPCInvestigateSystem(System):
         moving_states = {
             "investigating",
             "protecting",
+            "helping_victim",
+            "reporting_incident",
+            "warning",
             "chasing",
             "scavenging",
             "following",
@@ -28149,6 +28165,37 @@ class NPCInvestigateSystem(System):
                 if ai.state == "investigating":
                     self.sim.emit(Event("npc_investigation_complete", npc_eid=eid, x=tx, y=ty, z=tz))
 
+                if ai.state == "reporting_incident":
+                    self.sim.emit(Event(
+                        "npc_report_arrived",
+                        npc_eid=eid,
+                        incident_id=getattr(ai, "incident_id", None),
+                        x=tx,
+                        y=ty,
+                        z=tz,
+                    ))
+
+                if ai.state == "helping_victim":
+                    self.sim.emit(Event(
+                        "npc_help_arrived",
+                        npc_eid=eid,
+                        incident_id=getattr(ai, "incident_id", None),
+                        target_eid=ai.target_eid,
+                        x=tx,
+                        y=ty,
+                        z=tz,
+                    ))
+
+                if ai.state == "warning":
+                    self.sim.emit(Event(
+                        "npc_warning_arrived",
+                        npc_eid=eid,
+                        incident_id=getattr(ai, "incident_id", None),
+                        x=tx,
+                        y=ty,
+                        z=tz,
+                    ))
+
                 if ai.state == "protecting":
                     self.sim.emit(Event("npc_guarding_target", npc_eid=eid, target_eid=ai.target_eid, x=tx, y=ty, z=tz))
 
@@ -28165,8 +28212,45 @@ class NPCInvestigateSystem(System):
                     self.next_move_tick[eid] = self.sim.tick + 1
                 continue
 
-            if ai.state in {"investigating", "seeking_social", "seeking_companionship", "protecting"} and _manhattan(pos.x, pos.y, tx, ty) <= 1:
-                if ai.state == "investigating":
+            if ai.state in {"investigating", "seeking_social", "seeking_companionship", "protecting", "reporting_incident", "helping_victim", "warning"} and _manhattan(pos.x, pos.y, tx, ty) <= 1:
+                if ai.state == "reporting_incident":
+                    self.sim.emit(Event(
+                        "npc_report_arrived",
+                        npc_eid=eid,
+                        incident_id=getattr(ai, "incident_id", None),
+                        x=pos.x,
+                        y=pos.y,
+                        z=tz,
+                    ))
+                    ai.state = "idle"
+                    ai.target = None
+                    ai.target_eid = None
+                elif ai.state == "helping_victim":
+                    self.sim.emit(Event(
+                        "npc_help_arrived",
+                        npc_eid=eid,
+                        incident_id=getattr(ai, "incident_id", None),
+                        target_eid=ai.target_eid,
+                        x=pos.x,
+                        y=pos.y,
+                        z=tz,
+                    ))
+                    ai.state = "idle"
+                    ai.target = None
+                    ai.target_eid = None
+                elif ai.state == "warning":
+                    self.sim.emit(Event(
+                        "npc_warning_arrived",
+                        npc_eid=eid,
+                        incident_id=getattr(ai, "incident_id", None),
+                        x=pos.x,
+                        y=pos.y,
+                        z=tz,
+                    ))
+                    ai.state = "idle"
+                    ai.target = None
+                    ai.target_eid = None
+                elif ai.state == "investigating":
                     ai.state = "idle"
                     ai.target = None
                     ai.target_eid = None

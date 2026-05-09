@@ -44,6 +44,7 @@ from game.system_support.offense_runtime import (
     _offense_notice_radius,
     _offense_tier,
 )
+from game.checks import justice_level as _justice_level
 from game.system_support.status_runtime import (
     _npc_status_metric_args,
     _status_int_offset,

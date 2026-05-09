@@ -114,6 +114,7 @@ class NPCMemorySystem(System):
         context = event.data.get("context", "ordinary")
         offense_score = int(event.data.get("offense_score", 0))
         offense_tier = event.data.get("offense_tier", _offense_tier(offense_score))
+        incident_id = event.data.get("knowledge_incident_id")
         context_key = str(context or "ordinary").strip().lower() or "ordinary"
         action_key = str(action or "").strip().lower()
         ox = event.data.get("x")
@@ -245,6 +246,7 @@ class NPCMemorySystem(System):
                 z=oz,
                 property_id=offense_property_id,
                 has_property_stake=has_property_stake,
+                incident_id=incident_id,
             )
             approval = -min(
                 1.0,
@@ -268,6 +270,7 @@ class NPCMemorySystem(System):
                 property_id=offense_property_id,
                 has_property_stake=has_property_stake,
                 via="witnessed_offense",
+                incident_id=incident_id,
             )
 
             if offense_score >= 35:
@@ -284,6 +287,7 @@ class NPCMemorySystem(System):
                     z=oz,
                     property_id=offense_property_id,
                     has_property_stake=has_property_stake,
+                    incident_id=incident_id,
                 )
 
             npc_needs = needs_map.get(eid)
@@ -301,6 +305,7 @@ class NPCMemorySystem(System):
                     offense_score=offense_score,
                     offense_tier=offense_tier,
                     perceived=round(perceived, 3),
+                    incident_id=incident_id,
                 ))
 
     def on_npc_offended(self, event):
@@ -378,6 +383,7 @@ class NPCMemorySystem(System):
                 context=event.data.get("context"),
                 offense_score=offense_score,
                 via="npc_offended",
+                incident_id=event.data.get("incident_id"),
             )
             memory.remember(
                 tick=self.sim.tick,
@@ -390,6 +396,7 @@ class NPCMemorySystem(System):
                 context=event.data.get("context"),
                 offense_score=offense_score,
                 via="npc_offended",
+                incident_id=event.data.get("incident_id"),
             )
 
             if (offense_score >= 20 or perceived >= 0.62) and abs(alignment) >= 0.18:
@@ -408,6 +415,7 @@ class NPCMemorySystem(System):
                     y=target_pos.y if target_pos else offended_pos.y,
                     z=target_pos.z if target_pos else offended_pos.z,
                     via="npc_offended",
+                    incident_id=event.data.get("incident_id"),
                 )
             if (offense_score >= 26 or perceived >= 0.72) and alignment >= 0.28:
                 target_pos = offender_pos if offender_pos and int(offender_pos.z) == int(offended_pos.z) else offended_pos
@@ -421,6 +429,7 @@ class NPCMemorySystem(System):
                     y=target_pos.y if target_pos else offended_pos.y,
                     z=target_pos.z if target_pos else offended_pos.z,
                     via="npc_offended",
+                    incident_id=event.data.get("incident_id"),
                 )
 
             npc_needs = needs_map.get(eid)
@@ -872,6 +881,7 @@ class RumorSystem(System):
             "context": event.data.get("context", "ordinary"),
             "offense_score": offense_score,
             "offense_tier": event.data.get("offense_tier", _offense_tier(offense_score)),
+            "incident_id": event.data.get("knowledge_incident_id"),
             "x": ox,
             "y": oy,
             "z": oz,
@@ -1253,6 +1263,7 @@ class RumorSystem(System):
                 y=nearest["y"],
                 z=nearest["z"],
                 via="ambient_rumor",
+                incident_id=nearest.get("incident_id"),
             )
 
     def _social_rumor_pass(self, memories, socials, positions):
@@ -1273,6 +1284,7 @@ class RumorSystem(System):
 
             data = strongest["data"]
             offender_eid = data.get("offender_eid")
+            incident_id = data.get("incident_id")
             if offender_eid is None:
                 continue
 
@@ -1294,7 +1306,7 @@ class RumorSystem(System):
                 if _manhattan(source_pos.x, source_pos.y, target_pos.x, target_pos.y) > 6:
                     continue
 
-                key = (from_eid, to_eid, offender_eid)
+                key = (from_eid, to_eid, incident_id if incident_id is not None else offender_eid)
                 last_tick = self.last_share_tick.get(key, -10_000)
                 if self.sim.tick - last_tick < self.share_cooldown_ticks:
                     continue
@@ -1330,12 +1342,14 @@ class RumorSystem(System):
                     z=data.get("z", source_pos.z),
                     via="social_rumor",
                     source_eid=from_eid,
+                    incident_id=incident_id,
                 )
 
                 self.last_share_tick[key] = self.sim.tick
                 shares += 1
                 self.sim.emit(Event(
                     "rumor_shared",
+                    incident_id=incident_id,
                     from_eid=from_eid,
                     to_eid=to_eid,
                     offender_eid=offender_eid,

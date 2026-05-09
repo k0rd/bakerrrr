@@ -739,6 +739,231 @@ class NPCMemory:
         self.entries = keep
 
 
+class IncidentKnowledge:
+    def __init__(self, max_records=24, max_urgent=6, max_social=10):
+        self.max_records = max(4, int(max_records or 24))
+        self.max_urgent = max(1, int(max_urgent or 6))
+        self.max_social = max(1, int(max_social or 10))
+        self.records = {}
+        self.urgent_queue = []
+        self.social_queue = []
+        self.last_shared = {}
+
+    def _incident_key(self, incident_id):
+        try:
+            return int(incident_id)
+        except (TypeError, ValueError):
+            return None
+
+    def remember(
+        self,
+        incident_id,
+        *,
+        learned_tick=0,
+        source_kind="",
+        source_eid=None,
+        confidence=0.5,
+        firsthand=False,
+        propagation_depth=0,
+        urgency=0.0,
+        social_interest=0.0,
+        category="other",
+        severity=0,
+        x=None,
+        y=None,
+        z=None,
+    ):
+        incident_key = self._incident_key(incident_id)
+        if incident_key is None:
+            return None
+
+        try:
+            learned_tick = int(learned_tick)
+        except (TypeError, ValueError):
+            learned_tick = 0
+        try:
+            source_eid = int(source_eid) if source_eid is not None else None
+        except (TypeError, ValueError):
+            source_eid = None
+        try:
+            propagation_depth = max(0, int(propagation_depth))
+        except (TypeError, ValueError):
+            propagation_depth = 0
+        try:
+            severity = max(0, min(100, int(severity)))
+        except (TypeError, ValueError):
+            severity = 0
+
+        confidence = _clamp_unit(confidence, default=0.5)
+        urgency = _clamp_unit(urgency, default=0.0)
+        social_interest = _clamp_unit(social_interest, default=0.0)
+        category = str(category or "other").strip().lower() or "other"
+        source_kind = str(source_kind or "").strip().lower()
+
+        existing = self.records.get(incident_key)
+        if isinstance(existing, dict):
+            confidence = max(confidence, float(existing.get("confidence", 0.0) or 0.0))
+            urgency = max(urgency, float(existing.get("urgency", 0.0) or 0.0))
+            social_interest = max(social_interest, float(existing.get("social_interest", 0.0) or 0.0))
+            severity = max(severity, int(existing.get("severity", 0) or 0))
+            firsthand = bool(firsthand or existing.get("firsthand", False))
+            propagation_depth = min(
+                propagation_depth,
+                max(0, int(existing.get("propagation_depth", propagation_depth) or propagation_depth)),
+            )
+            if not source_kind:
+                source_kind = str(existing.get("source_kind", "") or "").strip().lower()
+            if source_eid is None:
+                source_eid = existing.get("source_eid")
+            if existing.get("category"):
+                category = str(existing.get("category", category) or category).strip().lower() or category
+            learned_tick = min(learned_tick, int(existing.get("learned_tick", learned_tick) or learned_tick))
+
+        record = {
+            "incident_id": incident_key,
+            "learned_tick": int(learned_tick),
+            "last_learned_tick": int(learned_tick if not existing else max(learned_tick, int(existing.get("last_learned_tick", learned_tick) or learned_tick))),
+            "source_kind": source_kind,
+            "source_eid": source_eid,
+            "confidence": float(confidence),
+            "firsthand": bool(firsthand),
+            "propagation_depth": int(propagation_depth),
+            "urgency": float(urgency),
+            "social_interest": float(social_interest),
+            "category": category,
+            "severity": int(severity),
+            "x": x,
+            "y": y,
+            "z": z,
+            "dismissed": bool((existing or {}).get("dismissed", False)) if isinstance(existing, dict) else False,
+        }
+        self.records[incident_key] = record
+        self._trim_records()
+        return record
+
+    def queue_incident(self, incident_id, *, queue="urgent", score=0.0, tick=0):
+        incident_key = self._incident_key(incident_id)
+        if incident_key is None:
+            return False
+        if incident_key not in self.records:
+            return False
+        queue_key = str(queue or "urgent").strip().lower()
+        if queue_key not in {"urgent", "social"}:
+            queue_key = "urgent"
+        try:
+            tick = int(tick)
+        except (TypeError, ValueError):
+            tick = 0
+        score = _clamp_unit(score, default=0.0)
+        target = self.urgent_queue if queue_key == "urgent" else self.social_queue
+
+        existing = None
+        for entry in target:
+            if int(entry.get("incident_id", -1) or -1) == incident_key:
+                existing = entry
+                break
+
+        if existing is None:
+            target.append({
+                "incident_id": incident_key,
+                "score": float(score),
+                "queued_tick": int(tick),
+            })
+        else:
+            existing["score"] = max(float(existing.get("score", 0.0) or 0.0), float(score))
+            existing["queued_tick"] = max(int(existing.get("queued_tick", tick) or tick), int(tick))
+
+        self._trim_queue(queue_key)
+        return True
+
+    def forget(self, incident_id):
+        incident_key = self._incident_key(incident_id)
+        if incident_key is None:
+            return False
+        removed = incident_key in self.records
+        self.records.pop(incident_key, None)
+        self.urgent_queue = [
+            entry for entry in self.urgent_queue
+            if int(entry.get("incident_id", -1) or -1) != incident_key
+        ]
+        self.social_queue = [
+            entry for entry in self.social_queue
+            if int(entry.get("incident_id", -1) or -1) != incident_key
+        ]
+        self.last_shared.pop(incident_key, None)
+        return removed
+
+    def mark_shared(self, incident_id, *, tick=0, channel="social"):
+        incident_key = self._incident_key(incident_id)
+        if incident_key is None:
+            return False
+        try:
+            tick = int(tick)
+        except (TypeError, ValueError):
+            tick = 0
+        channel_key = str(channel or "social").strip().lower() or "social"
+        shared = self.last_shared.get(incident_key)
+        if not isinstance(shared, dict):
+            shared = {}
+            self.last_shared[incident_key] = shared
+        shared[channel_key] = int(tick)
+        return True
+
+    def _trim_records(self):
+        if len(self.records) <= self.max_records:
+            return
+        ranked = sorted(
+            self.records.values(),
+            key=lambda record: (
+                max(
+                    float(record.get("urgency", 0.0) or 0.0),
+                    float(record.get("social_interest", 0.0) or 0.0),
+                ),
+                float(record.get("confidence", 0.0) or 0.0),
+                bool(record.get("firsthand", False)),
+                int(record.get("severity", 0) or 0),
+                int(record.get("last_learned_tick", 0) or 0),
+            ),
+            reverse=True,
+        )
+        keep_ids = {
+            int(record.get("incident_id", -1) or -1)
+            for record in ranked[: self.max_records]
+        }
+        for incident_id in tuple(self.records.keys()):
+            if incident_id not in keep_ids:
+                self.forget(incident_id)
+
+    def _trim_queue(self, queue_key):
+        target = self.urgent_queue if queue_key == "urgent" else self.social_queue
+        max_len = self.max_urgent if queue_key == "urgent" else self.max_social
+        filtered = []
+        seen = set()
+        for entry in sorted(
+            target,
+            key=lambda row: (
+                float(row.get("score", 0.0) or 0.0),
+                int(row.get("queued_tick", 0) or 0),
+            ),
+            reverse=True,
+        ):
+            incident_id = self._incident_key(entry.get("incident_id"))
+            if incident_id is None or incident_id in seen or incident_id not in self.records:
+                continue
+            filtered.append({
+                "incident_id": incident_id,
+                "score": _clamp_unit(entry.get("score", 0.0), default=0.0),
+                "queued_tick": int(entry.get("queued_tick", 0) or 0),
+            })
+            seen.add(incident_id)
+            if len(filtered) >= max_len:
+                break
+        if queue_key == "urgent":
+            self.urgent_queue = filtered
+        else:
+            self.social_queue = filtered
+
+
 class NPCSocial:
     DEFAULT_PROTECT = {
         "family": 0.95,

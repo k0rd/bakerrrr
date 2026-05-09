@@ -512,6 +512,7 @@ class PlayerInteractionRuntime:
             item_id,
             quantity=quantity,
             stack_max=stack_max,
+            instance_factory=getattr(self.sim, "new_item_instance_id", None),
             owner_eid=eid,
             owner_tag="player",
             metadata=entry.get("metadata"),

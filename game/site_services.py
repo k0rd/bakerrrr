@@ -711,6 +711,7 @@ class SiteServiceSystem(System):
             item_id,
             quantity=1,
             stack_max=max(1, int(item_def.get("stack_max", 1))),
+            instance_factory=getattr(self.sim, "new_item_instance_id", None),
             owner_eid=eid,
             owner_tag="player",
         )

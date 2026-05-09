@@ -22,6 +22,61 @@ ITEM_QUALITY_REQUIREMENT_DELTA = {
     "good": -0.18,
     "excellent": -0.4,
 }
+LEGAL_STATUSES = {"legal", "restricted", "suspicious", "illegal", "stolen", "unknown"}
+
+
+def _normalize_item_category(item_id, tags, item):
+    explicit = str(item.get("category", "") or "").strip().lower()
+    if explicit:
+        return explicit
+    tag_set = set(tags or ())
+    if item.get("weapon_id") or "weapon" in tag_set:
+        return "weapon"
+    if "ammo" in tag_set:
+        return "ammo"
+    if item.get("armor") or "armor" in tag_set or "wearable" in tag_set:
+        return "armor"
+    if "medical" in tag_set:
+        return "medical"
+    if "consumable" in tag_set or item.get("effects"):
+        return "consumable"
+    if "key" in tag_set or "credential" in tag_set:
+        return "credential"
+    if "communication" in tag_set or "phone" in tag_set or "cellular" in tag_set:
+        return "device"
+    if item.get("container"):
+        return "container"
+    if "tool" in tag_set:
+        return "tool"
+    if "token" in tag_set:
+        return "token"
+    return "misc"
+
+
+def _normalize_appearance_family(item_id, tags, item):
+    explicit = str(item.get("appearance_family", "") or "").strip().lower()
+    if explicit:
+        return explicit
+    tag_set = set(tags or ())
+    if "phone" in tag_set or "cellular" in tag_set:
+        return "phone"
+    if "injectable" in tag_set or "autoinjector" in str(item_id or ""):
+        return "injectable"
+    if "ammo" in tag_set:
+        return "ammo"
+    if "weapon" in tag_set:
+        return "firearm"
+    if "key" in tag_set:
+        return "key"
+    if "credential" in tag_set:
+        return "credential"
+    return ""
+
+
+def _normalize_appearance_slots(value):
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [str(slot).strip().lower() for slot in value if str(slot).strip()]
 
 
 def _float_or_default(value, default=0.0):
@@ -749,9 +804,13 @@ def load_item_catalog(path=ITEMS_PATH):
             tags = []
         tags = [str(tag).lower() for tag in tags if str(tag).strip()]
 
-        legal_status = str(item.get("legal_status", "legal")).lower()
-        if legal_status not in {"legal", "restricted", "illegal"}:
+        legal_status = str(item.get("legal_status", "legal")).strip().lower()
+        if legal_status not in LEGAL_STATUSES:
             legal_status = "legal"
+
+        category = _normalize_item_category(item_id, tags, item)
+        appearance_family = _normalize_appearance_family(item_id, tags, item)
+        appearance_slots = _normalize_appearance_slots(item.get("appearance_slots"))
 
         effects = item.get("effects", [])
         if not isinstance(effects, list):
@@ -763,7 +822,10 @@ def load_item_catalog(path=ITEMS_PATH):
             "glyph": str(glyph)[:1] or "?",
             "stack_max": stack_max,
             "tags": tags,
+            "category": category,
             "legal_status": legal_status,
+            "appearance_family": appearance_family,
+            "appearance_slots": appearance_slots,
             "effects": [effect for effect in effects if isinstance(effect, dict)],
             "tool_profiles": _normalize_tool_profiles(item.get("tool_profiles")),
             "weapon_id": str(item.get("weapon_id", "")).strip() or None,

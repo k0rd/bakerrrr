@@ -17,6 +17,7 @@ from engine.persistence import (
 from engine.sites import layout_chunk_site, site_gameplay_profile, site_layout_reserved_footprints
 from engine.sim import Simulation
 from engine.tilemap import Tile
+from game.systems_observed_events import ObservedIncidentConsequenceSystem
 from game.components import (
     AI,
     ArmorLoadout,
@@ -66,6 +67,7 @@ from game.npc_names import (
 from game.organizations import ensure_property_organization, seed_property_organization_defaults, sync_actor_organization_affiliations
 from game.population import human_max_hp_for_role, seed_chunk_items, seed_npc_finance, spawn_chunk_npcs
 from game.player_businesses import PlayerBusinessSystem
+from game.systems_incidents import IncidentKnowledgeSystem
 from game.vehicles import (
     generate_chunk_vehicle_records,
     roll_vehicle_profile,
@@ -261,6 +263,7 @@ def _register_runtime_systems(sim, view, player):
     camera_system = CameraSystem(sim, player)
     skill_progression_system = SkillProgressionSystem(sim, player)
     item_system = ItemSystem(sim, player)
+    incident_knowledge_system = IncidentKnowledgeSystem(sim)
     criminal_justice_system = CriminalJusticeSystem(sim, player)
     service_menu_system = ServiceMenuSystem(sim, player)
     trade_system = TradeSystem(sim, player)
@@ -318,6 +321,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(camera_system)
     sim.register_system(skill_progression_system)
     sim.register_system(item_system)
+    sim.register_system(incident_knowledge_system)
     sim.register_system(service_menu_system)
     sim.register_system(trade_system)
     sim.register_system(finance_system)
