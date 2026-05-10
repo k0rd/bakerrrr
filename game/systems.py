@@ -98,6 +98,19 @@ from game.dialogue import (
     topic_label as _dialogue_topic_label,
     topic_unlocks as _dialogue_topic_unlocks,
 )
+
+from game.dialogue_shape import (
+    build_dialogue_shape as _build_dialogue_shape,
+    shaped_concern_line as _shaped_concern_line,
+    shaped_local_line as _shaped_local_line,
+    shaped_opening_lines as _shaped_opening_lines,
+)
+from game.dialogue_pressure import (
+    dialogue_family_counts as _dialogue_family_counts,
+    dialogue_topic_family as _dialogue_topic_family,
+    repeated_topic_label as _repeated_topic_label,
+    repeat_pressure_score as _repeat_pressure_score,
+)
 from game.economy import (
     chunk_economy_profile,
     item_market_bias,
@@ -10986,12 +10999,14 @@ class NPCInteractionSystem(System):
                 "last_tick": -1,
                 "last_topic_id": "",
                 "topic_counts": {},
+                "topic_family_counts": {},
                 "unlocked_topics": set(),
             }
             history[key] = memory
             return memory
         if not isinstance(memory.get("topic_counts"), dict):
             memory["topic_counts"] = {}
+        _dialogue_family_counts(memory)
         unlocked = memory.get("unlocked_topics")
         if isinstance(unlocked, set):
             pass
@@ -11148,6 +11163,16 @@ class NPCInteractionSystem(System):
         except (TypeError, ValueError):
             return 0
 
+    def _dialogue_topic_family_count(self, npc_eid, topic_id):
+        family_key = _dialogue_topic_family(topic_id)
+        if not family_key:
+            return 0
+        counts = _dialogue_family_counts(self._dialogue_memory(npc_eid))
+        try:
+            return max(0, int(counts.get(family_key, 0)))
+        except (TypeError, ValueError):
+            return 0
+
     def _dialogue_mark_topic(self, npc_eid, topic_id):
         topic_key = str(topic_id or "").strip().lower()
         if not topic_key:
@@ -11155,6 +11180,10 @@ class NPCInteractionSystem(System):
         memory = self._dialogue_memory(npc_eid)
         count = self._dialogue_topic_count(npc_eid, topic_key) + 1
         memory["topic_counts"][topic_key] = count
+        family_key = _dialogue_topic_family(topic_key)
+        if family_key:
+            family_counts = _dialogue_family_counts(memory)
+            family_counts[family_key] = self._dialogue_topic_family_count(npc_eid, topic_key) + 1
         memory["last_topic_id"] = topic_key
         return count
 
@@ -11193,8 +11222,12 @@ class NPCInteractionSystem(System):
             return 0
         if topic_id in self.REPEAT_PRESSURE_SKIP_TOPICS or topic_id in self.MISSTEP_TOPICS:
             return 0
+        family_count = self._dialogue_topic_family_count(context.get("npc_eid"), topic_id)
+        pressure_count = max(ask_count, family_count)
+        if pressure_count <= 0:
+            return 0
         extra = 1
-        if ask_count >= 3:
+        if pressure_count >= 3:
             extra += 1
         return extra
 
@@ -11286,7 +11319,7 @@ class NPCInteractionSystem(System):
                 continue
             ranked.append((
                 0 if topic_id == last_topic_id else 1,
-                -ask_count,
+                -max(ask_count, self._dialogue_topic_family_count(npc_eid, topic_id)),
                 index,
                 topic_id,
                 extra,
@@ -11318,6 +11351,13 @@ class NPCInteractionSystem(System):
             for repeat_slot in range(extras_by_topic.get(topic_id, 0)):
                 clone = dict(row)
                 clone["repeat_slot"] = repeat_slot + 1
+                clone["label"] = _repeated_topic_label(
+                    row.get("label", row.get("id", "topic")),
+                    topic_id=topic_id,
+                    repeat_slot=repeat_slot + 1,
+                    ask_count=self._dialogue_topic_count(npc_eid, topic_id),
+                    family_count=self._dialogue_topic_family_count(npc_eid, topic_id),
+                )
                 extra_rows.append(clone)
 
         if not extra_rows:
@@ -15012,6 +15052,7 @@ class NPCInteractionSystem(System):
             "player_business_hire_manager_fit_hint": str((hire_manager_preview or {}).get("topic_hint", "")).strip(),
             "player_business_hire_staff_fit_hint": str((hire_staff_preview or {}).get("topic_hint", "")).strip(),
         })
+        context["dialogue_shape"] = _build_dialogue_shape(self.sim, npc_eid, context=context)
         return context
 
     def _history_summary(self, context):
@@ -17845,7 +17886,12 @@ class NPCInteractionSystem(System):
             npc_name=context["npc_name"],
             intro_source_name=context.get("intro_source_name", "someone"),
         )
-        return [self._dialogue_npc_line(context["npc_name"], first)]
+        lines = [self._dialogue_npc_line(context["npc_name"], first)]
+        for shaped_line in _shaped_opening_lines(context, limit=1):
+            formatted = self._dialogue_npc_line(context["npc_name"], shaped_line)
+            if formatted and formatted not in lines:
+                lines.append(formatted)
+        return [line for line in lines if line]
 
     def _available_dialog_topics(self, context):
         available = []
@@ -18505,7 +18551,10 @@ class NPCInteractionSystem(System):
         if topic_id in {"purpose", "apologize", "leave"}:
             return self._resolve_guard_dialogue(context, topic_id)
         if topic_id == "local":
-            if context.get("local_source") == "scene_event":
+            shaped_line = _shaped_local_line(context)
+            if shaped_line:
+                line = shaped_line
+            elif context.get("local_source") == "scene_event":
                 self._learn_scene_followup(context, source="npc_dialogue_scene_local")
                 line = (
                     str(context.get("scene_local_line", "")).strip()
@@ -18535,6 +18584,9 @@ class NPCInteractionSystem(System):
                 line = self._say("local_none", context, topic_id=topic_id, count=ask_count)
             return {"npc_lines": [line]}
         if topic_id == "concern":
+            shaped_line = _shaped_concern_line(context)
+            if shaped_line:
+                return {"npc_lines": [shaped_line]}
             summary = self._concern_summary(context)
             bank_id = "concern" if summary else "concern_none"
             return {
@@ -19033,7 +19085,8 @@ class NPCInteractionSystem(System):
             return response
 
         ask_count = self._dialogue_topic_count(npc_eid, topic_id)
-        if ask_count <= 1:
+        family_count = self._dialogue_topic_family_count(npc_eid, topic_id)
+        if ask_count <= 1 and family_count <= 1:
             return response
 
         bond = context.get("bond") or self._bond_snapshot(npc_eid) or {}
@@ -19048,6 +19101,7 @@ class NPCInteractionSystem(System):
         conversation = float(conversation)
 
         severity = max(0.0, float(ask_count - 2) * 0.24)
+        severity += _repeat_pressure_score(ask_count=ask_count, family_count=family_count)
         severity += max(0.0, float(self._dialogue_total_topics_asked(npc_eid) - ask_count - 2) * 0.012)
         severity += float(self._dialogue_misstep_count(npc_eid)) * 0.05
         severity += discipline * 0.08
@@ -19083,14 +19137,15 @@ class NPCInteractionSystem(System):
         perceived = 0.0
         offense_score = 0
 
-        if ask_count == 2 and severity < 0.34:
+        pressure_count = max(ask_count, family_count)
+        if pressure_count == 2 and severity < 0.34:
             trust_delta = -0.01
             closeness_delta = -0.006
-        elif ask_count == 2:
+        elif pressure_count == 2:
             bank_id = "repeat_soft"
             trust_delta = -0.018
             closeness_delta = -0.01
-        elif ask_count == 3 and severity < 0.72:
+        elif pressure_count == 3 and severity < 0.72:
             bank_id = "repeat_wary"
             trust_delta = -0.035
             closeness_delta = -0.02
@@ -19098,11 +19153,11 @@ class NPCInteractionSystem(System):
             offense_score = 12
         else:
             bank_id = "repeat_fail"
-            trust_delta = -0.085 if ask_count >= 4 else -0.07
-            closeness_delta = -0.048 if ask_count >= 4 else -0.038
+            trust_delta = -0.085 if pressure_count >= 4 else -0.07
+            closeness_delta = -0.048 if pressure_count >= 4 else -0.038
             close_dialog = True
-            perceived = 0.82 if ask_count >= 4 else 0.72
-            offense_score = 30 if ask_count >= 4 else 24
+            perceived = 0.82 if pressure_count >= 4 else 0.72
+            offense_score = 30 if pressure_count >= 4 else 24
 
         self._shift_dialogue_bond(
             npc_eid,
