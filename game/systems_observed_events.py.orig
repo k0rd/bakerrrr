@@ -49,20 +49,6 @@ RUMOR_HARD_PROPAGATION_LIMIT = 4
 SOCIAL_SHARE_COOLDOWN_TICKS = 90
 URGENT_RESPONSE_COOLDOWN_TICKS = 80
 SOCIAL_SHARE_RANGE = 6
-SOCIAL_FRIEND_SHARE_THRESHOLD = 0.48
-SOCIAL_NEIGHBOR_SHARE_THRESHOLD = 0.34
-SOCIAL_PUBLIC_SHARE_THRESHOLD = 0.28
-SOCIAL_UNAVAILABLE_STATES = {
-    "attacking",
-    "chasing",
-    "combat",
-    "fleeing",
-    "helping",
-    "protecting",
-    "reporting_incident",
-    "seeking_safety",
-    "warning",
-}
 
 
 def _clamp(value, lo=0.0, hi=1.0, default=0.0):
@@ -194,57 +180,42 @@ class ObservedIncidentConsequenceSystem(System):
                     self._remove_queue_item(knowledge, "social", incident_id)
                     continue
 
-                if not self._record_can_propagate(record, incident):
-                    self._remove_queue_item(knowledge, "social", incident_id)
-                    continue
-
                 listener_eid = self._pick_social_listener(from_eid, incident_id, record, social, pos)
                 if listener_eid is None:
                     continue
 
                 if self._share_rumor(from_eid, listener_eid, incident_id, record, incident):
-                    self._refresh_social_queue_item(knowledge, incident_id, record, tick=getattr(self.sim, "tick", 0))
+                    self._remove_queue_item(knowledge, "social", incident_id)
                 break
 
     def _pick_social_listener(self, from_eid, incident_id, source_record, social, source_pos):
         positions = self.sim.ecs.get(Position)
         knowledge_map = self.sim.ecs.get(IncidentKnowledge)
         now = getattr(self.sim, "tick", 0)
-        shared_with = self._record_shared_with(source_record)
-
-        if not self._socially_available(from_eid):
-            return None
 
         ranked = []
         for to_eid, bond in getattr(social, "bonds", {}).items():
-            try:
-                to_eid = int(to_eid)
-            except (TypeError, ValueError):
-                continue
-            if to_eid == from_eid or to_eid in shared_with:
-                continue
             to_pos = positions.get(to_eid)
             if not to_pos or to_pos.z != source_pos.z:
                 continue
             if _manhattan(source_pos, to_pos) > SOCIAL_SHARE_RANGE:
                 continue
-            if not self._socially_available(to_eid):
+            if to_eid == from_eid:
                 continue
 
             bond_score = _bond_score(bond)
-            if not self._bond_allows_social_share(bond, bond_score, source_record, incident_id, from_eid, to_eid):
+            if bond_score < 0.48:
                 continue
 
             target_knowledge = knowledge_map.get(to_eid)
             if target_knowledge and incident_id in target_knowledge.records:
-                shared_with.add(to_eid)
                 continue
 
             cooldown_key = (from_eid, to_eid, incident_id, "social")
             if now - self._last_social_attempt.get(cooldown_key, -10_000) < SOCIAL_SHARE_COOLDOWN_TICKS:
                 continue
 
-            # Prefer close trusted friends, but let weaker neighbors sometimes carry public gossip.
+            # Prefer close trusted friends, but add deterministic tie-breaking.
             jitter = _unit_roll(getattr(self.sim, "seed", ""), "social_listener", from_eid, to_eid, incident_id) * 0.08
             ranked.append((bond_score + jitter, to_eid))
 
@@ -252,46 +223,6 @@ class ObservedIncidentConsequenceSystem(System):
             return None
         ranked.sort(reverse=True)
         return ranked[0][1]
-
-    def _socially_available(self, eid):
-        ai = self.sim.ecs.get(AI).get(eid)
-        state = _key(getattr(ai, "state", "idle")) if ai else "idle"
-        return state not in SOCIAL_UNAVAILABLE_STATES
-
-    def _bond_allows_social_share(self, bond, bond_score, source_record, incident_id, from_eid, to_eid):
-        kind = _key((bond or {}).get("kind") if isinstance(bond, dict) else "")
-        social_interest = _clamp(source_record.get("social_interest"), default=0.0)
-        if kind in {"friend", "family", "partner", "coworker"} or bond_score >= SOCIAL_FRIEND_SHARE_THRESHOLD:
-            return bond_score >= SOCIAL_NEIGHBOR_SHARE_THRESHOLD
-        if kind == "neighbor" and bond_score >= SOCIAL_NEIGHBOR_SHARE_THRESHOLD:
-            return True
-        if bond_score < SOCIAL_PUBLIC_SHARE_THRESHOLD:
-            return False
-        if social_interest < 0.45:
-            return False
-        # Weak ties are occasional, deterministic, and biased by how talk-worthy the account is.
-        chance = min(0.42, 0.12 + social_interest * 0.28)
-        return _unit_roll(getattr(self.sim, "seed", ""), "weak_social_share", incident_id, from_eid, to_eid) < chance
-
-    def _record_shared_with(self, record):
-        raw = record.get("shared_with") if isinstance(record, dict) else None
-        if not isinstance(raw, (set, list, tuple)):
-            raw = set()
-        cleaned = set()
-        for eid in raw:
-            try:
-                cleaned.add(int(eid))
-            except (TypeError, ValueError):
-                continue
-        record["shared_with"] = sorted(cleaned)
-        return cleaned
-
-    def _record_can_propagate(self, source_record, incident):
-        source_depth = _int(source_record.get("propagation_depth"), 0)
-        next_depth = source_depth + 1
-        if next_depth > RUMOR_HARD_PROPAGATION_LIMIT:
-            return False
-        return incident_propagation_allowed(incident, next_depth)
 
     def _share_rumor(self, from_eid, to_eid, incident_id, source_record, incident):
         source_depth = _int(source_record.get("propagation_depth"), 0)
@@ -327,31 +258,13 @@ class ObservedIncidentConsequenceSystem(System):
         # The existing IncidentKnowledgeSystem learns the incident synchronously
         # from rumor_shared. Mutate only the recipient's actor-held account.
         target_knowledge = self.sim.ecs.get(IncidentKnowledge).get(to_eid)
-        shared_with = self._record_shared_with(source_record)
-        shared_with.add(int(to_eid))
-        source_record["shared_with"] = sorted(shared_with)
-        source_record["last_social_share_tick"] = int(now)
-        source_record["social_share_count"] = _int(source_record.get("social_share_count"), 0) + 1
-
-        # The recipient keeps the account as durable social memory too. If it is
-        # still below quota, keep it eligible for later retelling instead of
-        # treating rumor as a one-shot queue task.
-        target_knowledge = self.sim.ecs.get(IncidentKnowledge).get(to_eid)
         if target_knowledge is not None:
             target_record = target_knowledge.records.get(int(incident_id))
             if isinstance(target_record, dict):
                 target_record["account_note"] = account.get("account_note", "")
                 target_record["account_tags"] = tuple(account.get("account_tags", ()))
                 target_record["corruption_kind"] = account.get("corruption_kind", "")
-                target_record["shared_with"] = []
-                target_record["spreadable"] = self._record_can_propagate(target_record, incident)
-                if target_record["spreadable"]:
-                    target_knowledge.queue_incident(
-                        incident_id,
-                        queue="social",
-                        score=max(_clamp(target_record.get("social_interest"), default=0.0), 0.25),
-                        tick=now,
-                    )
+                target_record["spreadable"] = bool(next_depth < RUMOR_HARD_PROPAGATION_LIMIT)
                 target_knowledge.mark_shared(incident_id, tick=now, channel="social")
 
         self.sim.observed_incident_stats["rumors_shared"] += 1
@@ -682,18 +595,6 @@ class ObservedIncidentConsequenceSystem(System):
         will.target = target
         will.target_eid = target_eid
         will.last_tick = getattr(self.sim, "tick", 0)
-
-    def _refresh_social_queue_item(self, knowledge, incident_id, record, *, tick=0):
-        if knowledge is None:
-            return
-        for entry in getattr(knowledge, "social_queue", []) or []:
-            if _int(entry.get("incident_id"), -1) == int(incident_id):
-                entry["queued_tick"] = int(tick or 0)
-                entry["score"] = max(
-                    _clamp(entry.get("score"), default=0.0),
-                    _clamp((record or {}).get("social_interest"), default=0.0),
-                )
-                return
 
     def _remove_queue_item(self, knowledge, queue, incident_id):
         target_name = "urgent_queue" if queue == "urgent" else "social_queue"
