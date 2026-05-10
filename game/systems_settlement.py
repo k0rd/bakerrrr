@@ -101,6 +101,10 @@ _NPC_LIFE_REMOTE_TRANSIT_REQUIRED_DISTANCE = 2
 _NPC_LIFE_SETTLEMENT_TRANSIT_RADIUS = 2
 _NPC_LIFE_HOUSEHOLD_BOND_MIN = 0.72
 _NPC_LIFE_HOUSEHOLD_SPLIT_SCALE = 0.55
+_NPC_SETTLEMENT_BACKFILL_INTERVAL_TICKS = 300
+_NPC_SETTLEMENT_MAX_BACKFILL_PER_UPDATE = 12
+_NPC_SETTLEMENT_MAX_LIFE_UPDATES_PER_UPDATE = 8
+_NPC_SETTLEMENT_ACTIVE_CHUNK_RADIUS = 0
 _BUSINESS_EVENT_RELEASE_CAP = _NEWCOMER_LOCAL_CAP + 1
 
 
@@ -671,6 +675,9 @@ class NPCSettlementSystem(System):
             self.sim.chunk_ground_item_records = {}
         if not hasattr(self.sim, "chunk_population_records"):
             self.sim.chunk_population_records = {}
+        self._last_backfill_tick = -10_000
+        self._backfill_cursor = 0
+        self._life_cursor = 0
 
     def _world_streaming_system(self):
         current = self._streaming_system
@@ -681,6 +688,44 @@ class NPCSettlementSystem(System):
                 self._streaming_system = system
                 return system
         return None
+
+
+    def _actor_chunk_key(self, eid):
+        pos = self.sim.ecs.get(Position).get(eid)
+        if pos is None:
+            return None
+        try:
+            return self.sim.chunk_coords(int(pos.x), int(pos.y))
+        except (TypeError, ValueError):
+            return None
+
+    def _in_active_settlement_scope(self, eid):
+        active = self._active_chunk_coord()
+        if active is None:
+            return True
+        chunk = self._actor_chunk_key(eid)
+        if chunk is None:
+            return False
+        radius = max(0, int(_NPC_SETTLEMENT_ACTIVE_CHUNK_RADIUS))
+        return max(abs(int(chunk[0]) - active[0]), abs(int(chunk[1]) - active[1])) <= radius
+
+    def _settlement_worklist(self):
+        items = [
+            (int(eid), newcomer)
+            for eid, newcomer in tuple(self.sim.ecs.get(NPCSettlement).items())
+            if self._in_active_settlement_scope(eid)
+        ]
+        if not items:
+            return []
+        items.sort(key=lambda row: row[0])
+        budget = max(1, int(_NPC_SETTLEMENT_MAX_LIFE_UPDATES_PER_UPDATE))
+        if len(items) <= budget:
+            self._life_cursor = 0
+            return items
+        start = int(self._life_cursor) % len(items)
+        ordered = items[start:] + items[:start]
+        self._life_cursor = (start + budget) % len(items)
+        return ordered[:budget]
 
     def _chunk_loaded(self, chunk):
         if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
@@ -1460,9 +1505,24 @@ class NPCSettlementSystem(System):
         return newcomer
 
     def _backfill_resident_settlements(self):
-        for eid in tuple(self.sim.ecs.get(AI).keys()):
-            if not self._eligible_life_actor(eid):
-                continue
+        current_tick = int(getattr(self.sim, "tick", 0))
+        if current_tick - int(self._last_backfill_tick) < _NPC_SETTLEMENT_BACKFILL_INTERVAL_TICKS:
+            return
+        self._last_backfill_tick = current_tick
+        candidates = [
+            int(eid)
+            for eid in tuple(self.sim.ecs.get(AI).keys())
+            if self._eligible_life_actor(eid) and self._in_active_settlement_scope(eid)
+        ]
+        if not candidates:
+            self._backfill_cursor = 0
+            return
+        candidates.sort()
+        budget = max(1, int(_NPC_SETTLEMENT_MAX_BACKFILL_PER_UPDATE))
+        start = int(self._backfill_cursor) % len(candidates)
+        ordered = candidates[start:] + candidates[:start]
+        self._backfill_cursor = (start + budget) % len(candidates)
+        for eid in ordered[:budget]:
             self._ensure_actor_settlement(eid)
 
     def _housing_upgrade_worthwhile(self, newcomer, current_prop, candidate_prop, candidate_kind, candidate_score):
@@ -1938,7 +1998,11 @@ class NPCSettlementSystem(System):
             return None, ""
 
         weighted = []
-        for prop in self.sim.properties.values():
+        try:
+            search_props = self._props_in_chunk(self.sim.chunk_coords(int(pos.x), int(pos.y)))
+        except (TypeError, ValueError):
+            search_props = tuple(self.sim.properties.values())
+        for prop in search_props:
             home_kind = _newcomer_home_kind(prop)
             if not home_kind:
                 continue
@@ -1962,7 +2026,11 @@ class NPCSettlementSystem(System):
 
     def _candidate_workplace(self, pos):
         weighted = []
-        for prop in self.sim.properties.values():
+        try:
+            search_props = self._props_in_chunk(self.sim.chunk_coords(int(pos.x), int(pos.y)))
+        except (TypeError, ValueError):
+            search_props = tuple(self.sim.properties.values())
+        for prop in search_props:
             capacity = _newcomer_work_capacity(self.sim, prop)
             if capacity <= 0 or _newcomer_work_load(self.sim, prop) >= capacity:
                 continue
@@ -2191,6 +2259,6 @@ class NPCSettlementSystem(System):
             return
         self._backfill_resident_settlements()
         self._maybe_spawn_newcomer()
-        for eid, newcomer in list(self.sim.ecs.get(NPCSettlement).items()):
+        for eid, newcomer in self._settlement_worklist():
             self._update_newcomer(eid, newcomer)
             self._consider_life_upgrade(eid, newcomer)
