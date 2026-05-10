@@ -23,6 +23,10 @@ from game.components import (
     WeaponUseProfile,
 )
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
+from game.checks import (
+    crime_sensitivity as _crime_sensitivity,
+    justice_level as _justice_level,
+)
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import (
     _apply_downed_actor_state,

@@ -2,8 +2,19 @@ from __future__ import annotations
 
 import curses
 
-from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, VehicleState
+from game.components import (
+    AI,
+    CreatureIdentity,
+    FinancialProfile,
+    IncidentKnowledge,
+    Inventory,
+    NPCNeeds,
+    PlayerAssets,
+    Position,
+    VehicleState,
+)
 from game.final_operation import evaluate_final_operation
+from game.incident_runtime import incident_record
 from game.lighting import lighting_state, update_lighting_state
 from game.opportunities import evaluate_opportunity_facts
 from game.organization_reputation import organization_snapshot, top_organization_snapshots
@@ -208,6 +219,137 @@ def organization_summary_rows(sim, *, current_prop=None):
 
     return rows
 
+
+
+def _entity_debug_label(sim, eid, fallback="actor"):
+    try:
+        entity_id = int(eid)
+    except (TypeError, ValueError):
+        return str(fallback or "actor")
+    identities = sim.ecs.get(CreatureIdentity) if sim is not None else {}
+    identity = identities.get(entity_id) if identities is not None else None
+    if identity is not None:
+        name = str(identity.display_name() or "").strip()
+        if name:
+            return f"{name}#{entity_id}"
+    ai = sim.ecs.get(AI).get(entity_id) if sim is not None else None
+    role = str(getattr(ai, "role", "") or "").strip()
+    if role:
+        return f"{role}#{entity_id}"
+    return f"{str(fallback or 'actor')}#{entity_id}"
+
+
+def _nearest_npc_to_player(sim, player_eid, *, max_radius=18):
+    positions = sim.ecs.get(Position) if sim is not None else {}
+    player_pos = positions.get(player_eid) if positions is not None else None
+    if player_pos is None:
+        return None, None, None
+    ai_map = sim.ecs.get(AI)
+    best = None
+    for eid, pos in positions.items():
+        if eid == player_eid or pos is None:
+            continue
+        ai = ai_map.get(eid) if ai_map is not None else None
+        if ai is None:
+            continue
+        z_penalty = 12 if int(getattr(pos, "z", 0)) != int(getattr(player_pos, "z", 0)) else 0
+        distance = abs(int(pos.x) - int(player_pos.x)) + abs(int(pos.y) - int(player_pos.y)) + z_penalty
+        if distance > int(max_radius):
+            continue
+        candidate = (distance, int(eid), pos)
+        if best is None or candidate < best:
+            best = candidate
+    if best is None:
+        return None, None, None
+    return best[1], best[2], best[0]
+
+
+def _knowledge_queue_summary(knowledge, queue_name):
+    entries = getattr(knowledge, f"{queue_name}_queue", ()) or ()
+    if not entries:
+        return "-"
+    bits = []
+    for entry in list(entries)[:4]:
+        if not isinstance(entry, dict):
+            continue
+        incident_id = entry.get("incident_id", "?")
+        score = float(entry.get("score", 0.0) or 0.0)
+        bits.append(f"#{incident_id}:{score:.2f}")
+    return ", ".join(bits) if bits else "-"
+
+
+def _incident_knowledge_lines(sim, player_eid, *, limit=6):
+    npc_eid, npc_pos, distance = _nearest_npc_to_player(sim, player_eid)
+    if npc_eid is None:
+        return ["No nearby NPC with AI inside debug radius."]
+
+    knowledge = sim.ecs.get(IncidentKnowledge).get(npc_eid)
+    ai = sim.ecs.get(AI).get(npc_eid)
+    state = str(getattr(ai, "state", "idle") or "idle").strip().lower() or "idle"
+    role = str(getattr(ai, "role", "npc") or "npc").strip().lower() or "npc"
+    header = (
+        f"Closest {_entity_debug_label(sim, npc_eid, fallback='npc')} | "
+        f"role {role} | state {state} | dist {distance} | "
+        f"tile {getattr(npc_pos, 'x', '?')},{getattr(npc_pos, 'y', '?')},{getattr(npc_pos, 'z', '?')}"
+    )
+    if knowledge is None:
+        return [header, "No IncidentKnowledge component."]
+
+    records = getattr(knowledge, "records", {}) or {}
+    lines = [
+        header,
+        f"Records {len(records)} | urgent [{_knowledge_queue_summary(knowledge, 'urgent')}] | social [{_knowledge_queue_summary(knowledge, 'social')}]",
+    ]
+    if not records:
+        lines.append("No known incidents.")
+        return lines
+
+    def _sort_key(item):
+        incident_id, record = item
+        if not isinstance(record, dict):
+            return (0, 0.0, 0, int(incident_id))
+        return (
+            int(record.get("last_learned_tick", record.get("learned_tick", 0)) or 0),
+            float(record.get("urgency", 0.0) or 0.0),
+            int(record.get("severity", 0) or 0),
+            int(incident_id),
+        )
+
+    for incident_id, record in sorted(records.items(), key=_sort_key, reverse=True)[:max(1, int(limit))]:
+        if not isinstance(record, dict):
+            continue
+        incident = incident_record(sim, incident_id) or {}
+        kind = str(incident.get("kind", record.get("category", "incident")) or "incident").strip().lower()
+        note = str(incident.get("note", "") or "").strip()
+        tags = tuple(str(tag).strip().lower() for tag in incident.get("tags", ()) or () if str(tag).strip())
+        severity = int(record.get("severity", incident.get("severity", 0)) or 0)
+        confidence = float(record.get("confidence", 0.0) or 0.0)
+        urgency = float(record.get("urgency", 0.0) or 0.0)
+        social = float(record.get("social_interest", 0.0) or 0.0)
+        depth = int(record.get("propagation_depth", 0) or 0)
+        source = str(record.get("source_kind", "") or "").strip().lower() or "unknown"
+        firsthand = "first" if record.get("firsthand") else "rumor"
+        actor = incident.get("primary_actor_eid")
+        victim = incident.get("victim_eid")
+        actor_text = _entity_debug_label(sim, actor, fallback="actor") if actor is not None else "-"
+        victim_text = _entity_debug_label(sim, victim, fallback="victim") if victim is not None else "-"
+        loc = "-"
+        if record.get("x") is not None and record.get("y") is not None:
+            loc = f"{int(record.get('x'))},{int(record.get('y'))},{int(record.get('z', 0) or 0)}"
+        detail_bits = [
+            f"sev {severity}",
+            f"conf {confidence:.2f}",
+            f"urg {urgency:.2f}",
+            f"soc {social:.2f}",
+            f"d{depth}",
+            source,
+            firsthand,
+        ]
+        lines.append(f"#{incident_id} {kind}{(' | ' + note) if note else ''}")
+        lines.append("  " + " | ".join(detail_bits) + f" | actor {actor_text} | victim {victim_text} | loc {loc}")
+        if tags:
+            lines.append("  tags " + ", ".join(tags[:6]))
+    return lines
 
 def build_debug_overlay(
     sim,
@@ -478,6 +620,18 @@ def build_debug_overlay(
         )
     else:
         lines.append("No organization heat or standing established yet.")
+
+    lines.extend(["", _section_header_line("Closest NPC Knowledge", color="human")])
+    for raw in _incident_knowledge_lines(sim, player_eid):
+        text = _line_text(raw).strip()
+        if not text:
+            continue
+        if text.startswith("#"):
+            lines.append(_bullet_line(text, bullet="*", bullet_color="human", text_color="human"))
+        elif text.startswith("  ") or text.startswith("tags "):
+            lines.append(_bullet_line(text.strip(), bullet="-", bullet_color="building_edge"))
+        else:
+            lines.append(text)
 
     lines.extend(["", _section_header_line("Mission", color="objective")])
     if objective_eval:

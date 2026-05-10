@@ -366,6 +366,15 @@ class ObservedIncidentConsequenceSystem(System):
                     self._remove_queue_item(knowledge, "urgent", incident_id)
                 break
 
+    def _actor_report_suppressed_for_incident(self, eid, incident_id):
+        ai = self.sim.ecs.get(AI).get(eid)
+        if not ai:
+            return False
+        try:
+            return int(getattr(ai, "suppress_report_for_incident_id", -1)) == int(incident_id)
+        except (TypeError, ValueError):
+            return False
+
     def _handle_urgent_incident(self, eid, incident_id, source_record, incident):
         now = getattr(self.sim, "tick", 0)
         key = (eid, incident_id, "urgent")
@@ -378,6 +387,21 @@ class ObservedIncidentConsequenceSystem(System):
 
         decision = self._choose_urgent_response(eid, incident, source_record)
         cue_kind = decision["kind"]
+
+        # Dispatched responders can keep acting/investigating, but they should
+        # not recursively re-report the same incident they were assigned to.
+        if cue_kind == "report_authority" and (
+            incident.get("officially_reported")
+            or self._actor_report_suppressed_for_incident(eid, incident_id)
+        ):
+            self.sim.emit(Event(
+                "incident_report_cue_suppressed",
+                npc_eid=eid,
+                incident_id=incident_id,
+                reason="already_reported_or_dispatched",
+            ))
+            return True
+
         if cue_kind == "look_away":
             source_record["dismissed"] = True
             source_record["looked_away"] = True

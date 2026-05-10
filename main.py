@@ -18,6 +18,8 @@ from engine.sites import layout_chunk_site, site_gameplay_profile, site_layout_r
 from engine.sim import Simulation
 from engine.tilemap import Tile
 from game.systems_observed_events import ObservedIncidentConsequenceSystem
+from game.systems_observed_response import ObservedIncidentResponseSystem
+from game.systems_observed_dispatch import ObservedIncidentDispatchSystem
 from game.components import (
     AI,
     ArmorLoadout,
@@ -264,6 +266,9 @@ def _register_runtime_systems(sim, view, player):
     skill_progression_system = SkillProgressionSystem(sim, player)
     item_system = ItemSystem(sim, player)
     incident_knowledge_system = IncidentKnowledgeSystem(sim)
+    observed_incident_consequence_system = ObservedIncidentConsequenceSystem(sim)
+    observed_incident_response_system = ObservedIncidentResponseSystem(sim)
+    observed_incident_dispatch_system = ObservedIncidentDispatchSystem(sim)
     criminal_justice_system = CriminalJusticeSystem(sim, player)
     service_menu_system = ServiceMenuSystem(sim, player)
     trade_system = TradeSystem(sim, player)
@@ -322,6 +327,9 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(skill_progression_system)
     sim.register_system(item_system)
     sim.register_system(incident_knowledge_system)
+    sim.register_system(observed_incident_consequence_system)
+    sim.register_system(observed_incident_response_system)
+    sim.register_system(observed_incident_dispatch_system)
     sim.register_system(service_menu_system)
     sim.register_system(trade_system)
     sim.register_system(finance_system)
