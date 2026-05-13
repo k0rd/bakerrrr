@@ -80,6 +80,7 @@ class ObservedIncidentResponseSystem(System):
                 "reported": 0,
                 "help_arrivals": 0,
                 "phone_reports": 0,
+                "camera_reports": 0,
                 "dropped": 0,
             }
 
@@ -125,9 +126,12 @@ class ObservedIncidentResponseSystem(System):
 
         # If the NPC has a phone/radio, reporting is immediate and local. Still
         # emit a report event so authority/report systems can dedupe globally.
-        if cue_kind == "report_authority" and route.get("method") == "cell_phone":
+        if cue_kind == "report_authority" and route.get("method") in {"cell_phone", "camera_network"}:
             self._emit_authority_report(pending, x=pos.x, y=pos.y, z=pos.z)
-            self.sim.observed_response_stats["phone_reports"] += 1
+            if route.get("method") == "camera_network":
+                self.sim.observed_response_stats["camera_reports"] += 1
+            else:
+                self.sim.observed_response_stats["phone_reports"] += 1
             self._clear_actor_cue(npc_eid, incident_id)
             return
 
@@ -202,6 +206,18 @@ class ObservedIncidentResponseSystem(System):
         if cue_kind != "report_authority":
             return None
 
+        preferred_methods = tuple(
+            method
+            for method in (_key(raw_method) for raw_method in (cue_data.get("preferred_methods") or ()))
+            if method
+        )
+        if "camera_network" in preferred_methods and self._has_camera_network(npc_eid, cue_data.get("incident_id")):
+            return {
+                "method": "camera_network",
+                "target": self._incident_position(incident) or _pos_tuple(self.sim.ecs.get(Position).get(npc_eid)),
+                "target_eid": None,
+            }
+
         if self._has_phone(npc_eid):
             return {"method": "cell_phone", "target": _pos_tuple(self.sim.ecs.get(Position).get(npc_eid)), "target_eid": None}
 
@@ -233,6 +249,19 @@ class ObservedIncidentResponseSystem(System):
         if not inv:
             return False
         return inventory_has_phone(inv)
+
+    def _has_camera_network(self, eid, incident_id):
+        try:
+            incident_id = int(incident_id)
+        except (TypeError, ValueError):
+            return False
+        knowledge = self.sim.ecs.get(IncidentKnowledge).get(eid)
+        if knowledge is None:
+            return False
+        record = knowledge.records.get(incident_id)
+        if not isinstance(record, dict):
+            return False
+        return _key(record.get("source_kind")) == "camera" and bool(record.get("firsthand"))
 
     def _entity_position(self, eid):
         try:

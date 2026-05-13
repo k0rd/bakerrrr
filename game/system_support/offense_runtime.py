@@ -27,6 +27,7 @@ DEFAULT_ACTION_OFFENSE_BASE = {
     "purchase_property": 4,
     "toggle_cover": 0,
     "toggle_sneak": 0,
+    "melee_attack": 8,
     "fire_weapon": 18,
     "cycle_weapon": 0,
     "banking": 0,
@@ -39,6 +40,19 @@ DEFAULT_ACTION_OFFENSE_BASE = {
     "scan": 0,
 }
 
+ASSAULT_OFFENSE_CONTEXTS = frozenset({
+    "unarmed_assault",
+    "melee_assault",
+    "armed_assault",
+})
+VIOLENT_OFFENSE_CONTEXTS = ASSAULT_OFFENSE_CONTEXTS | frozenset({"explosive_discharge"})
+OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS = VIOLENT_OFFENSE_CONTEXTS | frozenset({
+    "trespass",
+    "tamper",
+    "item_theft",
+    "contraband_use",
+})
+
 DEFAULT_ACTION_OFFENSE_CONTEXT_BONUS = {
     "ordinary": 0,
     "trespass": 18,
@@ -46,6 +60,8 @@ DEFAULT_ACTION_OFFENSE_CONTEXT_BONUS = {
     "not_for_sale_attempt": 10,
     "item_theft": 48,
     "contraband_use": 32,
+    "unarmed_assault": 14,
+    "melee_assault": 28,
     "armed_assault": 56,
     "explosive_discharge": 68,
 }

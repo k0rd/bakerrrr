@@ -339,6 +339,8 @@ class RunPressureSystem(System):
             "tamper": 3,
             "item_theft": 3,
             "contraband_use": 2,
+            "unarmed_assault": 2,
+            "melee_assault": 3,
             "armed_assault": 4,
             "explosive_discharge": 5,
             "not_for_sale_attempt": 1,

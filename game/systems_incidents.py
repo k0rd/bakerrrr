@@ -10,7 +10,7 @@ from __future__ import annotations
 from engine.events import Event
 from engine.systems import System
 
-from game.components import AI, IncidentKnowledge, JusticeProfile, NPCTraits, Occupation
+from game.components import AI, IncidentKnowledge, JusticeProfile, NPCTraits, Occupation, Position
 from game.incident_runtime import (
     create_or_merge_incident,
     incident_propagation_allowed,
@@ -19,8 +19,14 @@ from game.incident_runtime import (
     prune_incidents,
     update_incident_propagation,
 )
+from game.organizations import property_org_members
 from game.system_support.awareness_runtime import _watchers_for_position
 from game.system_support.intrusion_runtime import _tamper_is_noisy, _trespass_is_obvious_breach
+from game.system_support.offense_runtime import OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS
+
+
+CAMERA_OWNER_AI_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
+CAMERA_OWNER_CAREER_TOKENS = ("guard", "security", "patrol", "police", "deputy", "marshal", "surveillance", "monitor", "dispatch")
 
 
 def _clamp_unit(value, default=0.0):
@@ -43,6 +49,7 @@ class IncidentKnowledgeSystem(System):
         self.sim.events.subscribe("property_trespass", self.on_property_trespass)
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
+        self.sim.events.subscribe("camera_scrutiny", self.on_camera_scrutiny)
         self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
         self.sim.events.subscribe("rumor_shared", self.on_rumor_shared)
         if not hasattr(self.sim, "incident_stats"):
@@ -214,6 +221,85 @@ class IncidentKnowledgeSystem(System):
             )
         )
 
+    def _camera_property(self, event):
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        if not property_id:
+            return None
+        prop = self.sim.properties.get(property_id)
+        return prop if isinstance(prop, dict) else None
+
+    def _camera_owner_recipients(self, prop, *, exclude_eid=None):
+        if not isinstance(prop, dict):
+            return ()
+        recipients = []
+        seen = set()
+
+        def _add(raw_eid):
+            try:
+                eid = int(raw_eid)
+            except (TypeError, ValueError):
+                return
+            if eid == exclude_eid or eid in seen:
+                return
+            if self.sim.ecs.get(AI).get(eid) is None:
+                return
+            seen.add(eid)
+            recipients.append(eid)
+
+        _add(prop.get("owner_eid"))
+        for member in property_org_members(self.sim, prop):
+            eid = member.get("eid")
+            role = str(member.get("role", "") or "").strip().lower()
+            occupation = member.get("occupation")
+            career = str(getattr(occupation, "career", "") or "").strip().lower()
+            ai_role = self._observer_role(eid)
+            if (
+                role in {"owner", "manager"}
+                or ai_role in CAMERA_OWNER_AI_ROLES
+                or any(token in career for token in CAMERA_OWNER_CAREER_TOKENS)
+            ):
+                _add(eid)
+        return tuple(recipients)
+
+    def _prime_camera_event_position(self, event):
+        offender_eid = event.data.get("eid")
+        pos = self.sim.ecs.get(Position).get(offender_eid)
+        if pos is None:
+            return
+        event.data.setdefault("x", pos.x)
+        event.data.setdefault("y", pos.y)
+        event.data.setdefault("z", pos.z)
+
+    def _camera_incident(self, event, prop, *, severity, official_reportable=False, note="", tags=()):
+        if isinstance(prop, dict) and prop.get("owner_eid") is not None:
+            event.data.setdefault("owner_eid", prop.get("owner_eid"))
+        self._prime_camera_event_position(event)
+        return self._create_incident(
+            event,
+            kind="camera_alert",
+            severity=severity,
+            merge_subject=str(event.data.get("property_id", event.data.get("camera_property_id", "")) or "").strip(),
+            official_reportable=official_reportable,
+            note=note,
+            tags=tags,
+        )
+
+    def _learn_camera_recipients(self, incident, prop, *, exclude_eid=None, confidence=0.65, queue=False):
+        if not isinstance(incident, dict) or not isinstance(prop, dict):
+            return
+        incident_id = int(incident.get("id", 0) or 0)
+        for observer_eid in self._camera_owner_recipients(prop, exclude_eid=exclude_eid):
+            self._learn_incident(
+                observer_eid,
+                incident_id,
+                source_kind="camera",
+                source_eid=None,
+                firsthand=True,
+                confidence=confidence,
+                propagation_depth=0,
+                queue=queue,
+            )
+
     def _create_incident(self, event, *, kind, severity, merge_subject="", official_reportable=False, note="", tags=()):
         incident, merged = create_or_merge_incident(
             self.sim,
@@ -282,7 +368,7 @@ class IncidentKnowledgeSystem(System):
         if context == "ordinary" and offense_score < self.MIN_ACTION_OFFENSE_SCORE:
             return
 
-        official_reportable = context in {"trespass", "tamper", "item_theft", "contraband_use", "armed_assault", "explosive_discharge"} or offense_score >= 24
+        official_reportable = context in OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS or offense_score >= 24
         incident = self._create_incident(
             event,
             kind="action_offense",
@@ -384,15 +470,38 @@ class IncidentKnowledgeSystem(System):
             )
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
+    def on_camera_scrutiny(self, event):
+        offender_eid = event.data.get("eid")
+        confidence = _clamp_unit(event.data.get("confidence"), default=0.0)
+        prop = self._camera_property(event)
+        if offender_eid is None or confidence <= 0.0 or not isinstance(prop, dict):
+            return
+        severity = max(6, min(18, int(round(confidence * 18.0))))
+        incident = self._camera_incident(
+            event,
+            prop,
+            severity=severity,
+            official_reportable=False,
+            note="camera_scrutiny",
+            tags=("camera", "scrutiny", event.data.get("disguise_role")),
+        )
+        self._learn_camera_recipients(
+            incident,
+            prop,
+            exclude_eid=offender_eid,
+            confidence=max(0.35, confidence),
+            queue=False,
+        )
+
     def on_camera_alerted(self, event):
         severity = int(event.data.get("severity_score", 0) or 0)
         if severity <= 0:
             return
-        incident = self._create_incident(
+        prop = self._camera_property(event)
+        incident = self._camera_incident(
             event,
-            kind="camera_alert",
+            prop,
             severity=severity,
-            merge_subject=str(event.data.get("property_id", event.data.get("camera_property_id", "")) or "").strip(),
             official_reportable=True,
             note=str(event.data.get("severity_label", "camera_alert") or "").strip().lower(),
             tags=("camera", event.data.get("severity_label"), event.data.get("access_level")),
@@ -409,6 +518,13 @@ class IncidentKnowledgeSystem(System):
                 propagation_depth=0,
                 queue=False,
             )
+        self._learn_camera_recipients(
+            incident,
+            prop,
+            exclude_eid=offender_eid,
+            confidence=0.96,
+            queue=True,
+        )
 
     def on_rumor_shared(self, event):
         incident_id = event.data.get("incident_id")

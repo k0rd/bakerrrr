@@ -30,6 +30,7 @@ from game.checks import (
     rumor_truth_read as _rumor_truth_read,
     social_read_axes as _social_read_axes,
 )
+from game.incident_runtime import incident_record
 from game.appearance import (
     creature_color_key as _appearance_creature_color_key,
     district_floor_color as _appearance_district_floor_color,
@@ -138,6 +139,12 @@ from game.items import (
     item_display_name,
     merge_item_stack_metadata,
     prepare_item_stack_metadata,
+)
+from game.item_semantics import (
+    appraise_item_for_actor,
+    item_display_name_for_actor,
+    item_is_identified_for_actor,
+    item_unknown_inspect_text_for_actor,
 )
 from game.justice_runtime import (
     booking_anchor_for as _justice_booking_anchor_for,
@@ -434,6 +441,9 @@ from game.system_support.item_runtime import (
 from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
     ACTION_OFFENSE_CONTEXT_BONUS,
+    ASSAULT_OFFENSE_CONTEXTS,
+    OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS,
+    VIOLENT_OFFENSE_CONTEXTS,
     _emit_action_offense_event,
     _offense_notice_radius,
     _offense_score_for_action,
@@ -2051,7 +2061,7 @@ def _observer_turns_blind_eye_to_offense(sim, observer_eid, offender_eid, *, act
 
     context_key = str(context or "ordinary").strip().lower() or "ordinary"
     action_key = str(action or "").strip().lower()
-    if context_key in {"armed_assault", "explosive_discharge", "tamper", "item_theft", "contraband_use"}:
+    if context_key in OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS:
         return False
     if action_key in {"fire_weapon", "vehicle_theft", "tamper"}:
         return False
@@ -8954,7 +8964,7 @@ class InputSystem(System):
         bonus_slots = max(0, _int_or_default(container_profile.get("bonus_slots"), 0))
         if bonus_slots <= 0:
             return False
-        item_name = item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=self.catalog)
+        item_name = item_display_name_for_actor(self.sim, self.player_eid, entry, item_catalog=self.catalog)
         return self._open_container_inventory_ui(
             {
                 "id": entry.get("instance_id"),
@@ -9095,13 +9105,51 @@ class InputSystem(System):
             return
 
         item_def = self.catalog.get(entry["item_id"], {})
-        item_name = item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=self.catalog)
+        item_name = item_display_name_for_actor(self.sim, self.player_eid, entry, item_catalog=self.catalog)
         entry_instance_id = str(entry.get("instance_id", "") or "").strip() or None
         legal_status = item_def.get("legal_status", "legal")
         tags = list(item_def.get("tags", []))
         effects = list(item_def.get("effects", []))
         weapon_id = _item_weapon_id(item_def)
         armor = _item_armor_profile(item_def)
+
+        identified = item_is_identified_for_actor(
+            self.sim,
+            self.player_eid,
+            entry,
+            item_catalog=self.catalog,
+        )
+        if not identified:
+            appraise_item_for_actor(
+                self.sim,
+                self.player_eid,
+                entry,
+                item_catalog=self.catalog,
+            )
+            state["inspect_text"] = item_unknown_inspect_text_for_actor(
+                self.sim,
+                self.player_eid,
+                entry,
+                item_catalog=self.catalog,
+            )
+            self.sim.emit(Event(
+                "inventory_inspected",
+                eid=self.player_eid,
+                item_id=entry["item_id"],
+                item_name=item_name,
+                quantity=entry["quantity"],
+                legal_status="unknown",
+                tags=[],
+                effects=[],
+                instance_id=entry_instance_id,
+                identified=False,
+                inspect_text=state["inspect_text"],
+                panel_kind=str(state.get("panel_kind", "inventory")).strip().lower() or "inventory",
+                title=str(state.get("title", "Inventory")).strip() or "Inventory",
+                container_kind=self._inventory_container_kind(),
+                container_label=self._inventory_container_label(),
+            ))
+            return
 
         effect_labels = []
         for effect in effects:
@@ -9213,6 +9261,7 @@ class InputSystem(System):
             tags=tags,
             effects=effects,
             instance_id=entry_instance_id,
+            identified=True,
             inspect_text=state["inspect_text"],
             panel_kind=str(state.get("panel_kind", "inventory")).strip().lower() or "inventory",
             title=str(state.get("title", "Inventory")).strip() or "Inventory",
@@ -9799,11 +9848,11 @@ class InputSystem(System):
             return
 
         if key == ord("v"):
-            self._emit_turn_action("toggle_cover")
+            self._emit_turn_action("cover_hop")
             return
 
         if key == ord("C"):
-            self._emit_turn_action("cover_hop")
+            self._emit_turn_action("toggle_cover")
             return
 
         if key in (ord("f"), ord("F")):
@@ -23287,7 +23336,7 @@ class CriminalJusticeSystem(System):
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
         self.sim.events.subscribe("action_offense", self.on_action_offense)
-        self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
+        self.sim.events.subscribe("incident_authority_reported", self.on_incident_authority_reported)
         self.sim.events.subscribe("property_interact", self.on_property_interact)
         self.sim.events.subscribe("npc_interact", self.on_npc_interact)
         self.sim.events.subscribe("npc_surrendered", self.on_npc_surrendered)
@@ -25415,9 +25464,9 @@ class CriminalJusticeSystem(System):
         if offender_eid is None:
             return
         context = str(event.data.get("context", "ordinary") or "").strip().lower() or "ordinary"
-        if context not in {"contraband_use", "armed_assault", "explosive_discharge"}:
+        if context not in {"contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
             return
-        if offender_eid != self.player_eid and context in {"armed_assault", "explosive_discharge"}:
+        if offender_eid != self.player_eid and context in VIOLENT_OFFENSE_CONTEXTS:
             # NPC violence needs lawful-force context before it can share the
             # same consequences as the player. Keep first-pass NPC justice to
             # clearer property and theft offenses.
@@ -25429,6 +25478,8 @@ class CriminalJusticeSystem(System):
             return
         incident_type = {
             "contraband_use": "contraband",
+            "unarmed_assault": "unarmed_assault",
+            "melee_assault": "melee_assault",
             "armed_assault": "armed_assault",
             "explosive_discharge": "explosive_discharge",
         }.get(context, context)
@@ -25443,30 +25494,29 @@ class CriminalJusticeSystem(System):
             note=f"{str(event.data.get('action', 'action') or '').strip().lower()}/{context}",
         )
 
-    def on_camera_alerted(self, event):
-        offender_eid = event.data.get("eid")
+    def on_incident_authority_reported(self, event):
+        incident = incident_record(self.sim, event.data.get("incident_id"))
+        if not isinstance(incident, dict):
+            return
+        if str(incident.get("kind", "") or "").strip().lower() != "camera_alert":
+            return
+        offender_eid = incident.get("primary_actor_eid")
         if offender_eid is None:
             return
-        property_id = str(event.data.get("property_id", "") or "").strip()
-        severity_score = int(event.data.get("severity_score", 0) or 0)
-        severity_label = str(event.data.get("severity_label", "clear") or "").strip().lower() or "clear"
-        if not property_id or severity_score <= 0 or severity_label == "clear":
-            return
-        x = event.data.get("x")
-        y = event.data.get("y")
-        z = event.data.get("z", 0)
-        if self._watchers_present(offender_eid, x, y, z):
+        property_id = str(incident.get("property_id", "") or "").strip()
+        severity_score = int(incident.get("severity", 0) or 0)
+        if not property_id or severity_score <= 0:
             return
         self._record_incident(
             offender_eid,
             incident_type="trespass",
             severity=severity_score,
-            source_event="camera_alerted",
+            source_event="property_trespass",
             property_id=property_id,
-            x=x,
-            y=y,
+            x=incident.get("x"),
+            y=incident.get("y"),
             witnessed=True,
-            note=f"camera_{severity_label}",
+            note=str(incident.get("note", "camera_alert") or "camera_alert").strip().lower(),
         )
 
     def on_property_interact(self, event):
@@ -29264,7 +29314,7 @@ class EventLogSystem(System):
             if property_name:
                 return f"visible contraband use at {property_name}"
             return "visible contraband use"
-        if incident_type in {"armed_assault", "explosive_discharge"}:
+        if incident_type in VIOLENT_OFFENSE_CONTEXTS:
             action_slug = note.split("/", 1)[0].strip().lower() if note else ""
             action_text = self._action_event_label(action_slug, fallback=incident_label or "violence")
             if property_name:
@@ -29538,10 +29588,10 @@ class EventLogSystem(System):
     def _ground_item_notice_label(self, ground):
         if not isinstance(ground, dict):
             return ""
-        item_id = str(ground.get("item_id", "item")).strip() or "item"
-        item_name = item_display_name(
-            item_id,
-            metadata=ground.get("metadata"),
+        item_name = item_display_name_for_actor(
+            self.sim,
+            self.player_eid,
+            ground,
             item_catalog=ITEM_CATALOG,
         )
         qty = int(max(1, _int_or_default(ground.get("quantity"), 1)))
@@ -29909,7 +29959,7 @@ class EventLogSystem(System):
             quote = "You should not be here."
         elif action in {"interact", "use_item"}:
             quote = "Leave that alone."
-        elif context in {"armed_assault", "explosive_discharge"} or action == "fire_weapon":
+        elif context in VIOLENT_OFFENSE_CONTEXTS or action in {"fire_weapon", "melee_attack"}:
             quote = "Get down!"
         else:
             quote = "What do you think you are doing?"
@@ -31355,6 +31405,18 @@ class EventLogSystem(System):
             self._warn_once(
                 "contraband",
                 "Warning: obvious contraband use can alarm nearby people and provoke a harsher response.",
+            )
+        elif context == "unarmed_assault":
+            summary = f"Violence witnessed{site_text}: {action_label}."
+            self._warn_once(
+                "unarmed_assault",
+                "Warning: even an unarmed assault can turn bystanders and escalate the scene quickly.",
+            )
+        elif context == "melee_assault":
+            summary = f"Violence witnessed{site_text}: {action_label}."
+            self._warn_once(
+                "melee_assault",
+                "Warning: armed melee is read as more serious than a fistfight and can trigger a violent response.",
             )
         elif context == "armed_assault":
             summary = f"Violence witnessed{site_text}: {action_label}."
@@ -34350,7 +34412,7 @@ class RenderSystem(System):
             "Infrastructure: typed markers (l lamp, p pole, h hydrant, u stop, j/t utility, $ ATM, c claim terminal, r access panel).",
             "Local terrain: = road, : trail, , brush, ^ rock, ~ water, _ shore flats.",
             "Remote sites: relay/lookout/survey sites provide intel; camps and huts can offer shelter.",
-            f"Aim/Combat: {aim_open}, move cursor, F cycle target, {aim_confirm}, v cover, C cover hop, Shift+S sneak, V cycle weapon.",
+            f"Aim/Combat: {aim_open}, move cursor, F cycle target, {aim_confirm}, C cover, v cover hop, Shift+S sneak, V cycle weapon.",
             "Items: I inventory, G pick up nearby, U use/equip/stow, R drop.",
             "Visual classes: vehicles use '&' symbol colors only; properties use letters; items are bright symbols; humans use colored @ symbols and wildlife uses taxonomy letters.",
             "Progress: O operations report, Y known locations and owned vehicles, L event log history.",
@@ -35650,7 +35712,7 @@ class RenderSystem(System):
         elif debug_ui.get("open"):
             controls = "Debug: Up/Down browse, O ops, Y locations, L log, D/Esc close, ? help"
         elif overlay.get("active"):
-            controls = f"Combat: move or act, {_aim_open_label(self.sim, self.player_eid)}, v cover, C hop, Shift+S sneak, ? help, Q quit"
+            controls = f"Combat: move or act, {_aim_open_label(self.sim, self.player_eid)}, C cover, v hop, Shift+S sneak, ? help, Q quit"
         elif zoom_mode == "overworld":
             controls = "In-vehicle: move, G drive marker, M/l/N markers, O ops, Y locations, L log, + sheet, t exit on-foot, center icons UPPER=loaded lower=distant, ? help"
         else:
@@ -35848,7 +35910,7 @@ class RenderSystem(System):
                 marker = ">" if absolute == selected_index else " "
                 item_def = ITEM_CATALOG.get(entry["item_id"], {})
                 glyph = item_def.get("glyph", "*")
-                name = item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG)
+                name = item_display_name_for_actor(self.sim, self.player_eid, entry, item_catalog=ITEM_CATALOG)
                 gear_marker = ""
                 if panel_kind != "container" or container_view == "pack":
                     if armor_loadout and armor_loadout.is_equipped(entry.get("instance_id")):
@@ -35906,18 +35968,32 @@ class RenderSystem(System):
             if entries:
                 selected = entries[selected_index]
                 item_def = ITEM_CATALOG.get(selected["item_id"], {})
-                legal = item_def.get("legal_status", "legal")
+                identified = item_is_identified_for_actor(self.sim, self.player_eid, selected, item_catalog=ITEM_CATALOG)
+                legal = item_def.get("legal_status", "legal") if identified else "unknown"
                 tags = ",".join(item_def.get("tags", [])[:3]) or "none"
-                inspect_name = item_display_name(
-                    selected["item_id"],
-                    metadata=selected.get("metadata"),
+                inspect_name = item_display_name_for_actor(
+                    self.sim,
+                    self.player_eid,
+                    selected,
                     item_catalog=ITEM_CATALOG,
                 )
                 if not inspect_text:
-                    inspect_text = _item_legend_line(
-                        selected["item_id"],
-                        f"{inspect_name} [{legal}] {tags}",
-                    )
+                    if identified:
+                        inspect_text = _item_legend_line(
+                            selected["item_id"],
+                            f"{inspect_name} [{legal}] {tags}",
+                        )
+                    else:
+                        appraise_item_for_actor(self.sim, self.player_eid, selected, item_catalog=ITEM_CATALOG)
+                        inspect_text = _item_legend_line(
+                            selected["item_id"],
+                            item_unknown_inspect_text_for_actor(
+                                self.sim,
+                                self.player_eid,
+                                selected,
+                                item_catalog=ITEM_CATALOG,
+                            ),
+                        )
             elif note_text:
                 inspect_text = inspect_text or note_text
 

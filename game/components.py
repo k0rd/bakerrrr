@@ -119,6 +119,13 @@ def _clamp_unit(value, default=0.5):
     return float(max(0.0, min(1.0, number)))
 
 
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 class InsightStats:
     """Player/NPC social insight profile for reading rumor quality.
 
@@ -749,6 +756,24 @@ class IncidentKnowledge:
         self.social_queue = []
         self.last_shared = {}
 
+    def _source_quality(self, *, source_kind="", firsthand=False, propagation_depth=0, confidence=0.0):
+        kind = str(source_kind or "").strip().lower()
+        if kind == "self":
+            source_rank = 0
+        elif bool(firsthand) or kind in {"witnessed", "camera"}:
+            source_rank = 1
+        elif kind in {"authority_report", "official_report"}:
+            source_rank = 2
+        elif kind == "social_rumor":
+            source_rank = 4
+        else:
+            source_rank = 3
+        return (
+            max(0, _safe_int(propagation_depth, 0)),
+            int(source_rank),
+            -_clamp_unit(confidence, default=0.0),
+        )
+
     def _incident_key(self, incident_id):
         try:
             return int(incident_id)
@@ -781,6 +806,7 @@ class IncidentKnowledge:
             learned_tick = int(learned_tick)
         except (TypeError, ValueError):
             learned_tick = 0
+        incoming_learned_tick = int(learned_tick)
         try:
             source_eid = int(source_eid) if source_eid is not None else None
         except (TypeError, ValueError):
@@ -801,28 +827,75 @@ class IncidentKnowledge:
         source_kind = str(source_kind or "").strip().lower()
 
         existing = self.records.get(incident_key)
+        incoming_quality = self._source_quality(
+            source_kind=source_kind,
+            firsthand=firsthand,
+            propagation_depth=propagation_depth,
+            confidence=confidence,
+        )
+        prefer_incoming_source = True
         if isinstance(existing, dict):
+            existing_learned_tick = _safe_int(existing.get("learned_tick"), learned_tick)
+            existing_last_learned_tick = _safe_int(
+                existing.get("last_learned_tick"),
+                existing_learned_tick,
+            )
+            existing_depth = max(0, _safe_int(existing.get("propagation_depth"), propagation_depth))
+            existing_quality = self._source_quality(
+                source_kind=existing.get("source_kind", ""),
+                firsthand=bool(existing.get("firsthand", False)),
+                propagation_depth=existing_depth,
+                confidence=existing.get("confidence", 0.0),
+            )
+            if existing_quality < incoming_quality:
+                prefer_incoming_source = False
+            elif existing_quality == incoming_quality and existing_last_learned_tick > learned_tick:
+                prefer_incoming_source = False
+
             confidence = max(confidence, float(existing.get("confidence", 0.0) or 0.0))
             urgency = max(urgency, float(existing.get("urgency", 0.0) or 0.0))
             social_interest = max(social_interest, float(existing.get("social_interest", 0.0) or 0.0))
             severity = max(severity, int(existing.get("severity", 0) or 0))
             firsthand = bool(firsthand or existing.get("firsthand", False))
-            propagation_depth = min(
-                propagation_depth,
-                max(0, int(existing.get("propagation_depth", propagation_depth) or propagation_depth)),
-            )
-            if not source_kind:
-                source_kind = str(existing.get("source_kind", "") or "").strip().lower()
-            if source_eid is None:
-                source_eid = existing.get("source_eid")
-            if existing.get("category"):
-                category = str(existing.get("category", category) or category).strip().lower() or category
-            learned_tick = min(learned_tick, int(existing.get("learned_tick", learned_tick) or learned_tick))
+            existing_category = str(existing.get("category", "") or "").strip().lower()
+            if category != "official" and existing_category == "official":
+                category = "official"
+            elif existing_category and not category:
+                category = existing_category
+            learned_tick = min(learned_tick, existing_learned_tick)
 
-        record = {
+            if prefer_incoming_source:
+                if not source_kind:
+                    source_kind = str(existing.get("source_kind", "") or "").strip().lower()
+                if source_eid is None:
+                    source_eid = existing.get("source_eid")
+                if x is None:
+                    x = existing.get("x")
+                if y is None:
+                    y = existing.get("y")
+                if z is None:
+                    z = existing.get("z")
+            else:
+                source_kind = str(existing.get("source_kind", "") or "").strip().lower() or source_kind
+                source_eid = existing.get("source_eid")
+                propagation_depth = existing_depth
+                x = existing.get("x")
+                y = existing.get("y")
+                z = existing.get("z")
+
+        record = dict(existing) if isinstance(existing, dict) else {}
+        record.update({
             "incident_id": incident_key,
             "learned_tick": int(learned_tick),
-            "last_learned_tick": int(learned_tick if not existing else max(learned_tick, int(existing.get("last_learned_tick", learned_tick) or learned_tick))),
+            "last_learned_tick": int(
+                incoming_learned_tick
+                if not isinstance(existing, dict)
+                else max(
+                    _safe_int(existing.get("last_learned_tick"), _safe_int(existing.get("learned_tick"), incoming_learned_tick)),
+                    _safe_int(existing.get("learned_tick"), incoming_learned_tick),
+                    int(incoming_learned_tick),
+                )
+            ),
             "source_kind": source_kind,
             "source_eid": source_eid,
             "confidence": float(confidence),
@@ -836,7 +909,7 @@ class IncidentKnowledge:
             "y": y,
             "z": z,
             "dismissed": bool((existing or {}).get("dismissed", False)) if isinstance(existing, dict) else False,
-        }
+        })
         self.records[incident_key] = record
         self._trim_records()
         return record
@@ -962,6 +1035,71 @@ class IncidentKnowledge:
             self.urgent_queue = filtered
         else:
             self.social_queue = filtered
+
+
+class ItemKnowledge:
+    def __init__(self):
+        self.identified = {}
+        self.appraised = {}
+
+    def identify(self, item_id, *, tick=0, source_kind="direct"):
+        key = str(item_id or "").strip().lower()
+        if not key:
+            return False
+        existing = self.identified.get(key)
+        tick = _safe_int(tick, 0)
+        self.identified[key] = {
+            "item_id": key,
+            "tick": tick if existing is None else min(_safe_int(existing.get("tick"), tick), tick),
+            "last_tick": tick if existing is None else max(_safe_int(existing.get("last_tick"), tick), tick),
+            "source_kind": str(source_kind or "direct").strip().lower() or "direct",
+        }
+        return existing is None
+
+    def is_identified(self, item_id):
+        key = str(item_id or "").strip().lower()
+        if not key:
+            return False
+        return key in self.identified
+
+    def appraise(self, instance_id, *, item_id=None, tick=0, detail_keys=()):
+        key = str(instance_id or "").strip()
+        if not key:
+            return False
+        details = {
+            str(detail).strip().lower()
+            for detail in detail_keys
+            if str(detail).strip()
+        }
+        existing = self.appraised.get(key)
+        merged_details = set(existing.get("detail_keys", ())) if isinstance(existing, dict) else set()
+        merged_details.update(details)
+        tick = _safe_int(tick, 0)
+        if isinstance(existing, dict):
+            known_item_id = str(existing.get("item_id", "") or "").strip().lower() or None
+        else:
+            known_item_id = None
+        item_id_text = str(item_id or known_item_id or "").strip().lower() or None
+        self.appraised[key] = {
+            "instance_id": key,
+            "item_id": item_id_text,
+            "tick": tick if existing is None else min(_safe_int(existing.get("tick"), tick), tick),
+            "last_tick": tick if existing is None else max(_safe_int(existing.get("last_tick"), tick), tick),
+            "detail_keys": tuple(sorted(merged_details)),
+        }
+        return existing is None or merged_details != set(existing.get("detail_keys", ()))
+
+    def knows_appraisal(self, instance_id, detail_key=None):
+        key = str(instance_id or "").strip()
+        if not key:
+            return False
+        record = self.appraised.get(key)
+        if not isinstance(record, dict):
+            return False
+        token = str(detail_key or "").strip().lower()
+        if not token:
+            return True
+        return token in set(record.get("detail_keys", ()))
 
 
 class NPCSocial:

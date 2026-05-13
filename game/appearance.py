@@ -835,6 +835,7 @@ def projectile_render_snapshot(glyph, *, color="projectile", catalog=None, layer
     return _semantic_snapshot(
         glyph,
         color=color,
+        semantic_id="projectile",
         catalog=catalog,
         preferred_categories=("projectiles",),
         layer=layer,
@@ -964,6 +965,7 @@ class AppearanceManager:
         return self.snapshot(
             glyph,
             color=color,
+            semantic_id="projectile",
             preferred_categories=("projectiles",),
             layer=layer,
             priority=priority,

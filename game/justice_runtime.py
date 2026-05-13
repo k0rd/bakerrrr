@@ -20,6 +20,8 @@ INCIDENT_REPEAT_COOLDOWNS = {
     "theft": 16,
     "contraband": 14,
     "resisting_custody": 14,
+    "unarmed_assault": 14,
+    "melee_assault": 16,
     "armed_assault": 18,
     "explosive_discharge": 22,
 }
@@ -30,6 +32,8 @@ INCIDENT_LABELS = {
     "theft": "theft",
     "contraband": "contraband use",
     "resisting_custody": "resisting custody",
+    "unarmed_assault": "unarmed assault",
+    "melee_assault": "armed melee assault",
     "armed_assault": "armed assault",
     "explosive_discharge": "explosive discharge",
 }
@@ -414,6 +418,10 @@ def _incident_weight(incident_type, *, severity=0, witnessed=False):
         return min(16, 7 + (severity // 14) + witnessed_bonus)
     if incident_type == "resisting_custody":
         return min(22, 10 + (severity // 12) + witnessed_bonus)
+    if incident_type == "unarmed_assault":
+        return min(18, 8 + (severity // 14) + witnessed_bonus)
+    if incident_type == "melee_assault":
+        return min(22, 12 + (severity // 12) + witnessed_bonus)
     if incident_type == "armed_assault":
         return min(26, 16 + (severity // 10) + witnessed_bonus)
     if incident_type == "explosive_discharge":

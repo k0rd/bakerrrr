@@ -8,6 +8,7 @@
     "drop_item": 0,
     "use_item": 6,
     "purchase_property": 4,
+    "melee_attack": 8,
     "fire_weapon": 18,
     "cycle_weapon": 0,
     "banking": 0,
@@ -22,6 +23,8 @@
     "not_for_sale_attempt": 10,
     "item_theft": 48,
     "contraband_use": 32,
+    "unarmed_assault": 14,
+    "melee_assault": 28,
     "armed_assault": 56,
     "explosive_discharge": 68
   },

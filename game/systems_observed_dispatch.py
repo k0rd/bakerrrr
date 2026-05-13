@@ -81,6 +81,20 @@ def _unit_roll(seed, *parts):
     return int(digest[:13], 16) / float(0x10000000000000)
 
 
+def _peace_dispatch_bonus(tags):
+    cleaned = {str(tag).strip().lower() for tag in (tags or ()) if str(tag).strip()}
+    bonus = 0.0
+    if cleaned & {"unarmed_assault", "assault"}:
+        bonus = max(bonus, 0.06)
+    if cleaned & {"melee_assault", "melee"}:
+        bonus = max(bonus, 0.12)
+    if cleaned & {"armed_assault", "fire_weapon", "gunfire", "weapon", "murder"}:
+        bonus = max(bonus, 0.18)
+    if cleaned & {"explosive_discharge", "explosion", "fire"}:
+        bonus = max(bonus, 0.24)
+    return bonus
+
+
 def _incident_position(incident, event_data=None):
     event_data = event_data or {}
     x = event_data.get("x", incident.get("x") if isinstance(incident, dict) else None)
@@ -271,8 +285,7 @@ class ObservedIncidentDispatchSystem(System):
         severity = _int(incident.get("severity"), 0) if isinstance(incident, dict) else 0
         tags = {str(tag).strip().lower() for tag in incident.get("tags", ()) or ()} if isinstance(incident, dict) else set()
         base_chance = 0.18 + min(0.45, severity / 180.0)
-        if tags & {"gunfire", "weapon", "murder", "fire", "explosion"}:
-            base_chance += 0.18
+        base_chance += _peace_dispatch_bonus(tags)
         if _unit_roll(getattr(self.sim, "seed", ""), "peace_dispatch", incident_id, severity) > min(0.85, base_chance):
             return []
         return [eid for _, eid in self._rank_candidates(target, peace_only=True)[:max_count]]

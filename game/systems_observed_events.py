@@ -38,7 +38,18 @@ from game.incident_runtime import incident_propagation_allowed, incident_record
 
 PEACE_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
 CIVIC_ROLES = {"clerk", "cashier", "merchant", "shopkeeper", "manager", "worker", "resident", "civilian"}
-VIOLENCE_TAGS = {"violence", "assault", "armed_assault", "weapon", "gunfire", "fire_weapon", "melee", "murder"}
+VIOLENCE_TAGS = {
+    "violence",
+    "assault",
+    "unarmed_assault",
+    "melee_assault",
+    "armed_assault",
+    "weapon",
+    "gunfire",
+    "fire_weapon",
+    "melee",
+    "murder",
+}
 DISASTER_TAGS = {"fire", "explosion", "collapse", "toxic", "hazard", "disaster", "gas", "flood"}
 TRESPASS_TAGS = {"trespass", "forced_entry", "break_in", "break-in", "unauthorized"}
 
@@ -538,6 +549,10 @@ class ObservedIncidentConsequenceSystem(System):
         scores = self._urgent_scores(eid, incident, source_record)
         ordered = sorted(scores.items(), key=lambda row: row[1], reverse=True)
         best_kind, best_score = ordered[0]
+        source_kind = _key(source_record.get("source_kind"))
+        preferred_report_methods = ("cell_phone", "alarm", "work_phone", "home_phone", "peace_officer")
+        if source_kind == "camera" and bool(source_record.get("firsthand")):
+            preferred_report_methods = ("camera_network",) + preferred_report_methods
 
         if best_kind == "help_victim" and best_score >= 0.42:
             return {
@@ -559,7 +574,7 @@ class ObservedIncidentConsequenceSystem(System):
                 "score": scores.get("report", 0.0),
                 "target_eid": None,
                 "reason": "reportable_and_motivated",
-                "preferred_methods": ("cell_phone", "alarm", "work_phone", "home_phone", "peace_officer"),
+                "preferred_methods": preferred_report_methods,
             }
         return {
             "kind": "look_away",
@@ -573,6 +588,8 @@ class ObservedIncidentConsequenceSystem(System):
         traits = self.sim.ecs.get(NPCTraits).get(eid) or NPCTraits()
         justice = self.sim.ecs.get(JusticeProfile).get(eid)
         role = _key(getattr(self.sim.ecs.get(AI).get(eid), "role", ""))
+        source_kind = _key(source_record.get("source_kind"))
+        camera_source = source_kind == "camera" and bool(source_record.get("firsthand"))
 
         victim_alignment = self._alignment(eid, incident.get("victim_eid"))
         offender_alignment = self._alignment(eid, incident.get("primary_actor_eid"))
@@ -590,12 +607,17 @@ class ObservedIncidentConsequenceSystem(System):
         discipline = _clamp(getattr(traits, "discipline", 0.5), default=0.5)
 
         immediate_danger = 1.0 if (severity >= 0.6 or (_tags(incident) & VIOLENCE_TAGS)) else 0.25
+        report_property_stake = property_stake * 0.32
+        report_role_duty = role_duty * 0.5
+        if camera_source and role not in PEACE_ROLES:
+            report_property_stake = 0.0
+            report_role_duty = 0.0
         report = (
             severity * 0.42
             + confidence * 0.18
             + victim_alignment * 0.28
-            + property_stake * 0.32
-            + role_duty * 0.5
+            + report_property_stake
+            + report_role_duty
             + justice_duty
             + discipline * 0.12
             - offender_alignment * 0.25

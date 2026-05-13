@@ -2466,16 +2466,45 @@ class PygameView:
             start = (mid_x - trail, mid_y - trail)
             end = (mid_x + trail, mid_y + trail)
         elif glyph_key == ",":
-            start = (mid_x - max(1, trail // 2), mid_y + max(1, trail // 4))
-            end = (mid_x + trail, mid_y - max(1, trail // 3))
+            start = (mid_x - max(1, trail // 3), mid_y)
+            end = (mid_x + trail, mid_y - max(1, trail // 8))
         else:
             start = (mid_x - trail, mid_y)
             end = (mid_x + trail, mid_y)
 
-        self.pygame.draw.line(overlay, glow, start, end, max(2, stroke_w + 1))
-        self.pygame.draw.line(overlay, tail, start, end, stroke_w)
-        self.pygame.draw.circle(overlay, stroke, end, point_r + 1)
-        self.pygame.draw.circle(overlay, glow, end, max(1, point_r // 2))
+        if glyph_key == ",":
+            hot_core = (
+                min(255, int(frame[0] * 1.08) + 28),
+                min(255, int(frame[1] * 1.35) + 22),
+                min(255, int(frame[2] * 0.92) + 6),
+                240,
+            )
+            twin_offset = max(1, stroke_w)
+            rear_len = max(2, trail // 2)
+            rear_start = (start[0] - max(1, trail // 6), start[1] + twin_offset)
+            rear_end = (rear_start[0] + rear_len, rear_start[1])
+            spark_len = max(2, trail // 3)
+            spark_start = (start[0] + max(1, trail // 6), start[1] - twin_offset)
+            spark_end = (spark_start[0] + spark_len, spark_start[1])
+
+            self.pygame.draw.line(overlay, glow, start, end, max(2, stroke_w + 2))
+            self.pygame.draw.line(overlay, tail, start, end, max(1, stroke_w + 1))
+            self.pygame.draw.line(overlay, hot_core, start, end, stroke_w)
+            self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 96), rear_start, rear_end, max(1, stroke_w))
+            self.pygame.draw.line(overlay, (hot_core[0], hot_core[1], hot_core[2], 122), spark_start, spark_end, max(1, stroke_w))
+
+            head_rect = self.pygame.Rect(0, 0, max(2, point_r + 3), max(2, point_r + 2))
+            head_rect.center = (end[0], end[1])
+            self.pygame.draw.ellipse(overlay, stroke, head_rect)
+            core_rect = head_rect.inflate(-max(1, point_r // 2), -max(1, point_r // 2))
+            if core_rect.width > 0 and core_rect.height > 0:
+                self.pygame.draw.ellipse(overlay, hot_core, core_rect)
+            self.pygame.draw.circle(overlay, glow, end, max(1, point_r // 2))
+        else:
+            self.pygame.draw.line(overlay, glow, start, end, max(2, stroke_w + 1))
+            self.pygame.draw.line(overlay, tail, start, end, stroke_w)
+            self.pygame.draw.circle(overlay, stroke, end, point_r + 1)
+            self.pygame.draw.circle(overlay, glow, end, max(1, point_r // 2))
 
         if glyph_key in {"*", "o"}:
             burst = max(2, self.cell_px // 6)

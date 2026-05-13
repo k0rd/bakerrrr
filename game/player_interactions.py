@@ -2,7 +2,8 @@
 
 from engine.events import Event
 
-from game.items import ITEM_CATALOG, item_display_name
+from game.item_semantics import item_display_name_for_actor
+from game.items import ITEM_CATALOG
 from game.opportunities import _item_label
 from game.property_access import (
     property_access_controller as _property_access_controller,
@@ -36,6 +37,9 @@ class PlayerInteractionRuntime:
         self.action_system = action_system
         self.sim = action_system.sim
         self._infrastructure_target_property = infrastructure_target_property
+
+    def _viewer_eid(self):
+        return getattr(self.sim, "player_eid", None)
 
     def _nearest_fixture_by_role(self, eid, pos, *roles):
         allowed = {
@@ -278,9 +282,10 @@ class PlayerInteractionRuntime:
         bonus_slots = max(0, _int_or_default(container_profile.get("bonus_slots"), 0))
         if bonus_slots <= 0:
             return None
-        item_name = str(current.get("item_name", "") or "").strip() or item_display_name(
-            entry["item_id"],
-            metadata=entry.get("metadata"),
+        item_name = str(current.get("item_name", "") or "").strip() or item_display_name_for_actor(
+            self.sim,
+            self._viewer_eid(),
+            entry,
             item_catalog=ITEM_CATALOG,
         )
         return {
@@ -478,7 +483,7 @@ class PlayerInteractionRuntime:
         metadata = dict(entry.get("metadata") or {})
         metadata.pop(ITEM_STOWED_CONTAINER_METADATA_KEY, None)
         runtime["inventory"].update_item_metadata(entry["instance_id"], metadata=metadata, replace=True)
-        name = item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG)
+        name = item_display_name_for_actor(self.sim, self._viewer_eid(), entry, item_catalog=ITEM_CATALOG)
         _log_player_feedback(self.sim, f"Took {name} from {runtime['item_name']}.", kind="interaction")
         self.sim.emit(Event(
             "container_withdraw",
@@ -525,7 +530,7 @@ class PlayerInteractionRuntime:
             )
             return False
         removed = container_items.pop(index)
-        name = item_display_name(item_id, metadata=removed.get("metadata"), item_catalog=ITEM_CATALOG)
+        name = item_display_name_for_actor(self.sim, self._viewer_eid(), removed, item_catalog=ITEM_CATALOG)
         _log_player_feedback(self.sim, f"Took {name} from {container_name}.", kind="interaction")
         self.sim.emit(Event(
             "container_withdraw",
@@ -587,7 +592,7 @@ class PlayerInteractionRuntime:
         metadata = dict(target_entry.get("metadata") or {})
         metadata[ITEM_STOWED_CONTAINER_METADATA_KEY] = runtime["instance_id"]
         runtime["inventory"].update_item_metadata(target_entry["instance_id"], metadata=metadata)
-        name = item_display_name(target_entry["item_id"], metadata=target_entry.get("metadata"), item_catalog=ITEM_CATALOG)
+        name = item_display_name_for_actor(self.sim, self._viewer_eid(), target_entry, item_catalog=ITEM_CATALOG)
         _log_player_feedback(self.sim, f"Stashed {name} in {runtime['item_name']}.", kind="interaction")
         self.sim.emit(Event(
             "container_deposit",
@@ -663,12 +668,12 @@ class PlayerInteractionRuntime:
             "instance_id": removed.get("instance_id"),
             "item_id": removed["item_id"],
             "quantity": removed["quantity"],
-            "name": item_display_name(removed["item_id"], metadata=removed.get("metadata"), item_catalog=ITEM_CATALOG),
+            "name": item_display_name_for_actor(self.sim, self._viewer_eid(), removed, item_catalog=ITEM_CATALOG),
             "metadata": removed.get("metadata"),
             "owner_eid": removed.get("owner_eid"),
             "owner_tag": removed.get("owner_tag"),
         })
-        name = item_display_name(removed["item_id"], metadata=removed.get("metadata"), item_catalog=ITEM_CATALOG)
+        name = item_display_name_for_actor(self.sim, self._viewer_eid(), removed, item_catalog=ITEM_CATALOG)
         _log_player_feedback(self.sim, f"Stashed {name} in {container_name}.", kind="interaction")
         self.sim.emit(Event(
             "container_deposit",

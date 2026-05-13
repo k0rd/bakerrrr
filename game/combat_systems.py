@@ -410,10 +410,11 @@ class WeaponSystem(System):
             loadout.cooldown_until_tick = int(self.sim.tick) + int(max(1, cooldown_ticks))
 
         if eid == self.player_eid:
+            context = "unarmed_assault" if melee_weapon_id == "unarmed" else "melee_assault"
             self._emit_action_offense(
                 eid=eid,
-                action="fire_weapon",
-                context="armed_assault",
+                action="melee_attack",
+                context=context,
                 x=source_pos.x,
                 y=source_pos.y,
                 z=source_pos.z,

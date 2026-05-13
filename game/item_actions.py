@@ -4,6 +4,11 @@ import random
 
 from engine.events import Event
 from game.components import Inventory, PlayerAssets, Position, StatusEffects, WeaponLoadout
+from game.item_semantics import (
+    identify_item_for_actor,
+    item_display_name_for_actor,
+    item_identification_profile,
+)
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_runtime import property_covering as _property_covering
@@ -52,6 +57,27 @@ class ItemActionRuntime:
             "legal_status": "legal",
             "effects": [],
         })
+
+    def _display_name_for_actor(self, eid, item_or_entry, *, identified=None):
+        return item_display_name_for_actor(
+            self.sim,
+            eid,
+            item_or_entry,
+            identified=identified,
+            item_catalog=self.catalog,
+        )
+
+    def _maybe_identify_item(self, eid, item_or_entry, *, source_kind="direct"):
+        profile = item_identification_profile(item_or_entry, item_catalog=self.catalog)
+        if not profile.get("requires_identification", False):
+            return False
+        return identify_item_for_actor(
+            self.sim,
+            eid,
+            item_or_entry,
+            source_kind=source_kind,
+            item_catalog=self.catalog,
+        )
 
     def _weapon_loadout_for(self, eid):
         loadouts = self.sim.ecs.get(WeaponLoadout)
@@ -120,7 +146,7 @@ class ItemActionRuntime:
             return False
 
         loadout = self._weapon_loadout_for(eid)
-        item_name = item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=self.catalog)
+        item_name = self._display_name_for_actor(eid, entry)
         equipped_weapon_id = loadout.current_weapon()
         if equipped_weapon_id == weapon_id:
             instance = loadout.weapon_instances.get(weapon_id, {})
@@ -167,7 +193,7 @@ class ItemActionRuntime:
             return False
 
         loadout = _ensure_armor_loadout(self.sim, eid)
-        item_name = item_display_name(entry["item_id"], metadata=entry.get("metadata"), item_catalog=self.catalog)
+        item_name = self._display_name_for_actor(eid, entry)
         if loadout.is_equipped(entry.get("instance_id")):
             removed_reduction = loadout.damage_reduction
             loadout.clear()
@@ -219,7 +245,7 @@ class ItemActionRuntime:
             return False
         item_id = item_def.get("id") or entry.get("item_id")
         instance_id = entry.get("instance_id")
-        item_name = item_display_name(item_id, metadata=entry.get("metadata"), item_catalog=self.catalog)
+        item_name = self._display_name_for_actor(eid, entry)
         current = getattr(self.sim, "disguise_state", None)
         if isinstance(current, dict) and current.get("instance_id") == instance_id:
             self.sim.disguise_state = None
@@ -269,7 +295,7 @@ class ItemActionRuntime:
             return False
         item_id = item_def.get("id") or entry.get("item_id")
         instance_id = entry.get("instance_id")
-        item_name = item_display_name(item_id, metadata=entry.get("metadata"), item_catalog=self.catalog)
+        item_name = self._display_name_for_actor(eid, entry)
         inventory = self._inventory_for(eid)
         current = getattr(self.sim, "equipped_container", None)
         if isinstance(current, dict) and current.get("instance_id") == instance_id:
@@ -417,7 +443,7 @@ class ItemActionRuntime:
             return False
 
         item_def = self._item_def(entry["item_id"])
-        item_name = item_display_name(item_def["id"], metadata=entry.get("metadata"), item_catalog=self.catalog)
+        item_name = self._display_name_for_actor(eid, entry)
         if _item_weapon_id(item_def):
             return self._toggle_weapon_item(
                 eid=eid,
@@ -493,11 +519,22 @@ class ItemActionRuntime:
             ))
             return False
 
+        profile = item_identification_profile(item_def["id"], item_catalog=self.catalog)
+        if profile.get("auto_identify_on_use", False):
+            self._maybe_identify_item(
+                eid,
+                {"item_id": item_def["id"], "metadata": entry.get("metadata"), "instance_id": entry.get("instance_id")},
+                source_kind="use",
+            )
+
         self.sim.emit(Event(
             "item_used",
             eid=eid,
             item_id=item_def["id"],
-            item_name=item_display_name(item_def["id"], metadata=entry.get("metadata"), item_catalog=self.catalog),
+            item_name=self._display_name_for_actor(
+                eid,
+                {"item_id": item_def["id"], "metadata": entry.get("metadata"), "instance_id": entry.get("instance_id")},
+            ),
             reason=reason,
             applied=applied,
         ))
@@ -547,11 +584,7 @@ class ItemActionRuntime:
                     "item_picked_up",
                     eid=eid,
                     item_id=ground["item_id"],
-                    item_name=item_display_name(
-                        ground["item_id"],
-                        metadata={"stored_credits": int(credits_gained)},
-                        item_catalog=self.catalog,
-                    ),
+                    item_name=item_display_name("credstick_chip", metadata={"stored_credits": int(credits_gained)}, item_catalog=self.catalog),
                     quantity=ground.get("quantity", 1),
                     instance_id=ground.get("instance_id"),
                     ground_item_id=ground["ground_item_id"],
@@ -566,11 +599,7 @@ class ItemActionRuntime:
                         "item_stolen",
                         offender_eid=eid,
                         item_id=ground["item_id"],
-                        item_name=item_display_name(
-                            ground["item_id"],
-                            metadata={"stored_credits": int(credits_gained)},
-                            item_catalog=self.catalog,
-                        ),
+                        item_name=item_display_name("credstick_chip", metadata={"stored_credits": int(credits_gained)}, item_catalog=self.catalog),
                         owner_eid=ground.get("owner_eid"),
                         owner_tag=ground.get("owner_tag"),
                         x=ground["x"],
@@ -611,7 +640,7 @@ class ItemActionRuntime:
                 eid=eid,
                 reason="inventory_full",
                 item_id=ground["item_id"],
-                item_name=item_display_name(ground["item_id"], metadata=ground_metadata, item_catalog=self.catalog),
+                item_name=self._display_name_for_actor(eid, ground),
             ))
             return
 
@@ -620,7 +649,7 @@ class ItemActionRuntime:
             "item_picked_up",
             eid=eid,
             item_id=ground["item_id"],
-            item_name=item_display_name(ground["item_id"], metadata=ground_metadata, item_catalog=self.catalog),
+            item_name=self._display_name_for_actor(eid, ground),
             quantity=ground.get("quantity", 1),
             instance_id=instance_id,
             ground_item_id=ground["ground_item_id"],
@@ -634,7 +663,7 @@ class ItemActionRuntime:
                 "item_stolen",
                 offender_eid=eid,
                 item_id=ground["item_id"],
-                item_name=item_display_name(ground["item_id"], metadata=ground_metadata, item_catalog=self.catalog),
+                item_name=self._display_name_for_actor(eid, ground),
                 owner_eid=ground.get("owner_eid"),
                 owner_tag=ground.get("owner_tag"),
                 x=ground["x"],
@@ -675,7 +704,7 @@ class ItemActionRuntime:
         if not removed:
             item_id = str((target_entry or {}).get("item_id", "") or "").strip().lower()
             item_name = (
-                item_display_name(item_id, metadata=(target_entry or {}).get("metadata"), item_catalog=self.catalog)
+                self._display_name_for_actor(eid, target_entry)
                 if item_id
                 else ""
             )
@@ -705,7 +734,7 @@ class ItemActionRuntime:
             "item_dropped",
             eid=eid,
             item_id=removed["item_id"],
-            item_name=item_display_name(removed["item_id"], metadata=removed.get("metadata"), item_catalog=self.catalog),
+            item_name=self._display_name_for_actor(eid, removed),
             quantity=removed["quantity"],
             ground_item_id=ground_id,
             x=x,

@@ -8,7 +8,8 @@ from engine.systems import System
 from game.appearance import ground_item_color as _ground_item_color, item_display_glyph as _appearance_item_display_glyph
 from game.components import Inventory, PlayerAssets, Position, VehicleState
 from game.economy import item_market_bias, store_supply_profile
-from game.items import ITEM_CATALOG, item_display_name
+from game.item_semantics import item_display_name_for_actor
+from game.items import ITEM_CATALOG
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_keys import ensure_property_lock, remove_actor_property_credentials
 from game.property_runtime import (
@@ -1245,7 +1246,7 @@ class TradeSystem(System):
             item_id = entry.get("item_id")
             quote, listed = self._sell_quote(item_id, store, terms=terms)
             item_def = ITEM_CATALOG.get(item_id, {"name": item_id, "glyph": "*"})
-            display_name = item_display_name(item_id, metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG)
+            display_name = item_display_name_for_actor(self.sim, self.player_eid, entry, item_catalog=ITEM_CATALOG)
             candidates.append({
                 "entry": entry,
                 "instance_id": entry.get("instance_id"),
@@ -1271,7 +1272,7 @@ class TradeSystem(System):
             item_def = ITEM_CATALOG.get(item_id, {"name": item_id, "glyph": "*"})
             rows.append({
                 "item_id": item_id,
-                "item_name": item_def.get("name", item_id),
+                "item_name": item_display_name_for_actor(self.sim, self.player_eid, {"item_id": item_id}, item_catalog=ITEM_CATALOG),
                 "glyph": _item_display_glyph(item_def),
                 "price": self._effective_buy_price(entry.get("buy_price", 1), terms),
                 "stock": int(max(0, entry.get("stock", 0))),
@@ -1709,7 +1710,7 @@ class TradeSystem(System):
             property_id=store_prop["id"],
             store_name=store_prop.get("name", store_prop["id"]),
             item_id=item_id,
-            item_name=item_display_name(item_id, metadata=removed.get("metadata"), item_catalog=ITEM_CATALOG),
+            item_name=item_display_name_for_actor(self.sim, self.player_eid, removed, item_catalog=ITEM_CATALOG),
             price=payout,
             base_price=base_payout,
             listed=bool(best["listed"]),
@@ -1832,4 +1833,3 @@ class TradeSystem(System):
         state = self._trade_ui_state()
         if state.get("open") and state.get("mode") == "sell":
             self._refresh_trade_ui(mode="sell", keep_selection=True)
-

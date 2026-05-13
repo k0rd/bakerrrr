@@ -20,7 +20,8 @@ from game.components import (
     Position,
     SkillProfile,
 )
-from game.items import ITEM_CATALOG, item_display_name
+from game.item_semantics import item_display_name_for_actor
+from game.items import ITEM_CATALOG
 from game.organization_reputation import organization_snapshot as _organization_snapshot
 from game.organizations import organization_name
 from game.property_runtime import (
@@ -188,10 +189,10 @@ class PlayerLookRuntime:
         if ground_items:
             labels = []
             for ground in ground_items[:2]:
-                item_id = str(ground.get("item_id", "item"))
-                item_name = item_display_name(
-                    item_id,
-                    metadata=ground.get("metadata"),
+                item_name = item_display_name_for_actor(
+                    self.sim,
+                    eid,
+                    ground,
                     item_catalog=ITEM_CATALOG,
                 )
                 qty = int(max(1, ground.get("quantity", 1)))

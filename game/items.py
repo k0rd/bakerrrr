@@ -62,6 +62,8 @@ def _normalize_appearance_family(item_id, tags, item):
         return "phone"
     if "injectable" in tag_set or "autoinjector" in str(item_id or ""):
         return "injectable"
+    if "medical" in tag_set:
+        return "medical"
     if "ammo" in tag_set:
         return "ammo"
     if "weapon" in tag_set:
@@ -77,6 +79,50 @@ def _normalize_appearance_slots(value):
     if not isinstance(value, (list, tuple)):
         return []
     return [str(slot).strip().lower() for slot in value if str(slot).strip()]
+
+
+def _default_appearance_slots_for_family(appearance_family):
+    family = str(appearance_family or "").strip().lower()
+    if family == "ammo":
+        return ["color", "marking"]
+    if family == "medical":
+        return ["color", "symbol"]
+    if family == "injectable":
+        return ["symbol", "liquid_color"]
+    return []
+
+
+def _normalize_identification_profile(item_id, tags, item, appearance_family):
+    raw = item.get("identification_profile")
+    if not isinstance(raw, dict):
+        raw = item.get("identification")
+    if not isinstance(raw, dict):
+        raw = {}
+
+    tag_set = set(tags or ())
+    default_requires_identification = appearance_family in {"ammo", "medical", "injectable"}
+    default_auto_identify_on_use = default_requires_identification and bool(
+        tag_set.intersection({"consumable", "medical", "ammo"})
+    )
+
+    appraisal_fields = raw.get("appraisal_fields")
+    if not isinstance(appraisal_fields, (list, tuple)):
+        appraisal_fields = ("item_quality", "item_durability", "item_max_durability")
+
+    return {
+        "family": str(appearance_family or "").strip().lower(),
+        "requires_identification": bool(
+            raw.get("requires_identification", default_requires_identification)
+        ),
+        "auto_identify_on_use": bool(
+            raw.get("auto_identify_on_use", default_auto_identify_on_use)
+        ),
+        "appraisal_fields": tuple(
+            str(field).strip().lower()
+            for field in appraisal_fields
+            if str(field).strip()
+        ),
+    }
 
 
 def _float_or_default(value, default=0.0):
@@ -811,6 +857,14 @@ def load_item_catalog(path=ITEMS_PATH):
         category = _normalize_item_category(item_id, tags, item)
         appearance_family = _normalize_appearance_family(item_id, tags, item)
         appearance_slots = _normalize_appearance_slots(item.get("appearance_slots"))
+        if not appearance_slots:
+            appearance_slots = _default_appearance_slots_for_family(appearance_family)
+        identification_profile = _normalize_identification_profile(
+            item_id,
+            tags,
+            item,
+            appearance_family,
+        )
 
         effects = item.get("effects", [])
         if not isinstance(effects, list):
@@ -826,6 +880,7 @@ def load_item_catalog(path=ITEMS_PATH):
             "legal_status": legal_status,
             "appearance_family": appearance_family,
             "appearance_slots": appearance_slots,
+            "identification_profile": identification_profile,
             "effects": [effect for effect in effects if isinstance(effect, dict)],
             "tool_profiles": _normalize_tool_profiles(item.get("tool_profiles")),
             "weapon_id": str(item.get("weapon_id", "")).strip() or None,
