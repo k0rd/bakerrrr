@@ -426,7 +426,7 @@ class RunPressureSystem(System):
         prop = self.sim.properties.get(property_id) if property_id else None
         severity_label = str(event.data.get("severity_label", "trespass")).strip().lower()
         severity_score = max(0, int(event.data.get("severity_score", 0)))
-        witnessed = bool(event.data.get("witnessed", True))
+        witnessed = bool(event.data.get("witnessed", False))
         ingress_kind = str(event.data.get("ingress_kind", "")).strip().lower()
         aperture_kind = str(event.data.get("aperture_kind", "")).strip().lower()
         ingress_method = str(event.data.get("ingress_method", "")).strip().lower()
@@ -496,7 +496,7 @@ class RunPressureSystem(System):
         property_id = str(event.data.get("property_id", "") or "").strip()
         prop = self.sim.properties.get(property_id) if property_id else None
         severity_score = max(0, int(event.data.get("severity_score", 0)))
-        witnessed = bool(event.data.get("witnessed", True))
+        witnessed = bool(event.data.get("witnessed", False))
         ingress_kind = str(event.data.get("ingress_kind", "")).strip().lower()
         ingress_method = str(event.data.get("ingress_method", "")).strip().lower()
         breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)

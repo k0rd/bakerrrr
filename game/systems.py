@@ -25390,7 +25390,7 @@ class CriminalJusticeSystem(System):
         offender_eid = event.data.get("offender_eid")
         if offender_eid is None:
             return
-        witnessed = bool(event.data.get("witnessed", True))
+        witnessed = bool(event.data.get("witnessed", False))
         ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
         ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
         breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
@@ -25418,7 +25418,7 @@ class CriminalJusticeSystem(System):
             return
         property_id = str(event.data.get("property_id", "") or "").strip()
         prop = self.sim.properties.get(property_id) if property_id else None
-        witnessed = bool(event.data.get("witnessed", True))
+        witnessed = bool(event.data.get("witnessed", False))
         if _quiet_unwitnessed_tamper(
             prop,
             witnessed=witnessed,
@@ -26194,7 +26194,7 @@ class PropertyDefenseSystem(System):
         offender_eid = event.data.get("offender_eid")
         property_id = event.data.get("property_id")
         threat_type = str(event.type or "property_tamper").strip().lower()
-        witnessed = bool(event.data.get("witnessed", threat_type != "property_trespass"))
+        witnessed = bool(event.data.get("witnessed", False))
         witness_eids = set()
         raw_witnesses = event.data.get("witnesses", ())
         if isinstance(raw_witnesses, (list, tuple, set, frozenset)):
@@ -29295,7 +29295,7 @@ class EventLogSystem(System):
         incident_label = str(event.data.get("incident_label", incident_type.replace("_", " ")) or "").strip()
         note = str(event.data.get("note", "") or "").strip()
         property_name = self._event_property_name(event, fallback="").strip()
-        witnessed = bool(event.data.get("incident_witnessed", True))
+        witnessed = bool(event.data.get("incident_witnessed", False))
         unseen_prefix = "unseen " if not witnessed else ""
 
         if incident_type == "trespass":
@@ -29374,7 +29374,7 @@ class EventLogSystem(System):
         reason = str(event.data.get("reason", "") or "").strip().lower()
         place_name = self._event_place_name(event)
         place_suffix = f" at {place_name}" if place_name else ""
-        witnessed = bool(event.data.get("witnessed", True))
+        witnessed = bool(event.data.get("witnessed", False))
         unseen_prefix = "unseen " if not witnessed else ""
 
         if source == "offense":
@@ -31293,7 +31293,7 @@ class EventLogSystem(System):
         if method_text and method_text not in {"authorized", "door breach", "window entry", "alternate entry"}:
             label = f"{label} ({method_text})"
 
-        if bool(event.data.get("witnessed", True)):
+        if bool(event.data.get("witnessed", False)):
             self._log(f"{prefix}: {label}.", channel="alerts", priority="high", dedupe_window=4)
             ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
             ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
@@ -31363,7 +31363,7 @@ class EventLogSystem(System):
             label = f"{label} {ingress_text}"
         if method_text and method_text not in {"authorized", "door breach", "window entry", "alternate entry"}:
             label = f"{label} ({method_text})"
-        witnessed = bool(event.data.get("witnessed", True))
+        witnessed = bool(event.data.get("witnessed", False))
         ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
         ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
         breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)

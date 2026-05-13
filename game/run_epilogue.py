@@ -16,7 +16,23 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from engine.systems import System
-from game.components import CreatureIdentity, IncidentKnowledge, Position
+from game.components import (
+    CreatureIdentity,
+    FinancialProfile,
+    IncidentKnowledge,
+    Inventory,
+    PlayerAssets,
+    Position,
+    StatusEffects,
+    Vitality,
+    WeaponLoadout,
+)
+from game.items import ITEM_CATALOG
+from game.justice_runtime import justice_summary_rows
+from game.organization_reputation import top_organization_snapshots
+from game.property_runtime import property_covering as _property_covering
+from game.run_pressure import pressure_snapshot
+from game.weapons import weapon_by_id
 
 try:  # Incident runtime is present in current BAKERRRR, but keep this module soft.
     from game.incident_runtime import incident_records
@@ -58,7 +74,7 @@ class RunEpilogueLedgerSystem(System):
 
     MAX_FACTS = 600
     MAX_NOTABLE_LINES = 7
-    MAX_SUMMARY_LINES = 18
+    MAX_SUMMARY_LINES = 26
 
     def __init__(self, sim, player_eid=None):
         super().__init__(sim)
@@ -186,6 +202,12 @@ class RunEpilogueLedgerSystem(System):
             if common:
                 return f"{common}#{eid}"
         return f"{fallback}#{eid}"
+
+    def _player_component(self, component_cls):
+        try:
+            return self.sim.ecs.get(component_cls).get(self.player_eid)
+        except Exception:  # pragma: no cover - defensive for older snapshots/tests.
+            return None
 
     def _place_label(self, data):
         prop = str(data.get("property_name", "") or "").strip()
@@ -464,16 +486,32 @@ class RunEpilogueLedgerSystem(System):
         if civic_bits:
             lines.append("  Civic aftermath: " + "; ".join(civic_bits) + ".")
 
+        pressure_summary = self._summarize_pressure()
+        if pressure_summary:
+            lines.extend(f"  {line}" for line in pressure_summary)
+
+        legal_summary = self._summarize_legal()
+        if legal_summary:
+            lines.extend(f"  {line}" for line in legal_summary)
+
+        organization_summary = self._summarize_organizations()
+        if organization_summary:
+            lines.extend(f"  {line}" for line in organization_summary)
+
+        player_state = self._summarize_player_state()
+        if player_state:
+            lines.extend(f"  {line}" for line in player_state)
+
+        loadout_summary = self._summarize_loadout()
+        if loadout_summary:
+            lines.extend(f"  {line}" for line in loadout_summary)
+
         if self.casino_rounds > 0:
             net_text = "won" if self.casino_net > 0 else "lost" if self.casino_net < 0 else "broke even on"
             lines.append(f"  Casino ledger: {self.casino_rounds} round(s), {net_text} {abs(self.casino_net)} credits total.")
 
         if self.visited_chunks:
             lines.append(f"  Route memory: you exposed {len(self.visited_chunks)} chunk-scale map node(s).")
-
-        pressure = self._latest_fact("run_pressure_tier") or self._latest_fact("run_pressure")
-        if pressure:
-            lines.append(f"  Pressure: {pressure.summary}")
 
         notable = self._notable_facts()
         if notable:
@@ -552,6 +590,149 @@ class RunEpilogueLedgerSystem(System):
     def _latest_fact(self, kind):
         facts = self.by_kind.get(kind) or []
         return facts[-1] if facts else None
+
+    def _player_place_label(self):
+        pos = self._player_component(Position)
+        if pos is None:
+            return ""
+        prop = _property_covering(self.sim, pos.x, pos.y, pos.z) or self.sim.property_at(pos.x, pos.y, pos.z)
+        if isinstance(prop, dict):
+            name = str(prop.get("name", "") or "").strip()
+            if name:
+                return name
+        return f"{int(pos.x)},{int(pos.y)},{int(pos.z)}"
+
+    def _summarize_pressure(self):
+        snapshot = pressure_snapshot(self.sim)
+        attention = int(snapshot.get("attention", 0) or 0)
+        peak = int(snapshot.get("peak_attention", 0) or 0)
+        mitigations = int(snapshot.get("mitigation_count", 0) or 0)
+        if attention <= 0 and peak <= 0 and mitigations <= 0:
+            return []
+        tier = str(snapshot.get("tier", "low") or "low").strip().lower() or "low"
+        line = f"Heat ledger: {tier} {attention} attention at the end; peak {peak}."
+        if mitigations > 0:
+            line += f" Pressure cooled {mitigations} time(s)."
+        return [line]
+
+    def _summarize_player_state(self):
+        assets = self._player_component(PlayerAssets)
+        finance = self._player_component(FinancialProfile)
+        vitality = self._player_component(Vitality)
+        statuses = self._player_component(StatusEffects)
+
+        lines = []
+        place = self._player_place_label()
+        hp_text = ""
+        if vitality is not None:
+            hp_text = f"HP {int(getattr(vitality, 'hp', 0) or 0)}/{int(getattr(vitality, 'max_hp', 1) or 1)}"
+            if bool(getattr(vitality, "downed", False)):
+                hp_text += " and downed"
+        active = []
+        if statuses is not None and isinstance(getattr(statuses, "active", None), dict):
+            active = sorted(str(status).replace("_", " ") for status in statuses.active.keys() if str(status).strip())
+        status_text = "no active effects"
+        if active:
+            preview = ", ".join(active[:2])
+            if len(active) > 2:
+                preview += ", ..."
+            noun = "effect" if len(active) == 1 else "effects"
+            status_text = f"{len(active)} active {noun} ({preview})"
+
+        if place or hp_text or status_text:
+            bits = []
+            if place:
+                bits.append(f"at {place}")
+            if hp_text:
+                bits.append(hp_text)
+            if status_text:
+                bits.append(status_text)
+            if bits:
+                lines.append("End state: " + "; ".join(bits) + ".")
+
+        credits = int(getattr(assets, "credits", 0) or 0) if assets is not None else 0
+        bank = int(getattr(finance, "bank_balance", 0) or 0) if finance is not None else 0
+        debt = int(finance.total_debt() if finance and hasattr(finance, "total_debt") else getattr(finance, "debt_balance", 0) or 0)
+        owned = len(getattr(assets, "owned_property_ids", ()) or ()) if assets is not None else 0
+        if assets is not None or finance is not None:
+            line = f"Finances: {credits} credits on hand, {bank} banked, {debt} debt."
+            if owned > 0:
+                line += f" Owned property {owned}."
+            lines.append(line)
+        return lines
+
+    def _summarize_loadout(self):
+        inventory = self._player_component(Inventory)
+        loadout = self._player_component(WeaponLoadout)
+        if inventory is None and loadout is None:
+            return []
+
+        carried = list(getattr(inventory, "items", ()) or ()) if inventory is not None else []
+        stack_count = len(carried)
+        hot_count = 0
+        medical_count = 0
+        for entry in carried:
+            if not isinstance(entry, dict):
+                continue
+            item_id = str(entry.get("item_id", "") or "").strip()
+            item_def = ITEM_CATALOG.get(item_id, {})
+            legal = str(item_def.get("legal_status", "legal") or "legal").strip().lower()
+            if legal in {"illegal", "restricted", "suspicious", "stolen"}:
+                hot_count += 1
+            if str(item_def.get("category", "") or "").strip().lower() == "medical":
+                medical_count += 1
+
+        weapon_text = "unarmed"
+        reserve = 0
+        arsenal_count = 0
+        if loadout is not None:
+            current_weapon = loadout.current_weapon() if hasattr(loadout, "current_weapon") else getattr(loadout, "equipped_weapon_id", None)
+            if current_weapon:
+                weapon = weapon_by_id(current_weapon)
+                weapon_text = str(weapon.get("name", current_weapon) or current_weapon).strip() or "armed"
+                reserve = int(max(0, getattr(loadout, "reserve_ammo", {}).get(current_weapon, 0) or 0))
+            arsenal_count = len(getattr(loadout, "weapon_ids", ()) or ())
+
+        line = (
+            f"Loadout residue: {weapon_text} ready, {reserve} reserve round(s), "
+            f"{stack_count} carried stack(s)"
+        )
+        extras = []
+        if arsenal_count > 1:
+            extras.append(f"{arsenal_count} total weapon slots filled")
+        if hot_count > 0:
+            extras.append(f"{hot_count} hot/restricted stack(s)")
+        if medical_count > 0:
+            extras.append(f"{medical_count} medical stack(s)")
+        if extras:
+            line += "; " + ", ".join(extras)
+        line += "."
+        return [line]
+
+    def _summarize_legal(self):
+        if self.player_eid is None:
+            return []
+        return [str(line).strip() for line in justice_summary_rows(self.sim, self.player_eid) if str(line).strip()]
+
+    def _summarize_organizations(self):
+        rows = [
+            row
+            for row in top_organization_snapshots(self.sim, limit=2, sort_by="heat")
+            if int(row.get("heat", 0) or 0) > 0 or abs(float(row.get("standing", 0.0) or 0.0)) >= 0.2
+        ]
+        if not rows:
+            return []
+        parts = []
+        for row in rows:
+            name = str(row.get("name", "Organization") or "Organization").strip()
+            heat = int(row.get("heat", 0) or 0)
+            heat_tier = str(row.get("heat_tier", "quiet") or "quiet").strip().lower() or "quiet"
+            standing_tier = str(row.get("standing_tier", "neutral") or "neutral").strip().lower() or "neutral"
+            part = f"{name} {heat_tier} heat {heat}"
+            if standing_tier != "neutral":
+                part += f", {standing_tier}"
+            parts.append(part)
+        return ["Organization fallout: " + "; ".join(parts) + "."]
 
     @staticmethod
     def _safe_int(value, default=0):

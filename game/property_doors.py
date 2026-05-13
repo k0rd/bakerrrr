@@ -57,6 +57,23 @@ def _operable_door_state_at(sim, x, y, z=0):
     return state
 
 
+def _door_property_at(sim, x, y, z=0, *, state=None):
+    prop = _property_covering(sim, x, y, z)
+    if isinstance(prop, dict):
+        return prop
+
+    if not isinstance(state, dict):
+        state = _operable_door_state_at(sim, x, y, z)
+    if not isinstance(state, dict):
+        return None
+
+    property_id = str(state.get("property_id", "") or "").strip()
+    if not property_id:
+        return None
+    prop = getattr(sim, "properties", {}).get(property_id)
+    return prop if isinstance(prop, dict) else None
+
+
 def _door_tile_is_occupied(sim, x, y, z=0):
     try:
         occupants = tuple(sim.tilemap.entities_at(int(x), int(y), int(z)))
@@ -107,7 +124,7 @@ def _door_open_attempt(sim, eid, x, y, z, *, allow_override=False):
     if not pos:
         return False, "missing_position"
 
-    prop = _property_covering(sim, x, y, z)
+    prop = _door_property_at(sim, x, y, z, state=state)
     ingress = None
     if prop:
         ingress = _property_ingress_context(
@@ -209,7 +226,7 @@ def _door_interaction_candidate(sim, pos, *, preferred_dir=None):
                 "y": y,
                 "z": z,
                 "state": state,
-                "prop": _property_covering(sim, x, y, z),
+                "prop": _door_property_at(sim, x, y, z, state=state),
             },
         ))
     if not ranked:

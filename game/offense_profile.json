@@ -1,4 +1,7 @@
 {
+  "_meta": {
+    "schema_version": 1
+  },
   "action_base": {
     "move": 2,
     "floor_change": 3,

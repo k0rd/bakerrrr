@@ -1,4 +1,7 @@
 {
+  "_meta": {
+    "schema_version": 1
+  },
   "atlas": {
     "image": "tileset.png",
     "w": 1024,

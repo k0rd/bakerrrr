@@ -9,6 +9,7 @@ from game.property_access import (
 )
 from game.property_doors import (
     _actor_is_animal_or_wildlife,
+    _door_property_at,
     _door_open_attempt,
     _operable_door_state_at,
 )
@@ -59,7 +60,7 @@ def _closed_door_move_block_reason(sim, eid, x, y, z):
     if not pos:
         return "missing_position"
 
-    prop = _property_covering(sim, x, y, z)
+    prop = _door_property_at(sim, x, y, z, state=state)
     ingress = None
     if prop:
         ingress = _property_ingress_context(

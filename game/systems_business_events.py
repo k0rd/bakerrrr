@@ -142,6 +142,10 @@ _BUSINESS_EVENT_AFTERMATH_PHASES = {
     "cleanup_detail",
     "candle_vigil",
 }
+_BUSINESS_EVENT_AFTERMATH_WITNESS_DELAY_HOURS = 0.12
+_BUSINESS_EVENT_AFTERMATH_HAZARD_DELAY_HOURS = 0.18
+_BUSINESS_EVENT_AFTERMATH_CLEANUP_HOURS = 0.65
+_BUSINESS_EVENT_AFTERMATH_VIGIL_HOURS = 0.5
 _BUSINESS_EVENT_SHIFT_PHASES = {
     "staff_handoff",
     "shift_handoff",
@@ -438,8 +442,9 @@ def _business_event_aftermath_micro_event(sim, prop=None, structure=None, base_p
     category = str((base_pulse or {}).get("category", "") or "").strip().lower() or _business_event_property_category(sim, prop)
     tick = int(getattr(sim, "tick", 0) or 0)
     ticks_per_hour = _business_event_ticks_per_hour(sim)
+    created_tick = entry.get("created_tick")
     try:
-        created_tick = int(entry.get("created_tick", tick) or tick)
+        created_tick = int(created_tick)
     except (TypeError, ValueError):
         created_tick = tick
     age_ticks = max(0, tick - created_tick)
@@ -448,7 +453,7 @@ def _business_event_aftermath_micro_event(sim, prop=None, structure=None, base_p
     casualty_count = max(0, int(entry.get("casualty_count", 0) or 0))
     severity = max(0.18, min(1.0, float(entry.get("severity", 0.4) or 0.4)))
 
-    if casualty_count > 0 and category == "residential" and age_hours >= 0.5:
+    if casualty_count > 0 and category == "residential" and age_hours >= _BUSINESS_EVENT_AFTERMATH_VIGIL_HOURS:
         return {
             "phase": "candle_vigil",
             "label": "candle vigil",
@@ -457,7 +462,9 @@ def _business_event_aftermath_micro_event(sim, prop=None, structure=None, base_p
             "emphasis": "residential",
             "perimeter_bonus": 1.9 + (severity * 0.6),
         }
-    if incident_kind == "hazard" or age_hours >= 0.65:
+    if incident_kind == "hazard":
+        if age_hours < _BUSINESS_EVENT_AFTERMATH_HAZARD_DELAY_HOURS:
+            return {}
         return {
             "phase": "cleanup_detail",
             "label": "cleanup detail",
@@ -466,6 +473,17 @@ def _business_event_aftermath_micro_event(sim, prop=None, structure=None, base_p
             "emphasis": "work",
             "perimeter_bonus": 1.55 + (severity * 0.45),
         }
+    if age_hours >= _BUSINESS_EVENT_AFTERMATH_CLEANUP_HOURS:
+        return {
+            "phase": "cleanup_detail",
+            "label": "cleanup detail",
+            "street_label": "cones and a cleanup crew at the entrance",
+            "entry_sentence": "The frontage is being reset after recent trouble, all cones, short instructions, and workers trying to make the doorway usable again without pretending nothing happened.",
+            "emphasis": "work",
+            "perimeter_bonus": 1.55 + (severity * 0.45),
+        }
+    if age_hours < _BUSINESS_EVENT_AFTERMATH_WITNESS_DELAY_HOURS:
+        return {}
     return {
         "phase": "taped_off_front",
         "label": "taped-off frontage",

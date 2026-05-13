@@ -1,4 +1,7 @@
 {
+  "_meta": {
+    "schema_version": 1
+  },
   "_comment": "Map semantic tile IDs to atlas tile IDs. Edit safely by hand.",
   "source": {
     "tile_map": "/home/adri/Documents/bakerrrr/assets/tiles/tile_map.json",

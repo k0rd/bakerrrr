@@ -4,6 +4,8 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
+from game.json_metadata import wrap_object_document
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNTIME_MAP_PATH = REPO_ROOT / "assets" / "tiles" / "semantic_map.json"
 DEFAULT_TILE_MAP_PATH = REPO_ROOT / "assets" / "tiles" / "tile_map.json"
@@ -243,7 +245,7 @@ def build_runtime_semantic_map(
         if render_profile is not None:
             entry["render"] = render_profile
 
-    return {
+    return wrap_object_document({
         "_comment": "Runtime semantic catalog combining render semantics and atlas aliases.",
         "sources": {
             "tile_map": str(Path(tile_map_path) if tile_map_path else DEFAULT_TILE_MAP_PATH),
@@ -258,7 +260,7 @@ def build_runtime_semantic_map(
         "semantic_render_defaults": semantic_render_defaults,
         "categories": categories,
         "semantics": semantics,
-    }
+    })
 
 
 def write_runtime_semantic_map(

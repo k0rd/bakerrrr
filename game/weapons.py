@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from game.content_warnings import warn_content_fallback
+from game.json_metadata import split_sequence_document
 
 WEAPONS_PATH = Path(__file__).resolve().parent / "weapons.json"
 
@@ -103,16 +104,20 @@ def load_weapon_catalog(path=WEAPONS_PATH):
     except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
         warn_content_fallback(path, "built-in weapon defaults", exc=exc)
         raw = []
-    if raw is not None and not isinstance(raw, list):
-        warn_content_fallback(path, "built-in weapon defaults", problem="top-level JSON must be a list")
-        raw = []
+    rows, _metadata, _extras = split_sequence_document(raw, sequence_key="weapons")
+    if rows is None:
+        warn_content_fallback(
+            path,
+            "built-in weapon defaults",
+            problem="top-level JSON must be a list or an object with a weapons list",
+        )
+        rows = []
 
-    if isinstance(raw, list):
-        for row in raw:
-            weapon = _normalize_weapon(row)
-            if not weapon:
-                continue
-            catalog[weapon["id"]] = weapon
+    for row in rows:
+        weapon = _normalize_weapon(row)
+        if not weapon:
+            continue
+        catalog[weapon["id"]] = weapon
 
     if not catalog:
         catalog[DEFAULT_WEAPON["id"]] = dict(DEFAULT_WEAPON)

@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from game.json_metadata import METADATA_KEY, SCHEMA_VERSION, split_object_document
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GAME_DIR = Path(__file__).resolve().parent
@@ -198,6 +200,61 @@ def _load_json_file(path, report):
     return data
 
 
+def _validate_schema_metadata(report, source, data):
+    if not isinstance(data, dict):
+        return
+    metadata = data.get(METADATA_KEY)
+    if not isinstance(metadata, dict):
+        report.error(source, [], f"missing {METADATA_KEY}.schema_version metadata")
+        return
+    version = metadata.get("schema_version")
+    if not _is_int(version):
+        report.error(source, [METADATA_KEY, "schema_version"], "schema_version must be an integer")
+        return
+    if int(version) != SCHEMA_VERSION:
+        report.error(
+            source,
+            [METADATA_KEY, "schema_version"],
+            f"schema_version must be {SCHEMA_VERSION}",
+        )
+
+
+def _load_object_document(path, report, description):
+    source = _rel_path(path)
+    data = _load_json_file(path, report)
+    if data is None:
+        return None, source
+    if not _expect_type(report, source, [], data, dict, description):
+        return None, source
+    _validate_schema_metadata(report, source, data)
+    payload, _metadata = split_object_document(data)
+    if not isinstance(payload, dict):
+        return None, source
+    return payload, source
+
+
+def _load_sequence_document(path, report, *, sequence_key, description):
+    source = _rel_path(path)
+    data = _load_json_file(path, report)
+    if data is None:
+        return None, source
+    if isinstance(data, list):
+        report.error(
+            source,
+            [],
+            f"top-level JSON must be an object with {METADATA_KEY}.schema_version metadata and a {sequence_key!r} list",
+        )
+        return data, source
+    if not _expect_type(report, source, [], data, dict, description):
+        return None, source
+    _validate_schema_metadata(report, source, data)
+    sequence = data.get(sequence_key)
+    if not isinstance(sequence, list):
+        report.error(source, [sequence_key], f"{sequence_key} must be a list")
+        return None, source
+    return sequence, source
+
+
 def _expect_type(report, source, path, value, expected_type, description):
     if not isinstance(value, expected_type):
         report.error(source, path, f"expected {description}")
@@ -343,11 +400,8 @@ def _validate_float_pair(report, source, path, value, *, minimum=None, maximum=N
 
 
 def _validate_items(path, report):
-    source = _rel_path(path)
-    data = _load_json_file(path, report)
+    data, source = _load_object_document(path, report, "an object keyed by item id")
     if data is None:
-        return set()
-    if not _expect_type(report, source, [], data, dict, "an object keyed by item id"):
         return set()
 
     item_ids = set()
@@ -556,11 +610,8 @@ def _validate_items(path, report):
 
 
 def _validate_loot_tables(path, item_ids, report):
-    source = _rel_path(path)
-    data = _load_json_file(path, report)
+    data, source = _load_object_document(path, report, "an object keyed by loot table id")
     if data is None:
-        return
-    if not _expect_type(report, source, [], data, dict, "an object keyed by loot table id"):
         return
 
     if "default" not in data:
@@ -597,11 +648,13 @@ def _validate_loot_tables(path, item_ids, report):
 
 
 def _validate_weapons(path, report):
-    source = _rel_path(path)
-    data = _load_json_file(path, report)
+    data, source = _load_sequence_document(
+        path,
+        report,
+        sequence_key="weapons",
+        description="an object with a weapons list",
+    )
     if data is None:
-        return
-    if not _expect_type(report, source, [], data, list, "a list of weapon objects"):
         return
 
     seen_ids = set()
@@ -662,11 +715,8 @@ def _validate_weapons(path, report):
 
 
 def _validate_offense_profile(path, report):
-    source = _rel_path(path)
-    data = _load_json_file(path, report)
+    data, source = _load_object_document(path, report, "an offense-profile object")
     if data is None:
-        return
-    if not _expect_type(report, source, [], data, dict, "an offense-profile object"):
         return
 
     for key in ("action_base", "context_bonus"):
@@ -721,11 +771,8 @@ def _validate_offense_profile(path, report):
 
 
 def _validate_word_pools(path, required_keys, report):
-    source = _rel_path(path)
-    data = _load_json_file(path, report)
+    data, source = _load_object_document(path, report, "an object")
     if data is None:
-        return
-    if not _expect_type(report, source, [], data, dict, "an object"):
         return
 
     for key in required_keys:
@@ -743,11 +790,8 @@ def _validate_word_pools(path, required_keys, report):
 
 
 def _validate_fixtures(path, report):
-    source = _rel_path(path)
-    data = _load_json_file(path, report)
+    data, source = _load_object_document(path, report, "an object keyed by area")
     if data is None:
-        return
-    if not _expect_type(report, source, [], data, dict, "an object keyed by area"):
         return
 
     for required_area in ("city", "non_city"):
@@ -848,11 +892,8 @@ def _validate_fixtures(path, report):
 
 
 def _validate_vehicles(path, report):
-    source = _rel_path(path)
-    data = _load_json_file(path, report)
+    data, source = _load_object_document(path, report, "a vehicle catalog object")
     if data is None:
-        return
-    if not _expect_type(report, source, [], data, dict, "a vehicle catalog object"):
         return
 
     if "vehicle_symbol" in data:
@@ -931,11 +972,8 @@ def _validate_vehicles(path, report):
 
 
 def _validate_npc_names(path, report):
-    source = _rel_path(path)
-    data = _load_json_file(path, report)
+    data, source = _load_object_document(path, report, "an object")
     if data is None:
-        return
-    if not _expect_type(report, source, [], data, dict, "an object"):
         return
 
     human = data.get("human")
@@ -970,11 +1008,8 @@ def _validate_npc_names(path, report):
 
 
 def _validate_tile_map(path, report):
-    source = _rel_path(path)
-    data = _load_json_file(path, report)
+    data, source = _load_object_document(path, report, "an object")
     if data is None:
-        return
-    if not _expect_type(report, source, [], data, dict, "an object"):
         return
 
     for category_name, category in data.items():

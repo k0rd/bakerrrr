@@ -1,4 +1,7 @@
 {
+  "_meta": {
+    "schema_version": 1
+  },
   "_comment": "Runtime semantic catalog combining render semantics and atlas aliases.",
   "asset_color_families": {
     "current": [

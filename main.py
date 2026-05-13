@@ -81,6 +81,7 @@ from game.property_access import default_site_services_for_archetype
 from game.property_controllers import PropertySystem
 from game.property_keys import ensure_actor_has_property_key, ensure_property_lock
 from game.run_objectives import evaluate_run_objective, seed_run_objective
+from game.run_epilogue import RunEpilogueLedgerSystem
 from game.service_menu import ServiceMenuSystem
 from game.site_services import SiteServiceSystem
 from game.skill_progression import SkillProgressionSystem
@@ -315,6 +316,7 @@ def _register_runtime_systems(sim, view, player):
     run_pressure_system = RunPressureSystem(sim, player)
     organization_reputation_system = OrganizationReputationSystem(sim, player)
     final_operation_system = FinalOperationSystem(sim, player)
+    run_epilogue_system = RunEpilogueLedgerSystem(sim, player)
 
     log_system = EventLogSystem(sim, player)
     render_system = RenderSystem(sim, view, player, hud_lines=10)
@@ -372,6 +374,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(run_pressure_system)
     sim.register_system(organization_reputation_system)
     sim.register_system(final_operation_system)
+    sim.register_system(run_epilogue_system)
     sim.register_system(visibility_system)
     sim.register_system(stealth_system)
     sim.register_system(log_system)

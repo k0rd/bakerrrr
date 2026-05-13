@@ -3,6 +3,7 @@ import random
 from pathlib import Path
 
 from game.content_warnings import warn_content_fallback
+from game.json_metadata import split_object_document
 
 
 ITEMS_PATH = Path(__file__).resolve().parent / "items.json"
@@ -299,6 +300,17 @@ DEFAULT_ITEM_CATALOG = {
             {"type": "status", "status": "calm", "duration": 24, "modifiers": {"safety_tick_delta": 0.09, "move_speed_mult": -0.06, "suppression_resist_mult": 0.35, "ranged_accuracy_mult": 0.1, "projectile_spread_mod": -1}},
         ],
     },
+    "shiver_patch": {
+        "name": "Shiver Patch",
+        "glyph": "!",
+        "stack_max": 2,
+        "tags": ["consumable", "safety", "medical", "suspicious"],
+        "legal_status": "suspicious",
+        "effects": [
+            {"type": "modify_need", "need": "safety", "delta": -8},
+            {"type": "status", "status": "shaky", "duration": 20, "modifiers": {"ranged_accuracy_mult": -0.2, "projectile_spread_mod": 2, "suppression_resist_mult": -0.15, "move_speed_mult": 0.04}},
+        ],
+    },
     "spark_brew": {
         "name": "Spark Brew",
         "glyph": "!",
@@ -319,6 +331,17 @@ DEFAULT_ITEM_CATALOG = {
         "effects": [
             {"type": "restore_hp", "delta": 14},
             {"type": "modify_need", "need": "safety", "delta": 24},
+        ],
+    },
+    "counterfeit_med_gel": {
+        "name": "Counterfeit Med Gel",
+        "glyph": "!",
+        "stack_max": 2,
+        "tags": ["consumable", "medical", "safety", "suspicious"],
+        "legal_status": "suspicious",
+        "effects": [
+            {"type": "modify_need", "need": "safety", "delta": -14},
+            {"type": "status", "status": "nauseous", "duration": 18, "modifiers": {"move_speed_mult": -0.08, "ranged_accuracy_mult": -0.08, "weapon_cooldown_mult": 0.08, "retreat_bias_delta": 0.08}},
         ],
     },
     "focus_inhaler": {
@@ -410,6 +433,30 @@ DEFAULT_ITEM_CATALOG = {
             {"type": "restore_hp", "delta": 14},
             {"type": "modify_need", "need": "safety", "delta": 10},
             {"type": "status", "status": "trauma_shocked", "duration": 22, "modifiers": {"safety_tick_delta": -0.06, "move_speed_mult": -0.2, "incoming_damage_mult": 0.18, "ranged_accuracy_mult": -0.14, "retreat_bias_delta": 0.12}},
+        ],
+    },
+    "sedative_ampoule": {
+        "name": "Sedative Ampoule",
+        "glyph": "!",
+        "stack_max": 1,
+        "tags": ["consumable", "medical", "safety", "restricted", "injectable"],
+        "legal_status": "restricted",
+        "effects": [
+            {"type": "modify_need", "need": "energy", "delta": -12},
+            {"type": "modify_need", "need": "safety", "delta": -6},
+            {"type": "status", "status": "sedated", "duration": 24, "modifiers": {"move_speed_mult": -0.24, "weapon_cooldown_mult": 0.18, "ranged_accuracy_mult": -0.12, "retreat_bias_delta": 0.14}},
+        ],
+    },
+    "burner_serum": {
+        "name": "Burner Serum",
+        "glyph": "!",
+        "stack_max": 1,
+        "tags": ["consumable", "medical", "energy", "illegal", "injectable", "stimulant"],
+        "legal_status": "illegal",
+        "effects": [
+            {"type": "modify_need", "need": "energy", "delta": 18},
+            {"type": "modify_need", "need": "safety", "delta": -18},
+            {"type": "status", "status": "overamped", "duration": 18, "modifiers": {"move_speed_mult": 0.18, "weapon_cooldown_mult": -0.12, "ranged_accuracy_mult": -0.18, "incoming_damage_mult": 0.18, "assault_bias_delta": 0.16, "retreat_bias_delta": -0.08}},
         ],
     },
     "synth_focus_tabs": {
@@ -728,14 +775,18 @@ DEFAULT_LOOT_TABLES = {
         {"item_id": "noodle_cup", "weight": 16},
         {"item_id": "spark_brew", "weight": 20},
         {"item_id": "calm_patch", "weight": 18},
+        {"item_id": "shiver_patch", "weight": 8},
         {"item_id": "hydration_salts", "weight": 12},
         {"item_id": "caff_shot", "weight": 16},
         {"item_id": "city_pass_token", "weight": 14},
         {"item_id": "transit_daypass", "weight": 10},
         {"item_id": "credstick_chip", "weight": 9},
         {"item_id": "med_gel", "weight": 10},
+        {"item_id": "counterfeit_med_gel", "weight": 6},
         {"item_id": "micro_medkit", "weight": 8},
         {"item_id": "focus_inhaler", "weight": 8},
+        {"item_id": "sedative_ampoule", "weight": 4},
+        {"item_id": "burner_serum", "weight": 4},
         {"item_id": "synth_focus_tabs", "weight": 6},
         {"item_id": "lockpick_kit", "weight": 5},
         {"item_id": "prybar", "weight": 4},
@@ -750,11 +801,15 @@ DEFAULT_LOOT_TABLES = {
         {"item_id": "transit_daypass", "weight": 11},
         {"item_id": "spark_brew", "weight": 16},
         {"item_id": "calm_patch", "weight": 14},
+        {"item_id": "shiver_patch", "weight": 7},
         {"item_id": "hydration_salts", "weight": 11},
         {"item_id": "med_gel", "weight": 12},
+        {"item_id": "counterfeit_med_gel", "weight": 5},
         {"item_id": "micro_medkit", "weight": 8},
         {"item_id": "caff_shot", "weight": 11},
         {"item_id": "focus_inhaler", "weight": 8},
+        {"item_id": "sedative_ampoule", "weight": 4},
+        {"item_id": "burner_serum", "weight": 3},
         {"item_id": "synth_focus_tabs", "weight": 6},
         {"item_id": "credstick_chip", "weight": 7},
         {"item_id": "lockpick_kit", "weight": 4},
@@ -769,6 +824,7 @@ DEFAULT_LOOT_TABLES = {
         {"item_id": "street_ration", "weight": 16},
         {"item_id": "protein_wrap", "weight": 12},
         {"item_id": "calm_patch", "weight": 10},
+        {"item_id": "shiver_patch", "weight": 6},
         {"item_id": "hydration_salts", "weight": 8},
         {"item_id": "caff_shot", "weight": 8},
     ],
@@ -778,6 +834,7 @@ DEFAULT_LOOT_TABLES = {
         {"item_id": "credstick_chip", "weight": 10},
         {"item_id": "spark_brew", "weight": 14},
         {"item_id": "focus_inhaler", "weight": 8},
+        {"item_id": "sedative_ampoule", "weight": 4},
         {"item_id": "synth_focus_tabs", "weight": 7},
         {"item_id": "lockpick_kit", "weight": 6},
         {"item_id": "prybar", "weight": 7},
@@ -786,9 +843,11 @@ DEFAULT_LOOT_TABLES = {
     ],
     "archetype:checkpoint": [
         {"item_id": "med_gel", "weight": 20},
+        {"item_id": "counterfeit_med_gel", "weight": 6},
         {"item_id": "micro_medkit", "weight": 16},
         {"item_id": "trauma_foam", "weight": 12},
         {"item_id": "focus_inhaler", "weight": 16},
+        {"item_id": "sedative_ampoule", "weight": 7},
         {"item_id": "synth_focus_tabs", "weight": 10},
         {"item_id": "caff_shot", "weight": 14},
         {"item_id": "city_pass_token", "weight": 12},
@@ -796,9 +855,12 @@ DEFAULT_LOOT_TABLES = {
     ],
     "archetype:armory": [
         {"item_id": "med_gel", "weight": 18},
+        {"item_id": "counterfeit_med_gel", "weight": 5},
         {"item_id": "micro_medkit", "weight": 14},
         {"item_id": "trauma_foam", "weight": 14},
         {"item_id": "focus_inhaler", "weight": 16},
+        {"item_id": "sedative_ampoule", "weight": 8},
+        {"item_id": "burner_serum", "weight": 7},
         {"item_id": "synth_focus_tabs", "weight": 11},
         {"item_id": "lockpick_kit", "weight": 9},
         {"item_id": "prybar", "weight": 8},
@@ -811,6 +873,7 @@ DEFAULT_LOOT_TABLES = {
         {"item_id": "caff_shot", "weight": 14},
         {"item_id": "credstick_chip", "weight": 8},
         {"item_id": "black_market_stim", "weight": 8},
+        {"item_id": "burner_serum", "weight": 6},
     ],
     "archetype:bar": [
         {"item_id": "spark_brew", "weight": 22},
@@ -818,6 +881,7 @@ DEFAULT_LOOT_TABLES = {
         {"item_id": "street_ration", "weight": 14},
         {"item_id": "protein_wrap", "weight": 10},
         {"item_id": "caff_shot", "weight": 10},
+        {"item_id": "shiver_patch", "weight": 4},
     ],
 }
 
@@ -835,7 +899,11 @@ def load_item_catalog(path=ITEMS_PATH):
     raw = _read_json(path, fallback_desc="built-in item catalog defaults")
     if raw is not None and not isinstance(raw, dict):
         warn_content_fallback(path, "built-in item catalog defaults", problem="top-level JSON must be an object")
-    source = raw if isinstance(raw, dict) else DEFAULT_ITEM_CATALOG
+    source = dict(DEFAULT_ITEM_CATALOG)
+    if isinstance(raw, dict):
+        payload, _metadata = split_object_document(raw)
+        if isinstance(payload, dict):
+            source.update(payload)
     parsed = {}
 
     for item_id, item in source.items():
@@ -909,7 +977,11 @@ def load_loot_tables(path=LOOT_TABLES_PATH, item_catalog=None):
     raw = _read_json(path, fallback_desc="built-in loot table defaults")
     if raw is not None and not isinstance(raw, dict):
         warn_content_fallback(path, "built-in loot table defaults", problem="top-level JSON must be an object")
-    source = raw if isinstance(raw, dict) else DEFAULT_LOOT_TABLES
+    source = dict(DEFAULT_LOOT_TABLES)
+    if isinstance(raw, dict):
+        payload, _metadata = split_object_document(raw)
+        if isinstance(payload, dict):
+            source.update(payload)
 
     parsed = {}
     for table_key, entries in source.items():

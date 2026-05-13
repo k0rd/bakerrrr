@@ -561,7 +561,7 @@ class OrganizationReputationSystem(System):
 
         severity_label = str(event.data.get("severity_label", "trespass")).strip().lower() or "trespass"
         access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
-        witnessed = bool(event.data.get("witnessed", True))
+        witnessed = bool(event.data.get("witnessed", False))
         ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
         ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
         breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
@@ -600,7 +600,7 @@ class OrganizationReputationSystem(System):
             return
         access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
         severity_score = max(0, int(event.data.get("severity_score", 0)))
-        witnessed = bool(event.data.get("witnessed", True))
+        witnessed = bool(event.data.get("witnessed", False))
         ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
         ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
         breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)

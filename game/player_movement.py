@@ -551,6 +551,16 @@ class PlayerMovementRuntime:
             self.sim.ecs.get(Position).get(eid),
             had_cover=had_cover,
         )
+        current_pos = self.sim.ecs.get(Position).get(eid)
+        if current_pos is not None:
+            visits = self.action_system._overworld_visit_state_for(eid)
+            for chunk in (
+                self.sim.chunk_coords(origin_x, origin_y),
+                self.sim.chunk_coords(current_pos.x, current_pos.y),
+            ):
+                chunk_key = (int(chunk[0]), int(chunk[1]))
+                visits.add(chunk_key)
+                self.action_system._remember_overworld_chunk_memory(eid, chunk_key, source="visit")
 
     def handle_floor_change(self, eid, pos, *, dz, zoom_mode):
         if str(zoom_mode).lower() == "overworld":
