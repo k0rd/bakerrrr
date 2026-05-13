@@ -20,6 +20,7 @@ TOPIC_FAMILIES = {
     "supervisor": "workplace",
     "coworkers": "workplace",
     "people": "workplace",
+    "where_place": "location_followup",
     # Property casing / prep
     "services": "property_prep",
     "hours": "property_prep",

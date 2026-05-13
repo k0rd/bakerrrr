@@ -160,13 +160,15 @@ class ObservedIncidentConsequenceSystem(System):
         super().__init__(sim)
         self._last_social_attempt = {}
         self._last_urgent_attempt = {}
-        if not hasattr(sim, "observed_incident_stats"):
-            sim.observed_incident_stats = {
-                "rumors_shared": 0,
-                "rumors_corrupted": 0,
-                "urgent_cues": 0,
-                "looked_away": 0,
-            }
+        stats = getattr(sim, "observed_incident_stats", None)
+        if not isinstance(stats, dict):
+            stats = {}
+            sim.observed_incident_stats = stats
+        stats.setdefault("rumors_shared", 0)
+        stats.setdefault("rumors_corrupted", 0)
+        stats.setdefault("urgent_cues", 0)
+        stats.setdefault("looked_away", 0)
+        stats.setdefault("sought_shelter", 0)
 
     # ------------------------------------------------------------------
     # Public update pass
@@ -513,7 +515,11 @@ class ObservedIncidentConsequenceSystem(System):
             ))
             return True
 
-        target = self._cue_target_position(incident)
+        if cue_kind == "seek_shelter":
+            source_record["sought_shelter"] = True
+            self.sim.observed_incident_stats["sought_shelter"] += 1
+
+        target = decision.get("target") or self._cue_target_position(incident)
         self.sim.emit(Event(
             "observed_response_cue",
             npc_eid=eid,
@@ -562,12 +568,6 @@ class ObservedIncidentConsequenceSystem(System):
                 "reason": "victim_aligned_or_in_danger",
                 "preferred_methods": ("reach_victim", "warn", "first_aid", "intervene"),
             }
-        if best_kind == "look_away" and best_score >= 0.46:
-            return {
-                "kind": "look_away",
-                "score": best_score,
-                "reason": "aligned_with_offender_or_avoiding_authority",
-            }
         if scores.get("report", 0.0) >= 0.38:
             return {
                 "kind": "report_authority",
@@ -575,6 +575,21 @@ class ObservedIncidentConsequenceSystem(System):
                 "target_eid": None,
                 "reason": "reportable_and_motivated",
                 "preferred_methods": preferred_report_methods,
+            }
+        shelter_response = self._violent_witness_shelter_response(
+            eid,
+            incident,
+            source_record,
+            scores=scores,
+            best_score=best_score,
+        )
+        if shelter_response is not None:
+            return shelter_response
+        if best_kind == "look_away" and best_score >= 0.46:
+            return {
+                "kind": "look_away",
+                "score": best_score,
+                "reason": "aligned_with_offender_or_avoiding_authority",
             }
         return {
             "kind": "look_away",
@@ -647,6 +662,122 @@ class ObservedIncidentConsequenceSystem(System):
             "help_victim": _clamp(help_victim),
         }
 
+    def _violent_witness_shelter_response(self, eid, incident, source_record, *, scores, best_score):
+        if not self._violent_witness_needs_shelter(eid, incident, source_record):
+            return None
+        if self._violent_witness_holds_ground(eid, incident):
+            return {
+                "kind": "look_away",
+                "score": max(best_score, scores.get("look_away", 0.0), 0.28),
+                "reason": "violent_incident_hold_ground",
+            }
+        target = self._pick_violent_witness_shelter_target(eid, incident)
+        if target is None:
+            return {
+                "kind": "look_away",
+                "score": max(best_score, scores.get("look_away", 0.0), 0.24),
+                "reason": "violent_incident_no_clear_retreat",
+            }
+        return {
+            "kind": "seek_shelter",
+            "score": max(scores.get("look_away", 0.0), 0.52),
+            "target": target,
+            "target_eid": incident.get("primary_actor_eid"),
+            "reason": "violent_incident_self_preservation",
+            "preferred_methods": ("retreat", "cover", "shelter"),
+        }
+
+    def _violent_witness_needs_shelter(self, eid, incident, source_record):
+        if not bool(source_record.get("firsthand")):
+            return False
+        source_kind = _key(source_record.get("source_kind"))
+        if source_kind in {"camera", "self"}:
+            return False
+        if int(incident.get("primary_actor_eid") or -1) == int(eid):
+            return False
+        incident_tags = _tags(incident) | set(source_record.get("account_tags", ()) or ())
+        if not (incident_tags & VIOLENCE_TAGS):
+            return False
+        observer_pos = self.sim.ecs.get(Position).get(eid)
+        threat_pos = self._violent_incident_threat_position(eid, incident)
+        if observer_pos is None or threat_pos is None:
+            return False
+        return int(threat_pos[2]) == int(observer_pos.z)
+
+    def _violent_witness_holds_ground(self, eid, incident):
+        traits = self.sim.ecs.get(NPCTraits).get(eid) or NPCTraits()
+        role = _key(getattr(self.sim.ecs.get(AI).get(eid), "role", ""))
+        bravery = _clamp(getattr(traits, "bravery", 0.5), default=0.5)
+        discipline = _clamp(getattr(traits, "discipline", 0.5), default=0.5)
+        chance = 0.015
+        chance += max(0.0, bravery - 0.82) * 0.18
+        chance += max(0.0, discipline - 0.84) * 0.06
+        if role in PEACE_ROLES:
+            chance += 0.01
+        chance = min(0.08, chance)
+        roll = _unit_roll(self.sim.seed, "violent_witness_hold_ground", eid, incident.get("id"))
+        return roll < chance
+
+    def _violent_incident_threat_position(self, eid, incident):
+        observer_pos = self.sim.ecs.get(Position).get(eid)
+        if observer_pos is None:
+            return None
+        offender_pos = self.sim.ecs.get(Position).get(incident.get("primary_actor_eid"))
+        if offender_pos is not None and int(offender_pos.z) == int(observer_pos.z):
+            return (int(offender_pos.x), int(offender_pos.y), int(offender_pos.z))
+        target = self._cue_target_position(incident)
+        if target is None:
+            return None
+        return target if int(target[2]) == int(observer_pos.z) else None
+
+    def _pick_violent_witness_shelter_target(self, eid, incident):
+        pos = self.sim.ecs.get(Position).get(eid)
+        threat_pos = self._violent_incident_threat_position(eid, incident)
+        if pos is None or threat_pos is None:
+            return None
+
+        current_dist = abs(int(pos.x) - int(threat_pos[0])) + abs(int(pos.y) - int(threat_pos[1]))
+        incident_property_id = _text(incident.get("property_id"))
+        best = None
+        best_score = float("-inf")
+
+        for dx in range(-6, 7):
+            for dy in range(-6, 7):
+                steps = abs(dx) + abs(dy)
+                if steps == 0 or steps > 6:
+                    continue
+                nx = int(pos.x) + dx
+                ny = int(pos.y) + dy
+                if not self.sim.tilemap.is_walkable(nx, ny, int(pos.z)):
+                    continue
+                threat_dist = abs(nx - int(threat_pos[0])) + abs(ny - int(threat_pos[1]))
+                if threat_dist <= max(2, current_dist):
+                    continue
+                covered = self.sim.property_covering(nx, ny, int(pos.z))
+                cover_bonus = 0.0
+                if covered is not None:
+                    cover_bonus += 4.0
+                    if incident_property_id and _text(covered.get("id")) != incident_property_id:
+                        cover_bonus += 2.5
+                if threat_dist >= current_dist + 2:
+                    cover_bonus += 3.0
+                score = (float(threat_dist) * 3.0) + cover_bonus - (float(steps) * 1.25)
+                if best is None or score > best_score:
+                    best = (int(nx), int(ny), int(pos.z))
+                    best_score = score
+
+        if best is not None:
+            return best
+
+        step_x = 1 if int(pos.x) >= int(threat_pos[0]) else -1
+        step_y = 1 if int(pos.y) >= int(threat_pos[1]) else -1
+        for stride in range(5, 0, -1):
+            nx = int(pos.x) + (step_x * stride)
+            ny = int(pos.y) + (step_y * stride)
+            if self.sim.tilemap.is_walkable(nx, ny, int(pos.z)):
+                return (nx, ny, int(pos.z))
+        return None
+
     def _alignment(self, eid, other_eid):
         if eid is None or other_eid is None or eid == other_eid:
             return 0.0
@@ -692,6 +823,7 @@ class ObservedIncidentConsequenceSystem(System):
         state = {
             "help_victim": "protecting",
             "report_authority": "reporting_incident",
+            "seek_shelter": "seeking_safety",
             "warn_nearby": "warning",
         }.get(cue_kind)
         if not state:

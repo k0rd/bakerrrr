@@ -26,6 +26,7 @@ PEACE_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "secu
 RESPONSE_STATE_BY_CUE = {
     "report_authority": "reporting_incident",
     "help_victim": "helping_victim",
+    "seek_shelter": "seeking_safety",
     "warn_nearby": "warning",
 }
 REPORT_METHOD_PRIORITY = ("cell_phone", "peace_officer", "alarm", "work_phone", "home_phone", "incident_site")
@@ -156,6 +157,9 @@ class ObservedIncidentResponseSystem(System):
             if pos is None:
                 self._drop_cue(npc_eid, cue, reason="actor_missing_position")
                 continue
+            if self._cue_is_complete(cue, pos):
+                self._finish_cue(npc_eid, cue)
+                continue
             self._apply_pending_intent(cue)
 
     def on_npc_report_arrived(self, event):
@@ -197,6 +201,16 @@ class ObservedIncidentResponseSystem(System):
             fallback = self._incident_position(incident) or cue_data.get("target")
             if fallback:
                 return {"method": "incident_site", "target": tuple(fallback), "target_eid": target_eid}
+            return None
+
+        if cue_kind == "seek_shelter":
+            target = cue_data.get("target")
+            if target:
+                return {
+                    "method": "retreat",
+                    "target": tuple(target),
+                    "target_eid": cue_data.get("target_eid") or incident.get("primary_actor_eid"),
+                }
             return None
 
         if cue_kind == "warn_nearby":
@@ -243,6 +257,28 @@ class ObservedIncidentResponseSystem(System):
         if target:
             return {"method": "incident_site", "target": tuple(target), "target_eid": None}
         return None
+
+    def _cue_is_complete(self, cue, pos):
+        cue_kind = _key(cue.get("cue_kind"))
+        if cue_kind != "seek_shelter":
+            return False
+        target = cue.get("target")
+        if not isinstance(target, (list, tuple)) or len(target) < 3:
+            return False
+        if int(pos.z) != _int(target[2], int(pos.z)):
+            return False
+        if _dist((pos.x, pos.y, pos.z), target) > 1:
+            return False
+        self.sim.emit(Event(
+            "npc_shelter_arrived",
+            npc_eid=_int(cue.get("npc_eid"), -1),
+            incident_id=_int(cue.get("incident_id"), -1),
+            method=_text(cue.get("method") or "retreat"),
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        ))
+        return True
 
     def _has_phone(self, eid):
         inv = self.sim.ecs.get(Inventory).get(eid)

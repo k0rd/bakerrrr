@@ -6262,6 +6262,8 @@ def _property_knowledge_hint(sim, viewer_eid, prop):
         return f"known:{source_name} owns this" if source_name else "known:owner"
     if lead_kind == "hours":
         return f"known:{source_name} mentioned public hours" if source_name else "known:hours"
+    if lead_kind == "location":
+        return f"known:{source_name} placed this on your map" if source_name else "known:location"
     if lead_kind in {"access", "security"}:
         return f"known:{source_name} mentioned access" if source_name else "known:access"
     if lead_kind == "contraband":
@@ -8544,6 +8546,86 @@ class InputSystem(System):
             purpose=purpose,
         )
 
+    def _stored_player_interact_direction(self):
+        state = getattr(self.sim, "player_interact_directions", None)
+        if not isinstance(state, dict):
+            return None
+        remembered = state.get(int(self.player_eid))
+        if not isinstance(remembered, dict):
+            return None
+        direction = _normalized_direction(remembered.get("dx", 0), remembered.get("dy", 0))
+        return None if direction == (0, 0) else direction
+
+    def _default_adjacent_interact_cursor(self, pos):
+        if pos is None:
+            return None
+
+        steps = [
+            (0, -1),
+            (1, 0),
+            (0, 1),
+            (-1, 0),
+            (-1, -1),
+            (1, -1),
+            (1, 1),
+            (-1, 1),
+        ]
+        preferred = self._stored_player_interact_direction()
+        if preferred in steps:
+            steps = [preferred] + [step for step in steps if step != preferred]
+
+        best = None
+        for index, (dx, dy) in enumerate(steps):
+            x = int(pos.x) + int(dx)
+            y = int(pos.y) + int(dy)
+            z = int(pos.z)
+            if not self.sim.tilemap.in_bounds(x, y):
+                continue
+
+            rank = 3
+            if _operable_door_state_at(self.sim, x, y, z) is not None:
+                rank = 0
+            elif any(int(other_eid) != int(self.player_eid) for other_eid in self.sim.tilemap.entities_at(x, y, z)):
+                rank = 1
+            elif self.sim.property_at(x, y, z) or _property_covering(self.sim, x, y, z):
+                rank = 2
+
+            row = (rank, index, x, y, z)
+            if best is None or row < best:
+                best = row
+
+        if best is None:
+            for default_dx, default_dy in ([preferred] if preferred else []) + steps:
+                if default_dx is None or default_dy is None:
+                    continue
+                x = int(pos.x) + int(default_dx)
+                y = int(pos.y) + int(default_dy)
+                if self.sim.tilemap.in_bounds(x, y):
+                    return (int(x), int(y), int(pos.z))
+            return None
+        return (int(best[2]), int(best[3]), int(best[4]))
+
+    def _activate_adjacent_interact_helper(self, zoom_mode):
+        if str(zoom_mode or "city").strip().lower() != "city":
+            return False
+
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(self.player_eid)
+        if pos is None:
+            return False
+
+        target = self._default_adjacent_interact_cursor(pos)
+        if target is None:
+            return False
+
+        return self._activate_look_mode_at(
+            "city",
+            x=int(target[0]),
+            y=int(target[1]),
+            z=int(target[2]),
+            purpose="interact",
+        )
+
     def _deactivate_look_mode(self):
         state = self._look_state()
         if not state.get("active"):
@@ -8584,6 +8666,10 @@ class InputSystem(System):
             return True
 
         if key in (27, ord(";"), ord("Q")):
+            if purpose == "interact" and key == 27:
+                self._deactivate_look_mode()
+                self._emit_turn_action("interact")
+                return True
             self._deactivate_look_mode()
             return True
 
@@ -8596,7 +8682,15 @@ class InputSystem(System):
                 nx = int(state.get("x", 0)) + int(dx)
                 ny = int(state.get("y", 0)) + int(dy)
                 if self.sim.tilemap.in_bounds(nx, ny):
-                    if purpose == "aim" and _entity_uses_melee_aim(self.sim, self.player_eid):
+                    if purpose == "interact":
+                        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+                        if player_pos:
+                            tx = int(player_pos.x) + int(dx)
+                            ty = int(player_pos.y) + int(dy)
+                            if self.sim.tilemap.in_bounds(tx, ty):
+                                state["x"] = tx
+                                state["y"] = ty
+                    elif purpose == "aim" and _entity_uses_melee_aim(self.sim, self.player_eid):
                         player_pos = self.sim.ecs.get(Position).get(self.player_eid)
                         if player_pos:
                             ddx = int(nx) - int(player_pos.x)
@@ -8624,6 +8718,20 @@ class InputSystem(System):
                 self._emit_aimed_fire()
                 return True
             if key in (ord("t"), ord("x"), ord("X")):
+                self._emit_cursor_examine(announce=True)
+                return True
+            return True
+
+        if purpose == "interact":
+            if key == ord("E"):
+                self._emit_turn_action("toggle_door_lock")
+                self._deactivate_look_mode()
+                return True
+            if key in ENTER_KEYS or key in (ord("t"), ord("T")):
+                self._emit_turn_action("interact", force_direction=True)
+                self._deactivate_look_mode()
+                return True
+            if key in (ord("x"), ord("X")):
                 self._emit_cursor_examine(announce=True)
                 return True
             return True
@@ -9800,7 +9908,7 @@ class InputSystem(System):
             return
 
         if key == ord("t"):
-            self._emit_turn_action("interact")
+            self._activate_adjacent_interact_helper(zoom_mode)
             return
 
         if key == ord("T"):
@@ -10787,7 +10895,7 @@ class NPCInteractionSystem(System):
         "seeking_safety": "keeping their distance",
         "surrendered": "standing down",
     }
-    ROOT_TOPICS = {"name", "job", "local", "opportunities", "attention", "contacts", "hire", "fire", "trade", "bye", "purpose", "apologize", "leave"}
+    ROOT_TOPICS = {"name", "job", "local", "opportunities", "attention", "contacts", "where_place", "hire", "fire", "trade", "bye", "purpose", "apologize", "leave"}
     MISSTEP_TOPICS = ("weird", "pry", "insult")
     MENU_REPEAT_ROW_BUDGET = 3
     REPEAT_PRESSURE_SKIP_TOPICS = {
@@ -10798,6 +10906,12 @@ class NPCInteractionSystem(System):
         "leave",
         "payoff",
         "fence",
+        "opportunities",
+        "fallout",
+        "objective",
+        "angle",
+        "risk",
+        "attention",
         "hire_runner",
         "backup_orders",
         "backup_follow",
@@ -11050,6 +11164,9 @@ class NPCInteractionSystem(System):
                 "topic_counts": {},
                 "topic_family_counts": {},
                 "unlocked_topics": set(),
+                "last_property_id": "",
+                "last_property_lead_kind": "",
+                "last_property_source_eid": None,
             }
             history[key] = memory
             return memory
@@ -11070,6 +11187,9 @@ class NPCInteractionSystem(System):
         memory.setdefault("opened_count", 0)
         memory.setdefault("last_tick", -1)
         memory.setdefault("last_topic_id", "")
+        memory.setdefault("last_property_id", "")
+        memory.setdefault("last_property_lead_kind", "")
+        memory.setdefault("last_property_source_eid", None)
         return memory
 
     def _guard_grace_key(self, npc_eid, prop):
@@ -11503,7 +11623,7 @@ class NPCInteractionSystem(System):
         return prop
 
     def _remember_player_property_lead(self, prop, source_eid, lead_kind, confidence):
-        return _remember_property_lead_for_actor(
+        changed = _remember_property_lead_for_actor(
             self.sim,
             self.player_eid,
             prop,
@@ -11511,6 +11631,24 @@ class NPCInteractionSystem(System):
             lead_kind=lead_kind,
             confidence=confidence,
         )
+        self._dialogue_mark_property_reference(
+            source_eid,
+            prop,
+            lead_kind=lead_kind,
+        )
+        return changed
+
+    def _dialogue_mark_property_reference(self, npc_eid, prop, *, lead_kind=""):
+        if npc_eid is None or not isinstance(prop, dict):
+            return False
+        property_id = str(prop.get("id", "") or "").strip()
+        if not property_id:
+            return False
+        memory = self._dialogue_memory(npc_eid)
+        memory["last_property_id"] = property_id
+        memory["last_property_lead_kind"] = str(lead_kind or "").strip().lower()
+        memory["last_property_source_eid"] = npc_eid
+        return True
 
     def _remember_player_contact(self, prop, source_eid, contact_kind, standing, benefits):
         if not prop:
@@ -11531,6 +11669,11 @@ class NPCInteractionSystem(System):
             standing=standing,
             tick=self.sim.tick,
             benefits=next_benefits,
+        )
+        self._dialogue_mark_property_reference(
+            source_eid,
+            prop,
+            lead_kind="contact",
         )
         return (
             existing is None
@@ -11588,6 +11731,14 @@ class NPCInteractionSystem(System):
             benefits=next_benefits,
             introduced=introduced,
         )
+        if property_id:
+            prop = self.sim.properties.get(str(property_id))
+            if isinstance(prop, dict):
+                self._dialogue_mark_property_reference(
+                    source_eid,
+                    prop,
+                    lead_kind="contact",
+                )
         return (
             existing is None
             or prior_source != source_eid
@@ -14674,6 +14825,7 @@ class NPCInteractionSystem(System):
                 if prop:
                     owned_prop = prop
                     break
+        dialogue_memory = self._dialogue_memory(npc_eid)
         current_prop = _property_covering(self.sim, player_pos.x, player_pos.y, player_pos.z)
         if current_prop is None:
             current_prop = _property_for_action(self.sim, player_pos, radius=1)
@@ -14681,6 +14833,12 @@ class NPCInteractionSystem(System):
             linked_prop = _infrastructure_target_property(self.sim, current_prop)
             if linked_prop is not None:
                 current_prop = linked_prop
+        referenced_place_prop = None
+        referenced_place_id = str(dialogue_memory.get("last_property_id", "") or "").strip()
+        if referenced_place_id:
+            candidate = self.sim.properties.get(referenced_place_id)
+            if isinstance(candidate, dict):
+                referenced_place_prop = candidate
         scene_prop = None
         if isinstance(scene_note, dict):
             scene_property_id = str(scene_note.get("property_id", "") or "").strip()
@@ -14688,6 +14846,10 @@ class NPCInteractionSystem(System):
                 scene_prop = self.sim.properties.get(scene_property_id)
         owner_place = workplace_prop or current_prop or owned_prop or scene_prop
         owner_place_name = str(owner_place.get("name", owner_place.get("id", "place"))).strip() if owner_place else ""
+        referenced_place_name = (
+            str(referenced_place_prop.get("name", referenced_place_prop.get("id", "place"))).strip()
+            if referenced_place_prop else ""
+        )
         organization = self._organization_snapshot(npc_eid, occupation, workplace_prop)
         bond = bond if bond is not None else self._bond_snapshot(npc_eid)
         rapport = self._conversation_rapport()
@@ -14953,6 +15115,9 @@ class NPCInteractionSystem(System):
             "current_prop": current_prop,
             "owner_place": owner_place,
             "owner_place_name": owner_place_name,
+            "referenced_place_prop": referenced_place_prop,
+            "referenced_place_name": referenced_place_name,
+            "referenced_place_lead_kind": str(dialogue_memory.get("last_property_lead_kind", "") or "").strip().lower(),
             "organization_eid": organization.get("organization_eid"),
             "organization_name": organization_name_text,
             "organization_kind": str(organization.get("organization_kind", "")).strip().lower(),
@@ -15358,6 +15523,33 @@ class NPCInteractionSystem(System):
         if workplace_name:
             return f"Small crew at {workplace_name}. Depends who is on."
         return ""
+
+    def _where_place_summary(self, context):
+        prop = context.get("referenced_place_prop")
+        if not isinstance(prop, dict):
+            return ""
+        place_name = str(context.get("referenced_place_name", "") or prop.get("name", prop.get("id", "that place"))).strip() or "that place"
+        current_prop = context.get("current_prop")
+        if isinstance(current_prop, dict) and str(current_prop.get("id", "")).strip() == str(prop.get("id", "")).strip():
+            return f"Right here. {place_name} is the place you're standing in."
+
+        focus = _property_focus_position(prop) or _property_display_position(prop)
+        if focus is None:
+            return f"{place_name} is on my mind, but I cannot place it cleanly from here."
+
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if player_pos is None:
+            return f"{place_name} is around {int(focus[0])},{int(focus[1])}."
+
+        origin_chunk = self.sim.chunk_coords(int(player_pos.x), int(player_pos.y))
+        target_chunk = self.sim.chunk_coords(int(focus[0]), int(focus[1]))
+        if tuple(origin_chunk) == tuple(target_chunk):
+            return f"{place_name} is in this chunk."
+
+        distance = _manhattan(int(origin_chunk[0]), int(origin_chunk[1]), int(target_chunk[0]), int(target_chunk[1]))
+        direction = self._dialogue_chunk_direction(origin_chunk, target_chunk)
+        distance_phrase = self._humanize_distance_with_direction(distance, direction, context)
+        return f"{place_name} is {distance_phrase}."
 
     def _social_lead_sentence(self, lead):
         if not isinstance(lead, dict):
@@ -17984,6 +18176,8 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "people" and not self._people_summary(context):
                 continue
+            if topic_id == "where_place" and not self._where_place_summary(context):
+                continue
             if topic_id == "hire" and not context.get("player_business_hire_option"):
                 continue
             if topic_id == "hire_manager" and not context.get("player_business_hire_manager_option"):
@@ -18326,6 +18520,32 @@ class NPCInteractionSystem(System):
                         topic_id=topic_id,
                         count=ask_count,
                         people_summary=summary,
+                    )
+                ]
+            }
+        if topic_id == "where_place":
+            summary = self._where_place_summary(context)
+            referenced_prop = context.get("referenced_place_prop")
+            if referenced_prop:
+                lead_kind = str(context.get("referenced_place_lead_kind", "") or "").strip().lower()
+                if lead_kind in {"", "contact"}:
+                    lead_kind = "location"
+                self._remember_player_property_lead(
+                    referenced_prop,
+                    source_eid=npc_eid,
+                    lead_kind=lead_kind,
+                    confidence=max(0.76, float(context.get("lead_confidence", 0.6)) + 0.08),
+                )
+            bank_id = "where_place" if summary else "where_place_none"
+            return {
+                "npc_lines": [
+                    self._say(
+                        bank_id,
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                        place_location_summary=summary,
+                        place_location_summary_lc=_dialogue_lower_start(summary),
                     )
                 ]
             }
@@ -19149,6 +19369,24 @@ class NPCInteractionSystem(System):
         (_perception, conversation, _streetwise), _ = self._player_social_axes()
         conversation = float(conversation)
 
+        # Let first-pass follow-up exploration land before adjacent-family
+        # pressure starts replacing the actual answer with a brush-off line.
+        # We still apply a small bond cost, but distinct newly reached topics
+        # should remain readable on their first ask even if the player is
+        # walking a whole seam of related questions.
+        pressure_count = max(ask_count, family_count)
+        if ask_count <= 1:
+            if pressure_count >= 2:
+                trust_delta = -0.004 * float(min(6, pressure_count - 1))
+                closeness_delta = -0.003 * float(min(6, pressure_count - 1))
+                self._shift_dialogue_bond(
+                    npc_eid,
+                    trust_delta=trust_delta,
+                    closeness_delta=closeness_delta,
+                    guarded=False,
+                )
+            return response
+
         severity = max(0.0, float(ask_count - 2) * 0.24)
         severity += _repeat_pressure_score(ask_count=ask_count, family_count=family_count)
         severity += max(0.0, float(self._dialogue_total_topics_asked(npc_eid) - ask_count - 2) * 0.012)
@@ -19186,7 +19424,6 @@ class NPCInteractionSystem(System):
         perceived = 0.0
         offense_score = 0
 
-        pressure_count = max(ask_count, family_count)
         if pressure_count == 2 and severity < 0.34:
             trust_delta = -0.01
             closeness_delta = -0.006
@@ -20134,7 +20371,37 @@ class PlayerActionSystem(System):
             "tick": int(self.sim.tick),
         }
 
-    def _player_interact_direction(self, eid):
+    def _adjacent_aim_interact_direction(self, eid, pos):
+        if eid is None or pos is None:
+            return None
+        state = getattr(self.sim, "look_ui", None)
+        if not isinstance(state, dict):
+            return None
+        if not bool(state.get("active")):
+            return None
+        if str(state.get("mode", "city")).strip().lower() != "city":
+            return None
+        if str(state.get("purpose", "inspect")).strip().lower() not in {"aim", "interact"}:
+            return None
+        try:
+            target_x = int(state.get("x", pos.x))
+            target_y = int(state.get("y", pos.y))
+            target_z = int(state.get("z", pos.z))
+        except (TypeError, ValueError):
+            return None
+        if int(target_z) != int(pos.z):
+            return None
+        dx = int(target_x) - int(pos.x)
+        dy = int(target_y) - int(pos.y)
+        if max(abs(dx), abs(dy)) != 1:
+            return None
+        direction = _normalized_direction(dx, dy)
+        return None if direction == (0, 0) else direction
+
+    def _player_interact_direction(self, eid, pos=None):
+        aimed_direction = self._adjacent_aim_interact_direction(eid, pos)
+        if aimed_direction is not None:
+            return aimed_direction
         if eid is None:
             return None
         state = self._player_interact_direction_state().get(int(eid))
@@ -20151,7 +20418,7 @@ class PlayerActionSystem(System):
             pos.y,
             target_x,
             target_y,
-            preferred_dir=self._player_interact_direction(eid),
+            preferred_dir=self._player_interact_direction(eid, pos),
             stable_tiebreaker=stable_tiebreaker,
         )
 
@@ -27648,6 +27915,13 @@ class NPCWillSystem(System):
                 will.last_tick = self.sim.tick
                 continue
 
+            if ai.state == "seeking_safety" and ai.target and getattr(ai, "incident_id", None) is not None:
+                will.intent = ai.state
+                will.target = ai.target
+                will.target_eid = ai.target_eid
+                will.last_tick = self.sim.tick
+                continue
+
             if ai.state == "protecting" and ai.target:
                 recent_threat = memory.strongest("ally_threatened") if memory else None
                 recent_property = _strongest_memory_entry(
@@ -30492,11 +30766,15 @@ class EventLogSystem(System):
             mode = str(event.data.get("mode", "city")).lower()
             if purpose == "aim":
                 self.sim.log.add(f"Aim mode enabled ({mode}).")
+            elif purpose == "interact":
+                self.sim.log.add(f"Interact target mode enabled ({mode}).")
             else:
                 self.sim.log.add(f"Look mode enabled ({mode}).")
         else:
             if purpose == "aim":
                 self.sim.log.add("Aim mode disabled.")
+            elif purpose == "interact":
+                self.sim.log.add("Interact target mode disabled.")
             else:
                 self.sim.log.add("Look mode disabled.")
 
@@ -30509,7 +30787,12 @@ class EventLogSystem(System):
         raw = event.data.get("text", "")
         text = _line_text(raw).strip()
         if text:
-            prefix = "Aim: " if purpose == "aim" else "Look: "
+            if purpose == "aim":
+                prefix = "Aim: "
+            elif purpose == "interact":
+                prefix = "Interact: "
+            else:
+                prefix = "Look: "
             entry = _line_with_prefix(raw, prefix)
             segments = _line_segments(entry)
             if segments:
@@ -35488,7 +35771,12 @@ class RenderSystem(System):
             status_chunks.append(" ".join(vehicle_bits))
         if look_ui.get("active"):
             look_mode = str(look_ui.get("mode", zoom_mode)).lower()
-            label = "Aim" if look_purpose == "aim" else "Look"
+            if look_purpose == "aim":
+                label = "Aim"
+            elif look_purpose == "interact":
+                label = "Interact"
+            else:
+                label = "Look"
             if look_mode == "overworld":
                 look_coord = (
                     f"{int(look_ui.get('chunk_x', 0))},"
@@ -35643,10 +35931,20 @@ class RenderSystem(System):
             look_entry = look_ui.get("inspect_text", "")
             look_text = _line_text(look_entry).strip()
             if look_text:
-                prefix = "Aim: " if look_purpose == "aim" else "Look: "
+                if look_purpose == "aim":
+                    prefix = "Aim: "
+                elif look_purpose == "interact":
+                    prefix = "Interact: "
+                else:
+                    prefix = "Look: "
                 report_hint_line = _line_with_prefix(look_entry, prefix)
             else:
-                report_hint_line = "Aim mode active." if look_purpose == "aim" else "Look mode active."
+                if look_purpose == "aim":
+                    report_hint_line = "Aim mode active."
+                elif look_purpose == "interact":
+                    report_hint_line = "Interact target mode active."
+                else:
+                    report_hint_line = "Look mode active."
             quest_lines = _wrap_display_lines(report_hint_line, hud_text_w, max_lines=2)
         else:
             quest_lines = []
@@ -35684,6 +35982,8 @@ class RenderSystem(System):
                     controls = "Aim (Melee): reticle adjacent-only, F cycle target, Enter strike, X/T inspect, Esc close, ? help"
                 else:
                     controls = "Aim: move cursor, F cycle target, Enter fire, X/T inspect, Esc close, ? help"
+            elif look_purpose == "interact":
+                controls = "Interact: choose adjacent tile, T/Enter confirm, E lock, X inspect, Esc fallback, ; close, ? help"
             else:
                 controls = "Look: move cursor, X/T inspect, Esc close, ? help"
         elif inventory_ui.get("open"):

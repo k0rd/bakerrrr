@@ -1035,6 +1035,92 @@ def _repair_corner_component_islands(excluded, left, right, top, bottom):
     return excluded
 
 
+def _cell_in_bounds(x, y, left, right, top, bottom):
+    return int(left) <= int(x) <= int(right) and int(top) <= int(y) <= int(bottom)
+
+
+def _component_touches_shell(component, left, right, top, bottom):
+    for cell_x, cell_y in component:
+        if int(cell_x) in {int(left), int(right)} or int(cell_y) in {int(top), int(bottom)}:
+            return True
+    return False
+
+
+def _cell_side_from_exposure(x, y, left, right, top, bottom, component):
+    exposures = []
+    component = {(int(cell_x), int(cell_y)) for cell_x, cell_y in component}
+    if int(y) == int(top) or (int(x), int(y) - 1) in component:
+        exposures.append("north")
+    if int(x) == int(right) or (int(x) + 1, int(y)) in component:
+        exposures.append("east")
+    if int(y) == int(bottom) or (int(x), int(y) + 1) in component:
+        exposures.append("south")
+    if int(x) == int(left) or (int(x) - 1, int(y)) in component:
+        exposures.append("west")
+    return exposures[0] if exposures else "south"
+
+
+def _reentrant_exterior_door_apertures(excluded, left, right, top, bottom):
+    excluded = {(int(x), int(y)) for x, y in excluded}
+    if not excluded:
+        return tuple()
+
+    apertures = []
+    seen = set()
+    for component in _cell_components(excluded):
+        if not _component_touches_shell(component, left, right, top, bottom):
+            continue
+
+        component = {(int(cell_x), int(cell_y)) for cell_x, cell_y in component}
+        for x, y in sorted(component, key=lambda cell: (int(cell[1]), int(cell[0]))):
+            for dx, dy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+                edge_a = (int(x) + int(dx), int(y))
+                edge_b = (int(x), int(y) + int(dy))
+                interior = (int(x) + int(dx), int(y) + int(dy))
+                exterior_a = (int(x) - int(dx), int(y))
+                exterior_b = (int(x), int(y) - int(dy))
+
+                if not all(
+                    _cell_in_bounds(cell_x, cell_y, left, right, top, bottom)
+                    for cell_x, cell_y in (edge_a, edge_b, interior)
+                ):
+                    continue
+                if any(cell in excluded for cell in (edge_a, edge_b, interior)):
+                    continue
+
+                interior_neighbors = (
+                    (interior[0] - 1, interior[1]),
+                    (interior[0] + 1, interior[1]),
+                    (interior[0], interior[1] - 1),
+                    (interior[0], interior[1] + 1),
+                )
+                if any(
+                    (not _cell_in_bounds(cell_x, cell_y, left, right, top, bottom)) or (cell_x, cell_y) in excluded
+                    for cell_x, cell_y in interior_neighbors
+                ):
+                    continue
+
+                if not all(
+                    (not _cell_in_bounds(cell_x, cell_y, left, right, top, bottom)) or (cell_x, cell_y) in component
+                    for cell_x, cell_y in (exterior_a, exterior_b)
+                ):
+                    continue
+
+                if (int(x), int(y)) in seen:
+                    break
+                seen.add((int(x), int(y)))
+                apertures.append({
+                    "x": int(x),
+                    "y": int(y),
+                    "z": 0,
+                    "side": _cell_side_from_exposure(x, y, left, right, top, bottom, component),
+                    "kind": "door",
+                    "ordinary": True,
+                })
+                break
+    return tuple(apertures)
+
+
 def building_shape_exclusions(
     rng,
     exterior_class,
@@ -2017,7 +2103,7 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
                 "text": sign_text,
             }
 
-    excluded = building_shape_exclusions(
+    excluded = set(building_shape_exclusions(
         rng=layout_rng,
         exterior_class=building_exterior_class(building) if isinstance(building, dict) else "building",
         left=left,
@@ -2029,7 +2115,7 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
         entry_side=front_side,
         parcel_span_x=parcel_span_x,
         parcel_span_y=parcel_span_y,
-    )
+    ))
 
     apertures = [
         {
@@ -2041,6 +2127,9 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
             "ordinary": True,
         }
     ]
+    for diagonal_aperture in _reentrant_exterior_door_apertures(excluded, left, right, top, bottom):
+        excluded.discard((int(diagonal_aperture["x"]), int(diagonal_aperture["y"])))
+        apertures.append(diagonal_aperture)
 
     service_aperture = _service_aperture(
         building=building,
@@ -2084,6 +2173,7 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
         ]
         if signage and (int(signage["x"]), int(signage["y"])) in excluded:
             signage = None
+    excluded = frozenset(excluded)
 
     return {
         "left": int(left),

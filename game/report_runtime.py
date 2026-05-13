@@ -830,6 +830,7 @@ def _known_location_summary_bits(sim, prop, known):
 
     lead_kind = str((known or {}).get("lead_kind", "") or "").strip().lower()
     lead_label = {
+        "location": "location lead",
         "owner": "owner lead",
         "workplace": "work lead",
         "hours": "hours lead",
@@ -916,6 +917,9 @@ def _known_location_fact_lines(
 
     if lead_kind == "workplace" and source_name:
         facts.append(f"{source_name} works here.")
+
+    if lead_kind == "location" and source_name:
+        facts.append(f"{source_name} pointed this place out for you.")
 
     if lead_kind == "hours" and hours_text:
         facts.append(f"Public hours: {hours_text}.")

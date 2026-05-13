@@ -60,7 +60,7 @@ class PropertyActionRuntime:
         if not nearby:
             return None
 
-        preferred_dir = self.action_system._player_interact_direction(actor_eid) if actor_eid is not None else None
+        preferred_dir = self.action_system._player_interact_direction(actor_eid, pos) if actor_eid is not None else None
         nearby = sorted(
             nearby,
             key=lambda current: _interaction_target_order_key(
@@ -195,7 +195,7 @@ class PropertyActionRuntime:
         candidate = _door_interaction_candidate(
             self.sim,
             pos,
-            preferred_dir=self.action_system._player_interact_direction(eid),
+            preferred_dir=self.action_system._player_interact_direction(eid, pos),
         )
         if not candidate:
             return False
@@ -255,7 +255,7 @@ class PropertyActionRuntime:
         candidate = _door_interaction_candidate(
             self.sim,
             pos,
-            preferred_dir=self.action_system._player_interact_direction(eid),
+            preferred_dir=self.action_system._player_interact_direction(eid, pos),
         )
         if not candidate:
             _log_player_feedback(
@@ -401,7 +401,7 @@ class PropertyActionRuntime:
         ))
 
     def _force_interact_in_last_direction(self, eid, pos):
-        preferred_dir = self.action_system._player_interact_direction(eid)
+        preferred_dir = self.action_system._player_interact_direction(eid, pos)
         if preferred_dir is None:
             return False
 
@@ -463,8 +463,14 @@ class PropertyActionRuntime:
         if force_direction and self._force_interact_in_last_direction(eid, pos):
             return
 
+        preferred_dir = self.action_system._player_interact_direction(eid, pos)
         prop = self.active_interact_property_near(pos)
-        npc_eid = None if prop else self.action_system._npc_for_player_action(eid, pos, radius=1)
+        npc_eid = None if prop else self.action_system._npc_for_player_action(
+            eid,
+            pos,
+            radius=1,
+            preferred_dir=preferred_dir,
+        )
         if npc_eid is not None:
             self._emit_npc_interact(eid, npc_eid, pos)
             return
@@ -473,7 +479,12 @@ class PropertyActionRuntime:
             return
 
         if not prop:
-            vehicle_prop = self.action_system._vehicle_for_player_action(eid=eid, pos=pos, radius=1)
+            vehicle_prop = self.action_system._vehicle_for_player_action(
+                eid=eid,
+                pos=pos,
+                radius=1,
+                preferred_dir=preferred_dir,
+            )
             if vehicle_prop is not None:
                 self.action_system._enter_vehicle(eid=eid, pos=pos, vehicle_prop=vehicle_prop)
                 return

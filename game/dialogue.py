@@ -16,6 +16,7 @@ TOPIC_ORDER = (
     "supervisor",
     "coworkers",
     "people",
+    "where_place",
     "hire",
     "hire_manager",
     "hire_staff",
@@ -124,6 +125,11 @@ TOPIC_DEFS = {
     "people": {
         "label": "Who should I know around here?",
         "root": False,
+        "unlocks": (),
+    },
+    "where_place": {
+        "label": "Where is that place?",
+        "root": True,
         "unlocks": (),
     },
     "hire": {
@@ -522,6 +528,11 @@ PLAYER_TOPIC_BANKS = {
         "Anybody around here worth knowing?",
         "Who matters around here?",
         "Who matters around {workplace_name}?",
+    ),
+    "where_place": (
+        "Where is {referenced_place_name}, exactly?",
+        "How do I find {referenced_place_name}?",
+        "Where is that place, then?",
     ),
     "services": (
         "What does the place actually do?",
@@ -1559,6 +1570,16 @@ DIALOGUE_BANKS = {
         "{people_summary}",
         "If you are looking for names, {people_summary}",
         "Start here: {people_summary}",
+    ),
+    "where_place": (
+        "{place_location_summary}",
+        "If you need it plain, {place_location_summary_lc}",
+        "For finding it? {place_location_summary_lc}",
+    ),
+    "where_place_none": (
+        "Nothing concrete enough to point at yet.",
+        "I do not have a clean place to put on the map for you.",
+        "Not enough there for me to point you anywhere real.",
     ),
     "people_none": (
         "No one I would point you at just yet.",
@@ -2688,6 +2709,8 @@ def topic_label(topic_id, context=None):
         return f"Who should I know around {context['workplace_name']}?"
     if topic_id == "people" and context.get("social_lead_name"):
         return "Who should I know around here?"
+    if topic_id == "where_place" and context.get("referenced_place_name"):
+        return f"Where is {context['referenced_place_name']}?"
     if topic_id == "hire" and context.get("player_business_hire_name"):
         open_roles = tuple(
             str(role).strip().lower()

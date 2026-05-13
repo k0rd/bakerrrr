@@ -206,6 +206,10 @@ def _door_interaction_candidate(sim, pos, *, preferred_dir=None):
         (int(pos.x) + 1, int(pos.y), int(pos.z)),
         (int(pos.x), int(pos.y) + 1, int(pos.z)),
         (int(pos.x) - 1, int(pos.y), int(pos.z)),
+        (int(pos.x) - 1, int(pos.y) - 1, int(pos.z)),
+        (int(pos.x) + 1, int(pos.y) - 1, int(pos.z)),
+        (int(pos.x) + 1, int(pos.y) + 1, int(pos.z)),
+        (int(pos.x) - 1, int(pos.y) + 1, int(pos.z)),
     ]
     ranked = []
     for index, (x, y, z) in enumerate(candidates):
