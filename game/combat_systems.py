@@ -33,6 +33,28 @@ from game.system_support.actor_runtime import (
     _detail_tick_allowed,
     _entity_is_downed,
 )
+from game.system_support.combat_targeting_runtime import (
+    _aim_confirm_label,
+    _aim_open_label,
+    _appearance_with_effect,
+    _clamp,
+    _dir_label,
+    _entity_should_blink_in_combat,
+    _entity_uses_melee_aim,
+    _first_targetable_entity_at,
+    _float_or_default,
+    _grid_distance,
+    _manual_fire_preview,
+    _npc_combat_metrics,
+    _projectile_path_points,
+    _shatter_window_for_projectile,
+    _target_condition_descriptor,
+    _weapon_ammo_type_label,
+    _weapon_context_for_entity,
+    _weapon_is_melee,
+    _weapon_reserve_ammo,
+    _weapon_target_viability,
+)
 from game.system_support.cover_runtime import _effective_cover_value
 from game.system_support.entity_naming import _entity_display_name
 from game.system_support.interaction_ordering import _direction_step, _manhattan
@@ -58,30 +80,6 @@ from game.system_support.status_runtime import (
 from game.weapons import weapon_by_id
 
 THREAT_STATES = {"protecting", "investigating"}
-
-
-def _unconfigured_helper(name):
-    def _missing(*args, **kwargs):
-        raise RuntimeError(f"combat_systems helper {name} was not configured")
-    return _missing
-
-
-def _int_or_default(value, default=0):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
-_float_or_default = _unconfigured_helper('_float_or_default')
-_grid_distance = _unconfigured_helper('_grid_distance')
-_clamp = _unconfigured_helper('_clamp')
-_dir_label = _unconfigured_helper('_dir_label')
-_first_targetable_entity_at = _unconfigured_helper('_first_targetable_entity_at')
-_manual_fire_preview = _unconfigured_helper('_manual_fire_preview')
-_projectile_path_points = _unconfigured_helper('_projectile_path_points')
-_shatter_window_for_projectile = _unconfigured_helper('_shatter_window_for_projectile')
-_weapon_target_viability = _unconfigured_helper('_weapon_target_viability')
-_weapon_is_melee = _unconfigured_helper('_weapon_is_melee')
-_npc_combat_metrics = _unconfigured_helper('_npc_combat_metrics')
 
 
 class WeaponSystem(System):

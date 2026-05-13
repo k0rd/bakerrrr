@@ -7,6 +7,7 @@ from game.lighting import update_lighting_state as _update_lighting_state
 from game.components import AI, CoverState, NoiseProfile, PlayerModeState, Position
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import _detail_tick_allowed, _entity_is_downed
+from game.system_support.combat_targeting_runtime import QUIET_NOISE_CAUSES
 from game.system_support.combat_pacing_runtime import _combat_overlay_state
 from game.system_support.cover_runtime import (
     THREAT_STATES,
@@ -17,8 +18,6 @@ from game.system_support.cover_runtime import (
 from game.system_support.entity_naming import _entity_display_name
 from game.system_support.interaction_ordering import _manhattan
 from game.system_support.stealth_runtime import _player_hidden_status
-
-QUIET_NOISE_CAUSES = None
 
 
 class CoverSystem(System):
@@ -200,14 +199,10 @@ class NoiseSystem(System):
         self.sim.events.subscribe("player_action", self.on_player_action)
 
     def on_player_action(self, event):
-        quiet_noise_causes = QUIET_NOISE_CAUSES
-        if quiet_noise_causes is None:
-            raise RuntimeError("perception_systems helper QUIET_NOISE_CAUSES was not configured")
-
         eid = event.data.get("eid")
         action = event.data.get("action")
 
-        if action not in quiet_noise_causes:
+        if action not in QUIET_NOISE_CAUSES:
             return
 
         positions = self.sim.ecs.get(Position)

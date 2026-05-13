@@ -3253,6 +3253,21 @@ class PygameView:
                 kind=semantic_key.removeprefix("overworld_focus_") or "corner_nw",
             )
             return semantic_key
+        if semantic_key == "overworld_selector_horizontal":
+            self._draw_overworld_focus_overlay(x, y, color=color, attrs=attrs, kind="horizontal")
+            return semantic_key
+        if semantic_key == "overworld_selector_vertical":
+            self._draw_overworld_focus_overlay(x, y, color=color, attrs=attrs, kind="vertical")
+            return semantic_key
+        if semantic_key.startswith("overworld_selector_corner_"):
+            self._draw_overworld_focus_overlay(
+                x,
+                y,
+                color=color,
+                attrs=attrs,
+                kind=semantic_key.removeprefix("overworld_selector_") or "corner_nw",
+            )
+            return semantic_key
         if semantic_key.startswith("overworld_district_"):
             self._draw_overworld_icon_overlay(
                 x,

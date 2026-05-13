@@ -735,16 +735,23 @@ def _overworld_edge_legend_lines(
             ])
     header_segments.append(_segment(" "))
 
+    player_eid = getattr(sim, "player_eid", None)
+    view_only = False
+    records = getattr(sim, "overworld_view_only_by_eid", None)
+    if isinstance(records, dict) and player_eid is not None:
+        try:
+            view_only = bool(records.get(int(player_eid), False))
+        except (TypeError, ValueError):
+            view_only = False
+
     footer_segments = [
-        _segment("In-vehicle: ", color="human", attrs=bold),
+        _segment("Map: " if view_only else "In-vehicle: ", color="human", attrs=bold),
         _segment("!", color="player", attrs=bold, inline_glyph=True, semantic_id="overworld_marker_nearest"),
         _segment(" nearest  "),
         _segment("4", color="human", inline_glyph=True, semantic_id="overworld_marker"),
         _segment(f" markers:{len(markers)}  "),
-        _segment("X", color="player", attrs=bold, inline_glyph=True, semantic_id="overworld_cursor"),
-        _segment(" cursor  "),
         _segment("bright=loaded dim=distant  "),
-        _segment("G drive  M mark  l list  N nearest  t exit"),
+        _segment("move browse  X look  Enter inspect  M mark  l list  N nearest  t exit" if view_only else "G drive  M mark  l list  N nearest  t exit"),
     ]
 
     return (

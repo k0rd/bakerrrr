@@ -2024,17 +2024,37 @@ class NPCSettlementSystem(System):
             return None, ""
         return choice[0], choice[1]
 
-    def _candidate_workplace(self, pos):
+    def _candidate_workplace(self, pos, *, anchor=None):
         weighted = []
+        probe = pos
+        if isinstance(anchor, (tuple, list)) and len(anchor) >= 3:
+            try:
+                probe = Position(int(anchor[0]), int(anchor[1]), int(anchor[2]))
+            except (TypeError, ValueError):
+                probe = pos
+        search_props = []
+        seen = set()
         try:
-            search_props = self._props_in_chunk(self.sim.chunk_coords(int(pos.x), int(pos.y)))
-        except (TypeError, ValueError):
+            origin_chunk = self.sim.chunk_coords(int(probe.x), int(probe.y))
+        except (AttributeError, TypeError, ValueError):
+            origin_chunk = None
+        if isinstance(origin_chunk, (tuple, list)) and len(origin_chunk) >= 2:
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    chunk = (int(origin_chunk[0]) + dx, int(origin_chunk[1]) + dy)
+                    for prop in self._props_in_chunk(chunk):
+                        prop_id = str((prop or {}).get("id", "") or "").strip()
+                        if not prop_id or prop_id in seen:
+                            continue
+                        seen.add(prop_id)
+                        search_props.append(prop)
+        if not search_props:
             search_props = tuple(self.sim.properties.values())
         for prop in search_props:
             capacity = _newcomer_work_capacity(self.sim, prop)
             if capacity <= 0 or _newcomer_work_load(self.sim, prop) >= capacity:
                 continue
-            distance = _newcomer_distance_to_property(pos, prop)
+            distance = _newcomer_distance_to_property(probe, prop)
             if distance > 30:
                 continue
             archetype = _property_archetype(prop)
@@ -2053,6 +2073,18 @@ class NPCSettlementSystem(System):
                 "general": 1.4,
             }.get(category, 1.0)
             weight = weight / max(1.0, 1.0 + (distance * 0.1))
+            prop_chunk = _property_chunk_key(self.sim, prop)
+            if (
+                isinstance(origin_chunk, (tuple, list))
+                and len(origin_chunk) >= 2
+                and isinstance(prop_chunk, (tuple, list))
+                and len(prop_chunk) >= 2
+            ):
+                chunk_step = max(
+                    abs(int(prop_chunk[0]) - int(origin_chunk[0])),
+                    abs(int(prop_chunk[1]) - int(origin_chunk[1])),
+                )
+                weight = weight / max(1.0, 1.0 + (chunk_step * 0.35))
             weighted.append((prop, weight))
         return _weighted_choice(self.rng, weighted)
 
@@ -2248,7 +2280,7 @@ class NPCSettlementSystem(System):
 
         if not work_prop and int(self.sim.tick) - int(newcomer.last_job_tick) >= _NEWCOMER_JOB_RETRY_TICKS:
             newcomer.last_job_tick = int(self.sim.tick)
-            work_choice = self._candidate_workplace(pos)
+            work_choice = self._candidate_workplace(pos, anchor=getattr(routine, "home", None))
             if work_choice is not None:
                 self._assign_workplace(eid, newcomer, work_choice)
 

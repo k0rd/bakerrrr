@@ -4,6 +4,7 @@ import copy
 import json
 import pickle
 import re
+import types
 from pathlib import Path
 
 from .events import EventBus
@@ -38,6 +39,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "mutators",
     "appearance",
     "npc_social_dynamics_system",
+    "run_epilogue_ledger",
     "property_anchor_index",
     "property_cover_index",
     "property_order",
@@ -46,6 +48,98 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "ground_item_order",
     "next_ground_item_order",
 }
+_SKIP_SNAPSHOT_VALUE = object()
+
+
+def _is_module_pickle_error(exc):
+    text = str(exc or "").strip().lower()
+    return "module" in text and ("pickle" in text or "copy" in text)
+
+
+def _strip_module_refs(value, memo=None):
+    if isinstance(value, types.ModuleType):
+        return _SKIP_SNAPSHOT_VALUE
+    memo = {} if memo is None else memo
+    value_id = id(value)
+    if value_id in memo:
+        return memo[value_id]
+    if isinstance(value, dict):
+        clone = {}
+        memo[value_id] = clone
+        for key, inner in value.items():
+            safe_key = _strip_module_refs(key, memo)
+            safe_inner = _strip_module_refs(inner, memo)
+            if safe_key is _SKIP_SNAPSHOT_VALUE or safe_inner is _SKIP_SNAPSHOT_VALUE:
+                continue
+            clone[safe_key] = safe_inner
+        return clone
+    if isinstance(value, list):
+        clone = []
+        memo[value_id] = clone
+        for inner in value:
+            safe_inner = _strip_module_refs(inner, memo)
+            if safe_inner is _SKIP_SNAPSHOT_VALUE:
+                continue
+            clone.append(safe_inner)
+        return clone
+    if isinstance(value, tuple):
+        placeholder = []
+        memo[value_id] = placeholder
+        for inner in value:
+            safe_inner = _strip_module_refs(inner, memo)
+            if safe_inner is _SKIP_SNAPSHOT_VALUE:
+                continue
+            placeholder.append(safe_inner)
+        clone = tuple(placeholder)
+        memo[value_id] = clone
+        return clone
+    if isinstance(value, set):
+        clone = set()
+        memo[value_id] = clone
+        for inner in value:
+            safe_inner = _strip_module_refs(inner, memo)
+            if safe_inner is _SKIP_SNAPSHOT_VALUE:
+                continue
+            clone.add(safe_inner)
+        return clone
+    try:
+        return copy.deepcopy(value)
+    except TypeError as exc:
+        if _is_module_pickle_error(exc):
+            return _SKIP_SNAPSHOT_VALUE
+        raise
+
+
+def _snapshot_value_or_skip(key, value):
+    if isinstance(value, types.ModuleType):
+        return _SKIP_SNAPSHOT_VALUE
+    if key == "log" and hasattr(value, "default_tick_source"):
+        # Avoid deep-copying bound runtime callbacks (they recurse back into sim state).
+        original_tick_source = value.default_tick_source
+        value.default_tick_source = None
+        try:
+            return copy.deepcopy(value)
+        finally:
+            value.default_tick_source = original_tick_source
+    if key == "tilemap":
+        original_add = getattr(value, "on_add_entity", None)
+        original_move = getattr(value, "on_move_entity", None)
+        original_remove = getattr(value, "on_remove_entity", None)
+        value.on_add_entity = None
+        value.on_move_entity = None
+        value.on_remove_entity = None
+        try:
+            return copy.deepcopy(value)
+        finally:
+            value.on_add_entity = original_add
+            value.on_move_entity = original_move
+            value.on_remove_entity = original_remove
+    try:
+        return copy.deepcopy(value)
+    except TypeError as exc:
+        if _is_module_pickle_error(exc):
+            return _strip_module_refs(value)
+        raise
 
 
 def normalize_character_name(raw_name, max_length=40):
@@ -388,30 +482,10 @@ def snapshot_simulation(sim):
     for key, value in sim.__dict__.items():
         if key in _EXCLUDED_SIM_STATE_KEYS:
             continue
-        if key == "log" and hasattr(value, "default_tick_source"):
-            # Avoid deep-copying bound runtime callbacks (they recurse back into sim state).
-            original_tick_source = value.default_tick_source
-            value.default_tick_source = None
-            try:
-                state[key] = copy.deepcopy(value)
-            finally:
-                value.default_tick_source = original_tick_source
+        copied = _snapshot_value_or_skip(key, value)
+        if copied is _SKIP_SNAPSHOT_VALUE:
             continue
-        if key == "tilemap":
-            original_add = getattr(value, "on_add_entity", None)
-            original_move = getattr(value, "on_move_entity", None)
-            original_remove = getattr(value, "on_remove_entity", None)
-            value.on_add_entity = None
-            value.on_move_entity = None
-            value.on_remove_entity = None
-            try:
-                state[key] = copy.deepcopy(value)
-            finally:
-                value.on_add_entity = original_add
-                value.on_move_entity = original_move
-                value.on_remove_entity = original_remove
-            continue
-        state[key] = copy.deepcopy(value)
+        state[key] = copied
     log = state.get("log")
     if log is not None and hasattr(log, "default_tick_source"):
         # Runtime callbacks should be rebound on restore, not pickled into saves.
