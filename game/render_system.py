@@ -245,6 +245,12 @@ from game.service_runtime import (
     _transit_token_amount_label,
     _vehicle_sale_stats_text,
 )
+from game.location_presentation_runtime import (
+    _creature_color_key,
+    _entity_render_style,
+    _item_legend_line,
+    _stakeout_progress_snapshot,
+)
 from game.ui_text_runtime import (
     _clip_display_line,
     _filtered_log_lines,
@@ -272,6 +278,10 @@ from game.skill_ui import (
     skill_debug_lines as _skill_debug_lines,
     skill_hud_status_chunks as _skill_hud_status_chunks,
 )
+from game.status_ui_runtime import (
+    _active_status_summary,
+    _hud_primary_status_chunks,
+)
 from game.weapons import WEAPON_CATALOG, roll_weapon_instance, weapon_by_id
 
 def _facade():
@@ -283,9 +293,6 @@ def _facade():
 STAKEOUT_MAX_REVEALS = 4
 
 STAKEOUT_REVEAL_INTERVAL = 8
-
-def _active_status_summary(*args, **kwargs):
-    return _facade()._active_status_summary(*args, **kwargs)
 
 def _aim_confirm_label(*args, **kwargs):
     return _facade()._aim_confirm_label(*args, **kwargs)
@@ -314,9 +321,6 @@ def _cover_source_label(*args, **kwargs):
 def _cover_source_render(*args, **kwargs):
     return _facade()._cover_source_render(*args, **kwargs)
 
-def _creature_color_key(*args, **kwargs):
-    return _facade()._creature_color_key(*args, **kwargs)
-
 def _district_floor_color(*args, **kwargs):
     return _facade()._district_floor_color(*args, **kwargs)
 
@@ -326,23 +330,14 @@ def _district_floor_glyph(*args, **kwargs):
 def _draw_overworld_frame(*args, **kwargs):
     return _facade()._draw_overworld_frame(*args, **kwargs)
 
-def _entity_render_style(*args, **kwargs):
-    return _facade()._entity_render_style(*args, **kwargs)
-
 def _entity_should_blink_in_combat(*args, **kwargs):
     return _facade()._entity_should_blink_in_combat(*args, **kwargs)
-
-def _hud_primary_status_chunks(*args, **kwargs):
-    return _facade()._hud_primary_status_chunks(*args, **kwargs)
 
 def _is_explored(*args, **kwargs):
     return _facade()._is_explored(*args, **kwargs)
 
 def _is_visible(*args, **kwargs):
     return _facade()._is_visible(*args, **kwargs)
-
-def _item_legend_line(*args, **kwargs):
-    return _facade()._item_legend_line(*args, **kwargs)
 
 def _overworld_cell_slots(*args, **kwargs):
     return _facade()._overworld_cell_slots(*args, **kwargs)
@@ -358,9 +353,6 @@ def _remember_tile_appearance(*args, **kwargs):
 
 def _remembered_tile_appearance(*args, **kwargs):
     return _facade()._remembered_tile_appearance(*args, **kwargs)
-
-def _stakeout_progress_snapshot(*args, **kwargs):
-    return _facade()._stakeout_progress_snapshot(*args, **kwargs)
 
 def _tile_prefers_feature_legend(*args, **kwargs):
     return _facade()._tile_prefers_feature_legend(*args, **kwargs)
@@ -1632,13 +1624,16 @@ class RenderSystem(System):
         ammo_text = "-"
         if loadout and loadout.current_weapon():
             weapon = weapon_by_id(loadout.current_weapon())
-            instance = loadout.weapon_instances.get(loadout.current_weapon(), {})
+            instance = loadout.weapon_instance(loadout.current_weapon())
             weapon_name = str(instance.get("custom_name") or weapon.get("name", weapon.get("id", "weapon")))
             if _weapon_uses_ammo(weapon):
                 ammo_type = _weapon_ammo_type_label(weapon)
                 reserve = _weapon_reserve_ammo(loadout, loadout.current_weapon())
                 if reserve is None:
-                    reserve = int(loadout.reserve_ammo.get(loadout.current_weapon(), _default_weapon_reserve_ammo(weapon)))
+                    reserve = int(loadout.reserve_ammo_value(
+                        loadout.current_weapon(),
+                        default=_default_weapon_reserve_ammo(weapon),
+                    ))
                 ammo_text = f"{int(reserve)} {ammo_type}"
             else:
                 ammo_text = "melee"
@@ -2232,7 +2227,11 @@ class RenderSystem(System):
                     weapon = weapon_by_id(weapon_id)
                     ammo_type = _weapon_ammo_type_label(weapon)
                     if _weapon_uses_ammo(weapon):
-                        reserve = _weapon_reserve_ammo(weapon_loadout, weapon_id)
+                        reserve = _weapon_reserve_ammo(
+                            weapon_loadout,
+                            weapon_id,
+                            instance_id=entry.get("instance_id"),
+                        )
                         if reserve is not None:
                             ammo_suffix = f" [{ammo_type}:{reserve}]"
                         else:

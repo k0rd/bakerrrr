@@ -11,6 +11,7 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
+from game.location_presentation_runtime import _storefront_illegal_goods_signal
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
 from game.system_support.entity_naming import _entity_display_name
 
@@ -40,7 +41,6 @@ _property_covering = _systems._property_covering
 _property_is_storefront = _systems._property_is_storefront
 _remember_property_lead_for_actor = _systems._remember_property_lead_for_actor
 _shared_observer_can_see_position = _systems._shared_observer_can_see_position
-_storefront_illegal_goods_signal = _systems._storefront_illegal_goods_signal
 _workplace_property = _systems._workplace_property
 _world_trait_claim_text = _systems._world_trait_claim_text
 _world_trait_claim_value = _systems._world_trait_claim_value

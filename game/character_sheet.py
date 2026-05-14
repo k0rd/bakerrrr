@@ -61,12 +61,7 @@ def _weapon_ammo_type_label(weapon):
 def _weapon_reserve_ammo(loadout, weapon_id):
     if not loadout or not weapon_id:
         return None
-    if weapon_id not in getattr(loadout, "reserve_ammo", {}):
-        return None
-    try:
-        return int(loadout.reserve_ammo.get(weapon_id, 0))
-    except (TypeError, ValueError):
-        return None
+    return loadout.reserve_ammo_value(weapon_id, default=None)
 
 
 def _active_status_text(status_effects, *, duration_label_fn, sim):

@@ -77,58 +77,59 @@ from game.vehicles import (
     vehicle_services_for_archetype,
 )
 from game.opportunities import evaluate_opportunity_board, seed_run_opportunities
+from game.organization_reputation import OrganizationReputationSystem
+from game.perception_systems import (
+    CombatPacingSystem,
+    CoverSystem,
+    LightingSystem,
+    NoiseSystem,
+    StealthSystem,
+    VisibilitySystem,
+)
 from game.property_access import default_site_services_for_archetype
 from game.property_controllers import PropertySystem
 from game.property_keys import ensure_actor_has_property_key, ensure_property_lock
+from game.run_pressure import RunPressureSystem
 from game.run_objectives import evaluate_run_objective, seed_run_objective
 from game.run_epilogue import RunEpilogueLedgerSystem
 from game.service_menu import ServiceMenuSystem
 from game.site_services import SiteServiceSystem
 from game.skill_progression import SkillProgressionSystem
 from game.skills import seed_skill_profile
+from game.npc_interaction_system import NPCInteractionSystem
+from game.objective_progress import ObjectiveProgressSystem
+from game.criminal_justice_system import CriminalJusticeSystem
+from game.trade_system import TradeSystem
+from game.combat_systems import NPCItemUseSystem, NPCWeaponSystem, StatusEffectSystem, WeaponSystem
+from game.world_progression_systems import (
+    FinalOperationSystem,
+    OpportunitySystem,
+    RivalOperatorSystem,
+    WorldStreamingSystem,
+)
 from game.systems import (
     AnimalSocialSystem,
     BusinessPulseAftermathSystem,
     BusinessPulseSceneSystem,
     CameraSystem,
-    CoverSystem,
-    CriminalJusticeSystem,
-    CombatPacingSystem,
     CreatureHazardSystem,
     DoorWaitSystem,
     EavesdropSystem,
     EventLogSystem,
-    FinalOperationSystem,
     ItemSystem,
     InputSystem,
-    LightingSystem,
-    NPCInteractionSystem,
     NPCInvestigateSystem,
-    NPCItemUseSystem,
     NPCMemorySystem,
     NPCNeedsSystem,
     NPCSettlementSystem,
-    NPCWeaponSystem,
     RumorSystem,
     NPCSocialDynamicsSystem,
     NPCWillSystem,
-    NoiseSystem,
     SuppressionSystem,
-    ObjectiveProgressSystem,
-    OrganizationReputationSystem,
-    OpportunitySystem,
     PlayerActionSystem,
     PropertyAwarenessSystem,
     PropertyDefenseSystem,
     RenderSystem,
-    RivalOperatorSystem,
-    RunPressureSystem,
-    StatusEffectSystem,
-    StealthSystem,
-    TradeSystem,
-    VisibilitySystem,
-    WeaponSystem,
-    WorldStreamingSystem,
 )
 from game.weapons import roll_weapon_instance
 from ui.curses_view import CursesView

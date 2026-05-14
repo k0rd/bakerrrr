@@ -634,6 +634,18 @@
       "weight": 5
     },
     {
+      "item_id": "shiver_patch",
+      "weight": 6
+    },
+    {
+      "item_id": "sedative_ampoule",
+      "weight": 5
+    },
+    {
+      "item_id": "burner_serum",
+      "weight": 5
+    },
+    {
       "item_id": "focus_inhaler",
       "weight": 16
     },
@@ -690,6 +702,10 @@
       "weight": 8
     },
     {
+      "item_id": "fire_axe",
+      "weight": 8
+    },
+    {
       "item_id": "light_ammo_box",
       "weight": 11
     },
@@ -718,8 +734,16 @@
       "weight": 14
     },
     {
+      "item_id": "heavy_revolver",
+      "weight": 10
+    },
+    {
       "item_id": "alley_shotgun",
       "weight": 12
+    },
+    {
+      "item_id": "sawed_off_shotgun",
+      "weight": 9
     },
     {
       "item_id": "machine_pistol",
@@ -728,6 +752,10 @@
     {
       "item_id": "compact_smg",
       "weight": 10
+    },
+    {
+      "item_id": "machine_carbine",
+      "weight": 8
     },
     {
       "item_id": "patrol_carbine",
@@ -740,6 +768,14 @@
     {
       "item_id": "improvised_launcher",
       "weight": 5
+    },
+    {
+      "item_id": "grenade_launcher",
+      "weight": 4
+    },
+    {
+      "item_id": "recoilless_launcher",
+      "weight": 2
     },
     {
       "item_id": "padded_jacket",
@@ -824,6 +860,10 @@
       "weight": 12
     },
     {
+      "item_id": "fire_axe",
+      "weight": 9
+    },
+    {
       "item_id": "holdout_pistol",
       "weight": 10
     },
@@ -834,6 +874,10 @@
     {
       "item_id": "alley_shotgun",
       "weight": 8
+    },
+    {
+      "item_id": "sawed_off_shotgun",
+      "weight": 6
     },
     {
       "item_id": "hunting_rifle",
@@ -886,6 +930,10 @@
       "weight": 12
     },
     {
+      "item_id": "fire_axe",
+      "weight": 10
+    },
+    {
       "item_id": "telescopic_baton",
       "weight": 10
     },
@@ -902,16 +950,32 @@
       "weight": 10
     },
     {
+      "item_id": "heavy_revolver",
+      "weight": 8
+    },
+    {
       "item_id": "alley_shotgun",
       "weight": 10
+    },
+    {
+      "item_id": "sawed_off_shotgun",
+      "weight": 8
     },
     {
       "item_id": "hunting_rifle",
       "weight": 10
     },
     {
+      "item_id": "machine_carbine",
+      "weight": 7
+    },
+    {
       "item_id": "patrol_carbine",
       "weight": 8
+    },
+    {
+      "item_id": "grenade_launcher",
+      "weight": 3
     },
     {
       "item_id": "padded_jacket",
@@ -952,6 +1016,18 @@
       "weight": 16
     },
     {
+      "item_id": "cocaine_bindle",
+      "weight": 8
+    },
+    {
+      "item_id": "mdma_capsule",
+      "weight": 8
+    },
+    {
+      "item_id": "lsd_blotter",
+      "weight": 5
+    },
+    {
       "item_id": "mint_strip",
       "weight": 12
     },
@@ -988,6 +1064,10 @@
     {
       "item_id": "smoke_tab",
       "weight": 14
+    },
+    {
+      "item_id": "cocaine_bindle",
+      "weight": 4
     },
     {
       "item_id": "street_ration",
@@ -1334,6 +1414,10 @@
       "weight": 16
     },
     {
+      "item_id": "counterfeit_med_gel",
+      "weight": 5
+    },
+    {
       "item_id": "trauma_foam",
       "weight": 14
     },
@@ -1378,6 +1462,18 @@
     {
       "item_id": "trauma_autoinjector",
       "weight": 7
+    },
+    {
+      "item_id": "shiver_patch",
+      "weight": 6
+    },
+    {
+      "item_id": "sedative_ampoule",
+      "weight": 6
+    },
+    {
+      "item_id": "burner_serum",
+      "weight": 5
     },
     {
       "item_id": "focus_inhaler",
@@ -1784,7 +1880,15 @@
       "weight": 9
     },
     {
+      "item_id": "heavy_revolver",
+      "weight": 7
+    },
+    {
       "item_id": "alley_shotgun",
+      "weight": 6
+    },
+    {
+      "item_id": "sawed_off_shotgun",
       "weight": 6
     },
     {
@@ -1822,6 +1926,10 @@
     {
       "item_id": "black_market_stim",
       "weight": 8
+    },
+    {
+      "item_id": "cocaine_bindle",
+      "weight": 5
     }
   ],
   "archetype:chop_shop": [
@@ -1862,6 +1970,10 @@
       "weight": 10
     },
     {
+      "item_id": "fire_axe",
+      "weight": 8
+    },
+    {
       "item_id": "telescopic_baton",
       "weight": 9
     },
@@ -1886,12 +1998,28 @@
       "weight": 12
     },
     {
+      "item_id": "heavy_revolver",
+      "weight": 8
+    },
+    {
       "item_id": "alley_shotgun",
       "weight": 10
     },
     {
+      "item_id": "sawed_off_shotgun",
+      "weight": 8
+    },
+    {
       "item_id": "compact_smg",
       "weight": 8
+    },
+    {
+      "item_id": "machine_carbine",
+      "weight": 6
+    },
+    {
+      "item_id": "grenade_launcher",
+      "weight": 3
     },
     {
       "item_id": "security_vest",
@@ -1904,6 +2032,14 @@
     {
       "item_id": "black_market_stim",
       "weight": 10
+    },
+    {
+      "item_id": "cocaine_bindle",
+      "weight": 7
+    },
+    {
+      "item_id": "mdma_capsule",
+      "weight": 4
     },
     {
       "item_id": "caff_shot",

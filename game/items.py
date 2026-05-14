@@ -266,6 +266,36 @@ def _normalize_condition_profile(value, *, tool_profiles=None, weapon_id=None, a
     }
 
 
+def _normalize_substance_profile(value):
+    raw = value if isinstance(value, dict) else {}
+    substance_id = str(raw.get("substance_id", "") or "").strip().lower()
+    if not substance_id:
+        return None
+
+    withdrawal_status = str(raw.get("withdrawal_status", "") or "").strip().lower()
+    modifiers = raw.get("withdrawal_modifiers", {})
+    if not isinstance(modifiers, dict):
+        modifiers = {}
+    parsed_modifiers = {}
+    for key, mod_value in modifiers.items():
+        try:
+            parsed_modifiers[str(key)] = float(mod_value)
+        except (TypeError, ValueError):
+            continue
+
+    return {
+        "substance_id": substance_id,
+        "intoxication_duration": max(0, _int_or_default(raw.get("intoxication_duration"), 0)),
+        "dependence_gain": max(0.0, min(1.0, _float_or_default(raw.get("dependence_gain"), 0.0))),
+        "dependence_decay": max(0.0, _float_or_default(raw.get("dependence_decay"), 0.0)),
+        "withdrawal_threshold": max(0.0, min(1.0, _float_or_default(raw.get("withdrawal_threshold"), 1.0))),
+        "withdrawal_status": withdrawal_status,
+        "withdrawal_duration": max(0, _int_or_default(raw.get("withdrawal_duration"), 0)),
+        "withdrawal_cooldown": max(0, _int_or_default(raw.get("withdrawal_cooldown"), 0)),
+        "withdrawal_modifiers": parsed_modifiers,
+    }
+
+
 DEFAULT_ITEM_CATALOG = {
     "street_ration": {
         "name": "Street Ration",
@@ -955,6 +985,7 @@ def load_item_catalog(path=ITEMS_PATH):
             "armor": _normalize_armor_profile(item.get("armor")),
             "disguise": _normalize_disguise_profile(item.get("disguise")),
             "container": _normalize_container_profile(item.get("container")),
+            "substance_profile": _normalize_substance_profile(item.get("substance_profile")),
             "condition_profile": _normalize_condition_profile(
                 item.get("condition_profile"),
                 tool_profiles=item.get("tool_profiles"),

@@ -170,9 +170,17 @@ class ItemActionRuntime:
         loadout.add_weapon(weapon_id, instance=instance)
         weapon = weapon_by_id(weapon_id)
         if _weapon_uses_ammo(weapon):
-            current = int(loadout.reserve_ammo.get(weapon_id, -1))
+            current = loadout.reserve_ammo_value(
+                weapon_id,
+                default=-1,
+                instance_id=entry.get("instance_id"),
+            )
             if current < 0:
-                loadout.reserve_ammo[weapon_id] = int(_default_weapon_reserve_ammo(weapon))
+                loadout.set_reserve_ammo_value(
+                    weapon_id,
+                    int(_default_weapon_reserve_ammo(weapon)),
+                    instance_id=entry.get("instance_id"),
+                )
         loadout.equip(weapon_id)
 
         self.sim.emit(Event(

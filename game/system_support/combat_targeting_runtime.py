@@ -347,9 +347,7 @@ def _weapon_context_for_entity(sim, eid):
         return loadout, None, {}
 
     weapon = weapon_by_id(weapon_id)
-    instance = loadout.weapon_instances.get(weapon_id, {})
-    if not isinstance(instance, dict):
-        instance = {}
+    instance = loadout.weapon_instance(weapon_id)
     return loadout, weapon, instance
 
 
@@ -691,15 +689,10 @@ def _weapon_ammo_type_label(weapon):
     return "ammo"
 
 
-def _weapon_reserve_ammo(loadout, weapon_id):
+def _weapon_reserve_ammo(loadout, weapon_id, *, instance_id=None):
     if not loadout or not weapon_id:
         return None
-    if weapon_id not in loadout.reserve_ammo:
-        return None
-    try:
-        return int(loadout.reserve_ammo.get(weapon_id, 0))
-    except (TypeError, ValueError):
-        return None
+    return loadout.reserve_ammo_value(weapon_id, default=None, instance_id=instance_id)
 
 
 def _shatter_window_for_projectile(sim, offender_eid, x, y, z):

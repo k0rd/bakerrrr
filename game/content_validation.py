@@ -435,6 +435,92 @@ def _validate_items(path, report):
                 if status not in ALLOWED_LEGAL_STATUS:
                     report.error(source, item_path + ["legal_status"], f"legal_status must be one of {sorted(ALLOWED_LEGAL_STATUS)}")
 
+        if "substance_profile" in item:
+            profile = item["substance_profile"]
+            profile_path = item_path + ["substance_profile"]
+            if not _expect_type(report, source, profile_path, profile, dict, "an object"):
+                pass
+            else:
+                _validate_non_empty_string(
+                    report,
+                    source,
+                    profile_path + ["substance_id"],
+                    profile.get("substance_id"),
+                    field_name="substance_id",
+                )
+                if "intoxication_duration" in profile:
+                    _validate_int(
+                        report,
+                        source,
+                        profile_path + ["intoxication_duration"],
+                        profile.get("intoxication_duration"),
+                        minimum=0,
+                        field_name="intoxication_duration",
+                    )
+                if "dependence_gain" in profile:
+                    _validate_number(
+                        report,
+                        source,
+                        profile_path + ["dependence_gain"],
+                        profile.get("dependence_gain"),
+                        field_name="dependence_gain",
+                    )
+                if "dependence_decay" in profile:
+                    _validate_number(
+                        report,
+                        source,
+                        profile_path + ["dependence_decay"],
+                        profile.get("dependence_decay"),
+                        field_name="dependence_decay",
+                    )
+                if "withdrawal_threshold" in profile:
+                    _validate_number(
+                        report,
+                        source,
+                        profile_path + ["withdrawal_threshold"],
+                        profile.get("withdrawal_threshold"),
+                        field_name="withdrawal_threshold",
+                    )
+                if "withdrawal_status" in profile:
+                    _validate_non_empty_string(
+                        report,
+                        source,
+                        profile_path + ["withdrawal_status"],
+                        profile.get("withdrawal_status"),
+                        field_name="withdrawal_status",
+                    )
+                if "withdrawal_duration" in profile:
+                    _validate_int(
+                        report,
+                        source,
+                        profile_path + ["withdrawal_duration"],
+                        profile.get("withdrawal_duration"),
+                        minimum=0,
+                        field_name="withdrawal_duration",
+                    )
+                if "withdrawal_cooldown" in profile:
+                    _validate_int(
+                        report,
+                        source,
+                        profile_path + ["withdrawal_cooldown"],
+                        profile.get("withdrawal_cooldown"),
+                        minimum=0,
+                        field_name="withdrawal_cooldown",
+                    )
+                modifiers = profile.get("withdrawal_modifiers", {})
+                if modifiers is not None:
+                    if not isinstance(modifiers, dict):
+                        report.error(source, profile_path + ["withdrawal_modifiers"], "withdrawal_modifiers must be an object")
+                    else:
+                        for modifier_key, modifier_value in modifiers.items():
+                            _validate_number(
+                                report,
+                                source,
+                                profile_path + ["withdrawal_modifiers", modifier_key],
+                                modifier_value,
+                                field_name="withdrawal modifier value",
+                            )
+
         if "effects" in item:
             effects = item["effects"]
             if not isinstance(effects, list):

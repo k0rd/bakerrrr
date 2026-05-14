@@ -1946,6 +1946,12 @@ class StatusEffects:
     def has(self, status):
         return status in self.active
 
+    def remove(self, status):
+        status = str(status or "").strip()
+        if not status:
+            return None
+        return self.active.pop(status, None)
+
     def tick(self):
         return self.advance(1)
 
@@ -1972,6 +1978,168 @@ class StatusEffects:
             for key, value in state["modifiers"].items():
                 total[key] = total.get(key, 0.0) + float(value)
         return total
+
+
+class SubstanceUseState:
+    def __init__(self):
+        self.substances = {}
+
+    def _entry_for(self, substance_id):
+        token = str(substance_id or "").strip().lower()
+        if not token:
+            return None
+        entry = self.substances.get(token)
+        if isinstance(entry, dict):
+            return entry
+        entry = {
+            "substance_id": token,
+            "dependence": 0.0,
+            "dependence_decay": 0.0,
+            "withdrawal_threshold": 1.0,
+            "withdrawal_status": "",
+            "withdrawal_duration": 0,
+            "withdrawal_cooldown": 0,
+            "withdrawal_modifiers": {},
+            "active_until_tick": -1,
+            "withdrawal_ready_tick": -1,
+            "last_tick": 0,
+        }
+        self.substances[token] = entry
+        return entry
+
+    def record_use(
+        self,
+        substance_id,
+        *,
+        tick=0,
+        intoxication_duration=0,
+        dependence_gain=0.0,
+        dependence_decay=0.0,
+        withdrawal_threshold=1.0,
+        withdrawal_status="",
+        withdrawal_duration=0,
+        withdrawal_cooldown=0,
+        withdrawal_modifiers=None,
+        statuses=None,
+    ):
+        entry = self._entry_for(substance_id)
+        if entry is None:
+            return None
+
+        try:
+            tick = int(tick)
+        except (TypeError, ValueError):
+            tick = 0
+        try:
+            intoxication_duration = max(0, int(intoxication_duration))
+        except (TypeError, ValueError):
+            intoxication_duration = 0
+        try:
+            dependence_gain = max(0.0, float(dependence_gain))
+        except (TypeError, ValueError):
+            dependence_gain = 0.0
+        try:
+            dependence_decay = max(0.0, float(dependence_decay))
+        except (TypeError, ValueError):
+            dependence_decay = 0.0
+        try:
+            withdrawal_threshold = max(0.0, min(1.0, float(withdrawal_threshold)))
+        except (TypeError, ValueError):
+            withdrawal_threshold = 1.0
+        try:
+            withdrawal_duration = max(0, int(withdrawal_duration))
+        except (TypeError, ValueError):
+            withdrawal_duration = 0
+        try:
+            withdrawal_cooldown = max(0, int(withdrawal_cooldown))
+        except (TypeError, ValueError):
+            withdrawal_cooldown = 0
+
+        entry["dependence"] = max(0.0, min(1.0, float(entry.get("dependence", 0.0)) + dependence_gain))
+        entry["dependence_decay"] = dependence_decay
+        entry["withdrawal_threshold"] = withdrawal_threshold
+        entry["withdrawal_status"] = str(withdrawal_status or "").strip().lower()
+        entry["withdrawal_duration"] = withdrawal_duration
+        entry["withdrawal_cooldown"] = withdrawal_cooldown
+        entry["withdrawal_modifiers"] = (
+            dict(withdrawal_modifiers)
+            if isinstance(withdrawal_modifiers, dict)
+            else {}
+        )
+        entry["active_until_tick"] = max(
+            int(entry.get("active_until_tick", -1)),
+            int(tick + intoxication_duration),
+        )
+        entry["withdrawal_ready_tick"] = max(
+            int(entry.get("withdrawal_ready_tick", -1)),
+            int(tick + intoxication_duration),
+        )
+        entry["last_tick"] = tick
+
+        if statuses:
+            withdrawal_state = entry["withdrawal_status"]
+            if withdrawal_state:
+                statuses.remove(withdrawal_state)
+        return dict(entry)
+
+    def advance(self, tick, *, statuses=None):
+        try:
+            tick = int(tick)
+        except (TypeError, ValueError):
+            tick = 0
+
+        pending = []
+        empty_keys = []
+        for substance_id, entry in list(self.substances.items()):
+            if not isinstance(entry, dict):
+                empty_keys.append(substance_id)
+                continue
+
+            last_tick = entry.get("last_tick", tick)
+            try:
+                last_tick = int(last_tick)
+            except (TypeError, ValueError):
+                last_tick = tick
+            elapsed = max(0, tick - last_tick)
+            dependence = max(0.0, min(1.0, float(entry.get("dependence", 0.0) or 0.0)))
+            active_until_tick = int(entry.get("active_until_tick", -1) or -1)
+            if elapsed > 0 and tick >= active_until_tick:
+                decay = max(0.0, float(entry.get("dependence_decay", 0.0) or 0.0))
+                if decay > 0.0:
+                    dependence = max(0.0, dependence - (decay * float(elapsed)))
+            entry["dependence"] = dependence
+            entry["last_tick"] = tick
+
+            threshold = max(0.0, min(1.0, float(entry.get("withdrawal_threshold", 1.0) or 1.0)))
+            withdrawal_status = str(entry.get("withdrawal_status", "") or "").strip().lower()
+            if not withdrawal_status:
+                if dependence <= 0.0:
+                    empty_keys.append(substance_id)
+                continue
+            if tick < int(entry.get("withdrawal_ready_tick", -1) or -1):
+                continue
+            if tick < active_until_tick:
+                continue
+            if dependence < threshold:
+                if dependence <= 0.0:
+                    empty_keys.append(substance_id)
+                continue
+            if statuses and statuses.has(withdrawal_status):
+                continue
+
+            duration = max(1, int(entry.get("withdrawal_duration", 1) or 1))
+            cooldown = max(0, int(entry.get("withdrawal_cooldown", 0) or 0))
+            entry["withdrawal_ready_tick"] = int(tick + duration + cooldown)
+            pending.append({
+                "substance_id": substance_id,
+                "status": withdrawal_status,
+                "duration": duration,
+                "modifiers": dict(entry.get("withdrawal_modifiers", {}) or {}),
+            })
+
+        for substance_id in empty_keys:
+            self.substances.pop(substance_id, None)
+        return pending
 
 
 class ItemUseProfile:
@@ -2057,6 +2225,66 @@ class WeaponLoadout:
         elif self.equipped_weapon_id not in self.weapon_ids:
             self.equipped_weapon_id = self.weapon_ids[0] if self.weapon_ids else None
         return removed
+
+    def weapon_instance(self, weapon_id):
+        weapon_id = str(weapon_id or "").strip()
+        if not weapon_id:
+            return {}
+        instance = self.weapon_instances.get(weapon_id, {})
+        return instance if isinstance(instance, dict) else {}
+
+    def weapon_inventory_instance_id(self, weapon_id):
+        instance = self.weapon_instance(weapon_id)
+        return str(instance.get("inventory_instance_id", "") or "").strip()
+
+    def reserve_ammo_key(self, weapon_id, *, instance_id=None):
+        weapon_id = str(weapon_id or "").strip()
+        if not weapon_id:
+            return ""
+        raw_instance_id = str(
+            instance_id
+            or self.weapon_inventory_instance_id(weapon_id)
+            or ""
+        ).strip()
+        if raw_instance_id:
+            return f"{weapon_id}::{raw_instance_id}"
+        return weapon_id
+
+    def reserve_ammo_value(self, weapon_id, default=None, *, instance_id=None):
+        weapon_id = str(weapon_id or "").strip()
+        if not weapon_id:
+            return default
+        key = self.reserve_ammo_key(weapon_id, instance_id=instance_id)
+        if key in self.reserve_ammo:
+            try:
+                return int(self.reserve_ammo.get(key, default if default is not None else 0))
+            except (TypeError, ValueError):
+                return default
+
+        if key != weapon_id and weapon_id in self.reserve_ammo:
+            try:
+                value = int(self.reserve_ammo.get(weapon_id, default if default is not None else 0))
+            except (TypeError, ValueError):
+                return default
+            self.reserve_ammo[key] = value
+            self.reserve_ammo.pop(weapon_id, None)
+            return value
+        return default
+
+    def set_reserve_ammo_value(self, weapon_id, value, *, instance_id=None):
+        weapon_id = str(weapon_id or "").strip()
+        if not weapon_id:
+            return None
+        key = self.reserve_ammo_key(weapon_id, instance_id=instance_id)
+        try:
+            ammo = int(value)
+        except (TypeError, ValueError):
+            ammo = 0
+        ammo = max(0, ammo)
+        if key != weapon_id:
+            self.reserve_ammo.pop(weapon_id, None)
+        self.reserve_ammo[key] = ammo
+        return ammo
 
     def current_weapon(self):
         return self.equipped_weapon_id

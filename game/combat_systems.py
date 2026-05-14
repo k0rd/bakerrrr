@@ -17,6 +17,7 @@ from game.components import (
     Position,
     Render,
     StatusEffects,
+    SubstanceUseState,
     SuppressionState,
     Vitality,
     WeaponLoadout,
@@ -122,8 +123,7 @@ class WeaponSystem(System):
     def _weapon_instance_data(self, loadout, weapon_id):
         if not loadout:
             return {}
-        instance = loadout.weapon_instances.get(weapon_id, {})
-        return instance if isinstance(instance, dict) else {}
+        return loadout.weapon_instance(weapon_id)
 
     def _consume_player_weapon_ammo(self, eid, loadout, weapon):
         if eid != self.player_eid:
@@ -132,16 +132,22 @@ class WeaponSystem(System):
             return True, None
 
         weapon_id = str(weapon.get("id", ""))
-        current = int(loadout.reserve_ammo.get(weapon_id, _default_weapon_reserve_ammo(weapon)))
-        if weapon_id not in loadout.reserve_ammo:
-            loadout.reserve_ammo[weapon_id] = current
+        current = int(loadout.reserve_ammo_value(
+            weapon_id,
+            default=_default_weapon_reserve_ammo(weapon),
+        ))
+        if loadout.reserve_ammo_value(weapon_id, default=None) is None:
+            loadout.set_reserve_ammo_value(weapon_id, current)
 
         ammo_per_shot = int(max(1, weapon.get("ammo_per_shot", 1)))
         if current < ammo_per_shot:
             return False, current
 
-        loadout.reserve_ammo[weapon_id] = max(0, current - ammo_per_shot)
-        return True, int(loadout.reserve_ammo[weapon_id])
+        remaining = loadout.set_reserve_ammo_value(
+            weapon_id,
+            max(0, current - ammo_per_shot),
+        )
+        return True, int(remaining)
 
     def _best_player_death_save_entry(self):
         inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
@@ -1408,6 +1414,7 @@ class StatusEffectSystem(System):
 
     def update(self):
         effects_map = self.sim.ecs.get(StatusEffects)
+        substance_map = self.sim.ecs.get(SubstanceUseState)
         needs_map = self.sim.ecs.get(NPCNeeds)
         positions = self.sim.ecs.get(Position)
         vitalities = self.sim.ecs.get(Vitality)
@@ -1446,6 +1453,41 @@ class StatusEffectSystem(System):
                     "status_expired",
                     eid=eid,
                     status=status,
+                ))
+
+        for eid, substance_state in substance_map.items():
+            pos = positions.get(eid)
+            if pos and not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
+                continue
+            statuses = effects_map.get(eid)
+            if not statuses or not substance_state:
+                continue
+            pending = substance_state.advance(
+                int(getattr(self.sim, "tick", 0) or 0),
+                statuses=statuses,
+            )
+            for queued in pending:
+                status = str(queued.get("status", "") or "").strip().lower()
+                if not status:
+                    continue
+                duration = max(1, _int_or_default(queued.get("duration", 1), 1))
+                modifiers = queued.get("modifiers", {})
+                if not isinstance(modifiers, dict):
+                    modifiers = {}
+                is_new = statuses.add(
+                    status=status,
+                    duration=duration,
+                    modifiers=modifiers,
+                    source_item=str(queued.get("substance_id", "") or "").strip().lower() or None,
+                )
+                self.sim.emit(Event(
+                    "status_applied",
+                    eid=eid,
+                    status=status,
+                    duration=duration,
+                    source_item=str(queued.get("substance_id", "") or "").strip().lower(),
+                    modifiers=dict(modifiers),
+                    new=is_new,
                 ))
 
 

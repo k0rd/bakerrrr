@@ -1742,6 +1742,139 @@ def _casino_cards_text(cards):
     return " ".join(rendered) if rendered else "--"
 
 
+_CASINO_DIE_ART = {
+    1: (".---.", "|   |", "| o |", "|   |", "'---'"),
+    2: (".---.", "|o  |", "|   |", "|  o|", "'---'"),
+    3: (".---.", "|o  |", "| o |", "|  o|", "'---'"),
+    4: (".---.", "|o o|", "|   |", "|o o|", "'---'"),
+    5: (".---.", "|o o|", "| o |", "|o o|", "'---'"),
+    6: (".---.", "|o o|", "|o o|", "|o o|", "'---'"),
+}
+
+
+def _casino_ascii_card_block(label, cards, *, hide_hole=False):
+    shown = []
+    for idx, card in enumerate(list(cards or ())):
+        if hide_hole and idx == 1:
+            shown.append("??")
+        else:
+            shown.append(_casino_card_label(card))
+    if not shown:
+        shown = ["??"]
+
+    top = " ".join(".----." for _ in shown)
+    middle = " ".join(f"|{str(face).strip()[:4].ljust(4)}|" for face in shown)
+    bottom = " ".join("'----'" for _ in shown)
+    prefix = f"{str(label or 'Hand').strip()}: "
+    pad = " " * len(prefix)
+    return [
+        prefix + top,
+        pad + middle,
+        pad + bottom,
+    ]
+
+
+def _casino_ascii_keno_board(*, picks=(), drawn=(), hits=()):
+    pick_set = {int(number) for number in list(picks or ())}
+    drawn_set = {int(number) for number in list(drawn or ())}
+    hit_set = {int(number) for number in list(hits or ())}
+    if drawn_set or hit_set:
+        lines = ["Keno board: [ticket] {hit} <draw>"]
+    else:
+        lines = ["Keno board: [ticket]"]
+    for row_start in range(1, CASINO_KENO_NUMBER_COUNT + 1, 5):
+        cells = []
+        for number in range(row_start, min(row_start + 5, CASINO_KENO_NUMBER_COUNT + 1)):
+            if number in hit_set:
+                cell = f"{{{number:02d}}}"
+            elif number in pick_set:
+                cell = f"[{number:02d}]"
+            elif number in drawn_set:
+                cell = f"<{number:02d}>"
+            else:
+                cell = f" {number:02d} "
+            cells.append(cell)
+        lines.append(" ".join(cells))
+    return lines
+
+
+def _casino_ascii_roll_block(label, roll):
+    if not isinstance(roll, dict):
+        return []
+    die_one = int(roll.get("die_one", 0) or 0)
+    die_two = int(roll.get("die_two", 0) or 0)
+    total = int(roll.get("total", die_one + die_two) or 0)
+    left = _CASINO_DIE_ART.get(die_one, _CASINO_DIE_ART[1])
+    right = _CASINO_DIE_ART.get(die_two, _CASINO_DIE_ART[1])
+    prefix = f"{str(label or 'Roll').strip()}: "
+    pad = " " * len(prefix)
+    lines = []
+    for idx in range(len(left)):
+        leader = prefix if idx == 0 else pad
+        lines.append(f"{leader}{left[idx]} {right[idx]}")
+    lines.append(f"{pad}total {total}")
+    return lines
+
+
+def _casino_ascii_craps_layout(view="layout"):
+    view = str(view or "layout").strip().lower() or "layout"
+    if view == "pass_odds":
+        return [
+            "+-----------------------------+",
+            "| PASS LINE | 1X | 2X | 3X    |",
+            "| 4/10 2:1  5/9 3:2  6/8 6:5  |",
+            "+-----------------------------+",
+        ]
+    if view == "dont_pass_odds":
+        return [
+            "+-----------------------------+",
+            "| DONT PASS | 1X | 2X | 3X    |",
+            "| 4/10 1:2  5/9 2:3  6/8 5:6  |",
+            "+-----------------------------+",
+        ]
+    if view == "place":
+        return [
+            "+-----------------------------+",
+            "| PLACE:  4   5   6   8   9 10|",
+            "| PAY:   9:5 7:5 7:6 7:6 7:5 9:5|",
+            "+-----------------------------+",
+        ]
+    if view == "hardways":
+        return [
+            "+-----------------------------+",
+            "| HARDWAYS: 4 | 6 | 8 | 10    |",
+            "| PAYS:     7:1 9:1 9:1 7:1   |",
+            "+-----------------------------+",
+        ]
+    if view == "props":
+        return [
+            "+-----------------------------+",
+            "| PROPS: 2  3  11 12  CRAPS 7 |",
+            "| PAYS: 31 16 16 31   8    5  |",
+            "+-----------------------------+",
+        ]
+    return [
+        "+-----------------------------+",
+        "| PASS | DONT | FIELD | ODDS  |",
+        "| PLACE 4 5 6 8 9 10 | HARD   |",
+        "| PROPS 2 3 11 12 | ANY 7    |",
+        "+-----------------------------+",
+    ]
+
+
+def _casino_ascii_reel_window(reels):
+    labels = [
+        str(CASINO_SLOT_SYMBOL_LABELS.get(str(symbol or "").strip().upper(), str(symbol or "").strip().title() or "BAR"))[:6].center(6)
+        for symbol in list(reels or ())
+    ]
+    if not labels:
+        labels = ["  --  "]
+    top = " ".join(".------." for _ in labels)
+    middle = " ".join(f"|{label}|" for label in labels)
+    bottom = " ".join("'------'" for _ in labels)
+    return [top, middle, bottom]
+
+
 def _casino_shuffled_deck(seed_token):
     deck = [f"{rank}{suit}" for suit in CASINO_CARD_SUITS for rank in CASINO_CARD_RANKS]
     rng = random.Random(f"{seed_token}:deck")
@@ -2049,6 +2182,15 @@ def _casino_video_poker_draw(session):
         draw_line = f"Drawn: {', '.join(str(slot) for slot in drawn_slots)}."
     else:
         draw_line = "Drawn: none (stand pat)."
+    result_lines = []
+    result_lines.extend(_casino_ascii_card_block("Final hand", cards))
+    result_lines.extend([
+        f"Final hand: {_casino_cards_text(cards)}",
+        hold_line,
+        draw_line,
+        f"Made: {hand_name}.",
+        detail,
+    ])
 
     return {
         "service": "video_poker",
@@ -2059,13 +2201,7 @@ def _casino_video_poker_draw(session):
         "headline": headline,
         "detail": detail,
         "summary": f"Final hand {_casino_cards_text(cards)} ({hand_name}). {headline}",
-        "result_lines": [
-            f"Final hand: {_casino_cards_text(cards)}",
-            hold_line,
-            draw_line,
-            f"Made: {hand_name}.",
-            detail,
-        ],
+        "result_lines": result_lines,
         "player_cards": tuple(cards),
         "player_hand_name": str(hand_name),
         "held_slots": tuple(int(slot) for slot in held_slots),
@@ -2175,6 +2311,24 @@ def _casino_keno_draw(session):
     payout_mult = int(CASINO_KENO_PAYOUT_MULTIPLIERS.get(pick_count, {}).get(hit_count, 0))
     payout = int(max(0, payout_mult) * int(current.get("wager", 0)))
     headline, detail = _casino_keno_outcome_text(pick_count, hit_count, payout_mult)
+    result_lines = []
+    result_lines.extend(_casino_ascii_keno_board(picks=picks, drawn=drawn_numbers, hits=hit_numbers))
+    result_lines.extend([
+        f"Ticket: {' '.join(f'{number:02d}' for number in picks)}",
+        f"Draw: {' '.join(f'{number:02d}' for number in drawn_numbers)}",
+        (
+            f"Hits: {' '.join(f'{number:02d}' for number in hit_numbers)} "
+            f"({hit_count}/{pick_count})."
+            if hit_numbers
+            else f"Hits: none (0/{pick_count})."
+        ),
+        (
+            f"Pay table: x{payout_mult} on {hit_count} hit{'s' if hit_count != 1 else ''}."
+            if payout_mult > 0
+            else "Pay table: no return on this miss."
+        ),
+        detail,
+    ])
 
     return {
         "service": "keno",
@@ -2188,22 +2342,7 @@ def _casino_keno_draw(session):
             f"Ticket {' '.join(f'{number:02d}' for number in picks)} catches "
             f"{hit_count} of {pick_count}. {headline}"
         ),
-        "result_lines": [
-            f"Ticket: {' '.join(f'{number:02d}' for number in picks)}",
-            f"Draw: {' '.join(f'{number:02d}' for number in drawn_numbers)}",
-            (
-                f"Hits: {' '.join(f'{number:02d}' for number in hit_numbers)} "
-                f"({hit_count}/{pick_count})."
-                if hit_numbers
-                else f"Hits: none (0/{pick_count})."
-            ),
-            (
-                f"Pay table: x{payout_mult} on {hit_count} hit{'s' if hit_count != 1 else ''}."
-                if payout_mult > 0
-                else "Pay table: no return on this miss."
-            ),
-            detail,
-        ],
+        "result_lines": result_lines,
         "picked_numbers": picks,
         "drawn_numbers": drawn_numbers,
         "hit_numbers": hit_numbers,
@@ -2785,7 +2924,15 @@ def _casino_craps_resolve(session, bet_kind, bet_value=None):
 
     roll_totals = tuple(int(roll.get("total", 0)) for roll in rolls)
     roll_pairs = tuple((int(roll.get("die_one", 0)), int(roll.get("die_two", 0))) for roll in rolls)
-    result_lines = list(lines)
+    result_lines = []
+    if rolls:
+        if kind in {"pass", "dont_pass", "field", "pass_odds", "dont_pass_odds"}:
+            result_lines.extend(_casino_ascii_roll_block("Come-out", rolls[0]))
+            if len(rolls) > 1:
+                result_lines.extend(_casino_ascii_roll_block("Finish", rolls[-1]))
+        else:
+            result_lines.extend(_casino_ascii_roll_block("Roll", rolls[-1]))
+    result_lines.extend(lines)
     if payout_mult > 0:
         result_lines.append(f"Payout: x{payout_mult} gross return.")
     elif payout > 0:
@@ -3005,13 +3152,16 @@ def _casino_baccarat_resolve(session, bet_side):
         detail = f"The {winner_label.lower()} hand takes the point and the house keeps the wager."
         outcome_key = f"{winning_side}_miss"
 
-    result_lines = [
+    result_lines = []
+    result_lines.extend(_casino_ascii_card_block("Player", player_cards))
+    result_lines.extend(_casino_ascii_card_block("Banker", banker_cards))
+    result_lines.extend([
         f"Bet: {bet_label}",
         f"Player: {_casino_cards_text(player_cards)} ({player_total})",
         f"Banker: {_casino_cards_text(banker_cards)} ({banker_total})",
         f"Winner: {winner_label}",
         payout_line if payout_line else "Payout: no return on this hand.",
-    ]
+    ])
     if player_natural or banker_natural:
         result_lines.append("Natural hand: the third-card rules never come into play.")
     elif player_third_card or banker_third_card:
@@ -3169,6 +3319,8 @@ def _casino_three_card_poker_resolve(session, action):
     player_hand_name = _casino_three_card_poker_hand_name(player_score)
 
     if action == "fold":
+        result_lines = []
+        result_lines.extend(_casino_ascii_card_block("You", player_cards))
         return {
             "service": "three_card_poker",
             "wager": int(wager),
@@ -3178,7 +3330,7 @@ def _casino_three_card_poker_resolve(session, action):
             "headline": "You fold the ante.",
             "detail": "The hand looks thin, so you slide the ante away and let the dealer keep it.",
             "summary": f"You fold {_casino_cards_text(player_cards)} ({player_hand_name}) and give up the ante.",
-            "result_lines": [
+            "result_lines": result_lines + [
                 f"Your hand: {_casino_cards_text(player_cards)} ({player_hand_name})",
                 "You fold before the dealer turns the hand over.",
             ],
@@ -3217,11 +3369,14 @@ def _casino_three_card_poker_resolve(session, action):
         headline = "Dealer wins."
         detail = "The dealer turns over the better hand and sweeps the main action."
 
-    result_lines = [
+    result_lines = []
+    result_lines.extend(_casino_ascii_card_block("You", player_cards))
+    result_lines.extend(_casino_ascii_card_block("Dealer", dealer_cards))
+    result_lines.extend([
         f"You: {_casino_cards_text(player_cards)} ({player_hand_name})",
         f"Dealer: {_casino_cards_text(dealer_cards)} ({dealer_hand_name})",
         "Dealer qualifies." if dealer_qualifies else "Dealer does not qualify (needs queen-high or better).",
-    ]
+    ])
     if ante_bonus > 0:
         result_lines.append(f"Ante bonus pays x{ante_bonus_mult} for your {player_hand_name}.")
     result_lines.append(detail)
@@ -3299,6 +3454,12 @@ def _casino_slots_resolve(seed_token, wager):
 
     payout = max(0, int(round(float(payout_mult) * float(wager))))
     reel_text = " | ".join(CASINO_SLOT_SYMBOL_LABELS.get(symbol, symbol.title()) for symbol in reels)
+    result_lines = []
+    result_lines.extend(_casino_ascii_reel_window(reels))
+    result_lines.extend([
+        f"Reels: {reel_text}",
+        detail,
+    ])
     return {
         "service": "slots",
         "wager": int(wager),
@@ -3308,10 +3469,7 @@ def _casino_slots_resolve(seed_token, wager):
         "headline": headline,
         "detail": detail,
         "summary": f"Reels {reel_text}. {headline}",
-        "result_lines": [
-            f"Reels: {reel_text}",
-            detail,
-        ],
+        "result_lines": result_lines,
         "reels": tuple(reels),
         "social_gain": _casino_social_gain("slots", seed_token),
     }
@@ -3601,7 +3759,9 @@ def _casino_twenty_one_finalize(session):
         detail_bits.append(f"{label} {status_text}")
     detail = ", ".join(detail_bits) + "."
 
-    result_lines = [_casino_blackjack_line("Dealer", current["dealer_cards"])]
+    result_lines = []
+    result_lines.extend(_casino_ascii_card_block("Dealer", current["dealer_cards"]))
+    result_lines.append(_casino_blackjack_line("Dealer", current["dealer_cards"]))
     for row in hand_results:
         tags = []
         if row["split_origin"]:
@@ -3610,6 +3770,7 @@ def _casino_twenty_one_finalize(session):
             tags.append("double")
         suffix = f" [{', '.join(tags)}]" if tags else ""
         hand_label = f"Hand {row['index'] + 1}"
+        result_lines.extend(_casino_ascii_card_block(hand_label, row["cards"]))
         result_lines.append(f"{_casino_blackjack_line(hand_label, row['cards'])}{suffix} -> {row['result']}.")
     result_lines.append(detail)
 
@@ -3694,6 +3855,9 @@ def _casino_twenty_one_resolve(session, action):
                 payout = 0
                 headline = "Dealer blackjack."
                 detail = "The dealer turns over a natural and sweeps the felt clean."
+            result_lines = []
+            result_lines.extend(_casino_ascii_card_block("Dealer", current["dealer_cards"]))
+            result_lines.extend(_casino_ascii_card_block("You", active_hand.get("cards", ())))
             return None, {
                 "service": "twenty_one",
                 "wager": int(current["wager"]),
@@ -3706,7 +3870,7 @@ def _casino_twenty_one_resolve(session, action):
                     f"Dealer {_casino_cards_text(current['dealer_cards'])} against "
                     f"{_casino_cards_text(active_hand.get('cards', ())) }. {headline}"
                 ).replace("  ", " "),
-                "result_lines": [
+                "result_lines": result_lines + [
                     _casino_blackjack_line("Dealer", current["dealer_cards"]),
                     _casino_blackjack_line("You", active_hand.get("cards", ())),
                     detail,
@@ -3839,6 +4003,9 @@ def _casino_holdem_resolve(session, action):
     board = flop + ([turn] if turn else []) + ([river] if river else [])
     board_text = _casino_cards_text(board)
     if action == "fold":
+        result_lines = []
+        result_lines.extend(_casino_ascii_card_block("You", player_cards))
+        result_lines.extend(_casino_ascii_card_block("Flop", flop))
         return {
             "service": "casino_holdem",
             "wager": int(wager),
@@ -3848,7 +4015,7 @@ def _casino_holdem_resolve(session, action):
             "headline": "You fold the ante.",
             "detail": "The flop looks wrong, so you release the hand and leave the ante in the circle.",
             "summary": f"You fold after the flop and forfeit the {wager}c ante.",
-            "result_lines": [
+            "result_lines": result_lines + [
                 f"Your hand: {_casino_cards_text(player_cards)}",
                 f"Flop: {_casino_cards_text(flop)}",
                 "You fold and let the ante go.",
@@ -3889,12 +4056,16 @@ def _casino_holdem_resolve(session, action):
         headline = "Dealer takes it."
         detail = "The house makes the better hand and sweeps the ante and call."
 
-    result_lines = [
+    result_lines = []
+    result_lines.extend(_casino_ascii_card_block("Board", board))
+    result_lines.extend(_casino_ascii_card_block("You", player_cards))
+    result_lines.extend(_casino_ascii_card_block("Dealer", dealer_cards))
+    result_lines.extend([
         f"Board: {board_text}",
         f"You: {_casino_cards_text(player_cards)} ({player_best['name']})",
         f"Dealer: {_casino_cards_text(dealer_cards)} ({dealer_best['name']})",
         "Dealer qualifies." if dealer_qualifies else "Dealer does not qualify (needs pair of 4s+).",
-    ]
+    ])
     if ante_bonus > 0:
         result_lines.append(f"Ante bonus pays x{ante_bonus_mult} for your {player_best['name']}.")
     result_lines.append(detail)

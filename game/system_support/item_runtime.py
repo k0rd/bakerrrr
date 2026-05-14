@@ -7,6 +7,7 @@ from game.components import (
     NPCNeeds,
     PlayerAssets,
     StatusEffects,
+    SubstanceUseState,
     Vitality,
     WeaponLoadout,
 )
@@ -76,10 +77,32 @@ def _item_armor_profile(item_def):
     }
 
 
+def _item_substance_intoxication_duration(item_def):
+    profile = item_def.get("substance_profile", {})
+    if isinstance(profile, dict):
+        try:
+            explicit = int(profile.get("intoxication_duration", 0) or 0)
+        except (TypeError, ValueError):
+            explicit = 0
+        if explicit > 0:
+            return explicit
+
+    durations = []
+    for effect in item_def.get("effects", ()):
+        if not isinstance(effect, dict) or effect.get("type") != "status":
+            continue
+        try:
+            durations.append(max(0, int(effect.get("duration", 0) or 0)))
+        except (TypeError, ValueError):
+            continue
+    return max(durations) if durations else 0
+
+
 def _apply_item_effects_to_entity(sim, eid, item_def):
     needs = sim.ecs.get(NPCNeeds).get(eid)
     vitality = sim.ecs.get(Vitality).get(eid)
     statuses = sim.ecs.get(StatusEffects).get(eid)
+    substance_states = sim.ecs.get(SubstanceUseState)
     assets = sim.ecs.get(PlayerAssets).get(eid)
 
     applied = []
@@ -224,9 +247,9 @@ def _apply_item_effects_to_entity(sim, eid, item_def):
 
             updated = []
             for weapon_id, weapon in targets:
-                before = int(loadout.reserve_ammo.get(weapon_id, 0))
+                before = int(loadout.reserve_ammo_value(weapon_id, default=0))
                 after = max(0, before + amount)
-                loadout.reserve_ammo[weapon_id] = after
+                loadout.set_reserve_ammo_value(weapon_id, after)
                 updated.append({
                     "weapon_id": weapon_id,
                     "weapon_name": str(weapon.get("name", weapon_id)),
@@ -241,6 +264,32 @@ def _apply_item_effects_to_entity(sim, eid, item_def):
                 "targets": updated,
             })
             continue
+
+    substance_profile = item_def.get("substance_profile", {})
+    if isinstance(substance_profile, dict) and substance_profile.get("substance_id") and statuses:
+        substance_state = substance_states.get(eid)
+        if substance_state is None:
+            substance_state = SubstanceUseState()
+            sim.ecs.add(eid, substance_state)
+        state_snapshot = substance_state.record_use(
+            substance_profile.get("substance_id"),
+            tick=int(getattr(sim, "tick", 0) or 0),
+            intoxication_duration=_item_substance_intoxication_duration(item_def),
+            dependence_gain=substance_profile.get("dependence_gain", 0.0),
+            dependence_decay=substance_profile.get("dependence_decay", 0.0),
+            withdrawal_threshold=substance_profile.get("withdrawal_threshold", 1.0),
+            withdrawal_status=substance_profile.get("withdrawal_status", ""),
+            withdrawal_duration=substance_profile.get("withdrawal_duration", 0),
+            withdrawal_cooldown=substance_profile.get("withdrawal_cooldown", 0),
+            withdrawal_modifiers=substance_profile.get("withdrawal_modifiers", {}),
+            statuses=statuses,
+        )
+        if state_snapshot:
+            applied.append({
+                "type": "substance_profile",
+                "substance_id": substance_profile.get("substance_id"),
+                "dependence": float(state_snapshot.get("dependence", 0.0) or 0.0),
+            })
 
     return applied
 

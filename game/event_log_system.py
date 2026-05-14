@@ -222,6 +222,13 @@ from game.vehicles import (
     vehicle_services_for_archetype,
 )
 from game.run_objectives import evaluate_run_objective
+from game.location_presentation_runtime import (
+    _entity_legend_line,
+    _location_description_snapshot,
+    _property_contact_hint,
+    _property_interaction_modes,
+    _property_summary,
+)
 from game.dialogue_runtime import (
     _contact_benefit_labels,
     _disguise_role_label,
@@ -243,6 +250,12 @@ from game.skill_ui import (
 from game.system_support.combat_targeting_runtime import (
     _dir_label,
     _target_condition_descriptor,
+)
+from game.status_ui_runtime import (
+    _floor_label,
+    _humanize_slug,
+    _sentence_from_note,
+    _status_effect_label,
 )
 from game.ui_text_runtime import (
     _line_segments,
@@ -316,38 +329,11 @@ _WORLD_EVENT_PLAYER_REVEAL_RADIUS = 1
 def _building_entry_description(*args, **kwargs):
     return _facade()._building_entry_description(*args, **kwargs)
 
-def _entity_legend_line(*args, **kwargs):
-    return _facade()._entity_legend_line(*args, **kwargs)
-
-def _floor_label(*args, **kwargs):
-    return _facade()._floor_label(*args, **kwargs)
-
-def _humanize_slug(*args, **kwargs):
-    return _facade()._humanize_slug(*args, **kwargs)
-
 def _ingress_label(*args, **kwargs):
     return _facade()._ingress_label(*args, **kwargs)
 
-def _location_description_snapshot(*args, **kwargs):
-    return _facade()._location_description_snapshot(*args, **kwargs)
-
-def _property_contact_hint(*args, **kwargs):
-    return _facade()._property_contact_hint(*args, **kwargs)
-
-def _property_interaction_modes(*args, **kwargs):
-    return _facade()._property_interaction_modes(*args, **kwargs)
-
-def _property_summary(*args, **kwargs):
-    return _facade()._property_summary(*args, **kwargs)
-
 def _room_entry_description(*args, **kwargs):
     return _facade()._room_entry_description(*args, **kwargs)
-
-def _sentence_from_note(*args, **kwargs):
-    return _facade()._sentence_from_note(*args, **kwargs)
-
-def _status_effect_label(*args, **kwargs):
-    return _facade()._status_effect_label(*args, **kwargs)
 
 class EventLogSystem(System):
     def on_world_event_started(self, event):

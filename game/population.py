@@ -1856,6 +1856,7 @@ def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
             "hotwire_leads",
             "forged_badge",
             "smoke_tab",
+            "cocaine_bindle",
             "caff_shot",
             "cheap_whiskey",
         )
@@ -1864,6 +1865,7 @@ def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
             "spark_brew",
             "cheap_whiskey",
             "smoke_tab",
+            "mdma_capsule",
             "deck_of_cards",
             "scratch_ticket",
             "lucky_charm",

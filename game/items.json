@@ -174,44 +174,62 @@
     ]
   },
   "black_market_stim": {
-    "name": "Black Market Stim",
+    "name": "Methamphetamine",
     "glyph": "!",
     "stack_max": 1,
     "tags": [
       "consumable",
       "energy",
       "illegal",
-      "stimulant"
+      "stimulant",
+      "drug"
     ],
     "legal_status": "illegal",
     "effects": [
       {
         "type": "modify_need",
         "need": "energy",
-        "delta": 30
+        "delta": 32
       },
       {
         "type": "modify_need",
         "need": "safety",
-        "delta": -10
+        "delta": -12
       },
       {
         "type": "status",
-        "status": "agitated",
-        "duration": 20,
+        "status": "spun_up",
+        "duration": 22,
         "modifiers": {
-          "safety_tick_delta": -0.12,
-          "energy_tick_delta": -0.06,
-          "move_speed_mult": 0.16,
-          "weapon_cooldown_mult": -0.28,
-          "melee_damage_mult": 0.22,
-          "ranged_accuracy_mult": -0.16,
-          "incoming_damage_mult": 0.14,
-          "assault_bias_delta": 0.18,
-          "retreat_bias_delta": -0.12
+          "safety_tick_delta": -0.15,
+          "energy_tick_delta": -0.08,
+          "move_speed_mult": 0.18,
+          "weapon_cooldown_mult": -0.3,
+          "melee_damage_mult": 0.24,
+          "ranged_accuracy_mult": -0.18,
+          "incoming_damage_mult": 0.16,
+          "assault_bias_delta": 0.2,
+          "retreat_bias_delta": -0.14
         }
       }
-    ]
+    ],
+    "substance_profile": {
+      "substance_id": "methamphetamine",
+      "intoxication_duration": 22,
+      "dependence_gain": 0.24,
+      "dependence_decay": 0.006,
+      "withdrawal_threshold": 0.42,
+      "withdrawal_status": "meth_crash",
+      "withdrawal_duration": 20,
+      "withdrawal_cooldown": 18,
+      "withdrawal_modifiers": {
+        "energy_tick_delta": -0.16,
+        "safety_tick_delta": -0.08,
+        "move_speed_mult": -0.12,
+        "ranged_accuracy_mult": -0.1,
+        "retreat_bias_delta": 0.12
+      }
+    }
   },
   "protein_wrap": {
     "name": "Protein Wrap",
@@ -394,14 +412,210 @@
       }
     ]
   },
+  "shiver_patch": {
+    "name": "Fentanyl Patch",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "illegal",
+      "injectable",
+      "opioid",
+      "drug"
+    ],
+    "legal_status": "illegal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": -10
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 4
+      },
+      {
+        "type": "status",
+        "status": "opioid_numbed",
+        "duration": 20,
+        "modifiers": {
+          "move_speed_mult": -0.18,
+          "weapon_cooldown_mult": 0.16,
+          "ranged_accuracy_mult": -0.16,
+          "incoming_damage_mult": -0.08,
+          "retreat_bias_delta": 0.08
+        }
+      }
+    ],
+    "substance_profile": {
+      "substance_id": "fentanyl",
+      "intoxication_duration": 20,
+      "dependence_gain": 0.28,
+      "dependence_decay": 0.007,
+      "withdrawal_threshold": 0.38,
+      "withdrawal_status": "opioid_withdrawal",
+      "withdrawal_duration": 22,
+      "withdrawal_cooldown": 20,
+      "withdrawal_modifiers": {
+        "energy_tick_delta": -0.12,
+        "safety_tick_delta": -0.14,
+        "move_speed_mult": -0.12,
+        "ranged_accuracy_mult": -0.08,
+        "retreat_bias_delta": 0.1
+      }
+    }
+  },
+  "counterfeit_med_gel": {
+    "name": "Counterfeit Med Gel",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": [
+      "consumable",
+      "medical",
+      "safety",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": -14
+      },
+      {
+        "type": "status",
+        "status": "nauseous",
+        "duration": 18,
+        "modifiers": {
+          "move_speed_mult": -0.08,
+          "ranged_accuracy_mult": -0.08,
+          "weapon_cooldown_mult": 0.08,
+          "retreat_bias_delta": 0.08
+        }
+      }
+    ]
+  },
+  "sedative_ampoule": {
+    "name": "Heroin Syringe",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "illegal",
+      "injectable",
+      "opioid",
+      "drug"
+    ],
+    "legal_status": "illegal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": -12
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": -6
+      },
+      {
+        "type": "status",
+        "status": "sedated",
+        "duration": 24,
+        "modifiers": {
+          "move_speed_mult": -0.26,
+          "weapon_cooldown_mult": 0.18,
+          "ranged_accuracy_mult": -0.14,
+          "retreat_bias_delta": 0.14
+        }
+      }
+    ],
+    "substance_profile": {
+      "substance_id": "heroin",
+      "intoxication_duration": 24,
+      "dependence_gain": 0.3,
+      "dependence_decay": 0.008,
+      "withdrawal_threshold": 0.36,
+      "withdrawal_status": "opioid_withdrawal",
+      "withdrawal_duration": 24,
+      "withdrawal_cooldown": 20,
+      "withdrawal_modifiers": {
+        "energy_tick_delta": -0.14,
+        "safety_tick_delta": -0.14,
+        "move_speed_mult": -0.14,
+        "ranged_accuracy_mult": -0.08,
+        "retreat_bias_delta": 0.12
+      }
+    }
+  },
+  "burner_serum": {
+    "name": "Ketamine Vial",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "illegal",
+      "injectable",
+      "dissociative",
+      "drug"
+    ],
+    "legal_status": "illegal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": -10
+      },
+      {
+        "type": "modify_need",
+        "need": "social",
+        "delta": -4
+      },
+      {
+        "type": "status",
+        "status": "dissociated",
+        "duration": 18,
+        "modifiers": {
+          "move_speed_mult": -0.1,
+          "weapon_cooldown_mult": 0.1,
+          "ranged_accuracy_mult": -0.26,
+          "incoming_damage_mult": -0.1,
+          "melee_damage_mult": 0.08,
+          "retreat_bias_delta": 0.06
+        }
+      }
+    ],
+    "substance_profile": {
+      "substance_id": "ketamine",
+      "intoxication_duration": 18,
+      "dependence_gain": 0.16,
+      "dependence_decay": 0.005,
+      "withdrawal_threshold": 0.44,
+      "withdrawal_status": "ketamine_crash",
+      "withdrawal_duration": 16,
+      "withdrawal_cooldown": 16,
+      "withdrawal_modifiers": {
+        "energy_tick_delta": -0.08,
+        "safety_tick_delta": -0.08,
+        "move_speed_mult": -0.06,
+        "ranged_accuracy_mult": -0.06
+      }
+    }
+  },
   "synth_focus_tabs": {
-    "name": "Synth Focus Tabs",
+    "name": "Amphetamine Tablets",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
       "consumable",
       "discipline",
-      "restricted"
+      "restricted",
+      "stimulant",
+      "drug"
     ],
     "legal_status": "restricted",
     "effects": [
@@ -417,7 +631,23 @@
           "weapon_cooldown_mult": -0.22
         }
       }
-    ]
+    ],
+    "substance_profile": {
+      "substance_id": "amphetamine",
+      "intoxication_duration": 22,
+      "dependence_gain": 0.12,
+      "dependence_decay": 0.004,
+      "withdrawal_threshold": 0.46,
+      "withdrawal_status": "amphetamine_crash",
+      "withdrawal_duration": 16,
+      "withdrawal_cooldown": 14,
+      "withdrawal_modifiers": {
+        "energy_tick_delta": -0.08,
+        "social_tick_delta": -0.06,
+        "move_speed_mult": -0.04,
+        "ranged_accuracy_mult": -0.04
+      }
+    }
   },
   "light_ammo_box": {
     "name": "Light Ammo Box",
@@ -485,7 +715,7 @@
     ]
   },
   "rocket_tube_pack": {
-    "name": "Rocket Tube Pack",
+    "name": "Launcher Round Pack",
     "glyph": "=",
     "stack_max": 1,
     "tags": [
@@ -507,16 +737,82 @@
     ]
   },
   "smoke_tab": {
-    "name": "Smoke Tab",
+    "name": "Cannabis Joint",
     "glyph": "!",
     "stack_max": 2,
     "tags": [
       "consumable",
       "social",
-      "illegal"
+      "illegal",
+      "cannabis",
+      "drug"
     ],
     "legal_status": "illegal",
     "effects": [
+      {
+        "type": "modify_need",
+        "need": "social",
+        "delta": 12
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": -2
+      },
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": -2
+      },
+      {
+        "type": "status",
+        "status": "stoned",
+        "duration": 18,
+        "modifiers": {
+          "social_tick_delta": 0.08,
+          "safety_tick_delta": -0.02,
+          "ranged_accuracy_mult": -0.14,
+          "move_speed_mult": -0.06,
+          "weapon_cooldown_mult": 0.08,
+          "retreat_bias_delta": 0.08
+        }
+      }
+    ],
+    "substance_profile": {
+      "substance_id": "cannabis",
+      "intoxication_duration": 18,
+      "dependence_gain": 0.06,
+      "dependence_decay": 0.003,
+      "withdrawal_threshold": 0.48,
+      "withdrawal_status": "irritable",
+      "withdrawal_duration": 12,
+      "withdrawal_cooldown": 14,
+      "withdrawal_modifiers": {
+        "social_tick_delta": -0.06,
+        "safety_tick_delta": -0.04,
+        "retreat_bias_delta": -0.04
+      }
+    }
+  },
+  "cocaine_bindle": {
+    "name": "Cocaine",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "energy",
+      "social",
+      "illegal",
+      "stimulant",
+      "drug"
+    ],
+    "legal_status": "illegal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 20
+      },
       {
         "type": "modify_need",
         "need": "social",
@@ -525,18 +821,132 @@
       {
         "type": "modify_need",
         "need": "safety",
-        "delta": -4
+        "delta": -8
       },
       {
         "type": "status",
-        "status": "hazy",
-        "duration": 18,
+        "status": "coked_up",
+        "duration": 16,
         "modifiers": {
-          "social_tick_delta": 0.07,
-          "safety_tick_delta": -0.08,
-          "ranged_accuracy_mult": -0.22,
-          "weapon_cooldown_mult": 0.08,
-          "retreat_bias_delta": 0.08
+          "move_speed_mult": 0.14,
+          "weapon_cooldown_mult": -0.18,
+          "ranged_accuracy_mult": -0.06,
+          "incoming_damage_mult": 0.08,
+          "assault_bias_delta": 0.12,
+          "retreat_bias_delta": -0.1
+        }
+      }
+    ],
+    "substance_profile": {
+      "substance_id": "cocaine",
+      "intoxication_duration": 16,
+      "dependence_gain": 0.18,
+      "dependence_decay": 0.005,
+      "withdrawal_threshold": 0.4,
+      "withdrawal_status": "cocaine_crash",
+      "withdrawal_duration": 16,
+      "withdrawal_cooldown": 16,
+      "withdrawal_modifiers": {
+        "energy_tick_delta": -0.12,
+        "safety_tick_delta": -0.08,
+        "social_tick_delta": -0.06,
+        "move_speed_mult": -0.08
+      }
+    }
+  },
+  "mdma_capsule": {
+    "name": "MDMA",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "social",
+      "illegal",
+      "party_drug",
+      "drug"
+    ],
+    "legal_status": "illegal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "social",
+        "delta": 26
+      },
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 8
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 6
+      },
+      {
+        "type": "status",
+        "status": "rolling",
+        "duration": 20,
+        "modifiers": {
+          "social_tick_delta": 0.14,
+          "safety_tick_delta": 0.02,
+          "move_speed_mult": 0.06,
+          "ranged_accuracy_mult": -0.12,
+          "suppression_resist_mult": -0.08,
+          "retreat_bias_delta": -0.06
+        }
+      }
+    ],
+    "substance_profile": {
+      "substance_id": "mdma",
+      "intoxication_duration": 20,
+      "dependence_gain": 0.1,
+      "dependence_decay": 0.004,
+      "withdrawal_threshold": 0.52,
+      "withdrawal_status": "serotonin_crash",
+      "withdrawal_duration": 18,
+      "withdrawal_cooldown": 18,
+      "withdrawal_modifiers": {
+        "social_tick_delta": -0.12,
+        "energy_tick_delta": -0.1,
+        "safety_tick_delta": -0.08,
+        "move_speed_mult": -0.06
+      }
+    }
+  },
+  "lsd_blotter": {
+    "name": "LSD Blotter",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "social",
+      "illegal",
+      "hallucinogen",
+      "drug"
+    ],
+    "legal_status": "illegal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "social",
+        "delta": 6
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": -8
+      },
+      {
+        "type": "status",
+        "status": "tripping",
+        "duration": 26,
+        "modifiers": {
+          "move_speed_mult": 0.04,
+          "ranged_accuracy_mult": -0.24,
+          "projectile_spread_mod": 2,
+          "suppression_resist_mult": -0.12,
+          "assault_bias_delta": -0.06,
+          "retreat_bias_delta": 0.1
         }
       }
     ]
@@ -1143,15 +1553,17 @@
     "effects": []
   },
   "burner_phone": {
-    "name": "Burner Phone",
+    "name": "Phone",
     "glyph": "=",
     "stack_max": 1,
     "tags": [
       "token",
-      "junk",
-      "illegal"
+      "phone",
+      "communication",
+      "burner",
+      "legal"
     ],
-    "legal_status": "illegal",
+    "legal_status": "legal",
     "effects": []
   },
   "scrap_circuit": {
@@ -1374,6 +1786,59 @@
     "effects": [],
     "weapon_id": "trail_machete"
   },
+  "fire_axe": {
+    "name": "Fire Axe",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "melee",
+      "blade",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "fire_axe"
+  },
+  "heavy_revolver": {
+    "name": "Heavy Revolver",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "handgun",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "heavy_revolver"
+  },
+  "sawed_off_shotgun": {
+    "name": "Sawed-Off Shotgun",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "shotgun",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "sawed_off_shotgun"
+  },
+  "machine_carbine": {
+    "name": "Machine Carbine",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "rifle",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "machine_carbine"
+  },
   "improvised_launcher": {
     "name": "Improvised Launcher",
     "glyph": ")",
@@ -1386,6 +1851,32 @@
     "legal_status": "illegal",
     "effects": [],
     "weapon_id": "improvised_launcher"
+  },
+  "grenade_launcher": {
+    "name": "Grenade Launcher",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "launcher",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "grenade_launcher"
+  },
+  "recoilless_launcher": {
+    "name": "Recoilless Launcher",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "launcher",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "recoilless_launcher"
   },
   "padded_jacket": {
     "name": "Padded Jacket",

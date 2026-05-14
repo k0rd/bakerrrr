@@ -140,6 +140,41 @@
       ]
     },
     {
+      "id": "fire_axe",
+      "name": "Fire Axe",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 1.0,
+      "range": 1,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 14,
+      "cooldown_ticks": 2,
+      "noise_radius": 3,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.0,
+      "tags": [
+        "melee",
+        "axe",
+        "blade",
+        "utility"
+      ],
+      "named_prefixes": [
+        "Rescue",
+        "Station",
+        "Redline",
+        "Breaker"
+      ],
+      "named_suffixes": [
+        "Axe",
+        "Hook",
+        "Head",
+        "Split"
+      ]
+    },
+    {
       "id": "holdout_pistol",
       "name": "Holdout Pistol",
       "glyph": "!",
@@ -241,6 +276,40 @@
       ]
     },
     {
+      "id": "heavy_revolver",
+      "name": "Heavy Revolver",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 1.65,
+      "range": 11,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 20,
+      "cooldown_ticks": 3,
+      "noise_radius": 9,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.22,
+      "tags": [
+        "handgun",
+        "kinetic",
+        "precision"
+      ],
+      "named_prefixes": [
+        "Iron",
+        "Marshal",
+        "Widow",
+        "Deadline"
+      ],
+      "named_suffixes": [
+        "Magnum",
+        "Prime",
+        "Longsix",
+        "King"
+      ]
+    },
+    {
       "id": "alley_shotgun",
       "name": "Alley Shotgun",
       "glyph": "!",
@@ -272,6 +341,41 @@
         "Howl",
         "Hammer",
         "Scatterheart"
+      ]
+    },
+    {
+      "id": "sawed_off_shotgun",
+      "name": "Sawed-Off Shotgun",
+      "glyph": "!",
+      "projectile_glyph": ":",
+      "trajectory": "ballistic",
+      "speed": 1.15,
+      "range": 5,
+      "pellets": 7,
+      "spread": 3,
+      "base_damage": 8,
+      "cooldown_ticks": 3,
+      "noise_radius": 10,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.04,
+      "tags": [
+        "shotgun",
+        "kinetic",
+        "spread",
+        "concealable"
+      ],
+      "named_prefixes": [
+        "Stub",
+        "Backseat",
+        "Gravel",
+        "Hideout"
+      ],
+      "named_suffixes": [
+        "Scatter",
+        "Coach",
+        "Jaw",
+        "Bite"
       ]
     },
     {
@@ -342,6 +446,41 @@
         "Flux",
         "Type-7",
         "Sparrow"
+      ]
+    },
+    {
+      "id": "machine_carbine",
+      "name": "Machine Carbine",
+      "glyph": "!",
+      "projectile_glyph": ",",
+      "trajectory": "ballistic",
+      "speed": 1.88,
+      "range": 11,
+      "pellets": 3,
+      "spread": 1,
+      "base_damage": 8,
+      "cooldown_ticks": 1,
+      "noise_radius": 10,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.15,
+      "tags": [
+        "rifle",
+        "carbine",
+        "kinetic",
+        "burst"
+      ],
+      "named_prefixes": [
+        "Patrol",
+        "Northline",
+        "Rail",
+        "Cobalt"
+      ],
+      "named_suffixes": [
+        "Rake",
+        "Mk V",
+        "Carbine",
+        "Storm"
       ]
     },
     {
@@ -443,6 +582,73 @@
         "Arc",
         "Mk. Zero",
         "Rainmaker"
+      ]
+    },
+    {
+      "id": "grenade_launcher",
+      "name": "Grenade Launcher",
+      "glyph": "!",
+      "projectile_glyph": "o",
+      "trajectory": "lobbed",
+      "speed": 0.95,
+      "range": 10,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 24,
+      "cooldown_ticks": 4,
+      "noise_radius": 13,
+      "explosion_radius": 3,
+      "aoe_falloff": 0.45,
+      "cover_penetration": 0.24,
+      "tags": [
+        "explosive",
+        "launcher"
+      ],
+      "named_prefixes": [
+        "Thunder",
+        "Barricade",
+        "Arc",
+        "Metro"
+      ],
+      "named_suffixes": [
+        "Lobber",
+        "Tube",
+        "Mk II",
+        "Rumbler"
+      ]
+    },
+    {
+      "id": "recoilless_launcher",
+      "name": "Recoilless Launcher",
+      "glyph": "!",
+      "projectile_glyph": "o",
+      "trajectory": "lobbed",
+      "speed": 1.0,
+      "range": 12,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 30,
+      "cooldown_ticks": 5,
+      "noise_radius": 14,
+      "explosion_radius": 2,
+      "aoe_falloff": 0.35,
+      "cover_penetration": 0.34,
+      "tags": [
+        "explosive",
+        "launcher",
+        "heavy"
+      ],
+      "named_prefixes": [
+        "Siege",
+        "Outrider",
+        "Dustline",
+        "Breaker"
+      ],
+      "named_suffixes": [
+        "Lance",
+        "Mk IV",
+        "Hammer",
+        "Backblast"
       ]
     }
   ]

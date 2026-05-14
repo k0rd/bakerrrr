@@ -70,6 +70,7 @@ from game.item_semantics import (
     item_is_identified_for_actor,
     item_unknown_inspect_text_for_actor,
 )
+from game.opportunities import _item_label
 from game.player_action_system import PlayerActionSystem
 from game.character_sheet import (
     build_character_sheet_pages as _build_character_sheet_pages,
@@ -141,6 +142,10 @@ from game.property_runtime import (
     viewer_property_credential_status as _viewer_property_credential_status,
     viewer_revealed_building_id as _viewer_revealed_building_id,
 )
+from game.location_presentation_runtime import (
+    _build_known_locations_report,
+    _item_legend_line,
+)
 from game.service_runtime import _int_or_default
 from game.system_support.combat_targeting_runtime import (
     _entity_uses_melee_aim,
@@ -178,6 +183,10 @@ from game.system_support.item_runtime import (
     _weapon_uses_ammo,
 )
 from game.system_support.player_feedback import _log_player_feedback
+from game.status_ui_runtime import (
+    _entity_status_move_speed_multiplier,
+    _status_effect_label,
+)
 from game.ui_text_runtime import (
     _cycle_log_filter_id,
     _filtered_log_lines,
@@ -201,26 +210,11 @@ def _facade():
 
 THREAT_STATES = {"protecting", "investigating"}
 
-def _build_known_locations_report(*args, **kwargs):
-    return _facade()._build_known_locations_report(*args, **kwargs)
-
-def _entity_status_move_speed_multiplier(*args, **kwargs):
-    return _facade()._entity_status_move_speed_multiplier(*args, **kwargs)
-
-def _item_label(*args, **kwargs):
-    return _facade()._item_label(*args, **kwargs)
-
-def _item_legend_line(*args, **kwargs):
-    return _facade()._item_legend_line(*args, **kwargs)
-
 def _path_next_step(*args, **kwargs):
     return _facade()._path_next_step(*args, **kwargs)
 
 def _property_access_summary(*args, **kwargs):
     return _facade()._property_access_summary(*args, **kwargs)
-
-def _status_effect_label(*args, **kwargs):
-    return _facade()._status_effect_label(*args, **kwargs)
 
 class InputSystem(System):
 
@@ -2859,6 +2853,15 @@ class InputSystem(System):
                     )
                 )
 
+        substance_profile = item_def.get("substance_profile", {}) if isinstance(item_def.get("substance_profile"), dict) else {}
+        if substance_profile.get("substance_id"):
+            effect_labels.append("addictive")
+            withdrawal_status = str(substance_profile.get("withdrawal_status", "") or "").strip().lower()
+            if withdrawal_status:
+                effect_labels.append(
+                    f"withdrawal {_status_effect_label(withdrawal_status, title=False, limit=2)}"
+                )
+
         if weapon_id:
             weapon = weapon_by_id(weapon_id)
             loadout = self.sim.ecs.get(WeaponLoadout).get(self.player_eid)
@@ -2874,7 +2877,11 @@ class InputSystem(System):
             if _weapon_uses_ammo(weapon):
                 reserve = _weapon_reserve_ammo(loadout, weapon_id)
                 if reserve is None and equipped and loadout:
-                    reserve = int(loadout.reserve_ammo.get(weapon_id, _default_weapon_reserve_ammo(weapon)))
+                    reserve = int(loadout.reserve_ammo_value(
+                        weapon_id,
+                        default=_default_weapon_reserve_ammo(weapon),
+                        instance_id=entry_instance_id,
+                    ))
                 if reserve is None:
                     weapon_bits.append(f"ammo {ammo_type}")
                 else:

@@ -41,7 +41,7 @@ class PlayerInteractionRuntime:
     def _viewer_eid(self):
         return getattr(self.sim, "player_eid", None)
 
-    def _nearest_fixture_by_role(self, eid, pos, *roles):
+    def _nearest_fixture_by_role(self, eid, pos, *roles, preferred_dir=None, exact_direction=False):
         allowed = {
             str(role or "").strip().lower()
             for role in roles
@@ -50,6 +50,23 @@ class PlayerInteractionRuntime:
         if not allowed:
             return None
         nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=1)
+        if exact_direction:
+            direction = preferred_dir if preferred_dir is not None else self.action_system._player_interact_direction(eid, pos)
+            if not isinstance(direction, tuple) or len(direction) < 2:
+                return None
+            dx = _int_or_default(direction[0], 0)
+            dy = _int_or_default(direction[1], 0)
+            if dx == 0 and dy == 0:
+                return None
+            target_x = int(pos.x) + int(dx)
+            target_y = int(pos.y) + int(dy)
+            nearby = [
+                prop
+                for prop in nearby
+                if int(prop.get("x", 0)) == target_x
+                and int(prop.get("y", 0)) == target_y
+                and int(prop.get("z", pos.z)) == int(pos.z)
+            ]
         candidates = []
         for prop in nearby:
             if _property_infrastructure_role(prop) not in allowed:
@@ -69,8 +86,14 @@ class PlayerInteractionRuntime:
         candidates.sort(key=lambda row: row[0])
         return candidates[0][1]
 
-    def nearest_sabotage_fixture(self, eid, pos):
-        return self._nearest_fixture_by_role(eid, pos, "sabotage_target")
+    def nearest_sabotage_fixture(self, eid, pos, *, preferred_dir=None, exact_direction=False):
+        return self._nearest_fixture_by_role(
+            eid,
+            pos,
+            "sabotage_target",
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
 
     def security_fixture_target_property(self, prop):
         if not isinstance(prop, dict):
@@ -171,8 +194,14 @@ class PlayerInteractionRuntime:
             cut_until=cut_until,
         ))
 
-    def nearest_camera_fixture(self, eid, pos):
-        return self._nearest_fixture_by_role(eid, pos, "camera_target")
+    def nearest_camera_fixture(self, eid, pos, *, preferred_dir=None, exact_direction=False):
+        return self._nearest_fixture_by_role(
+            eid,
+            pos,
+            "camera_target",
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
 
     def player_disable_camera(self, eid, pos, prop):
         now = self.sim.tick
@@ -217,8 +246,14 @@ class PlayerInteractionRuntime:
             disabled_until=now + duration,
         ))
 
-    def nearest_alarm_fixture(self, eid, pos):
-        return self._nearest_fixture_by_role(eid, pos, "alarm_target")
+    def nearest_alarm_fixture(self, eid, pos, *, preferred_dir=None, exact_direction=False):
+        return self._nearest_fixture_by_role(
+            eid,
+            pos,
+            "alarm_target",
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
 
     def player_disable_alarm(self, eid, pos, prop):
         now = self.sim.tick
@@ -398,11 +433,24 @@ class PlayerInteractionRuntime:
             return "Stash"
         return "Container"
 
-    def nearest_cache_fixture(self, eid, pos):
-        return self._nearest_fixture_by_role(eid, pos, "cache_target", "bones_stash")
+    def nearest_cache_fixture(self, eid, pos, *, preferred_dir=None, exact_direction=False):
+        return self._nearest_fixture_by_role(
+            eid,
+            pos,
+            "cache_target",
+            "bones_stash",
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
 
-    def nearest_business_scene_cache(self, eid, pos):
-        return self._nearest_fixture_by_role(eid, pos, "business_scene_cache")
+    def nearest_business_scene_cache(self, eid, pos, *, preferred_dir=None, exact_direction=False):
+        return self._nearest_fixture_by_role(
+            eid,
+            pos,
+            "business_scene_cache",
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
 
     def open_property_container_ui(self, eid, prop, *, container_kind="container", container_label=None):
         inventory_ui = getattr(self.sim, "inventory_ui", None)
@@ -707,23 +755,51 @@ class PlayerInteractionRuntime:
         )
 
     def handle_interact_action(self, eid, pos, *, force_direction=False):
-        sabotage_prop = self.nearest_sabotage_fixture(eid, pos)
+        preferred_dir = self.action_system._player_interact_direction(eid, pos)
+        exact_direction = bool(force_direction and preferred_dir is not None)
+
+        sabotage_prop = self.nearest_sabotage_fixture(
+            eid,
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
         if sabotage_prop is not None:
             self.player_sabotage_fixture(eid, pos, sabotage_prop)
             return
-        camera_prop = self.nearest_camera_fixture(eid, pos)
+        camera_prop = self.nearest_camera_fixture(
+            eid,
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
         if camera_prop is not None:
             self.player_disable_camera(eid, pos, camera_prop)
             return
-        alarm_prop = self.nearest_alarm_fixture(eid, pos)
+        alarm_prop = self.nearest_alarm_fixture(
+            eid,
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
         if alarm_prop is not None:
             self.player_disable_alarm(eid, pos, alarm_prop)
             return
-        business_scene_cache = self.nearest_business_scene_cache(eid, pos)
+        business_scene_cache = self.nearest_business_scene_cache(
+            eid,
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
         if business_scene_cache is not None:
             self.player_interact_business_scene_cache(eid, pos, business_scene_cache)
             return
-        cache_prop = self.nearest_cache_fixture(eid, pos)
+        cache_prop = self.nearest_cache_fixture(
+            eid,
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
         if cache_prop is not None:
             self.player_interact_cache(eid, pos, cache_prop)
             return

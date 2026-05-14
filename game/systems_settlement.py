@@ -10,6 +10,7 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
+from game.location_presentation_runtime import _location_building_category
 from game.system_support.settlement_runtime import (
     _home_property,
     _property_chunk_key,
@@ -33,7 +34,6 @@ Vitality = _systems.Vitality
 _actor_skill = _systems._actor_skill
 _bond_pair = _systems._bond_pair
 _clamp = _systems._clamp
-_location_building_category = _systems._location_building_category
 _manhattan = _systems._manhattan
 _property_access_level = _systems._property_access_level
 _property_archetype = _systems._property_archetype

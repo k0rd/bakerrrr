@@ -47,6 +47,22 @@ from game.property_runtime import (
     property_is_storefront as _property_is_storefront,
     property_metadata as _property_metadata,
 )
+from game.location_presentation_runtime import (
+    _access_prep_detail_lines,
+    _active_property_opportunities,
+    _building_street_summary,
+    _entity_legend_line,
+    _item_legend_line,
+    _property_contact_hint,
+    _property_knowledge_hint,
+    _property_legend_line,
+    _property_summary,
+    _stakeout_progress_snapshot,
+    _stakeout_property_opportunity_stats,
+    _structure_summary,
+    _tile_label,
+    _tile_legend_line,
+)
 from game.service_runtime import _credit_amount_label, _site_service_label
 from game.skills import (
     access_prep_skill_terms as _access_prep_skill_terms,
@@ -76,6 +92,8 @@ from game.system_support.offense_runtime import (
     _offense_notice_radius,
     _offense_tier,
 )
+from game.system_support.security_disguise_runtime import _security_fixture_is_online
+from game.status_ui_runtime import _entity_status_move_speed_multiplier
 from game.ui_text_runtime import _line_with_suffix
 
 STAKEOUT_REVEAL_INTERVAL = 8
@@ -87,81 +105,15 @@ def _facade():
 
     return facade
 
-
-def _access_prep_detail_lines(*args, **kwargs):
-    return _facade()._access_prep_detail_lines(*args, **kwargs)
-
-
-def _active_property_opportunities(*args, **kwargs):
-    return _facade()._active_property_opportunities(*args, **kwargs)
-
-
 def _best_cover_candidate(*args, **kwargs):
     return _facade()._best_cover_candidate(*args, **kwargs)
-
-
-def _building_street_summary(*args, **kwargs):
-    return _facade()._building_street_summary(*args, **kwargs)
-
 
 def _emit_move_access_events(*args, **kwargs):
     return _facade()._emit_move_access_events(*args, **kwargs)
 
 
-def _entity_legend_line(*args, **kwargs):
-    return _facade()._entity_legend_line(*args, **kwargs)
-
-
-def _entity_status_move_speed_multiplier(*args, **kwargs):
-    return _facade()._entity_status_move_speed_multiplier(*args, **kwargs)
-
-
-def _item_legend_line(*args, **kwargs):
-    return _facade()._item_legend_line(*args, **kwargs)
-
-
 def _property_access_summary(*args, **kwargs):
     return _facade()._property_access_summary(*args, **kwargs)
-
-
-def _property_contact_hint(*args, **kwargs):
-    return _facade()._property_contact_hint(*args, **kwargs)
-
-
-def _property_knowledge_hint(*args, **kwargs):
-    return _facade()._property_knowledge_hint(*args, **kwargs)
-
-
-def _property_legend_line(*args, **kwargs):
-    return _facade()._property_legend_line(*args, **kwargs)
-
-
-def _property_summary(*args, **kwargs):
-    return _facade()._property_summary(*args, **kwargs)
-
-
-def _security_fixture_is_online(*args, **kwargs):
-    return _facade()._security_fixture_is_online(*args, **kwargs)
-
-
-def _stakeout_progress_snapshot(*args, **kwargs):
-    return _facade()._stakeout_progress_snapshot(*args, **kwargs)
-
-
-def _stakeout_property_opportunity_stats(*args, **kwargs):
-    return _facade()._stakeout_property_opportunity_stats(*args, **kwargs)
-
-
-def _structure_summary(*args, **kwargs):
-    return _facade()._structure_summary(*args, **kwargs)
-
-
-def _tile_label(*args, **kwargs):
-    return _facade()._tile_label(*args, **kwargs)
-
-
-def _tile_legend_line(*args, **kwargs):
-    return _facade()._tile_legend_line(*args, **kwargs)
 
 
 def _tile_prefers_feature_legend(*args, **kwargs):

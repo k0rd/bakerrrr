@@ -33,6 +33,9 @@ from game.service_runtime import (
     CASINO_PLINKO_LANE_COUNT,
     TRANSIT_SERVICE_IDS,
     _casino_apply_round_result,
+    _casino_ascii_card_block,
+    _casino_ascii_craps_layout,
+    _casino_ascii_keno_board,
     _casino_baccarat_normalize_session,
     _casino_baccarat_resolve,
     _casino_baccarat_start,
@@ -316,14 +319,14 @@ class ServiceMenuSystem(System):
         dealer_cards = list(session.get("dealer_cards", ()) or ()) if isinstance(session, dict) else []
         hands = list(session.get("hands", ()) or ()) if isinstance(session, dict) else []
         active_idx = int(session.get("active_hand_index", -1)) if isinstance(session, dict) else -1
-        transcript = [
-            f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is on the felt.",
-            _casino_blackjack_line("Dealer", dealer_cards, hide_hole=True),
-        ]
+        transcript = [f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is on the felt."]
+        transcript.extend(_casino_ascii_card_block("Dealer", dealer_cards, hide_hole=True))
+        transcript.append(_casino_blackjack_line("Dealer", dealer_cards, hide_hole=True))
         for idx, hand in enumerate(hands):
             label = f"Hand {idx + 1}"
             if idx == active_idx:
                 label += " *"
+            transcript.extend(_casino_ascii_card_block(label, hand.get("cards", ())))
             line = _casino_blackjack_line(label, hand.get("cards", ()))
             tags = []
             if bool(hand.get("split_origin", False)):
@@ -362,13 +365,18 @@ class ServiceMenuSystem(System):
         wager = int(session.get("wager", 0))
         transcript = [
             f"Ante {_credit_amount_label(wager)} is posted.",
+        ]
+        transcript.extend(_casino_ascii_card_block("You", session.get("player_cards", ())))
+        transcript.extend(_casino_ascii_card_block("Flop", session.get("flop", ())))
+        transcript.extend(_casino_ascii_card_block("Dealer", ("??", "??")))
+        transcript.extend([
             f"Your hand: {_casino_cards_text(session.get('player_cards', ())) }".rstrip(),
             f"Flop: {_casino_cards_text(session.get('flop', ())) }".rstrip(),
             "Dealer: ?? ??",
             f"Call adds {_credit_amount_label(wager)} more; fold surrenders the ante.",
             "Dealer qualifies with pair of 4s or better. Straight or better pays an ante bonus.",
             f"Wallet {_credit_amount_label(self._wallet_credits())}.",
-        ]
+        ])
         topics = [
             {"id": "casino_holdem:call", "label": f"Call {_credit_amount_label(wager)}"},
             {"id": "casino_holdem:fold", "label": "Fold"},
@@ -390,6 +398,7 @@ class ServiceMenuSystem(System):
         holds = list(session.get("holds", ()) or ()) if isinstance(session, dict) else []
         held_slots = [str(idx + 1) for idx, held in enumerate(holds) if held]
         transcript = [f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted."]
+        transcript.extend(_casino_ascii_card_block("Hand", cards))
         for idx, card in enumerate(cards):
             marker = " [HELD]" if idx < len(holds) and holds[idx] else ""
             transcript.append(f"{idx + 1}. {_casino_cards_text([card])}{marker}")
@@ -428,6 +437,9 @@ class ServiceMenuSystem(System):
             transcript.append(notice)
         transcript.extend([
             f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.",
+        ])
+        transcript.extend(_casino_ascii_keno_board(picks=picks))
+        transcript.extend([
             f"Mark up to {CASINO_KENO_MAX_PICKS} spots from 01-{CASINO_KENO_NUMBER_COUNT:02d}.",
             (
                 f"Selected ({len(picks)}/{CASINO_KENO_MAX_PICKS}): "
@@ -526,6 +538,7 @@ class ServiceMenuSystem(System):
             transcript.append(notice)
         transcript.append(f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.")
         wager = int(session.get("wager", 0))
+        transcript.extend(_casino_ascii_craps_layout(view))
 
         if view == "pass_odds":
             transcript.extend([
@@ -640,6 +653,8 @@ class ServiceMenuSystem(System):
             transcript.append(notice)
         transcript.extend([
             f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.",
+            *_casino_ascii_card_block("Player", ("??", "??")),
+            *_casino_ascii_card_block("Banker", ("??", "??")),
             "Choose player, banker, or tie before the dealer opens the shoe.",
             "Player pays even money. Banker pays 0.95 to 1 after commission. Tie pays 8 to 1.",
             "Two cards each are dealt and the third-card rules run automatically.",
@@ -670,6 +685,8 @@ class ServiceMenuSystem(System):
             transcript.append(notice)
         transcript.extend([
             f"Ante {_credit_amount_label(wager)} is posted.",
+            *_casino_ascii_card_block("You", session.get("player_cards", ())),
+            *_casino_ascii_card_block("Dealer", ("??", "??", "??")),
             f"Your hand: {_casino_cards_text(session.get('player_cards', ())) }".rstrip(),
             "Dealer: ?? ?? ??",
             f"Play adds {_credit_amount_label(wager)} more; fold surrenders the ante.",

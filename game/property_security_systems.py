@@ -142,6 +142,12 @@ from game.system_support.actor_runtime import (
     _detail_tick_allowed,
     _entity_is_downed,
 )
+from game.system_support.security_disguise_runtime import (
+    _camera_disguise_scrutiny_profile,
+    _degrade_player_disguise,
+    _npc_disguise_scrutiny_profile,
+    _security_fixture_is_online,
+)
 from game.system_support.interaction_ordering import (
     _direction_step,
     _interaction_target_order_key,
@@ -160,24 +166,6 @@ from game.system_support.offense_runtime import (
     _offense_tier,
 )
 from game.system_support.player_feedback import _log_player_feedback
-
-def _facade():
-    from game import systems as facade
-
-    return facade
-
-
-def _camera_disguise_scrutiny_profile(*args, **kwargs):
-    return _facade()._camera_disguise_scrutiny_profile(*args, **kwargs)
-
-def _degrade_player_disguise(*args, **kwargs):
-    return _facade()._degrade_player_disguise(*args, **kwargs)
-
-def _npc_disguise_scrutiny_profile(*args, **kwargs):
-    return _facade()._npc_disguise_scrutiny_profile(*args, **kwargs)
-
-def _security_fixture_is_online(*args, **kwargs):
-    return _facade()._security_fixture_is_online(*args, **kwargs)
 
 class CameraSystem(System):
     """Detects the player in camera sightlines and raises offense events.

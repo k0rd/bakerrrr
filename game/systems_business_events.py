@@ -8,8 +8,16 @@ facade for the rest of the project.
 import random
 
 from engine.systems import System
+from game.location_presentation_runtime import _location_building_category
 from game.property_runtime import (
+    building_id_from_property as _building_id_from_property,
+    building_id_from_structure as _building_id_from_structure,
     clear_property_runtime_container_state as _clear_property_runtime_container_state,
+    property_access_level as _property_access_level,
+    property_is_public as _property_is_public,
+    property_is_storefront as _property_is_storefront,
+    property_metadata as _property_metadata,
+    property_status_text as _property_status_text,
     property_runtime_container_entries as _property_runtime_container_entries,
 )
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
@@ -44,8 +52,6 @@ _REQUIRED_SYSTEM_EXPORTS = (
     "_active_business_scene_actor_ids",
     "_active_contractor_record",
     "_adjacent_street_tiles",
-    "_building_id_from_property",
-    "_building_pulse_snapshot",
     "_business_event_chunk_population_target",
     "_business_scene_spillover_unsettled",
     "_chunk_entity_tallies",
@@ -57,14 +63,9 @@ _REQUIRED_SYSTEM_EXPORTS = (
     "_manhattan",
     "_organization_snapshot",
     "_property_access_controller",
-    "_property_access_level",
     "_property_archetype",
     "_property_covering",
     "_property_focus_position",
-    "_property_is_public",
-    "_property_is_storefront",
-    "_property_metadata",
-    "_regular_building_micro_event_visible_property_ids",
     "_release_actor_to_newcomer",
     "_remember_property_lead_for_actor",
     "_spawn_human",
@@ -194,6 +195,954 @@ def _business_event_regular_chunk_hourly_chance(sim):
         except (TypeError, ValueError):
             chance = _BUSINESS_EVENT_REGULAR_CHUNK_HOURLY_CHANCE
     return max(0.0, min(1.0, float(chance)))
+
+
+_BUILDING_PULSE_BUCKETS = 4
+
+
+def _building_tick_snapshot(sim, *, bucket_count=_BUILDING_PULSE_BUCKETS):
+    if sim is None:
+        return {
+            "ticks_per_hour": 600,
+            "hour_tick": 0,
+            "bucket": 0,
+            "bucket_count": max(1, int(bucket_count)),
+            "minute": 0,
+        }
+
+    world_traits = getattr(sim, "world_traits", {}) if sim is not None else {}
+    clock = world_traits.get("clock", {}) if isinstance(world_traits, dict) else {}
+    if not isinstance(clock, dict):
+        clock = {}
+
+    try:
+        ticks_per_hour = int(clock.get("ticks_per_hour", 600))
+    except (TypeError, ValueError):
+        ticks_per_hour = 600
+    ticks_per_hour = max(60, ticks_per_hour)
+
+    bucket_count = max(1, int(bucket_count))
+    tick = int(getattr(sim, "tick", 0) or 0)
+    hour_tick = tick % ticks_per_hour
+    bucket_span = max(1, ticks_per_hour // bucket_count)
+    bucket = min(bucket_count - 1, hour_tick // bucket_span)
+    minute = min(59, int((hour_tick * 60) / ticks_per_hour))
+    return {
+        "ticks_per_hour": ticks_per_hour,
+        "hour_tick": hour_tick,
+        "bucket": bucket,
+        "bucket_count": bucket_count,
+        "minute": minute,
+    }
+
+
+def _building_micro_event_pool(category, phase, *, open_now=False):
+    category = str(category or "").strip().lower()
+    phase = str(phase or "").strip().lower()
+    if not phase or phase in {"after_hours", "locked_down", "quiet_hours", "quiet_interior"}:
+        return ()
+
+    if category in {"retail", "finance", "office"}:
+        if phase == "opening":
+            return (
+                {
+                    "phase": "delivery_drop",
+                    "label": "delivery drop",
+                    "street_label": "courier stop at the door",
+                    "entry_sentence": "A delivery is briefly pulling motion toward the threshold and the back-room route behind it.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 1.1,
+                },
+                {
+                    "phase": "staff_handoff",
+                    "label": "staff handoff",
+                    "street_label": "staff cycling through the frontage",
+                    "entry_sentence": "A short handoff is making the threshold feel busier than the customer side behind it.",
+                    "emphasis": "admin",
+                    "perimeter_bonus": 0.9,
+                },
+                {
+                    "phase": "help_wanted_board",
+                    "label": "help-wanted board",
+                    "street_label": "job seekers checking a notice board",
+                    "entry_sentence": "A small help-wanted knot has formed off the front, with people reading the posted shift needs before deciding whether to step in.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 1.7,
+                },
+            )
+        if phase == "rush":
+            return (
+                {
+                    "phase": "counter_queue",
+                    "label": "counter queue",
+                    "street_label": "short line holding at the entrance",
+                    "entry_sentence": "A short queue keeps forming and dissolving at the front, so the place feels like it is breathing in bursts instead of evenly.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 2.1,
+                },
+                {
+                    "phase": "courier_stop",
+                    "label": "courier stop",
+                    "street_label": "messenger traffic clipping the curb",
+                    "entry_sentence": "A courier stop keeps interrupting the normal flow, pulling attention back toward the threshold every few minutes.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 1.4,
+                },
+            )
+        if phase in {"back_office", "steady_trade"}:
+            return (
+                {
+                    "phase": "paperwork_surge",
+                    "label": "paperwork surge",
+                    "street_label": "front thinning while the back office catches up",
+                    "entry_sentence": "The public rooms are quieter because a paperwork crunch is pulling more people deeper inside.",
+                    "emphasis": "admin",
+                    "perimeter_bonus": 0.1,
+                },
+                {
+                    "phase": "shift_handoff",
+                    "label": "shift handoff",
+                    "street_label": "staff rotating through the frontage",
+                    "entry_sentence": "A quick shift handoff is making the front edge feel more exposed than settled.",
+                    "emphasis": "admin",
+                    "perimeter_bonus": 1.0,
+                },
+            )
+
+    if category in {"hospitality", "entertainment"}:
+        if phase in {"prep", "cleanup"}:
+            return (
+                {
+                    "phase": "supplier_drop",
+                    "label": "supplier drop",
+                    "street_label": "crates and carts near the service door",
+                    "entry_sentence": "A supplier drop has the support loop briefly spilling out into public view.",
+                    "emphasis": "work",
+                    "perimeter_bonus": 0.8,
+                },
+                {
+                    "phase": "reset_scramble",
+                    "label": "reset scramble",
+                    "street_label": "staff cutting hard between the front and the back",
+                    "entry_sentence": "A reset scramble is keeping the place in short efficient loops rather than one smooth flow.",
+                    "emphasis": "work",
+                    "perimeter_bonus": 0.2,
+                },
+            )
+        if phase in {"lunch_rush", "evening_crowd"}:
+            return (
+                {
+                    "phase": "table_turnover",
+                    "label": "table turnover",
+                    "street_label": "staff threading hard through the front room",
+                    "entry_sentence": "A turnover crunch is keeping the public rooms in constant motion, with barely any pause between one party and the next.",
+                    "emphasis": "hospitality",
+                    "perimeter_bonus": 0.3,
+                },
+                {
+                    "phase": "crowd_spillover",
+                    "label": "crowd spillover",
+                    "street_label": "people bunching outside the door",
+                    "entry_sentence": "A knot of people has started to spill back onto the sidewalk, making the place feel bigger than its footprint.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 3.2,
+                },
+                {
+                    "phase": "waiting_parties",
+                    "label": "waiting parties",
+                    "street_label": "small groups lingering just outside",
+                    "entry_sentence": "Small waiting parties are collecting outside, turning the threshold into part of the room.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 2.5,
+                },
+            )
+        if phase == "late_buzz":
+            return (
+                {
+                    "phase": "barback_reset",
+                    "label": "barback reset",
+                    "street_label": "staff shuttling between the door and the back",
+                    "entry_sentence": "The late hour has compressed the motion here into short reset loops and quiet checks.",
+                    "emphasis": "work",
+                    "perimeter_bonus": 0.4,
+                },
+                {
+                    "phase": "last_call_spill",
+                    "label": "last-call spill",
+                    "street_label": "slow exits and smokers outside",
+                    "entry_sentence": "Last call is leaking onto the street in slow exits, smoke breaks, and people deciding whether they are really leaving.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 3.4,
+                },
+            )
+
+    if category in {"industrial", "transit"}:
+        if phase == "receiving":
+            return (
+                {
+                    "phase": "delivery_run",
+                    "label": "delivery run",
+                    "street_label": "truck-side handoffs at the curb",
+                    "entry_sentence": "A delivery run has the site briefly organized around handoff rather than storage.",
+                    "emphasis": "work",
+                    "perimeter_bonus": 1.8,
+                },
+                {
+                    "phase": "manifest_check",
+                    "label": "manifest check",
+                    "street_label": "crew pausing near the gate with clipboards",
+                    "entry_sentence": "A manifest check has movement bunching near the edge of the site before it can spread deeper in.",
+                    "emphasis": "admin",
+                    "perimeter_bonus": 1.2,
+                },
+            )
+        if phase in {"shift_work", "steady_ops"}:
+            events = [
+                {
+                    "phase": "loading_push",
+                    "label": "loading push",
+                    "street_label": "freight moving in short bursts",
+                    "entry_sentence": "A loading push is giving the place a start-stop tempo instead of a smooth hum.",
+                    "emphasis": "work",
+                    "perimeter_bonus": 0.8,
+                },
+                {
+                    "phase": "dispatch_surge",
+                    "label": "dispatch surge",
+                    "street_label": "dispatch traffic clipping the frontage",
+                    "entry_sentence": "A dispatch surge is briefly pulling operational attention back toward the edge of the site.",
+                    "emphasis": "transit" if category == "transit" else "admin",
+                    "perimeter_bonus": 1.1,
+                },
+            ]
+            if category == "transit":
+                events.append({
+                    "phase": "boarding_crush",
+                    "label": "boarding crush",
+                    "street_label": "fares and boarding calls bunching at the stop",
+                    "entry_sentence": "A boarding crush is turning the stop into a brief knot of fares, shouted destinations, and people trying not to miss the clean connection.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 3.0,
+                })
+                events.append({
+                    "phase": "commuter_orientation",
+                    "label": "commuter orientation",
+                    "street_label": "new arrivals sorting routes by the edge",
+                    "entry_sentence": "A few new arrivals are sorting routes and work leads near the stop instead of committing to a direction yet.",
+                    "emphasis": "transit",
+                    "perimeter_bonus": 1.6,
+                })
+            else:
+                events.append({
+                    "phase": "day_labor_call",
+                    "label": "day-labor call",
+                    "street_label": "hands gathering around a crew list",
+                    "entry_sentence": "A day-labor call is pulling loose workers toward the edge of the site, all names, short terms, and people hoping the shift sticks.",
+                    "emphasis": "work",
+                    "perimeter_bonus": 1.5,
+                })
+            return tuple(events)
+        if phase == "handoff":
+            events = [
+                {
+                    "phase": "shift_change",
+                    "label": "shift change",
+                    "street_label": "workers bunching near the entrance",
+                    "entry_sentence": "A shift change has people collecting near the threshold longer than the building usually likes.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 2.6,
+                },
+                {
+                    "phase": "gate_briefing",
+                    "label": "gate briefing",
+                    "street_label": "supervisors stopping people just inside the gate",
+                    "entry_sentence": "A quick gate briefing is turning the entrance into a temporary choke point.",
+                    "emphasis": "admin",
+                    "perimeter_bonus": 2.0,
+                },
+            ]
+            if category == "transit":
+                events.append({
+                    "phase": "arrival_handoff",
+                    "label": "arrival handoff",
+                    "street_label": "incoming riders and pickups meeting at the edge",
+                    "entry_sentence": "An arrival handoff is making the stop feel connected to somewhere farther out, with inbound riders, relief pickups, and quick onward directions all landing at once.",
+                    "emphasis": "transit",
+                    "perimeter_bonus": 2.4,
+                })
+            return tuple(events)
+
+    if category == "medical":
+        if phase == "intake":
+            return (
+                {
+                    "phase": "triage_spill",
+                    "label": "triage spill",
+                    "street_label": "intake queue holding at the door",
+                    "entry_sentence": "An intake queue is keeping more people near the threshold than the lobby was built to flatter.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 2.2,
+                },
+                {
+                    "phase": "chart_handoff",
+                    "label": "chart handoff",
+                    "street_label": "staff cutting brisk lines between desks",
+                    "entry_sentence": "A chart handoff is pulling staff into short loops between the desk and the deeper rooms.",
+                    "emphasis": "medical",
+                    "perimeter_bonus": 0.6,
+                },
+                {
+                    "phase": "clinic_outreach",
+                    "label": "clinic outreach",
+                    "street_label": "walk-ins checking in at an outreach table",
+                    "entry_sentence": "An outreach table has made the front feel less like a door and more like a first safe stop for people trying to get steady.",
+                    "emphasis": "medical",
+                    "perimeter_bonus": 1.4,
+                },
+            )
+        if phase in {"treatment", "night_watch"}:
+            return (
+                {
+                    "phase": "supply_run",
+                    "label": "supply run",
+                    "street_label": "carts and staff slipping between doors",
+                    "entry_sentence": "A supply run is briefly making the place feel more logistical than serene.",
+                    "emphasis": "medical",
+                    "perimeter_bonus": 0.4,
+                },
+                {
+                    "phase": "quiet_handoff",
+                    "label": "quiet handoff",
+                    "street_label": "a subdued exchange near the front desk",
+                    "entry_sentence": "A quiet handoff is briefly gathering staff near the front before they disappear deeper in again.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 1.1,
+                },
+                {
+                    "phase": "street_triage",
+                    "label": "curbside triage",
+                    "street_label": "medics stabilizing somebody outside",
+                    "entry_sentence": "Emergency treatment has spilled right out to the threshold, where hurt bodies and clipped orders are suddenly visible from the street.",
+                    "emphasis": "medical",
+                    "perimeter_bonus": 1.8,
+                },
+            )
+
+    if category == "secure":
+        if phase == "intake":
+            return (
+                {
+                    "phase": "visitor_screening",
+                    "label": "visitor screening",
+                    "street_label": "screening line bunching at the entrance",
+                    "entry_sentence": "Visitor screening is briefly turning the front into a controlled queue.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 2.4,
+                },
+                {
+                    "phase": "booking_queue",
+                    "label": "booking queue",
+                    "street_label": "processing traffic holding near the desk",
+                    "entry_sentence": "A booking queue is holding movement near the front longer than the building would like.",
+                    "emphasis": "admin",
+                    "perimeter_bonus": 1.9,
+                },
+            )
+        if phase in {"controlled_ops", "night_watch"}:
+            return (
+                {
+                    "phase": "guard_rotation",
+                    "label": "guard rotation",
+                    "street_label": "uniformed staff changing over by the gate",
+                    "entry_sentence": "A guard rotation is briefly making the secure edge of the site more legible than usual.",
+                    "emphasis": "admin",
+                    "perimeter_bonus": 1.5,
+                },
+                {
+                    "phase": "custody_handoff",
+                    "label": "custody handoff",
+                    "street_label": "staff clustering for a controlled handoff",
+                    "entry_sentence": "A custody handoff has movement bunching where the building can keep eyes on all of it.",
+                    "emphasis": "secure",
+                    "perimeter_bonus": 1.3,
+                },
+            )
+        if phase == "handoff":
+            return (
+                {
+                    "phase": "custody_handoff",
+                    "label": "custody handoff",
+                    "street_label": "officers pausing at the secure threshold",
+                    "entry_sentence": "A custody handoff is turning the entrance into a temporary checkpoint inside the checkpoint.",
+                    "emphasis": "secure",
+                    "perimeter_bonus": 2.1,
+                },
+                {
+                    "phase": "release_queue",
+                    "label": "release queue",
+                    "street_label": "families and releases holding near the front",
+                    "entry_sentence": "A release queue is making the building show more human traffic at the edge than it usually allows.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 2.3,
+                },
+            )
+
+    if category == "residential":
+        if phase == "starting_day":
+            return (
+                {
+                    "phase": "school_run",
+                    "label": "school-run cluster",
+                    "street_label": "families bunching at the stoop",
+                    "entry_sentence": "For a few minutes the building is all keys, bags, and people trying not to be late.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 1.6,
+                },
+                {
+                    "phase": "doorstep_drop",
+                    "label": "doorstep drop",
+                    "street_label": "a courier hovering at the entrance",
+                    "entry_sentence": "A doorstep drop has pulled attention back toward the entrance and whoever is hurrying to meet it.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 1.1,
+                },
+            )
+        if phase == "settled_evening":
+            return (
+                {
+                    "phase": "neighbors_lingering",
+                    "label": "neighbors lingering",
+                    "street_label": "people talking just outside the entrance",
+                    "entry_sentence": "The evening has spilled out to the threshold, where a few people are stretching conversation before heading in.",
+                    "emphasis": "residential",
+                    "perimeter_bonus": 1.5,
+                },
+                {
+                    "phase": "takeout_arrival",
+                    "label": "takeout arrival",
+                    "street_label": "delivery arrivals at the curb",
+                    "entry_sentence": "A takeout arrival is briefly making the front edge feel more social than private.",
+                    "emphasis": "front",
+                    "perimeter_bonus": 1.2,
+                },
+                {
+                    "phase": "tenant_meetup",
+                    "label": "tenant meetup",
+                    "street_label": "a new tenant and neighbors comparing notes",
+                    "entry_sentence": "A new tenant meetup has brought a few people down to the stoop, half introductions and half practical advice about the building.",
+                    "emphasis": "residential",
+                    "perimeter_bonus": 1.4,
+                },
+                {
+                    "phase": "mutual_aid_table",
+                    "label": "mutual aid table",
+                    "street_label": "volunteers sharing supplies near the stoop",
+                    "entry_sentence": "A small mutual aid table is making the frontage feel like a soft landing spot instead of a pass-through.",
+                    "emphasis": "residential",
+                    "perimeter_bonus": 1.6,
+                },
+            )
+
+    if open_now or phase == "active_floor":
+        return (
+            {
+                "phase": "brief_pickup",
+                "label": "brief pickup stop",
+                "street_label": "a short pickup lingering at the door",
+                "entry_sentence": "A brief pickup is momentarily pulling activity back toward the entrance.",
+                "emphasis": "front",
+                "perimeter_bonus": 1.0,
+            },
+            {
+                "phase": "maintenance_loop",
+                "label": "maintenance loop",
+                "street_label": "tools and staff slipping in and out",
+                "entry_sentence": "A maintenance loop is making the place feel more improvised than settled.",
+                "emphasis": "work",
+                "perimeter_bonus": 0.6,
+            },
+            {
+                "phase": "street_triage",
+                "label": "street triage",
+                "street_label": "someone being patched up near the entrance",
+                "entry_sentence": "A sudden injury has turned the frontage into a rough treatment spot, with somebody working fast to keep a hurt person steady.",
+                "emphasis": "front",
+                "perimeter_bonus": 1.7,
+            },
+        )
+    return ()
+
+
+def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=None):
+    if sim is None:
+        return {}
+
+    prop = prop if isinstance(prop, dict) else None
+    structure = structure if isinstance(structure, dict) else None
+    base_pulse = base_pulse if isinstance(base_pulse, dict) else {}
+
+    category = str(base_pulse.get("category", "") or "").strip().lower()
+    phase = str(base_pulse.get("phase", "") or "").strip().lower()
+    open_now = bool(base_pulse.get("open_now"))
+    bucket = max(0, int(base_pulse.get("bucket", 0) or 0))
+    hour = max(0, int(base_pulse.get("hour", 0) or 0))
+
+    aftermath_event = _business_event_aftermath_micro_event(
+        sim,
+        prop=prop,
+        structure=structure,
+        base_pulse=base_pulse,
+    )
+    if isinstance(aftermath_event, dict) and str(aftermath_event.get("phase", "") or "").strip():
+        return {
+            "phase": str(aftermath_event.get("phase", "") or "").strip().lower(),
+            "label": str(aftermath_event.get("label", "") or "").strip(),
+            "street_label": str(aftermath_event.get("street_label", "") or "").strip(),
+            "entry_sentence": str(aftermath_event.get("entry_sentence", "") or "").strip(),
+            "emphasis": str(aftermath_event.get("emphasis", "") or "").strip().lower(),
+            "perimeter_bonus": max(0.0, float(aftermath_event.get("perimeter_bonus", 0.0) or 0.0)),
+        }
+    events = list(_building_micro_event_pool(category, phase, open_now=open_now))
+    if not events:
+        return {}
+
+    sceneable_events = []
+    for event_item in events:
+        if not isinstance(event_item, dict):
+            continue
+        event_phase = str(event_item.get("phase", "") or "").strip().lower()
+        if _business_event_scene_blueprint(prop, {"event_phase": event_phase, "category": category}) is not None:
+            sceneable_events.append(event_item)
+    candidate_events = sceneable_events if sceneable_events else list(events)
+
+    building_key = (
+        _building_id_from_property(prop)
+        or _building_id_from_structure(structure)
+        or str((prop or {}).get("id", "") or "").strip()
+    )
+    seed = f"{getattr(sim, 'seed', 0)}:building-micro-event:{building_key}:{phase}:{hour}"
+    rng = random.Random(seed)
+    event = rng.choice(candidate_events)
+    if not isinstance(event, dict):
+        return {}
+
+    event_phase = str(event.get("phase", "") or "").strip().lower()
+    if event_phase in _BUSINESS_EVENT_DELIVERY_PHASES:
+        rarity_rng = random.Random(f"{getattr(sim, 'seed', 0)}:building-micro-event-rarity:{building_key}:{event_phase}:{hour}")
+        if rarity_rng.random() > 0.35:
+            return {}
+    rare_phase_chance = _BUSINESS_EVENT_RARE_PHASE_CHANCES.get(event_phase)
+    if rare_phase_chance is not None:
+        rarity_rng = random.Random(f"{getattr(sim, 'seed', 0)}:building-micro-event-rarity:{building_key}:{event_phase}:{hour}")
+        if rarity_rng.random() > float(rare_phase_chance):
+            return {}
+
+    return {
+        "phase": str(event.get("phase", "") or "").strip().lower(),
+        "label": str(event.get("label", "") or "").strip(),
+        "street_label": str(event.get("street_label", "") or "").strip(),
+        "entry_sentence": str(event.get("entry_sentence", "") or "").strip(),
+        "emphasis": str(event.get("emphasis", "") or "").strip().lower(),
+        "perimeter_bonus": max(0.0, float(event.get("perimeter_bonus", 0.0) or 0.0)),
+    }
+
+
+def _building_regular_chunk_pulse_cache(sim):
+    state = getattr(sim, "building_regular_chunk_pulse_cache", None)
+    if not isinstance(state, dict):
+        state = {}
+        sim.building_regular_chunk_pulse_cache = state
+
+    try:
+        hour = int(_world_hour(sim)) % 24 if sim is not None else 0
+    except (TypeError, ValueError):
+        hour = 0
+    token = (
+        hour,
+        len(getattr(sim, "properties", {}) or {}),
+        int(_BUSINESS_EVENT_REGULAR_SCENE_CAP or 0),
+    )
+    if state.get("token") != token:
+        state.clear()
+        state["token"] = token
+        state["winners"] = {}
+    winners = state.get("winners")
+    if not isinstance(winners, dict):
+        winners = {}
+        state["winners"] = winners
+    return winners
+
+
+def _base_building_pulse_snapshot(sim, prop=None, structure=None):
+    prop = prop if isinstance(prop, dict) else None
+    structure = structure if isinstance(structure, dict) else None
+    metadata = _property_metadata(prop)
+    archetype = str(
+        metadata.get("archetype", (structure or {}).get("archetype", "")) or ""
+    ).strip().lower()
+    category = _location_building_category(
+        archetype,
+        storefront=bool(prop and _property_is_storefront(prop)),
+    )
+    try:
+        hour = int(_world_hour(sim)) % 24 if sim is not None else 12
+    except (TypeError, ValueError):
+        hour = 12
+    tick_snapshot = _building_tick_snapshot(sim)
+    bucket = int(tick_snapshot.get("bucket", 0) or 0)
+    minute = int(tick_snapshot.get("minute", 0) or 0)
+
+    status_text = ""
+    if sim is not None and prop is not None:
+        status_text = str(_property_status_text(sim, prop, hour=hour)).strip().lower()
+    open_now = status_text == "open"
+
+    phase = "steady"
+    label = "steady rhythm"
+    street_label = "steady foot traffic"
+    entry_sentence = "The place is holding its ordinary rhythm right now."
+    emphasis = "front" if open_now else "secure"
+
+    if category in {"retail", "finance", "office"}:
+        if open_now and 7 <= hour < 10:
+            phase = "opening"
+            label = "opening hour"
+            street_label = "front waking up"
+            entry_sentence = "At this hour the place feels like it is still gathering itself, with most of the motion collecting near the front."
+            emphasis = "front"
+        elif open_now and 11 <= hour < 14:
+            phase = "rush"
+            label = "midday rush"
+            street_label = "traffic bunching at the front"
+            entry_sentence = "Right now the place feels caught in a midday rush, with the front edge carrying more motion than the deeper rooms can fully hide."
+            emphasis = "front"
+        elif open_now and 15 <= hour < 18:
+            phase = "back_office"
+            label = "back-room churn"
+            street_label = "quieter frontage, busier back rooms"
+            entry_sentence = "The public face feels thinner right now while the real work slips deeper into the building."
+            emphasis = "admin"
+        elif open_now:
+            phase = "steady_trade"
+            label = "steady trade"
+            street_label = "working pace at the front"
+            entry_sentence = "The place is moving at working pace right now, more routine than spectacle."
+            emphasis = "front"
+        else:
+            phase = "after_hours"
+            label = "after hours"
+            street_label = "dark front, watchful interior"
+            entry_sentence = "At this hour the place feels more locked into itself than open to the street."
+            emphasis = "secure"
+    elif category in {"hospitality", "entertainment"}:
+        if category == "hospitality" and 6 <= hour < 11:
+            phase = "prep"
+            label = "prep cycle"
+            street_label = "setup and reset work"
+            entry_sentence = "The public side is only part of the story right now; most of the energy feels like setup, cleanup, and short service loops."
+            emphasis = "work"
+        elif open_now and category == "hospitality" and 11 <= hour < 14:
+            phase = "lunch_rush"
+            label = "lunch rush"
+            street_label = "crowd pressing the front"
+            entry_sentence = "Right now the place feels caught in a meal rush, with the front doing everything it can to stay ahead of the back rooms."
+            emphasis = "front"
+        elif open_now and 17 <= hour < 23:
+            phase = "evening_crowd"
+            label = "evening crowd"
+            street_label = "voices and traffic at the front"
+            entry_sentence = "The building feels tilted toward the public rooms right now, as if the whole place is leaning into whoever just came through the door."
+            emphasis = "hospitality"
+        elif open_now and (hour >= 23 or hour < 3):
+            phase = "late_buzz"
+            label = "late buzz"
+            street_label = "late traffic and lingering bodies"
+            entry_sentence = "At this hour the place feels stretched into its late rhythm, all lingering voices, short service loops, and slower exits."
+            emphasis = "front"
+        elif open_now:
+            phase = "cleanup"
+            label = "cleanup cycle"
+            street_label = "quiet front, active reset"
+            entry_sentence = "The front is calmer right now, but the support spaces still feel busy with reset work."
+            emphasis = "work"
+        else:
+            phase = "after_hours"
+            label = "after hours"
+            street_label = "shut frontage and faint after-hours motion"
+            entry_sentence = "At this hour, without the public flow, the place feels more like a held interior than an invitation."
+            emphasis = "secure"
+    elif category in {"industrial", "transit"}:
+        if 5 <= hour < 9:
+            phase = "receiving"
+            label = "receiving window"
+            street_label = "handoff traffic and loading work"
+            entry_sentence = "The building feels tuned to handoff right now, with short purposeful movement replacing any sense of lingering."
+            emphasis = "work"
+        elif open_now and 9 <= hour < 16:
+            phase = "shift_work"
+            label = "shift churn"
+            street_label = "steady operational traffic"
+            entry_sentence = "Everything here feels locked into active throughput right now: tasks landing, getting handled, and moving on."
+            emphasis = "work"
+        elif open_now and 16 <= hour < 19:
+            phase = "handoff"
+            label = "handoff hour"
+            street_label = "between-shift movement"
+            entry_sentence = "The place feels between shifts right now, all short exchanges, delayed exits, and one task handing off to the next."
+            emphasis = "admin" if category == "industrial" else "transit"
+        elif open_now:
+            phase = "steady_ops"
+            label = "steady operations"
+            street_label = "working yard pace"
+            entry_sentence = "The site feels busy in a practical way right now, more throughput than display."
+            emphasis = "work"
+        else:
+            phase = "locked_down"
+            label = "locked down"
+            street_label = "quiet yard and sealed doors"
+            entry_sentence = "At this hour the useful motion has dropped away, leaving the place feeling more controlled than alive."
+            emphasis = "secure"
+    elif category == "medical":
+        if 7 <= hour < 10:
+            phase = "intake"
+            label = "intake wave"
+            street_label = "people sorting at the front"
+            entry_sentence = "Right now the place feels caught in intake, with movement clustering near the front before the deeper rooms can absorb it."
+            emphasis = "front"
+        elif 10 <= hour < 18:
+            phase = "treatment"
+            label = "treatment hours"
+            street_label = "steady clinical traffic"
+            entry_sentence = "The place is moving with procedural focus right now, all treatment rooms, short handoffs, and purposeful waiting."
+            emphasis = "medical"
+        elif open_now:
+            phase = "night_watch"
+            label = "night watch"
+            street_label = "quiet entrance, active interior"
+            entry_sentence = "At this hour the public edge is quiet, but the deeper rooms still feel actively watched."
+            emphasis = "secure"
+        else:
+            phase = "after_hours"
+            label = "after hours"
+            street_label = "held quiet behind the threshold"
+            entry_sentence = "At this hour the place feels more held in reserve than open to the street."
+            emphasis = "secure"
+    elif category == "secure":
+        if 7 <= hour < 10:
+            phase = "intake"
+            label = "processing hour"
+            street_label = "people being sorted at the secure front"
+            entry_sentence = "The site feels caught in controlled processing right now, with movement stopping at the front before it can go anywhere else."
+            emphasis = "front"
+        elif 10 <= hour < 17:
+            phase = "controlled_ops"
+            label = "controlled operations"
+            street_label = "guarded movement inside the perimeter"
+            entry_sentence = "Everything here feels organized around observation, procedure, and slow deliberate motion."
+            emphasis = "secure"
+        elif 17 <= hour < 20:
+            phase = "handoff"
+            label = "custody turnover"
+            street_label = "between-shift pressure at the gate"
+            entry_sentence = "The place feels between watches right now, all clipped orders, delayed exits, and controlled handoffs."
+            emphasis = "admin"
+        else:
+            phase = "night_watch"
+            label = "night watch"
+            street_label = "sealed frontage under watch"
+            entry_sentence = "At this hour the site feels less closed than actively held, like the perimeter itself is still on duty."
+            emphasis = "secure"
+    elif category == "residential":
+        if 6 <= hour < 9:
+            phase = "starting_day"
+            label = "starting day"
+            street_label = "early household movement"
+            entry_sentence = "The building feels like it is just pulling itself into the day, with routine doing more shaping than any formal design."
+            emphasis = "residential"
+        elif 18 <= hour < 23:
+            phase = "settled_evening"
+            label = "lived-in evening"
+            street_label = "windows bright and people settling in"
+            entry_sentence = "At this hour the place feels more lived-in than transactional, like routine has taken full possession of the rooms."
+            emphasis = "residential"
+        else:
+            phase = "quiet_hours"
+            label = "quiet hours"
+            street_label = "low-light household quiet"
+            entry_sentence = "The building has gone quiet in a way that suggests people have settled into it rather than left it."
+            emphasis = "residential"
+    else:
+        if open_now:
+            phase = "active_floor"
+            label = "active floor"
+            street_label = "front moving at work pace"
+            entry_sentence = "The place feels active right now, with most of the motion staying close enough to the front to read from the threshold."
+            emphasis = "front"
+        else:
+            phase = "quiet_interior"
+            label = "quiet interior"
+            street_label = "still frontage"
+            entry_sentence = "The building feels quieter than empty right now, as if the useful activity has retreated deeper in."
+            emphasis = "secure"
+
+    pulse = {
+        "phase": phase,
+        "label": label,
+        "street_label": street_label,
+        "entry_sentence": entry_sentence,
+        "emphasis": emphasis,
+        "hour": hour,
+        "minute": minute,
+        "bucket": bucket,
+        "category": category,
+        "open_now": bool(open_now),
+        "event_phase": "",
+        "event_label": "",
+        "perimeter_bonus": 0.0,
+    }
+    return pulse
+
+
+def _regular_building_micro_event_visible_property_ids(sim, chunk):
+    if sim is None or not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+        return ()
+    try:
+        chunk_key = (int(chunk[0]), int(chunk[1]))
+    except (TypeError, ValueError):
+        return ()
+
+    winners = _building_regular_chunk_pulse_cache(sim)
+    cached = winners.get(chunk_key)
+    if cached is not None:
+        return tuple(str(property_id or "").strip() for property_id in tuple(cached or ()) if str(property_id or "").strip())
+
+    chance = _business_event_regular_chunk_hourly_chance(sim)
+    if chance <= 0.0:
+        winners[chunk_key] = ()
+        return ()
+
+    try:
+        hour = int(_world_hour(sim)) % 24 if sim is not None else 0
+    except (TypeError, ValueError):
+        hour = 0
+    activation_rng = random.Random(
+        f"{getattr(sim, 'seed', 0)}:building-regular-chunk-active:{chunk_key[0]}:{chunk_key[1]}:{hour}"
+    )
+    if activation_rng.random() > chance:
+        winners[chunk_key] = ()
+        return ()
+
+    candidates = []
+    for prop in getattr(sim, "properties", {}).values():
+        if not isinstance(prop, dict):
+            continue
+        if str(prop.get("kind", "") or "").strip().lower() != "building":
+            continue
+        try:
+            prop_chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+        except (TypeError, ValueError):
+            continue
+        if prop_chunk != chunk_key:
+            continue
+
+        base_pulse = _base_building_pulse_snapshot(sim, prop=prop)
+        event = _raw_building_micro_event_snapshot(sim, prop=prop, base_pulse=base_pulse)
+        event_phase = str(event.get("phase", "") or "").strip().lower()
+        if not event_phase or event_phase in _BUSINESS_EVENT_AFTERMATH_PHASES:
+            continue
+
+        category = str(base_pulse.get("category", "") or "").strip().lower()
+        if _business_event_scene_blueprint(prop, {"event_phase": event_phase, "category": category}) is None:
+            continue
+
+        property_id = str(prop.get("id", "") or "").strip()
+        if not property_id:
+            continue
+
+        score = float(event.get("perimeter_bonus", 0.0) or 0.0)
+        if _property_is_storefront(prop) or _property_is_public(prop):
+            score += 0.75
+        if _property_access_level(prop) == "public":
+            score += 0.35
+        candidates.append((
+            -score,
+            event_phase,
+            property_id,
+        ))
+
+    candidates.sort()
+    visible_count = max(0, int(_BUSINESS_EVENT_REGULAR_SCENE_CAP or 0))
+    visible_ids = tuple(
+        str(candidate[2] or "").strip()
+        for candidate in candidates[:visible_count]
+        if str(candidate[2] or "").strip()
+    )
+    winners[chunk_key] = visible_ids
+    return visible_ids
+
+
+def _building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=None, *, respect_chunk_cap=True):
+    event = _raw_building_micro_event_snapshot(sim, prop=prop, structure=structure, base_pulse=base_pulse)
+    if not event or not respect_chunk_cap:
+        return event
+
+    prop = prop if isinstance(prop, dict) else None
+    if prop is None or sim is None:
+        return event
+
+    event_phase = str(event.get("phase", "") or "").strip().lower()
+    if not event_phase or event_phase in _BUSINESS_EVENT_AFTERMATH_PHASES:
+        return event
+
+    category = str(((base_pulse or {}) if isinstance(base_pulse, dict) else {}).get("category", "") or "").strip().lower()
+    if _business_event_scene_blueprint(prop, {"event_phase": event_phase, "category": category}) is None:
+        return event
+
+    try:
+        prop_chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+    except (TypeError, ValueError):
+        return event
+
+    property_id = str(prop.get("id", "") or "").strip()
+    if not property_id:
+        return event
+    visible_ids = _regular_building_micro_event_visible_property_ids(sim, prop_chunk)
+    if property_id not in visible_ids:
+        return {}
+    return event
+
+
+def _building_pulse_snapshot(sim, prop=None, structure=None, *, respect_chunk_cap=True):
+    pulse = _base_building_pulse_snapshot(sim, prop=prop, structure=structure)
+    base_label = str(pulse.get("label", "") or "").strip()
+    base_entry_sentence = str(pulse.get("entry_sentence", "") or "").strip()
+    event = _building_micro_event_snapshot(
+        sim,
+        prop=prop,
+        structure=structure,
+        base_pulse=pulse,
+        respect_chunk_cap=respect_chunk_cap,
+    )
+    if event:
+        event_label = str(event.get("label", "") or "").strip()
+        if event_label:
+            pulse["label"] = f"{base_label} + {event_label}"
+            pulse["event_label"] = event_label
+        event_street = str(event.get("street_label", "") or "").strip()
+        if event_street:
+            pulse["street_label"] = event_street
+        event_sentence = str(event.get("entry_sentence", "") or "").strip()
+        if event_sentence:
+            pulse["entry_sentence"] = f"{base_entry_sentence} {event_sentence}".strip()
+        event_emphasis = str(event.get("emphasis", "") or "").strip().lower()
+        if event_emphasis:
+            pulse["emphasis"] = event_emphasis
+        pulse["event_phase"] = str(event.get("phase", "") or "").strip().lower()
+        try:
+            pulse["perimeter_bonus"] = max(0.0, float(event.get("perimeter_bonus", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            pulse["perimeter_bonus"] = 0.0
+    return pulse
 def _next_business_event_seed_id(sim):
     state = _business_event_seed_state(sim)
     seed_id = f"bseed-{int(state.get('next_id', 1) or 1)}"
