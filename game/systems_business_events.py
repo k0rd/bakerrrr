@@ -13,6 +13,12 @@ from game.property_runtime import (
     property_runtime_container_entries as _property_runtime_container_entries,
 )
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
+from game.system_support.ai_intent_runtime import _sync_ai_intent
+from game.system_support.business_event_state import (
+    _business_event_actor_note,
+    _business_event_actor_state,
+    _business_event_seed_state,
+)
 from game.system_support.entity_naming import _entity_display_name
 from game import systems as _systems
 
@@ -78,12 +84,6 @@ globals().update({name: getattr(_systems, name) for name in _REQUIRED_SYSTEM_EXP
 
 def _pick_property_roam_tile(*args, **kwargs):
     return _systems._pick_property_roam_tile(*args, **kwargs)
-
-
-def _sync_ai_intent(*args, **kwargs):
-    return _systems._sync_ai_intent(*args, **kwargs)
-
-
 _BUSINESS_EVENT_SCENE_CAP = 1
 _BUSINESS_EVENT_REGULAR_SCENE_CAP = 1
 _BUSINESS_EVENT_RELEASE_CAP = _NEWCOMER_LOCAL_CAP + 1
@@ -194,36 +194,6 @@ def _business_event_regular_chunk_hourly_chance(sim):
         except (TypeError, ValueError):
             chance = _BUSINESS_EVENT_REGULAR_CHUNK_HOURLY_CHANCE
     return max(0.0, min(1.0, float(chance)))
-
-
-def _business_event_actor_state(sim):
-    state = getattr(sim, "business_event_actor_state", None)
-    if isinstance(state, dict):
-        return state
-    state = {}
-    sim.business_event_actor_state = state
-    return state
-
-
-def _business_event_actor_note(sim, eid):
-    try:
-        key = int(eid)
-    except (TypeError, ValueError):
-        return None
-    return _business_event_actor_state(sim).get(key)
-
-
-def _business_event_seed_state(sim):
-    state = getattr(sim, "business_event_seed_state", None)
-    if isinstance(state, dict):
-        state.setdefault("active", {})
-        state["next_id"] = max(1, int(state.get("next_id", 1) or 1))
-        return state
-    state = {"active": {}, "next_id": 1}
-    sim.business_event_seed_state = state
-    return state
-
-
 def _next_business_event_seed_id(sim):
     state = _business_event_seed_state(sim)
     seed_id = f"bseed-{int(state.get('next_id', 1) or 1)}"

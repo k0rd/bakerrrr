@@ -147,10 +147,18 @@ from game.property_runtime import (
     viewer_property_credential_status as _viewer_property_credential_status,
     viewer_revealed_building_id as _viewer_revealed_building_id,
 )
+from game.service_runtime import _clamp
 from game.system_support.actor_runtime import (
     _apply_downed_actor_state,
     _detail_tick_allowed,
     _entity_is_downed,
+)
+from game.system_support.ai_intent_runtime import _sync_ai_intent
+from game.criminal_justice_runtime import _noise_merits_attention
+from game.dialogue_runtime import (
+    _active_contractor_record,
+    _contractor_order_target_from_record,
+    _workplace_property,
 )
 from game.system_support.entity_naming import _entity_display_name
 from game.system_support.interaction_ordering import (
@@ -159,6 +167,7 @@ from game.system_support.interaction_ordering import (
     _manhattan,
     _normalized_direction,
 )
+from game.system_support.settlement_runtime import _home_property
 from game.system_support.status_runtime import (
     _npc_status_metric_args,
     _status_int_offset,
@@ -176,15 +185,6 @@ def _wildlife_module():
     from game import systems_wildlife as wildlife
 
     return wildlife
-
-
-def _home_property(sim, routine=None):
-    home = getattr(routine, "home", None)
-    if isinstance(home, (list, tuple)) and len(home) >= 3:
-        prop = _property_covering(sim, int(home[0]), int(home[1]), int(home[2]))
-        if prop:
-            return prop
-    return None
 
 
 QUIET_NOISE_CAUSES = {
@@ -206,15 +206,6 @@ QUIET_NOISE_CAUSES = {
     "zoom_city_enter",
 }
 
-def _active_contractor_record(*args, **kwargs):
-    return _facade()._active_contractor_record(*args, **kwargs)
-
-def _clamp(*args, **kwargs):
-    return _facade()._clamp(*args, **kwargs)
-
-def _contractor_order_target_from_record(*args, **kwargs):
-    return _facade()._contractor_order_target_from_record(*args, **kwargs)
-
 def _emit_move_access_events(*args, **kwargs):
     return _facade()._emit_move_access_events(*args, **kwargs)
 
@@ -232,9 +223,6 @@ def _known_threat_position_for_npc(*args, **kwargs):
 
 def _memory_visible(*args, **kwargs):
     return _facade()._memory_visible(*args, **kwargs)
-
-def _noise_merits_attention(*args, **kwargs):
-    return _facade()._noise_merits_attention(*args, **kwargs)
 
 def _npc_actor_impression(*args, **kwargs):
     return _facade()._npc_actor_impression(*args, **kwargs)
@@ -269,18 +257,11 @@ def _strongest_memory_entry(*args, **kwargs):
 def _sv_focus(*args, **kwargs):
     return _facade()._sv_focus(*args, **kwargs)
 
-def _sync_ai_intent(*args, **kwargs):
-    return _facade()._sync_ai_intent(*args, **kwargs)
-
 def _sync_npc_cover_against_threat(*args, **kwargs):
     return _facade()._sync_npc_cover_against_threat(*args, **kwargs)
 
 def _weapon_context_for_entity(*args, **kwargs):
     return _facade()._weapon_context_for_entity(*args, **kwargs)
-
-def _workplace_property(*args, **kwargs):
-    return _facade()._workplace_property(*args, **kwargs)
-
 
 def _actors_use_wildlife_social(*args, **kwargs):
     return _wildlife_module()._actors_use_wildlife_social(*args, **kwargs)

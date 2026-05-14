@@ -185,6 +185,12 @@ from game.property_runtime import (
     viewer_property_credential_status as _viewer_property_credential_status,
     viewer_revealed_building_id as _viewer_revealed_building_id,
 )
+from game.service_runtime import (
+    _building_site_service_seed_token,
+    _clamp,
+    _int_or_default,
+    _site_service_seed_token,
+)
 from game.system_support.interaction_ordering import (
     _direction_step,
     _interaction_target_order_key,
@@ -199,30 +205,11 @@ from game.vehicles import (
 )
 from game.run_objectives import evaluate_run_objective
 
-def _facade():
-    from game import systems as facade
-
-    return facade
-
 
 def _generate_human_personal_name(*args, **kwargs):
-    return _facade().generate_human_personal_name(*args, **kwargs)
+    from game import systems as facade
 
-
-def _building_site_service_seed_token(*args, **kwargs):
-    return _facade()._building_site_service_seed_token(*args, **kwargs)
-
-def _clamp(*args, **kwargs):
-    return _facade()._clamp(*args, **kwargs)
-
-def _int_or_default(*args, **kwargs):
-    return _facade()._int_or_default(*args, **kwargs)
-
-def _rank(*args, **kwargs):
-    return _facade()._rank(*args, **kwargs)
-
-def _site_service_seed_token(*args, **kwargs):
-    return _facade()._site_service_seed_token(*args, **kwargs)
+    return facade.generate_human_personal_name(*args, **kwargs)
 
 class WorldStreamingSystem(System):
 

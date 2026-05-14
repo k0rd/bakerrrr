@@ -122,6 +122,10 @@ from game.property_keys import (
     property_lock_state,
 )
 from game.player_action_system import PlayerActionSystem
+from game.dialogue_runtime import (
+    _disguise_role_label,
+    _property_access_summary,
+)
 from game.overworld_runtime import (
     PlayerOverworldRuntime,
     _chunk_tuple,
@@ -129,9 +133,9 @@ from game.overworld_runtime import (
     _overworld_chunk_knowledge,
     _overworld_chunk_memory_state,
     _overworld_chunk_view,
-    _overworld_edge_legend_lines as _shared_overworld_edge_legend_lines,
+    _overworld_edge_legend_lines,
     _overworld_fill_semantic_id,
-    _overworld_hud_lines as _shared_overworld_hud_lines,
+    _overworld_hud_lines,
     _overworld_legend_line_from_snapshot,
     _overworld_render_style_from_snapshot,
     _player_overworld_visit_state,
@@ -193,6 +197,14 @@ from game.system_support.combat_pacing_runtime import (
     _combat_turn_pacing_active,
     _set_manual_combat_pacing,
 )
+from game.system_support.combat_targeting_runtime import (
+    _entity_uses_melee_aim,
+    _first_targetable_entity_at,
+    _manual_fire_preview,
+    _target_condition_descriptor,
+    _weapon_ammo_type_label,
+    _weapon_reserve_ammo,
+)
 from game.system_support.interaction_ordering import (
     _direction_step,
     _interaction_target_order_key,
@@ -214,6 +226,7 @@ from game.service_runtime import (
     _casino_game_title,
     _chunk_site_kinds,
     _credit_amount_label,
+    _int_or_default,
     _overworld_discovery_profile,
     _overworld_identity_profile,
     _overworld_discovery_summary_bits,
@@ -231,6 +244,27 @@ from game.service_runtime import (
     _transit_service_title,
     _transit_token_amount_label,
     _vehicle_sale_stats_text,
+)
+from game.ui_text_runtime import (
+    _clip_display_line,
+    _filtered_log_lines,
+    _fit_wrapped_sections,
+    _flow_text_chunks,
+    _hud_log_lines,
+    _known_location_detail_lines,
+    _known_location_list_line,
+    _line_segments,
+    _line_text,
+    _line_with_prefix,
+    _log_display_line,
+    _log_filter_label,
+    _log_filter_spec,
+    _log_prefix,
+    _mode_line,
+    _tick_duration_label,
+    _view_text_wrap_width,
+    _wrap_display_lines,
+    _wrap_text_lines,
 )
 from game.run_objectives import evaluate_run_objective
 from game.skill_ui import (
@@ -274,9 +308,6 @@ def _appearance_with_effect(*args, **kwargs):
 def _clip(*args, **kwargs):
     return _facade()._clip(*args, **kwargs)
 
-def _clip_display_line(*args, **kwargs):
-    return _facade()._clip_display_line(*args, **kwargs)
-
 def _cover_source_label(*args, **kwargs):
     return _facade()._cover_source_label(*args, **kwargs)
 
@@ -285,9 +316,6 @@ def _cover_source_render(*args, **kwargs):
 
 def _creature_color_key(*args, **kwargs):
     return _facade()._creature_color_key(*args, **kwargs)
-
-def _disguise_role_label(*args, **kwargs):
-    return _facade()._disguise_role_label(*args, **kwargs)
 
 def _district_floor_color(*args, **kwargs):
     return _facade()._district_floor_color(*args, **kwargs)
@@ -304,29 +332,8 @@ def _entity_render_style(*args, **kwargs):
 def _entity_should_blink_in_combat(*args, **kwargs):
     return _facade()._entity_should_blink_in_combat(*args, **kwargs)
 
-def _entity_uses_melee_aim(*args, **kwargs):
-    return _facade()._entity_uses_melee_aim(*args, **kwargs)
-
-def _filtered_log_lines(*args, **kwargs):
-    return _facade()._filtered_log_lines(*args, **kwargs)
-
-def _first_targetable_entity_at(*args, **kwargs):
-    return _facade()._first_targetable_entity_at(*args, **kwargs)
-
-def _fit_wrapped_sections(*args, **kwargs):
-    return _facade()._fit_wrapped_sections(*args, **kwargs)
-
-def _flow_text_chunks(*args, **kwargs):
-    return _facade()._flow_text_chunks(*args, **kwargs)
-
-def _hud_log_lines(*args, **kwargs):
-    return _facade()._hud_log_lines(*args, **kwargs)
-
 def _hud_primary_status_chunks(*args, **kwargs):
     return _facade()._hud_primary_status_chunks(*args, **kwargs)
-
-def _int_or_default(*args, **kwargs):
-    return _facade()._int_or_default(*args, **kwargs)
 
 def _is_explored(*args, **kwargs):
     return _facade()._is_explored(*args, **kwargs)
@@ -337,56 +344,14 @@ def _is_visible(*args, **kwargs):
 def _item_legend_line(*args, **kwargs):
     return _facade()._item_legend_line(*args, **kwargs)
 
-def _known_location_detail_lines(*args, **kwargs):
-    return _facade()._known_location_detail_lines(*args, **kwargs)
-
-def _known_location_list_line(*args, **kwargs):
-    return _facade()._known_location_list_line(*args, **kwargs)
-
-def _line_segments(*args, **kwargs):
-    return _facade()._line_segments(*args, **kwargs)
-
-def _line_text(*args, **kwargs):
-    return _facade()._line_text(*args, **kwargs)
-
-def _line_with_prefix(*args, **kwargs):
-    return _facade()._line_with_prefix(*args, **kwargs)
-
-def _log_display_line(*args, **kwargs):
-    return _facade()._log_display_line(*args, **kwargs)
-
-def _log_filter_label(*args, **kwargs):
-    return _facade()._log_filter_label(*args, **kwargs)
-
-def _log_filter_spec(*args, **kwargs):
-    return _facade()._log_filter_spec(*args, **kwargs)
-
-def _log_prefix(*args, **kwargs):
-    return _facade()._log_prefix(*args, **kwargs)
-
-def _manual_fire_preview(*args, **kwargs):
-    return _facade()._manual_fire_preview(*args, **kwargs)
-
-def _mode_line(*args, **kwargs):
-    return _facade()._mode_line(*args, **kwargs)
-
 def _overworld_cell_slots(*args, **kwargs):
     return _facade()._overworld_cell_slots(*args, **kwargs)
-
-def _overworld_edge_legend_lines(*args, **kwargs):
-    return _facade()._overworld_edge_legend_lines(*args, **kwargs)
-
-def _overworld_hud_lines(*args, **kwargs):
-    return _facade()._overworld_hud_lines(*args, **kwargs)
 
 def _player_tile_memory_state(*args, **kwargs):
     return _facade()._player_tile_memory_state(*args, **kwargs)
 
 def _pos(*args, **kwargs):
     return _facade()._pos(*args, **kwargs)
-
-def _property_access_summary(*args, **kwargs):
-    return _facade()._property_access_summary(*args, **kwargs)
 
 def _remember_tile_appearance(*args, **kwargs):
     return _facade()._remember_tile_appearance(*args, **kwargs)
@@ -397,29 +362,8 @@ def _remembered_tile_appearance(*args, **kwargs):
 def _stakeout_progress_snapshot(*args, **kwargs):
     return _facade()._stakeout_progress_snapshot(*args, **kwargs)
 
-def _target_condition_descriptor(*args, **kwargs):
-    return _facade()._target_condition_descriptor(*args, **kwargs)
-
-def _tick_duration_label(*args, **kwargs):
-    return _facade()._tick_duration_label(*args, **kwargs)
-
 def _tile_prefers_feature_legend(*args, **kwargs):
     return _facade()._tile_prefers_feature_legend(*args, **kwargs)
-
-def _view_text_wrap_width(*args, **kwargs):
-    return _facade()._view_text_wrap_width(*args, **kwargs)
-
-def _weapon_ammo_type_label(*args, **kwargs):
-    return _facade()._weapon_ammo_type_label(*args, **kwargs)
-
-def _weapon_reserve_ammo(*args, **kwargs):
-    return _facade()._weapon_reserve_ammo(*args, **kwargs)
-
-def _wrap_display_lines(*args, **kwargs):
-    return _facade()._wrap_display_lines(*args, **kwargs)
-
-def _wrap_text_lines(*args, **kwargs):
-    return _facade()._wrap_text_lines(*args, **kwargs)
 
 class RenderSystem(System):
 

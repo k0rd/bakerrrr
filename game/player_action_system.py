@@ -17,6 +17,11 @@ from game.overworld_runtime import (
     _player_overworld_visit_state,
     _remember_overworld_chunk_memory,
 )
+from game.dialogue_runtime import (
+    _career_label,
+    _infrastructure_target_property,
+    _workplace_property,
+)
 from game.player_interactions import PlayerInteractionRuntime
 from game.player_look import PlayerLookRuntime
 from game.player_movement import PlayerMovementRuntime
@@ -71,6 +76,7 @@ from game.system_support.offense_runtime import (
     _offense_notice_radius,
     _offense_tier,
 )
+from game.ui_text_runtime import _line_with_suffix
 
 STAKEOUT_REVEAL_INTERVAL = 8
 STAKEOUT_MAX_REVEALS = 4
@@ -98,10 +104,6 @@ def _building_street_summary(*args, **kwargs):
     return _facade()._building_street_summary(*args, **kwargs)
 
 
-def _career_label(*args, **kwargs):
-    return _facade()._career_label(*args, **kwargs)
-
-
 def _emit_move_access_events(*args, **kwargs):
     return _facade()._emit_move_access_events(*args, **kwargs)
 
@@ -114,16 +116,8 @@ def _entity_status_move_speed_multiplier(*args, **kwargs):
     return _facade()._entity_status_move_speed_multiplier(*args, **kwargs)
 
 
-def _infrastructure_target_property(*args, **kwargs):
-    return _facade()._infrastructure_target_property(*args, **kwargs)
-
-
 def _item_legend_line(*args, **kwargs):
     return _facade()._item_legend_line(*args, **kwargs)
-
-
-def _line_with_suffix(*args, **kwargs):
-    return _facade()._line_with_suffix(*args, **kwargs)
 
 
 def _property_access_summary(*args, **kwargs):
@@ -180,10 +174,6 @@ def _world_trait_claim_text(*args, **kwargs):
 
 def _world_trait_claim_value(*args, **kwargs):
     return _facade()._world_trait_claim_value(*args, **kwargs)
-
-
-def _workplace_property(*args, **kwargs):
-    return _facade()._workplace_property(*args, **kwargs)
 
 
 class PlayerActionSystem(System):

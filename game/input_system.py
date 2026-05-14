@@ -75,6 +75,12 @@ from game.character_sheet import (
     build_character_sheet_pages as _build_character_sheet_pages,
 )
 import game.report_debug_ui as _report_debug_ui
+from game.report_runtime import build_progress_report as _build_progress_report
+from game.dialogue_runtime import (
+    _dialog_backup_cursor_payload,
+    _dialog_backup_mark_from_state,
+    _disguise_role_label,
+)
 from game.property_doors import (
     _door_action_text,
     _door_close_attempt,
@@ -135,6 +141,14 @@ from game.property_runtime import (
     viewer_property_credential_status as _viewer_property_credential_status,
     viewer_revealed_building_id as _viewer_revealed_building_id,
 )
+from game.service_runtime import _int_or_default
+from game.system_support.combat_targeting_runtime import (
+    _entity_uses_melee_aim,
+    _first_targetable_entity_at,
+    _weapon_ammo_type_label,
+    _weapon_context_for_entity,
+    _weapon_reserve_ammo,
+)
 from game.system_support.container_runtime import (
     ITEM_STOWED_CONTAINER_METADATA_KEY,
     _clear_inventory_container_assignments,
@@ -164,6 +178,18 @@ from game.system_support.item_runtime import (
     _weapon_uses_ammo,
 )
 from game.system_support.player_feedback import _log_player_feedback
+from game.ui_text_runtime import (
+    _cycle_log_filter_id,
+    _filtered_log_lines,
+    _grid_distance,
+    _line_text,
+    _log_display_line,
+    _log_filter_label,
+    _log_filter_spec,
+    _tick_duration_label,
+    _wrap_display_lines,
+    _wrap_text_lines,
+)
 from game.weapons import WEAPON_CATALOG, roll_weapon_instance, weapon_by_id
 from ui.input_keys import ENTER_KEYS, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_UP
 
@@ -178,56 +204,14 @@ THREAT_STATES = {"protecting", "investigating"}
 def _build_known_locations_report(*args, **kwargs):
     return _facade()._build_known_locations_report(*args, **kwargs)
 
-def _build_progress_report(*args, **kwargs):
-    return _facade()._build_progress_report(*args, **kwargs)
-
-def _cycle_log_filter_id(*args, **kwargs):
-    return _facade()._cycle_log_filter_id(*args, **kwargs)
-
-def _dialog_backup_cursor_payload(*args, **kwargs):
-    return _facade()._dialog_backup_cursor_payload(*args, **kwargs)
-
-def _dialog_backup_mark_from_state(*args, **kwargs):
-    return _facade()._dialog_backup_mark_from_state(*args, **kwargs)
-
-def _disguise_role_label(*args, **kwargs):
-    return _facade()._disguise_role_label(*args, **kwargs)
-
 def _entity_status_move_speed_multiplier(*args, **kwargs):
     return _facade()._entity_status_move_speed_multiplier(*args, **kwargs)
-
-def _entity_uses_melee_aim(*args, **kwargs):
-    return _facade()._entity_uses_melee_aim(*args, **kwargs)
-
-def _filtered_log_lines(*args, **kwargs):
-    return _facade()._filtered_log_lines(*args, **kwargs)
-
-def _first_targetable_entity_at(*args, **kwargs):
-    return _facade()._first_targetable_entity_at(*args, **kwargs)
-
-def _grid_distance(*args, **kwargs):
-    return _facade()._grid_distance(*args, **kwargs)
-
-def _int_or_default(*args, **kwargs):
-    return _facade()._int_or_default(*args, **kwargs)
 
 def _item_label(*args, **kwargs):
     return _facade()._item_label(*args, **kwargs)
 
 def _item_legend_line(*args, **kwargs):
     return _facade()._item_legend_line(*args, **kwargs)
-
-def _line_text(*args, **kwargs):
-    return _facade()._line_text(*args, **kwargs)
-
-def _log_display_line(*args, **kwargs):
-    return _facade()._log_display_line(*args, **kwargs)
-
-def _log_filter_label(*args, **kwargs):
-    return _facade()._log_filter_label(*args, **kwargs)
-
-def _log_filter_spec(*args, **kwargs):
-    return _facade()._log_filter_spec(*args, **kwargs)
 
 def _path_next_step(*args, **kwargs):
     return _facade()._path_next_step(*args, **kwargs)
@@ -237,24 +221,6 @@ def _property_access_summary(*args, **kwargs):
 
 def _status_effect_label(*args, **kwargs):
     return _facade()._status_effect_label(*args, **kwargs)
-
-def _tick_duration_label(*args, **kwargs):
-    return _facade()._tick_duration_label(*args, **kwargs)
-
-def _weapon_ammo_type_label(*args, **kwargs):
-    return _facade()._weapon_ammo_type_label(*args, **kwargs)
-
-def _weapon_context_for_entity(*args, **kwargs):
-    return _facade()._weapon_context_for_entity(*args, **kwargs)
-
-def _weapon_reserve_ammo(*args, **kwargs):
-    return _facade()._weapon_reserve_ammo(*args, **kwargs)
-
-def _wrap_display_lines(*args, **kwargs):
-    return _facade()._wrap_display_lines(*args, **kwargs)
-
-def _wrap_text_lines(*args, **kwargs):
-    return _facade()._wrap_text_lines(*args, **kwargs)
 
 class InputSystem(System):
 

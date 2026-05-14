@@ -10,6 +10,11 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
+from game.system_support.settlement_runtime import (
+    _home_property,
+    _property_chunk_key,
+    _track_entity_in_chunk_population,
+)
 
 AI = _systems.AI
 CreatureIdentity = _systems.CreatureIdentity
@@ -49,26 +54,6 @@ pick_career_for_workplace = _systems.pick_career_for_workplace
 sync_actor_organization_affiliations = _systems.sync_actor_organization_affiliations
 unload_chunk_state = _systems.unload_chunk_state
 workplace_archetype_weight = _systems.workplace_archetype_weight
-
-
-def _home_property(sim, routine=None):
-    home = getattr(routine, "home", None)
-    if isinstance(home, (list, tuple)) and len(home) >= 3:
-        prop = _property_covering(sim, int(home[0]), int(home[1]), int(home[2]))
-        if prop:
-            return prop
-    return None
-
-
-def _property_chunk_key(sim, prop):
-    if not isinstance(prop, dict):
-        return None
-    try:
-        return sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
-    except (TypeError, ValueError):
-        return None
-
-
 def _anchor_distance(left, right):
     if not isinstance(left, (tuple, list)) or len(left) < 3:
         return 999999
@@ -322,21 +307,6 @@ def _live_newcomer_count_in_chunk(sim, chunk):
             continue
         total += 1
     return total
-
-
-def _track_entity_in_chunk_population(sim, eid, *, chunk=None):
-    if eid is None:
-        return None
-    if not hasattr(sim, "chunk_population_records") or not isinstance(getattr(sim, "chunk_population_records", None), dict):
-        sim.chunk_population_records = {}
-    if not hasattr(sim, "chunk_population_baselines") or not isinstance(getattr(sim, "chunk_population_baselines", None), dict):
-        sim.chunk_population_baselines = {}
-    tracker = getattr(sim, "track_population_entity", None)
-    if callable(tracker):
-        return tracker(eid, chunk=chunk)
-    return None
-
-
 def _business_scene_origin(newcomer):
     if not isinstance(newcomer, NPCSettlement):
         return ""

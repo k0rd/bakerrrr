@@ -40,6 +40,26 @@ def _clamp(value, lo=0.0, hi=100.0):
     return max(lo, min(hi, value))
 
 
+def _building_site_service_seed_token(chunk_x, chunk_y, building, *, building_index=0):
+    local_building_id = ""
+    if isinstance(building, dict):
+        local_building_id = str(building.get("building_id", "") or "").strip()
+    if not local_building_id:
+        local_building_id = str(int(building_index))
+    return f"{int(chunk_x)}:{int(chunk_y)}:building:{local_building_id}"
+
+
+def _site_service_seed_token(chunk_x, chunk_y, site, *, site_index=0):
+    site_kind = "site"
+    site_id = ""
+    if isinstance(site, dict):
+        site_kind = str(site.get("kind", site_kind)).strip().lower() or "site"
+        site_id = str(site.get("site_id", "") or "").strip()
+    if not site_id:
+        site_id = str(int(site_index))
+    return f"{int(chunk_x)}:{int(chunk_y)}:site:{site_kind}:{site_id}"
+
+
 def _line_text(line):
     if isinstance(line, dict):
         return str(line.get("text", ""))

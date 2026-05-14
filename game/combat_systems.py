@@ -42,6 +42,7 @@ from game.system_support.combat_targeting_runtime import (
     _entity_should_blink_in_combat,
     _entity_uses_melee_aim,
     _first_targetable_entity_at,
+    _int_or_default,
     _float_or_default,
     _grid_distance,
     _manual_fire_preview,

@@ -122,6 +122,11 @@ from game.run_pressure import (
     pressure_effects as _pressure_effects,
     pressure_snapshot as _pressure_snapshot,
 )
+from game.criminal_justice_runtime import (
+    _defender_excuses_window_shot,
+    _observer_is_active_contractor_ally,
+)
+from game.dialogue_runtime import _dialogue_guard_grace_active
 from game.system_support.intrusion_runtime import (
     _ingress_method_label,
     _ingress_mode_label,
@@ -165,20 +170,11 @@ def _facade():
 def _camera_disguise_scrutiny_profile(*args, **kwargs):
     return _facade()._camera_disguise_scrutiny_profile(*args, **kwargs)
 
-def _defender_excuses_window_shot(*args, **kwargs):
-    return _facade()._defender_excuses_window_shot(*args, **kwargs)
-
 def _degrade_player_disguise(*args, **kwargs):
     return _facade()._degrade_player_disguise(*args, **kwargs)
 
-def _dialogue_guard_grace_active(*args, **kwargs):
-    return _facade()._dialogue_guard_grace_active(*args, **kwargs)
-
 def _npc_disguise_scrutiny_profile(*args, **kwargs):
     return _facade()._npc_disguise_scrutiny_profile(*args, **kwargs)
-
-def _observer_is_active_contractor_ally(*args, **kwargs):
-    return _facade()._observer_is_active_contractor_ally(*args, **kwargs)
 
 def _security_fixture_is_online(*args, **kwargs):
     return _facade()._security_fixture_is_online(*args, **kwargs)

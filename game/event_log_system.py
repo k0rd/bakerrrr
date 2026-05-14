@@ -191,9 +191,11 @@ from game.system_support.player_feedback import _log_player_feedback
 from game.service_runtime import (
     CASINO_GAME_SERVICE_IDS,
     TRANSIT_SERVICE_IDS,
+    _building_site_service_seed_token,
     _casino_game_title,
     _chunk_site_kinds,
     _credit_amount_label,
+    _int_or_default,
     _overworld_discovery_profile,
     _overworld_identity_profile,
     _overworld_discovery_summary_bits,
@@ -211,6 +213,7 @@ from game.service_runtime import (
     _transit_service_title,
     _transit_token_amount_label,
     _vehicle_sale_stats_text,
+    _site_service_seed_token,
 )
 from game.vehicles import (
     generate_chunk_vehicle_records,
@@ -219,6 +222,11 @@ from game.vehicles import (
     vehicle_services_for_archetype,
 )
 from game.run_objectives import evaluate_run_objective
+from game.dialogue_runtime import (
+    _contact_benefit_labels,
+    _disguise_role_label,
+    _infrastructure_target_property,
+)
 from game.skills import (
     access_prep_skill_terms as _access_prep_skill_terms,
     actor_skill as _actor_skill,
@@ -231,6 +239,16 @@ from game.skill_ui import (
     skill_change_reason_label as _skill_change_reason_label,
     skill_debug_lines as _skill_debug_lines,
     skill_hud_status_chunks as _skill_hud_status_chunks,
+)
+from game.system_support.combat_targeting_runtime import (
+    _dir_label,
+    _target_condition_descriptor,
+)
+from game.ui_text_runtime import (
+    _line_segments,
+    _line_text,
+    _line_with_prefix,
+    _tick_duration_label,
 )
 from game.weapons import WEAPON_CATALOG, roll_weapon_instance, weapon_by_id
 
@@ -298,18 +316,6 @@ _WORLD_EVENT_PLAYER_REVEAL_RADIUS = 1
 def _building_entry_description(*args, **kwargs):
     return _facade()._building_entry_description(*args, **kwargs)
 
-def _building_site_service_seed_token(*args, **kwargs):
-    return _facade()._building_site_service_seed_token(*args, **kwargs)
-
-def _contact_benefit_labels(*args, **kwargs):
-    return _facade()._contact_benefit_labels(*args, **kwargs)
-
-def _dir_label(*args, **kwargs):
-    return _facade()._dir_label(*args, **kwargs)
-
-def _disguise_role_label(*args, **kwargs):
-    return _facade()._disguise_role_label(*args, **kwargs)
-
 def _entity_legend_line(*args, **kwargs):
     return _facade()._entity_legend_line(*args, **kwargs)
 
@@ -319,23 +325,8 @@ def _floor_label(*args, **kwargs):
 def _humanize_slug(*args, **kwargs):
     return _facade()._humanize_slug(*args, **kwargs)
 
-def _infrastructure_target_property(*args, **kwargs):
-    return _facade()._infrastructure_target_property(*args, **kwargs)
-
 def _ingress_label(*args, **kwargs):
     return _facade()._ingress_label(*args, **kwargs)
-
-def _int_or_default(*args, **kwargs):
-    return _facade()._int_or_default(*args, **kwargs)
-
-def _line_segments(*args, **kwargs):
-    return _facade()._line_segments(*args, **kwargs)
-
-def _line_text(*args, **kwargs):
-    return _facade()._line_text(*args, **kwargs)
-
-def _line_with_prefix(*args, **kwargs):
-    return _facade()._line_with_prefix(*args, **kwargs)
 
 def _location_description_snapshot(*args, **kwargs):
     return _facade()._location_description_snapshot(*args, **kwargs)
@@ -355,17 +346,8 @@ def _room_entry_description(*args, **kwargs):
 def _sentence_from_note(*args, **kwargs):
     return _facade()._sentence_from_note(*args, **kwargs)
 
-def _site_service_seed_token(*args, **kwargs):
-    return _facade()._site_service_seed_token(*args, **kwargs)
-
 def _status_effect_label(*args, **kwargs):
     return _facade()._status_effect_label(*args, **kwargs)
-
-def _target_condition_descriptor(*args, **kwargs):
-    return _facade()._target_condition_descriptor(*args, **kwargs)
-
-def _tick_duration_label(*args, **kwargs):
-    return _facade()._tick_duration_label(*args, **kwargs)
 
 class EventLogSystem(System):
     def on_world_event_started(self, event):
