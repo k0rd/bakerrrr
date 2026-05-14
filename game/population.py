@@ -44,6 +44,7 @@ from game.npc_names import generate_human_personal_name, human_descriptor
 from game.organizations import ensure_property_organization, sync_actor_organization_affiliations
 from game.property_access import property_is_open, property_is_public, property_is_storefront, world_hour
 from game.skills import seed_skill_profile
+from game.system_support.npc_behavior_runtime import behavior_profile_for_spawn
 from game.weapons import roll_weapon_instance
 
 
@@ -2127,6 +2128,12 @@ def _spawn_human(
             personal_name=personal_name,
         ),
         AI(role),
+        behavior_profile_for_spawn(
+            role=role,
+            career=career,
+            workplace_archetype=_property_archetype(workplace_prop),
+            home_archetype=_property_archetype(home_prop),
+        ),
         MovementThrottle(
             default_cooldown=2,
             state_cooldowns={"patrolling": 2, "resting": 3, "seeking_safety": 2},

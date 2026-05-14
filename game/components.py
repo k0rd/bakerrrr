@@ -705,6 +705,69 @@ class NPCWill:
         self.last_tick = -1
 
 
+class BehaviorProfile:
+    def __init__(self, behaviors=None, preferences=None, tags=None):
+        self.behaviors = {}
+        self.preferences = dict(preferences or {})
+        if isinstance(behaviors, dict):
+            for name, value in behaviors.items():
+                self.set(name, value)
+        elif behaviors:
+            self.add(*behaviors)
+        if tags:
+            self.add(*tags)
+
+    @staticmethod
+    def _token(name):
+        return str(name or "").strip().lower()
+
+    @staticmethod
+    def _value(value, default=0.0):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = float(default)
+        return float(max(0.0, min(1.0, number)))
+
+    @property
+    def tags(self):
+        return {
+            name
+            for name, value in self.behaviors.items()
+            if self._value(value) > 0.0
+        }
+
+    def set(self, name, value=1.0):
+        token = self._token(name)
+        if not token:
+            return 0.0
+        amount = self._value(value)
+        if amount <= 0.0:
+            self.behaviors.pop(token, None)
+            return 0.0
+        self.behaviors[token] = amount
+        return amount
+
+    def add(self, *tags, value=1.0):
+        amount = self._value(value, default=1.0)
+        for tag in tags:
+            token = self._token(tag)
+            if token:
+                self.behaviors[token] = max(self.get(token, 0.0), amount)
+
+    def get(self, tag, default=0.0):
+        token = self._token(tag)
+        if not token:
+            return float(default)
+        return self._value(self.behaviors.get(token, default), default=default)
+
+    def has(self, tag, minimum=0.05):
+        token = self._token(tag)
+        if not token:
+            return False
+        return self.get(token, 0.0) >= self._value(minimum, default=0.05)
+
+
 class NPCMemory:
     def __init__(self, max_entries=32):
         self.max_entries = max_entries

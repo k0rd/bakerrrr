@@ -6,7 +6,6 @@ from engine.systems import System
 from game.checks import (
     crime_read_summary as _crime_read_summary,
     crime_sensitivity as _crime_sensitivity,
-    justice_level as _justice_level,
     rumor_truth_read as _rumor_truth_read,
     social_read_axes as _social_read_axes,
 )
@@ -166,6 +165,14 @@ from game.system_support.interaction_ordering import (
     _interaction_target_order_key,
     _manhattan,
     _normalized_direction,
+)
+from game.system_support.npc_behavior_runtime import (
+    BEHAVIOR_COLLECT_GROUND_CREDITS,
+    BEHAVIOR_AVOID_THREAT,
+    BEHAVIOR_ENFORCE_JUSTICE,
+    _collect_ground_credits_at_actor,
+    _effective_behavior_value,
+    _find_ground_credit_target,
 )
 from game.system_support.settlement_runtime import _home_property
 from game.system_support.status_runtime import (
@@ -788,15 +795,15 @@ class NPCWillSystem(System):
                 offender_pos = positions.get(offender_eid) if offender_eid is not None else None
                 justice = justices.get(eid)
                 crime_sensitivity = _crime_sensitivity(justice, default=0.5)
+                justice_behavior = _effective_behavior_value(
+                    self.sim,
+                    eid,
+                    BEHAVIOR_ENFORCE_JUSTICE,
+                    traits=traits,
+                    justice=justice,
+                )
 
-                justice_drive = 0.0
-                if justice:
-                    justice_drive = (_justice_level(justice) * 52.0) + (crime_sensitivity * 20.0)
-                    if justice.enforce_all:
-                        justice_drive += 18.0
-                    justice_drive *= max(0.25, 1.0 - (_clamp(justice.corruption, lo=0.0, hi=1.0) * 0.6))
-                else:
-                    justice_drive = 36.0 + (crime_sensitivity * 12.0)
+                justice_drive = 24.0 + (justice_behavior * 56.0) + (crime_sensitivity * 10.0)
 
                 protect_threshold = max(0.24, 0.5 - (crime_sensitivity * 0.12))
                 investigate_threshold = max(0.18, 0.34 - (crime_sensitivity * 0.1))
@@ -809,7 +816,7 @@ class NPCWillSystem(System):
                         best_target_eid = offender_eid
                     elif (
                         offense_strength >= investigate_threshold
-                        and traits.bravery >= 0.45
+                        and justice_behavior >= 0.32
                         and (offense_strength * 60.0) > best_score
                     ):
                         best_intent = "investigating"
@@ -817,7 +824,14 @@ class NPCWillSystem(System):
                         best_target = (offender_pos.x, offender_pos.y, offender_pos.z)
                         best_target_eid = offender_eid
 
-            safety_pressure = (100.0 - needs.safety) * (1.2 - (traits.bravery * 0.7))
+            avoid_threat = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_AVOID_THREAT,
+                traits=traits,
+                needs=needs,
+            )
+            safety_pressure = (100.0 - needs.safety) * (0.5 + (avoid_threat * 0.75))
             threat = memory.strongest("threat") if memory else None
             if threat and safety_pressure > best_score:
                 tx = threat["data"].get("x", pos.x)
@@ -834,6 +848,38 @@ class NPCWillSystem(System):
                     best_target_eid = None
 
             social_pressure = (100.0 - needs.social) * (0.7 + (traits.empathy * 0.6))
+            workplace_prop = _workplace_property(self.sim, occupation=occupation, routine=routine)
+            home_prop = _home_property(self.sim, routine=routine)
+            work_active = work_shift_active(
+                self.sim,
+                occupation=occupation,
+                workplace_prop=workplace_prop,
+                role=ai.role,
+            )
+
+            collect_ground_credits = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_COLLECT_GROUND_CREDITS,
+                traits=traits,
+                needs=needs,
+            )
+            if collect_ground_credits >= 0.05:
+                scavenging_target = _find_ground_credit_target(self.sim, eid, pos)
+                if scavenging_target:
+                    scavenging_score = float(scavenging_target.get("score", 0.0) or 0.0) * (
+                        0.45 + (collect_ground_credits * 0.9)
+                    )
+                    if work_active:
+                        scavenging_score *= 0.55
+                    if ai.state == "scavenging" and ai.target == scavenging_target.get("target"):
+                        scavenging_score += 4.0
+                    if scavenging_score > best_score:
+                        best_intent = "scavenging"
+                        best_score = scavenging_score
+                        best_target = scavenging_target["target"]
+                        best_target_eid = None
+
             if social and social_pressure > best_score:
                 bond_eid = social.strongest_bond(min_closeness=0.35)
                 bond_pos = positions.get(bond_eid)
@@ -851,15 +897,6 @@ class NPCWillSystem(System):
                     best_score = energy_pressure
                     best_target = routine.home
                     best_target_eid = None
-
-            workplace_prop = _workplace_property(self.sim, occupation=occupation, routine=routine)
-            home_prop = _home_property(self.sim, routine=routine)
-            work_active = work_shift_active(
-                self.sim,
-                occupation=occupation,
-                workplace_prop=workplace_prop,
-                role=ai.role,
-            )
 
             social_venue_pressure = (100.0 - needs.social) * (0.55 + (traits.empathy * 0.45))
             if not work_active and social_venue_pressure > best_score:
@@ -1201,6 +1238,9 @@ class NPCInvestigateSystem(System):
 
                 if ai.state == "investigating":
                     self.sim.emit(Event("npc_investigation_complete", npc_eid=eid, x=tx, y=ty, z=tz))
+
+                if ai.state == "scavenging":
+                    _collect_ground_credits_at_actor(self.sim, eid, pos)
 
                 if ai.state == "reporting_incident":
                     self.sim.emit(Event(

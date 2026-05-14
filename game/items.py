@@ -61,6 +61,8 @@ def _normalize_appearance_family(item_id, tags, item):
     tag_set = set(tags or ())
     if "phone" in tag_set or "cellular" in tag_set:
         return "phone"
+    if "drug" in tag_set and str(item.get("legal_status", "") or "").strip().lower() == "illegal":
+        return "drug"
     if "injectable" in tag_set or "autoinjector" in str(item_id or ""):
         return "injectable"
     if "medical" in tag_set:
@@ -90,6 +92,8 @@ def _default_appearance_slots_for_family(appearance_family):
         return ["color", "symbol"]
     if family == "injectable":
         return ["symbol", "liquid_color"]
+    if family == "drug":
+        return ["color", "symbol"]
     return []
 
 
@@ -101,7 +105,7 @@ def _normalize_identification_profile(item_id, tags, item, appearance_family):
         raw = {}
 
     tag_set = set(tags or ())
-    default_requires_identification = appearance_family in {"ammo", "medical", "injectable"}
+    default_requires_identification = appearance_family in {"ammo", "medical", "injectable", "drug"}
     default_auto_identify_on_use = default_requires_identification and bool(
         tag_set.intersection({"consumable", "medical", "ammo"})
     )

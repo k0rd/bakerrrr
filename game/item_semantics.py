@@ -88,6 +88,10 @@ _FAMILY_APPEARANCE_PROFILES = {
         "default_slots": ("symbol", "liquid_color"),
         "observation_template": "injectable with a {symbol} symbol, contains {liquid_color} liquid",
     },
+    "drug": {
+        "default_slots": ("color", "symbol"),
+        "observation_template": "{form} with {color} labeling and a {symbol} stamp",
+    },
 }
 
 
@@ -171,12 +175,38 @@ def _medical_form_label(item_id, item_def) -> str:
     return "medical pack"
 
 
+def _drug_form_label(item_id, item_def) -> str:
+    item_text = _key(item_id)
+    name_text = _key(item_def.get("name"))
+    if "joint" in item_text or "joint" in name_text or "smoke" in item_text:
+        return "rolled smoke"
+    if "blotter" in item_text or "blotter" in name_text:
+        return "blotter tab"
+    if "bindle" in item_text or "bindle" in name_text or "powder" in name_text:
+        return "powder bindle"
+    if "capsule" in item_text or "capsule" in name_text:
+        return "capsule"
+    if "tablet" in item_text or "tablet" in name_text or "tabs" in item_text:
+        return "tablet sleeve"
+    if "patch" in item_text or "patch" in name_text:
+        return "patch packet"
+    if "syringe" in item_text or "syringe" in name_text:
+        return "syringe"
+    if "vial" in item_text or "vial" in name_text or "serum" in item_text:
+        return "vial"
+    if "stim" in item_text:
+        return "stimulant packet"
+    return "drug packet"
+
+
 def _fixed_family_traits(item_id, item_def, family) -> dict:
     family_key = _key(family)
     if family_key == "ammo":
         return {"package": _ammo_package_label(item_id, item_def)}
     if family_key == "medical":
         return {"form": _medical_form_label(item_id, item_def)}
+    if family_key == "drug":
+        return {"form": _drug_form_label(item_id, item_def)}
     return {}
 
 
@@ -426,6 +456,8 @@ def item_unknown_name_for_actor(sim, actor_eid, item_or_entry, *, item_catalog=N
         return f"{traits.get('liquid_color', 'unknown')} {_symbol_mark(traits.get('symbol'))} injectable".strip()
     if family == "medical":
         return f"{traits.get('color', 'unknown')} {_symbol_mark(traits.get('symbol'))} {traits.get('form', 'medical pack')}".strip()
+    if family == "drug":
+        return f"{traits.get('color', 'unknown')} {_symbol_mark(traits.get('symbol'))} {traits.get('form', 'drug packet')}".strip()
     if family == "ammo":
         return f"{traits.get('color', 'unknown')} {traits.get('marking', 'marked')} {traits.get('package', 'ammo pack')}".strip()
     return "unidentified item"
