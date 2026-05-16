@@ -3153,6 +3153,7 @@ def _casino_baccarat_resolve(session, bet_side):
         outcome_key = f"{winning_side}_miss"
 
     result_lines = []
+    result_lines.append("")
     result_lines.extend(_casino_ascii_card_block("Player", player_cards))
     result_lines.extend(_casino_ascii_card_block("Banker", banker_cards))
     result_lines.extend([
@@ -3320,6 +3321,7 @@ def _casino_three_card_poker_resolve(session, action):
 
     if action == "fold":
         result_lines = []
+        result_lines.append("")
         result_lines.extend(_casino_ascii_card_block("You", player_cards))
         return {
             "service": "three_card_poker",
