@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 
+from engine.world import World
 from engine.events import Event
 from engine.systems import System
 from game.components import AI, NPCRoutine, Occupation, OrganizationAffiliations, PlayerAssets, Position
@@ -23,6 +24,8 @@ from game.organizations import (
     sync_actor_organization_affiliations,
 )
 from game.property_access import (
+    FINANCE_SERVICE_FALLBACKS as _FINANCE_SERVICE_FALLBACKS,
+    default_site_services_for_archetype as _default_site_services_for_archetype,
     finance_services_for_property as _finance_services_for_property,
     property_is_open as _property_is_open,
     property_is_storefront as _property_is_storefront,
@@ -77,6 +80,7 @@ LARGE_STAFF_ARCHETYPES = {
 BUSINESS_BASE_REVENUE = {
     "bank": 12,
     "brokerage": 11,
+    "contractor_office": 10,
     "corner_store": 9,
     "hotel": 12,
     "nightclub": 11,
@@ -88,7 +92,9 @@ BUSINESS_BASE_REVENUE = {
     "auto_garage": 10,
     "outfitter": 10,
     "pawn_shop": 10,
+    "service_station": 10,
     "surplus_store": 10,
+    "thrift_store": 9,
     "tool_depot": 10,
 }
 ROLE_WAGES = {
@@ -145,6 +151,7 @@ SOCIAL_ARCHETYPES = {
     "nightclub",
     "pawn_shop",
     "restaurant",
+    "thrift_store",
 }
 FINANCE_ARCHETYPES = {
     "bank",
@@ -158,8 +165,10 @@ CARE_ARCHETYPES = {
 TECH_ARCHETYPES = {
     "auto_garage",
     "cold_storage",
+    "contractor_office",
     "factory",
     "freight_depot",
+    "service_station",
     "tool_depot",
     "warehouse",
 }
@@ -171,6 +180,7 @@ SECURE_ARCHETYPES = {
     "surplus_store",
     "warehouse",
 }
+BUSINESS_REMODEL_ELIGIBLE_ARCHETYPES = tuple(sorted(getattr(World, "STOREFRONT_ARCHETYPES", ()) or ()))
 
 
 def _text(value):
@@ -267,6 +277,11 @@ def _hours_text(opening):
     if start_hour == end_hour:
         return "all day"
     return f"{start_hour:02d}:00-{end_hour:02d}:00"
+
+
+def _archetype_title(archetype):
+    clean = _text(archetype).lower()
+    return clean.replace("_", " ").strip().title() or "Business"
 
 
 def _property_metadata(prop):
@@ -545,6 +560,8 @@ def player_business_account_balance(prop):
 
 
 def player_business_customer_policy(prop):
+    if _property_supports_lodging_service(prop):
+        return "public"
     state = player_business_state(prop, create=False)
     return _normalize_customer_policy(state.get("customer_policy")) if state else "public"
 
@@ -562,12 +579,14 @@ def player_business_set_customer_policy(prop, policy):
     state = player_business_state(prop, create=True)
     if state is None:
         return "public"
-    clean = _normalize_customer_policy(policy)
+    clean = "public" if _property_supports_lodging_service(prop) else _normalize_customer_policy(policy)
     state["customer_policy"] = clean
     return clean
 
 
 def player_business_hours_mode(prop):
+    if _property_supports_lodging_service(prop):
+        return "always_open"
     state = player_business_state(prop, create=False)
     return _normalize_business_hours_mode(state.get("hours_mode")) if state else "normal"
 
@@ -604,7 +623,7 @@ def player_business_set_hours_mode(sim, prop, mode):
         baseline = _normalize_open_window(_property_open_window(sim, prop))
         state["baseline_hours"] = list(baseline) if baseline is not None else None
 
-    clean = _normalize_business_hours_mode(mode)
+    clean = "always_open" if _property_supports_lodging_service(prop) else _normalize_business_hours_mode(mode)
     opening = player_business_hours_window(sim, prop, mode=clean)
     state["hours_mode"] = clean
 
@@ -618,6 +637,120 @@ def player_business_set_hours_mode(sim, prop, mode):
         "hours_mode": clean,
         "opening_window": opening,
         "hours_text": _hours_text(opening),
+    }
+
+
+def _business_remodel_rarity_counts():
+    counts = {}
+    for district_rows in tuple(getattr(World, "CORE_BUILDINGS_BY_DISTRICT", {}).values()):
+        for archetype in tuple(district_rows or ()):
+            key = _text(archetype).lower()
+            if key:
+                counts[key] = counts.get(key, 0) + 1
+    for district_rows in tuple(getattr(World, "OPTIONAL_BUILDINGS_BY_DISTRICT", {}).values()):
+        for archetype in tuple(district_rows or ()):
+            key = _text(archetype).lower()
+            if key:
+                counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def player_business_remodel_quote(prop, target_archetype):
+    if not isinstance(prop, dict):
+        return None
+    target = _text(target_archetype).lower()
+    current = _property_archetype(prop)
+    if not target or target == current or target not in BUSINESS_REMODEL_ELIGIBLE_ARCHETYPES:
+        return None
+
+    counts = _business_remodel_rarity_counts()
+    eligible_counts = {
+        archetype: max(1, int(counts.get(archetype, 1)))
+        for archetype in BUSINESS_REMODEL_ELIGIBLE_ARCHETYPES
+    }
+    min_count = min(eligible_counts.values()) if eligible_counts else 1
+    max_count = max(eligible_counts.values()) if eligible_counts else 1
+    target_count = max(1, int(eligible_counts.get(target, 1)))
+    if max_count <= min_count:
+        rarity_rank = 0.0
+    else:
+        rarity_rank = float(max_count - target_count) / float(max_count - min_count)
+    if rarity_rank >= 0.72:
+        rarity_label = "rare"
+    elif rarity_rank >= 0.35:
+        rarity_label = "uncommon"
+    else:
+        rarity_label = "common"
+
+    metadata = _property_metadata(prop)
+    source_price = max(80, _int_or(metadata.get("purchase_cost"), default=150))
+    current_service_total = len(tuple(_finance_services_for_property(prop) or ())) + len(tuple(_site_services_for_property(prop) or ()))
+    service_seed_token = _text(metadata.get("site_service_seed_token")) or _text(prop.get("id")) or _text(prop.get("name"))
+    target_service_total = len(tuple(_default_site_services_for_archetype(target, seed_token=service_seed_token) or ()))
+    target_service_total += len(tuple(_FINANCE_SERVICE_FALLBACKS.get(target, ()) or ()))
+    complexity_delta = max(0, int(target_service_total) - int(current_service_total))
+
+    base_factor = 0.34 + (0.38 * float(rarity_rank))
+    complexity_factor = 0.1 * float(complexity_delta)
+    total_cost = max(25, int(round(float(source_price) * float(base_factor + complexity_factor))))
+    return {
+        "target_archetype": target,
+        "target_label": _archetype_title(target),
+        "source_price": int(source_price),
+        "target_count": int(target_count),
+        "rarity_rank": float(round(rarity_rank, 3)),
+        "rarity_label": rarity_label,
+        "cost": int(total_cost),
+        "complexity_delta": int(complexity_delta),
+    }
+
+
+def player_business_remodel_options(prop):
+    if not isinstance(prop, dict) or not property_supports_player_business(prop):
+        return ()
+    rows = []
+    for archetype in BUSINESS_REMODEL_ELIGIBLE_ARCHETYPES:
+        quote = player_business_remodel_quote(prop, archetype)
+        if not isinstance(quote, dict):
+            continue
+        rows.append(quote)
+    rows.sort(
+        key=lambda row: (
+            int(row.get("cost", 0)),
+            -float(row.get("rarity_rank", 0.0)),
+            str(row.get("target_label", "")).lower(),
+        )
+    )
+    return tuple(rows)
+
+
+def player_business_apply_remodel(sim, prop, target_archetype):
+    quote = player_business_remodel_quote(prop, target_archetype)
+    if not isinstance(quote, dict) or not isinstance(prop, dict):
+        return None
+
+    metadata = _property_metadata(prop)
+    service_seed_token = _text(metadata.get("site_service_seed_token")) or _text(prop.get("id")) or _text(prop.get("name"))
+    target = str(quote.get("target_archetype", "")).strip().lower()
+    metadata["archetype"] = target
+    metadata["is_storefront"] = bool(target in BUSINESS_REMODEL_ELIGIBLE_ARCHETYPES)
+    metadata["site_services"] = list(_default_site_services_for_archetype(target, seed_token=service_seed_token))
+    finance_defaults = tuple(_FINANCE_SERVICE_FALLBACKS.get(target, ()) or ())
+    metadata["finance_services"] = list(finance_defaults)
+    metadata.pop("access_controller_hours", None)
+
+    state = player_business_state(prop, create=True)
+    if isinstance(state, dict):
+        state["required_staff"] = _required_staff_for(prop)
+        state["baseline_hours"] = None
+        player_business_set_customer_policy(prop, state.get("customer_policy"))
+        player_business_set_hours_mode(sim, prop, state.get("hours_mode"))
+
+    return {
+        **quote,
+        "business_name": _text(metadata.get("business_name")) or _property_label(prop),
+        "site_services": tuple(_site_services_for_property(prop) or ()),
+        "finance_services": tuple(_finance_services_for_property(prop) or ()),
     }
 
 
@@ -1774,8 +1907,11 @@ __all__ = [
     "player_business_next_customer_policy",
     "player_business_next_hours_mode",
     "player_business_open_role",
+    "player_business_apply_remodel",
     "player_business_role_fit",
     "player_business_role_weights",
+    "player_business_remodel_options",
+    "player_business_remodel_quote",
     "player_business_set_customer_policy",
     "player_business_set_hours_mode",
     "player_business_operating_quality",

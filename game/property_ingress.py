@@ -25,6 +25,7 @@ from game.property_runtime import (
 from game.skills import actor_skill as _actor_skill
 from game.system_support.access_runtime import _attempt_locked_property_entry_with_sim
 from game.system_support.awareness_runtime import _watchers_for_position
+from game.system_support.building_repair_runtime import record_building_damage as _record_building_damage
 from game.system_support.access_checks import (
     _maybe_damage_access_tool,
     _resolve_access_skill_check,
@@ -619,6 +620,40 @@ class PropertyIngressRuntime:
             candidate["z"],
             exclude_eid=eid,
         )
+        ingress_kind = str(ingress.ingress_kind or "").strip().lower()
+        aperture_kind = str(ingress.aperture_kind or "").strip().lower()
+        if ingress_kind in {"boundary_breach", "deep_breach"}:
+            _record_building_damage(
+                self.sim,
+                prop,
+                candidate["x"],
+                candidate["y"],
+                candidate["z"],
+                kind="wall",
+                cause=ingress_method,
+            )
+        elif ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
+            _record_building_damage(
+                self.sim,
+                prop,
+                candidate["x"],
+                candidate["y"],
+                candidate["z"],
+                kind="window",
+                aperture_kind=aperture_kind,
+                cause=ingress_method,
+            )
+        elif ingress_method == "forced_side_entry" and _is_side_aperture(aperture_kind):
+            _record_building_damage(
+                self.sim,
+                prop,
+                candidate["x"],
+                candidate["y"],
+                candidate["z"],
+                kind="door",
+                aperture_kind=aperture_kind,
+                cause=ingress_method,
+            )
 
         if hostile:
             severity_score = max(

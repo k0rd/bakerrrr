@@ -11,6 +11,7 @@ from game.property_runtime import property_covering as _property_covering
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import _entity_is_downed
 from game.system_support.awareness_runtime import _watchers_for_position
+from game.system_support.building_repair_runtime import record_building_damage as _record_building_damage
 from game.system_support.combat_pacing_runtime import _combat_turn_pacing_active
 from game.system_support.entity_naming import _entity_display_name
 from game.system_support.intrusion_runtime import _is_window_aperture, _trespass_label_from_score
@@ -706,6 +707,16 @@ def _shatter_window_for_projectile(sim, offender_eid, x, y, z):
         int(y),
         Tile(walkable=True, transparent=True, glyph="/"),
         z=int(z),
+    )
+    _record_building_damage(
+        sim,
+        prop,
+        int(x),
+        int(y),
+        int(z),
+        kind="window",
+        aperture_kind=aperture.get("kind", "window"),
+        cause="window_shot",
     )
 
     if offender_eid is None:

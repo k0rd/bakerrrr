@@ -9,7 +9,7 @@ from .eventlog import EventLog
 from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
 from game.components import Position
-from game.items import prepare_item_stack_metadata
+from game.items import prepare_ground_item_stack_metadata
 
 class Simulation:
 
@@ -1971,7 +1971,16 @@ class Simulation:
             "z": z,
             "owner_eid": owner_eid,
             "owner_tag": owner_tag,
-            "metadata": prepare_item_stack_metadata(item_id, metadata=metadata, quantity=quantity),
+            "metadata": prepare_ground_item_stack_metadata(
+                self,
+                item_id,
+                x,
+                y,
+                z,
+                quantity=quantity,
+                instance_id=instance_id,
+                metadata=metadata,
+            ),
         }
         self._index_ground_item_record(ground_item_id, self.ground_items[ground_item_id])
         return ground_item_id

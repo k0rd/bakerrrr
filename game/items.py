@@ -24,6 +24,21 @@ ITEM_QUALITY_REQUIREMENT_DELTA = {
     "excellent": -0.4,
 }
 LEGAL_STATUSES = {"legal", "restricted", "suspicious", "illegal", "stolen", "unknown"}
+GROUND_CREDSTICK_DISTRICT_MULTS = {
+    "corporate": 1.36,
+    "downtown": 1.2,
+    "military": 1.18,
+    "industrial": 1.04,
+    "residential": 0.94,
+    "entertainment": 1.08,
+    "slums": 0.72,
+}
+GROUND_CREDSTICK_AREA_MULTS = {
+    "city": 1.0,
+    "frontier": 1.06,
+    "wilderness": 0.88,
+    "coastal": 1.02,
+}
 
 
 def _normalize_item_category(item_id, tags, item):
@@ -55,17 +70,19 @@ def _normalize_item_category(item_id, tags, item):
 
 
 def _normalize_appearance_family(item_id, tags, item):
+    tag_set = set(tags or ())
     explicit = str(item.get("appearance_family", "") or "").strip().lower()
     if explicit:
+        if explicit == "drug":
+            if "injectable" in tag_set or "autoinjector" in str(item_id or ""):
+                return "injectable"
+            return "medical"
         return explicit
-    tag_set = set(tags or ())
     if "phone" in tag_set or "cellular" in tag_set:
         return "phone"
-    if "drug" in tag_set and str(item.get("legal_status", "") or "").strip().lower() == "illegal":
-        return "drug"
     if "injectable" in tag_set or "autoinjector" in str(item_id or ""):
         return "injectable"
-    if "medical" in tag_set:
+    if "medical" in tag_set or "drug" in tag_set:
         return "medical"
     if "ammo" in tag_set:
         return "ammo"
@@ -1098,6 +1115,67 @@ def prepare_item_stack_metadata(item_id, metadata=None, quantity=1, item_catalog
     if is_credstick_item(item_id):
         prepared["stored_credits"] = int(credstick_total_credits(quantity=quantity, metadata=prepared))
     return prepared
+
+
+def _ground_item_district(sim, x, y):
+    world = getattr(sim, "world", None)
+    if world is None:
+        chunk = getattr(sim, "active_chunk", None)
+    else:
+        try:
+            cx, cy = sim.chunk_coords(int(x), int(y))
+        except Exception:
+            return {}
+        chunk = world.get_chunk(int(cx), int(cy))
+    district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+    return district if isinstance(district, dict) else {}
+
+
+def ground_credstick_total_for_location(sim, x, y, z=0, *, quantity=1, instance_id=None, metadata=None):
+    quantity = max(1, _int_or_default(quantity, 1))
+    prepared = normalize_item_instance_metadata(CREDSTICK_ITEM_ID, metadata=metadata, item_catalog=ITEM_CATALOG)
+    if "stored_credits" in prepared:
+        return int(credstick_total_credits(quantity=quantity, metadata=prepared))
+
+    district = _ground_item_district(sim, x, y)
+    area_type = str(district.get("area_type", "city")).strip().lower() or "city"
+    district_type = str(district.get("district_type", "unknown")).strip().lower() or "unknown"
+    wealth = max(1, min(10, _int_or_default(district.get("wealth"), 5)))
+    security = max(1, min(10, _int_or_default(district.get("security_level"), 5)))
+    crime = max(1, min(10, _int_or_default(district.get("crime_rate"), 5)))
+
+    district_mult = _float_or_default(GROUND_CREDSTICK_DISTRICT_MULTS.get(district_type, 1.0), 1.0)
+    area_mult = _float_or_default(GROUND_CREDSTICK_AREA_MULTS.get(area_type, 1.0), 1.0)
+    wealth_mult = 0.58 + (wealth * 0.09)
+    security_mult = 0.9 + (security * 0.018)
+    crime_mult = 0.98 + max(0.0, (crime - 5) * 0.014)
+    chooser = random.Random(
+        f"{getattr(sim, 'seed', 0)}:ground-credstick:{instance_id or ''}:{int(x)}:{int(y)}:{int(z)}:{quantity}"
+    )
+    swing = 0.82 + (chooser.random() * 0.56)
+    baseline = float(DEFAULT_CREDSTICK_VALUE * quantity)
+    total = baseline * district_mult * area_mult * wealth_mult * security_mult * crime_mult * swing
+    low = max(4 * quantity, int(round((DEFAULT_CREDSTICK_VALUE * quantity) * 0.35)))
+    high = max(low, int(round((DEFAULT_CREDSTICK_VALUE * quantity) * 6.5)))
+    return int(max(low, min(high, round(total))))
+
+
+def prepare_ground_item_stack_metadata(sim, item_id, x, y, z=0, *, quantity=1, instance_id=None, metadata=None, item_catalog=None):
+    quantity = max(1, _int_or_default(quantity, 1))
+    prepared = normalize_item_instance_metadata(item_id, metadata=metadata, item_catalog=item_catalog or ITEM_CATALOG)
+    if is_credstick_item(item_id):
+        prepared["stored_credits"] = int(
+            ground_credstick_total_for_location(
+                sim,
+                x,
+                y,
+                z,
+                quantity=quantity,
+                instance_id=instance_id,
+                metadata=prepared,
+            )
+        )
+    return prepare_item_stack_metadata(item_id, metadata=prepared, quantity=quantity, item_catalog=item_catalog or ITEM_CATALOG)
 
 
 def split_item_stack_metadata(item_id, metadata=None, stack_quantity=1, removed_quantity=1, item_catalog=None):

@@ -4183,6 +4183,8 @@ def _site_service_label(service):
     if transit_profile:
         return str(transit_profile.get("service_label", service)).strip().lower() or service.replace("_", " ")
     mapping = {
+        "building_repair": "building repair",
+        "business_remodel": "business refit",
         "intel": "intel",
         "shelter": "shelter",
         "rest": "lodging",
@@ -4209,6 +4211,8 @@ def _service_menu_option_label(option_id):
         "trade_sell": "Sell goods",
         "banking": "Manage bank funds",
         "insurance": "Review coverage",
+        "building_repair": "Repair a building",
+        "business_remodel": "Change business type",
         "vending": "Buy a snack",
         "fuel": "Refuel vehicle",
         "repair": "Repair vehicle",

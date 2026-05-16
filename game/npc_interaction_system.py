@@ -7,6 +7,7 @@ from game.components import (
     AnimalPhysicalProfile,
     AnimalSocialProfile,
     ArmorLoadout,
+    BehaviorProfile,
     Collider,
     ContactLedger,
     CoreStats,
@@ -83,8 +84,19 @@ from game.items import (
     credstick_total_credits,
     is_credstick_item,
     item_display_name,
+    item_instance_condition,
     merge_item_stack_metadata,
     prepare_item_stack_metadata,
+)
+from game.item_semantics import (
+    appraise_item_for_actor,
+    identify_item_for_actor,
+    item_category,
+    item_is_appraised_for_actor,
+    item_is_identified_for_actor,
+    item_legal_status,
+    item_requires_identification,
+    item_tags,
 )
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
@@ -123,6 +135,7 @@ from game.system_support.business_event_state import (
     _business_event_actor_state,
     _business_event_seed_state,
 )
+from game.system_support.container_runtime import _unlink_removed_item_from_gear
 from game.run_pressure import (
     apply_pressure_delta as _apply_pressure_delta,
     pressure_effects as _pressure_effects,
@@ -247,6 +260,13 @@ from game.system_support.interaction_ordering import (
     _manhattan,
     _normalized_direction,
 )
+from game.system_support.npc_behavior_runtime import (
+    BEHAVIOR_APPRAISE_STREET_GOODS,
+    BEHAVIOR_BUY_DESIRED_DRUG,
+    BEHAVIOR_BUY_PLAYER_GOODS,
+    BEHAVIOR_IDENTIFY_STREET_DRUGS,
+    _actor_behavior_value,
+)
 from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
     ACTION_OFFENSE_CONTEXT_BONUS,
@@ -314,7 +334,24 @@ class NPCInteractionSystem(System):
         "seeking_safety": "keeping their distance",
         "surrendered": "standing down",
     }
-    ROOT_TOPICS = {"name", "job", "local", "opportunities", "attention", "contacts", "where_place", "hire", "fire", "trade", "bye", "purpose", "apologize", "leave"}
+    ROOT_TOPICS = {
+        "name",
+        "job",
+        "local",
+        "opportunities",
+        "attention",
+        "contacts",
+        "where_place",
+        "hire",
+        "fire",
+        "trade",
+        "street_appraise",
+        "street_buy",
+        "bye",
+        "purpose",
+        "apologize",
+        "leave",
+    }
     MISSTEP_TOPICS = ("weird", "pry", "insult")
     MENU_REPEAT_ROW_BUDGET = 3
     REPEAT_PRESSURE_SKIP_TOPICS = {
@@ -3559,11 +3596,434 @@ class NPCInteractionSystem(System):
 
     # ── Fence helpers ────────────────────────────────────────────────────────
 
+    _STREET_ITEM_VALUE = {
+        "weapon": 46,
+        "firearm": 46,
+        "launcher": 74,
+        "armor": 30,
+        "tool": 24,
+        "device": 20,
+        "communication": 20,
+        "medical": 20,
+        "ammo": 18,
+        "token": 10,
+        "access": 28,
+        "stimulant": 22,
+        "drug": 24,
+    }
+    _STREET_ITEM_OVERRIDES = {
+        "cocaine_bindle": 32,
+        "mdma_capsule": 30,
+        "lsd_blotter": 26,
+        "black_market_stim": 28,
+        "methamphetamine": 34,
+        "fentanyl_patch": 30,
+        "ketamine_vial": 30,
+        "heroin_syringe": 32,
+    }
+    _STREET_DEFAULT_VALUE = 14
     _FENCE_ITEM_VALUE = {
         "weapon": 50, "firearm": 50, "gear": 32, "armor": 32,
         "tool": 24, "access": 28, "stimulant": 18, "drug": 18,
     }
     _FENCE_DEFAULT_VALUE = 14
+
+    def _street_behavior_profile(self, npc_eid):
+        return self.sim.ecs.get(BehaviorProfile).get(npc_eid)
+
+    def _street_behavior_preference(self, npc_eid, key, default=None):
+        profile = self._street_behavior_profile(npc_eid)
+        if not profile:
+            return default
+        preferences = getattr(profile, "preferences", None)
+        if not isinstance(preferences, dict):
+            return default
+        return preferences.get(key, default)
+
+    def _street_item_value(self, item_id):
+        item_id = str(item_id or "").strip().lower()
+        if not item_id:
+            return self._STREET_DEFAULT_VALUE
+        if item_id in self._STREET_ITEM_OVERRIDES:
+            return int(self._STREET_ITEM_OVERRIDES[item_id])
+        item_def = ITEM_CATALOG.get(item_id, {})
+        tags = set(str(t).strip().lower() for t in item_def.get("tags", ()))
+        category = str(item_def.get("category", "")).strip().lower()
+        for tag, val in self._STREET_ITEM_VALUE.items():
+            if tag in tags or (category and tag == category):
+                return int(val)
+        return self._STREET_DEFAULT_VALUE
+
+    def _street_item_price(self, entry, *, mult=1.0):
+        item_id = str((entry or {}).get("item_id", "") or "").strip().lower()
+        if not item_id or is_credstick_item(item_id):
+            return 0
+        quantity = max(1, int((entry or {}).get("quantity", 1) or 1))
+        base = float(self._street_item_value(item_id))
+        condition = item_instance_condition(
+            item_id,
+            metadata=(entry or {}).get("metadata"),
+            item_catalog=ITEM_CATALOG,
+        )
+        quality = str(condition.get("quality", "standard")).strip().lower() or "standard"
+        quality_mult = {
+            "poor": 0.78,
+            "standard": 1.0,
+            "good": 1.18,
+            "excellent": 1.34,
+        }.get(quality, 1.0)
+        if bool((condition.get("profile") or {}).get("supports_durability")):
+            quality_mult *= 0.72 + (float(condition.get("durability_ratio", 1.0) or 1.0) * 0.4)
+        total = base * quantity * max(0.2, float(mult or 1.0)) * quality_mult
+        return max(1, int(round(total)))
+
+    def _street_drug_item_ids(self):
+        rows = []
+        for item_id, item_def in ITEM_CATALOG.items():
+            tags = {str(tag).strip().lower() for tag in item_def.get("tags", ()) if str(tag).strip()}
+            legal_status = str(item_def.get("legal_status", "legal")).strip().lower()
+            if legal_status != "illegal":
+                continue
+            if "consumable" not in tags:
+                continue
+            if not tags.intersection({"drug", "stimulant", "injectable", "social"}):
+                continue
+            rows.append(str(item_id).strip().lower())
+        rows.sort()
+        return tuple(rows)
+
+    def _street_buy_terms_for(self, npc_eid, context):
+        buy_desired_drug = _actor_behavior_value(self.sim, npc_eid, BEHAVIOR_BUY_DESIRED_DRUG, 0.0)
+        buy_player_goods = _actor_behavior_value(self.sim, npc_eid, BEHAVIOR_BUY_PLAYER_GOODS, 0.0)
+        if buy_desired_drug < 0.2 and buy_player_goods < 0.2:
+            return None
+
+        preferred_item_ids = self._street_behavior_preference(npc_eid, "street_buy_item_ids", ())
+        item_ids = [
+            str(item_id or "").strip().lower()
+            for item_id in (preferred_item_ids if isinstance(preferred_item_ids, (list, tuple, set, frozenset)) else (preferred_item_ids,))
+            if str(item_id or "").strip()
+        ]
+        desired_item_id = str(self._street_behavior_preference(npc_eid, "desired_drug_item_id", "") or "").strip().lower()
+        if not desired_item_id and buy_desired_drug >= 0.2:
+            pool = self._street_drug_item_ids()
+            if pool:
+                district_type = str((context or {}).get("district_type", "") or "").strip().lower()
+                occupation = context.get("occupation") if isinstance(context, dict) else None
+                career = str(getattr(occupation, "career", "") or "").strip().lower()
+                chooser = random.Random(
+                    f"{self.sim.seed}:street-buy:{int(npc_eid)}:{career}:{district_type}:{len(pool)}"
+                )
+                desired_item_id = pool[chooser.randrange(len(pool))]
+        if desired_item_id and desired_item_id not in item_ids:
+            item_ids.insert(0, desired_item_id)
+
+        preferred_categories = self._street_behavior_preference(npc_eid, "street_buy_categories", ())
+        categories = {
+            str(value or "").strip().lower()
+            for value in (preferred_categories if isinstance(preferred_categories, (list, tuple, set, frozenset)) else (preferred_categories,))
+            if str(value or "").strip()
+        }
+        preferred_tags = self._street_behavior_preference(npc_eid, "street_buy_tags", ())
+        tags = {
+            str(value or "").strip().lower()
+            for value in (preferred_tags if isinstance(preferred_tags, (list, tuple, set, frozenset)) else (preferred_tags,))
+            if str(value or "").strip()
+        }
+
+        if buy_player_goods >= 0.2 and not categories and not tags:
+            categories.update({"tool", "weapon", "armor", "medical", "device", "token"})
+            tags.update({"tool", "weapon", "armor", "medical", "stimulant", "drug", "communication", "ammo"})
+
+        generic_mult = max(
+            1.2,
+            float(self._street_behavior_preference(npc_eid, "street_buy_price_mult", 1.18 + (buy_player_goods * 0.95)) or 1.2),
+        )
+        desired_mult = max(
+            generic_mult,
+            float(self._street_behavior_preference(npc_eid, "desired_drug_price_mult", 1.55 + (buy_desired_drug * 1.15)) or generic_mult),
+        )
+        return {
+            "item_ids": tuple(item_ids),
+            "categories": tuple(sorted(categories)),
+            "tags": tuple(sorted(tags)),
+            "desired_item_id": desired_item_id,
+            "generic_mult": float(generic_mult),
+            "desired_mult": float(desired_mult),
+        }
+
+    def _street_buy_candidate_rows(self, npc_eid, context):
+        terms = self._street_buy_terms_for(npc_eid, context)
+        inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
+        if not terms or not inventory:
+            return []
+
+        wanted_item_ids = {str(item_id).strip().lower() for item_id in terms.get("item_ids", ()) if str(item_id).strip()}
+        wanted_categories = {str(value).strip().lower() for value in terms.get("categories", ()) if str(value).strip()}
+        wanted_tags = {str(value).strip().lower() for value in terms.get("tags", ()) if str(value).strip()}
+        desired_item_id = str(terms.get("desired_item_id", "") or "").strip().lower()
+
+        rows = []
+        for entry in inventory.items:
+            item_id = str(entry.get("item_id", "") or "").strip().lower()
+            if not item_id or is_credstick_item(item_id):
+                continue
+            category = item_category(entry, item_catalog=ITEM_CATALOG)
+            if category == "credential":
+                continue
+            tags = item_tags(entry, item_catalog=ITEM_CATALOG)
+            matched = item_id in wanted_item_ids
+            matched = matched or bool(wanted_categories and category in wanted_categories)
+            matched = matched or bool(wanted_tags and tags.intersection(wanted_tags))
+            if not matched:
+                continue
+            mult = float(terms.get("desired_mult", 1.0) if desired_item_id and item_id == desired_item_id else terms.get("generic_mult", 1.0))
+            price = self._street_item_price(entry, mult=mult)
+            if price <= 0:
+                continue
+            rows.append({
+                "entry": entry,
+                "instance_id": entry.get("instance_id"),
+                "item_id": item_id,
+                "item_name": item_display_name(item_id, metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG),
+                "quantity": int(max(1, entry.get("quantity", 1) or 1)),
+                "price": int(price),
+                "desired": bool(desired_item_id and item_id == desired_item_id),
+                "illegal": item_legal_status(entry, item_catalog=ITEM_CATALOG) in {"illegal", "stolen"},
+            })
+        rows.sort(key=lambda row: (-int(row.get("price", 0)), not bool(row.get("desired")), str(row.get("item_id", ""))))
+        return rows
+
+    def _street_buy_preview(self, npc_eid, context):
+        rows = self._street_buy_candidate_rows(npc_eid, context)
+        if not rows:
+            return ""
+        top = rows[0]
+        desired_item_id = str((self._street_buy_terms_for(npc_eid, context) or {}).get("desired_item_id", "") or "").strip().lower()
+        if desired_item_id:
+            desired_name = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG)
+            return f"Wants {desired_name}; top offer about {int(top.get('price', 0))} credits."
+        return f"Will move {len(rows)} item(s); top offer about {int(top.get('price', 0))} credits."
+
+    def _street_buy_available_for(self, npc_eid, context):
+        if context.get("guarded"):
+            return False
+        return bool(self._street_buy_candidate_rows(npc_eid, context))
+
+    def _street_appraise_candidates(self, npc_eid):
+        inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
+        if not inventory:
+            return {"identify": [], "appraise": []}
+
+        identify_strength = _actor_behavior_value(self.sim, npc_eid, BEHAVIOR_IDENTIFY_STREET_DRUGS, 0.0)
+        appraise_strength = _actor_behavior_value(self.sim, npc_eid, BEHAVIOR_APPRAISE_STREET_GOODS, 0.0)
+        identify_rows = []
+        appraise_rows = []
+
+        for entry in inventory.items:
+            legal_status = item_legal_status(entry, item_catalog=ITEM_CATALOG)
+            if identify_strength >= 0.2 and item_requires_identification(entry, item_catalog=ITEM_CATALOG):
+                if not item_is_identified_for_actor(self.sim, self.player_eid, entry, item_catalog=ITEM_CATALOG):
+                    if legal_status in {"illegal", "restricted", "suspicious"}:
+                        identify_rows.append(entry)
+            if appraise_strength >= 0.2:
+                condition = item_instance_condition(
+                    str(entry.get("item_id", "") or "").strip().lower(),
+                    metadata=entry.get("metadata"),
+                    item_catalog=ITEM_CATALOG,
+                )
+                profile = condition.get("profile", {}) if isinstance(condition.get("profile"), dict) else {}
+                needs_quality = (
+                    ("item_quality" in (entry.get("metadata") or {}) or profile.get("supports_quality"))
+                    and not item_is_appraised_for_actor(self.sim, self.player_eid, entry, "item_quality")
+                )
+                needs_durability = (
+                    (
+                        "item_durability" in (entry.get("metadata") or {})
+                        or "item_max_durability" in (entry.get("metadata") or {})
+                        or profile.get("supports_durability")
+                    )
+                    and not (
+                        item_is_appraised_for_actor(self.sim, self.player_eid, entry, "item_durability")
+                        and item_is_appraised_for_actor(self.sim, self.player_eid, entry, "item_max_durability")
+                    )
+                )
+                if needs_quality or needs_durability:
+                    appraise_rows.append(entry)
+
+        return {"identify": identify_rows, "appraise": appraise_rows}
+
+    def _street_appraise_preview(self, npc_eid):
+        candidates = self._street_appraise_candidates(npc_eid)
+        identify_count = len(candidates.get("identify", ()))
+        appraise_count = len(candidates.get("appraise", ()))
+        bits = []
+        if identify_count:
+            bits.append(f"{identify_count} unknown street item" + ("s" if identify_count != 1 else ""))
+        if appraise_count:
+            bits.append(f"{appraise_count} appraisal target" + ("s" if appraise_count != 1 else ""))
+        return ", ".join(bits)
+
+    def _street_appraise_available_for(self, npc_eid, context):
+        if context.get("guarded"):
+            return False
+        candidates = self._street_appraise_candidates(npc_eid)
+        return bool(candidates.get("identify") or candidates.get("appraise"))
+
+    def _resolve_street_appraise_topic(self, context, *, topic_id, ask_count):
+        npc_eid = context.get("npc_eid")
+        candidates = self._street_appraise_candidates(npc_eid)
+        identified_names = []
+        identify_count = 0
+        for entry in list(candidates.get("identify", ()) or ()):
+            if identify_item_for_actor(
+                self.sim,
+                self.player_eid,
+                entry,
+                source_kind="npc_street_appraise",
+                item_catalog=ITEM_CATALOG,
+            ):
+                identify_count += 1
+                identified_names.append(
+                    item_display_name(
+                        entry.get("item_id"),
+                        metadata=entry.get("metadata"),
+                        item_catalog=ITEM_CATALOG,
+                    )
+                )
+        appraise_count = 0
+        for entry in list(candidates.get("appraise", ()) or ()):
+            revealed = appraise_item_for_actor(
+                self.sim,
+                self.player_eid,
+                entry,
+                item_catalog=ITEM_CATALOG,
+            )
+            if revealed:
+                appraise_count += 1
+        if identify_count <= 0 and appraise_count <= 0:
+            return {
+                "npc_lines": [
+                    "There is nothing in that stock I can read better than you already can."
+                ]
+            }
+
+        bits = []
+        if identified_names:
+            named = _dialogue_human_join(tuple(identified_names[:3]))
+            if identify_count > 3:
+                named = f"{named}, and the rest of the batch"
+            bits.append(f"That reads as {named}.")
+        elif identify_count > 0:
+            bits.append(f"I sorted out {identify_count} street item" + ("s." if identify_count != 1 else "."))
+        if appraise_count > 0:
+            bits.append(f"I also sized up {appraise_count} piece" + ("s" if appraise_count != 1 else "") + " of gear.")
+        line = " ".join(bit for bit in bits if bit).strip()
+        if not line:
+            line = "I gave the stock a quick read for you."
+        return {"npc_lines": [line]}
+
+    def _resolve_street_buy_topic(self, context, *, topic_id, ask_count):
+        npc_eid = context.get("npc_eid")
+        rows = self._street_buy_candidate_rows(npc_eid, context)
+        if not rows:
+            return {"npc_lines": ["Not tonight. You are not carrying anything I want to move."]}
+        inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
+        assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+        if not inventory or not assets:
+            return {"npc_lines": ["You do not have the stock on you right now."]}
+
+        total_payout = 0
+        sold_rows = []
+        illegal_units = 0
+        for row in list(rows):
+            quantity = int(max(1, row.get("quantity", 1) or 1))
+            removed = inventory.remove_item(instance_id=row.get("instance_id"), quantity=quantity)
+            if not removed:
+                continue
+            gear_changes = _unlink_removed_item_from_gear(self.sim, self.player_eid, removed, item_catalog=ITEM_CATALOG)
+            if gear_changes.get("armor_name"):
+                self.sim.emit(Event(
+                    "armor_removed",
+                    eid=self.player_eid,
+                    item_id=gear_changes.get("armor_item_id"),
+                    armor_name=gear_changes["armor_name"],
+                    reason="street_sold",
+                ))
+            if gear_changes.get("weapon_id"):
+                self.sim.emit(Event(
+                    "weapon_removed",
+                    eid=self.player_eid,
+                    weapon_id=gear_changes["weapon_id"],
+                    weapon_name=gear_changes["weapon_name"],
+                    reason="street_sold",
+                ))
+            if gear_changes.get("disguise_name"):
+                self.sim.emit(Event(
+                    "disguise_removed",
+                    eid=self.player_eid,
+                    item_id=gear_changes.get("disguise_item_id"),
+                    item_name=gear_changes["disguise_name"],
+                    reason="street_sold",
+                ))
+            if gear_changes.get("container_name"):
+                self.sim.emit(Event(
+                    "container_removed",
+                    eid=self.player_eid,
+                    item_id=gear_changes.get("container_item_id"),
+                    item_name=gear_changes["container_name"],
+                    reason="street_sold",
+                ))
+            total_payout += int(row.get("price", 0) or 0)
+            illegal_units += quantity if bool(row.get("illegal")) else 0
+            sold_rows.append(row)
+
+        if total_payout <= 0 or not sold_rows:
+            return {"npc_lines": ["That stock is not moving cleanly enough for me to touch it."]}
+
+        assets.credits += int(total_payout)
+        terms = self._street_buy_terms_for(npc_eid, context) or {}
+        desired_item_id = str(terms.get("desired_item_id", "") or "").strip().lower()
+        if illegal_units > 0:
+            player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+            if player_pos:
+                score = min(28, 10 + (illegal_units * 4) + (6 if desired_item_id else 0))
+                _emit_action_offense_event(
+                    self.sim,
+                    self.player_eid,
+                    "trade_sell",
+                    player_pos.x,
+                    player_pos.y,
+                    player_pos.z,
+                    context="contraband_use",
+                    score=score,
+                )
+        self._shift_dialogue_bond(
+            npc_eid,
+            trust_delta=0.04,
+            closeness_delta=0.02,
+            guarded=False,
+        )
+        self.sim.emit(Event(
+            "street_buy_transaction",
+            eid=self.player_eid,
+            npc_eid=npc_eid,
+            payout=int(total_payout),
+            item_count=len(sold_rows),
+            illegal_units=int(illegal_units),
+            desired_item_id=desired_item_id,
+            credits=int(getattr(assets, "credits", 0) or 0),
+        ))
+
+        sold_names = [str(row.get("item_name", row.get("item_id", "stock"))).strip() for row in sold_rows[:3] if str(row.get("item_name", row.get("item_id", "stock"))).strip()]
+        if desired_item_id and any(str(row.get("item_id", "")).strip().lower() == desired_item_id for row in sold_rows):
+            desired_name = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG)
+            line = f"That is exactly the {desired_name} I was looking for. {int(total_payout)} credits, and keep your head down."
+        elif sold_names:
+            line = f"I can move { _dialogue_human_join(tuple(sold_names)) }. {int(total_payout)} credits for the lot."
+        else:
+            line = f"I can move that stock. {int(total_payout)} credits for the lot."
+        return {"npc_lines": [line]}
 
     def _fence_illegal_items(self, player_eid):
         inventory = self.sim.ecs.get(Inventory).get(player_eid)
@@ -3584,7 +4044,7 @@ class NPCInteractionSystem(System):
         for tag, val in self._FENCE_ITEM_VALUE.items():
             if tag in tags:
                 return val
-        return self._FENCE_DEFAULT_VALUE
+        return max(self._FENCE_DEFAULT_VALUE, self._street_item_value(item_id))
 
     def _fence_payout_preview(self, player_eid):
         items = self._fence_illegal_items(player_eid)
@@ -4413,6 +4873,22 @@ class NPCInteractionSystem(System):
             local_source = "other"
             detail_line = f"Try {other_name}. They hear more than I do."
         trade_context = self._trade_context(npc_eid, workplace_prop, current_prop)
+        street_context = {
+            "npc_eid": npc_eid,
+            "occupation": occupation,
+            "district_type": district_type,
+            "guarded": guarded,
+        }
+        street_appraise_available = self._street_appraise_available_for(npc_eid, street_context)
+        street_appraise_preview = self._street_appraise_preview(npc_eid) if street_appraise_available else ""
+        street_buy_available = self._street_buy_available_for(npc_eid, street_context)
+        street_buy_preview = self._street_buy_preview(npc_eid, street_context) if street_buy_available else ""
+        street_buy_terms = self._street_buy_terms_for(npc_eid, street_context) if street_buy_available else None
+        street_buy_hint = ""
+        if isinstance(street_buy_terms, dict):
+            desired_item_id = str(street_buy_terms.get("desired_item_id", "") or "").strip().lower()
+            if desired_item_id:
+                street_buy_hint = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG)
         contractor = self._active_backup_contract(npc_eid)
         peaceful_contract = self._active_peaceful_surrender(npc_eid) if peaceful_orders_only else None
         order_rec = contractor or peaceful_contract
@@ -4501,6 +4977,11 @@ class NPCInteractionSystem(System):
             "payoff_cost": f"{max(self.PAYOFF_BASE_COST, int(pressure.get('attention', 0)) * 2)} credits",
             "fence_available": self._fence_available_for(npc_eid, contact_standing, guarded),
             "fence_payout_preview": self._fence_payout_preview(self.player_eid),
+            "street_appraise_available": street_appraise_available,
+            "street_appraise_preview": street_appraise_preview,
+            "street_buy_available": street_buy_available,
+            "street_buy_preview": street_buy_preview,
+            "street_buy_hint": street_buy_hint,
             "hire_runner_available": self._hire_runner_available_for(npc_eid, contact_standing, guarded),
             "hire_runner_cost": self.CONTRACTOR_COST,
             "hire_runner_hours": f"{max(1, self.CONTRACTOR_DURATION // 60)} hours",
@@ -7567,6 +8048,10 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "trade" and not context.get("trade_available"):
                 continue
+            if topic_id == "street_appraise" and not context.get("street_appraise_available"):
+                continue
+            if topic_id == "street_buy" and not context.get("street_buy_available"):
+                continue
             if topic_id == "routine" and not self._routine_summary(context):
                 continue
             if topic_id == "workplace" and not context.get("workplace_prop"):
@@ -7622,6 +8107,10 @@ class NPCInteractionSystem(System):
             if topic_id == "payoff" and not context.get("payoff_available"):
                 continue
             if topic_id == "fence" and not context.get("fence_available"):
+                continue
+            if topic_id == "street_appraise" and not context.get("street_appraise_available"):
+                continue
+            if topic_id == "street_buy" and not context.get("street_buy_available"):
                 continue
             if topic_id == "hire_runner" and not context.get("hire_runner_available"):
                 continue
@@ -8454,6 +8943,10 @@ class NPCInteractionSystem(System):
                 line = self._say(bank_id, context, topic_id=topic_id, count=ask_count)
                 return {"npc_lines": [line], "open_trade": True, "trade_property_id": context["trade_context"].get("property_id")}
             return {"npc_lines": [self._say("trade_no", context, topic_id=topic_id, count=ask_count)]}
+        if topic_id == "street_appraise":
+            return self._resolve_street_appraise_topic(context, topic_id=topic_id, ask_count=ask_count)
+        if topic_id == "street_buy":
+            return self._resolve_street_buy_topic(context, topic_id=topic_id, ask_count=ask_count)
         if topic_id == "payoff":
             npc_eid = context.get("npc_eid")
             cost_amount = int(context.get("payoff_cost_amount", self.PAYOFF_BASE_COST))

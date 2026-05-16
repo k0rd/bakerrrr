@@ -11,6 +11,8 @@ from game.player_businesses import (
     player_business_hours_mode_label,
     player_business_next_customer_policy,
     player_business_next_hours_mode,
+    player_business_remodel_options,
+    player_business_remodel_quote,
     player_business_set_customer_policy,
     player_business_set_hours_mode,
     player_business_status_snapshot,
@@ -92,6 +94,7 @@ from game.service_runtime import (
     _vehicle_sale_stats_text,
 )
 from game.skills import skill_label as _skill_label
+from game.system_support.building_repair_runtime import owned_repairable_buildings as _owned_repairable_buildings
 
 
 class ServiceMenuSystem(System):
@@ -1414,6 +1417,9 @@ class ServiceMenuSystem(System):
             })
         return contexts
 
+    def _owned_repair_contexts(self, eid):
+        return list(_owned_repairable_buildings(self.sim, eid) or ())
+
     def _justice_banking_context(self, eid):
         profile = self._profile_for(eid)
         debt_balance = 0
@@ -1666,6 +1672,191 @@ class ServiceMenuSystem(System):
                 ),
             })
         return options
+
+    def _open_repair_target_menu(self, contractor_prop):
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        contexts = self._owned_repair_contexts(self.player_eid)
+        if not contexts:
+            self._present_service_result(
+                f"Repair: {contractor_prop.get('name', contractor_prop.get('id', 'Contractor'))}",
+                ["No owned building currently needs shell repair."],
+                property_id=contractor_prop.get("id"),
+            )
+            return
+
+        transcript = ["Choose an owned building to patch up."]
+        for context in list(contexts[:3]):
+            target_prop = context.get("prop") or {}
+            summary = context.get("summary") or {}
+            name = str(target_prop.get("name", target_prop.get("id", "Building"))).strip() or "Building"
+            bits = []
+            if int(summary.get("window_count", 0) or 0) > 0:
+                bits.append(f"{int(summary['window_count'])} window")
+            if int(summary.get("door_count", 0) or 0) > 0:
+                bits.append(f"{int(summary['door_count'])} door")
+            if int(summary.get("wall_count", 0) or 0) > 0:
+                bits.append(f"{int(summary['wall_count'])} wall")
+            transcript.append(
+                f"{name}: {', '.join(bits) if bits else 'damage logged'} | quote {_credit_amount_label(int(summary.get('cost', 0) or 0))}."
+            )
+        if len(contexts) > 3:
+            transcript.append(f"{len(contexts) - 3} more owned building(s) need work.")
+
+        topics = [{"id": "service_menu:root", "label": "Back"}]
+        for context in contexts:
+            target_prop = context.get("prop") or {}
+            summary = context.get("summary") or {}
+            target_property_id = str(target_prop.get("id", "")).strip()
+            if not target_property_id:
+                continue
+            name = str(target_prop.get("name", target_property_id)).strip() or target_property_id
+            bits = []
+            if int(summary.get("window_count", 0) or 0) > 0:
+                bits.append(f"{int(summary['window_count'])}w")
+            if int(summary.get("door_count", 0) or 0) > 0:
+                bits.append(f"{int(summary['door_count'])}d")
+            if int(summary.get("wall_count", 0) or 0) > 0:
+                bits.append(f"{int(summary['wall_count'])}wall")
+            label = f"Repair {_credit_amount_label(int(summary.get('cost', 0) or 0))} [{name}]"
+            if bits:
+                label += f" ({', '.join(bits)})"
+            topics.append({
+                "id": f"building_repair:target|{target_property_id}",
+                "label": label,
+            })
+
+        state = self._dialog_ui_state()
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": contractor_prop.get("id"),
+            "title": f"Repair: {contractor_prop.get('name', contractor_prop.get('id', 'Contractor'))}",
+            "subtitle": "Owned building shell repair",
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Choose a building to restore its damaged shell. Esc closes the contractor desk.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": "contractor:repair_targets",
+            "casino_session": None,
+        })
+
+    def _open_business_remodel_business_menu(self, contractor_prop):
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        business_contexts = self._business_banking_contexts(self.player_eid)
+        if not business_contexts:
+            self._present_service_result(
+                f"Business Refit: {contractor_prop.get('name', contractor_prop.get('id', 'Contractor'))}",
+                ["No owned business is available for a model change right now."],
+                property_id=contractor_prop.get("id"),
+            )
+            return
+
+        transcript = ["Choose which owned business you want to refit."]
+        topics = [{"id": "service_menu:root", "label": "Back"}]
+        for context in business_contexts:
+            target_prop = context.get("prop") or {}
+            summary = context.get("summary") or {}
+            target_property_id = str(target_prop.get("id", "")).strip()
+            if not target_property_id:
+                continue
+            business_name = str(summary.get("business_name", target_prop.get("name", target_property_id))).strip() or target_property_id
+            archetype = str((target_prop.get("metadata", {}) or {}).get("archetype", "")).strip().replace("_", " ").title() or "Business"
+            transcript.append(f"{business_name}: currently {archetype.lower()} | purchase {_credit_amount_label(int((target_prop.get('metadata', {}) or {}).get('purchase_cost', 0) or 0))}.")
+            topics.append({
+                "id": f"business_remodel:target|{target_property_id}",
+                "label": f"Refit [{business_name}]",
+            })
+
+        state = self._dialog_ui_state()
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": contractor_prop.get("id"),
+            "title": f"Business Refit: {contractor_prop.get('name', contractor_prop.get('id', 'Contractor'))}",
+            "subtitle": "Owned business selection",
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Choose a business to see contractor conversion quotes.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": "contractor:remodel_targets",
+            "casino_session": None,
+        })
+
+    def _open_business_remodel_option_menu(self, contractor_prop, target_prop):
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        options = list(player_business_remodel_options(target_prop) or ())
+        if not options:
+            name = str(target_prop.get("name", target_prop.get("id", "Business"))).strip() or "Business"
+            self._present_service_result(
+                f"Business Refit: {name}",
+                ["No alternate business model is available for this property right now."],
+                property_id=contractor_prop.get("id"),
+            )
+            return
+
+        metadata = target_prop.get("metadata", {}) if isinstance(target_prop.get("metadata"), dict) else {}
+        business_name = str(metadata.get("business_name", target_prop.get("name", "Business"))).strip() or "Business"
+        current_archetype = str(metadata.get("archetype", "")).strip().replace("_", " ").title() or "Business"
+        current_quote = player_business_remodel_quote(target_prop, str(options[0].get("target_archetype", "")))
+        purchase_cost = int(metadata.get("purchase_cost", 0) or 0)
+
+        transcript = [
+            f"{business_name} is currently set as {current_archetype.lower()}.",
+            f"Source purchase {_credit_amount_label(purchase_cost)} drives the contractor baseline.",
+        ]
+        if isinstance(current_quote, dict):
+            transcript.append("Rarer target businesses quote higher than common ones.")
+
+        topics = [{"id": "business_remodel", "label": "Back"}]
+        target_property_id = str(target_prop.get("id", "")).strip()
+        for option in options:
+            target_archetype = str(option.get("target_archetype", "")).strip().lower()
+            if not target_archetype:
+                continue
+            label = (
+                f"{str(option.get('target_label', target_archetype)).strip()} "
+                f"({_credit_amount_label(int(option.get('cost', 0) or 0))}, {str(option.get('rarity_label', 'common')).strip()})"
+            )
+            topics.append({
+                "id": f"business_remodel:apply|{target_property_id}|{target_archetype}",
+                "label": label,
+            })
+
+        state = self._dialog_ui_state()
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": contractor_prop.get("id"),
+            "title": f"Business Refit: {business_name}",
+            "subtitle": current_archetype,
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Choose a new business model. The quote scales with rarity and the source property cost.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": "contractor:remodel_apply",
+            "casino_session": None,
+        })
 
     def _open_vehicle_sale_menu(self, prop, quality):
         quality = _vehicle_sale_quality(quality)
@@ -2217,6 +2408,47 @@ class ServiceMenuSystem(System):
                 lines.append(skill_note)
             lines.append(f"Condition {durability}/{durability_max}.")
             return f"Repair: {prop_name}", lines
+        if service == "building_repair":
+            target_name = str(event.data.get("target_property_name", "building")).strip() or "building"
+            credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            window_count = int(event.data.get("window_count", 0) or 0)
+            door_count = int(event.data.get("door_count", 0) or 0)
+            wall_count = int(event.data.get("wall_count", 0) or 0)
+            bits = []
+            if window_count > 0:
+                bits.append(f"{window_count} window")
+            if door_count > 0:
+                bits.append(f"{door_count} door")
+            if wall_count > 0:
+                bits.append(f"{wall_count} wall")
+            lines = [
+                f"{prop_name} sends a contractor crew to {target_name}.",
+                f"Shell repair cost {_credit_amount_label(credits_spent)}.",
+            ]
+            if bits:
+                lines.append(f"Restored: {', '.join(bits)}.")
+            return f"Building Repair: {prop_name}", lines
+        if service == "business_remodel":
+            target_name = str(event.data.get("target_property_name", "business")).strip() or "business"
+            target_label = str(event.data.get("target_label", "New Business")).strip() or "New Business"
+            credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            rarity_label = str(event.data.get("rarity_label", "")).strip().lower()
+            site_services = [
+                _site_service_label(service_id)
+                for service_id in tuple(event.data.get("site_services", ()) or ())
+                if str(service_id).strip()
+            ]
+            finance_services = [str(service_id).strip().lower() for service_id in tuple(event.data.get("finance_services", ()) or ()) if str(service_id).strip()]
+            lines = [
+                f"{target_name} is now fitted as {target_label}.",
+                f"Contractor cost {_credit_amount_label(credits_spent)}.",
+            ]
+            if rarity_label:
+                lines.append(f"Target rarity: {rarity_label}.")
+            if site_services or finance_services:
+                services_text = ", ".join(site_services + finance_services)
+                lines.append(f"Service profile: {services_text}.")
+            return f"Business Refit: {prop_name}", lines
         if service == "vending":
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             credits_spent = int(event.data.get("credits_spent", 0))
@@ -2365,6 +2597,10 @@ class ServiceMenuSystem(System):
             return "Business policy", ["That business record is no longer available through this terminal."]
         if option_id.startswith("banking_business_hours:"):
             return "Business hours", ["That business record is no longer available through this terminal."]
+        if option_id == "building_repair" or option_id.startswith("building_repair:target|"):
+            return "Building Repair", ["That contractor quote is no longer available here."]
+        if option_id == "business_remodel" or option_id.startswith("business_remodel:"):
+            return "Business Refit", ["That contractor quote is no longer available here."]
         for service in CASINO_GAME_SERVICE_IDS:
             if option_id == service or option_id.startswith(f"{service}:"):
                 return _casino_game_title(service), ["That table is no longer open.", "Pick another seat or start a fresh round."]
@@ -2419,6 +2655,13 @@ class ServiceMenuSystem(System):
             return f"Fuel: {prop_name}", [f"{prop_name} can only refuel a vehicle you own or have set active."]
         if reason == "no_vehicle" and service == "repair":
             return f"Repair: {prop_name}", [f"{prop_name} can only work on a vehicle you own or have set active."]
+        if reason == "invalid_target" and service == "building_repair":
+            return f"Building Repair: {prop_name}", ["That owned-building repair target is no longer valid."]
+        if reason == "invalid_target" and service == "business_remodel":
+            return f"Business Refit: {prop_name}", ["That business refit target is no longer valid."]
+        if reason == "no_damage" and service == "building_repair":
+            target_name = str(event.data.get("target_property_name", "building")).strip() or "building"
+            return f"Building Repair: {prop_name}", [f"{target_name} does not currently need shell repair."]
         if reason == "tank_full" and service == "fuel":
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             fuel = int(event.data.get("fuel", 0))
@@ -2448,6 +2691,23 @@ class ServiceMenuSystem(System):
             return f"Repair: {prop_name}", [
                 f"{prop_name} quotes {_credit_amount_label(cost)} per repair point for {vehicle_name}.",
                 f"You have {_credit_amount_label(credits)} on hand. Condition {durability}/{durability_max}.",
+            ]
+        if reason == "no_credits" and service == "building_repair":
+            cost = int(event.data.get("cost", 0) or 0)
+            credits = int(event.data.get("credits", 0) or 0)
+            target_name = str(event.data.get("target_property_name", "building")).strip() or "building"
+            return f"Building Repair: {prop_name}", [
+                f"{target_name} repair quote is {_credit_amount_label(cost)}.",
+                f"You only have {_credit_amount_label(credits)} available.",
+            ]
+        if reason == "no_credits" and service == "business_remodel":
+            cost = int(event.data.get("cost", 0) or 0)
+            credits = int(event.data.get("credits", 0) or 0)
+            target_name = str(event.data.get("target_property_name", "business")).strip() or "business"
+            target_label = str(event.data.get("target_label", "new business")).strip() or "new business"
+            return f"Business Refit: {prop_name}", [
+                f"{target_name} costs {_credit_amount_label(cost)} to refit as {target_label}.",
+                f"You only have {_credit_amount_label(credits)} available.",
             ]
         if reason == "no_credits" and service == "vending":
             cost = int(event.data.get("cost", 0))
@@ -2722,6 +2982,17 @@ class ServiceMenuSystem(System):
             return
 
         prop = self.sim.properties.get(property_id)
+        if option_id == "service_menu:root":
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            pos = self._position_for(self.player_eid)
+            if not pos:
+                return
+            options, storefront_service = self._service_menu_options(self.player_eid, prop, pos)
+            self._open_service_menu(prop, options, storefront_service=storefront_service)
+            return
         if option_id == "trade_buy":
             self._close_service_menu()
             self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="buy", property_id=property_id))
@@ -2736,6 +3007,87 @@ class ServiceMenuSystem(System):
             else:
                 title, lines = self._bank_blocked_lines(Event("banking_action_blocked", eid=self.player_eid, reason="no_banking_service"))
                 self._present_service_result(title, lines)
+            return
+        if option_id == "building_repair":
+            if isinstance(prop, dict):
+                self._open_repair_target_menu(prop)
+            else:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+            return
+        if option_id == "business_remodel":
+            if isinstance(prop, dict):
+                self._open_business_remodel_business_menu(prop)
+            else:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+            return
+        if option_id.startswith("building_repair:target|"):
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            target_property_id = str(option_id.partition("|")[2] or "").strip()
+            if not target_property_id:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            self._begin_pending_service_result(
+                channel="site",
+                property_id=property_id,
+                property_name=prop.get("name", property_id),
+                service="building_repair",
+            )
+            self.sim.emit(Event(
+                "site_service_request",
+                eid=self.player_eid,
+                property_id=property_id,
+                service="building_repair",
+                property_name=prop.get("name", property_id),
+                target_property_id=target_property_id,
+            ))
+            return
+        if option_id.startswith("business_remodel:target|"):
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            target_property_id = str(option_id.partition("|")[2] or "").strip()
+            target_prop = self.sim.properties.get(target_property_id)
+            if not isinstance(target_prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            self._open_business_remodel_option_menu(prop, target_prop)
+            return
+        if option_id.startswith("business_remodel:apply|"):
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            payload = str(option_id[len("business_remodel:apply|"):]).strip()
+            business_property_id, sep, target_archetype = payload.partition("|")
+            business_property_id = str(business_property_id or "").strip()
+            target_archetype = str(target_archetype or "").strip().lower()
+            if not business_property_id or not target_archetype:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            self._begin_pending_service_result(
+                channel="site",
+                property_id=property_id,
+                property_name=prop.get("name", property_id),
+                service="business_remodel",
+            )
+            self.sim.emit(Event(
+                "site_service_request",
+                eid=self.player_eid,
+                property_id=property_id,
+                service="business_remodel",
+                property_name=prop.get("name", property_id),
+                target_property_id=business_property_id,
+                target_archetype=target_archetype,
+            ))
             return
         if option_id in TRANSIT_SERVICE_IDS:
             if isinstance(prop, dict):

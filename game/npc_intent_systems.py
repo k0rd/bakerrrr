@@ -167,12 +167,23 @@ from game.system_support.interaction_ordering import (
     _normalized_direction,
 )
 from game.system_support.npc_behavior_runtime import (
+    BEHAVIOR_APPRAISE_STREET_GOODS,
     BEHAVIOR_COLLECT_GROUND_CREDITS,
     BEHAVIOR_AVOID_THREAT,
+    BEHAVIOR_BUY_DESIRED_DRUG,
+    BEHAVIOR_BUY_PLAYER_GOODS,
     BEHAVIOR_ENFORCE_JUSTICE,
-    _collect_ground_credits_at_actor,
+    BEHAVIOR_FOLLOW_DUTY,
+    BEHAVIOR_PROTECT_ALLIES,
+    BEHAVIOR_SCAVENGE_LOOSE_ITEMS,
+    BEHAVIOR_SELL_SCAVENGED_ITEMS,
+    BEHAVIOR_SEEK_SOCIAL_CONTACT,
+    _collect_ground_items_at_actor,
     _effective_behavior_value,
+    _find_scavenged_sale_target,
     _find_ground_credit_target,
+    _find_scavenge_ground_item_target,
+    _sell_scavenged_inventory_at_actor,
 )
 from game.system_support.settlement_runtime import _home_property
 from game.system_support.status_runtime import (
@@ -718,6 +729,12 @@ class NPCWillSystem(System):
                 predicate=_memory_visible,
             )
             if ally_threat:
+                protect_allies = _effective_behavior_value(
+                    self.sim,
+                    eid,
+                    BEHAVIOR_PROTECT_ALLIES,
+                    traits=traits,
+                )
                 threat_strength = float(ally_threat.get("strength", 0.0) or 0.0)
                 threat_data = ally_threat.get("data", {}) if isinstance(ally_threat.get("data"), dict) else {}
                 ally_eid = threat_data.get("ally_eid")
@@ -730,11 +747,14 @@ class NPCWillSystem(System):
                     (threat_strength * 48.0)
                     + (protectiveness * 22.0)
                     + (trust * 10.0)
-                    + (traits.loyalty * 14.0)
-                    + (traits.empathy * 9.0)
+                    + (protect_allies * 24.0)
                 )
                 if against_pos and int(against_pos.z) == int(pos.z):
-                    if protect_drive > best_score and (threat_strength >= 0.24 or protectiveness >= 0.62):
+                    if protect_drive > best_score and (
+                        threat_strength >= 0.24
+                        or protectiveness >= 0.62
+                        or protect_allies >= 0.65
+                    ):
                         best_intent = "protecting"
                         best_score = min(96.0, protect_drive)
                         best_target = (against_pos.x, against_pos.y, against_pos.z)
@@ -746,6 +766,12 @@ class NPCWillSystem(System):
                 predicate=_memory_visible,
             )
             if conflict_side:
+                protect_allies = _effective_behavior_value(
+                    self.sim,
+                    eid,
+                    BEHAVIOR_PROTECT_ALLIES,
+                    traits=traits,
+                )
                 side_strength = float(conflict_side.get("strength", 0.0) or 0.0)
                 side_data = conflict_side.get("data", {}) if isinstance(conflict_side.get("data"), dict) else {}
                 side_eid = side_data.get("side_eid")
@@ -756,9 +782,7 @@ class NPCWillSystem(System):
                 against_impression = _npc_actor_impression(self.sim, eid, against_eid, memory=memory, social=social)
                 commit_ready = (
                     side_strength >= 0.38
-                    or traits.bravery >= 0.58
-                    or traits.loyalty >= 0.72
-                    or traits.empathy >= 0.76
+                    or protect_allies >= 0.58
                     or side_impression >= 0.58
                     or against_impression <= -0.58
                 )
@@ -766,9 +790,7 @@ class NPCWillSystem(System):
                     (side_strength * 54.0)
                     + (max(0.0, side_impression) * 18.0)
                     + (max(0.0, -against_impression) * 16.0)
-                    + (traits.bravery * 10.0)
-                    + (traits.loyalty * 8.0)
-                    + (traits.empathy * 6.0)
+                    + (protect_allies * 22.0)
                 )
                 if against_pos and int(against_pos.z) == int(pos.z) and commit_ready and protect_drive > best_score:
                     best_intent = "protecting"
@@ -847,7 +869,14 @@ class NPCWillSystem(System):
                     best_target = (safe_x, safe_y, pos.z)
                     best_target_eid = None
 
-            social_pressure = (100.0 - needs.social) * (0.7 + (traits.empathy * 0.6))
+            seek_social_contact = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_SEEK_SOCIAL_CONTACT,
+                traits=traits,
+                needs=needs,
+            )
+            social_pressure = (100.0 - needs.social) * (0.35 + (seek_social_contact * 1.05))
             workplace_prop = _workplace_property(self.sim, occupation=occupation, routine=routine)
             home_prop = _home_property(self.sim, routine=routine)
             work_active = work_shift_active(
@@ -861,6 +890,20 @@ class NPCWillSystem(System):
                 self.sim,
                 eid,
                 BEHAVIOR_COLLECT_GROUND_CREDITS,
+                traits=traits,
+                needs=needs,
+            )
+            scavenge_loose_items = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_SCAVENGE_LOOSE_ITEMS,
+                traits=traits,
+                needs=needs,
+            )
+            sell_scavenged_items = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_SELL_SCAVENGED_ITEMS,
                 traits=traits,
                 needs=needs,
             )
@@ -878,6 +921,42 @@ class NPCWillSystem(System):
                         best_intent = "scavenging"
                         best_score = scavenging_score
                         best_target = scavenging_target["target"]
+                        best_target_eid = None
+
+            if scavenge_loose_items >= 0.05:
+                item_target = _find_scavenge_ground_item_target(self.sim, eid, pos)
+                if item_target:
+                    item_score = float(item_target.get("score", 0.0) or 0.0) * (
+                        0.4 + (scavenge_loose_items * 0.95)
+                    )
+                    if work_active:
+                        item_score *= 0.55
+                    if ai.state == "scavenging" and ai.target == item_target.get("target"):
+                        item_score += 4.0
+                    if item_score > best_score:
+                        best_intent = "scavenging"
+                        best_score = item_score
+                        best_target = item_target["target"]
+                        best_target_eid = None
+
+            if sell_scavenged_items >= 0.05:
+                sale_target = _find_scavenged_sale_target(self.sim, eid, pos)
+                if sale_target:
+                    sale_score = float(sale_target.get("score", 0.0) or 0.0) * (
+                        0.5 + (sell_scavenged_items * 1.15)
+                    )
+                    if work_active and (
+                        workplace_prop is not None
+                        or (occupation and getattr(occupation, "workplace", None))
+                        or (routine and getattr(routine, "work", None))
+                    ):
+                        sale_score *= 0.6
+                    if ai.state == "selling_scavenged" and ai.target == sale_target.get("target"):
+                        sale_score += 4.0
+                    if sale_score > best_score:
+                        best_intent = "selling_scavenged"
+                        best_score = sale_score
+                        best_target = sale_target["target"]
                         best_target_eid = None
 
             if social and social_pressure > best_score:
@@ -898,7 +977,7 @@ class NPCWillSystem(System):
                     best_target = routine.home
                     best_target_eid = None
 
-            social_venue_pressure = (100.0 - needs.social) * (0.55 + (traits.empathy * 0.45))
+            social_venue_pressure = (100.0 - needs.social) * (0.3 + (seek_social_contact * 0.95))
             if not work_active and social_venue_pressure > best_score:
                 own_prop_id = None
                 if occupation and isinstance(getattr(occupation, "workplace", None), dict):
@@ -952,9 +1031,16 @@ class NPCWillSystem(System):
                     scoring_anchor = _property_focus_position(_fb_prop)
                     duty_anchor = scoring_anchor
 
-            duty_score = traits.discipline * 45.0
+            follow_duty = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_FOLLOW_DUTY,
+                traits=traits,
+                needs=needs,
+            )
+            duty_score = follow_duty * 45.0
             _sa = scoring_anchor or duty_anchor
-            if ai.role in {"guard", "scout", "worker", "civilian", "thief"} and _sa:
+            if _sa and follow_duty >= 0.08:
                 ax, ay, az = _sa
                 if az == pos.z:
                     duty_score += min(20.0, _manhattan(pos.x, pos.y, ax, ay) * 2.5)
@@ -1008,6 +1094,7 @@ class NPCInvestigateSystem(System):
         "warning": 1,
         "chasing": 1,
         "scavenging": 2,
+        "selling_scavenged": 2,
         "following": 1,
         "holding": 1,
         "seeking_social": 2,
@@ -1119,6 +1206,7 @@ class NPCInvestigateSystem(System):
             "warning",
             "chasing",
             "scavenging",
+            "selling_scavenged",
             "following",
             "holding",
             "seeking_social",
@@ -1240,7 +1328,9 @@ class NPCInvestigateSystem(System):
                     self.sim.emit(Event("npc_investigation_complete", npc_eid=eid, x=tx, y=ty, z=tz))
 
                 if ai.state == "scavenging":
-                    _collect_ground_credits_at_actor(self.sim, eid, pos)
+                    _collect_ground_items_at_actor(self.sim, eid, pos)
+                if ai.state == "selling_scavenged":
+                    _sell_scavenged_inventory_at_actor(self.sim, eid, pos)
 
                 if ai.state == "reporting_incident":
                     self.sim.emit(Event(

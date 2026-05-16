@@ -154,12 +154,24 @@ def _ammo_package_label(item_id, item_def) -> str:
 def _medical_form_label(item_id, item_def) -> str:
     item_text = _key(item_id)
     name_text = _key(item_def.get("name"))
+    if "joint" in item_text or "joint" in name_text or "smoke" in item_text:
+        return "rolled smoke"
+    if "blotter" in item_text or "blotter" in name_text:
+        return "blotter tab"
+    if "bindle" in item_text or "bindle" in name_text or "powder" in name_text:
+        return "powder bindle"
+    if "capsule" in item_text or "capsule" in name_text:
+        return "capsule"
     if "patch" in item_text or "patch" in name_text:
         return "patch packet"
     if "gel" in item_text or "gel" in name_text:
         return "gel tube"
     if "salts" in item_text or "salts" in name_text:
         return "powder sachet"
+    if "vial" in item_text or "vial" in name_text or "serum" in item_text:
+        return "vial"
+    if "syringe" in item_text or "syringe" in name_text:
+        return "syringe"
     if "medkit" in item_text or "medkit" in name_text:
         return "med kit"
     if "foam" in item_text or "foam" in name_text:
@@ -172,6 +184,8 @@ def _medical_form_label(item_id, item_def) -> str:
         return "tablet sleeve"
     if "inhaler" in item_text or "inhaler" in name_text:
         return "inhaler"
+    if "stim" in item_text:
+        return "stimulant packet"
     return "medical pack"
 
 

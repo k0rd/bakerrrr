@@ -321,12 +321,6 @@ def prune_incidents(sim, *, tick=None):
             incidents.pop(incident_id, None)
             continue
         last_tick = _int_or_default(record.get("last_observed_tick"), _int_or_default(record.get("created_tick"), tick))
- 
- #   THIS NEEDS REMOVED, WE DO NOT EXPIRE OLD MEMORY
- #       if tick - last_tick > _incident_max_age(record.get("kind")):
- #           incidents.pop(incident_id, None)
- #           removed.append(int(incident_id))
- #           continue
 
         keep_recent.append(int(incident_id))
     state["recent_ids"] = keep_recent[-256:]

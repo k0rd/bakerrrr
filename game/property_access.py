@@ -37,9 +37,11 @@ STOREFRONT_ARCHETYPE_HINTS = {
     "roadhouse",
     "soup_kitchen",
     "surplus_store",
+    "service_station",
     "street_kitchen",
     "tavern",
     "theater",
+    "thrift_store",
     "tool_depot",
     "music_venue",
     "gaming_hall",
@@ -83,6 +85,7 @@ PUBLIC_HOURS_BY_ARCHETYPE = {
     "brokerage": (8, 18),
     "casino": (12, 4),
     "corner_store": (6, 23),
+    "contractor_office": (7, 19),
     "courier_office": (7, 19),
     "daycare": (7, 18),
     "flophouse": (0, 24),
@@ -104,11 +107,13 @@ PUBLIC_HOURS_BY_ARCHETYPE = {
     "relay_post": (6, 22),
     "restaurant": (7, 22),
     "roadhouse": (6, 23),
+    "service_station": (5, 24),
     "soup_kitchen": (10, 19),
     "street_kitchen": (11, 23),
     "surplus_store": (9, 18),
     "tavern": (14, 2),
     "theater": (14, 23),
+    "thrift_store": (9, 19),
     "truck_stop": (0, 24),
     "tool_depot": (7, 19),
     "dock_shack": (6, 19),
@@ -198,6 +203,7 @@ CONTROLLER_INTRUSION_PROFILES = {
 
 DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "casino": ("slots", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", "casino_holdem", "plinko", "twenty_one"),
+    "contractor_office": ("building_repair", "business_remodel"),
     "dock_shack": ("shuttle_transit", "ferry_transit"),
     "ferry_post": ("intel", "ferry_transit"),
     "flophouse": ("rest",),
@@ -206,6 +212,7 @@ DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "metro_exchange": ("rail_transit", "bus_transit"),
     "relay_post": ("bus_transit", "shuttle_transit"),
     "roadhouse": ("shuttle_transit",),
+    "service_station": ("fuel", "repair", "vending"),
     "tavern": ("intel",),
     "tide_station": ("intel", "ferry_transit"),
     "truck_stop": ("bus_transit", "shuttle_transit"),
@@ -246,6 +253,27 @@ OPTIONAL_SITE_SERVICES_BY_ARCHETYPE = {
         ),
     },
 }
+RARE_UNRELATED_BUSINESS_SERVICE_CHANCE = 0.015
+RARE_UNRELATED_BUSINESS_SERVICE_WEIGHTS = (
+    ("video_poker", 8),
+    ("keno", 7),
+    ("slots", 5),
+    ("intel", 5),
+    ("rest", 3),
+    ("repair", 3),
+    ("fuel", 2),
+    ("vehicle_fetch", 2),
+)
+_RARE_UNRELATED_SERVICE_EXCLUDED_ARCHETYPES = frozenset({
+    "casino",
+    "dock_shack",
+    "ferry_post",
+    "gaming_hall",
+    "metro_exchange",
+    "relay_post",
+    "tide_station",
+    "truck_stop",
+})
 
 
 def _clamp_unit(value, default=0.0):
@@ -438,11 +466,55 @@ def _roll_optional_site_services(archetype, *, seed_token=""):
     return bundles[-1][0]
 
 
+def _eligible_for_rare_unrelated_site_service(archetype):
+    key = str(archetype or "").strip().lower()
+    if not key or key in _RARE_UNRELATED_SERVICE_EXCLUDED_ARCHETYPES:
+        return False
+    return key in STOREFRONT_ARCHETYPE_HINTS or key in FINANCE_SERVICE_FALLBACKS
+
+
+def _roll_rare_unrelated_site_service(archetype, *, seed_token="", existing=()):
+    key = str(archetype or "").strip().lower()
+    if not _eligible_for_rare_unrelated_site_service(key) or not str(seed_token).strip():
+        return ()
+
+    rng = random.Random(f"rare-unrelated-site-service:{key}:{seed_token}")
+    if rng.random() >= RARE_UNRELATED_BUSINESS_SERVICE_CHANCE:
+        return ()
+
+    blocked = set(_dedupe_service_ids(existing))
+    options = []
+    total_weight = 0
+    for service, weight in RARE_UNRELATED_BUSINESS_SERVICE_WEIGHTS:
+        clean_service = str(service).strip().lower()
+        if not clean_service or clean_service in blocked:
+            continue
+        try:
+            clean_weight = int(weight)
+        except (TypeError, ValueError):
+            continue
+        if clean_weight <= 0:
+            continue
+        options.append((clean_service, clean_weight))
+        total_weight += clean_weight
+    if total_weight <= 0:
+        return ()
+
+    pick = rng.randrange(total_weight)
+    cursor = 0
+    for service, weight in options:
+        cursor += weight
+        if pick < cursor:
+            return (service,)
+    return (options[-1][0],)
+
+
 def default_site_services_for_archetype(archetype, *, seed_token=""):
     key = str(archetype or "").strip().lower()
     base = list(DEFAULT_SITE_SERVICES_BY_ARCHETYPE.get(key, ()))
     if str(seed_token).strip():
         base.extend(_roll_optional_site_services(key, seed_token=seed_token))
+        base.extend(_roll_rare_unrelated_site_service(key, seed_token=seed_token, existing=base))
     return _dedupe_service_ids(base)
 
 

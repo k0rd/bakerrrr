@@ -2,8 +2,10 @@ import random
 
 from engine.events import Event
 from engine.systems import System
-from game.components import Inventory, NPCNeeds, PlayerAssets, Position, StatusEffects, VehicleState, Vitality
+from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, StatusEffects, VehicleState, Vitality
 from game.items import ITEM_CATALOG, item_display_name
+from game.player_businesses import player_business_apply_remodel as _player_business_apply_remodel
+from game.player_businesses import player_business_remodel_quote as _player_business_remodel_quote
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_keys import can_receive_property_key, ensure_actor_has_property_key, ensure_property_lock
 from game.property_runtime import (
@@ -42,6 +44,11 @@ from game.service_runtime import (
     _vehicle_sale_remove_offer,
 )
 from game.skills import intel_skill_terms as _intel_skill_terms, mobility_service_skill_terms as _mobility_service_skill_terms
+from game.system_support.building_repair_runtime import (
+    owned_building_properties as _owned_building_properties,
+    property_damage_summary as _property_damage_summary,
+    repair_building_damage as _repair_building_damage,
+)
 from game.system_support.player_feedback import _log_player_feedback
 from game.vehicles import vehicle_metadata
 
@@ -151,6 +158,9 @@ class SiteServiceSystem(System):
     def _assets_for(self, eid):
         return self.sim.ecs.get(PlayerAssets).get(eid)
 
+    def _finance_profile_for(self, eid):
+        return self.sim.ecs.get(FinancialProfile).get(eid)
+
     def _inventory_for(self, eid):
         return self.sim.ecs.get(Inventory).get(eid)
 
@@ -178,6 +188,35 @@ class SiteServiceSystem(System):
             item_id=str(item_id or "").strip().lower(),
             quantity=max(1, int(quantity)),
         )
+
+    def _liquid_credits_for(self, eid):
+        assets = self._assets_for(eid)
+        if assets is not None:
+            return max(0, int(getattr(assets, "credits", 0) or 0))
+        profile = self._finance_profile_for(eid)
+        if profile is not None:
+            return max(0, int(getattr(profile, "bank_balance", 0) or 0))
+        return 0
+
+    def _spend_liquid_credits(self, eid, amount):
+        amount = max(0, int(amount))
+        if amount <= 0:
+            return True, 0
+        assets = self._assets_for(eid)
+        if assets is not None:
+            credits = max(0, int(getattr(assets, "credits", 0) or 0))
+            if credits < amount:
+                return False, credits
+            assets.credits = max(0, credits - amount)
+            return True, int(assets.credits)
+        profile = self._finance_profile_for(eid)
+        if profile is not None:
+            bank_balance = max(0, int(getattr(profile, "bank_balance", 0) or 0))
+            if bank_balance < amount:
+                return False, bank_balance
+            profile.bank_balance = max(0, bank_balance - amount)
+            return True, int(profile.bank_balance)
+        return False, 0
 
     def _ticks_per_hour(self):
         world_traits = getattr(self.sim, "world_traits", {})
@@ -660,6 +699,196 @@ class SiteServiceSystem(System):
             skill_note=skill_note,
         ))
 
+    def _owned_building_target(self, eid, target_property_id):
+        target_property_id = str(target_property_id or "").strip()
+        if not target_property_id:
+            return None
+        for owned_prop in _owned_building_properties(self.sim, eid):
+            if str(owned_prop.get("id", "")).strip() == target_property_id:
+                return owned_prop
+        return None
+
+    def _apply_building_repair_service(self, eid, prop, request=None):
+        request = request if isinstance(request, dict) else {}
+        target_property_id = str(request.get("target_property_id", "") or "").strip()
+        target_prop = self._owned_building_target(eid, target_property_id)
+        if not isinstance(target_prop, dict):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="building_repair",
+                reason="invalid_target",
+            ))
+            return
+
+        summary = _property_damage_summary(self.sim, target_prop)
+        damage_count = int(summary.get("damage_count", 0) or 0)
+        if damage_count <= 0:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="building_repair",
+                reason="no_damage",
+                target_property_id=target_prop.get("id"),
+                target_property_name=target_prop.get("name", target_prop.get("id")),
+            ))
+            return
+
+        quoted_cost = int(summary.get("cost", 0) or 0)
+        credits = self._liquid_credits_for(eid)
+        if credits < quoted_cost:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="building_repair",
+                reason="no_credits",
+                cost=int(quoted_cost),
+                credits=int(credits),
+                target_property_id=target_prop.get("id"),
+                target_property_name=target_prop.get("name", target_prop.get("id")),
+                damage_count=damage_count,
+            ))
+            return
+
+        spent, credits_after = self._spend_liquid_credits(eid, quoted_cost)
+        if not spent:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="building_repair",
+                reason="no_credits",
+                cost=int(quoted_cost),
+                credits=int(credits_after),
+                target_property_id=target_prop.get("id"),
+                target_property_name=target_prop.get("name", target_prop.get("id")),
+                damage_count=damage_count,
+            ))
+            return
+
+        repaired = _repair_building_damage(self.sim, target_prop)
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service="building_repair",
+            target_property_id=target_prop.get("id"),
+            target_property_name=target_prop.get("name", target_prop.get("id")),
+            damage_count=int(repaired.get("damage_count", damage_count) or damage_count),
+            restored_count=int(repaired.get("restored_count", damage_count) or damage_count),
+            window_count=int(repaired.get("window_count", 0) or 0),
+            door_count=int(repaired.get("door_count", 0) or 0),
+            wall_count=int(repaired.get("wall_count", 0) or 0),
+            credits_spent=int(quoted_cost),
+            credits_after=int(credits_after),
+        ))
+
+    def _apply_business_remodel_service(self, eid, prop, request=None):
+        request = request if isinstance(request, dict) else {}
+        target_property_id = str(request.get("target_property_id", "") or "").strip()
+        target_archetype = str(request.get("target_archetype", "") or "").strip().lower()
+        target_prop = self._owned_building_target(eid, target_property_id)
+        if not isinstance(target_prop, dict):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="business_remodel",
+                reason="invalid_target",
+            ))
+            return
+
+        quote = _player_business_remodel_quote(target_prop, target_archetype)
+        if not isinstance(quote, dict):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="business_remodel",
+                reason="invalid_target",
+                target_property_id=target_prop.get("id"),
+                target_property_name=target_prop.get("name", target_prop.get("id")),
+            ))
+            return
+
+        quoted_cost = int(quote.get("cost", 0) or 0)
+        credits = self._liquid_credits_for(eid)
+        if credits < quoted_cost:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="business_remodel",
+                reason="no_credits",
+                cost=int(quoted_cost),
+                credits=int(credits),
+                target_property_id=target_prop.get("id"),
+                target_property_name=target_prop.get("name", target_prop.get("id")),
+                target_archetype=str(quote.get("target_archetype", target_archetype)).strip().lower(),
+                target_label=str(quote.get("target_label", target_archetype)).strip(),
+            ))
+            return
+
+        spent, credits_after = self._spend_liquid_credits(eid, quoted_cost)
+        if not spent:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="business_remodel",
+                reason="no_credits",
+                cost=int(quoted_cost),
+                credits=int(credits_after),
+                target_property_id=target_prop.get("id"),
+                target_property_name=target_prop.get("name", target_prop.get("id")),
+                target_archetype=str(quote.get("target_archetype", target_archetype)).strip().lower(),
+                target_label=str(quote.get("target_label", target_archetype)).strip(),
+            ))
+            return
+
+        remodel = _player_business_apply_remodel(self.sim, target_prop, target_archetype)
+        if not isinstance(remodel, dict):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="business_remodel",
+                reason="invalid_target",
+                target_property_id=target_prop.get("id"),
+                target_property_name=target_prop.get("name", target_prop.get("id")),
+            ))
+            return
+
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service="business_remodel",
+            target_property_id=target_prop.get("id"),
+            target_property_name=target_prop.get("name", target_prop.get("id")),
+            target_archetype=str(remodel.get("target_archetype", target_archetype)).strip().lower(),
+            target_label=str(remodel.get("target_label", target_archetype)).strip(),
+            rarity_label=str(remodel.get("rarity_label", "")).strip(),
+            credits_spent=int(quoted_cost),
+            credits_after=int(credits_after),
+            site_services=tuple(remodel.get("site_services", ()) or ()),
+            finance_services=tuple(remodel.get("finance_services", ()) or ()),
+        ))
+
     def _apply_vending_service(self, eid, prop):
         item_def = self._choose_vending_item(eid, prop)
         if not isinstance(item_def, dict):
@@ -1061,6 +1290,12 @@ class SiteServiceSystem(System):
             return True
         if service == "repair":
             self._apply_repair_service(eid, prop, pos)
+            return True
+        if service == "building_repair":
+            self._apply_building_repair_service(eid, prop, request=request)
+            return True
+        if service == "business_remodel":
+            self._apply_business_remodel_service(eid, prop, request=request)
             return True
         if service in TRANSIT_SERVICE_IDS:
             self._apply_transit_service(eid, prop, pos, service, request=request)
@@ -1703,7 +1938,7 @@ class SiteServiceSystem(System):
 
     def on_site_service_request(self, event):
         eid = event.data.get("eid")
-        if eid != self.player_eid:
+        if eid is None:
             return
 
         prop = self.sim.properties.get(event.data.get("property_id"))

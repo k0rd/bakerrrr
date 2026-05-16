@@ -75,6 +75,8 @@ TOPIC_ORDER = (
     "introduction",
     "vouch",
     "trade",
+    "street_appraise",
+    "street_buy",
     "bye",
     "payoff",
     "fence",
@@ -467,6 +469,16 @@ TOPIC_DEFS = {
     },
     "trade": {
         "label": "Let's trade.",
+        "root": True,
+        "unlocks": (),
+    },
+    "street_appraise": {
+        "label": "Can you look over this stock for me?",
+        "root": True,
+        "unlocks": (),
+    },
+    "street_buy": {
+        "label": "I have some stock you might want.",
         "root": True,
         "unlocks": (),
     },
@@ -902,6 +914,8 @@ PLAYER_CONNECTIVE_SKIP_TOPICS = {
     "pry",
     "insult",
     "trade",
+    "street_appraise",
+    "street_buy",
     "bye",
     "payoff",
     "fence",
@@ -2681,6 +2695,8 @@ def topic_label(topic_id, context=None):
 
     if topic_id == "workplace" and context.get("workplace_here"):
         return "Do you work here?"
+    if topic_id == "street_buy" and context.get("street_buy_hint"):
+        return f"I might have some {context['street_buy_hint']}."
     if topic_id == "organization" and context.get("workplace_name"):
         if str(context.get("organization_role", "")).strip().lower() == "owner":
             return f"Is {context['workplace_name']} yours?"

@@ -88,6 +88,7 @@ INDUSTRIAL_ARCHETYPES = {
     "machine_shop",
     "recycling_plant",
     "auto_garage",
+    "service_station",
     "freight_depot",
     "server_hub",
     "data_center",
@@ -149,8 +150,10 @@ STOREFRONT_ARCHETYPES = {
     "music_venue",
     "gaming_hall",
     "surplus_store",
+    "service_station",
     "truck_stop",
     "tool_depot",
+    "thrift_store",
     "bookshop",
     "hardware_store",
     "gallery",
@@ -788,7 +791,7 @@ def _shift_window_for(archetype, role, rng):
         return rng.choice(ROUND_CLOCK_SHIFT_WINDOWS)
     if archetype in TRANSIT_ARCHETYPES:
         return rng.choice(EARLY_SHIFT_WINDOWS + LATE_SHIFT_WINDOWS[:2])
-    if archetype in {"restaurant", "corner_store", "laundromat", "daycare", "soup_kitchen", "street_kitchen", "tool_depot", "hardware_store", "bookshop", "outfitter", "surplus_store"}:
+    if archetype in {"restaurant", "corner_store", "laundromat", "daycare", "soup_kitchen", "street_kitchen", "tool_depot", "hardware_store", "bookshop", "outfitter", "surplus_store", "thrift_store", "service_station"}:
         return rng.choice(EARLY_SHIFT_WINDOWS + DAY_SHIFT_WINDOWS)
     return rng.choice(DAY_SHIFT_WINDOWS)
 
@@ -2133,6 +2136,20 @@ def _spawn_human(
             career=career,
             workplace_archetype=_property_archetype(workplace_prop),
             home_archetype=_property_archetype(home_prop),
+            seed_token="|".join(
+                str(bit)
+                for bit in (
+                    getattr(sim, "seed", 0),
+                    personal_name,
+                    role,
+                    career,
+                    workplace_prop.get("id") if isinstance(workplace_prop, dict) else workplace,
+                    home_prop.get("id") if isinstance(home_prop, dict) else None,
+                    position[0] if isinstance(position, (list, tuple)) and len(position) >= 1 else None,
+                    position[1] if isinstance(position, (list, tuple)) and len(position) >= 2 else None,
+                    position[2] if isinstance(position, (list, tuple)) and len(position) >= 3 else 0,
+                )
+            ),
         ),
         MovementThrottle(
             default_cooldown=2,

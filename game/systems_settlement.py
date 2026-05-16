@@ -195,7 +195,9 @@ def _newcomer_home_kind(prop):
     archetype = _property_archetype(prop)
     if "shelter" in services:
         return "shelter"
-    if archetype in {"hotel", "flophouse"} or "rest" in services:
+    if archetype in {"hotel", "flophouse"}:
+        return "lodging"
+    if "rest" in services and not _property_is_storefront(prop):
         return "lodging"
     if archetype in RESIDENTIAL_ARCHETYPES:
         return "housing"
