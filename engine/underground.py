@@ -124,7 +124,9 @@ def _metro_underpass_plan(
 
     surface_x, surface_y, _surface_z = surface_entry
     side = _text(entry.get("side") or "south").lower() or "south"
-    tunnel_z = -max(2, int(building.get("basement_levels", 0) or 0) + 1)
+    # Keep station underpasses on the lowest station level so the metro stack
+    # feels like one coherent place instead of "one more floor lower."
+    tunnel_z = -max(2, int(building.get("basement_levels", 0) or 0))
 
     if side in {"north", "south"}:
         surface_exit = _surface_exit_for_vertical(

@@ -15,6 +15,7 @@ from engine.visibility import (
     observer_can_see_position as _shared_observer_can_see_position,
     update_player_visibility as _update_player_visibility,
 )
+from engine.world import normalize_building_levels
 from game.bones import archive_failed_run_bones, maybe_seed_bones_for_chunk
 from game.components import (
     AI,
@@ -476,6 +477,11 @@ class WorldStreamingSystem(System):
                 business_founder_name = str(building.get("business_founder_name") or "").strip()
                 business_founder_first_name = str(building.get("business_founder_first_name") or "").strip()
                 business_founder_last_name = str(building.get("business_founder_last_name") or "").strip()
+                floors, basement_levels = normalize_building_levels(
+                    archetype,
+                    building.get("floors", 1),
+                    building.get("basement_levels", 0),
+                )
                 display_name = business_name if business_name else f"{archetype}:{building['building_id']}"
                 metadata = {
                     "archetype": archetype,
@@ -484,7 +490,8 @@ class WorldStreamingSystem(System):
                     "large_parcel": bool(building.get("large_parcel")),
                     "parcel_span_x": int(building.get("parcel_span_x", 1) or 1),
                     "parcel_span_y": int(building.get("parcel_span_y", 1) or 1),
-                    "floors": int(building.get("floors", 1)),
+                    "floors": int(floors),
+                    "basement_levels": int(basement_levels),
                     "rooms": list(building.get("rooms", ())),
                     "footprint": dict(layout.get("footprint", {})),
                     "footprint_excluded_cells": [

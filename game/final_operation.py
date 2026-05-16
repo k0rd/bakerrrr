@@ -26,6 +26,7 @@ SECURE_ROOM_KINDS = {
     "control_room",
     "control_booth",
     "noc",
+    "evidence_lockup",
 }
 ADMIN_ROOM_KINDS = {
     "office",
@@ -44,8 +45,12 @@ ADMIN_ROOM_KINDS = {
     "briefing_room",
     "reception",
     "lobby",
+    "front_desk",
     "front_counter",
     "service_counter",
+    "clerk_office",
+    "archive",
+    "boardroom",
 }
 WORKROOM_KINDS = {
     "tool_crib",
@@ -67,6 +72,11 @@ WORKROOM_KINDS = {
     "storage",
     "power_room",
     "racks",
+    "service_corridor",
+    "housekeeping",
+    "linen_closet",
+    "workshop",
+    "screening_room",
 }
 FRONT_ROOM_KINDS = {
     "entry",
@@ -78,7 +88,9 @@ FRONT_ROOM_KINDS = {
     "concourse",
     "public_hall",
     "counter",
+    "ticketing",
     "front_counter",
+    "front_desk",
     "host_desk",
     "service_counter",
     "showroom",

@@ -2865,6 +2865,10 @@ ROOM_KIND_SENTENCES = {
         "Grilles, sightlines, and controlled reach make the room feel secure even when it is quiet.",
         "The whole space is built around keeping money visible to staff and distant from everyone else.",
     ),
+    "clerk_office": (
+        "The room feels like the quiet hinge between public procedure and the paperwork that keeps it standing up.",
+        "Everything here suggests filings, scheduling, and the smaller decisions that keep bigger authority moving.",
+    ),
     "concourse": (
         "The room spreads movement wide enough to sort traffic before it narrows again elsewhere.",
         "Everything about the space is built to absorb arrivals without letting them settle.",
@@ -2892,6 +2896,18 @@ ROOM_KIND_SENTENCES = {
     "guest_floor": (
         "The room trades privacy for orderly repetition, one door or partition after the next.",
         "Everything here feels standardized enough to host strangers without ever really personalizing the space.",
+    ),
+    "guest_lounge": (
+        "The room tries to keep waiting guests comfortable without ever pretending the building belongs to them.",
+        "Everything here softens transit and downtime into something the building can still manage.",
+    ),
+    "evidence_lockup": (
+        "The room feels built for custody of objects that matter to someone else's trouble.",
+        "Shelving, locks, and deliberate access make the space feel like memory under seal.",
+    ),
+    "front_desk": (
+        "The room turns first contact into a small controlled ritual: greet, sort, direct, repeat.",
+        "Everything here is built to catch arrivals early and decide where they belong next.",
     ),
     "booking": (
         "Counters, rails, and procedure make the room feel more like intake than welcome.",
@@ -2933,6 +2949,14 @@ ROOM_KIND_SENTENCES = {
         "The room spreads work out in plain view, trading privacy for coordination.",
         "Shared sightlines and repeated desks make the space feel like workflow made visible.",
     ),
+    "archive": (
+        "The room feels less active than persistent, built to keep old answers within reach.",
+        "Everything here suggests retention, cross-reference, and the slow weight of accumulated records.",
+    ),
+    "boardroom": (
+        "The room is arranged for decisions made in company rather than in public.",
+        "Distance, seating, and the fixed center of attention make the room feel intentionally strategic.",
+    ),
     "platform": (
         "The room holds the tension between waiting and immediate departure.",
         "Everything here feels like a pause that expects to end abruptly.",
@@ -2965,6 +2989,10 @@ ROOM_KIND_SENTENCES = {
         "Working clearance and tool access matter more here than any attempt at polish.",
         "The room is tuned for vehicles, machinery, or equipment to arrive broken and leave useful.",
     ),
+    "service_corridor": (
+        "The room exists to keep support work moving without asking the public to notice it.",
+        "Everything here feels like backstage circulation for a larger system.",
+    ),
     "showroom": (
         "The room is staged to make stock look more certain than the back end probably feels.",
         "Everything visible here is doing sales work, even when nobody is speaking.",
@@ -2984,6 +3012,10 @@ ROOM_KIND_SENTENCES = {
     "testing_lab": (
         "The room feels built for procedure, calibration, and results that need to stand up later.",
         "Everything here suggests controlled trials rather than open-ended experiment.",
+    ),
+    "ticketing": (
+        "The room exists to turn movement into a transaction before it becomes a journey.",
+        "Counters, queues, and repeated questions make the space feel like controlled passage sold a step at a time.",
     ),
     "visitation": (
         "Distance, furniture, and oversight make even ordinary conversation feel supervised.",

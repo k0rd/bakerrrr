@@ -211,6 +211,7 @@ SECURE_ROOM_KINDS = {
     "control_room",
     "control_booth",
     "noc",
+    "evidence_lockup",
 }
 ADMIN_ROOM_KINDS = {
     "office",
@@ -230,8 +231,12 @@ ADMIN_ROOM_KINDS = {
     "booking",
     "reception",
     "lobby",
+    "front_desk",
     "front_counter",
     "service_counter",
+    "clerk_office",
+    "archive",
+    "boardroom",
 }
 MEDICAL_ROOM_KINDS = {
     "exam",
@@ -244,6 +249,7 @@ MEDICAL_ROOM_KINDS = {
     "surgery",
     "storage",
     "cold_storage",
+    "clean_room",
 }
 WORKROOM_KINDS = {
     "tool_crib",
@@ -265,6 +271,11 @@ WORKROOM_KINDS = {
     "storage",
     "power_room",
     "racks",
+    "service_corridor",
+    "housekeeping",
+    "linen_closet",
+    "workshop",
+    "screening_room",
 }
 FRONT_ROOM_KINDS = {
     "entry",
@@ -277,7 +288,9 @@ FRONT_ROOM_KINDS = {
     "concourse",
     "public_hall",
     "counter",
+    "ticketing",
     "front_counter",
+    "front_desk",
     "host_desk",
     "service_counter",
     "visitation",
@@ -302,6 +315,8 @@ HOSPITALITY_ROOM_KINDS = {
     "breakroom",
     "reading_nook",
     "guest_floor",
+    "guest_lounge",
+    "balcony",
 }
 ROUND_CLOCK_ARCHETYPES = {
     "checkpoint",
@@ -1333,6 +1348,95 @@ def _room_kind_at(sim, x, y, z):
     return str(info.get("room_kind", "") or "").strip().lower()
 
 
+def _property_room_tiles(sim, prop):
+    by_room = {}
+    for tile in _walkable_inside_tiles(sim, prop):
+        room_kind = _room_kind_at(sim, tile[0], tile[1], tile[2])
+        if not room_kind:
+            continue
+        by_room.setdefault(room_kind, []).append(tile)
+    return {
+        room_kind: _unique_positions(tiles)
+        for room_kind, tiles in by_room.items()
+    }
+
+
+def _spawn_room_bonus_loot_for_property(sim, chunk_key, prop, rng):
+    if not isinstance(prop, dict):
+        return []
+    if str(prop.get("kind", "")).strip().lower() != "building":
+        return []
+    if _property_total_levels(prop) <= 1 and int(_property_metadata(prop).get("basement_levels", 0) or 0) <= 0:
+        return []
+
+    room_tiles = _property_room_tiles(sim, prop)
+    candidate_rows = [
+        room_kind
+        for room_kind in sorted(room_tiles.keys())
+        if room_kind in ROOM_BONUS_LOOT_ROWS
+    ]
+    if not candidate_rows:
+        return []
+
+    base_chance = 0.16 + min(0.16, 0.03 * len(candidate_rows))
+    if rng.random() > base_chance:
+        return []
+
+    budget = 1 + int(_property_total_levels(prop) >= 4 and rng.random() < 0.22)
+    spawned = []
+    used_rooms = set()
+    for _index in range(int(max(1, budget))):
+        available_rooms = [room_kind for room_kind in candidate_rows if room_kind not in used_rooms]
+        if not available_rooms:
+            break
+        room_kind = _weighted_choice(
+            rng,
+            [
+                (
+                    candidate,
+                    1.0 + (0.1 * len(tuple(room_tiles.get(candidate, ()) or ())))
+                )
+                for candidate in available_rooms
+            ],
+        )
+        if not room_kind:
+            break
+        item_id = _weighted_choice(rng, list(ROOM_BONUS_LOOT_ROWS.get(room_kind, ())))
+        item_def = ITEM_CATALOG.get(str(item_id or "").strip().lower())
+        if not item_def:
+            used_rooms.add(str(room_kind))
+            continue
+        tile = _pick_tile(
+            sim,
+            room_tiles.get(room_kind, ()),
+            rng,
+            allow_entities=True,
+            weight_fn=lambda pos, _prop=prop, _item_def=item_def: _item_tile_weight(sim, _prop, _item_def, "interior", pos) + 2.0,
+        )
+        if not tile:
+            used_rooms.add(str(room_kind))
+            continue
+        ground_id = sim.register_ground_item(
+            item_id=str(item_id).strip().lower(),
+            x=tile[0],
+            y=tile[1],
+            z=tile[2],
+            quantity=1,
+            owner_eid=None,
+            owner_tag="city",
+            metadata={
+                "source_property_id": prop.get("id"),
+                "chunk": tuple(chunk_key),
+                "placement_zone": "room_bonus",
+                "placement_room_kind": room_kind,
+                "room_bonus_kind": room_kind,
+            },
+        )
+        spawned.append(ground_id)
+        used_rooms.add(str(room_kind))
+    return spawned
+
+
 def _item_tile_weight(sim, prop, item_def, zone, pos):
     room_kind = _room_kind_at(sim, pos[0], pos[1], pos[2])
     tags = {str(tag).strip().lower() for tag in item_def.get("tags", ()) if str(tag).strip()}
@@ -1628,6 +1732,8 @@ def seed_chunk_items(sim, chunk, property_records):
                 },
             )
             spawned.append(ground_id)
+
+        spawned.extend(_spawn_room_bonus_loot_for_property(sim, key, prop, rng))
 
     ground_records[key] = list(spawned)
     return len(spawned)
@@ -2584,6 +2690,174 @@ UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS = (
     },
 )
 
+ROOM_BONUS_LOOT_ROWS = {
+    "archive": (
+        ("pocket_notebook", 5),
+        ("credstick_chip", 4),
+        ("burner_phone", 2),
+        ("battery_pack", 1),
+    ),
+    "clerk_office": (
+        ("pocket_notebook", 5),
+        ("credstick_chip", 4),
+        ("city_pass_token", 2),
+        ("burner_phone", 2),
+    ),
+    "front_desk": (
+        ("meal_voucher", 4),
+        ("scratch_ticket", 4),
+        ("burner_phone", 3),
+        ("credstick_chip", 3),
+    ),
+    "guest_lounge": (
+        ("spark_brew", 4),
+        ("cheap_whiskey", 3),
+        ("scratch_ticket", 4),
+        ("burner_phone", 2),
+    ),
+    "housekeeping": (
+        ("bandage_roll", 4),
+        ("med_gel", 3),
+        ("bottled_water", 4),
+        ("calm_patch", 2),
+    ),
+    "linen_closet": (
+        ("bandage_roll", 5),
+        ("bottled_water", 4),
+        ("med_gel", 2),
+        ("calm_patch", 1),
+    ),
+    "ticketing": (
+        ("city_pass_token", 5),
+        ("transit_daypass", 4),
+        ("meal_voucher", 3),
+        ("bottled_water", 2),
+    ),
+    "locker_wall": (
+        ("city_pass_token", 4),
+        ("transit_daypass", 4),
+        ("battery_pack", 2),
+        ("bottled_water", 2),
+    ),
+    "service_corridor": (
+        ("battery_pack", 4),
+        ("scrap_circuit", 4),
+        ("lockpick_kit", 2),
+        ("bottled_water", 2),
+    ),
+    "boardroom": (
+        ("credstick_chip", 4),
+        ("burner_phone", 3),
+        ("caff_shot", 3),
+        ("pocket_notebook", 3),
+    ),
+    "evidence_lockup": (
+        ("forged_badge", 3),
+        ("signal_jammer", 2),
+        ("lockpick_kit", 2),
+        ("credstick_chip", 2),
+    ),
+    "green_room": (
+        ("spark_brew", 4),
+        ("cheap_whiskey", 3),
+        ("burner_phone", 2),
+        ("scratch_ticket", 2),
+    ),
+    "balcony": (
+        ("scratch_ticket", 4),
+        ("spark_brew", 3),
+        ("burner_phone", 2),
+        ("city_pass_token", 1),
+    ),
+    "screening_room": (
+        ("battery_pack", 3),
+        ("burner_phone", 3),
+        ("pocket_notebook", 3),
+        ("spark_brew", 2),
+    ),
+}
+
+ROOM_CURIOSITY_ENCOUNTER_ROWS = (
+    {
+        "profile_id": "transit_staff_roamer",
+        "weight": 5,
+        "archetypes": ("metro_exchange",),
+        "room_kinds": ("ticketing", "platform", "service_corridor", "locker_wall"),
+        "role": "worker",
+        "career_rows": (
+            ("ticketing_clerk", 3),
+            ("fare_inspector", 2),
+            ("transit_controller", 2),
+            ("transit_maintenance", 2),
+        ),
+        "assign_workplace": True,
+        "bonus_item_rows": (
+            ("city_pass_token", 4),
+            ("transit_daypass", 3),
+            ("bottled_water", 2),
+        ),
+    },
+    {
+        "profile_id": "hotel_afterhours_guest",
+        "weight": 4,
+        "archetypes": ("hotel", "flophouse"),
+        "room_kinds": ("guest_lounge", "guest_floor", "front_desk", "linen_closet"),
+        "role": "civilian",
+        "career_rows": (
+            ("concierge", 2),
+            ("housekeeper", 2),
+            ("night_attendant", 1),
+            ("drifter", 1),
+        ),
+        "assign_workplace": False,
+        "bonus_item_rows": (
+            ("meal_voucher", 4),
+            ("spark_brew", 3),
+            ("scratch_ticket", 2),
+        ),
+    },
+    {
+        "profile_id": "backstage_worker",
+        "weight": 3,
+        "archetypes": ("theater", "music_venue", "nightclub", "casino", "gaming_hall"),
+        "room_kinds": ("green_room", "balcony", "backstage", "sound_booth", "screening_room"),
+        "role": "worker",
+        "career_rows": (
+            ("stagehand", 3),
+            ("sound_engineer", 2),
+            ("lighting_technician", 2),
+            ("tour_manager", 1),
+            ("surveillance_operator", 1),
+        ),
+        "assign_workplace": True,
+        "bonus_item_rows": (
+            ("spark_brew", 3),
+            ("burner_phone", 2),
+            ("battery_pack", 2),
+        ),
+    },
+    {
+        "profile_id": "records_keeper",
+        "weight": 3,
+        "archetypes": ("courthouse", "jail", "tower", "office", "brokerage", "media_lab", "co_working_hub"),
+        "room_kinds": ("archive", "clerk_office", "records_office", "records_room", "boardroom", "evidence_lockup"),
+        "role": "worker",
+        "career_rows": (
+            ("records_archivist", 3),
+            ("court_clerk", 2),
+            ("office_admin", 2),
+            ("compliance_auditor", 2),
+            ("archive_runner", 1),
+        ),
+        "assign_workplace": True,
+        "bonus_item_rows": (
+            ("pocket_notebook", 4),
+            ("credstick_chip", 3),
+            ("burner_phone", 2),
+        ),
+    },
+)
+
 
 def _property_skips_ambient_population(prop):
     return bool(_property_metadata(prop).get("skip_ambient_population"))
@@ -2690,6 +2964,103 @@ def _spawn_underground_transient_encounter(sim, chunk, prop, rng, *, economy_pro
     return eid
 
 
+def _spawn_room_curiosity_encounter(sim, chunk, prop, rng, *, economy_profile=None):
+    if not isinstance(prop, dict):
+        return None
+    if str(prop.get("kind", "")).strip().lower() != "building":
+        return None
+    if _property_total_levels(prop) <= 1:
+        return None
+
+    archetype = _property_archetype(prop)
+    room_tiles = _property_room_tiles(sim, prop)
+    if not archetype or not room_tiles:
+        return None
+
+    profile_rows = []
+    for row in ROOM_CURIOSITY_ENCOUNTER_ROWS:
+        row_archetypes = {str(value or "").strip().lower() for value in tuple(row.get("archetypes", ()) or ())}
+        if archetype not in row_archetypes:
+            continue
+        available_room_kinds = [
+            str(room_kind).strip().lower()
+            for room_kind in tuple(row.get("room_kinds", ()) or ())
+            if str(room_kind).strip().lower() in room_tiles
+        ]
+        if not available_room_kinds:
+            continue
+        weight = float(row.get("weight", 0.0) or 0.0) * (1.0 + (0.08 * len(available_room_kinds)))
+        if weight <= 0.0:
+            continue
+        profile_rows.append(((row, tuple(available_room_kinds)), weight))
+
+    picked = _weighted_choice(rng, profile_rows)
+    if not isinstance(picked, tuple) or len(picked) != 2:
+        return None
+    profile, available_room_kinds = picked
+    if not isinstance(profile, dict):
+        return None
+
+    room_kind = _weighted_choice(
+        rng,
+        [
+            (
+                candidate,
+                1.0 + (0.12 * len(tuple(room_tiles.get(candidate, ()) or ()))),
+            )
+            for candidate in available_room_kinds
+        ],
+    )
+    if not room_kind:
+        return None
+    tile = _pick_tile(
+        sim,
+        room_tiles.get(room_kind, ()),
+        rng,
+        allow_entities=False,
+    )
+    if not tile:
+        return None
+
+    role = str(profile.get("role", "civilian") or "civilian").strip().lower() or "civilian"
+    career = _weighted_choice(rng, list(tuple(profile.get("career_rows", ()) or ()))) or "resident"
+    career = str(career or "resident").strip().lower() or "resident"
+    assign_workplace = bool(profile.get("assign_workplace"))
+    shift_window = _shift_window_for(archetype, role, rng) if assign_workplace else None
+    workplace = None
+    workplace_prop = prop if assign_workplace else None
+    home_prop = prop if not assign_workplace else None
+    work_anchor = None
+    if assign_workplace:
+        organization_eid = ensure_property_organization(sim, prop)
+        workplace = {
+            "property_id": prop.get("id"),
+            "building_id": _property_metadata(prop).get("building_id"),
+            "archetype": archetype,
+            "organization_eid": organization_eid,
+        }
+        work_anchor = _focus_position(prop) or tile
+
+    eid = _spawn_human(
+        sim,
+        rng,
+        role=role,
+        position=tile,
+        career=career,
+        workplace=workplace,
+        home=tile,
+        work=work_anchor,
+        shift_window=shift_window,
+        workplace_prop=workplace_prop,
+        home_prop=home_prop,
+        economy_profile=economy_profile if isinstance(economy_profile, dict) else chunk_economy_profile(sim, chunk),
+    )
+    bonus_item = _weighted_choice(rng, list(tuple(profile.get("bonus_item_rows", ()) or ())))
+    if bonus_item and rng.random() < 0.82:
+        _give_item(sim, eid, str(bonus_item).strip().lower(), quantity=1)
+    return eid
+
+
 def _spawn_underground_pest_wildlife(sim, chunk, prop, rng):
     spawn_points = list(_ambient_wildlife_spawn_points(sim, prop))
     if not spawn_points:
@@ -2739,15 +3110,16 @@ def spawn_chunk_special_population(sim, chunk, property_records):
     economy_profile = chunk_economy_profile(sim, chunk)
     spawned = []
     building_props = []
+    room_curiosity_props = []
     for record in property_records:
         prop = sim.properties.get(record.get("id"))
         if not prop:
             continue
         if str(prop.get("kind", "")).strip().lower() != "building":
             continue
-        if not _ambient_encounter_profile(prop):
-            continue
         building_props.append(prop)
+        if _property_total_levels(prop) > 1:
+            room_curiosity_props.append(prop)
 
     building_props.sort(key=lambda row: str(row.get("id", "")))
     for prop in building_props:
@@ -2767,6 +3139,32 @@ def spawn_chunk_special_population(sim, chunk, property_records):
         wildlife_profile = _ambient_wildlife_profile(prop)
         if wildlife_profile == "underground_pests":
             spawned.extend(_spawn_underground_pest_wildlife(sim, chunk, prop, rng))
+
+    room_curiosity_props.sort(key=lambda row: str(row.get("id", "")))
+    room_encounter_budget = 1 + int(len(room_curiosity_props) >= 5 and rng.random() < 0.18)
+    for prop in room_curiosity_props:
+        if room_encounter_budget <= 0:
+            break
+        encounter_profile = _ambient_encounter_profile(prop)
+        total_levels = _property_total_levels(prop)
+        chance = 0.05 + min(0.08, 0.02 * max(0, total_levels - 1))
+        if int(_property_metadata(prop).get("basement_levels", 0) or 0) > 0:
+            chance += 0.02
+        if encounter_profile:
+            chance *= 0.72
+        if rng.random() > chance:
+            continue
+        eid = _spawn_room_curiosity_encounter(
+            sim,
+            chunk,
+            prop,
+            rng,
+            economy_profile=economy_profile,
+        )
+        if eid is None:
+            continue
+        spawned.append(eid)
+        room_encounter_budget -= 1
 
     special_records[key] = list(spawned)
     memberships = getattr(sim, "chunk_population_membership", None)

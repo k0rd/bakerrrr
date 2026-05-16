@@ -5,7 +5,7 @@ from .ecs import ECS
 from .events import Event, EventBus
 from .underground import chunk_underground_site_plans
 from .sites import layout_chunk_site, site_entry_front_cell, site_layout_reserved_footprints
-from .world import World
+from .world import World, normalize_building_levels
 from .eventlog import EventLog
 from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
@@ -711,7 +711,11 @@ class Simulation:
         floor = int(floor)
         max_start = max(0, len(labels) - window)
         if floor < 0:
-            return tuple(reversed(labels[-window:]))
+            basement_levels = max(0, int(basement_levels))
+            basement_index = max(0, abs(floor) - 1)
+            basement_shift = min(max_start, basement_index, max(0, basement_levels - 1))
+            start = max(0, max_start - basement_shift)
+            return tuple(reversed(labels[start:start + window]))
         start = min(max_start, int(max(0, floor)))
         return tuple(labels[start:start + window])
 
@@ -1625,7 +1629,12 @@ class Simulation:
             for block in chunk.get("blocks", ()):
                 for building in block.get("buildings", ()):
                     try:
-                        basement_depth = max(basement_depth, int(max(0, building.get("basement_levels", 0))))
+                        _floors, normalized_basements = normalize_building_levels(
+                            building.get("archetype"),
+                            building.get("floors", 1),
+                            building.get("basement_levels", 0),
+                        )
+                        basement_depth = max(basement_depth, int(normalized_basements))
                     except (TypeError, ValueError, AttributeError):
                         continue
             underground_plans = chunk_underground_site_plans(
@@ -1715,8 +1724,13 @@ class Simulation:
                     top = int(layout["top"])
                     bottom = int(layout["bottom"])
                     entry = dict(layout.get("entry", {}))
-                    floors = int(max(1, min(self.tilemap.max_floors, building.get("floors", 1))))
-                    basement_levels = int(max(0, building.get("basement_levels", 0)))
+                    floors, basement_levels = normalize_building_levels(
+                        building.get("archetype"),
+                        building.get("floors", 1),
+                        building.get("basement_levels", 0),
+                    )
+                    floors = int(max(1, min(self.tilemap.max_floors, floors)))
+                    basement_levels = int(max(0, basement_levels))
                     door_x = int(entry.get("x", layout["anchor_x"]))
                     door_y = int(entry.get("y", bottom))
                     shape_excluded = layout.get("excluded", frozenset())
