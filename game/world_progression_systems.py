@@ -5,6 +5,7 @@ import re
 from engine.buildings import building_exterior_profile, layout_chunk_building, world_building_id
 from engine.events import Event
 from engine.fixtures import generate_chunk_fixture_records
+from engine.underground import UNDERGROUND_ACCESS_SERVICE, chunk_underground_site_plans
 from engine.persistence import restore_chunk_state, unload_chunk_state
 from engine.sites import layout_chunk_site, site_gameplay_profile
 from engine.systems import System
@@ -128,6 +129,7 @@ from game.population import (
     _spawn_human,
     seed_chunk_items,
     spawn_chunk_npcs,
+    spawn_chunk_special_population,
     work_shift_active,
 )
 from game.property_access import (
@@ -211,6 +213,20 @@ def _generate_human_personal_name(*args, **kwargs):
 
     return facade.generate_human_personal_name(*args, **kwargs)
 
+
+_UNDERPASS_CACHE_CONTENT_ROWS = (
+    ("transit_daypass", 10, 1, 1),
+    ("battery_pack", 9, 1, 1),
+    ("scrap_circuit", 9, 1, 2),
+    ("energy_bar", 8, 1, 2),
+    ("bottled_water", 8, 1, 2),
+    ("signal_jammer", 4, 1, 1),
+    ("lockpick_kit", 4, 1, 1),
+    ("med_gel", 6, 1, 1),
+    ("micro_medkit", 3, 1, 1),
+    ("credstick_chip", 8, 1, 1),
+)
+
 class WorldStreamingSystem(System):
 
     def __init__(self, sim, focus_eid):
@@ -227,6 +243,157 @@ class WorldStreamingSystem(System):
             return
         self.sim.tilemap.set_tile(x, y, Tile(walkable=True, transparent=True, glyph="."), z=z)
 
+    def _register_underground_access_asset(
+        self,
+        records,
+        *,
+        key,
+        name,
+        x,
+        y,
+        z,
+        destination,
+        linked_property_id=None,
+        fixture_type="underpass_stairwell",
+        glyph="u",
+        public=True,
+    ):
+        self._ensure_property_anchor(x, y, z)
+        metadata = {
+            "archetype": str(fixture_type).strip().lower() or "underpass_stairwell",
+            "fixture_type": str(fixture_type).strip().lower() or "underpass_stairwell",
+            "display_glyph": str(glyph)[:1] or "u",
+            "display_color": "property_service",
+            "cover_kind": "low",
+            "cover_value": 0.12,
+            "public": bool(public),
+            "site_services": [UNDERGROUND_ACCESS_SERVICE],
+            "site_service_destinations": {
+                UNDERGROUND_ACCESS_SERVICE: dict(destination or {}),
+            },
+            "chunk": key,
+        }
+        if linked_property_id:
+            metadata["linked_property_id"] = str(linked_property_id)
+        property_id = self.sim.register_property(
+            name=str(name).strip() or "Stairwell",
+            kind="asset",
+            x=int(x),
+            y=int(y),
+            z=int(z),
+            owner_eid=None,
+            owner_tag="public" if bool(public) else "city",
+            metadata=metadata,
+        )
+        records.append({
+            "id": property_id,
+            "kind": "asset",
+            "x": int(x),
+            "y": int(y),
+            "z": int(z),
+            "archetype": metadata.get("archetype"),
+            "building_id": None,
+        })
+        return property_id
+
+    def _seed_underpass_cache_contents(self, property_id, *, seed_token=""):
+        cache_items = _property_runtime_container_entries(
+            self.sim,
+            property_id,
+            container_kind="cache",
+        )
+        if cache_items:
+            return len(cache_items)
+
+        rng = random.Random(
+            f"{self.sim.seed}:underpass_cache:{str(seed_token or '').strip() or property_id}:{property_id}"
+        )
+        rows = [
+            row for row in _UNDERPASS_CACHE_CONTENT_ROWS
+            if ITEM_CATALOG.get(str(row[0]).strip().lower())
+        ]
+        if not rows:
+            return 0
+
+        target_count = 2 + (1 if rng.random() < 0.55 else 0)
+        while rows and len(cache_items) < target_count:
+            pick_index = rng.choices(
+                range(len(rows)),
+                weights=[float(row[1]) for row in rows],
+                k=1,
+            )[0]
+            item_id, _weight, quantity_lo, quantity_hi = rows.pop(int(pick_index))
+            quantity = int(rng.randint(int(quantity_lo), int(max(quantity_lo, quantity_hi))))
+            metadata = None
+            if is_credstick_item(item_id):
+                metadata = prepare_item_stack_metadata(
+                    item_id,
+                    metadata={"stored_credits": int(rng.randint(18, 76))},
+                    quantity=quantity,
+                )
+            cache_items.append({
+                "instance_id": self.sim.new_item_instance_id(),
+                "item_id": str(item_id).strip().lower(),
+                "quantity": int(max(1, quantity)),
+                "name": item_display_name(item_id, item_catalog=ITEM_CATALOG),
+                "metadata": metadata,
+                "owner_eid": None,
+                "owner_tag": "city",
+            })
+        return len(cache_items)
+
+    def _register_underground_cache_asset(
+        self,
+        records,
+        *,
+        key,
+        name,
+        x,
+        y,
+        z,
+        linked_property_id=None,
+        seed_token="",
+    ):
+        self._ensure_property_anchor(x, y, z)
+        metadata = {
+            "archetype": "underpass_cache",
+            "fixture_type": "maintenance_cache_box",
+            "display_glyph": "c",
+            "display_color": "property_fixture",
+            "cover_kind": "low",
+            "cover_value": 0.18,
+            "interaction_role": "cache_target",
+            "fixture_kind": "cache",
+            "container_kind": "cache",
+            "container_label": "Cache",
+            "container_note_text": "A maintenance stash tucked behind conduit panels.",
+            "public": True,
+            "chunk": key,
+        }
+        if linked_property_id:
+            metadata["linked_property_id"] = str(linked_property_id)
+        property_id = self.sim.register_property(
+            name=str(name).strip() or "Maintenance Locker",
+            kind="asset",
+            x=int(x),
+            y=int(y),
+            z=int(z),
+            owner_eid=None,
+            owner_tag="city",
+            metadata=metadata,
+        )
+        self._seed_underpass_cache_contents(property_id, seed_token=seed_token)
+        records.append({
+            "id": property_id,
+            "kind": "asset",
+            "x": int(x),
+            "y": int(y),
+            "z": int(z),
+            "archetype": metadata.get("archetype"),
+            "building_id": None,
+        })
+        return property_id
+
     def _ensure_chunk_properties(self, cx, cy):
         key = (int(cx), int(cy))
         if restore_chunk_state(self.sim, key):
@@ -242,6 +409,17 @@ class WorldStreamingSystem(System):
         origin_x = key[0] * chunk_size
         origin_y = key[1] * chunk_size
         area_type = str(chunk.get("district", {}).get("area_type", "city")).strip().lower() or "city"
+        underground_plans = chunk_underground_site_plans(
+            chunk,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+        )
+        underground_by_source = {
+            str(plan.get("source_building_id", "")).strip(): plan
+            for plan in underground_plans
+            if isinstance(plan, dict) and str(plan.get("source_building_id", "")).strip()
+        }
         finance_by_archetype = {
             "bank": ("banking", "insurance"),
             "brokerage": ("banking", "insurance"),
@@ -286,11 +464,51 @@ class WorldStreamingSystem(System):
                     list(_default_site_services_for_archetype(archetype, seed_token=service_seed_token))
                     + list(vehicle_services_for_archetype(archetype))
                 ))
+                service_destinations = {}
+                underpass_plan = underground_by_source.get(chunk_building_id)
+                if isinstance(underpass_plan, dict):
+                    if UNDERGROUND_ACCESS_SERVICE not in site_services:
+                        site_services.append(UNDERGROUND_ACCESS_SERVICE)
+                    service_destinations[UNDERGROUND_ACCESS_SERVICE] = dict(
+                        (underpass_plan.get("station_surface", {}) or {}).get("destination", {}) or {}
+                    )
                 business_name = str(building.get("business_name") or "").strip()
                 business_founder_name = str(building.get("business_founder_name") or "").strip()
                 business_founder_first_name = str(building.get("business_founder_first_name") or "").strip()
                 business_founder_last_name = str(building.get("business_founder_last_name") or "").strip()
                 display_name = business_name if business_name else f"{archetype}:{building['building_id']}"
+                metadata = {
+                    "archetype": archetype,
+                    "building_id": chunk_building_id,
+                    "local_building_id": local_building_id or None,
+                    "large_parcel": bool(building.get("large_parcel")),
+                    "parcel_span_x": int(building.get("parcel_span_x", 1) or 1),
+                    "parcel_span_y": int(building.get("parcel_span_y", 1) or 1),
+                    "floors": int(building.get("floors", 1)),
+                    "rooms": list(building.get("rooms", ())),
+                    "footprint": dict(layout.get("footprint", {})),
+                    "footprint_excluded_cells": [
+                        {"x": int(cell_x), "y": int(cell_y)}
+                        for cell_x, cell_y in sorted(layout.get("excluded", ()) or ())
+                    ],
+                    "entry": dict(layout.get("entry", {})),
+                    "apertures": [dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)],
+                    "signage": dict(layout["signage"]) if isinstance(layout.get("signage"), dict) else None,
+                    "security_features": list(building.get("security_features", ())),
+                    "purchase_cost": rng.randint(180, 460),
+                    "finance_services": finance_services,
+                    "site_services": site_services,
+                    "site_service_seed_token": service_seed_token,
+                    "is_storefront": bool(building.get("is_storefront")),
+                    "public": bool(building.get("public")),
+                    "business_name": business_name or None,
+                    "business_founder_name": business_founder_name or None,
+                    "business_founder_first_name": business_founder_first_name or None,
+                    "business_founder_last_name": business_founder_last_name or None,
+                    "chunk": key,
+                }
+                if service_destinations:
+                    metadata["site_service_destinations"] = service_destinations
                 property_id = self.sim.register_property(
                     name=display_name,
                     kind="building",
@@ -299,36 +517,7 @@ class WorldStreamingSystem(System):
                     z=z,
                     owner_eid=None,
                     owner_tag="city",
-                    metadata={
-                        "archetype": archetype,
-                        "building_id": chunk_building_id,
-                        "local_building_id": local_building_id or None,
-                        "large_parcel": bool(building.get("large_parcel")),
-                        "parcel_span_x": int(building.get("parcel_span_x", 1) or 1),
-                        "parcel_span_y": int(building.get("parcel_span_y", 1) or 1),
-                        "floors": int(building.get("floors", 1)),
-                        "rooms": list(building.get("rooms", ())),
-                        "footprint": dict(layout.get("footprint", {})),
-                        "footprint_excluded_cells": [
-                            {"x": int(cell_x), "y": int(cell_y)}
-                            for cell_x, cell_y in sorted(layout.get("excluded", ()) or ())
-                        ],
-                        "entry": dict(layout.get("entry", {})),
-                        "apertures": [dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)],
-                        "signage": dict(layout["signage"]) if isinstance(layout.get("signage"), dict) else None,
-                        "security_features": list(building.get("security_features", ())),
-                        "purchase_cost": rng.randint(180, 460),
-                        "finance_services": finance_services,
-                        "site_services": site_services,
-                        "site_service_seed_token": service_seed_token,
-                        "is_storefront": bool(building.get("is_storefront")),
-                        "public": bool(building.get("public")),
-                        "business_name": business_name or None,
-                        "business_founder_name": business_founder_name or None,
-                        "business_founder_first_name": business_founder_first_name or None,
-                        "business_founder_last_name": business_founder_last_name or None,
-                        "chunk": key,
-                    },
+                    metadata=metadata,
                 )
                 prop = self.sim.properties.get(property_id)
                 seed_property_organization_defaults(prop, district=chunk.get("district"))
@@ -421,8 +610,120 @@ class WorldStreamingSystem(System):
                 "y": y,
                 "z": z,
                 "archetype": site_kind,
-                "building_id": f"{key[0]}:{key[1]}:{site.get('site_id', idx)}",
+                    "building_id": f"{key[0]}:{key[1]}:{site.get('site_id', idx)}",
+                })
+
+        for plan in underground_plans:
+            anchor = plan.get("anchor", {})
+            footprint = plan.get("footprint", {})
+            entry = plan.get("entry", {})
+            x = int(anchor.get("x", entry.get("x", 0)))
+            y = int(anchor.get("y", entry.get("y", 0)))
+            z = int(anchor.get("z", plan.get("z", 0)))
+            if self.sim.property_at(x, y, z):
+                continue
+            self._ensure_property_anchor(x, y, z)
+            property_id = self.sim.register_property(
+                name=str(plan.get("name", "Underpass")).strip() or "Underpass",
+                kind="building",
+                x=x,
+                y=y,
+                z=z,
+                owner_eid=None,
+                owner_tag="public",
+                metadata={
+                    "archetype": str(plan.get("kind", "underground_site")).strip().lower() or "underground_site",
+                    "site_kind": str(plan.get("kind", "underground_site")).strip().lower() or "underground_site",
+                    "building_id": str(plan.get("building_id", "")).strip() or None,
+                    "source_building_id": str(plan.get("source_building_id", "")).strip() or None,
+                    "floors": int(plan.get("floors", 1) or 1),
+                    "rooms": list(plan.get("rooms", ())),
+                    "footprint": dict(footprint),
+                    "footprint_excluded_cells": [],
+                    "entry": dict(entry),
+                    "apertures": [dict(aperture) for aperture in plan.get("apertures", ()) if isinstance(aperture, dict)],
+                    "skip_ambient_population": True,
+                    "ambient_encounter_profile": str(plan.get("ambient_encounter_profile", "")).strip().lower() or None,
+                    "ambient_encounter_spawns": [
+                        dict(spec)
+                        for spec in tuple(plan.get("ambient_encounter_spawns", ()) or ())
+                        if isinstance(spec, dict)
+                    ],
+                    "allow_wildlife_habitation": bool(plan.get("ambient_wildlife_profile")),
+                    "ambient_wildlife_profile": str(plan.get("ambient_wildlife_profile", "")).strip().lower() or None,
+                    "ambient_wildlife_spawns": [
+                        dict(spec)
+                        for spec in tuple(plan.get("ambient_wildlife_spawns", ()) or ())
+                        if isinstance(spec, dict)
+                    ],
+                    "purchase_cost": 0,
+                    "finance_services": [],
+                    "site_services": [],
+                    "public": True,
+                    "chunk": key,
+                    "site_id": str(plan.get("site_id", "")).strip() or None,
+                },
+            )
+            records.append({
+                "id": property_id,
+                "kind": "building",
+                "x": x,
+                "y": y,
+                "z": z,
+                "archetype": str(plan.get("kind", "underground_site")).strip().lower() or "underground_site",
+                "building_id": str(plan.get("building_id", "")).strip() or None,
             })
+
+            street_surface = plan.get("street_surface", {}) if isinstance(plan.get("street_surface"), dict) else {}
+            if street_surface:
+                self._register_underground_access_asset(
+                    records,
+                    key=key,
+                    name=str(street_surface.get("name", "Street Stairwell")).strip() or "Street Stairwell",
+                    x=int(street_surface.get("x", x)),
+                    y=int(street_surface.get("y", y)),
+                    z=int(street_surface.get("z", 0)),
+                    destination=dict(street_surface.get("destination", {}) or {}),
+                    linked_property_id=property_id,
+                    fixture_type="street_stairwell",
+                    glyph="u",
+                    public=True,
+                )
+
+            for return_spec in tuple(plan.get("underground_returns", ()) or ()):
+                if not isinstance(return_spec, dict):
+                    continue
+                self._register_underground_access_asset(
+                    records,
+                    key=key,
+                    name=str(return_spec.get("name", "Stairs Up")).strip() or "Stairs Up",
+                    x=int(return_spec.get("x", x)),
+                    y=int(return_spec.get("y", y)),
+                    z=int(return_spec.get("z", z)),
+                    destination=dict(return_spec.get("destination", {}) or {}),
+                    linked_property_id=property_id,
+                    fixture_type="underpass_stairs",
+                    glyph="s",
+                    public=True,
+                )
+
+            for cache_index, cache_spec in enumerate(tuple(plan.get("cache_sites", ()) or ())):
+                if not isinstance(cache_spec, dict):
+                    continue
+                self._register_underground_cache_asset(
+                    records,
+                    key=key,
+                    name=str(cache_spec.get("name", "Maintenance Locker")).strip() or "Maintenance Locker",
+                    x=int(cache_spec.get("x", x)),
+                    y=int(cache_spec.get("y", y)),
+                    z=int(cache_spec.get("z", z)),
+                    linked_property_id=property_id,
+                    seed_token=(
+                        f"{str(plan.get('site_id', '')).strip() or property_id}:"
+                        f"{int(cache_spec.get('x', x))}:{int(cache_spec.get('y', y))}:{int(cache_spec.get('z', z))}:"
+                        f"{cache_index}"
+                    ),
+                )
 
         fixture_count = max(1, chunk_size // 8) if area_type != "city" else max(4, chunk_size // 4)
         fixtures = generate_chunk_fixture_records(
@@ -507,6 +808,7 @@ class WorldStreamingSystem(System):
             return
         seed_chunk_items(self.sim, chunk, records)
         spawn_chunk_npcs(self.sim, chunk, records)
+        spawn_chunk_special_population(self.sim, chunk, records)
 
     def update(self):
         positions = self.sim.ecs.get(Position)

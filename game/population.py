@@ -719,6 +719,12 @@ def ensure_chunk_population_state(sim):
     return sim.chunk_ground_item_records, sim.chunk_population_records
 
 
+def ensure_chunk_special_population_state(sim):
+    if not hasattr(sim, "chunk_special_population_records"):
+        sim.chunk_special_population_records = {}
+    return sim.chunk_special_population_records
+
+
 def _property_metadata(prop):
     if not isinstance(prop, dict):
         return {}
@@ -2535,6 +2541,244 @@ def _business_founder_keyholder_chance(prop):
     return 0.26 if property_is_storefront(prop) else 0.14
 
 
+UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS = (
+    {
+        "profile_id": "maintenance_worker",
+        "weight": 4,
+        "role": "worker",
+        "career": "transit_maintenance",
+        "assign_workplace": True,
+        "bonus_items": (("battery_pack", 1), ("transit_daypass", 1)),
+    },
+    {
+        "profile_id": "tunnel_scavenger",
+        "weight": 4,
+        "role": "thief",
+        "career": "scavenger",
+        "assign_workplace": False,
+        "bonus_items": (("scrap_circuit", 1), ("energy_bar", 1)),
+    },
+    {
+        "profile_id": "rail_runner",
+        "weight": 2,
+        "role": "worker",
+        "career": "transit_runner",
+        "assign_workplace": True,
+        "bonus_items": (("city_pass_token", 1), ("transit_daypass", 1)),
+    },
+    {
+        "profile_id": "shelter_drifter",
+        "weight": 3,
+        "role": "civilian",
+        "career": "drifter",
+        "assign_workplace": False,
+        "bonus_items": (("bottled_water", 1),),
+    },
+    {
+        "profile_id": "burned_out_vagrant",
+        "weight": 1,
+        "role": "drunk",
+        "career": "drifter",
+        "assign_workplace": False,
+        "bonus_items": (("spark_brew", 1),),
+    },
+)
+
+
+def _property_skips_ambient_population(prop):
+    return bool(_property_metadata(prop).get("skip_ambient_population"))
+
+
+def _ambient_encounter_profile(prop):
+    return str(_property_metadata(prop).get("ambient_encounter_profile", "") or "").strip().lower()
+
+
+def _ambient_wildlife_profile(prop):
+    return str(_property_metadata(prop).get("ambient_wildlife_profile", "") or "").strip().lower()
+
+
+def _ambient_spawn_points(sim, prop, metadata_key):
+    points = []
+    for spec in tuple(_property_metadata(prop).get(metadata_key, ()) or ()):
+        if not isinstance(spec, dict):
+            continue
+        try:
+            x = int(spec.get("x"))
+            y = int(spec.get("y"))
+            z = int(spec.get("z", prop.get("z", 0)))
+        except (TypeError, ValueError):
+            continue
+        if not sim.tilemap.is_walkable(x, y, z):
+            continue
+        points.append((x, y, z))
+    return _unique_positions(points)
+
+
+def _ambient_encounter_spawn_points(sim, prop):
+    return _ambient_spawn_points(sim, prop, "ambient_encounter_spawns")
+
+
+def _ambient_wildlife_spawn_points(sim, prop):
+    return _ambient_spawn_points(sim, prop, "ambient_wildlife_spawns")
+
+
+UNDERGROUND_PEST_WILDLIFE_ROWS = (
+    {"profile_id": "sewer_rat", "weight": 6},
+    {"profile_id": "roach_swarm", "weight": 5},
+    {"profile_id": "wharf_rat", "weight": 1},
+)
+
+
+def _ambient_creature_profile(profile_id):
+    wanted = str(profile_id or "").strip().lower()
+    if not wanted:
+        return None
+    for profile in AMBIENT_CREATURE_PROFILES:
+        if str(profile.get("id", "") or "").strip().lower() == wanted:
+            return profile
+    return None
+
+
+def _spawn_underground_transient_encounter(sim, chunk, prop, rng, *, economy_profile=None):
+    candidates = _ambient_encounter_spawn_points(sim, prop)
+    if not candidates:
+        candidates = _tile_candidates_for_property(sim, prop, "interior")
+    tile = _pick_tile(sim, candidates, rng, allow_entities=False)
+    if not tile:
+        return None
+
+    choice = _weighted_choice(
+        rng,
+        [(row, float(row.get("weight", 0.0) or 0.0)) for row in UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS],
+    )
+    if not isinstance(choice, dict):
+        return None
+
+    role = str(choice.get("role", "civilian") or "civilian").strip().lower() or "civilian"
+    career = str(choice.get("career", "drifter") or "drifter").strip().lower() or "drifter"
+    assign_workplace = bool(choice.get("assign_workplace"))
+    shift_window = _shift_window_for("metro_exchange", role, rng) if assign_workplace and role == "worker" else None
+    workplace = None
+    work_anchor = None
+    workplace_prop = prop if assign_workplace else None
+    if assign_workplace:
+        organization_eid = ensure_property_organization(sim, prop)
+        workplace = {
+            "property_id": prop.get("id"),
+            "building_id": _property_metadata(prop).get("building_id"),
+            "archetype": _property_archetype(prop),
+            "organization_eid": organization_eid,
+        }
+        work_anchor = _focus_position(prop) or tile
+
+    eid = _spawn_human(
+        sim,
+        rng,
+        role=role,
+        position=tile,
+        career=career,
+        workplace=workplace,
+        home=tile,
+        work=work_anchor,
+        shift_window=shift_window,
+        workplace_prop=workplace_prop,
+        home_prop=None,
+        economy_profile=economy_profile if isinstance(economy_profile, dict) else chunk_economy_profile(sim, chunk),
+    )
+    for item_id, quantity in tuple(choice.get("bonus_items", ()) or ()):
+        _give_item(sim, eid, str(item_id or "").strip().lower(), quantity=quantity)
+    return eid
+
+
+def _spawn_underground_pest_wildlife(sim, chunk, prop, rng):
+    spawn_points = list(_ambient_wildlife_spawn_points(sim, prop))
+    if not spawn_points:
+        spawn_points = list(_tile_candidates_for_property(sim, prop, "interior"))
+    if not spawn_points:
+        return []
+
+    target_count = min(
+        len(spawn_points),
+        1 + int(rng.random() < 0.7) + int(rng.random() < 0.28),
+    )
+    if target_count <= 0:
+        return []
+
+    spawned = []
+    profile_counts = {}
+    while spawn_points and len(spawned) < target_count:
+        weighted = []
+        for row in UNDERGROUND_PEST_WILDLIFE_ROWS:
+            profile_id = str(row.get("profile_id", "") or "").strip().lower()
+            profile = _ambient_creature_profile(profile_id)
+            if not profile:
+                continue
+            repeat_penalty = 1.0 + (float(profile_counts.get(profile_id, 0)) * 0.9)
+            weighted.append((profile, float(row.get("weight", 0.0) or 0.0) / repeat_penalty))
+        profile = _weighted_choice(rng, weighted)
+        if not isinstance(profile, dict):
+            break
+        tile = _pick_tile(sim, spawn_points, rng, allow_entities=False)
+        if not tile:
+            break
+        spawn_points = [candidate for candidate in spawn_points if tuple(candidate) != tuple(tile)]
+        eid = _spawn_wildlife(sim, rng, profile, tile)
+        spawned.append(eid)
+        profile_id = str(profile.get("id", "creature") or "creature").strip().lower()
+        profile_counts[profile_id] = int(profile_counts.get(profile_id, 0) or 0) + 1
+    return spawned
+
+
+def spawn_chunk_special_population(sim, chunk, property_records):
+    special_records = ensure_chunk_special_population_state(sim)
+    key = (int(chunk.get("cx", 0)), int(chunk.get("cy", 0)))
+    if key in special_records:
+        return list(special_records[key])
+
+    rng = random.Random(f"{sim.seed}:{key[0]}:{key[1]}:chunk_special_population")
+    economy_profile = chunk_economy_profile(sim, chunk)
+    spawned = []
+    building_props = []
+    for record in property_records:
+        prop = sim.properties.get(record.get("id"))
+        if not prop:
+            continue
+        if str(prop.get("kind", "")).strip().lower() != "building":
+            continue
+        if not _ambient_encounter_profile(prop):
+            continue
+        building_props.append(prop)
+
+    building_props.sort(key=lambda row: str(row.get("id", "")))
+    for prop in building_props:
+        encounter_profile = _ambient_encounter_profile(prop)
+        if encounter_profile == "underground_transient":
+            eid = _spawn_underground_transient_encounter(
+                sim,
+                chunk,
+                prop,
+                rng,
+                economy_profile=economy_profile,
+            )
+        else:
+            eid = None
+        if eid is not None:
+            spawned.append(eid)
+        wildlife_profile = _ambient_wildlife_profile(prop)
+        if wildlife_profile == "underground_pests":
+            spawned.extend(_spawn_underground_pest_wildlife(sim, chunk, prop, rng))
+
+    special_records[key] = list(spawned)
+    memberships = getattr(sim, "chunk_population_membership", None)
+    if isinstance(memberships, dict):
+        for eid in tuple(spawned):
+            try:
+                memberships[int(eid)] = key
+            except (TypeError, ValueError):
+                continue
+    return list(spawned)
+
+
 def _business_founder_candidate(sim, prop, assigned_property_ids):
     if not isinstance(prop, dict):
         return ""
@@ -2584,6 +2828,8 @@ def spawn_chunk_npcs(sim, chunk, property_records, reserved_property_ids=None):
         if not prop:
             continue
         if str(prop.get("kind", "")).strip().lower() != "building":
+            continue
+        if _property_skips_ambient_population(prop):
             continue
         props.append(prop)
 

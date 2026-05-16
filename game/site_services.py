@@ -2,6 +2,7 @@ import random
 
 from engine.events import Event
 from engine.systems import System
+from engine.underground import UNDERGROUND_ACCESS_SERVICE
 from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, StatusEffects, VehicleState, Vitality
 from game.items import ITEM_CATALOG, item_display_name
 from game.player_businesses import player_business_apply_remodel as _player_business_apply_remodel
@@ -166,6 +167,14 @@ class SiteServiceSystem(System):
 
     def _vehicle_state_for(self, eid):
         return self.sim.ecs.get(VehicleState).get(eid)
+
+    def _service_destination(self, prop, service):
+        metadata = _property_metadata(prop)
+        destinations = metadata.get("site_service_destinations")
+        if not isinstance(destinations, dict):
+            return None
+        destination = destinations.get(str(service or "").strip().lower())
+        return dict(destination) if isinstance(destination, dict) else None
 
     def _inventory_item_count(self, eid, item_id):
         inventory = self._inventory_for(eid)
@@ -1270,6 +1279,9 @@ class SiteServiceSystem(System):
                 kind="interaction",
             )
             return True
+        if service == UNDERGROUND_ACCESS_SERVICE:
+            self._apply_linked_access_service(eid, prop, pos, service)
+            return True
         if service == "shelter":
             self._apply_shelter(eid, prop)
             return True
@@ -1643,6 +1655,87 @@ class SiteServiceSystem(System):
             token_cost=int(token_cost),
             base_credits_spent=int(payment.get("base_cost", 0) or 0),
             skill_note=skill_note,
+            time_advanced_ticks=int(advanced_ticks),
+        ))
+
+    def _apply_linked_access_service(self, eid, prop, pos, service):
+        service = str(service or "").strip().lower()
+        destination = self._service_destination(prop, service)
+        if not isinstance(destination, dict):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                reason="unavailable",
+            ))
+            return
+
+        vehicle_state = self._vehicle_state_for(eid)
+        if vehicle_state and bool(getattr(vehicle_state, "in_vehicle", False)):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                reason="leave_vehicle",
+            ))
+            return
+
+        try:
+            dest_x = int(destination.get("x", pos.x))
+            dest_y = int(destination.get("y", pos.y))
+            dest_z = int(destination.get("z", pos.z))
+        except (TypeError, ValueError):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                reason="invalid_destination",
+            ))
+            return
+
+        travel_ticks = max(0, int(destination.get("travel_ticks", 0) or 0))
+        advanced_ticks = self._advance_time_for_service(eid, prop, service, travel_ticks) if travel_ticks > 0 else 0
+
+        self.sim.stream_world(dest_x, dest_y)
+        self.sim.ensure_loaded_chunk_terrain()
+        landing_x, landing_y = dest_x, dest_y
+        tile = self.sim.tilemap.tile_at(dest_x, dest_y, dest_z)
+        if not tile or not tile.walkable:
+            landing = self._find_walkable_near(dest_x, dest_y, z=dest_z, radius=4)
+            if landing is None:
+                self.sim.emit(Event(
+                    "site_service_blocked",
+                    eid=eid,
+                    property_id=prop["id"],
+                    property_name=prop.get("name", prop["id"]),
+                    service=service,
+                    reason="no_destination_tile",
+                ))
+                return
+            landing_x, landing_y = landing
+
+        self._move_entity(eid, pos, landing_x, landing_y, dest_z, reason=service)
+
+        world_streamer = self._world_streamer()
+        if world_streamer is not None:
+            world_streamer.update()
+
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service=service,
+            destination_name=str(destination.get("destination_name", "the passage")).strip() or "the passage",
+            destination_x=int(landing_x),
+            destination_y=int(landing_y),
+            destination_z=int(dest_z),
             time_advanced_ticks=int(advanced_ticks),
         ))
 

@@ -1303,6 +1303,8 @@ def _wildlife_walkable_tiles(sim, origin, *, radius=4, outside_only=True, includ
         return []
     ox, oy, oz = int(origin[0]), int(origin[1]), int(origin[2])
     radius = max(1, int(radius))
+    habitat = _wildlife_habitat_property(sim, ox, oy, oz) if outside_only else None
+    habitat_id = str((habitat or {}).get("id", "")).strip() if isinstance(habitat, dict) else ""
     seen = set()
     tiles = []
     for dy in range(-radius, radius + 1):
@@ -1315,14 +1317,38 @@ def _wildlife_walkable_tiles(sim, origin, *, radius=4, outside_only=True, includ
             ty = oy + dy
             if not sim.tilemap.is_walkable(tx, ty, oz):
                 continue
-            if outside_only and _property_covering(sim, tx, ty, oz):
-                continue
+            covered = _property_covering(sim, tx, ty, oz) if outside_only else None
+            if outside_only:
+                if habitat_id:
+                    if not (covered and str(covered.get("id", "")).strip() == habitat_id):
+                        continue
+                elif covered:
+                    continue
             tile = (tx, ty, oz)
             if tile in seen:
                 continue
             seen.add(tile)
             tiles.append(tile)
     return tiles
+
+
+def _property_allows_wildlife_habitation(prop):
+    if not isinstance(prop, dict):
+        return False
+    metadata = prop.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if bool(metadata.get("allow_wildlife_habitation")):
+        return True
+    return bool(str(metadata.get("ambient_wildlife_profile", "") or "").strip())
+
+
+def _wildlife_habitat_property(sim, x, y, z):
+    covered = _property_covering(sim, x, y, z)
+    if not (covered and str(covered.get("kind", "building")).strip().lower() == "building"):
+        return None
+    if not _property_allows_wildlife_habitation(covered):
+        return None
+    return covered
 
 
 def _wildlife_is_active(behavior, hour):
@@ -1475,6 +1501,8 @@ def _relocate_indoor_wildlife_outdoors(sim, eid, pos, routine):
         return False
     covered = _property_covering(sim, pos.x, pos.y, pos.z)
     if not (covered and str(covered.get("kind", "building")).strip().lower() == "building"):
+        return False
+    if _property_allows_wildlife_habitation(covered):
         return False
 
     search_origins = [

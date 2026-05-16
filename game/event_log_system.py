@@ -2313,6 +2313,16 @@ class EventLogSystem(System):
                 text += f" {skill_note}"
             self.sim.log.add(text)
             return
+        if service == "underground_access":
+            destination_name = str(event.data.get("destination_name", "the passage")).strip() or "the passage"
+            destination_z = int(event.data.get("destination_z", 0) or 0)
+            time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0) or 0)
+            level_note = " underground" if destination_z < 0 else " topside"
+            text = f"Passage: {prop_name} leads to {destination_name}{level_note}."
+            if time_advanced_ticks > 0:
+                text += f" Travel time {_tick_duration_label(self.sim, time_advanced_ticks)}."
+            self.sim.log.add(text)
+            return
         if service in {"vehicle_sales_new", "vehicle_sales_used"}:
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             price = int(event.data.get("price", 0))

@@ -3,6 +3,7 @@ import random
 from .buildings import layout_chunk_building, world_building_id
 from .ecs import ECS
 from .events import Event, EventBus
+from .underground import chunk_underground_site_plans
 from .sites import layout_chunk_site, site_entry_front_cell, site_layout_reserved_footprints
 from .world import World
 from .eventlog import EventLog
@@ -1627,6 +1628,19 @@ class Simulation:
                         basement_depth = max(basement_depth, int(max(0, building.get("basement_levels", 0))))
                     except (TypeError, ValueError, AttributeError):
                         continue
+            underground_plans = chunk_underground_site_plans(
+                chunk,
+                origin_x=ox,
+                origin_y=oy,
+                chunk_size=size,
+            )
+            for plan in underground_plans:
+                try:
+                    basement_depth = max(basement_depth, abs(int(plan.get("z", 0) or 0)))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+        else:
+            underground_plans = ()
 
         for z in range(-int(basement_depth), 0):
             for y in range(oy, oy + size):
@@ -1800,6 +1814,72 @@ class Simulation:
                             kind=connector_kind,
                             bottom_floor=-basement_levels,
                         )
+
+            for plan in underground_plans:
+                footprint = plan.get("footprint")
+                entry = plan.get("entry")
+                if not isinstance(footprint, dict) or not isinstance(entry, dict):
+                    continue
+                try:
+                    left = int(footprint.get("left"))
+                    right = int(footprint.get("right"))
+                    top = int(footprint.get("top"))
+                    bottom = int(footprint.get("bottom"))
+                    z = int(plan.get("z", 0))
+                    door_x = int(entry.get("x"))
+                    door_y = int(entry.get("y"))
+                except (TypeError, ValueError):
+                    continue
+                room_plan = self._room_plan_for_shell(
+                    plan.get("rooms", ("maintenance_tunnel", "junction")),
+                    left=left,
+                    right=right,
+                    top=top,
+                    bottom=bottom,
+                    floor=z,
+                    floors=1,
+                    basement_levels=0,
+                    entry_side=entry.get("side", "south"),
+                )
+                structure_info = {
+                    "building_id": str(plan.get("building_id", "")).strip() or str(plan.get("site_id", "")).strip() or "underground_site",
+                    "name": str(plan.get("name", "Underground Site")).strip() or "Underground Site",
+                    "archetype": str(plan.get("kind", "underground_site")).strip().lower() or "underground_site",
+                    "is_storefront": False,
+                    "floor": z,
+                    "floors": 1,
+                    "basement_levels": 0,
+                    "total_levels": 1,
+                    "rooms": tuple(room.get("kind", "room") for room in room_plan.get("rooms", ())) or tuple(plan.get("rooms", ("maintenance_tunnel",))),
+                    "entry": dict(entry),
+                    "apertures": tuple(
+                        dict(aperture)
+                        for aperture in plan.get("apertures", ())
+                        if isinstance(aperture, dict)
+                    ),
+                    "footprint": dict(footprint),
+                    "signage": None,
+                }
+                self._stamp_room_shell(
+                    left=left,
+                    right=right,
+                    top=top,
+                    bottom=bottom,
+                    z=z,
+                    door_x=door_x,
+                    door_y=door_y,
+                    apertures=plan.get("apertures", ()),
+                    room_plan=room_plan,
+                )
+                self._mark_structure_area(
+                    left=left,
+                    right=right,
+                    top=top,
+                    bottom=bottom,
+                    z=z,
+                    info=structure_info,
+                    room_plan=room_plan,
+                )
 
             obstacle_count = 0
             for _ in range(obstacle_count):
