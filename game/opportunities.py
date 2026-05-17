@@ -38,10 +38,24 @@ MIN_ACTIVE_OPPORTUNITIES = 6
 MAX_ACTIVE_OPPORTUNITIES = 10
 REMOTE_SEED_MIN_DISTANCE = 3
 REMOTE_SEED_FAR_DISTANCE = 5
-BASE_OPPORTUNITY_EXPIRE_TICKS = 420
-ACCEPTED_OPPORTUNITY_EXPIRE_TICKS = 720
-EXPIRE_DISTANCE_BONUS_PER_CHUNK = 18
-EXPIRE_DISTANCE_BONUS_CAP = 180
+BASE_OPPORTUNITY_EXPIRE_HOURS = 24.0
+ACCEPTED_OPPORTUNITY_EXPIRE_HOURS = 36.0
+URGENT_OPPORTUNITY_EXPIRE_HOURS = 12.0
+ACCEPTED_URGENT_OPPORTUNITY_EXPIRE_HOURS = 18.0
+EXPIRE_DISTANCE_BONUS_HOURS_PER_CHUNK = 1.0
+EXPIRE_DISTANCE_BONUS_CAP_HOURS = 12.0
+_OPPORTUNITY_URGENCY_KEYWORDS = (
+    "urgent",
+    "immediate",
+    "right away",
+    "asap",
+    "tonight",
+    "before dawn",
+    "before sunrise",
+    "before morning",
+    "before noon",
+)
+_OPPORTUNITY_EXPIRE_VERSION = 3
 
 EXCLUDED_CONTRACT_ROLES = {"guard", "scout"}
 
@@ -758,6 +772,26 @@ def _intel_for_opportunity(state, observer_eid, opportunity_id):
     return bucket.get(str(int(opportunity_id)))
 
 
+def _active_opportunity_by_id(state, opportunity_id):
+    if not isinstance(state, dict):
+        return None
+    try:
+        target_id = int(opportunity_id or 0)
+    except (TypeError, ValueError):
+        target_id = 0
+    if target_id <= 0:
+        return None
+    active = state.get("active")
+    if not isinstance(active, list):
+        return None
+    for entry in active:
+        if not isinstance(entry, dict):
+            continue
+        if int(entry.get("id", 0) or 0) == target_id:
+            return entry
+    return None
+
+
 def _upsert_observer_intel(
     sim,
     state,
@@ -788,19 +822,36 @@ def _upsert_observer_intel(
     previous = bucket.get(oid_key) if isinstance(bucket.get(oid_key), dict) else {}
     previous_awareness = _normalize_awareness(previous.get("awareness_state"))
     previous_confidence = _normalize_confidence(previous.get("confidence", 0.0), previous_awareness)
+    previous_first_known_tick = _safe_int(previous.get("first_known_tick"), default=-1)
 
     if _AWARENESS_RANK.get(previous_awareness, 0) > _AWARENESS_RANK.get(awareness, 0):
         awareness = previous_awareness
     confidence = max(previous_confidence, confidence)
+    now = int(getattr(sim, "tick", 0))
+    if previous_first_known_tick >= 0:
+        first_known_tick = previous_first_known_tick
+    elif awareness == "unknown":
+        first_known_tick = -1
+    else:
+        first_known_tick = now
 
     record = {
         "opportunity_id": opportunity_id,
         "awareness_state": awareness,
         "confidence": confidence,
         "source": source,
-        "last_updated_tick": int(getattr(sim, "tick", 0)),
+        "last_updated_tick": now,
     }
+    if first_known_tick >= 0:
+        record["first_known_tick"] = first_known_tick
     bucket[oid_key] = record
+
+    if observer_eid == getattr(sim, "player_eid", None) and first_known_tick >= 0:
+        entry = _active_opportunity_by_id(state, opportunity_id)
+        if isinstance(entry, dict):
+            if _safe_int(entry.get("first_player_known_tick"), default=-1) < 0:
+                entry["first_player_known_tick"] = first_known_tick
+            _ensure_lifecycle_fields(sim, entry)
     return record
 
 
@@ -1148,37 +1199,87 @@ def _opportunity_requirements(opportunity):
     return requirements
 
 
-def _default_opportunity_expire_ticks(opportunity):
+def _opportunity_ticks_per_hour(sim):
+    world_traits = getattr(sim, "world_traits", {}) if sim is not None else {}
+    clock = world_traits.get("clock", {}) if isinstance(world_traits, dict) else {}
+    if not isinstance(clock, dict):
+        clock = {}
+    try:
+        ticks_per_hour = int(clock.get("ticks_per_hour", 600))
+    except (TypeError, ValueError):
+        ticks_per_hour = 600
+    return max(1, ticks_per_hour)
+
+
+def _opportunity_has_readable_urgency(opportunity):
+    if not isinstance(opportunity, dict):
+        return False
     requirements = _opportunity_requirements(opportunity)
-    duration = ACCEPTED_OPPORTUNITY_EXPIRE_TICKS if bool(requirements.get("player_accepted")) else BASE_OPPORTUNITY_EXPIRE_TICKS
+    policy = opportunity.get("failure_policy")
+    if not isinstance(policy, dict):
+        policy = {}
+
+    for raw in (
+        opportunity.get("urgency"),
+        opportunity.get("time_pressure"),
+        requirements.get("urgency"),
+        requirements.get("time_pressure"),
+        policy.get("urgency"),
+    ):
+        token = str(raw or "").strip().lower()
+        if token in {"high", "urgent", "immediate", "time_sensitive"}:
+            return True
+
+    if bool(opportunity.get("readable_urgency")) or bool(requirements.get("readable_urgency")):
+        return True
+
+    readable_text = " ".join(
+        str(opportunity.get(field, "") or "").strip().lower()
+        for field in ("title", "summary")
+    )
+    return any(keyword in readable_text for keyword in _OPPORTUNITY_URGENCY_KEYWORDS)
+
+
+def _default_opportunity_expire_ticks(sim, opportunity):
+    requirements = _opportunity_requirements(opportunity)
+    urgent = _opportunity_has_readable_urgency(opportunity)
+    if bool(requirements.get("player_accepted")):
+        duration_hours = ACCEPTED_URGENT_OPPORTUNITY_EXPIRE_HOURS if urgent else ACCEPTED_OPPORTUNITY_EXPIRE_HOURS
+    else:
+        duration_hours = URGENT_OPPORTUNITY_EXPIRE_HOURS if urgent else BASE_OPPORTUNITY_EXPIRE_HOURS
 
     source = str((opportunity or {}).get("source", "") or "").strip().lower()
     if source in {"contact", "intel"}:
-        duration += 120
+        duration_hours += 6.0
     elif source in {"property_service", "economy_profile"}:
-        duration += 40
+        duration_hours += 2.0
 
     if str((opportunity or {}).get("kind", "") or "").strip().lower() == "contract_kill":
-        duration += 180
+        duration_hours += 8.0
 
     if str(requirements.get("require_item_id", "") or "").strip().lower():
-        duration += 80
+        duration_hours += 4.0
     if bool(requirements.get("provide_item")):
-        duration += 120
+        duration_hours += 6.0
 
     risk = str((opportunity or {}).get("risk", "") or "").strip().lower()
     if risk == "exposed":
-        duration += 40
+        duration_hours += 2.0
     elif risk == "hazardous":
-        duration += 80
+        duration_hours += 4.0
 
     chunk = _chunk_tuple((opportunity or {}).get("chunk"))
     origin = _chunk_tuple((opportunity or {}).get("origin_chunk"))
     if chunk and origin:
         distance = _manhattan(origin, chunk)
-        duration += min(EXPIRE_DISTANCE_BONUS_CAP, max(0, int(distance)) * EXPIRE_DISTANCE_BONUS_PER_CHUNK)
+        duration_hours += min(
+            EXPIRE_DISTANCE_BONUS_CAP_HOURS,
+            max(0, int(distance)) * EXPIRE_DISTANCE_BONUS_HOURS_PER_CHUNK,
+        )
 
-    return max(120, int(duration))
+    ticks_per_hour = _opportunity_ticks_per_hour(sim)
+    minimum_hours = URGENT_OPPORTUNITY_EXPIRE_HOURS if urgent else BASE_OPPORTUNITY_EXPIRE_HOURS
+    return max(int(minimum_hours * ticks_per_hour), int(duration_hours * ticks_per_hour))
 
 
 def _ensure_lifecycle_fields(sim, opportunity):
@@ -1208,11 +1309,31 @@ def _ensure_lifecycle_fields(sim, opportunity):
     ):
         policy.setdefault("fail_on_target_killed", True)
 
-    if _safe_int(opportunity.get("expire_tick"), default=0) <= 0:
-        origin = _chunk_tuple(getattr(sim, "world_traits", {}).get("origin_chunk")) if isinstance(getattr(sim, "world_traits", None), dict) else None
-        if origin and "origin_chunk" not in opportunity:
-            opportunity["origin_chunk"] = origin
-        opportunity["expire_tick"] = now + _default_opportunity_expire_ticks(opportunity)
+    origin = _chunk_tuple(getattr(sim, "world_traits", {}).get("origin_chunk")) if isinstance(getattr(sim, "world_traits", None), dict) else None
+    if origin and "origin_chunk" not in opportunity:
+        opportunity["origin_chunk"] = origin
+
+    desired_duration = _default_opportunity_expire_ticks(sim, opportunity)
+    accepted_tick = _safe_int(opportunity.get("accepted_tick"), default=-1)
+    seed_tick = _safe_int(opportunity.get("seed_tick"), default=-1)
+    first_player_known_tick = _safe_int(opportunity.get("first_player_known_tick"), default=-1)
+    if accepted_tick >= 0 and bool(requirements.get("player_accepted")):
+        anchor_tick = accepted_tick
+    elif first_player_known_tick >= 0:
+        anchor_tick = first_player_known_tick
+    else:
+        anchor_tick = seed_tick
+    if anchor_tick < 0:
+        anchor_tick = now
+    desired_expire_tick = anchor_tick + desired_duration
+
+    current_expire_tick = _safe_int(opportunity.get("expire_tick"), default=0)
+    expire_version = _safe_int(opportunity.get("expire_version"), default=0)
+    if current_expire_tick <= 0:
+        opportunity["expire_tick"] = desired_expire_tick
+    elif expire_version < _OPPORTUNITY_EXPIRE_VERSION:
+        opportunity["expire_tick"] = max(current_expire_tick, desired_expire_tick)
+    opportunity["expire_version"] = _OPPORTUNITY_EXPIRE_VERSION
 
     return opportunity
 

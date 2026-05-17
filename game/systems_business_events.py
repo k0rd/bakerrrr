@@ -143,10 +143,13 @@ _BUSINESS_EVENT_AFTERMATH_PHASES = {
     "cleanup_detail",
     "candle_vigil",
 }
-_BUSINESS_EVENT_AFTERMATH_WITNESS_DELAY_HOURS = 0.12
+_BUSINESS_EVENT_AFTERMATH_WITNESS_DELAY_HOURS = 24.0
 _BUSINESS_EVENT_AFTERMATH_HAZARD_DELAY_HOURS = 0.18
-_BUSINESS_EVENT_AFTERMATH_CLEANUP_HOURS = 0.65
-_BUSINESS_EVENT_AFTERMATH_VIGIL_HOURS = 0.5
+_BUSINESS_EVENT_AFTERMATH_CLEANUP_HOURS = 48.0
+_BUSINESS_EVENT_AFTERMATH_VIGIL_HOURS = 24.0
+_BUSINESS_EVENT_AFTERMATH_CASUALTY_DURATION_HOURS = 72.0
+_BUSINESS_EVENT_AFTERMATH_HAZARD_DURATION_HOURS = 6.0
+_BUSINESS_EVENT_AFTERMATH_VIOLENCE_DURATION_HOURS = 60.0
 _BUSINESS_EVENT_SHIFT_PHASES = {
     "staff_handoff",
     "shift_handoff",
@@ -1222,6 +1225,14 @@ def _prune_business_event_aftermath_state(sim):
             expires_tick = int(entry.get("expires_tick", tick) or tick)
         except (TypeError, ValueError):
             expires_tick = tick
+        created_tick = entry.get("created_tick")
+        try:
+            created_tick = int(created_tick)
+        except (TypeError, ValueError):
+            created_tick = tick
+        upgraded_expire = created_tick + _business_event_aftermath_duration_ticks(sim, entry)
+        expires_tick = max(expires_tick, upgraded_expire)
+        entry["expires_tick"] = expires_tick
         if tick > expires_tick:
             properties.pop(property_id, None)
 
@@ -1286,6 +1297,23 @@ def _business_event_reactive_property_near(sim, x, y, z, *, radius=12):
     return best
 
 
+def _business_event_aftermath_duration_ticks(sim, entry):
+    ticks_per_hour = _business_event_ticks_per_hour(sim)
+    incident_kind = str((entry or {}).get("incident_kind", "violence") or "violence").strip().lower() or "violence"
+    try:
+        casualty_count = int((entry or {}).get("casualty_count", 0) or 0)
+    except (TypeError, ValueError):
+        casualty_count = 0
+    casualty_count = max(0, casualty_count)
+    if casualty_count > 0:
+        duration_hours = _BUSINESS_EVENT_AFTERMATH_CASUALTY_DURATION_HOURS
+    elif incident_kind == "hazard":
+        duration_hours = _BUSINESS_EVENT_AFTERMATH_HAZARD_DURATION_HOURS
+    else:
+        duration_hours = _BUSINESS_EVENT_AFTERMATH_VIOLENCE_DURATION_HOURS
+    return int(ticks_per_hour * duration_hours)
+
+
 def _record_business_event_aftermath(
     sim,
     *,
@@ -1328,12 +1356,13 @@ def _record_business_event_aftermath(
 
     casualty_count = max(0, int(entry.get("casualty_count", 0) or 0)) + (1 if casualty else 0)
     serious_count = max(0, int(entry.get("serious_count", 0) or 0)) + (1 if serious else 0)
-    if casualty:
-        duration_ticks = int(ticks_per_hour * 3)
-    elif incident_kind == "hazard":
-        duration_ticks = int(ticks_per_hour * 2)
-    else:
-        duration_ticks = int(ticks_per_hour * 2.5)
+    duration_ticks = _business_event_aftermath_duration_ticks(
+        sim,
+        {
+            "incident_kind": incident_kind,
+            "casualty_count": casualty_count,
+        },
+    )
 
     entry.update({
         "property_id": property_id,

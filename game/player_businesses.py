@@ -15,7 +15,7 @@ import random
 from engine.world import World
 from engine.events import Event
 from engine.systems import System
-from game.components import AI, NPCRoutine, Occupation, OrganizationAffiliations, PlayerAssets, Position
+from game.components import AI, NPCRoutine, NPCWill, Occupation, OrganizationAffiliations, PlayerAssets, Position
 from game.economy import chunk_economy_profile, pick_career_for_workplace, workplace_archetype_weight
 from game.organizations import (
     ensure_property_organization,
@@ -1623,8 +1623,20 @@ def fire_actor_from_player_business(sim, owner_eid, actor_eid, prop=None):
         routine.work = None
 
     ai = sim.ecs.get(AI).get(actor_eid)
-    if ai and str(ai.role or "").strip().lower() == "worker":
-        ai.role = "civilian"
+    if ai:
+        if str(ai.role or "").strip().lower() == "worker":
+            ai.role = "civilian"
+        ai.state = "idle"
+        ai.target = None
+        ai.target_eid = None
+
+    will = sim.ecs.get(NPCWill).get(actor_eid)
+    if will:
+        will.intent = "idle"
+        will.score = 0.0
+        will.target = None
+        will.target_eid = None
+        will.last_tick = -1
 
     component = sim.ecs.get(OrganizationAffiliations).get(actor_eid)
     organization_eid = property_organization_eid(sim, employed_prop, ensure=False)
