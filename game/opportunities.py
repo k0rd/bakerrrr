@@ -1,6 +1,11 @@
 import random
 
 from engine.sites import site_gameplay_profile
+from game.criminal_justice_runtime import (
+    _justice_booking_seizure_snapshot,
+    _justice_held_property_snapshot,
+    _justice_snapshot,
+)
 from game.components import (
     AI,
     ContactLedger,
@@ -33,6 +38,10 @@ MIN_ACTIVE_OPPORTUNITIES = 6
 MAX_ACTIVE_OPPORTUNITIES = 10
 REMOTE_SEED_MIN_DISTANCE = 3
 REMOTE_SEED_FAR_DISTANCE = 5
+BASE_OPPORTUNITY_EXPIRE_TICKS = 420
+ACCEPTED_OPPORTUNITY_EXPIRE_TICKS = 720
+EXPIRE_DISTANCE_BONUS_PER_CHUNK = 18
+EXPIRE_DISTANCE_BONUS_CAP = 180
 
 EXCLUDED_CONTRACT_ROLES = {"guard", "scout"}
 
@@ -662,6 +671,11 @@ def _state(sim):
         completed = []
         state["completed"] = completed
 
+    failed = state.get("failed")
+    if not isinstance(failed, list):
+        failed = []
+        state["failed"] = failed
+
     intel_by_observer = state.get("intel_by_observer")
     if not isinstance(intel_by_observer, dict):
         intel_by_observer = {}
@@ -675,6 +689,18 @@ def _state(sim):
     else:
         state["origin_chunk"] = None
     return state
+
+
+def _terminal_entries(state):
+    if not isinstance(state, dict):
+        return ()
+    rows = []
+    for bucket in ("completed", "failed"):
+        entries = state.get(bucket)
+        if not isinstance(entries, list):
+            continue
+        rows.extend(entry for entry in entries if isinstance(entry, dict))
+    return tuple(rows)
 
 
 def _observer_key(observer_eid):
@@ -986,6 +1012,53 @@ def _recent_site_interactions(sim, freshness_ticks=8):
     return frozenset(property_ids), frozenset(building_ids)
 
 
+def _recent_required_item_transfers(sim, freshness_ticks=12):
+    records = []
+    if sim is None:
+        return tuple(records)
+
+    current_tick = int(getattr(sim, "tick", 0))
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        return tuple(records)
+
+    raw_records = traits.get("recent_required_item_transfers")
+    if not isinstance(raw_records, list):
+        return tuple(records)
+
+    max_age = int(max(1, freshness_ticks))
+    kept = []
+    for raw in list(raw_records):
+        if not isinstance(raw, dict):
+            continue
+        tick = _safe_int(raw.get("tick"), default=-10_000)
+        if current_tick - tick > max_age:
+            continue
+        item_id = str(raw.get("item_id", "") or "").strip().lower()
+        if not item_id:
+            continue
+        quantity = max(1, _safe_int(raw.get("quantity"), default=1))
+        npc_eid = _safe_int(raw.get("npc_eid"), default=0)
+        property_id = str(raw.get("property_id", "") or "").strip()
+        building_id = str(raw.get("building_id", "") or "").strip()
+        chunk = _chunk_tuple(raw.get("chunk"))
+        source = str(raw.get("source", "") or "").strip().lower()
+        normalized = {
+            "tick": int(tick),
+            "item_id": item_id,
+            "quantity": int(quantity),
+            "npc_eid": int(npc_eid) if npc_eid > 0 else 0,
+            "property_id": property_id,
+            "building_id": building_id,
+            "chunk": chunk,
+            "source": source,
+        }
+        kept.append(normalized)
+        records.append(normalized)
+    traits["recent_required_item_transfers"] = kept[-20:]
+    return tuple(records)
+
+
 def _recent_opportunity_activities(sim, freshness_ticks=18):
     property_tags = {}
     building_tags = {}
@@ -1075,6 +1148,75 @@ def _opportunity_requirements(opportunity):
     return requirements
 
 
+def _default_opportunity_expire_ticks(opportunity):
+    requirements = _opportunity_requirements(opportunity)
+    duration = ACCEPTED_OPPORTUNITY_EXPIRE_TICKS if bool(requirements.get("player_accepted")) else BASE_OPPORTUNITY_EXPIRE_TICKS
+
+    source = str((opportunity or {}).get("source", "") or "").strip().lower()
+    if source in {"contact", "intel"}:
+        duration += 120
+    elif source in {"property_service", "economy_profile"}:
+        duration += 40
+
+    if str((opportunity or {}).get("kind", "") or "").strip().lower() == "contract_kill":
+        duration += 180
+
+    if str(requirements.get("require_item_id", "") or "").strip().lower():
+        duration += 80
+    if bool(requirements.get("provide_item")):
+        duration += 120
+
+    risk = str((opportunity or {}).get("risk", "") or "").strip().lower()
+    if risk == "exposed":
+        duration += 40
+    elif risk == "hazardous":
+        duration += 80
+
+    chunk = _chunk_tuple((opportunity or {}).get("chunk"))
+    origin = _chunk_tuple((opportunity or {}).get("origin_chunk"))
+    if chunk and origin:
+        distance = _manhattan(origin, chunk)
+        duration += min(EXPIRE_DISTANCE_BONUS_CAP, max(0, int(distance)) * EXPIRE_DISTANCE_BONUS_PER_CHUNK)
+
+    return max(120, int(duration))
+
+
+def _ensure_lifecycle_fields(sim, opportunity):
+    if sim is None or not isinstance(opportunity, dict):
+        return opportunity
+
+    now = int(getattr(sim, "tick", 0))
+    requirements = _opportunity_requirements(opportunity)
+    kind = str(opportunity.get("kind", "") or "").strip().lower()
+    policy = opportunity.get("failure_policy")
+    if not isinstance(policy, dict):
+        policy = {}
+        opportunity["failure_policy"] = policy
+
+    if bool(requirements.get("provide_item")):
+        policy.setdefault("fail_on_missing_provided_item", True)
+    if bool(requirements.get("player_accepted")):
+        policy.setdefault("fail_on_legal_compromise", True)
+        if _safe_int(opportunity.get("accepted_tick"), default=-1) < 0:
+            opportunity["accepted_tick"] = now
+    if (
+        kind != "contract_kill"
+        and (
+            _safe_int(requirements.get("interact_npc_eid"), default=0) > 0
+            or _safe_int(requirements.get("pickup_interact_npc_eid"), default=0) > 0
+        )
+    ):
+        policy.setdefault("fail_on_target_killed", True)
+
+    if _safe_int(opportunity.get("expire_tick"), default=0) <= 0:
+        origin = _chunk_tuple(getattr(sim, "world_traits", {}).get("origin_chunk")) if isinstance(getattr(sim, "world_traits", None), dict) else None
+        if origin and "origin_chunk" not in opportunity:
+            opportunity["origin_chunk"] = origin
+        opportunity["expire_tick"] = now + _default_opportunity_expire_ticks(opportunity)
+
+    return opportunity
+
+
 def _player_site_state(sim, player_eid):
     pos = sim.ecs.get(Position).get(player_eid) if sim is not None and player_eid is not None else None
     if not pos:
@@ -1122,7 +1264,11 @@ def _player_metrics(sim, player_eid):
         if e is not None
     )
     recent_property_ids, recent_building_ids = _recent_site_interactions(sim)
+    recent_required_item_transfers = _recent_required_item_transfers(sim)
     recent_activity_property_tags, recent_activity_building_tags, recent_activity_chunk_tags = _recent_opportunity_activities(sim)
+    justice_snapshot = _justice_snapshot(sim, player_eid) if sim is not None and player_eid is not None else {}
+    held_property = _justice_held_property_snapshot(sim, player_eid) if sim is not None and player_eid is not None else {}
+    booking_seizure = _justice_booking_seizure_snapshot(sim, player_eid) if sim is not None and player_eid is not None else {}
     return {
         "wallet_credits": wallet,
         "bank_credits": bank,
@@ -1137,12 +1283,105 @@ def _player_metrics(sim, player_eid):
         "recent_npc_eids": _recent_npc_interactions(sim),
         "recent_property_ids": recent_property_ids,
         "recent_building_ids": recent_building_ids,
+        "recent_required_item_transfers": recent_required_item_transfers,
         "recent_activity_property_tags": recent_activity_property_tags,
         "recent_activity_building_tags": recent_activity_building_tags,
         "recent_activity_chunk_tags": recent_activity_chunk_tags,
+        "inventory": inventory,
         "inventory_counts": _inventory_counts(inventory),
         "killed_npc_eids": killed_eids,
+        "justice_snapshot": justice_snapshot if isinstance(justice_snapshot, dict) else {},
+        "held_property": held_property if isinstance(held_property, dict) else {},
+        "booking_seizure": booking_seizure if isinstance(booking_seizure, dict) else {},
     }
+
+
+def _opportunity_tagged_item_quantity(inventory, opportunity_id, item_id):
+    if not inventory:
+        return 0
+    target_item_id = str(item_id or "").strip().lower()
+    target_opportunity_id = _safe_int(opportunity_id, default=0)
+    if target_opportunity_id <= 0 or not target_item_id:
+        return 0
+
+    total = 0
+    for entry in list(getattr(inventory, "items", ()) or ()):
+        if str(entry.get("item_id", "")).strip().lower() != target_item_id:
+            continue
+        metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
+        if _safe_int(metadata.get("quest_opportunity_id"), default=0) != target_opportunity_id:
+            continue
+        total += max(0, _safe_int(entry.get("quantity"), default=0))
+    return total
+
+
+def _recent_required_item_transfer_for_item(metrics, *, item_id="", min_tick=0):
+    item_key = str(item_id or "").strip().lower()
+    if not item_key:
+        return None
+    records = (
+        metrics.get("recent_required_item_transfers", ())
+        if isinstance(metrics.get("recent_required_item_transfers", ()), (list, tuple))
+        else ()
+    )
+    cutoff_tick = int(max(0, _safe_int(min_tick, default=0)))
+    for raw in reversed(list(records)):
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("item_id", "")).strip().lower() != item_key:
+            continue
+        if _safe_int(raw.get("tick"), default=-10_000) < cutoff_tick:
+            continue
+        return raw
+    return None
+
+
+def _required_item_label_for_opportunity(opportunity):
+    requirements = _opportunity_requirements(opportunity)
+    item_id = str(requirements.get("require_item_id", "")).strip().lower()
+    return str(requirements.get("item_label", "")).strip() or _item_label(item_id)
+
+
+def _matching_required_item_entries(opportunity, entries):
+    if not isinstance(opportunity, dict):
+        return ()
+    requirements = _opportunity_requirements(opportunity)
+    item_id = str(requirements.get("require_item_id", "")).strip().lower()
+    required_qty = max(1, _safe_int(requirements.get("require_item_qty"), default=1))
+    if not item_id:
+        return ()
+
+    opportunity_id = _safe_int(opportunity.get("id"), default=0)
+    require_tagged = bool(requirements.get("provide_item")) or _safe_int(opportunity.get("provided_item_issued_tick"), default=-1) >= 0
+    total = 0
+    matched = []
+    for raw in tuple(entries or ()):
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("item_id", "")).strip().lower() != item_id:
+            continue
+        metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+        if require_tagged and _safe_int(metadata.get("quest_opportunity_id"), default=0) != opportunity_id:
+            continue
+        matched.append(dict(raw))
+        total += max(0, _safe_int(raw.get("quantity"), default=0))
+        if total >= required_qty:
+            return tuple(matched)
+    return ()
+
+
+def _required_item_seizure_reason(opportunity, *, site_name="", during_booking=False):
+    item_label = _required_item_label_for_opportunity(opportunity)
+    requirements = _opportunity_requirements(opportunity)
+    provided = bool(requirements.get("provide_item")) or _safe_int(opportunity.get("provided_item_issued_tick"), default=-1) >= 0
+    item_phrase = f"the provided {item_label}" if provided else item_label
+    site_name = str(site_name or "").strip()
+    if during_booking:
+        site = site_name or "the justice booking"
+        return f"{site} seized {item_phrase} during booking"
+    if site_name:
+        return f"{site_name} is holding {item_phrase}"
+    return f"justice seized {item_phrase}"
 
 
 def _matches_property_target(sim, metrics, property_id):
@@ -1259,6 +1498,63 @@ def _match_recent_opportunity_activity(metrics, *, property_id=None, building_id
             if tag in current_tags:
                 return tag
     return ""
+
+
+def _matching_recent_required_item_transfer(
+    metrics,
+    *,
+    item_id,
+    quantity=1,
+    npc_eid=0,
+    property_id="",
+    building_id="",
+    chunk=None,
+):
+    item_id = str(item_id or "").strip().lower()
+    property_id = str(property_id or "").strip()
+    building_id = str(building_id or "").strip()
+    chunk = _chunk_tuple(chunk)
+    needed_qty = max(1, _safe_int(quantity, default=1))
+    records = (
+        metrics.get("recent_required_item_transfers", ())
+        if isinstance(metrics.get("recent_required_item_transfers", ()), (list, tuple))
+        else ()
+    )
+    total = 0
+    matched = None
+    for raw in reversed(tuple(records)):
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("item_id", "") or "").strip().lower() != item_id:
+            continue
+        record_npc_eid = _safe_int(raw.get("npc_eid"), default=0)
+        record_property_id = str(raw.get("property_id", "") or "").strip()
+        record_building_id = str(raw.get("building_id", "") or "").strip()
+        record_chunk = _chunk_tuple(raw.get("chunk"))
+
+        scope_matched = False
+        if npc_eid > 0 and record_npc_eid == int(npc_eid):
+            scope_matched = True
+        if property_id and record_property_id == property_id:
+            scope_matched = True
+        if building_id and record_building_id == building_id:
+            scope_matched = True
+        if npc_eid <= 0 and not property_id and not building_id:
+            scope_matched = True
+        if not scope_matched:
+            continue
+        if chunk and record_chunk and record_chunk != chunk:
+            continue
+
+        total += max(0, _safe_int(raw.get("quantity"), default=0))
+        if matched is None:
+            matched = dict(raw)
+        if total >= needed_qty:
+            break
+    if matched is None or total < needed_qty:
+        return None
+    matched["quantity"] = int(total)
+    return matched
 
 
 def _opportunity_activity_instruction(requirements):
@@ -2939,6 +3235,8 @@ def _append_opportunity(state, opportunity, existing_keys):
     entry = dict(opportunity)
     entry["id"] = next_id
     entry["status"] = "active"
+    if "origin_chunk" not in entry and _chunk_tuple(state.get("origin_chunk")):
+        entry["origin_chunk"] = _chunk_tuple(state.get("origin_chunk"))
     state["next_id"] = next_id + 1
     state["active"].append(entry)
     existing_keys.add(key)
@@ -3080,7 +3378,7 @@ def seed_run_opportunities(sim, player_eid=None, rng=None, count_min=MIN_ACTIVE_
 
     existing_keys = {
         str(entry.get("key", "")).strip().lower()
-        for entry in list(state.get("active", ())) + list(state.get("completed", ()))
+        for entry in list(state.get("active", ())) + list(_terminal_entries(state))
         if str(entry.get("key", "")).strip()
     }
 
@@ -3178,7 +3476,7 @@ def seed_contract_kill_opportunity(sim, player_eid, rng=None):
     # Only allow one active contract_kill at a time.
     existing_keys = {
         str(entry.get("key", "")).strip().lower()
-        for entry in list(state.get("active", ())) + list(state.get("completed", ()))
+        for entry in list(state.get("active", ())) + list(_terminal_entries(state))
         if str(entry.get("key", "")).strip()
     }
     if any(k.startswith("contract_kill:") for k in existing_keys):
@@ -3650,7 +3948,7 @@ def refresh_dynamic_opportunities(sim, player_eid, rng=None):
 
     existing_keys = {
         str(entry.get("key", "")).strip().lower()
-        for entry in list(state.get("active", ())) + list(state.get("completed", ()))
+        for entry in list(state.get("active", ())) + list(_terminal_entries(state))
         if str(entry.get("key", "")).strip()
     }
 
@@ -3728,7 +4026,7 @@ def _completion_detail(sim, opportunity, metrics):
     visited = set(metrics.get("visited_chunks", ()))
     reasons = []
     if visit_chunk and visit_chunk not in visited and visit_chunk != current_chunk:
-        return False, ""
+        return False, "", None
 
     target_property_id = str(requirements.get("property_id", "")).strip()
     target_building_id = str(requirements.get("building_id", "")).strip()
@@ -3738,23 +4036,23 @@ def _completion_detail(sim, opportunity, metrics):
         property_id=target_property_id,
         building_id=target_building_id,
     ):
-        return False, ""
+        return False, "", None
 
     min_contacts = _safe_int(requirements.get("contact_count"), default=0)
     if min_contacts > _safe_int(metrics.get("contact_count"), default=0):
-        return False, ""
+        return False, "", None
     if min_contacts > 0:
         reasons.append(f"contacts >= {min_contacts}")
 
     min_leads = _safe_int(requirements.get("intel_leads"), default=0)
     if min_leads > _safe_int(metrics.get("intel_leads"), default=0):
-        return False, ""
+        return False, "", None
     if min_leads > 0:
         reasons.append(f"intel leads >= {min_leads}")
 
     min_reserve = _safe_int(requirements.get("reserve_credits"), default=0)
     if min_reserve > _safe_int(metrics.get("reserve_credits"), default=0):
-        return False, ""
+        return False, "", None
     if min_reserve > 0:
         reasons.append(f"reserve >= {min_reserve}c")
 
@@ -3766,53 +4064,80 @@ def _completion_detail(sim, opportunity, metrics):
     if interact_npc_eid > 0 and not require_item_id:
         recent_npc_eids = metrics.get("recent_npc_eids", frozenset())
         if interact_npc_eid not in recent_npc_eids:
-            return False, ""
+            return False, "", None
         if interaction_requirement == "pressure":
             player_eid = getattr(sim, "player_eid", None)
             if player_eid is None or not _recent_pressure_interaction(sim, interact_npc_eid, player_eid):
-                return False, ""
+                return False, "", None
             reasons.append(f"leaned on {interact_name}")
         else:
             reasons.append(f"made contact with {interact_name}")
     require_item_qty = max(1, _safe_int(requirements.get("require_item_qty"), default=1))
+    recent_transfer = None
     if require_item_id:
         inventory_counts = metrics.get("inventory_counts", {}) if isinstance(metrics.get("inventory_counts", {}), dict) else {}
-        have_qty = max(0, _safe_int(inventory_counts.get(require_item_id), default=0))
-        if have_qty < require_item_qty:
-            return False, ""
-        item_label = str(requirements.get("item_label", "")).strip() or _item_label(require_item_id)
-        reasons.append(f"carrying {item_label}")
-
-        delivery_chunk = _chunk_tuple(requirements.get("delivery_chunk")) or visit_chunk
-        if interact_npc_eid > 0:
-            recent_npc_eids = metrics.get("recent_npc_eids", frozenset())
-            if interact_npc_eid not in recent_npc_eids:
-                return False, ""
-            if delivery_chunk and current_chunk != delivery_chunk:
-                return False, ""
-            reasons.append(f"handed over to {interact_name}")
+        if bool(requirements.get("provide_item")):
+            have_qty = _opportunity_tagged_item_quantity(
+                metrics.get("inventory"),
+                _safe_int(opportunity.get("id"), default=0),
+                require_item_id,
+            )
         else:
-            delivery_property_id = str(requirements.get("delivery_property_id", "")).strip() or target_property_id
-            delivery_building_id = str(requirements.get("delivery_building_id", "")).strip() or target_building_id
-            if not (delivery_property_id or delivery_building_id):
-                return False, ""
-            if not _matches_site_requirement(
-                sim,
+            have_qty = max(0, _safe_int(inventory_counts.get(require_item_id), default=0))
+        delivery_chunk = _chunk_tuple(requirements.get("delivery_chunk")) or visit_chunk
+        delivery_property_id = str(requirements.get("delivery_property_id", "")).strip() or target_property_id
+        delivery_building_id = str(requirements.get("delivery_building_id", "")).strip() or target_building_id
+        if have_qty < require_item_qty:
+            recent_transfer = _matching_recent_required_item_transfer(
                 metrics,
+                item_id=require_item_id,
+                quantity=require_item_qty,
+                npc_eid=interact_npc_eid,
                 property_id=delivery_property_id,
                 building_id=delivery_building_id,
-            ):
-                return False, ""
-            if not _matches_recent_site_interaction(
-                metrics,
-                property_id=delivery_property_id,
-                building_id=delivery_building_id,
-            ):
-                return False, ""
-            reasons.append("completed handoff at delivery site")
+                chunk=delivery_chunk,
+            )
+            if recent_transfer is None:
+                return False, "", None
+        item_label = str(requirements.get("item_label", "")).strip() or _item_label(require_item_id)
+        if recent_transfer is not None and have_qty < require_item_qty:
+            source = str(recent_transfer.get("source", "") or "").strip().lower()
+            if source == "street_buy":
+                reasons.append(f"sold {item_label} to {interact_name}")
+            elif source == "trade_sold":
+                reasons.append(f"sold {item_label} at delivery site")
+            else:
+                reasons.append(f"delivered {item_label}")
+        else:
+            reasons.append(f"carrying {item_label}")
+
+            if interact_npc_eid > 0:
+                recent_npc_eids = metrics.get("recent_npc_eids", frozenset())
+                if interact_npc_eid not in recent_npc_eids:
+                    return False, "", None
+                if delivery_chunk and current_chunk != delivery_chunk:
+                    return False, "", None
+                reasons.append(f"handed over to {interact_name}")
+            else:
+                if not (delivery_property_id or delivery_building_id):
+                    return False, "", None
+                if not _matches_site_requirement(
+                    sim,
+                    metrics,
+                    property_id=delivery_property_id,
+                    building_id=delivery_building_id,
+                ):
+                    return False, "", None
+                if not _matches_recent_site_interaction(
+                    metrics,
+                    property_id=delivery_property_id,
+                    building_id=delivery_building_id,
+                ):
+                    return False, "", None
+                reasons.append("completed handoff at delivery site")
 
         if delivery_chunk and current_chunk != delivery_chunk:
-            return False, ""
+            return False, "", None
     elif recent_activity_tags:
         matched_tag = _match_recent_opportunity_activity(
             metrics,
@@ -3822,7 +4147,7 @@ def _completion_detail(sim, opportunity, metrics):
             accepted_tags=recent_activity_tags,
         )
         if not matched_tag:
-            return False, ""
+            return False, "", None
         reasons.append(OPPORTUNITY_ACTIVITY_REASON_LABELS.get(matched_tag, "worked the site"))
     elif (target_property_id or target_building_id) and interact_npc_eid <= 0:
         if not _matches_recent_site_interaction(
@@ -3830,21 +4155,21 @@ def _completion_detail(sim, opportunity, metrics):
             property_id=target_property_id,
             building_id=target_building_id,
         ):
-            return False, ""
+            return False, "", None
         reasons.append("completed work at target site")
     elif _site_task_expected(requirements):
-        return False, ""
+        return False, "", None
 
     kill_target_eid = _safe_int(requirements.get("kill_target_eid"), default=0)
     if kill_target_eid > 0:
         if not bool(requirements.get("player_accepted")):
-            return False, ""
+            return False, "", None
         killed_eids = metrics.get("killed_npc_eids", frozenset())
         if kill_target_eid not in killed_eids:
-            return False, ""
+            return False, "", None
         target_name = str(requirements.get("kill_target_name", "target")).strip() or "target"
         reasons.append(f"{target_name} neutralized")
-    return True, ", ".join(reasons) if reasons else "requirements met"
+    return True, ", ".join(reasons) if reasons else "requirements met", recent_transfer
 
 
 def _recent_pressure_interaction(sim, target_eid, actor_eid, *, max_age=18, min_negative=0.18):
@@ -3933,8 +4258,14 @@ def _ensure_provided_item(sim, player_eid, opportunity, metrics):
     if not inventory:
         return
 
-    counts = _inventory_counts(inventory)
-    if _safe_int(counts.get(item_id), default=0) >= max(1, _safe_int(requirements.get("require_item_qty"), default=1)):
+    opportunity_id = _safe_int(opportunity.get("id"), default=0)
+    required_qty = max(1, _safe_int(requirements.get("require_item_qty"), default=1))
+    tagged_qty = _opportunity_tagged_item_quantity(inventory, opportunity_id, item_id)
+    if tagged_qty >= required_qty:
+        if _safe_int(opportunity.get("provided_item_issued_tick"), default=-1) < 0:
+            opportunity["provided_item_issued_tick"] = int(getattr(sim, "tick", 0))
+        return
+    if _safe_int(opportunity.get("provided_item_issued_tick"), default=-1) >= 0:
         return
 
     metadata = {
@@ -3950,6 +4281,38 @@ def _ensure_provided_item(sim, player_eid, opportunity, metrics):
         owner_tag="opportunity",
         metadata=metadata,
     )
+    opportunity["provided_item_issued_tick"] = int(getattr(sim, "tick", 0))
+
+
+def _remove_tagged_opportunity_item(inventory, *, opportunity_id=0, item_id="", quantity=1):
+    if not inventory:
+        return 0
+    target_opportunity_id = _safe_int(opportunity_id, default=0)
+    target_item_id = str(item_id or "").strip().lower()
+    remaining = max(1, _safe_int(quantity, default=1))
+    removed_total = 0
+    if target_opportunity_id <= 0 or not target_item_id:
+        return 0
+
+    tagged_entries = []
+    for entry in list(getattr(inventory, "items", ()) or ()):
+        if str(entry.get("item_id", "")).strip().lower() != target_item_id:
+            continue
+        metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
+        if _safe_int(metadata.get("quest_opportunity_id"), default=0) != target_opportunity_id:
+            continue
+        tagged_entries.append(dict(entry))
+
+    for entry in tagged_entries:
+        if remaining <= 0:
+            break
+        removed = inventory.remove_item(instance_id=entry.get("instance_id"), quantity=remaining)
+        if not removed:
+            continue
+        removed_qty = max(0, _safe_int(removed.get("quantity"), default=0))
+        removed_total += removed_qty
+        remaining -= removed_qty
+    return removed_total
 
 
 def _consume_required_item(sim, player_eid, opportunity):
@@ -3967,6 +4330,15 @@ def _consume_required_item(sim, player_eid, opportunity):
         return None
 
     removed_total = 0
+    if bool(requirements.get("provide_item")):
+        removed_total += _remove_tagged_opportunity_item(
+            inventory,
+            opportunity_id=_safe_int(opportunity.get("id"), default=0),
+            item_id=item_id,
+            quantity=quantity,
+        )
+        if removed_total < quantity:
+            return None
     while removed_total < quantity:
         removed = inventory.remove_item(item_id=item_id, quantity=quantity - removed_total)
         if not removed:
@@ -4391,58 +4763,341 @@ def format_reward_text(reward):
     return ", ".join(bits) if bits else "none"
 
 
-def resolve_opportunities(sim, player_eid):
+def _resolve_terminal_entry(
+    sim,
+    state,
+    player_eid,
+    entry,
+    *,
+    status="completed",
+    reason="",
+    reward_applied=None,
+    extra=None,
+    intel_source="completed",
+):
+    done = dict(entry or {})
+    terminal_status = str(status or "completed").strip().lower() or "completed"
+    tick = int(getattr(sim, "tick", 0))
+    if terminal_status == "completed":
+        done["status"] = "completed"
+        done["completed_tick"] = tick
+        done["reward_applied"] = dict(reward_applied or {})
+        done["completion_reason"] = str(reason).strip() or "requirements met"
+        state["completed"].append(done)
+    else:
+        done["status"] = "failed"
+        done["failed_tick"] = tick
+        done["failure_reason"] = str(reason).strip() or "opportunity failed"
+        if isinstance(reward_applied, dict) and reward_applied:
+            done["reward_applied"] = dict(reward_applied)
+        state["failed"].append(done)
+    if isinstance(extra, dict):
+        done.update(extra)
+    if player_eid is not None:
+        _upsert_observer_intel(
+            sim,
+            state,
+            observer_eid=player_eid,
+            opportunity_id=int(done.get("id", 0) or 0),
+            awareness_state="confirmed",
+            confidence=1.0,
+            source=str(intel_source or terminal_status).strip().lower() or terminal_status,
+        )
+    return done
+
+
+def _opportunity_target_specs(opportunity):
+    if not isinstance(opportunity, dict):
+        return ()
+    requirements = _opportunity_requirements(opportunity)
+    rows = []
+    seen = set()
+    for eid_key, name_key, fallback_name, stage in (
+        ("pickup_interact_npc_eid", "pickup_interact_npc_name", "the pickup contact", "pickup"),
+        ("interact_npc_eid", "interact_npc_name", "the contact", "handoff"),
+    ):
+        target_eid = _safe_int(requirements.get(eid_key), default=0)
+        if target_eid <= 0 or target_eid in seen:
+            continue
+        seen.add(target_eid)
+        target_name = str(requirements.get(name_key, "")).strip() or fallback_name
+        rows.append((target_eid, target_name, stage))
+    return tuple(rows)
+
+
+def _target_killed_failure_detail(opportunity, metrics):
+    killed_eids = metrics.get("killed_npc_eids", frozenset())
+    if not killed_eids:
+        return None
+
+    kind = str((opportunity or {}).get("kind", "") or "").strip().lower()
+    for target_eid, target_name, stage in _opportunity_target_specs(opportunity):
+        if target_eid not in killed_eids:
+            continue
+        if kind == "issuer_pressure":
+            reason = f"{target_name} was killed before you could lean on them"
+        elif stage == "pickup":
+            reason = f"{target_name} was killed before the pickup"
+        else:
+            reason = f"{target_name} was killed before the handoff"
+        return {
+            "failure_code": "target_killed",
+            "failure_reason": reason,
+        }
+    return None
+
+
+def _legal_compromise_failure_detail(opportunity, metrics):
+    if not isinstance(opportunity, dict):
+        return None
+    snapshot = metrics.get("justice_snapshot", {}) if isinstance(metrics.get("justice_snapshot"), dict) else {}
+    accepted_tick = _safe_int(opportunity.get("accepted_tick"), default=-1)
+    if accepted_tick < 0:
+        return None
+
+    custody_tick = _safe_int(snapshot.get("custody_tick"), default=-10_000)
+    if bool(snapshot.get("in_custody", False)) and custody_tick >= accepted_tick:
+        return {
+            "failure_code": "custody_compromised",
+            "failure_reason": "custody burned the handoff",
+        }
+
+    held_property_count = max(0, _safe_int(snapshot.get("held_property_count"), default=0))
+    held_property_updated_tick = _safe_int(snapshot.get("held_property_updated_tick"), default=-10_000)
+    held_property = metrics.get("held_property", {}) if isinstance(metrics.get("held_property"), dict) else {}
+    held_item_entries = _matching_required_item_entries(opportunity, held_property.get("entries", ()))
+    booking_tick = _safe_int(snapshot.get("last_booking_tick"), default=-10_000)
+    booking_site = str(snapshot.get("last_booking_property_name", "")).strip() or "the justice booking"
+    booking_seizure = metrics.get("booking_seizure", {}) if isinstance(metrics.get("booking_seizure"), dict) else {}
+    booking_seized_count = max(0, _safe_int(booking_seizure.get("item_count"), default=0))
+    booking_item_entries = _matching_required_item_entries(opportunity, booking_seizure.get("entries", ()))
+    if booking_tick >= accepted_tick:
+        if booking_item_entries:
+            return {
+                "failure_code": "booking_required_item_seized",
+                "failure_reason": _required_item_seizure_reason(opportunity, site_name=booking_site, during_booking=True),
+            }
+        if booking_seized_count > 0 or held_property_count > 0:
+            return {
+                "failure_code": "booking_confiscated",
+                "failure_reason": f"{booking_site} seized property tied to the handoff",
+            }
+        return {
+            "failure_code": "booking_compromised",
+            "failure_reason": f"booking at {booking_site} burned the handoff",
+        }
+
+    if held_property_count > 0 and held_property_updated_tick >= accepted_tick:
+        if held_item_entries:
+            return {
+                "failure_code": "held_required_item_seized",
+                "failure_reason": _required_item_seizure_reason(
+                    opportunity,
+                    site_name=str(held_property.get("property_name", "")).strip(),
+                    during_booking=False,
+                ),
+            }
+        return {
+            "failure_code": "held_property_seized",
+            "failure_reason": "justice seized property tied to the handoff",
+        }
+
+    last_incident_tick = _safe_int(snapshot.get("last_incident_tick"), default=-10_000)
+    wanted_tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
+    if last_incident_tick >= accepted_tick and wanted_tier in {"wanted", "arrest_on_sight"}:
+        latest_incident = snapshot.get("latest_incident", {}) if isinstance(snapshot.get("latest_incident"), dict) else {}
+        latest_label = str(latest_incident.get("label", "")).strip().lower() or "legal trouble"
+        return {
+            "failure_code": "legal_compromise",
+            "failure_reason": f"{latest_label} burned the handoff",
+        }
+    return None
+
+
+def _failure_detail(sim, opportunity, metrics, *, include_item_loss=True):
+    if sim is None or not isinstance(opportunity, dict):
+        return None
+
+    _ensure_lifecycle_fields(sim, opportunity)
+    now = int(getattr(sim, "tick", 0))
+    expire_tick = _safe_int(opportunity.get("expire_tick"), default=0)
+    if expire_tick > 0 and now >= expire_tick:
+        return {
+            "failure_code": "expired",
+            "failure_reason": "the window expired",
+        }
+
+    policy = opportunity.get("failure_policy", {}) if isinstance(opportunity.get("failure_policy"), dict) else {}
+    if bool(policy.get("fail_on_target_killed")):
+        target_failure = _target_killed_failure_detail(opportunity, metrics)
+        if isinstance(target_failure, dict):
+            return target_failure
+    if bool(policy.get("fail_on_legal_compromise")):
+        legal_failure = _legal_compromise_failure_detail(opportunity, metrics)
+        if isinstance(legal_failure, dict):
+            return legal_failure
+
+    if not include_item_loss or not bool(policy.get("fail_on_missing_provided_item")):
+        return None
+
+    requirements = _opportunity_requirements(opportunity)
+    if not bool(requirements.get("provide_item")):
+        return None
+
+    issued_tick = _safe_int(opportunity.get("provided_item_issued_tick"), default=-1)
+    if issued_tick < 0:
+        return None
+
+    require_item_id = str(requirements.get("require_item_id", "")).strip().lower()
+    require_item_qty = max(1, _safe_int(requirements.get("require_item_qty"), default=1))
+    opportunity_id = _safe_int(opportunity.get("id"), default=0)
+    tagged_qty = _opportunity_tagged_item_quantity(metrics.get("inventory"), opportunity_id, require_item_id)
+    if tagged_qty >= require_item_qty:
+        return None
+
+    visit_chunk = _chunk_tuple(requirements.get("visit_chunk"))
+    target_property_id = str(requirements.get("property_id", "")).strip()
+    target_building_id = str(requirements.get("building_id", "")).strip()
+    delivery_chunk = _chunk_tuple(requirements.get("delivery_chunk")) or visit_chunk
+    delivery_property_id = str(requirements.get("delivery_property_id", "")).strip() or target_property_id
+    delivery_building_id = str(requirements.get("delivery_building_id", "")).strip() or target_building_id
+    interact_npc_eid = _safe_int(requirements.get("interact_npc_eid"), default=0)
+    valid_transfer = _matching_recent_required_item_transfer(
+        metrics,
+        item_id=require_item_id,
+        quantity=require_item_qty,
+        npc_eid=interact_npc_eid,
+        property_id=delivery_property_id,
+        building_id=delivery_building_id,
+        chunk=delivery_chunk,
+    )
+    if valid_transfer is not None:
+        return None
+
+    item_label = str(requirements.get("item_label", "")).strip() or _item_label(require_item_id)
+    transfer = _recent_required_item_transfer_for_item(
+        metrics,
+        item_id=require_item_id,
+        min_tick=issued_tick,
+    )
+    if isinstance(transfer, dict):
+        source = str(transfer.get("source", "") or "").strip().lower()
+        if source in {"street_buy", "trade_sold"}:
+            reason = f"sold the provided {item_label} before delivery"
+        else:
+            reason = f"gave up the provided {item_label} before delivery"
+    else:
+        reason = f"lost the provided {item_label} before delivery"
+    return {
+        "failure_code": "provided_item_lost",
+        "failure_reason": reason,
+    }
+
+
+def advance_opportunity_lifecycle(sim, player_eid):
     state = _state(sim)
     active = list(state.get("active", ()))
     if not active:
-        return []
+        return {"completed": [], "failed": []}
 
     stage_active_opportunities(sim, player_eid)
     metrics = _player_metrics(sim, player_eid)
     completed = []
+    failed = []
     remaining = []
     for entry in active:
         if not isinstance(entry, dict):
             continue
+        _ensure_lifecycle_fields(sim, entry)
+        failure = _failure_detail(sim, entry, metrics, include_item_loss=False)
+        if isinstance(failure, dict):
+            failed.append(
+                _resolve_terminal_entry(
+                    sim,
+                    state,
+                    player_eid,
+                    entry,
+                    status="failed",
+                    reason=str(failure.get("failure_reason", "")).strip() or "opportunity failed",
+                    extra={
+                        "failure_code": str(failure.get("failure_code", "")).strip().lower() or "failed",
+                    },
+                    intel_source="failed",
+                )
+            )
+            continue
         _ensure_provided_item(sim, player_eid, entry, metrics)
-        metrics["inventory_counts"] = _inventory_counts(sim.ecs.get(Inventory).get(player_eid) if sim is not None else None)
-        is_completed, reason_text = _completion_detail(sim, entry, metrics)
+        inventory = sim.ecs.get(Inventory).get(player_eid) if sim is not None else None
+        metrics["inventory"] = inventory
+        metrics["inventory_counts"] = _inventory_counts(inventory)
+        failure = _failure_detail(sim, entry, metrics, include_item_loss=True)
+        if isinstance(failure, dict):
+            failed.append(
+                _resolve_terminal_entry(
+                    sim,
+                    state,
+                    player_eid,
+                    entry,
+                    status="failed",
+                    reason=str(failure.get("failure_reason", "")).strip() or "opportunity failed",
+                    extra={
+                        "failure_code": str(failure.get("failure_code", "")).strip().lower() or "failed",
+                    },
+                    intel_source="failed",
+                )
+            )
+            continue
+        is_completed, reason_text, recent_transfer = _completion_detail(sim, entry, metrics)
         if not is_completed:
             remaining.append(entry)
             continue
 
         consumed = _consume_required_item(sim, player_eid, entry)
         requirements = entry.get("requirements", {}) if isinstance(entry.get("requirements", {}), dict) else {}
-        if bool(requirements.get("consume_item")) and not consumed:
+        if bool(requirements.get("consume_item")) and not consumed and recent_transfer is None:
             remaining.append(entry)
             continue
 
         reward = dict(entry.get("reward", {}))
         applied = _apply_reward(sim, player_eid, reward, opportunity=entry)
-        done = dict(entry)
-        done["status"] = "completed"
-        done["completed_tick"] = int(getattr(sim, "tick", 0))
-        done["reward_applied"] = applied
         completion_reason = str(reason_text).strip() or "requirements met"
+        extra = {}
         if consumed:
-            done["consumed_item"] = consumed
+            extra["consumed_item"] = consumed
             completion_reason = f"{completion_reason}, delivered {consumed['item_label']}"
-        done["completion_reason"] = completion_reason
-        state["completed"].append(done)
-        _upsert_observer_intel(
-            sim,
-            state,
-            observer_eid=player_eid,
-            opportunity_id=int(done.get("id", 0)),
-            awareness_state="confirmed",
-            confidence=1.0,
-            source="completed",
+        elif recent_transfer is not None and bool(requirements.get("consume_item")):
+            transferred_item = {
+                "item_id": str(recent_transfer.get("item_id", "") or "").strip().lower(),
+                "quantity": max(1, _safe_int(recent_transfer.get("quantity"), default=1)),
+                "item_label": str(requirements.get("item_label", "")).strip() or _item_label(recent_transfer.get("item_id")),
+                "already_transferred": True,
+                "source": str(recent_transfer.get("source", "") or "").strip().lower(),
+            }
+            extra["consumed_item"] = transferred_item
+        completed.append(
+            _resolve_terminal_entry(
+                sim,
+                state,
+                player_eid,
+                entry,
+                status="completed",
+                reason=completion_reason,
+                reward_applied=applied,
+                extra=extra,
+                intel_source="completed",
+            )
         )
-        completed.append(done)
 
-    if completed:
+    if completed or failed:
         state["active"] = remaining
-    return completed
+    return {
+        "completed": completed,
+        "failed": failed,
+    }
+
+
+def resolve_opportunities(sim, player_eid):
+    return list(advance_opportunity_lifecycle(sim, player_eid).get("completed", ()))
 
 
 def resolve_external_opportunity(
@@ -4479,18 +5134,33 @@ def resolve_external_opportunity(
         if not isinstance(entry, dict):
             continue
         if resolved is None and int(entry.get("id", 0) or 0) == target_id:
-            done = dict(entry)
-            done["status"] = str(status or "completed").strip().lower() or "completed"
-            done["completed_tick"] = int(getattr(sim, "tick", 0))
-            done["reward_applied"] = dict(reward_applied or {})
-            done["completion_reason"] = (
-                str(completion_reason).strip()
-                or f"resolved externally ({done['status']})"
-            )
-            if isinstance(extra, dict):
-                done.update(extra)
-            state["completed"].append(done)
-            resolved = done
+            terminal_status = str(status or "completed").strip().lower() or "completed"
+            if terminal_status == "completed":
+                resolved = _resolve_terminal_entry(
+                    sim,
+                    state,
+                    getattr(sim, "player_eid", None),
+                    entry,
+                    status="completed",
+                    reason=str(completion_reason).strip() or "resolved externally (completed)",
+                    reward_applied=reward_applied,
+                    extra=extra,
+                    intel_source="completed",
+                )
+            else:
+                failure_extra = dict(extra or {})
+                failure_extra.setdefault("failure_code", terminal_status)
+                resolved = _resolve_terminal_entry(
+                    sim,
+                    state,
+                    getattr(sim, "player_eid", None),
+                    entry,
+                    status="failed",
+                    reason=str(completion_reason).strip() or f"resolved externally ({terminal_status})",
+                    reward_applied=reward_applied,
+                    extra=failure_extra,
+                    intel_source="failed",
+                )
             continue
         remaining.append(entry)
 
@@ -4646,6 +5316,7 @@ def evaluate_opportunity_board(sim, player_eid, limit=3, observer_eid=None):
         _bootstrap_player_opportunity_intel(sim, state, player_eid, origin_chunk=_player_chunk(sim, player_eid))
     active = [entry for entry in state.get("active", ()) if isinstance(entry, dict)]
     completed = [entry for entry in state.get("completed", ()) if isinstance(entry, dict)]
+    failed = [entry for entry in state.get("failed", ()) if isinstance(entry, dict)]
     metrics = _player_metrics(sim, player_eid)
     current = _chunk_tuple(metrics.get("current_chunk")) or (0, 0)
 
@@ -4681,17 +5352,18 @@ def evaluate_opportunity_board(sim, player_eid, limit=3, observer_eid=None):
         nearest_dir = _chunk_direction(current, nearest_chunk)
         nearest_text = opportunity_distance_text(nearest_dist, nearest_dir)
         summary_line = (
-            f"Opp {len(scoped)} known/{len(completed)} done | "
+            f"Opp {len(scoped)} known/{len(completed)} done/{len(failed)} failed | "
             f"nearest O{int(nearest.get('id', 0))} {nearest_text} "
             f"{str(nearest.get('title', 'Opportunity')).strip()}"
         )
     else:
-        summary_line = f"Opp 0 known/{len(completed)} done"
+        summary_line = f"Opp 0 known/{len(completed)} done/{len(failed)} failed"
 
     remaining = max(0, len(scoped) - len(lines))
     return {
         "active_count": len(scoped),
         "completed_count": len(completed),
+        "failed_count": len(failed),
         "summary_line": summary_line,
         "lines": lines,
         "remaining": remaining,

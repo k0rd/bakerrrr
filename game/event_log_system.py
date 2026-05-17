@@ -505,6 +505,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("overworld_marker_report", self.on_overworld_marker_report)
         self.sim.events.subscribe("opportunity_added", self.on_opportunity_added)
         self.sim.events.subscribe("opportunity_completed", self.on_opportunity_completed)
+        self.sim.events.subscribe("opportunity_failed", self.on_opportunity_failed)
         self.sim.events.subscribe("opportunity_report", self.on_opportunity_report)
         self.sim.events.subscribe("rival_operator_seeded", self.on_rival_operator_seeded)
         self.sim.events.subscribe("rival_operator_spotted", self.on_rival_operator_spotted)
@@ -4677,6 +4678,32 @@ class EventLogSystem(System):
         details.append("Press O for report")
         self.sim.log.add("  " + " | ".join(details) + ".")
 
+    def on_opportunity_failed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        opp_id = int(event.data.get("opportunity_id", 0))
+        title = str(event.data.get("title", "Opportunity")).strip() or "Opportunity"
+        summary = str(event.data.get("summary", "")).strip()
+        chunk = event.data.get("chunk", (0, 0))
+        source = str(event.data.get("source", "unknown")).strip()
+        failure_reason = str(event.data.get("failure_reason", "")).strip() or "the lead collapsed"
+        active_remaining = int(event.data.get("active_remaining", 0))
+        label = f"O{opp_id} {title}" if opp_id > 0 else title
+        location = f" @ {chunk}" if isinstance(chunk, (list, tuple)) and len(chunk) == 2 else ""
+
+        self._log(
+            f"Opportunity failed: {label}{location} after {failure_reason}.",
+            channel="opportunity",
+            priority="high",
+        )
+
+        if summary:
+            self.sim.log.add(f"  {summary}")
+
+        source_text = opportunity_source_label(source, short=False)
+        details = [f"Source {source_text}", f"{active_remaining} active remain", "Press O for report"]
+        self.sim.log.add("  " + " | ".join(details) + ".")
+
     def on_opportunity_added(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -5186,6 +5213,8 @@ class EventLogSystem(System):
         after_tier = str(event.data.get("after_tier", "clear")).strip().lower() or "clear"
         after_score = int(event.data.get("after_score", 0) or 0)
         fine_due = int(event.data.get("fine_due", 0) or 0)
+        restitution_due = int(event.data.get("restitution_due", 0) or 0)
+        restitution_property_count = int(event.data.get("restitution_property_count", 0) or 0)
         fine_paid = int(event.data.get("fine_paid", 0) or 0)
         cash_fine_paid = int(event.data.get("cash_fine_paid", 0) or 0)
         wallet_fine_paid = int(event.data.get("wallet_fine_paid", 0) or 0)
@@ -5233,6 +5262,9 @@ class EventLogSystem(System):
                 summary += f" Fine converted to {debt_added}c debt."
             else:
                 summary += f" Fine assessed: {fine_due}c."
+        if restitution_due > 0:
+            site_word = "site" if restitution_property_count == 1 else "sites"
+            summary += f" Restitution {restitution_due}c across {restitution_property_count} damaged {site_word}."
         summary += f" Released {status_text} ({after_score})."
         if confiscated_count > 0:
             seized_bits = []

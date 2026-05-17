@@ -121,10 +121,25 @@ def _clean_damage_record(record, *, default_kind="", default_aperture_kind=""):
         "repair_kind": repair_kind,
         "aperture_kind": aperture_kind,
         "cause": _text(record.get("cause")).lower(),
+        "offender_eid": _int_or(record.get("offender_eid"), default=0) or None,
+        "damage_tick": _int_or(record.get("damage_tick"), default=-10_000),
     }
 
+def damage_record_repair_cost(prop, record):
+    clean = _clean_damage_record(record)
+    if clean is None:
+        return 0
+    repair_kind = _normalize_repair_kind(
+        clean.get("repair_kind"),
+        aperture_kind=clean.get("aperture_kind"),
+    )
+    base_cost = int(BUILDING_REPAIR_BASE_COSTS.get(repair_kind, BUILDING_REPAIR_BASE_COSTS["wall"]))
+    purchase_cost = max(80, _int_or(_property_metadata(prop).get("purchase_cost"), default=150))
+    complexity_mult = 1.0 + min(0.45, max(0.0, float(purchase_cost) / 1000.0))
+    return max(0, int(round(float(base_cost) * complexity_mult)))
 
-def record_building_damage(sim, prop, x, y, z=0, *, kind="", aperture_kind="", cause=""):
+
+def record_building_damage(sim, prop, x, y, z=0, *, kind="", aperture_kind="", cause="", offender_eid=None, damage_tick=None):
     if not isinstance(prop, dict) or _text(prop.get("kind")).lower() != "building":
         return None
     clean = _clean_damage_record(
@@ -135,6 +150,8 @@ def record_building_damage(sim, prop, x, y, z=0, *, kind="", aperture_kind="", c
             "repair_kind": kind,
             "aperture_kind": aperture_kind,
             "cause": cause,
+            "offender_eid": offender_eid,
+            "damage_tick": _int_or(damage_tick, default=_int_or(getattr(sim, "tick", 0), default=0)),
         },
         default_kind=kind,
         default_aperture_kind=aperture_kind,
@@ -144,16 +161,12 @@ def record_building_damage(sim, prop, x, y, z=0, *, kind="", aperture_kind="", c
     state = _stored_damage_state(prop, create=True)
     records = list(state.get("records", ()))
     key = _record_key(clean)
-    replaced = False
     for index, existing in enumerate(records):
         normalized = _clean_damage_record(existing)
         if normalized is None or _record_key(normalized) != key:
             continue
-        records[index] = clean
-        replaced = True
-        break
-    if not replaced:
-        records.append(clean)
+        return normalized
+    records.append(clean)
     state["records"] = records
     return clean
 
@@ -248,7 +261,7 @@ def _inferred_damage_records(sim, prop):
     return tuple(inferred)
 
 
-def property_damage_records(sim, prop):
+def property_damage_records(sim, prop, *, offender_eid=None, damage_tick=None):
     if not isinstance(prop, dict) or _text(prop.get("kind")).lower() != "building":
         return ()
     merged = {}
@@ -264,27 +277,36 @@ def property_damage_records(sim, prop):
         if clean is None:
             continue
         merged.setdefault(_record_key(clean), clean)
-    return tuple(
-        merged[key]
-        for key in sorted(merged.keys(), key=lambda row: (row[2], row[1], row[0]))
-    )
+    rows = []
+    wanted_offender = _int_or(offender_eid, default=0) if offender_eid is not None else None
+    wanted_tick = _int_or(damage_tick, default=-10_000) if damage_tick is not None else None
+    for key in sorted(merged.keys(), key=lambda row: (row[2], row[1], row[0])):
+        clean = merged[key]
+        if wanted_offender is not None and _int_or(clean.get("offender_eid"), default=0) != wanted_offender:
+            continue
+        if wanted_tick is not None and _int_or(clean.get("damage_tick"), default=-10_000) != wanted_tick:
+            continue
+        rows.append(clean)
+    return tuple(rows)
 
 
-def property_damage_summary(sim, prop):
-    records = tuple(property_damage_records(sim, prop))
+def property_damage_summary(sim, prop, *, offender_eid=None, damage_tick=None):
+    records = tuple(property_damage_records(sim, prop, offender_eid=offender_eid, damage_tick=damage_tick))
     counts = {"window": 0, "door": 0, "wall": 0}
-    base_cost = 0
+    total_cost = 0
     for record in records:
         repair_kind = _normalize_repair_kind(
             record.get("repair_kind"),
             aperture_kind=record.get("aperture_kind"),
         )
         counts[repair_kind] = counts.get(repair_kind, 0) + 1
-        base_cost += int(BUILDING_REPAIR_BASE_COSTS.get(repair_kind, BUILDING_REPAIR_BASE_COSTS["wall"]))
+        total_cost += int(damage_record_repair_cost(prop, record))
 
+    base_cost = 0
+    for repair_kind, count in counts.items():
+        base_cost += int(BUILDING_REPAIR_BASE_COSTS.get(repair_kind, BUILDING_REPAIR_BASE_COSTS["wall"])) * int(count)
     purchase_cost = max(80, _int_or(_property_metadata(prop).get("purchase_cost"), default=150))
     complexity_mult = 1.0 + min(0.45, max(0.0, float(purchase_cost) / 1000.0))
-    total_cost = int(round(float(base_cost) * complexity_mult)) if base_cost > 0 else 0
     return {
         "records": records,
         "damage_count": len(records),
@@ -439,6 +461,7 @@ def repair_building_damage(sim, prop):
 __all__ = [
     "owned_building_properties",
     "owned_repairable_buildings",
+    "damage_record_repair_cost",
     "property_damage_records",
     "property_damage_summary",
     "property_needs_building_repair",

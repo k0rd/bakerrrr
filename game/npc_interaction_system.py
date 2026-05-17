@@ -2138,7 +2138,15 @@ class NPCInteractionSystem(System):
         opp_state = traits.get("opportunities")
         if not isinstance(opp_state, dict):
             return None
-        for entry in reversed(list(opp_state.get("completed", ()))):
+        terminal = list(opp_state.get("completed", ())) + list(opp_state.get("failed", ()))
+        terminal.sort(
+            key=lambda entry: max(
+                _int_or_default((entry or {}).get("completed_tick"), -10_000),
+                _int_or_default((entry or {}).get("failed_tick"), -10_000),
+            ),
+            reverse=True,
+        )
+        for entry in terminal:
             if not isinstance(entry, dict):
                 continue
             if str(entry.get("kind", "")).strip().lower() not in self.SIDE_JOB_KINDS:
@@ -2146,8 +2154,11 @@ class NPCInteractionSystem(System):
             issuer = entry.get("issuer", {}) if isinstance(entry.get("issuer"), dict) else {}
             if _int_or_default(issuer.get("npc_eid"), 0) != npc_int:
                 continue
-            completed_tick = _int_or_default(entry.get("completed_tick"), -10_000)
-            if self.sim.tick - completed_tick < self.SIDE_JOB_COOLDOWN_TICKS:
+            terminal_tick = max(
+                _int_or_default(entry.get("completed_tick"), -10_000),
+                _int_or_default(entry.get("failed_tick"), -10_000),
+            )
+            if self.sim.tick - terminal_tick < self.SIDE_JOB_COOLDOWN_TICKS:
                 return entry
             break
         return None
@@ -4012,6 +4023,14 @@ class NPCInteractionSystem(System):
             item_count=len(sold_rows),
             illegal_units=int(illegal_units),
             desired_item_id=desired_item_id,
+            sold_items=tuple(
+                {
+                    "item_id": str(row.get("item_id", "") or "").strip().lower(),
+                    "quantity": int(max(1, row.get("quantity", 1) or 1)),
+                }
+                for row in sold_rows
+                if str(row.get("item_id", "") or "").strip()
+            ),
             credits=int(getattr(assets, "credits", 0) or 0),
         ))
 

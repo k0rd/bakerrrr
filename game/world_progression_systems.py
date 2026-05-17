@@ -85,6 +85,7 @@ from game.items import (
 )
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
+    advance_opportunity_lifecycle,
     append_external_opportunity,
     evaluate_opportunity_board,
     evaluate_opportunity_facts,
@@ -96,7 +97,6 @@ from game.opportunities import (
     refresh_dynamic_opportunities,
     reveal_opportunity_to_observer,
     resolve_external_opportunity,
-    resolve_opportunities,
     seed_run_opportunities,
     stage_active_opportunities,
 )
@@ -1418,6 +1418,7 @@ class OpportunitySystem(System):
         self.sim.events.subscribe("site_intel_report", self.on_site_intel_report)
         self.sim.events.subscribe("trade_bought", self.on_trade_bought)
         self.sim.events.subscribe("trade_sold", self.on_trade_sold)
+        self.sim.events.subscribe("street_buy_transaction", self.on_street_buy_transaction)
         self.sim.events.subscribe("bank_transaction", self.on_bank_transaction)
         self.sim.events.subscribe("insurance_policy_purchased", self.on_insurance_policy_purchased)
         self.sim.events.subscribe("stakeout_intel_gained", self.on_stakeout_intel_gained)
@@ -1473,7 +1474,8 @@ class OpportunitySystem(System):
         board = evaluate_opportunity_board(self.sim, self.player_eid, limit=max(1, int(limit)))
         title = (
             f"Opportunities ({int(board.get('active_count', 0))} active / "
-            f"{int(board.get('completed_count', 0))} done)"
+            f"{int(board.get('completed_count', 0))} done / "
+            f"{int(board.get('failed_count', 0))} failed)"
         )
         self.sim.emit(Event(
             "opportunity_report",
@@ -1624,6 +1626,56 @@ class OpportunitySystem(System):
                 if _int_or_default(raw_tick, default=-10_000) < cutoff:
                     recent_buildings.pop(raw_building_id, None)
 
+    def _remember_required_item_transfer(self, *, item_id, quantity=1, npc_eid=None, property_id=None, building_id=None, chunk=None, source=""):
+        item_id = str(item_id or "").strip().lower()
+        property_id = str(property_id or "").strip()
+        building_id = str(building_id or "").strip()
+        npc_eid = _int_or_default(npc_eid, default=0)
+        source = str(source or "").strip().lower()
+        try:
+            quantity = max(1, int(quantity))
+        except (TypeError, ValueError):
+            quantity = 1
+        if isinstance(chunk, (list, tuple)) and len(chunk) == 2:
+            try:
+                chunk = (int(chunk[0]), int(chunk[1]))
+            except (TypeError, ValueError):
+                chunk = None
+        else:
+            chunk = None
+        if not item_id:
+            return
+
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            self.sim.world_traits = {}
+            traits = self.sim.world_traits
+        records = traits.get("recent_required_item_transfers")
+        if not isinstance(records, list):
+            records = []
+            traits["recent_required_item_transfers"] = records
+        records.append({
+            "tick": int(getattr(self.sim, "tick", 0)),
+            "item_id": item_id,
+            "quantity": int(quantity),
+            "npc_eid": int(npc_eid) if npc_eid > 0 else 0,
+            "property_id": property_id,
+            "building_id": building_id,
+            "chunk": chunk,
+            "source": source,
+        })
+        cutoff = int(getattr(self.sim, "tick", 0)) - 24
+        kept = []
+        for raw in list(records):
+            if not isinstance(raw, dict):
+                continue
+            if _int_or_default(raw.get("tick"), default=-10_000) < cutoff:
+                continue
+            if not str(raw.get("item_id", "") or "").strip():
+                continue
+            kept.append(raw)
+        traits["recent_required_item_transfers"] = kept[-20:]
+
     def on_property_interact(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -1657,7 +1709,50 @@ class OpportunitySystem(System):
     def on_trade_sold(self, event):
         if event.data.get("eid") != self.player_eid:
             return
-        self._remember_opportunity_activity_for_property(event.data.get("property_id"), "trade")
+        property_id = event.data.get("property_id")
+        self._remember_opportunity_activity_for_property(property_id, "trade")
+        prop = self.sim.properties.get(str(property_id or "").strip()) if hasattr(self.sim, "properties") else None
+        chunk = None
+        if isinstance(prop, dict):
+            try:
+                chunk = self.sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+            except (TypeError, ValueError):
+                chunk = None
+        self._remember_required_item_transfer(
+            item_id=event.data.get("item_id"),
+            quantity=event.data.get("quantity", 1),
+            property_id=property_id,
+            building_id=_building_id_from_property(prop) if isinstance(prop, dict) else "",
+            chunk=chunk,
+            source="trade_sold",
+        )
+
+    def on_street_buy_transaction(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        npc_eid = event.data.get("npc_eid")
+        sold_items = event.data.get("sold_items", ())
+        if isinstance(sold_items, dict):
+            sold_items = (sold_items,)
+        if not isinstance(sold_items, (list, tuple)):
+            return
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        chunk = None
+        if player_pos is not None:
+            try:
+                chunk = self.sim.chunk_coords(int(player_pos.x), int(player_pos.y))
+            except (TypeError, ValueError):
+                chunk = None
+        for spec in sold_items:
+            if not isinstance(spec, dict):
+                continue
+            self._remember_required_item_transfer(
+                item_id=spec.get("item_id"),
+                quantity=spec.get("quantity", 1),
+                npc_eid=npc_eid,
+                chunk=chunk,
+                source="street_buy",
+            )
 
     def on_bank_transaction(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -1706,9 +1801,17 @@ class OpportunitySystem(System):
         for notice in stage_active_opportunities(self.sim, self.player_eid):
             self.sim.log.add(notice, channel="opportunity", priority="high")
 
-        completed = resolve_opportunities(self.sim, self.player_eid)
-        if not completed:
+        lifecycle = advance_opportunity_lifecycle(self.sim, self.player_eid)
+        completed = list(lifecycle.get("completed", ())) if isinstance(lifecycle, dict) else []
+        failed = list(lifecycle.get("failed", ())) if isinstance(lifecycle, dict) else []
+        if not completed and not failed:
             return
+
+        if completed or failed:
+            refresh_dynamic_opportunities(self.sim, self.player_eid)
+            self._emit_new_opportunity_log()
+            for notice in stage_active_opportunities(self.sim, self.player_eid):
+                self.sim.log.add(notice, channel="opportunity", priority="high")
 
         active_count = int(opportunity_known_count(self.sim, self.player_eid, observer_eid=self.player_eid))
         for entry in completed:
@@ -1735,6 +1838,30 @@ class OpportunitySystem(System):
                 reward=reward,
                 reward_text=format_reward_text(reward),
                 completion_reason=str(entry.get("completion_reason", "")).strip(),
+                active_remaining=active_count,
+            ))
+        for entry in failed:
+            raw_chunk = entry.get("chunk", (0, 0))
+            if isinstance(raw_chunk, (list, tuple)) and len(raw_chunk) == 2:
+                try:
+                    chunk = (int(raw_chunk[0]), int(raw_chunk[1]))
+                except (TypeError, ValueError):
+                    chunk = (0, 0)
+            else:
+                chunk = (0, 0)
+
+            self.sim.emit(Event(
+                "opportunity_failed",
+                eid=self.player_eid,
+                opportunity_id=int(entry.get("id", 0)),
+                title=str(entry.get("title", "Opportunity")).strip() or "Opportunity",
+                summary=str(entry.get("summary", "")).strip(),
+                chunk=chunk,
+                source=str(entry.get("source", "unknown")).strip(),
+                risk=str(entry.get("risk", "low")).strip(),
+                playstyles=tuple(entry.get("playstyles", ())),
+                failure_reason=str(entry.get("failure_reason", "")).strip(),
+                failure_code=str(entry.get("failure_code", "")).strip().lower(),
                 active_remaining=active_count,
             ))
 
@@ -3002,10 +3129,31 @@ class RivalOperatorSystem(System):
             reward["credits"] += 6
         return {key: int(value) for key, value in reward.items() if int(value) > 0}
 
+    def _should_spawn_rival_followup(self, resolved, *, resolution, casualty=""):
+        if not isinstance(resolved, dict):
+            return False
+        if self._is_rival_followup_entry(resolved):
+            return False
+
+        kind = str(resolved.get("kind", "")).strip().lower()
+        requirements = resolved.get("requirements", {}) if isinstance(resolved.get("requirements", {}), dict) else {}
+        failure_policy = resolved.get("failure_policy", {}) if isinstance(resolved.get("failure_policy"), dict) else {}
+        explicit = failure_policy.get("allow_rival_followup")
+        if explicit is None:
+            explicit = requirements.get("allow_rival_followup")
+        if explicit is not None:
+            return bool(explicit)
+
+        if kind == "contract_kill":
+            return False
+        if casualty == "dead":
+            return True
+        return resolution in {"claimed", "burned"}
+
     def _spawn_rival_followup(self, rival, resolved, *, resolution, casualty=""):
         if not isinstance(resolved, dict):
             return None
-        if self._is_rival_followup_entry(resolved):
+        if not self._should_spawn_rival_followup(resolved, resolution=resolution, casualty=casualty):
             return None
         chunk = self._normalize_chunk(resolved.get("chunk"), fallback=rival.get("current_chunk"))
         rival_name = str(rival.get("name", "rival")).strip() or "rival"
@@ -3220,16 +3368,23 @@ class RivalOperatorSystem(System):
 
         known_before = bool(opportunity_intel_for_observer(self.sim, self.player_eid, int(entry.get("id", 0) or 0)))
         reward = dict(entry.get("reward", {}))
+        entry_kind = str(entry.get("kind", "")).strip().lower()
+        is_followup = self._is_rival_followup_entry(entry)
+        rival_name = str(rival.get("name", "a rival")).strip() or "a rival"
         if resolution == "claimed":
             self._apply_rival_reward(rival, reward)
             self._mirror_reward_to_materialized_inventory(rival, reward)
             rival["heat"] = int(_clamp(int(rival.get("heat", 0) or 0) + max(2, int(reward.get("standing", 0) or 0)), 0, 100))
-            reason = f"claimed by {rival.get('name', 'a rival')} ({rival.get('hustle', 'cash')})"
-            status = "completed"
+            if entry_kind == "contract_kill" or is_followup:
+                reason = f"claimed by {rival_name} ({rival.get('hustle', 'cash')})"
+                status = "completed"
+            else:
+                reason = f"{rival_name} got there first"
+                status = "rival_claimed"
         else:
             rival["heat"] = int(_clamp(int(rival.get("heat", 0) or 0) + 5, 0, 100))
-            reason = f"burned by {rival.get('name', 'a rival')}"
-            status = "spoiled"
+            reason = f"{rival_name} burned the scene"
+            status = "rival_burned"
 
         resolved = resolve_external_opportunity(
             self.sim,

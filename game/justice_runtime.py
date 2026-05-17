@@ -119,6 +119,57 @@ def _release_grace_property_key(property_id):
     return _text(property_id)
 
 
+def _normalize_property_entries(entries):
+    cleaned_entries = []
+    for entry in tuple(entries or ()):
+        if not isinstance(entry, dict):
+            continue
+        item_id = _text(entry.get("item_id")).lower()
+        instance_id = _text(entry.get("instance_id"))
+        quantity = max(1, _safe_int(entry.get("quantity"), default=1))
+        if not item_id or not instance_id:
+            continue
+        metadata = entry.get("metadata")
+        cleaned_entries.append({
+            "instance_id": instance_id,
+            "item_id": item_id,
+            "quantity": quantity,
+            "owner_eid": entry.get("owner_eid"),
+            "owner_tag": _text(entry.get("owner_tag")),
+            "metadata": dict(metadata) if isinstance(metadata, dict) else {},
+        })
+    return cleaned_entries
+
+
+def _normalize_restitution_entries(entries):
+    cleaned = []
+    for entry in tuple(entries or ()):
+        if not isinstance(entry, dict):
+            continue
+        property_id = _text(entry.get("property_id"))
+        property_name = _text(entry.get("property_name"))
+        amount = max(0, _safe_int(entry.get("amount"), default=0))
+        damage_keys = []
+        for raw in tuple(entry.get("damage_keys", ()) or ()):
+            key = _text(raw)
+            if key and key not in damage_keys:
+                damage_keys.append(key)
+        if amount <= 0 and not damage_keys:
+            continue
+        cleaned.append({
+            "property_id": property_id,
+            "property_name": property_name,
+            "amount": amount,
+            "damage_keys": tuple(damage_keys),
+            "damage_count": max(0, _safe_int(entry.get("damage_count"), default=len(damage_keys))),
+            "window_count": max(0, _safe_int(entry.get("window_count"), default=0)),
+            "door_count": max(0, _safe_int(entry.get("door_count"), default=0)),
+            "wall_count": max(0, _safe_int(entry.get("wall_count"), default=0)),
+            "updated_tick": _safe_int(entry.get("updated_tick"), default=-10_000),
+        })
+    return cleaned
+
+
 def grant_custody_release_grace(sim, offender_eid, property_id, *, duration=18, reason="custody_release"):
     try:
         offender_key = str(int(offender_eid))
@@ -202,6 +253,15 @@ def _offender_record(state, offender_eid, *, create=False):
             "held_property_site_name": "",
             "held_property_entries": [],
             "held_property_updated_tick": -10_000,
+            "last_booking_tick": -10_000,
+            "last_booking_property_id": "",
+            "last_booking_property_name": "",
+            "last_booking_hold_ticks": 0,
+            "last_booking_fine_due": 0,
+            "last_booking_fine_paid": 0,
+            "last_booking_debt_added": 0,
+            "last_booking_seized_entries": [],
+            "restitution_entries": [],
         }
         offenders[offender_key] = record
 
@@ -235,26 +295,23 @@ def _offender_record(state, offender_eid, *, create=False):
     held_entries = record.get("held_property_entries")
     if not isinstance(held_entries, list):
         held_entries = []
-    cleaned_entries = []
-    for entry in held_entries:
-        if not isinstance(entry, dict):
-            continue
-        item_id = _text(entry.get("item_id")).lower()
-        instance_id = _text(entry.get("instance_id"))
-        quantity = max(1, _safe_int(entry.get("quantity"), default=1))
-        if not item_id or not instance_id:
-            continue
-        metadata = entry.get("metadata")
-        cleaned_entries.append({
-            "instance_id": instance_id,
-            "item_id": item_id,
-            "quantity": quantity,
-            "owner_eid": entry.get("owner_eid"),
-            "owner_tag": _text(entry.get("owner_tag")),
-            "metadata": dict(metadata) if isinstance(metadata, dict) else {},
-        })
-    record["held_property_entries"] = cleaned_entries
+    record["held_property_entries"] = _normalize_property_entries(held_entries)
     record["held_property_updated_tick"] = _safe_int(record.get("held_property_updated_tick"), default=-10_000)
+    record["last_booking_tick"] = _safe_int(record.get("last_booking_tick"), default=-10_000)
+    record["last_booking_property_id"] = _text(record.get("last_booking_property_id"))
+    record["last_booking_property_name"] = _text(record.get("last_booking_property_name"))
+    record["last_booking_hold_ticks"] = max(0, _safe_int(record.get("last_booking_hold_ticks"), default=0))
+    record["last_booking_fine_due"] = max(0, _safe_int(record.get("last_booking_fine_due"), default=0))
+    record["last_booking_fine_paid"] = max(0, _safe_int(record.get("last_booking_fine_paid"), default=0))
+    record["last_booking_debt_added"] = max(0, _safe_int(record.get("last_booking_debt_added"), default=0))
+    booking_entries = record.get("last_booking_seized_entries")
+    if not isinstance(booking_entries, list):
+        booking_entries = []
+    record["last_booking_seized_entries"] = _normalize_property_entries(booking_entries)
+    restitution_entries = record.get("restitution_entries")
+    if not isinstance(restitution_entries, list):
+        restitution_entries = []
+    record["restitution_entries"] = _normalize_restitution_entries(restitution_entries)
     return record
 
 
@@ -299,11 +356,23 @@ def justice_snapshot(sim, offender_eid):
             "wanted_tier": "clear",
             "wanted_label": wanted_label("clear"),
             "in_custody": False,
+            "custody_tick": -10_000,
             "held_by_eid": None,
             "latest_incident": None,
             "held_property_count": 0,
             "held_property_site_id": "",
             "held_property_site_name": "",
+            "held_property_updated_tick": -10_000,
+            "last_booking_tick": -10_000,
+            "last_booking_property_id": "",
+            "last_booking_property_name": "",
+            "last_booking_hold_ticks": 0,
+            "last_booking_fine_due": 0,
+            "last_booking_fine_paid": 0,
+            "last_booking_debt_added": 0,
+            "last_booking_seized_count": 0,
+            "restitution_due": 0,
+            "restitution_property_count": 0,
         }
     incidents = record.get("incidents", [])
     latest = incidents[-1] if incidents else None
@@ -319,11 +388,23 @@ def justice_snapshot(sim, offender_eid):
         "wanted_tier": tier,
         "wanted_label": wanted_label(tier),
         "in_custody": bool(record.get("in_custody", False)),
+        "custody_tick": int(record.get("custody_tick", -10_000)),
         "held_by_eid": record.get("held_by_eid"),
         "latest_incident": dict(latest) if isinstance(latest, dict) else None,
         "held_property_count": int(sum(max(1, _safe_int(entry.get("quantity"), default=1)) for entry in record.get("held_property_entries", ()) if isinstance(entry, dict))),
         "held_property_site_id": _text(record.get("held_property_site_id")),
         "held_property_site_name": _text(record.get("held_property_site_name")),
+        "held_property_updated_tick": int(record.get("held_property_updated_tick", -10_000)),
+        "last_booking_tick": int(record.get("last_booking_tick", -10_000)),
+        "last_booking_property_id": _text(record.get("last_booking_property_id")),
+        "last_booking_property_name": _text(record.get("last_booking_property_name")),
+        "last_booking_hold_ticks": max(0, _safe_int(record.get("last_booking_hold_ticks"), default=0)),
+        "last_booking_fine_due": max(0, _safe_int(record.get("last_booking_fine_due"), default=0)),
+        "last_booking_fine_paid": max(0, _safe_int(record.get("last_booking_fine_paid"), default=0)),
+        "last_booking_debt_added": max(0, _safe_int(record.get("last_booking_debt_added"), default=0)),
+        "last_booking_seized_count": int(sum(max(1, _safe_int(entry.get("quantity"), default=1)) for entry in record.get("last_booking_seized_entries", ()) if isinstance(entry, dict))),
+        "restitution_due": int(sum(max(0, _safe_int(entry.get("amount"), default=0)) for entry in record.get("restitution_entries", ()) if isinstance(entry, dict))),
+        "restitution_property_count": int(sum(1 for entry in record.get("restitution_entries", ()) if isinstance(entry, dict) and max(0, _safe_int(entry.get("amount"), default=0)) > 0)),
     }
 
 
@@ -354,6 +435,54 @@ def held_property_snapshot(sim, offender_eid):
     }
 
 
+def booking_seizure_snapshot(sim, offender_eid):
+    state = _state(sim)
+    record = _offender_record(state, offender_eid, create=False)
+    if not isinstance(record, dict):
+        return {
+            "property_id": "",
+            "property_name": "",
+            "booking_tick": -10_000,
+            "entry_count": 0,
+            "item_count": 0,
+            "entries": (),
+        }
+    entries = tuple(
+        dict(entry)
+        for entry in tuple(record.get("last_booking_seized_entries", ()) or ())
+        if isinstance(entry, dict)
+    )
+    return {
+        "property_id": _text(record.get("last_booking_property_id")),
+        "property_name": _text(record.get("last_booking_property_name")),
+        "booking_tick": int(record.get("last_booking_tick", -10_000)),
+        "entry_count": len(entries),
+        "item_count": int(sum(max(1, _safe_int(entry.get("quantity"), default=1)) for entry in entries)),
+        "entries": entries,
+    }
+
+
+def restitution_snapshot(sim, offender_eid):
+    state = _state(sim)
+    record = _offender_record(state, offender_eid, create=False)
+    if not isinstance(record, dict):
+        return {
+            "entry_count": 0,
+            "total_due": 0,
+            "entries": (),
+        }
+    entries = tuple(
+        dict(entry)
+        for entry in tuple(record.get("restitution_entries", ()) or ())
+        if isinstance(entry, dict)
+    )
+    return {
+        "entry_count": len(entries),
+        "total_due": int(sum(max(0, _safe_int(entry.get("amount"), default=0)) for entry in entries)),
+        "entries": entries,
+    }
+
+
 def replace_held_property(sim, offender_eid, *, property_id=None, property_name=None, entries=()):
     state = _state(sim)
     record = _offender_record(state, offender_eid, create=True)
@@ -361,24 +490,7 @@ def replace_held_property(sim, offender_eid, *, property_id=None, property_name=
         return None
     record["held_property_site_id"] = _text(property_id or record.get("held_property_site_id"))
     record["held_property_site_name"] = _text(property_name or record.get("held_property_site_name"))
-    normalized = []
-    for entry in tuple(entries or ()):
-        if not isinstance(entry, dict):
-            continue
-        item_id = _text(entry.get("item_id")).lower()
-        instance_id = _text(entry.get("instance_id"))
-        quantity = max(1, _safe_int(entry.get("quantity"), default=1))
-        if not item_id or not instance_id:
-            continue
-        metadata = entry.get("metadata")
-        normalized.append({
-            "instance_id": instance_id,
-            "item_id": item_id,
-            "quantity": quantity,
-            "owner_eid": entry.get("owner_eid"),
-            "owner_tag": _text(entry.get("owner_tag")),
-            "metadata": dict(metadata) if isinstance(metadata, dict) else {},
-        })
+    normalized = _normalize_property_entries(entries)
     record["held_property_entries"] = normalized
     record["held_property_updated_tick"] = _safe_int(getattr(sim, "tick", 0), default=0)
     if not normalized:
@@ -402,6 +514,93 @@ def store_held_property(sim, offender_eid, *, property_id=None, property_name=No
         property_name=property_name,
         entries=combined,
     )
+
+
+def record_restitution_claim(
+    sim,
+    offender_eid,
+    *,
+    property_id=None,
+    property_name=None,
+    amount=0,
+    damage_keys=(),
+    damage_count=0,
+    window_count=0,
+    door_count=0,
+    wall_count=0,
+):
+    amount = max(0, _safe_int(amount))
+    unique_damage_keys = []
+    for raw in tuple(damage_keys or ()):
+        key = _text(raw)
+        if key and key not in unique_damage_keys:
+            unique_damage_keys.append(key)
+    if amount <= 0 and not unique_damage_keys:
+        return restitution_snapshot(sim, offender_eid)
+
+    state = _state(sim)
+    record = _offender_record(state, offender_eid, create=True)
+    if not isinstance(record, dict):
+        return None
+
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    entries = _normalize_restitution_entries(record.get("restitution_entries", ()))
+    target_property_id = _text(property_id)
+    target_property_name = _text(property_name)
+    match_key = target_property_id or target_property_name.lower()
+    matched = False
+    for entry in entries:
+        entry_key = _text(entry.get("property_id")) or _text(entry.get("property_name")).lower()
+        if entry_key != match_key:
+            continue
+        existing_keys = list(entry.get("damage_keys", ()) or ())
+        new_key_count = 0
+        for key in unique_damage_keys:
+            if key in existing_keys:
+                continue
+            existing_keys.append(key)
+            new_key_count += 1
+        if not unique_damage_keys:
+            new_key_count = 1
+        if new_key_count <= 0:
+            matched = True
+            break
+        entry["property_id"] = target_property_id or _text(entry.get("property_id"))
+        entry["property_name"] = target_property_name or _text(entry.get("property_name"))
+        entry["amount"] = max(0, _safe_int(entry.get("amount"), default=0) + int(amount))
+        entry["damage_keys"] = tuple(existing_keys)
+        entry["damage_count"] = max(0, _safe_int(entry.get("damage_count"), default=0) + max(0, _safe_int(damage_count, default=new_key_count)))
+        entry["window_count"] = max(0, _safe_int(entry.get("window_count"), default=0) + max(0, _safe_int(window_count, default=0)))
+        entry["door_count"] = max(0, _safe_int(entry.get("door_count"), default=0) + max(0, _safe_int(door_count, default=0)))
+        entry["wall_count"] = max(0, _safe_int(entry.get("wall_count"), default=0) + max(0, _safe_int(wall_count, default=0)))
+        entry["updated_tick"] = tick
+        matched = True
+        break
+
+    if not matched:
+        entries.append({
+            "property_id": target_property_id,
+            "property_name": target_property_name,
+            "amount": int(amount),
+            "damage_keys": tuple(unique_damage_keys),
+            "damage_count": max(0, _safe_int(damage_count, default=len(unique_damage_keys) or 1)),
+            "window_count": max(0, _safe_int(window_count, default=0)),
+            "door_count": max(0, _safe_int(door_count, default=0)),
+            "wall_count": max(0, _safe_int(wall_count, default=0)),
+            "updated_tick": tick,
+        })
+
+    record["restitution_entries"] = _normalize_restitution_entries(entries)
+    return restitution_snapshot(sim, offender_eid)
+
+
+def clear_restitution_claims(sim, offender_eid):
+    state = _state(sim)
+    record = _offender_record(state, offender_eid, create=True)
+    if not isinstance(record, dict):
+        return None
+    record["restitution_entries"] = []
+    return restitution_snapshot(sim, offender_eid)
 
 
 def _incident_weight(incident_type, *, severity=0, witnessed=False):
@@ -644,6 +843,35 @@ def release_from_custody(sim, offender_eid, *, new_score=None, x=None, y=None):
     }
 
 
+def record_booking_completion(
+    sim,
+    offender_eid,
+    *,
+    property_id=None,
+    property_name=None,
+    hold_ticks=0,
+    fine_due=0,
+    fine_paid=0,
+    debt_added=0,
+    seized_entries=(),
+):
+    state = _state(sim)
+    record = _offender_record(state, offender_eid, create=True)
+    if not isinstance(record, dict):
+        return None
+
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    record["last_booking_tick"] = tick
+    record["last_booking_property_id"] = _text(property_id)
+    record["last_booking_property_name"] = _text(property_name)
+    record["last_booking_hold_ticks"] = max(0, _safe_int(hold_ticks, default=0))
+    record["last_booking_fine_due"] = max(0, _safe_int(fine_due, default=0))
+    record["last_booking_fine_paid"] = max(0, _safe_int(fine_paid, default=0))
+    record["last_booking_debt_added"] = max(0, _safe_int(debt_added, default=0))
+    record["last_booking_seized_entries"] = _normalize_property_entries(seized_entries)
+    return justice_snapshot(sim, offender_eid)
+
+
 def booking_anchor_for(sim, offender_eid, *, fallback_x=None, fallback_y=None):
     state = _state(sim)
     record = _offender_record(state, offender_eid, create=False)
@@ -721,6 +949,9 @@ def justice_summary_rows(sim, offender_eid):
     held = held_property_snapshot(sim, offender_eid)
     held_count = max(0, _safe_int(held.get("item_count"), default=0))
     held_site = _text(held.get("property_name")) or _text(snapshot.get("held_property_site_name")) or jurisdiction
+    restitution = restitution_snapshot(sim, offender_eid)
+    restitution_due = max(0, _safe_int(restitution.get("total_due"), default=0))
+    restitution_count = max(0, _safe_int(restitution.get("entry_count"), default=0))
     finance = sim.ecs.get(FinancialProfile).get(offender_eid) if sim is not None else None
     justice_debt = int(finance.debt_amount("justice_fines")) if finance and hasattr(finance, "debt_amount") else 0
 
@@ -742,6 +973,9 @@ def justice_summary_rows(sim, offender_eid):
             f"Legal pressure {score} | recorded incidents {incident_count} | latest {latest_label}.",
         ])
 
+    if restitution_due > 0:
+        site_word = "site" if restitution_count == 1 else "sites"
+        lines.append(f"Pending restitution {restitution_due}c across {restitution_count} damaged {site_word}.")
     if justice_debt > 0:
         lines.append(f"Justice debt {justice_debt}c is on the books.")
     if held_count > 0:

@@ -7,7 +7,9 @@ from game.checks import (
 from game.components import AI, JusticeProfile, NPCSocial, Position
 from game.dialogue_runtime import _active_contractor_record
 from game.justice_runtime import (
+    booking_seizure_snapshot as _justice_booking_seizure_snapshot,
     booking_anchor_for as _justice_booking_anchor_for,
+    clear_restitution_claims as _clear_justice_restitution_claims,
     custody_release_grace_active as _custody_release_grace_active,
     decay_records as _decay_justice_records,
     grant_custody_release_grace as _grant_custody_release_grace,
@@ -15,9 +17,12 @@ from game.justice_runtime import (
     justice_snapshot as _justice_snapshot,
     justice_summary_rows as _justice_summary_rows,
     mark_in_custody as _mark_justice_in_custody,
+    record_booking_completion as _record_justice_booking_completion,
     record_incident as _record_justice_incident,
+    record_restitution_claim as _record_justice_restitution_claim,
     replace_held_property as _replace_justice_held_property,
     release_from_custody as _release_justice_from_custody,
+    restitution_snapshot as _justice_restitution_snapshot,
     store_held_property as _store_justice_held_property,
 )
 from game.property_access import (
@@ -198,6 +203,7 @@ _mark_justice_in_custody = _mark_justice_in_custody
 _noise_merits_attention = noise_merits_attention
 _observer_is_active_contractor_ally = observer_is_active_contractor_ally
 _observer_turns_blind_eye_to_offense = observer_turns_blind_eye_to_offense
+_record_justice_booking_completion = _record_justice_booking_completion
 _record_justice_incident = _record_justice_incident
 _release_justice_from_custody = _release_justice_from_custody
 _replace_justice_held_property = _replace_justice_held_property

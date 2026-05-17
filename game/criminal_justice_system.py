@@ -81,14 +81,18 @@ from game.checks import (
     social_read_axes as _social_read_axes,
 )
 from game.criminal_justice_runtime import (
+    _clear_justice_restitution_claims,
     _decay_justice_records,
     _grant_custody_release_grace,
     _justice_booking_anchor_for,
     _justice_held_property_snapshot,
+    _justice_restitution_snapshot,
     _justice_snapshot,
     _justice_summary_rows,
     _mark_justice_in_custody,
+    _record_justice_booking_completion,
     _record_justice_incident,
+    _record_justice_restitution_claim,
     _release_justice_from_custody,
     _replace_justice_held_property,
     _store_justice_held_property,
@@ -100,6 +104,10 @@ from game.system_support.actor_runtime import (
     _entity_is_downed,
 )
 from game.system_support.ai_intent_runtime import _sync_ai_intent
+from game.system_support.building_repair_runtime import (
+    damage_record_repair_cost as _damage_record_repair_cost,
+    property_damage_records as _property_damage_records,
+)
 from game.system_support.item_runtime import (
     _apply_item_effects_to_entity,
     _default_weapon_reserve_ammo,
@@ -668,6 +676,74 @@ class CriminalJusticeSystem(System):
     def _player_held_property_snapshot(self):
         return _justice_held_property_snapshot(self.sim, self.player_eid)
 
+    def _player_restitution_snapshot(self):
+        return _justice_restitution_snapshot(self.sim, self.player_eid)
+
+    def _clear_restitution_claims(self, offender_eid):
+        return _clear_justice_restitution_claims(self.sim, offender_eid)
+
+    def _record_structural_restitution_claim(self, offender_eid, prop, *, damage_tick=None):
+        if offender_eid is None or not isinstance(prop, dict):
+            return None
+        if str(prop.get("kind", "")).strip().lower() != "building":
+            return None
+        existing_claims = self._player_restitution_snapshot() if int(offender_eid) == int(self.player_eid) else _justice_restitution_snapshot(self.sim, offender_eid)
+        existing_keys = set()
+        target_property_id = str(prop.get("id", "") or "").strip()
+        for entry in tuple(existing_claims.get("entries", ()) or ()):
+            if not isinstance(entry, dict):
+                continue
+            entry_property_id = str(entry.get("property_id", "") or "").strip()
+            if target_property_id and entry_property_id != target_property_id:
+                continue
+            existing_keys.update(str(key).strip() for key in tuple(entry.get("damage_keys", ()) or ()) if str(key).strip())
+        records = tuple(
+            _property_damage_records(
+                self.sim,
+                prop,
+                offender_eid=offender_eid,
+                damage_tick=damage_tick,
+            )
+        )
+        if not records:
+            return None
+        damage_keys = []
+        damage_count = 0
+        window_count = 0
+        door_count = 0
+        wall_count = 0
+        total_amount = 0
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            key = f"{int(record.get('x', 0))}:{int(record.get('y', 0))}:{int(record.get('z', 0))}"
+            if key in existing_keys:
+                continue
+            damage_keys.append(key)
+            damage_count += 1
+            repair_kind = str(record.get("repair_kind", "") or "").strip().lower()
+            if repair_kind == "window":
+                window_count += 1
+            elif repair_kind == "door":
+                door_count += 1
+            else:
+                wall_count += 1
+            total_amount += int(_damage_record_repair_cost(prop, record))
+        if damage_count <= 0 or total_amount <= 0:
+            return None
+        return _record_justice_restitution_claim(
+            self.sim,
+            offender_eid,
+            property_id=prop.get("id"),
+            property_name=prop.get("name"),
+            amount=int(total_amount),
+            damage_keys=tuple(damage_keys),
+            damage_count=int(damage_count),
+            window_count=int(window_count),
+            door_count=int(door_count),
+            wall_count=int(wall_count),
+        )
+
     def _present_justice_result(self, title, lines, *, property_id=None, subtitle=""):
         state = self._dialog_ui_state()
         cleaned = [str(line).strip() for line in list(lines or ()) if str(line).strip()]
@@ -1000,6 +1076,7 @@ class CriminalJusticeSystem(System):
         snapshot = snapshot if isinstance(snapshot, dict) else {}
         tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
         score = max(0, int(snapshot.get("active_score", 0) or 0))
+        restitution_due = max(0, int(snapshot.get("restitution_due", 0) or 0))
         base = {
             "questioning": 8,
             "wanted": 22,
@@ -1010,12 +1087,13 @@ class CriminalJusticeSystem(System):
             "wanted": 1.5,
             "arrest_on_sight": 2.0,
         }.get(tier, 1.0)
-        return int(max(base, min(180, round(base + (score * per_score)))))
+        return int(max(base, min(180, round(base + (score * per_score)))) + restitution_due)
 
     def _player_fine_amount(self, snapshot):
         snapshot = snapshot if isinstance(snapshot, dict) else {}
         tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
         score = max(0, int(snapshot.get("active_score", 0) or 0))
+        restitution_due = max(0, int(snapshot.get("restitution_due", 0) or 0))
         base = {
             "questioning": 10,
             "wanted": 30,
@@ -1026,7 +1104,7 @@ class CriminalJusticeSystem(System):
             "wanted": 1.4,
             "arrest_on_sight": 2.1,
         }.get(tier, 1.0)
-        return int(max(base, min(240, round(base + (score * per_score)))))
+        return int(max(base, min(240, round(base + (score * per_score)))) + restitution_due)
 
     def _player_booking_anchor(self, fallback_pos):
         if fallback_pos is None:
@@ -1128,6 +1206,8 @@ class CriminalJusticeSystem(System):
         tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
         hold_hours = float(self.BOOKING_HOURS_BY_TIER.get(tier, 1.0))
         fine_due = int(self._player_fine_amount(snapshot))
+        restitution_due = max(0, int(snapshot.get("restitution_due", 0) or 0))
+        restitution_sites = max(0, int(snapshot.get("restitution_property_count", 0) or 0))
         funds = self._player_funds_snapshot()
         manifest = self._player_confiscation_manifest(remove=False)
         place_label = self._justice_anchor_place_label(anchor)
@@ -1148,6 +1228,9 @@ class CriminalJusticeSystem(System):
                 booking_line += "."
             else:
                 booking_line += f" Fine estimate: {fine_due}c. Unpaid balance will be filed as debt."
+        if restitution_due > 0:
+            site_phrase = "site" if restitution_sites == 1 else "sites"
+            booking_line += f" That includes {restitution_due}c restitution for damaged property across {restitution_sites} {site_phrase}."
 
         state = self._dialog_ui_state()
         self.sim.set_time_paused(True, reason="dialog")
@@ -1846,6 +1929,8 @@ class CriminalJusticeSystem(System):
             "before_score": int(snapshot.get("active_score", 0) or 0),
             "release_score": int(self._booking_release_score(snapshot)),
             "fine_due": int(self._npc_fine_amount(snapshot)),
+            "restitution_due": int(snapshot.get("restitution_due", 0) or 0),
+            "restitution_property_count": int(snapshot.get("restitution_property_count", 0) or 0),
             "fine_paid": 0,
             "wallet_credits_before": int(wallet_before),
             "wallet_credits_after": int(wallet_before),
@@ -2223,6 +2308,8 @@ class CriminalJusticeSystem(System):
 
         confiscation = self._confiscate_player_inventory(booking_prop=booking_prop)
         fine_due = int(self._player_fine_amount(snapshot))
+        restitution_due = int(snapshot.get("restitution_due", 0) or 0)
+        restitution_property_count = int(snapshot.get("restitution_property_count", 0) or 0)
         fine_result = self._collect_player_fine(fine_due)
         hold_ticks = self._advance_time_for_booking(
             self._hours_to_ticks(self.BOOKING_HOURS_BY_TIER.get(starting_tier, 1.0)),
@@ -2239,6 +2326,18 @@ class CriminalJusticeSystem(System):
         )
         if isinstance(booking_prop, dict):
             self._grant_player_release_grace(booking_prop, reason="booking_release")
+        _record_justice_booking_completion(
+            self.sim,
+            self.player_eid,
+            property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
+            property_name=(booking_prop or {}).get("name") if isinstance(booking_prop, dict) else None,
+            hold_ticks=int(hold_ticks),
+            fine_due=int(fine_due),
+            fine_paid=int(fine_result.get("fine_paid", 0) or 0),
+            debt_added=int(fine_result.get("debt_added", 0) or 0),
+            seized_entries=tuple(confiscation.get("held_entries", ()) or ()) + tuple(confiscation.get("forfeited_entries", ()) or ()),
+        )
+        self._clear_restitution_claims(self.player_eid)
         self._emit_change_events(release_change, source_event="justice_booking_release", reason="booking_release")
         self.sim.emit(Event(
             "justice_booking_completed",
@@ -2253,6 +2352,8 @@ class CriminalJusticeSystem(System):
             before_score=int(snapshot.get("active_score", 0) or 0),
             after_score=int((release_change or {}).get("after_score", 0) or 0),
             fine_due=int(fine_due),
+            restitution_due=int(restitution_due),
+            restitution_property_count=int(restitution_property_count),
             fine_paid=int(fine_result.get("fine_paid", 0) or 0),
             cash_fine_paid=int(fine_result.get("cash_fine_paid", 0) or 0),
             wallet_fine_paid=int(fine_result.get("wallet_fine_paid", 0) or 0),
@@ -2367,6 +2468,12 @@ class CriminalJusticeSystem(System):
             witnessed=witnessed,
             note="property_tamper",
         )
+        if witnessed and isinstance(prop, dict):
+            self._record_structural_restitution_claim(
+                offender_eid,
+                prop,
+                damage_tick=int(getattr(self.sim, "tick", 0)),
+            )
 
     def on_item_stolen(self, event):
         offender_eid = event.data.get("offender_eid")
@@ -2666,6 +2773,7 @@ class CriminalJusticeSystem(System):
             record["wallet_credits_after"] = int(wallet_after)
             record["released_tick"] = int(tick)
             record["active"] = False
+            self._clear_restitution_claims(int(record.get("eid", 0) or 0))
 
             release_change = _release_justice_from_custody(
                 self.sim,
@@ -2684,6 +2792,8 @@ class CriminalJusticeSystem(System):
                 property_name=str(record.get("booking_property_name", "Justice Office") or "Justice Office").strip() or "Justice Office",
                 hold_ticks=int(record.get("hold_ticks", 0) or 0),
                 fine_due=int(record.get("fine_due", 0) or 0),
+                restitution_due=int(record.get("restitution_due", 0) or 0),
+                restitution_property_count=int(record.get("restitution_property_count", 0) or 0),
                 fine_paid=int(fine_paid),
                 wallet_credits_before=int(record.get("wallet_credits_before", 0) or 0),
                 wallet_credits_after=int(wallet_after),
