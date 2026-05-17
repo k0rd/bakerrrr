@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import random
+
 from engine.buildings import layout_chunk_building, world_building_id
 from engine.sites import site_entry_front_cell
 
 
 UNDERGROUND_ACCESS_SERVICE = "underground_access"
 METRO_UNDERPASS_KIND = "metro_underpass"
+UNDERGROUND_HAZARD_ROWS = (
+    ("live_wire", "Live Wire", 4.0),
+    ("steam_leak", "Steam Leak", 4.0),
+    ("foul_drain", "Foul Drain", 3.0),
+)
 
 
 def _text(value):
@@ -27,6 +34,81 @@ def _point_in_footprint(footprint, x, y):
     except (TypeError, ValueError):
         return False
     return left <= x <= right and top <= y <= bottom
+
+
+def _weighted_choice(rng, rows):
+    total = 0.0
+    normalized = []
+    for row in rows:
+        if not isinstance(row, tuple) or len(row) < 3:
+            continue
+        weight = float(row[2] or 0.0)
+        if weight <= 0.0:
+            continue
+        total += weight
+        normalized.append((row, total))
+    if total <= 0.0 or not normalized:
+        return None
+    pick = rng.random() * total
+    for row, ceiling in normalized:
+        if pick <= ceiling:
+            return row
+    return normalized[-1][0]
+
+
+def _underpass_hazard_specs(
+    *,
+    chunk_x,
+    chunk_y,
+    source_building_id,
+    tunnel_z,
+    orientation,
+    fixed_axis,
+    axis_min,
+    axis_max,
+    reserved_axes,
+):
+    candidates = [
+        int(axis)
+        for axis in range(int(axis_min) + 1, int(axis_max))
+        if int(axis) not in {int(value) for value in tuple(reserved_axes or ())}
+    ]
+    if not candidates:
+        return ()
+
+    rng = random.Random(
+        f"{int(chunk_x)}:{int(chunk_y)}:{str(source_building_id).strip() or 'metro'}:underpass_hazards"
+    )
+    hazard_count = 1 + int(len(candidates) >= 5 and rng.random() < 0.38)
+    hazard_count = min(len(candidates), max(1, hazard_count))
+
+    selected_axes = []
+    pool = list(candidates)
+    while pool and len(selected_axes) < hazard_count:
+        picked_axis = int(rng.choice(pool))
+        selected_axes.append(picked_axis)
+        pool = [axis for axis in pool if abs(int(axis) - picked_axis) > 1]
+
+    specs = []
+    for axis in sorted(selected_axes):
+        picked = _weighted_choice(rng, UNDERGROUND_HAZARD_ROWS)
+        if not picked:
+            continue
+        profile_id, label, _weight = picked
+        if str(orientation).strip().lower() == "vertical":
+            x = int(fixed_axis)
+            y = int(axis)
+        else:
+            x = int(axis)
+            y = int(fixed_axis)
+        specs.append({
+            "name": str(label).strip() or "Hazard",
+            "x": x,
+            "y": y,
+            "z": int(tunnel_z),
+            "profile": str(profile_id).strip().lower() or "live_wire",
+        })
+    return tuple(specs)
 
 
 def _building_footprints(chunk, *, origin_x, origin_y, chunk_size):
@@ -213,6 +295,22 @@ def _metro_underpass_plan(
             }
             for axis_value in sorted({int(axis_min + 1), int(axis_max - 1)})
         )
+        hazard_sites = _underpass_hazard_specs(
+            chunk_x=chunk_x,
+            chunk_y=chunk_y,
+            source_building_id=source_building_id,
+            tunnel_z=tunnel_z,
+            orientation="vertical",
+            fixed_axis=int(tunnel_start[0]),
+            axis_min=axis_min,
+            axis_max=axis_max,
+            reserved_axes={
+                int(midpoint_axis),
+                int(encounter_axis),
+                int(axis_min + 1),
+                int(axis_max - 1),
+            },
+        )
     else:
         start_axis = int(tunnel_start[0])
         end_axis = int(tunnel_end[0])
@@ -249,6 +347,22 @@ def _metro_underpass_plan(
             }
             for axis_value in sorted({int(axis_min + 1), int(axis_max - 1)})
         )
+        hazard_sites = _underpass_hazard_specs(
+            chunk_x=chunk_x,
+            chunk_y=chunk_y,
+            source_building_id=source_building_id,
+            tunnel_z=tunnel_z,
+            orientation="horizontal",
+            fixed_axis=int(tunnel_start[1]),
+            axis_min=axis_min,
+            axis_max=axis_max,
+            reserved_axes={
+                int(midpoint_axis),
+                int(encounter_axis),
+                int(axis_min + 1),
+                int(axis_max - 1),
+            },
+        )
 
     station_destination = {
         "x": int(tunnel_start[0]),
@@ -280,6 +394,8 @@ def _metro_underpass_plan(
         "ambient_encounter_spawns": encounter_spawns,
         "ambient_wildlife_profile": "underground_pests",
         "ambient_wildlife_spawns": wildlife_spawns,
+        "ambient_hazard_profile": "transit_hazards" if hazard_sites else "",
+        "ambient_hazard_spawns": hazard_sites,
         "cache_sites": cache_sites,
         "footprint": footprint,
         "entry": {

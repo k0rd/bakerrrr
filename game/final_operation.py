@@ -7,7 +7,7 @@ from game.items import item_display_name
 from game.opportunities import opportunity_intel_for_observer
 from game.property_access import property_access_controller, property_apertures
 from game.property_keys import property_credential_item_metadata
-from game.property_runtime import property_access_level, property_entry_position
+from game.property_runtime import property_access_level, property_entry_position, property_power_cut_active as _property_power_cut_active
 from game.run_objectives import evaluate_run_objective
 
 SECURE_ROOM_KINDS = {
@@ -571,18 +571,6 @@ def _chunk_intel_bonus(sim, player_eid, chunk):
             confirmed_count += 1
         best_confidence = max(best_confidence, confidence)
     return min(8, known_count + (confirmed_count * 2) + int(round(best_confidence * 2.0)))
-
-
-def _property_power_cut_active(sim, prop):
-    if sim is None or not isinstance(prop, dict):
-        return False
-    prop_id = _text(prop.get("id"))
-    if not prop_id:
-        return False
-    power_cuts = getattr(sim, "fixture_power_cuts", {})
-    if not isinstance(power_cuts, dict):
-        return False
-    return _safe_int(power_cuts.get(prop_id), default=0) > _safe_int(getattr(sim, "tick", 0), default=0)
 
 
 def _linked_security_snapshot(sim, prop):

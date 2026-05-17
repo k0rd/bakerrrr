@@ -7,7 +7,10 @@ from engine.events import Event
 from game.components import CoverState, PlayerModeState, Position
 from game.movement_runtime import _can_step_transition_for, try_move_entity
 from game.opportunities import opportunity_intel_for_observer, reveal_opportunity_to_observer
-from game.property_runtime import property_covering as _property_covering
+from game.property_runtime import (
+    property_covering as _property_covering,
+    property_power_cut_active as _property_power_cut_active,
+)
 from game.system_support.cover_runtime import _effective_cover_value, _threat_positions_for_entity
 from game.system_support.interaction_ordering import _direction_step
 from game.system_support.player_feedback import _log_player_feedback
@@ -587,6 +590,34 @@ class PlayerMovementRuntime:
                 dz=dz,
             ))
             return
+
+        if str(floor_link.get("kind", "") or "").strip().lower() == "elevator":
+            current_prop = self.sim.property_at(pos.x, pos.y, pos.z) or _property_covering(self.sim, pos.x, pos.y, pos.z)
+            target_prop = self.sim.property_at(
+                floor_link["x"],
+                floor_link["y"],
+                floor_link["z"],
+            ) or _property_covering(
+                self.sim,
+                floor_link["x"],
+                floor_link["y"],
+                floor_link["z"],
+            )
+            if any(
+                _property_power_cut_active(self.sim, prop)
+                for prop in (current_prop, target_prop)
+                if isinstance(prop, dict)
+            ):
+                self.sim.emit(Event(
+                    "floor_change_blocked",
+                    eid=eid,
+                    reason="power_cut",
+                    x=pos.x,
+                    y=pos.y,
+                    z=pos.z,
+                    dz=dz,
+                ))
+                return
 
         old_z = pos.z
         moved, reason = try_move_entity(

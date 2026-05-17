@@ -24,6 +24,7 @@ TOPIC_ORDER = (
     "services",
     "service_fuel",
     "service_repair",
+    "service_contractor",
     "service_banking",
     "service_insurance",
     "service_rest",
@@ -34,6 +35,8 @@ TOPIC_ORDER = (
     "service_ferry",
     "service_intel",
     "service_trade",
+    "service_discreet_trade",
+    "service_street_doctor",
     "service_outfitter",
     "service_justice",
     "service_used_cars",
@@ -160,6 +163,7 @@ TOPIC_DEFS = {
         "unlocks": (
             "service_fuel",
             "service_repair",
+            "service_contractor",
             "service_banking",
             "service_insurance",
             "service_rest",
@@ -170,6 +174,8 @@ TOPIC_DEFS = {
             "service_ferry",
             "service_intel",
             "service_trade",
+            "service_discreet_trade",
+            "service_street_doctor",
             "service_outfitter",
             "service_justice",
             "service_used_cars",
@@ -185,6 +191,11 @@ TOPIC_DEFS = {
     },
     "service_repair": {
         "label": "Any repair shop nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_contractor": {
+        "label": "Any contractor nearby?",
         "root": False,
         "unlocks": (),
     },
@@ -235,6 +246,16 @@ TOPIC_DEFS = {
     },
     "service_trade": {
         "label": "Any shopping around here?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_discreet_trade": {
+        "label": "Know any discreet sellers?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_street_doctor": {
+        "label": "Know any quiet doctors?",
         "root": False,
         "unlocks": (),
     },
@@ -323,6 +344,7 @@ TOPIC_DEFS = {
             "history",
             "service_fuel",
             "service_repair",
+            "service_contractor",
             "service_banking",
             "service_insurance",
             "service_rest",
@@ -333,6 +355,8 @@ TOPIC_DEFS = {
             "service_ferry",
             "service_intel",
             "service_trade",
+            "service_discreet_trade",
+            "service_street_doctor",
             "service_outfitter",
             "service_justice",
             "service_used_cars",
@@ -2774,6 +2798,8 @@ def topic_label(topic_id, context=None):
         return "Any fuel nearby?"
     if topic_id == "service_repair":
         return "Any repair shop nearby?"
+    if topic_id == "service_contractor":
+        return "Any contractor nearby?"
     if topic_id == "service_banking":
         return "Any bank or broker nearby?"
     if topic_id == "service_insurance":
@@ -2794,6 +2820,10 @@ def topic_label(topic_id, context=None):
         return "Anywhere selling intel nearby?"
     if topic_id == "service_trade":
         return "Any shopping around here?"
+    if topic_id == "service_discreet_trade":
+        return "Know any discreet sellers?"
+    if topic_id == "service_street_doctor":
+        return "Know any quiet doctors?"
     if topic_id == "service_outfitter":
         return "Any outfitter nearby?"
     if topic_id == "service_justice":

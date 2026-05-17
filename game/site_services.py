@@ -12,6 +12,7 @@ from game.property_keys import can_receive_property_key, ensure_actor_has_proper
 from game.property_runtime import (
     property_is_vehicle as _property_is_vehicle,
     property_metadata as _property_metadata,
+    property_power_cut_active as _property_power_cut_active,
     site_services_for_property as _site_services_for_property,
     vehicle_fuel_values as _vehicle_fuel_values,
     vehicle_label as _vehicle_label,
@@ -52,28 +53,6 @@ from game.system_support.building_repair_runtime import (
 )
 from game.system_support.player_feedback import _log_player_feedback
 from game.vehicles import vehicle_metadata
-
-
-def _property_power_is_cut(sim, prop):
-    """Return True when the property's electrical supply is currently cut."""
-    if not isinstance(prop, dict):
-        return False
-    power_cuts = getattr(sim, "fixture_power_cuts", {})
-    if not power_cuts:
-        return False
-    tick = int(getattr(sim, "tick", 0))
-    prop_id = str(prop.get("id", "")).strip()
-    if prop_id and power_cuts.get(prop_id, 0) > tick:
-        return True
-    # Also check all properties that cover this prop's position.
-    cover_index = getattr(sim, "property_cover_index", {})
-    px = int(prop.get("x", 0))
-    py = int(prop.get("y", 0))
-    pz = int(prop.get("z", 0))
-    for pid in cover_index.get((px, py, pz), ()):
-        if power_cuts.get(pid, 0) > tick:
-            return True
-    return False
 
 
 def _fixture_is_electronic(prop):
@@ -1264,7 +1243,7 @@ class SiteServiceSystem(System):
     def _run_site_service(self, eid, prop, pos, service, request=None):
         service = str(service or "").strip().lower()
         # Electronic fixtures are offline when their power supply is cut.
-        if _fixture_is_electronic(prop) and _property_power_is_cut(self.sim, prop):
+        if _fixture_is_electronic(prop) and _property_power_cut_active(self.sim, prop):
             self.sim.emit(Event(
                 "site_service_blocked",
                 eid=eid,

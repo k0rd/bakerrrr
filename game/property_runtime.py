@@ -277,6 +277,33 @@ def property_covering(sim, x, y, z=0):
     return sim.property_at(x, y, z)
 
 
+def property_power_cut_active(sim, prop, *, tick=None):
+    if sim is None or not isinstance(prop, dict):
+        return False
+    power_cuts = getattr(sim, "fixture_power_cuts", {})
+    if not isinstance(power_cuts, dict) or not power_cuts:
+        return False
+    if tick is None:
+        tick = _int_or_default(getattr(sim, "tick", 0), 0)
+    else:
+        tick = _int_or_default(tick, _int_or_default(getattr(sim, "tick", 0), 0))
+
+    prop_id = str(prop.get("id", "") or "").strip()
+    if prop_id and _int_or_default(power_cuts.get(prop_id), 0) > tick:
+        return True
+
+    cover_index = getattr(sim, "property_cover_index", {})
+    if not isinstance(cover_index, dict):
+        return False
+    prop_x = _int_or_default(prop.get("x"), 0)
+    prop_y = _int_or_default(prop.get("y"), 0)
+    prop_z = _int_or_default(prop.get("z"), 0)
+    for covered_pid in tuple(cover_index.get((prop_x, prop_y, prop_z), ()) or ()):
+        if _int_or_default(power_cuts.get(covered_pid), 0) > tick:
+            return True
+    return False
+
+
 def property_enclosing_structure(sim, x, y, z=0, *, prop=None):
     try:
         key = (int(x), int(y), int(z))
@@ -444,7 +471,7 @@ def property_status_text(sim, prop, hour=None):
     return _property_status_text(sim, prop, hour=hour)
 
 
-def remember_property_lead_for_actor(sim, viewer_eid, prop, *, source_eid=None, lead_kind=None, confidence=0.5):
+def remember_property_lead_for_actor(sim, viewer_eid, prop, *, source_eid=None, lead_kind=None, confidence=0.5, hidden=None):
     if viewer_eid is None or not prop:
         return False
     knowledge = sim.ecs.get(PropertyKnowledge).get(viewer_eid)
@@ -454,6 +481,7 @@ def remember_property_lead_for_actor(sim, viewer_eid, prop, *, source_eid=None, 
     prior_conf = float(existing.get("confidence", 0.0)) if existing else 0.0
     prior_source = existing.get("source_eid") if existing else None
     prior_kind = str(existing.get("lead_kind", "") or "").strip().lower() if existing else ""
+    prior_hidden = bool(knowledge.is_hidden(prop["id"]))
     knowledge.remember(
         prop["id"],
         owner_eid=prop.get("owner_eid"),
@@ -463,11 +491,19 @@ def remember_property_lead_for_actor(sim, viewer_eid, prop, *, source_eid=None, 
         source_eid=source_eid,
         lead_kind=lead_kind,
     )
+    hidden_changed = False
+    if hidden is True:
+        hidden_changed = bool(knowledge.hide(prop["id"]))
+    elif hidden is False:
+        hidden_changed = bool(knowledge.unhide(prop["id"]))
+    current_hidden = bool(knowledge.is_hidden(prop["id"]))
     return (
         existing is None
         or prior_conf + 0.04 < float(confidence)
         or prior_source != source_eid
         or prior_kind != str(lead_kind or "").strip().lower()
+        or prior_hidden != current_hidden
+        or hidden_changed
     )
 
 

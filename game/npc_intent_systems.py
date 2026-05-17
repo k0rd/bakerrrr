@@ -168,22 +168,44 @@ from game.system_support.interaction_ordering import (
 )
 from game.system_support.npc_behavior_runtime import (
     BEHAVIOR_APPRAISE_STREET_GOODS,
+    BEHAVIOR_AVOID_AUTHORITIES,
     BEHAVIOR_COLLECT_GROUND_CREDITS,
     BEHAVIOR_AVOID_THREAT,
     BEHAVIOR_BUY_DESIRED_DRUG,
     BEHAVIOR_BUY_PLAYER_GOODS,
     BEHAVIOR_ENFORCE_JUSTICE,
     BEHAVIOR_FOLLOW_DUTY,
+    BEHAVIOR_INITIATE_DIALOGUE,
     BEHAVIOR_PROTECT_ALLIES,
     BEHAVIOR_SCAVENGE_LOOSE_ITEMS,
     BEHAVIOR_SELL_SCAVENGED_ITEMS,
+    BEHAVIOR_SEEK_SHELTER,
     BEHAVIOR_SEEK_SOCIAL_CONTACT,
+    BEHAVIOR_SEEK_MEDICAL_AID,
+    _actor_behavior_value,
+    _behavior_live_street_heat,
+    _behavior_preference,
     _collect_ground_items_at_actor,
     _effective_behavior_value,
+    _find_authority_avoidance_target,
+    _find_lodging_target,
+    _find_medical_aid_target,
+    _find_safe_spot_target,
     _find_scavenged_sale_target,
     _find_ground_credit_target,
     _find_scavenge_ground_item_target,
+    _inventory_contraband_heat,
+    _receive_lodging_at_actor,
+    _receive_medical_aid_at_actor,
+    _receive_safe_spot_at_actor,
+    _resolve_street_buy_between_actors,
+    _resolve_street_appraise_between_actors,
     _sell_scavenged_inventory_at_actor,
+    _street_appraise_candidates_for_actor,
+    _street_appraise_capabilities,
+    _street_buy_candidate_rows_for_actor,
+    _street_buy_interest_profile,
+    _street_buy_terms,
 )
 from game.system_support.settlement_runtime import _home_property
 from game.system_support.status_runtime import (
@@ -320,6 +342,453 @@ def _wildlife_is_active(*args, **kwargs):
 def _wildlife_social_intent(*args, **kwargs):
     return _wildlife_module()._wildlife_social_intent(*args, **kwargs)
 
+
+BEHAVIOR_TIP_HEAT = "behavior_tip_heat"
+BEHAVIOR_TIP_MEDICAL = "behavior_tip_medical"
+BEHAVIOR_TIP_SHELTER = "behavior_tip_shelter"
+BEHAVIOR_TIP_SAFE_SPOT = "behavior_tip_safe_spot"
+BEHAVIOR_TIP_STREET_BUY = "behavior_tip_street_buy"
+BEHAVIOR_TIP_STREET_APPRAISE = "behavior_tip_street_appraise"
+BEHAVIOR_TIP_MAX_AGE = 180
+BEHAVIOR_TIP_RADIUS = 6
+BEHAVIOR_TIP_COOLDOWN = 120
+
+
+def _recent_behavior_tip(memory, kind, *, now, max_age=BEHAVIOR_TIP_MAX_AGE):
+    current_tick = int(now or 0)
+
+    def _fresh(entry):
+        try:
+            age = max(0, current_tick - int(entry.get("tick", current_tick) or current_tick))
+        except (TypeError, ValueError):
+            age = max_age + 1
+        return age <= int(max_age)
+
+    return _strongest_memory_entry(memory, kind, predicate=_fresh)
+
+
+def _retreat_target_from_warning(sim, pos, warning_pos, *, max_stride=4):
+    if not pos or not isinstance(warning_pos, (tuple, list)) or len(warning_pos) < 2:
+        return None
+    wx = int(warning_pos[0])
+    wy = int(warning_pos[1])
+    dx = int(pos.x) - wx
+    dy = int(pos.y) - wy
+    if dx == 0 and dy == 0:
+        chooser = random.Random(
+            f"{getattr(sim, 'seed', 0)}:heat-tip-retreat:{int(pos.x)}:{int(pos.y)}:{int(getattr(sim, 'tick', 0))}"
+        )
+        if chooser.random() < 0.5:
+            dx = 1
+        else:
+            dy = 1
+    step_x = 1 if dx >= 0 else -1
+    step_y = 1 if dy >= 0 else -1
+    for stride in range(int(max(1, max_stride)), 0, -1):
+        nx = int(pos.x) + (step_x * stride)
+        ny = int(pos.y) + (step_y * stride)
+        if sim.tilemap.is_walkable(nx, ny, int(pos.z)):
+            return (nx, ny, int(pos.z))
+    return None
+
+
+def _find_tipped_street_buyer_target(sim, actor_eid, pos, tip_data):
+    if not pos or not isinstance(tip_data, dict):
+        return None
+    buyer_eid = tip_data.get("buyer_eid")
+    if buyer_eid is None or int(buyer_eid) == int(actor_eid):
+        return None
+
+    positions = sim.ecs.get(Position)
+    buyer_pos = positions.get(buyer_eid)
+    if not buyer_pos or int(buyer_pos.z) != int(pos.z):
+        return None
+
+    occupation = sim.ecs.get(Occupation).get(buyer_eid)
+    career = str(getattr(occupation, "career", "") or "").strip().lower()
+    district_type = ""
+    world = getattr(sim, "world", None)
+    if world is not None:
+        chunk = world.get_chunk(*sim.chunk_coords(buyer_pos.x, buyer_pos.y))
+        district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+        if not isinstance(district, dict):
+            district = {}
+        district_type = str(district.get("district_type", "") or "").strip().lower()
+
+    rows = _street_buy_candidate_rows_for_actor(
+        sim,
+        buyer_eid,
+        actor_eid,
+        district_type=district_type,
+        career=career,
+    )
+    if not rows:
+        return None
+
+    total_offer = sum(int(row.get("price", 0) or 0) for row in rows)
+    distance = _manhattan(pos.x, pos.y, buyer_pos.x, buyer_pos.y)
+    score = max(0.0, (total_offer * 0.34) + 12.0 - (distance * 1.7))
+    desired_item_id = str((tip_data or {}).get("desired_item_id", "") or "").strip().lower()
+    if desired_item_id and any(bool(row.get("desired")) for row in rows):
+        score += 10.0
+    return {
+        "buyer_eid": int(buyer_eid),
+        "target": (int(buyer_pos.x), int(buyer_pos.y), int(buyer_pos.z)),
+        "distance": int(distance),
+        "score": float(score),
+        "desired_item_id": desired_item_id,
+        "rows": tuple(rows),
+    }
+
+
+def _find_tipped_street_appraiser_target(sim, actor_eid, pos, tip_data):
+    if not pos or not isinstance(tip_data, dict):
+        return None
+    appraiser_eid = tip_data.get("appraiser_eid")
+    if appraiser_eid is None or int(appraiser_eid) == int(actor_eid):
+        return None
+
+    positions = sim.ecs.get(Position)
+    appraiser_pos = positions.get(appraiser_eid)
+    if not appraiser_pos or int(appraiser_pos.z) != int(pos.z):
+        return None
+
+    candidates = _street_appraise_candidates_for_actor(sim, appraiser_eid, actor_eid)
+    identify_count = len(candidates.get("identify", ()) or ())
+    appraise_count = len(candidates.get("appraise", ()) or ())
+    if identify_count <= 0 and appraise_count <= 0:
+        return None
+
+    distance = _manhattan(pos.x, pos.y, appraiser_pos.x, appraiser_pos.y)
+    score = max(0.0, 16.0 + (identify_count * 18.0) + (appraise_count * 12.0) - (distance * 1.45))
+    return {
+        "appraiser_eid": int(appraiser_eid),
+        "target": (int(appraiser_pos.x), int(appraiser_pos.y), int(appraiser_pos.z)),
+        "distance": int(distance),
+        "score": float(score),
+        "identify_count": int(identify_count),
+        "appraise_count": int(appraise_count),
+    }
+
+
+def _find_tipped_safe_spot_target(sim, actor_eid, pos, tip_data):
+    if not pos or not isinstance(tip_data, dict):
+        return None
+    property_id = str(tip_data.get("property_id", "") or "").strip()
+    if not property_id:
+        return None
+    target = _find_safe_spot_target(
+        sim,
+        actor_eid,
+        pos,
+        preferred_property_id=property_id,
+        preferred_score_bonus=18.0,
+    )
+    if not target or str(target.get("property_id", "") or "").strip() != property_id:
+        return None
+    return target
+
+
+def _behavior_tip_interest(sim, target_eid, tip_kind, payload=None):
+    needs = sim.ecs.get(NPCNeeds).get(target_eid)
+    traits = sim.ecs.get(NPCTraits).get(target_eid) or NPCTraits()
+    vitality = sim.ecs.get(Vitality).get(target_eid)
+
+    if tip_kind == BEHAVIOR_TIP_MEDICAL:
+        if vitality is None or bool(getattr(vitality, "downed", False)):
+            return 0.0
+        max_hp = max(1, int(getattr(vitality, "max_hp", 1) or 1))
+        hp = max(0, int(getattr(vitality, "hp", max_hp) or max_hp))
+        health_gap = max(0.0, 1.0 - (float(hp) / float(max_hp)))
+        if health_gap <= 0.05:
+            return 0.0
+        medical_drive = _effective_behavior_value(
+            sim,
+            target_eid,
+            BEHAVIOR_SEEK_MEDICAL_AID,
+            traits=traits,
+            needs=needs,
+            vitality=vitality,
+        )
+        return float((health_gap * 80.0) + (medical_drive * 22.0))
+
+    if tip_kind == BEHAVIOR_TIP_SHELTER:
+        routine = sim.ecs.get(NPCRoutine).get(target_eid)
+        home = getattr(routine, "home", None) if routine else None
+        energy_gap = max(0.0, (100.0 - float(getattr(needs, "energy", 85.0) or 85.0)) / 100.0) if needs else 0.0
+        safety_gap = max(0.0, (100.0 - float(getattr(needs, "safety", 85.0) or 85.0)) / 100.0) if needs else 0.0
+        social_gap = max(0.0, (100.0 - float(getattr(needs, "social", 70.0) or 70.0)) / 100.0) if needs else 0.0
+        night_bonus = 0.18 if (_world_hour(sim) >= 21 or _world_hour(sim) < 6) else 0.0
+        if max(energy_gap, safety_gap, social_gap, night_bonus) <= 0.08 and home:
+            return 0.0
+        shelter_drive = _effective_behavior_value(
+            sim,
+            target_eid,
+            BEHAVIOR_SEEK_SHELTER,
+            traits=traits,
+            needs=needs,
+            vitality=vitality,
+        )
+        homeless_bonus = 0.28 if not home else 0.0
+        return float((energy_gap * 46.0) + (safety_gap * 38.0) + (social_gap * 8.0) + (night_bonus * 22.0) + (shelter_drive * 18.0) + (homeless_bonus * 20.0))
+
+    if tip_kind == BEHAVIOR_TIP_HEAT:
+        avoid_drive = _effective_behavior_value(
+            sim,
+            target_eid,
+            BEHAVIOR_AVOID_AUTHORITIES,
+            traits=traits,
+            needs=needs,
+            justice=sim.ecs.get(JusticeProfile).get(target_eid),
+        )
+        live_heat = _behavior_live_street_heat(sim, target_eid)
+        if live_heat < 0.08 and avoid_drive < 0.08:
+            return 0.0
+        return float((live_heat * 52.0) + (avoid_drive * 18.0))
+
+    if tip_kind == BEHAVIOR_TIP_SAFE_SPOT:
+        payload = payload if isinstance(payload, dict) else {}
+        pos = sim.ecs.get(Position).get(target_eid)
+        if pos is None:
+            return 0.0
+        target = _find_tipped_safe_spot_target(sim, target_eid, pos, payload)
+        if not target:
+            return 0.0
+        return float(min(94.0, float(target.get("score", 0.0) or 0.0) + 12.0))
+
+    if tip_kind == BEHAVIOR_TIP_STREET_BUY:
+        payload = payload if isinstance(payload, dict) else {}
+        buyer_eid = payload.get("buyer_eid")
+        if buyer_eid is None or int(buyer_eid) == int(target_eid):
+            return 0.0
+        occupation = sim.ecs.get(Occupation).get(buyer_eid)
+        career = str(getattr(occupation, "career", "") or "").strip().lower()
+        district_type = ""
+        buyer_pos = sim.ecs.get(Position).get(buyer_eid)
+        world = getattr(sim, "world", None)
+        if buyer_pos is not None and world is not None:
+            chunk = world.get_chunk(*sim.chunk_coords(buyer_pos.x, buyer_pos.y))
+            district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+            if not isinstance(district, dict):
+                district = {}
+            district_type = str(district.get("district_type", "") or "").strip().lower()
+        rows = _street_buy_candidate_rows_for_actor(
+            sim,
+            buyer_eid,
+            target_eid,
+            district_type=district_type,
+            career=career,
+        )
+        if not rows:
+            return 0.0
+        total_offer = sum(int(row.get("price", 0) or 0) for row in rows)
+        desired_bonus = 10.0 if any(bool(row.get("desired")) for row in rows) else 0.0
+        return float(min(96.0, (total_offer * 0.58) + (len(rows) * 6.0) + desired_bonus))
+
+    if tip_kind == BEHAVIOR_TIP_STREET_APPRAISE:
+        payload = payload if isinstance(payload, dict) else {}
+        appraiser_eid = payload.get("appraiser_eid")
+        if appraiser_eid is None or int(appraiser_eid) == int(target_eid):
+            return 0.0
+        candidates = _street_appraise_candidates_for_actor(sim, appraiser_eid, target_eid)
+        identify_count = len(candidates.get("identify", ()) or ())
+        appraise_count = len(candidates.get("appraise", ()) or ())
+        if identify_count <= 0 and appraise_count <= 0:
+            return 0.0
+        return float(min(92.0, (identify_count * 22.0) + (appraise_count * 16.0) + 10.0))
+
+    return 0.0
+
+
+def _plan_behavior_tip_share(sim, source_eid, pos, intent, *, medical_target=None, shelter_target=None, avoidance_target=None, safe_spot_share=None, street_buy_share=None, street_appraise_share=None, cooldowns=None, tick=0):
+    if not pos:
+        return None
+    intent = str(intent or "").strip().lower()
+    if intent == "seeking_medical_aid" and isinstance(medical_target, dict):
+        tip_kind = BEHAVIOR_TIP_MEDICAL
+        payload = {
+            "property_id": medical_target.get("property_id"),
+            "property_name": medical_target.get("property_name"),
+            "x": int(medical_target["target"][0]),
+            "y": int(medical_target["target"][1]),
+            "z": int(medical_target["target"][2]),
+        }
+        strength = max(0.22, min(0.92, float(medical_target.get("score", 0.0) or 0.0) / 100.0))
+    elif intent == "seeking_shelter" and isinstance(shelter_target, dict):
+        tip_kind = BEHAVIOR_TIP_SHELTER
+        payload = {
+            "property_id": shelter_target.get("property_id"),
+            "property_name": shelter_target.get("property_name"),
+            "service": shelter_target.get("service"),
+            "x": int(shelter_target["target"][0]),
+            "y": int(shelter_target["target"][1]),
+            "z": int(shelter_target["target"][2]),
+        }
+        strength = max(0.2, min(0.9, float(shelter_target.get("score", 0.0) or 0.0) / 100.0))
+    elif intent == "evading_authority" and isinstance(avoidance_target, dict):
+        authority_pos = avoidance_target.get("authority_pos") or (pos.x, pos.y, pos.z)
+        tip_kind = BEHAVIOR_TIP_HEAT
+        payload = {
+            "authority_eid": avoidance_target.get("authority_eid"),
+            "x": int(authority_pos[0]),
+            "y": int(authority_pos[1]),
+            "z": int(authority_pos[2]) if len(authority_pos) >= 3 else int(pos.z),
+        }
+        strength = max(0.24, min(0.94, float(avoidance_target.get("score", 0.0) or 0.0) / 100.0))
+    elif isinstance(safe_spot_share, dict) and intent not in {"protecting", "seeking_safety", "chasing", "warning", "helping_victim", "reporting_incident"}:
+        tip_kind = BEHAVIOR_TIP_SAFE_SPOT
+        payload = {
+            "property_id": safe_spot_share.get("property_id"),
+            "property_name": safe_spot_share.get("property_name"),
+            "safe_kind": safe_spot_share.get("safe_kind"),
+            "service": safe_spot_share.get("service"),
+            "x": int(safe_spot_share["target"][0]),
+            "y": int(safe_spot_share["target"][1]),
+            "z": int(safe_spot_share["target"][2]),
+        }
+        strength = max(0.22, min(0.9, float(safe_spot_share.get("score", 0.0) or 0.0) / 100.0))
+    elif isinstance(street_buy_share, dict) and intent not in {"protecting", "seeking_safety", "chasing", "warning", "helping_victim", "reporting_incident"}:
+        desired_item_id = str(street_buy_share.get("desired_item_id", "") or "").strip().lower()
+        tip_kind = BEHAVIOR_TIP_STREET_BUY
+        payload = {
+            "buyer_eid": int(source_eid),
+            "desired_item_id": desired_item_id,
+            "x": int(pos.x),
+            "y": int(pos.y),
+            "z": int(pos.z),
+        }
+        strength = max(
+            0.22,
+            min(
+                0.88,
+                0.18
+                + (float(street_buy_share.get("buy_desired_drug", 0.0) or 0.0) * 0.5)
+                + (float(street_buy_share.get("buy_player_goods", 0.0) or 0.0) * 0.32),
+            ),
+        )
+    elif isinstance(street_appraise_share, dict) and intent not in {"protecting", "seeking_safety", "chasing", "warning", "helping_victim", "reporting_incident"}:
+        tip_kind = BEHAVIOR_TIP_STREET_APPRAISE
+        payload = {
+            "appraiser_eid": int(source_eid),
+            "x": int(pos.x),
+            "y": int(pos.y),
+            "z": int(pos.z),
+        }
+        strength = max(
+            0.2,
+            min(
+                0.86,
+                0.16
+                + (float(street_appraise_share.get("identify_strength", 0.0) or 0.0) * 0.42)
+                + (float(street_appraise_share.get("appraise_strength", 0.0) or 0.0) * 0.34),
+            ),
+        )
+    else:
+        return None
+
+    ais = sim.ecs.get(AI)
+    positions = sim.ecs.get(Position)
+    memories = sim.ecs.get(NPCMemory)
+    socials = sim.ecs.get(NPCSocial)
+    source_social = socials.get(source_eid)
+    best = None
+    best_score = 0.0
+    for target_eid, target_ai in ais.items():
+        if target_eid == source_eid or target_eid == getattr(sim, "player_eid", None):
+            continue
+        if str(getattr(target_ai, "role", "") or "").strip().lower() == "wildlife":
+            continue
+        target_pos = positions.get(target_eid)
+        target_memory = memories.get(target_eid)
+        if not target_pos or not target_memory or int(target_pos.z) != int(pos.z):
+            continue
+        distance = _manhattan(pos.x, pos.y, target_pos.x, target_pos.y)
+        if distance <= 0 or distance > BEHAVIOR_TIP_RADIUS:
+            continue
+        interest = _behavior_tip_interest(sim, target_eid, tip_kind, payload=payload)
+        if interest <= 0.0:
+            continue
+        existing = _recent_behavior_tip(target_memory, tip_kind, now=tick, max_age=BEHAVIOR_TIP_MAX_AGE)
+        if existing is not None:
+            existing_data = existing.get("data", {}) if isinstance(existing.get("data"), dict) else {}
+            if (
+                str(existing_data.get("property_id", "") or "").strip() == str(payload.get("property_id", "") or "").strip()
+                and str(existing_data.get("buyer_eid", "") or "").strip() == str(payload.get("buyer_eid", "") or "").strip()
+                and str(existing_data.get("appraiser_eid", "") or "").strip() == str(payload.get("appraiser_eid", "") or "").strip()
+            ):
+                if float(existing.get("strength", 0.0) or 0.0) >= strength - 0.04:
+                    continue
+        anchor = str(
+            payload.get("property_id")
+            or payload.get("buyer_eid")
+            or payload.get("appraiser_eid")
+            or f"{int(payload.get('x', pos.x))}:{int(payload.get('y', pos.y))}:{int(payload.get('z', pos.z))}"
+        )
+        if isinstance(cooldowns, dict):
+            last_tick = int(cooldowns.get((int(source_eid), int(target_eid), tip_kind, anchor), -10_000) or -10_000)
+            if int(tick) - last_tick < BEHAVIOR_TIP_COOLDOWN:
+                continue
+        bond_bonus = 0.0
+        if source_social is not None:
+            bond = getattr(source_social, "bonds", {}).get(target_eid)
+            if isinstance(bond, dict):
+                bond_bonus = (float(bond.get("trust", 0.0) or 0.0) * 6.0) + (float(bond.get("closeness", 0.0) or 0.0) * 4.0)
+        score = interest + bond_bonus + max(0.0, (BEHAVIOR_TIP_RADIUS + 1 - distance) * 3.2)
+        if best is None or score > best_score:
+            best = {
+                "kind": tip_kind,
+                "target_eid": int(target_eid),
+                "strength": float(strength),
+                "payload": dict(payload),
+                "anchor": anchor,
+            }
+            best_score = score
+    return best
+
+
+def _apply_behavior_tip_shares(sim, pending, *, cooldowns=None, tick=0):
+    if not pending:
+        return 0
+    memories = sim.ecs.get(NPCMemory)
+    applied = 0
+    for share in pending:
+        if not isinstance(share, dict):
+            continue
+        target_eid = share.get("target_eid")
+        target_memory = memories.get(target_eid)
+        if target_memory is None:
+            continue
+        payload = dict(share.get("payload") or {})
+        payload["source_eid"] = int(share.get("source_eid"))
+        payload["via"] = "peer_tip"
+        target_memory.remember(
+            tick=int(tick or 0),
+            kind=str(share.get("kind", "")).strip().lower(),
+            strength=float(share.get("strength", 0.0) or 0.0),
+            **payload,
+        )
+        if isinstance(cooldowns, dict):
+            cooldowns[(
+                int(share.get("source_eid")),
+                int(target_eid),
+                str(share.get("kind", "")).strip().lower(),
+                str(share.get("anchor", "")).strip(),
+            )] = int(tick or 0)
+        sim.emit(Event(
+            "npc_behavior_tip_shared",
+            source_eid=int(share.get("source_eid")),
+            target_eid=int(target_eid),
+            tip_kind=str(share.get("kind", "")).strip().lower(),
+            strength=round(float(share.get("strength", 0.0) or 0.0), 3),
+            property_id=payload.get("property_id"),
+            property_name=payload.get("property_name"),
+            x=payload.get("x"),
+            y=payload.get("y"),
+            z=payload.get("z"),
+        ))
+        applied += 1
+    return applied
+
 class NPCNeedsSystem(System):
 
     CRITICAL_LEVEL = 30.0
@@ -413,6 +882,17 @@ class NPCWillSystem(System):
         vitalities = self.sim.ecs.get(Vitality)
         player_eid = getattr(self.sim, "player_eid", None)
         player_pos = positions.get(player_eid)
+        dialog_state = getattr(self.sim, "dialog_ui", None)
+        dialog_open = bool(dialog_state.get("open")) if isinstance(dialog_state, dict) else False
+        dialog_cooldowns = getattr(self.sim, "npc_dialogue_cooldowns", None)
+        if not isinstance(dialog_cooldowns, dict):
+            dialog_cooldowns = {}
+            self.sim.npc_dialogue_cooldowns = dialog_cooldowns
+        tip_cooldowns = getattr(self.sim, "npc_behavior_tip_cooldowns", None)
+        if not isinstance(tip_cooldowns, dict):
+            tip_cooldowns = {}
+            self.sim.npc_behavior_tip_cooldowns = tip_cooldowns
+        pending_behavior_tips = []
 
         for eid, ai in ais.items():
             pos = positions.get(eid)
@@ -558,6 +1038,20 @@ class NPCWillSystem(System):
             social = socials.get(eid)
             occupation = occupations.get(eid)
             portfolio = portfolios.get(eid)
+            medical_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_MEDICAL, now=self.sim.tick)
+            shelter_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_SHELTER, now=self.sim.tick)
+            safe_spot_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_SAFE_SPOT, now=self.sim.tick)
+            heat_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_HEAT, now=self.sim.tick)
+            street_buy_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_STREET_BUY, now=self.sim.tick)
+            street_appraise_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_STREET_APPRAISE, now=self.sim.tick)
+            medical_target = None
+            shelter_target = None
+            avoidance_target = None
+            safe_spot_share = None
+            street_buy_target = None
+            street_buy_share = None
+            street_appraise_target = None
+            street_appraise_share = None
 
             def _memory_visible(entry):
                 return not _guard_grace_suppresses_memory_entry(
@@ -869,6 +1363,118 @@ class NPCWillSystem(System):
                     best_target = (safe_x, safe_y, pos.z)
                     best_target_eid = None
 
+            seek_medical_aid = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_SEEK_MEDICAL_AID,
+                traits=traits,
+                needs=needs,
+                vitality=vitality,
+            )
+            medical_tip_data = medical_tip.get("data", {}) if isinstance(medical_tip, dict) else {}
+            medical_tip_strength = float(medical_tip.get("strength", 0.0) or 0.0) if isinstance(medical_tip, dict) else 0.0
+            medical_tip_property_id = str(medical_tip_data.get("property_id", "") or "").strip() if isinstance(medical_tip_data, dict) else ""
+            if seek_medical_aid >= 0.08 or medical_tip is not None:
+                medical_target = _find_medical_aid_target(
+                    self.sim,
+                    eid,
+                    pos,
+                    preferred_property_id=medical_tip_property_id or None,
+                    preferred_score_bonus=18.0 * medical_tip_strength,
+                )
+                if medical_target:
+                    medical_score = float(medical_target.get("score", 0.0) or 0.0) * (
+                        0.4 + (seek_medical_aid * 0.9)
+                    )
+                    if medical_tip_property_id and medical_target.get("property_id") == medical_tip_property_id:
+                        medical_score += 10.0 + (medical_tip_strength * 22.0)
+                    if ai.state == "seeking_medical_aid" and ai.target == medical_target.get("target"):
+                        medical_score += 4.0
+                    if medical_score > best_score:
+                        best_intent = "seeking_medical_aid"
+                        best_score = medical_score
+                        best_target = medical_target["target"]
+                        best_target_eid = None
+
+            seek_shelter = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_SEEK_SHELTER,
+                traits=traits,
+                needs=needs,
+                vitality=vitality,
+            )
+            shelter_tip_data = shelter_tip.get("data", {}) if isinstance(shelter_tip, dict) else {}
+            shelter_tip_strength = float(shelter_tip.get("strength", 0.0) or 0.0) if isinstance(shelter_tip, dict) else 0.0
+            shelter_tip_property_id = str(shelter_tip_data.get("property_id", "") or "").strip() if isinstance(shelter_tip_data, dict) else ""
+            if seek_shelter >= 0.08 or shelter_tip is not None:
+                shelter_target = _find_lodging_target(
+                    self.sim,
+                    eid,
+                    pos,
+                    preferred_property_id=shelter_tip_property_id or None,
+                    preferred_score_bonus=16.0 * shelter_tip_strength,
+                )
+                if shelter_target:
+                    shelter_score = float(shelter_target.get("score", 0.0) or 0.0) * (
+                        0.4 + (seek_shelter * 0.92)
+                    )
+                    if shelter_tip_property_id and shelter_target.get("property_id") == shelter_tip_property_id:
+                        shelter_score += 9.0 + (shelter_tip_strength * 20.0)
+                    if ai.state == "seeking_shelter" and ai.target == shelter_target.get("target"):
+                        shelter_score += 4.0
+                    if routine and getattr(routine, "home", None):
+                        shelter_score *= 0.8
+                    if shelter_score > best_score:
+                        best_intent = "seeking_shelter"
+                        best_score = shelter_score
+                        best_target = shelter_target["target"]
+                        best_target_eid = None
+
+            if isinstance(shelter_target, dict):
+                safe_spot_share = {
+                    "property_id": shelter_target.get("property_id"),
+                    "property_name": shelter_target.get("property_name"),
+                    "target": shelter_target.get("target"),
+                    "service": shelter_target.get("service"),
+                    "safe_kind": "lodging",
+                    "score": float(shelter_target.get("score", 0.0) or 0.0),
+                }
+            if isinstance(medical_target, dict):
+                medical_safe_score = float(medical_target.get("score", 0.0) or 0.0)
+                if safe_spot_share is None or medical_safe_score > float(safe_spot_share.get("score", 0.0) or 0.0):
+                    safe_spot_share = {
+                        "property_id": medical_target.get("property_id"),
+                        "property_name": medical_target.get("property_name"),
+                        "target": medical_target.get("target"),
+                        "service": "medical",
+                        "safe_kind": "medical",
+                        "score": medical_safe_score,
+                    }
+
+            safe_spot_tip_data = safe_spot_tip.get("data", {}) if isinstance(safe_spot_tip, dict) else {}
+            safe_spot_tip_strength = float(safe_spot_tip.get("strength", 0.0) or 0.0) if isinstance(safe_spot_tip, dict) else 0.0
+            if safe_spot_tip is not None:
+                safe_spot_target = _find_tipped_safe_spot_target(self.sim, eid, pos, safe_spot_tip_data)
+                if safe_spot_target:
+                    live_heat = _behavior_live_street_heat(self.sim, eid)
+                    safe_spot_intent = "seeking_safe_spot"
+                    safe_kind = str(safe_spot_target.get("safe_kind", "") or "").strip().lower()
+                    if safe_kind == "medical":
+                        safe_spot_intent = "seeking_medical_aid"
+                    elif safe_kind == "lodging" and live_heat < 0.12:
+                        safe_spot_intent = "seeking_shelter"
+                    safe_spot_score = float(safe_spot_target.get("score", 0.0) or 0.0)
+                    safe_spot_score += safe_spot_tip_strength * 28.0
+                    safe_spot_score += live_heat * 20.0
+                    if ai.state == safe_spot_intent and ai.target == safe_spot_target.get("target"):
+                        safe_spot_score += 4.0
+                    if safe_spot_score > best_score:
+                        best_intent = safe_spot_intent
+                        best_score = safe_spot_score
+                        best_target = safe_spot_target["target"]
+                        best_target_eid = None
+
             seek_social_contact = _effective_behavior_value(
                 self.sim,
                 eid,
@@ -885,6 +1491,15 @@ class NPCWillSystem(System):
                 workplace_prop=workplace_prop,
                 role=ai.role,
             )
+            district_type = ""
+            world = getattr(self.sim, "world", None)
+            if world is not None:
+                chunk = world.get_chunk(*self.sim.chunk_coords(pos.x, pos.y))
+                district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+                if not isinstance(district, dict):
+                    district = {}
+                district_type = str(district.get("district_type", "") or "").strip().lower()
+            career = str(getattr(occupation, "career", "") or "").strip().lower()
 
             collect_ground_credits = _effective_behavior_value(
                 self.sim,
@@ -958,6 +1573,197 @@ class NPCWillSystem(System):
                         best_score = sale_score
                         best_target = sale_target["target"]
                         best_target_eid = None
+
+            street_buy_tip_data = street_buy_tip.get("data", {}) if isinstance(street_buy_tip, dict) else {}
+            street_buy_tip_strength = float(street_buy_tip.get("strength", 0.0) or 0.0) if isinstance(street_buy_tip, dict) else 0.0
+            if street_buy_tip is not None:
+                street_buy_target = _find_tipped_street_buyer_target(
+                    self.sim,
+                    eid,
+                    pos,
+                    street_buy_tip_data,
+                )
+                if street_buy_target:
+                    street_buy_score = (
+                        float(street_buy_target.get("score", 0.0) or 0.0)
+                        + (street_buy_tip_strength * 22.0)
+                    )
+                    if work_active:
+                        street_buy_score *= 0.84
+                    if ai.state == "seeking_street_buyer" and ai.target_eid == street_buy_target.get("buyer_eid"):
+                        street_buy_score += 4.0
+                    if street_buy_score > best_score:
+                        best_intent = "seeking_street_buyer"
+                        best_score = street_buy_score
+                        best_target = street_buy_target["target"]
+                        best_target_eid = street_buy_target.get("buyer_eid")
+
+            street_appraise_tip_data = street_appraise_tip.get("data", {}) if isinstance(street_appraise_tip, dict) else {}
+            street_appraise_tip_strength = float(street_appraise_tip.get("strength", 0.0) or 0.0) if isinstance(street_appraise_tip, dict) else 0.0
+            if street_appraise_tip is not None:
+                street_appraise_target = _find_tipped_street_appraiser_target(
+                    self.sim,
+                    eid,
+                    pos,
+                    street_appraise_tip_data,
+                )
+                if street_appraise_target:
+                    appraise_score = (
+                        float(street_appraise_target.get("score", 0.0) or 0.0)
+                        + (street_appraise_tip_strength * 26.0)
+                    )
+                    if work_active:
+                        appraise_score *= 0.86
+                    if ai.state == "seeking_street_appraiser" and ai.target_eid == street_appraise_target.get("appraiser_eid"):
+                        appraise_score += 4.0
+                    if appraise_score > best_score:
+                        best_intent = "seeking_street_appraiser"
+                        best_score = appraise_score
+                        best_target = street_appraise_target["target"]
+                        best_target_eid = street_appraise_target.get("appraiser_eid")
+
+            avoid_authorities = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_AVOID_AUTHORITIES,
+                traits=traits,
+                needs=needs,
+                justice=justices.get(eid),
+            )
+            heat_tip_data = heat_tip.get("data", {}) if isinstance(heat_tip, dict) else {}
+            heat_tip_strength = float(heat_tip.get("strength", 0.0) or 0.0) if isinstance(heat_tip, dict) else 0.0
+            if avoid_authorities >= 0.08 or heat_tip is not None:
+                inventory_heat = _inventory_contraband_heat(self.sim, eid)
+                street_heat = max(
+                    _actor_behavior_value(self.sim, eid, BEHAVIOR_BUY_DESIRED_DRUG, 0.0),
+                    _actor_behavior_value(self.sim, eid, BEHAVIOR_BUY_PLAYER_GOODS, 0.0),
+                    _actor_behavior_value(self.sim, eid, BEHAVIOR_APPRAISE_STREET_GOODS, 0.0) * 0.8,
+                )
+                authority_heat = max(float(inventory_heat), float(street_heat) * 0.72, heat_tip_strength * 0.62)
+                if authority_heat >= 0.12 or heat_tip is not None:
+                    avoidance_target = _find_authority_avoidance_target(self.sim, eid, pos)
+                    if avoidance_target is None and isinstance(heat_tip_data, dict):
+                        warning_z = int(heat_tip_data.get("z", pos.z) or pos.z)
+                        if warning_z == int(pos.z):
+                            retreat_target = _retreat_target_from_warning(
+                                self.sim,
+                                pos,
+                                (
+                                    int(heat_tip_data.get("x", pos.x) or pos.x),
+                                    int(heat_tip_data.get("y", pos.y) or pos.y),
+                                    warning_z,
+                                ),
+                            )
+                            if retreat_target:
+                                avoidance_target = {
+                                    "authority_eid": heat_tip_data.get("authority_eid"),
+                                    "authority_pos": (
+                                        int(heat_tip_data.get("x", pos.x) or pos.x),
+                                        int(heat_tip_data.get("y", pos.y) or pos.y),
+                                        warning_z,
+                                    ),
+                                    "distance": int(_manhattan(pos.x, pos.y, int(heat_tip_data.get("x", pos.x) or pos.x), int(heat_tip_data.get("y", pos.y) or pos.y))),
+                                    "score": 12.0 + (heat_tip_strength * 22.0),
+                                    "target": retreat_target,
+                                }
+                    if avoidance_target:
+                        avoidance_score = (
+                            float(avoidance_target.get("score", 0.0) or 0.0) * (0.35 + (avoid_authorities * 0.95))
+                        ) + (authority_heat * 28.0)
+                        if heat_tip is not None:
+                            # Peer heat warnings should be strong enough to push
+                            # suspicious NPCs off their default routine for at
+                            # least a short-lived evasive response.
+                            avoidance_score += 14.0 + (heat_tip_strength * 18.0) + (authority_heat * 12.0)
+                        if ai.state == "evading_authority":
+                            avoidance_score += 4.0
+                        if avoidance_score > best_score:
+                            best_intent = "evading_authority"
+                            best_score = avoidance_score
+                            best_target = avoidance_target["target"]
+                            best_target_eid = avoidance_target.get("authority_eid")
+
+            street_buy_terms = _street_buy_terms(
+                self.sim,
+                eid,
+                district_type=district_type,
+                career=career,
+            )
+            if street_buy_terms:
+                street_buy_share = {
+                    "buy_desired_drug": float(street_buy_terms.get("buy_desired_drug", 0.0) or 0.0),
+                    "buy_player_goods": float(street_buy_terms.get("buy_player_goods", 0.0) or 0.0),
+                    "desired_item_id": str(street_buy_terms.get("desired_item_id", "") or "").strip().lower(),
+                }
+            appraise_caps = _street_appraise_capabilities(self.sim, eid)
+            if appraise_caps:
+                street_appraise_share = {
+                    "identify_strength": float(appraise_caps.get("identify_strength", 0.0) or 0.0),
+                    "appraise_strength": float(appraise_caps.get("appraise_strength", 0.0) or 0.0),
+                }
+
+            if (
+                player_eid is not None
+                and player_eid != eid
+                and player_pos is not None
+                and int(player_pos.z) == int(pos.z)
+                and not dialog_open
+                and int(dialog_cooldowns.get(eid, 0) or 0) <= int(self.sim.tick)
+            ):
+                street_buy_profile = _street_buy_interest_profile(
+                    self.sim,
+                    eid,
+                    player_eid,
+                    district_type=district_type,
+                    career=career,
+                )
+                if street_buy_profile:
+                    initiate_dialogue = _effective_behavior_value(
+                        self.sim,
+                        eid,
+                        BEHAVIOR_INITIATE_DIALOGUE,
+                        traits=traits,
+                        needs=needs,
+                    )
+                    desired_name = str(street_buy_profile.get("desired_name", "") or "").strip()
+                    player_has_match = bool(street_buy_profile.get("player_has_match"))
+                    player_has_desired = bool(street_buy_profile.get("player_has_desired"))
+                    has_reason = bool(
+                        desired_name
+                        or player_has_match
+                        or player_has_desired
+                        or float(street_buy_profile.get("buy_player_goods", 0.0) or 0.0) >= 0.3
+                    )
+                    dialogue_radius = int(max(
+                        2,
+                        _behavior_preference(self.sim, eid, "initiate_dialogue_radius", 5) or 5,
+                    ))
+                    if not player_has_match and not player_has_desired:
+                        dialogue_radius = min(dialogue_radius, 3)
+                    distance = _manhattan(pos.x, pos.y, player_pos.x, player_pos.y)
+                    if has_reason and initiate_dialogue >= 0.08 and distance <= dialogue_radius:
+                        solicitation_score = (
+                            16.0
+                            + (initiate_dialogue * 34.0)
+                            + (float(street_buy_profile.get("buy_desired_drug", 0.0) or 0.0) * 18.0)
+                            + (float(street_buy_profile.get("buy_player_goods", 0.0) or 0.0) * 12.0)
+                            + max(0.0, (dialogue_radius + 1 - distance) * 3.5)
+                        )
+                        if player_has_desired:
+                            solicitation_score += 26.0
+                        elif player_has_match:
+                            solicitation_score += 16.0
+                        elif desired_name:
+                            solicitation_score += 8.0
+                        if work_active:
+                            solicitation_score *= 0.82
+                        if ai.state == "soliciting_player" and ai.target_eid == player_eid:
+                            solicitation_score += 5.0
+                        if solicitation_score > best_score:
+                            best_intent = "soliciting_player"
+                            best_score = solicitation_score
+                            best_target = (player_pos.x, player_pos.y, player_pos.z)
+                            best_target_eid = player_eid
 
             if social and social_pressure > best_score:
                 bond_eid = social.strongest_bond(min_closeness=0.35)
@@ -1084,6 +1890,44 @@ class NPCWillSystem(System):
                     best_target_eid,
                 )
 
+            queued_tip = _plan_behavior_tip_share(
+                self.sim,
+                eid,
+                pos,
+                best_intent,
+                medical_target=medical_target,
+                shelter_target=shelter_target,
+                avoidance_target=avoidance_target,
+                safe_spot_share=None,
+                street_buy_share=street_buy_share,
+                street_appraise_share=street_appraise_share,
+                cooldowns=tip_cooldowns,
+                tick=self.sim.tick,
+            )
+            if queued_tip:
+                queued_tip["source_eid"] = int(eid)
+                pending_behavior_tips.append(queued_tip)
+            if best_intent in {"seeking_shelter", "seeking_medical_aid", "evading_authority"} and isinstance(safe_spot_share, dict):
+                safe_tip = _plan_behavior_tip_share(
+                    self.sim,
+                    eid,
+                    pos,
+                    "seeking_safe_spot",
+                    safe_spot_share=safe_spot_share,
+                    cooldowns=tip_cooldowns,
+                    tick=self.sim.tick,
+                )
+                if safe_tip:
+                    safe_tip["source_eid"] = int(eid)
+                    pending_behavior_tips.append(safe_tip)
+
+        _apply_behavior_tip_shares(
+            self.sim,
+            pending_behavior_tips,
+            cooldowns=tip_cooldowns,
+            tick=self.sim.tick,
+        )
+
 class NPCInvestigateSystem(System):
 
     DEFAULT_MOVE_COOLDOWNS = {
@@ -1095,11 +1939,18 @@ class NPCInvestigateSystem(System):
         "chasing": 1,
         "scavenging": 2,
         "selling_scavenged": 2,
+        "evading_authority": 1,
+        "seeking_street_buyer": 2,
+        "seeking_street_appraiser": 2,
+        "soliciting_player": 2,
         "following": 1,
         "holding": 1,
         "seeking_social": 2,
         "seeking_companionship": 2,
         "seeking_safety": 1,
+        "seeking_medical_aid": 2,
+        "seeking_safe_spot": 2,
+        "seeking_shelter": 2,
         "patrolling": 3,
         "working": 3,
         "lounging": 4,
@@ -1196,7 +2047,14 @@ class NPCInvestigateSystem(System):
         weapon_profiles = self.sim.ecs.get(WeaponUseProfile)
         vitalities = self.sim.ecs.get(Vitality)
         suppressions = self.sim.ecs.get(SuppressionState)
+        occupations = self.sim.ecs.get(Occupation)
         global_stride = int(max(1, getattr(self.sim, "npc_move_tick_stride", 1)))
+        player_eid = getattr(self.sim, "player_eid", None)
+        player_pos = positions.get(player_eid)
+        dialog_cooldowns = getattr(self.sim, "npc_dialogue_cooldowns", None)
+        if not isinstance(dialog_cooldowns, dict):
+            dialog_cooldowns = {}
+            self.sim.npc_dialogue_cooldowns = dialog_cooldowns
 
         moving_states = {
             "investigating",
@@ -1207,11 +2065,18 @@ class NPCInvestigateSystem(System):
             "chasing",
             "scavenging",
             "selling_scavenged",
+            "evading_authority",
+            "seeking_street_buyer",
+            "seeking_street_appraiser",
+            "soliciting_player",
             "following",
             "holding",
             "seeking_social",
             "seeking_companionship",
             "seeking_safety",
+            "seeking_medical_aid",
+            "seeking_safe_spot",
+            "seeking_shelter",
             "patrolling",
             "working",
             "lounging",
@@ -1331,6 +2196,42 @@ class NPCInvestigateSystem(System):
                     _collect_ground_items_at_actor(self.sim, eid, pos)
                 if ai.state == "selling_scavenged":
                     _sell_scavenged_inventory_at_actor(self.sim, eid, pos)
+                if ai.state == "seeking_street_buyer" and ai.target_eid is not None:
+                    buyer_eid = ai.target_eid
+                    buyer_pos = positions.get(buyer_eid)
+                    if buyer_pos and int(buyer_pos.z) == int(pos.z) and _manhattan(pos.x, pos.y, buyer_pos.x, buyer_pos.y) <= 1:
+                        occupation = occupations.get(buyer_eid)
+                        career = str(getattr(occupation, "career", "") or "").strip().lower()
+                        district_type = ""
+                        world = getattr(self.sim, "world", None)
+                        if world is not None:
+                            chunk = world.get_chunk(*self.sim.chunk_coords(buyer_pos.x, buyer_pos.y))
+                            district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+                            if not isinstance(district, dict):
+                                district = {}
+                            district_type = str(district.get("district_type", "") or "").strip().lower()
+                        _resolve_street_buy_between_actors(
+                            self.sim,
+                            buyer_eid,
+                            eid,
+                            district_type=district_type,
+                            career=career,
+                        )
+                if ai.state == "seeking_street_appraiser" and ai.target_eid is not None:
+                    appraiser_eid = ai.target_eid
+                    appraiser_pos = positions.get(appraiser_eid)
+                    if appraiser_pos and int(appraiser_pos.z) == int(pos.z) and _manhattan(pos.x, pos.y, appraiser_pos.x, appraiser_pos.y) <= 1:
+                        _resolve_street_appraise_between_actors(
+                            self.sim,
+                            appraiser_eid,
+                            eid,
+                        )
+                if ai.state == "seeking_medical_aid":
+                    _receive_medical_aid_at_actor(self.sim, eid, pos)
+                if ai.state == "seeking_safe_spot":
+                    _receive_safe_spot_at_actor(self.sim, eid, pos)
+                if ai.state == "seeking_shelter":
+                    _receive_lodging_at_actor(self.sim, eid, pos)
 
                 if ai.state == "reporting_incident":
                     self.sim.emit(Event(
@@ -1379,7 +2280,7 @@ class NPCInvestigateSystem(System):
                     self.next_move_tick[eid] = self.sim.tick + 1
                 continue
 
-            if ai.state in {"investigating", "seeking_social", "seeking_companionship", "protecting", "reporting_incident", "helping_victim", "warning"} and _manhattan(pos.x, pos.y, tx, ty) <= 1:
+            if ai.state in {"investigating", "seeking_social", "seeking_companionship", "protecting", "reporting_incident", "helping_victim", "warning", "soliciting_player", "seeking_street_buyer", "seeking_street_appraiser"} and _manhattan(pos.x, pos.y, tx, ty) <= 1:
                 if ai.state == "reporting_incident":
                     self.sim.emit(Event(
                         "npc_report_arrived",
@@ -1422,6 +2323,87 @@ class NPCInvestigateSystem(System):
                     ai.target = None
                     ai.target_eid = None
                     self.sim.emit(Event("npc_investigation_complete", npc_eid=eid, x=pos.x, y=pos.y, z=tz))
+                elif ai.state == "soliciting_player":
+                    occupation = occupations.get(eid)
+                    career = str(getattr(occupation, "career", "") or "").strip().lower()
+                    district_type = ""
+                    world = getattr(self.sim, "world", None)
+                    if world is not None:
+                        chunk = world.get_chunk(*self.sim.chunk_coords(pos.x, pos.y))
+                        district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+                        if not isinstance(district, dict):
+                            district = {}
+                        district_type = str(district.get("district_type", "") or "").strip().lower()
+                    interest = None
+                    if player_eid is not None and player_pos is not None and int(player_pos.z) == int(pos.z):
+                        interest = _street_buy_interest_profile(
+                            self.sim,
+                            eid,
+                            player_eid,
+                            district_type=district_type,
+                            career=career,
+                        )
+                    prompt_lines = ()
+                    if interest:
+                        desired_name = str(interest.get("desired_name", "") or "").strip()
+                        if interest.get("player_has_desired") and desired_name:
+                            prompt_lines = (f"You carrying any {desired_name}? I'll pay for it.",)
+                        elif desired_name:
+                            prompt_lines = (f"If you run across any {desired_name}, find me. I'm buying.",)
+                        elif interest.get("player_has_match"):
+                            prompt_lines = ("You carrying anything worth moving? I can pay.",)
+                    cooldown = int(max(
+                        60,
+                        _behavior_preference(self.sim, eid, "initiate_dialogue_cooldown", 240) or 240,
+                    ))
+                    dialog_cooldowns[eid] = int(self.sim.tick) + cooldown
+                    if prompt_lines and player_eid is not None:
+                        self.sim.emit(Event(
+                            "npc_dialogue_request",
+                            eid=player_eid,
+                            npc_eid=eid,
+                            prompt_lines=prompt_lines,
+                            highlight_topic_ids=("street_buy",),
+                        ))
+                    ai.state = "idle"
+                    ai.target = None
+                    ai.target_eid = None
+                elif ai.state == "seeking_street_buyer":
+                    buyer_eid = ai.target_eid
+                    buyer_pos = positions.get(buyer_eid) if buyer_eid is not None else None
+                    if buyer_pos and int(buyer_pos.z) == int(pos.z):
+                        occupation = occupations.get(buyer_eid)
+                        career = str(getattr(occupation, "career", "") or "").strip().lower()
+                        district_type = ""
+                        world = getattr(self.sim, "world", None)
+                        if world is not None:
+                            chunk = world.get_chunk(*self.sim.chunk_coords(buyer_pos.x, buyer_pos.y))
+                            district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+                            if not isinstance(district, dict):
+                                district = {}
+                            district_type = str(district.get("district_type", "") or "").strip().lower()
+                        _resolve_street_buy_between_actors(
+                            self.sim,
+                            buyer_eid,
+                            eid,
+                            district_type=district_type,
+                            career=career,
+                        )
+                    ai.state = "idle"
+                    ai.target = None
+                    ai.target_eid = None
+                elif ai.state == "seeking_street_appraiser":
+                    appraiser_eid = ai.target_eid
+                    appraiser_pos = positions.get(appraiser_eid) if appraiser_eid is not None else None
+                    if appraiser_pos and int(appraiser_pos.z) == int(pos.z):
+                        _resolve_street_appraise_between_actors(
+                            self.sim,
+                            appraiser_eid,
+                            eid,
+                        )
+                    ai.state = "idle"
+                    ai.target = None
+                    ai.target_eid = None
                 elif ai.state == "seeking_social":
                     partner_eid = ai.target_eid
                     needs = needs_map.get(eid)

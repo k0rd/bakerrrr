@@ -2856,7 +2856,162 @@ ROOM_CURIOSITY_ENCOUNTER_ROWS = (
             ("burner_phone", 2),
         ),
     },
+    {
+        "profile_id": "backroom_entrepreneur",
+        "weight": 1.15,
+        "archetypes": ("hotel", "tower", "office", "brokerage", "media_lab", "theater", "music_venue", "gaming_hall", "casino"),
+        "room_kinds": ("service_office", "archive", "records_room", "executive_office", "screening_room", "backstage", "green_room", "vip_lounge", "surveillance_room"),
+        "role": "civilian",
+        "career_rows": (
+            ("black_market_broker", 1),
+        ),
+        "assign_workplace": False,
+        "hidden_storefront": {
+            "archetype": "backroom_market",
+            "dialogue_trade_only": True,
+            "lead_item_id": "backroom_card",
+        },
+        "bonus_item_rows": (
+            ("burner_phone", 4),
+            ("credstick_chip", 3),
+            ("signal_jammer", 2),
+        ),
+    },
+    {
+        "profile_id": "backroom_doctor",
+        "weight": 0.9,
+        "archetypes": ("hotel", "flophouse", "nightclub", "music_venue", "theater", "gaming_hall", "casino"),
+        "room_kinds": ("service_office", "guest_lounge", "linen_closet", "green_room", "backstage", "vip_lounge"),
+        "role": "civilian",
+        "career_rows": (
+            ("street_doc", 1),
+        ),
+        "assign_workplace": False,
+        "hidden_storefront": {
+            "archetype": "backroom_clinic",
+            "dialogue_trade_only": True,
+            "lead_item_id": "clinic_scrap",
+        },
+        "bonus_item_rows": (
+            ("field_dressing", 4),
+            ("med_gel", 4),
+            ("burner_phone", 2),
+        ),
+    },
 )
+
+
+def _hidden_storefront_name(host_prop, *, room_kind=""):
+    host_name = str((host_prop or {}).get("name", "") or "").strip()
+    if host_name:
+        return f"{host_name} Back Room"
+    room_label = str(room_kind or "").strip().replace("_", " ")
+    if room_label:
+        return f"{room_label.title()} Back Room"
+    return "Back Room"
+
+
+def _spawn_hidden_storefront(
+    sim,
+    host_prop,
+    owner_eid,
+    tile,
+    *,
+    archetype="backroom_market",
+    room_kind="",
+    dialogue_trade_only=True,
+):
+    if not isinstance(host_prop, dict) or owner_eid is None:
+        return None
+    if not isinstance(tile, (list, tuple)) or len(tile) < 3:
+        return None
+
+    try:
+        x = int(tile[0])
+        y = int(tile[1])
+        z = int(tile[2])
+    except (TypeError, ValueError):
+        return None
+
+    host_meta = host_prop.get("metadata") if isinstance(host_prop.get("metadata"), dict) else {}
+    building_id = str(host_meta.get("building_id", "") or host_prop.get("id", "")).strip()
+    host_property_id = str(host_prop.get("id", "")).strip()
+    name = _hidden_storefront_name(host_prop, room_kind=room_kind)
+    metadata = {
+        "archetype": str(archetype or "backroom_market").strip().lower() or "backroom_market",
+        "business_name": name,
+        "is_storefront": True,
+        "storefront_service_mode": "staffed",
+        "dialogue_trade_only": bool(dialogue_trade_only),
+        "customer_policy": "staff_only",
+        "public": False,
+        "linked_property_id": host_property_id or None,
+        "linked_building_id": building_id or None,
+        "hidden_contact_kind": str(archetype or "backroom_market").strip().lower() or "backroom_market",
+        "placement_room_kind": str(room_kind or "").strip().lower() or None,
+        "footprint": {
+            "left": x,
+            "right": x,
+            "top": y,
+            "bottom": y,
+        },
+        "entry": {
+            "x": x,
+            "y": y,
+            "z": z,
+            "kind": "counter",
+            "ordinary": False,
+        },
+    }
+    return sim.register_property(
+        name=name,
+        kind="asset",
+        x=x,
+        y=y,
+        z=z,
+        owner_eid=owner_eid,
+        owner_tag="npc",
+        metadata=metadata,
+    )
+
+
+def _spawn_hidden_contact_lead_item(sim, hidden_storefront, room_tiles, rng, *, lead_item_id=""):
+    lead_item_id = str(lead_item_id or "").strip().lower()
+    if not lead_item_id or not isinstance(hidden_storefront, dict):
+        return None
+    source_property_id = str(hidden_storefront.get("id", "") or "").strip()
+    if not source_property_id:
+        return None
+
+    positions = []
+    for candidate in tuple(room_tiles or ()):
+        if not isinstance(candidate, (list, tuple)) or len(candidate) < 3:
+            continue
+        try:
+            positions.append((int(candidate[0]), int(candidate[1]), int(candidate[2])))
+        except (TypeError, ValueError):
+            continue
+    if not positions:
+        positions = [(int(hidden_storefront.get("x", 0)), int(hidden_storefront.get("y", 0)), int(hidden_storefront.get("z", 0)))]
+    positions = _unique_positions(positions)
+    tile = _pick_tile(sim, positions, rng, allow_entities=True)
+    if not tile:
+        return None
+    return sim.register_ground_item(
+        item_id=lead_item_id,
+        x=tile[0],
+        y=tile[1],
+        z=tile[2],
+        quantity=1,
+        owner_eid=None,
+        owner_tag="city",
+        metadata={
+            "source_property_id": source_property_id,
+            "placement_zone": "room_curiosity_lead",
+            "placement_room_kind": str((hidden_storefront.get("metadata", {}) or {}).get("placement_room_kind", "")).strip().lower() or None,
+            "hidden_contact_kind": str((hidden_storefront.get("metadata", {}) or {}).get("hidden_contact_kind", "")).strip().lower() or None,
+        },
+    )
 
 
 def _property_skips_ambient_population(prop):
@@ -3055,6 +3210,36 @@ def _spawn_room_curiosity_encounter(sim, chunk, prop, rng, *, economy_profile=No
         home_prop=home_prop,
         economy_profile=economy_profile if isinstance(economy_profile, dict) else chunk_economy_profile(sim, chunk),
     )
+    hidden_store = profile.get("hidden_storefront") if isinstance(profile.get("hidden_storefront"), dict) else {}
+    if hidden_store:
+        hidden_storefront_id = _spawn_hidden_storefront(
+            sim,
+            prop,
+            eid,
+            tile,
+            archetype=str(hidden_store.get("archetype", "backroom_market") or "backroom_market").strip().lower(),
+            room_kind=room_kind,
+            dialogue_trade_only=bool(hidden_store.get("dialogue_trade_only", True)),
+        )
+        hidden_storefront = sim.properties.get(hidden_storefront_id) if hidden_storefront_id else None
+        occupation = sim.ecs.get(Occupation).get(eid)
+        if occupation is not None and isinstance(hidden_storefront, dict):
+            occupation.workplace = {
+                "property_id": hidden_storefront_id,
+                "building_id": str((hidden_storefront.get("metadata", {}) or {}).get("linked_building_id", "")).strip() or None,
+                "archetype": str((hidden_storefront.get("metadata", {}) or {}).get("archetype", "")).strip().lower() or "backroom_market",
+            }
+        routine = sim.ecs.get(NPCRoutine).get(eid)
+        if routine is not None:
+            routine.work = tile
+        if isinstance(hidden_storefront, dict):
+            _spawn_hidden_contact_lead_item(
+                sim,
+                hidden_storefront,
+                room_tiles.get(room_kind, ()),
+                rng,
+                lead_item_id=str(hidden_store.get("lead_item_id", "") or "").strip().lower(),
+            )
     bonus_item = _weighted_choice(rng, list(tuple(profile.get("bonus_item_rows", ()) or ())))
     if bonus_item and rng.random() < 0.82:
         _give_item(sim, eid, str(bonus_item).strip().lower(), quantity=1)

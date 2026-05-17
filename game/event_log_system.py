@@ -188,6 +188,7 @@ from game.system_support.offense_runtime import (
     _offense_tier,
 )
 from game.system_support.player_feedback import _log_player_feedback
+from game.system_support.environment_hazard_runtime import environment_hazard_player_note
 from game.service_runtime import (
     CASINO_GAME_SERVICE_IDS,
     TRANSIT_SERVICE_IDS,
@@ -388,6 +389,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("entity_changed_floor", self.on_entity_changed_floor)
         self.sim.events.subscribe("noise", self.on_noise)
         self.sim.events.subscribe("creature_hazard_triggered", self.on_creature_hazard_triggered)
+        self.sim.events.subscribe("environmental_hazard_triggered", self.on_environmental_hazard_triggered)
         self.sim.events.subscribe("world_condition_triggered", self.on_world_condition_triggered)
         self.sim.events.subscribe("scan_report", self.on_scan_report)
         self.sim.events.subscribe("look_mode_toggled", self.on_look_mode_toggled)
@@ -901,6 +903,13 @@ class EventLogSystem(System):
                     return f"You cannot access {name} from here."
                 return "You cannot access that floor connection."
             return "You cannot open that door."
+        if reason == "power_cut":
+            if floor_context:
+                return "The elevator is offline. Power is out."
+            if isinstance(prop, dict):
+                name = str(prop.get("name", prop.get("id", "The site"))).strip() or "The site"
+                return f"{name} is offline. Power is out."
+            return "That system is offline. Power is out."
         if None not in {x, y, z}:
             return self._move_blocked_phrase(x, y, z, reason)
         if floor_context:
@@ -1786,6 +1795,14 @@ class EventLogSystem(System):
         coat = str(event.data.get("coat_variant", "unknown")).replace("_", " ")
         self._log(f"Toxic contact: {coat} cat venom burns.", channel="status", priority="high")
 
+    def on_environmental_hazard_triggered(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+        profile_id = str(event.data.get("hazard_profile", "") or "").strip().lower()
+        hazard_name = str(event.data.get("hazard_name", event.data.get("property_name", "hazard")) or "").strip()
+        note = str(event.data.get("hazard_note", "")).strip() or environment_hazard_player_note(profile_id, name=hazard_name)
+        self._log(f"Hazard: {note}", channel="status", priority="high")
+
     def on_world_condition_triggered(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -1893,14 +1910,29 @@ class EventLogSystem(System):
             return
         property_name = str(event.data.get("property_name", "location")).strip() or "location"
         discovery_mode = str(event.data.get("discovery_mode", "sight")).strip().lower() or "sight"
+        source_item_name = str(event.data.get("source_item_name", "") or "").strip()
+        hidden = bool(event.data.get("hidden"))
         confidence = max(0, min(100, int(round(float(event.data.get("confidence", 0.0) or 0.0) * 100.0))))
+        bucket = "hidden locations" if hidden else "known locations"
         if discovery_mode == "interact":
-            self.sim.log.add(f"Location confirmed: {property_name} added to known locations ({confidence}% confidence).")
+            self.sim.log.add(f"Location confirmed: {property_name} added to {bucket} ({confidence}% confidence).")
             return
         if discovery_mode == "scan":
-            self.sim.log.add(f"Scan noted: {property_name} added to known locations ({confidence}% confidence).")
+            self.sim.log.add(f"Scan noted: {property_name} added to {bucket} ({confidence}% confidence).")
             return
-        self.sim.log.add(f"Location noted: {property_name} added to known locations ({confidence}% confidence).")
+        if discovery_mode == "advertisement":
+            if source_item_name:
+                self.sim.log.add(f"Lead noted from {source_item_name}: {property_name} added to {bucket} ({confidence}% confidence).")
+                return
+            self.sim.log.add(f"Lead noted: {property_name} added to {bucket} ({confidence}% confidence).")
+            return
+        if discovery_mode == "covert_note":
+            if source_item_name:
+                self.sim.log.add(f"Hidden lead filed from {source_item_name}: {property_name} added to {bucket} ({confidence}% confidence).")
+                return
+            self.sim.log.add(f"Hidden lead filed: {property_name} added to {bucket} ({confidence}% confidence).")
+            return
+        self.sim.log.add(f"Location noted: {property_name} added to {bucket} ({confidence}% confidence).")
 
     def on_interact_empty(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -2912,6 +2944,17 @@ class EventLogSystem(System):
         eid = event.data.get("eid")
         item_name = event.data.get("item_name", event.data.get("item_id", "item"))
         if eid == self.player_eid:
+            usage_kind = str(event.data.get("usage_kind", "") or "").strip().lower()
+            if usage_kind == "property_lead":
+                if not bool(event.data.get("lead_changed")):
+                    property_name = str(event.data.get("property_name", "") or "").strip()
+                    hidden = bool(event.data.get("hidden"))
+                    if property_name:
+                        bucket = "hidden notebook" if hidden else "notebook"
+                        _log_player_feedback(self.sim, f"{item_name} points to {property_name}, but you already filed it in your {bucket}.", kind="interaction")
+                    else:
+                        _log_player_feedback(self.sim, f"{item_name} does not tell you anything new.", kind="interaction")
+                return
             applied = list(event.data.get("applied", ()) or ())
             bits = []
             for entry in applied:
@@ -3092,6 +3135,8 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"{item_name} only triggers automatically in a critical state.", kind="interaction")
         elif reason == "item_not_usable":
             _log_player_feedback(self.sim, f"{item_name} cannot be used.", kind="interaction")
+        elif reason == "no_property_lead":
+            _log_player_feedback(self.sim, f"{item_name} does not point to any clear location right now.", kind="interaction")
         elif reason == "no_applicable_effect":
             _log_player_feedback(self.sim, f"{item_name} has no effect right now.", kind="interaction")
         elif reason == "consume_failed":

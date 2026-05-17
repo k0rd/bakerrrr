@@ -194,6 +194,10 @@ from game.service_runtime import (
     _int_or_default,
     _site_service_seed_token,
 )
+from game.system_support.environment_hazard_runtime import (
+    environment_hazard_asset_metadata as _environment_hazard_asset_metadata,
+    normalize_environment_hazard_specs as _normalize_environment_hazard_specs,
+)
 from game.system_support.interaction_ordering import (
     _direction_step,
     _interaction_target_order_key,
@@ -390,6 +394,47 @@ class WorldStreamingSystem(System):
             "x": int(x),
             "y": int(y),
             "z": int(z),
+            "archetype": metadata.get("archetype"),
+            "building_id": None,
+        })
+        return property_id
+
+    def _register_environmental_hazard_asset(
+        self,
+        records,
+        *,
+        key,
+        spec,
+        linked_property_id=None,
+    ):
+        normalized = _normalize_environment_hazard_specs((spec,))
+        if not normalized:
+            return None
+        spec = normalized[0]
+        self._ensure_property_anchor(spec["x"], spec["y"], spec["z"])
+        metadata = _environment_hazard_asset_metadata(
+            spec,
+            key=key,
+            linked_property_id=linked_property_id,
+        )
+        if not metadata:
+            return None
+        property_id = self.sim.register_property(
+            name=str(spec.get("name", "Hazard")).strip() or "Hazard",
+            kind="asset",
+            x=int(spec["x"]),
+            y=int(spec["y"]),
+            z=int(spec["z"]),
+            owner_eid=None,
+            owner_tag="city",
+            metadata=metadata,
+        )
+        records.append({
+            "id": property_id,
+            "kind": "asset",
+            "x": int(spec["x"]),
+            "y": int(spec["y"]),
+            "z": int(spec["z"]),
             "archetype": metadata.get("archetype"),
             "building_id": None,
         })
@@ -663,6 +708,12 @@ class WorldStreamingSystem(System):
                         for spec in tuple(plan.get("ambient_wildlife_spawns", ()) or ())
                         if isinstance(spec, dict)
                     ],
+                    "ambient_hazard_profile": str(plan.get("ambient_hazard_profile", "")).strip().lower() or None,
+                    "ambient_hazard_spawns": [
+                        dict(spec)
+                        for spec in tuple(plan.get("ambient_hazard_spawns", ()) or ())
+                        if isinstance(spec, dict)
+                    ],
                     "purchase_cost": 0,
                     "finance_services": [],
                     "site_services": [],
@@ -730,6 +781,15 @@ class WorldStreamingSystem(System):
                         f"{int(cache_spec.get('x', x))}:{int(cache_spec.get('y', y))}:{int(cache_spec.get('z', z))}:"
                         f"{cache_index}"
                     ),
+                )
+            for hazard_spec in tuple(plan.get("ambient_hazard_spawns", ()) or ()):
+                if not isinstance(hazard_spec, dict):
+                    continue
+                self._register_environmental_hazard_asset(
+                    records,
+                    key=key,
+                    spec=hazard_spec,
+                    linked_property_id=property_id,
                 )
 
         fixture_count = max(1, chunk_size // 8) if area_type != "city" else max(4, chunk_size // 4)

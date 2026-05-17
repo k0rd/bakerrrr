@@ -317,6 +317,37 @@ class TradeSystem(System):
                 ("street_ration", 8),
             ),
         },
+        "backroom_market": {
+            "buy_mult_lo": 1.14,
+            "buy_mult_hi": 1.62,
+            "sell_ratio": 0.58,
+            "unlisted_sell_ratio": 0.38,
+            "item_pool": (
+                ("burner_phone", 12),
+                ("lockpick_kit", 16),
+                ("glass_cutter", 12),
+                ("hotwire_leads", 10),
+                ("signal_jammer", 12),
+                ("cloned_thumb", 8),
+                ("med_gel", 10),
+                ("counterfeit_med_gel", 8),
+                ("trauma_foam", 8),
+                ("burner_serum", 8),
+                ("trauma_autoinjector", 3),
+                ("focus_inhaler", 10),
+                ("black_market_stim", 12),
+                ("cocaine_bindle", 10),
+                ("mdma_capsule", 8),
+                ("lsd_blotter", 6),
+                ("fentanyl_patch", 4),
+                ("heroin_syringe", 4),
+                ("ketamine_vial", 5),
+                ("forged_badge", 8),
+                ("credstick_chip", 12),
+                ("holdout_pistol", 6),
+                ("light_ammo_box", 8),
+            ),
+        },
         "nightclub": {
             "buy_mult_lo": 1.02,
             "buy_mult_hi": 1.38,
@@ -1029,6 +1060,9 @@ class TradeSystem(System):
         blocked = []
         for prop in nearby:
             if not self._is_storefront(prop):
+                continue
+            metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+            if bool(metadata.get("dialogue_trade_only")):
                 continue
             access = _evaluate_property_access(
                 self.sim,
@@ -1888,6 +1922,9 @@ class TradeSystem(System):
 
         prop = self.sim.properties.get(event.data.get("property_id"))
         if not self._is_storefront(prop):
+            return
+        metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+        if bool(metadata.get("dialogue_trade_only")) and not bool(event.data.get("allow_dialogue_trade_only")):
             return
         pos = self._position_for(self.player_eid)
         if pos:

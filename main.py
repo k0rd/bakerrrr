@@ -101,6 +101,7 @@ from game.objective_progress import ObjectiveProgressSystem
 from game.criminal_justice_system import CriminalJusticeSystem
 from game.trade_system import TradeSystem
 from game.combat_systems import NPCItemUseSystem, NPCWeaponSystem, StatusEffectSystem, WeaponSystem
+from game.environment_hazard_system import EnvironmentalHazardSystem
 from game.world_progression_systems import (
     FinalOperationSystem,
     OpportunitySystem,
@@ -285,6 +286,7 @@ def _register_runtime_systems(sim, view, player):
     visibility_system = VisibilitySystem(sim, player)
     stealth_system = StealthSystem(sim, player)
     creature_hazard_system = CreatureHazardSystem(sim, player)
+    environmental_hazard_system = EnvironmentalHazardSystem(sim)
 
     property_system = PropertySystem(sim, player)
     player_business_system = PlayerBusinessSystem(sim, player)
@@ -343,6 +345,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(noise_system)
     sim.register_system(lighting_system)
     sim.register_system(creature_hazard_system)
+    sim.register_system(environmental_hazard_system)
 
     sim.register_system(property_system)
     sim.register_system(player_business_system)

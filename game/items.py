@@ -317,6 +317,30 @@ def _normalize_substance_profile(value):
     }
 
 
+def _normalize_lead_profile(value):
+    raw = value if isinstance(value, dict) else {}
+    lead_kind = str(raw.get("lead_kind", "") or "").strip().lower()
+    if not lead_kind:
+        return None
+
+    discovery_mode = str(raw.get("discovery_mode", "advertisement") or "").strip().lower() or "advertisement"
+    source_metadata_key = str(raw.get("source_metadata_key", "source_property_id") or "").strip() or "source_property_id"
+    property_services = _string_tuple(raw.get("property_services"))
+    property_archetypes = _string_tuple(raw.get("property_archetypes"))
+    confidence = max(0.0, min(1.0, _float_or_default(raw.get("confidence"), 0.66)))
+
+    return {
+        "lead_kind": lead_kind,
+        "confidence": confidence,
+        "discovery_mode": discovery_mode,
+        "consume_on_use": bool(raw.get("consume_on_use", False)),
+        "hidden_on_learn": bool(raw.get("hidden_on_learn", False)),
+        "source_metadata_key": source_metadata_key,
+        "property_services": property_services,
+        "property_archetypes": property_archetypes,
+    }
+
+
 DEFAULT_ITEM_CATALOG = {
     "street_ration": {
         "name": "Street Ration",
@@ -1007,6 +1031,7 @@ def load_item_catalog(path=ITEMS_PATH):
             "disguise": _normalize_disguise_profile(item.get("disguise")),
             "container": _normalize_container_profile(item.get("container")),
             "substance_profile": _normalize_substance_profile(item.get("substance_profile")),
+            "lead_profile": _normalize_lead_profile(item.get("lead_profile")),
             "condition_profile": _normalize_condition_profile(
                 item.get("condition_profile"),
                 tool_profiles=item.get("tool_profiles"),
@@ -1079,6 +1104,24 @@ def item_condition_profile(item_id, item_catalog=None):
         armor=item_def.get("armor"),
         stack_max=item_def.get("stack_max", 1),
     )
+
+
+def item_lead_profile(item_id, item_catalog=None):
+    catalog = item_catalog or ITEM_CATALOG
+    item_def = catalog.get(item_id, {})
+    profile = item_def.get("lead_profile")
+    if isinstance(profile, dict):
+        return {
+            "lead_kind": str(profile.get("lead_kind", "") or "").strip().lower(),
+            "confidence": max(0.0, min(1.0, _float_or_default(profile.get("confidence"), 0.66))),
+            "discovery_mode": str(profile.get("discovery_mode", "advertisement") or "").strip().lower() or "advertisement",
+            "consume_on_use": bool(profile.get("consume_on_use", False)),
+            "hidden_on_learn": bool(profile.get("hidden_on_learn", False)),
+            "source_metadata_key": str(profile.get("source_metadata_key", "source_property_id") or "").strip() or "source_property_id",
+            "property_services": tuple(str(service).strip().lower() for service in profile.get("property_services", ()) if str(service).strip()),
+            "property_archetypes": tuple(str(archetype).strip().lower() for archetype in profile.get("property_archetypes", ()) if str(archetype).strip()),
+        }
+    return _normalize_lead_profile(item_def.get("lead_profile"))
 
 
 def normalize_item_instance_metadata(item_id, metadata=None, item_catalog=None):

@@ -1508,7 +1508,65 @@
       "legal"
     ],
     "legal_status": "legal",
-    "effects": []
+    "effects": [],
+    "lead_profile": {
+      "lead_kind": "service_transit",
+      "confidence": 0.68,
+      "discovery_mode": "advertisement",
+      "consume_on_use": true,
+      "property_services": [
+        "rail_transit",
+        "bus_transit",
+        "shuttle_transit",
+        "ferry_transit"
+      ]
+    }
+  },
+  "backroom_card": {
+    "name": "Scrawled Card",
+    "glyph": "=",
+    "stack_max": 3,
+    "tags": [
+      "token",
+      "junk",
+      "paper",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "lead_profile": {
+      "lead_kind": "service_trade",
+      "confidence": 0.74,
+      "discovery_mode": "covert_note",
+      "consume_on_use": true,
+      "hidden_on_learn": true,
+      "property_archetypes": [
+        "backroom_market"
+      ]
+    }
+  },
+  "clinic_scrap": {
+    "name": "Folded Clinic Note",
+    "glyph": "=",
+    "stack_max": 3,
+    "tags": [
+      "token",
+      "junk",
+      "paper",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "lead_profile": {
+      "lead_kind": "service_medical",
+      "confidence": 0.78,
+      "discovery_mode": "covert_note",
+      "consume_on_use": true,
+      "hidden_on_learn": true,
+      "property_archetypes": [
+        "backroom_clinic"
+      ]
+    }
   },
   "scratch_ticket": {
     "name": "Scratch Ticket",

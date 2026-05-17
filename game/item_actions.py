@@ -9,9 +9,14 @@ from game.item_semantics import (
     item_display_name_for_actor,
     item_identification_profile,
 )
-from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
+from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name, item_lead_profile
 from game.property_access import evaluate_property_access as _evaluate_property_access
-from game.property_runtime import property_covering as _property_covering
+from game.property_runtime import (
+    property_covering as _property_covering,
+    property_distance as _property_distance,
+    property_services as _property_services,
+    remember_property_lead_for_actor as _remember_property_lead_for_actor,
+)
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
 from game.system_support.container_runtime import (
     _clear_inventory_container_assignments,
@@ -398,6 +403,153 @@ class ItemActionRuntime:
     def _apply_item_effects(self, eid, item_def):
         return _apply_item_effects_to_entity(self.sim, eid, item_def)
 
+    def _property_matches_item_lead_profile(self, prop, lead_profile):
+        if not isinstance(prop, dict):
+            return False
+        if not isinstance(lead_profile, dict):
+            return False
+
+        required_archetypes = {
+            str(archetype).strip().lower()
+            for archetype in tuple(lead_profile.get("property_archetypes", ()) or ())
+            if str(archetype).strip()
+        }
+        if required_archetypes:
+            metadata = prop.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            prop_archetype = str(metadata.get("archetype", prop.get("kind", "")) or "").strip().lower()
+            if prop_archetype not in required_archetypes:
+                return False
+
+        required_services = {
+            str(service).strip().lower()
+            for service in tuple(lead_profile.get("property_services", ()) or ())
+            if str(service).strip()
+        }
+        if required_services:
+            prop_services = {
+                str(service).strip().lower()
+                for service in tuple(_property_services(prop) or ())
+                if str(service).strip()
+            }
+            if not prop_services.intersection(required_services):
+                return False
+
+        return True
+
+    def _resolve_item_lead_property(self, x, y, z, entry, item_def, lead_profile):
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        source_key = str(lead_profile.get("source_metadata_key", "source_property_id") or "").strip() or "source_property_id"
+        source_property_id = str(metadata.get(source_key, "") or "").strip()
+        if source_property_id:
+            prop = getattr(self.sim, "properties", {}).get(source_property_id)
+            if self._property_matches_item_lead_profile(prop, lead_profile):
+                return prop
+
+        current_prop = _property_covering(self.sim, x, y, z)
+        if self._property_matches_item_lead_profile(current_prop, lead_profile):
+            return current_prop
+
+        candidates = []
+        for prop in getattr(self.sim, "properties", {}).values():
+            if not self._property_matches_item_lead_profile(prop, lead_profile):
+                continue
+            candidates.append(prop)
+
+        if not candidates:
+            return None
+
+        candidates.sort(
+            key=lambda prop: (
+                _property_distance(int(x), int(y), prop),
+                str(prop.get("name", "") or "").strip().lower(),
+                str(prop.get("id", "") or "").strip(),
+            ),
+        )
+        return candidates[0]
+
+    def _use_lead_item(self, eid, x, y, z, inventory, entry, item_def, *, reason="manual"):
+        lead_profile = item_lead_profile(item_def.get("id"), item_catalog=self.catalog)
+        if not isinstance(lead_profile, dict):
+            return None
+
+        prop = self._resolve_item_lead_property(x, y, z, entry, item_def, lead_profile)
+        item_name = self._display_name_for_actor(eid, entry)
+        if not prop:
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="no_property_lead",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
+
+        removed = None
+        if bool(lead_profile.get("consume_on_use", False)):
+            removed = inventory.remove_item(instance_id=entry["instance_id"], quantity=1)
+            if not removed:
+                self.sim.emit(Event(
+                    "item_use_blocked",
+                    eid=eid,
+                    reason="consume_failed",
+                    item_id=item_def["id"],
+                    item_name=item_name,
+                ))
+                return False
+
+        changed = _remember_property_lead_for_actor(
+            self.sim,
+            eid,
+            prop,
+            lead_kind=lead_profile.get("lead_kind"),
+            confidence=float(lead_profile.get("confidence", 0.66)),
+            hidden=True if bool(lead_profile.get("hidden_on_learn", False)) else None,
+        )
+        hidden = bool(lead_profile.get("hidden_on_learn", False))
+
+        if changed:
+            self.sim.emit(Event(
+                "property_self_discovered",
+                eid=eid,
+                property_id=prop.get("id"),
+                property_name=str(prop.get("name", prop.get("id", "location"))).strip() or "location",
+                discovery_mode=str(lead_profile.get("discovery_mode", "advertisement") or "advertisement").strip().lower() or "advertisement",
+                confidence=float(lead_profile.get("confidence", 0.66)),
+                source_item_id=item_def["id"],
+                source_item_name=item_name,
+                lead_kind=str(lead_profile.get("lead_kind", "") or "").strip().lower(),
+                hidden=hidden,
+            ))
+
+        self.sim.emit(Event(
+            "item_used",
+            eid=eid,
+            item_id=item_def["id"],
+            item_name=item_name,
+            reason=reason,
+            applied=[],
+            usage_kind="property_lead",
+            lead_changed=bool(changed),
+            lead_kind=str(lead_profile.get("lead_kind", "") or "").strip().lower(),
+            property_id=str(prop.get("id", "") or "").strip(),
+            property_name=str(prop.get("name", prop.get("id", "location"))).strip() or "location",
+            discovery_mode=str(lead_profile.get("discovery_mode", "advertisement") or "advertisement").strip().lower() or "advertisement",
+            hidden=hidden,
+            consumed=bool(removed),
+        ))
+
+        self.item_system._emit_action_offense(
+            eid=eid,
+            action="use_item",
+            context="ordinary",
+            x=x,
+            y=y,
+            z=z,
+        )
+        return True
+
     def reconcile_player_credsticks(self):
         inventory = self._inventory_for(self.player_eid)
         assets = self._assets_for(self.player_eid)
@@ -493,6 +645,19 @@ class ItemActionRuntime:
                 item_name=item_name,
             ))
             return False
+
+        lead_result = self._use_lead_item(
+            eid,
+            x,
+            y,
+            z,
+            inventory,
+            entry,
+            item_def,
+            reason=reason,
+        )
+        if lead_result is not None:
+            return bool(lead_result)
 
         effects = item_def.get("effects", [])
         if not effects:

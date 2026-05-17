@@ -266,6 +266,12 @@ from game.system_support.npc_behavior_runtime import (
     BEHAVIOR_BUY_PLAYER_GOODS,
     BEHAVIOR_IDENTIFY_STREET_DRUGS,
     _actor_behavior_value,
+    _resolve_street_appraise_between_actors,
+    _street_appraise_candidates_for_actor,
+    _street_buy_candidate_rows_for_inventory,
+    _street_buy_terms,
+    _street_item_price,
+    _street_item_value,
 )
 from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
@@ -329,9 +335,16 @@ class NPCInteractionSystem(System):
         "protecting": "covering someone",
         "following": "watching your back",
         "holding": "holding position",
+        "evading_authority": "keeping clear of the law",
+        "seeking_street_buyer": "trying to move some stock",
+        "seeking_street_appraiser": "looking for someone to size up their stock",
         "seeking_social": "looking for company",
         "seeking_companionship": "sticking close to a companion",
+        "soliciting_player": "trying to make a buy",
         "seeking_safety": "keeping their distance",
+        "seeking_medical_aid": "trying to get patched up",
+        "seeking_safe_spot": "looking for somewhere to lie low",
+        "seeking_shelter": "looking for a place to crash",
         "surrendered": "standing down",
     }
     ROOT_TOPICS = {
@@ -423,6 +436,12 @@ class NPCInteractionSystem(System):
             "offer_label": "vehicle repair",
             "lead_kind": "service_repair",
         },
+        "service_contractor": {
+            "services": ("building_repair", "business_remodel"),
+            "service_label": "contractor",
+            "offer_label": "building repair or remodel",
+            "lead_kind": "service_contractor",
+        },
         "service_banking": {
             "services": ("banking",),
             "service_label": "bank or broker",
@@ -494,6 +513,28 @@ class NPCInteractionSystem(System):
             "lead_kind": "service_trade",
             "storefront": True,
         },
+        "service_discreet_trade": {
+            "services": (),
+            "service_label": "discreet seller",
+            "offer_label": "quiet trade",
+            "lead_kind": "service_trade",
+            "archetypes": ("backroom_market",),
+            "covert": True,
+            "hidden_lead": True,
+            "local_summary": "If you need quiet trade, {names_text} is the kind of door people mention in this chunk.",
+            "near_summary": "Nearest discreet seller I know is {distance_phrase} at {names_text}.",
+        },
+        "service_street_doctor": {
+            "services": (),
+            "service_label": "quiet doctor",
+            "offer_label": "off-book medical help",
+            "lead_kind": "service_medical",
+            "archetypes": ("backroom_clinic",),
+            "covert": True,
+            "hidden_lead": True,
+            "local_summary": "If you need help without paperwork, {names_text} is the kind of door people use in this chunk.",
+            "near_summary": "Nearest quiet doctor I know is {distance_phrase} at {names_text}.",
+        },
         "service_outfitter": {
             "services": (),
             "service_label": "outfitter",
@@ -559,6 +600,7 @@ class NPCInteractionSystem(System):
         if not hasattr(self, "fence_cooldown_ticks"):
             self.fence_cooldown_ticks = {}
         self.sim.events.subscribe("npc_interact", self.on_npc_interact)
+        self.sim.events.subscribe("npc_dialogue_request", self.on_npc_dialogue_request)
         self.sim.events.subscribe("dialog_topic_request", self.on_dialog_topic_request)
         self.sim.events.subscribe("dialog_close_request", self.on_dialog_close_request)
         self.sim.events.subscribe("contractor_hired", self.on_contractor_hired)
@@ -1082,7 +1124,7 @@ class NPCInteractionSystem(System):
             return None
         return prop
 
-    def _remember_player_property_lead(self, prop, source_eid, lead_kind, confidence):
+    def _remember_player_property_lead(self, prop, source_eid, lead_kind, confidence, *, hidden=None):
         changed = _remember_property_lead_for_actor(
             self.sim,
             self.player_eid,
@@ -1090,6 +1132,7 @@ class NPCInteractionSystem(System):
             source_eid=source_eid,
             lead_kind=lead_kind,
             confidence=confidence,
+            hidden=hidden,
         )
         self._dialogue_mark_property_reference(
             source_eid,
@@ -3230,9 +3273,114 @@ class NPCInteractionSystem(System):
         if not isinstance(context, dict) or not bool(context.get("human", True)):
             return False
         topic_id = str(topic_id or "").strip().lower()
+        spec = self._service_locator_spec(topic_id) or {}
+        if bool(spec.get("covert")):
+            return self._covert_service_locator_topic_available(context, spec)
         if topic_id == "service_justice":
             return self._justice_locator_topic_available(context)
         return not bool(context.get("guarded"))
+
+    def _covert_service_locator_context_score(self, context, spec):
+        if not isinstance(context, dict) or bool(context.get("guarded")) or not bool(context.get("human", True)):
+            return -1.0
+        spec = spec if isinstance(spec, dict) else {}
+        archetypes = self._service_locator_archetypes(spec)
+        bond = context.get("bond") if isinstance(context.get("bond"), dict) else {}
+        trust = float(bond.get("trust", 0.0) or 0.0)
+        closeness = float(bond.get("closeness", 0.0) or 0.0)
+        standing = max(
+            float(context.get("social_standing", 0.0) or 0.0),
+            float(context.get("contact_standing", 0.0) or 0.0),
+            float(context.get("intro_standing", 0.0) or 0.0),
+        )
+        role_id = str(context.get("role_id", "") or "").strip().lower()
+        career_text = str(context.get("career_text", "") or "").strip().lower()
+        organization_kind = str(context.get("organization_kind", "") or "").strip().lower()
+        score = (trust * 0.72) + (closeness * 0.48) + (standing * 0.42)
+        if organization_kind in {"gang", "crew", "criminal"}:
+            score += 0.55
+        if role_id in {"thief", "scout"}:
+            score += 0.32
+        if any(
+            token in career_text
+            for token in (
+                "bartender",
+                "bouncer",
+                "courier",
+                "dealer",
+                "drifter",
+                "fixer",
+                "janitor",
+                "mechanic",
+                "runner",
+                "scavenger",
+                "smuggler",
+            )
+        ):
+            score += 0.34
+        if bool(context.get("fence_available")):
+            score += 0.24
+        if bool(context.get("street_buy_available")):
+            score += 0.24
+        if bool(context.get("street_appraise_available")):
+            score += 0.18
+        if bool(context.get("hire_runner_available")):
+            score += 0.18
+
+        for ref in (
+            context.get("current_prop"),
+            context.get("workplace_prop"),
+            context.get("owner_place"),
+            context.get("home_prop"),
+        ):
+            if _property_archetype(ref) in archetypes:
+                score += 0.82
+                break
+
+        if "backroom_clinic" in archetypes and any(
+            token in career_text for token in ("doctor", "medic", "nurse", "orderly", "paramedic", "triage")
+        ):
+            score += 0.42
+        if "backroom_market" in archetypes and any(
+            token in career_text for token in ("broker", "dealer", "fence", "pawnbroker", "shopkeeper", "vendor")
+        ):
+            score += 0.36
+        return score
+
+    def _covert_service_locator_topic_available(self, context, spec):
+        return self._covert_service_locator_context_score(context, spec) >= 0.58
+
+    def _covert_service_locator_prop_score(self, prop, context, spec):
+        if not isinstance(prop, dict):
+            return -1.0
+        base_score = self._covert_service_locator_context_score(context, spec)
+        if base_score < 0.58:
+            return -1.0
+        metadata = _property_metadata(prop)
+        if bool(metadata.get("public", True)):
+            return -1.0
+        score = base_score
+        npc_eid = context.get("npc_eid")
+        if npc_eid is not None and prop.get("owner_eid") == npc_eid:
+            score += 1.35
+
+        linked_property_id = str(metadata.get("linked_property_id", "") or "").strip()
+        linked_building_id = str(metadata.get("linked_building_id", "") or "").strip()
+        for ref in (
+            context.get("current_prop"),
+            context.get("workplace_prop"),
+            context.get("owner_place"),
+            context.get("home_prop"),
+        ):
+            if not isinstance(ref, dict):
+                continue
+            ref_id = str(ref.get("id", "") or "").strip()
+            ref_building_id = str(_property_metadata(ref).get("building_id", "") or ref_id).strip()
+            if linked_property_id and linked_property_id == ref_id:
+                score += 1.05
+            if linked_building_id and linked_building_id == ref_building_id:
+                score += 0.72
+        return score
 
     def _service_locator_service_keys(self, spec):
         if not isinstance(spec, dict):
@@ -3268,7 +3416,7 @@ class NPCInteractionSystem(System):
             return True
         return False
 
-    def _service_locator_rows(self, services, *, radius=None):
+    def _service_locator_rows(self, services, *, radius=None, context=None):
         spec = services if isinstance(services, dict) else {"services": tuple(services or ())}
         if not self._service_locator_service_keys(spec) and not bool(spec.get("storefront")) and not self._service_locator_archetypes(spec):
             return ()
@@ -3288,6 +3436,11 @@ class NPCInteractionSystem(System):
                 storefront=_property_is_storefront(prop),
             ):
                 continue
+            covert_score = 0.0
+            if bool(spec.get("covert")):
+                covert_score = self._covert_service_locator_prop_score(prop, context, spec)
+                if covert_score < 0.0:
+                    continue
             chunk_coord = self.sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
             chunk_distance = _manhattan(origin[0], origin[1], int(chunk_coord[0]), int(chunk_coord[1]))
             if chunk_distance > max(0, int(radius)):
@@ -3311,10 +3464,12 @@ class NPCInteractionSystem(System):
                 "tile_distance": int(tile_distance),
                 "accessible": bool(access.can_use_services),
                 "role_priority": 0 if _property_infrastructure_role(prop) == "service_terminal" else 1,
+                "covert_score": float(covert_score),
             })
         rows.sort(
             key=lambda row: (
                 int(row["chunk_distance"]),
+                -float(row.get("covert_score", 0.0) or 0.0),
                 0 if bool(row["accessible"]) else 1,
                 int(row["tile_distance"]),
                 int(row["role_priority"]),
@@ -3489,7 +3644,7 @@ class NPCInteractionSystem(System):
         offer_label = str(spec.get("offer_label", service_label)).strip() or service_label
         local_template = str(spec.get("local_summary", "")).strip()
         near_template = str(spec.get("near_summary", "")).strip()
-        rows = list(self._service_locator_rows(spec, radius=self.SERVICE_LOCATOR_SEARCH_RADIUS))
+        rows = list(self._service_locator_rows(spec, radius=self.SERVICE_LOCATOR_SEARCH_RADIUS, context=context))
         origin = self._player_current_chunk()
 
         if rows:
@@ -3553,6 +3708,9 @@ class NPCInteractionSystem(System):
                 "service_label": service_label,
                 "lead_prop": lead_prop,
             }
+
+        if bool(spec.get("covert")):
+            return {"summary": "", "service_label": service_label, "lead_prop": None}
 
         chunk_coord, names = self._nearest_service_locator_preview(
             spec,
@@ -3652,158 +3810,36 @@ class NPCInteractionSystem(System):
         return preferences.get(key, default)
 
     def _street_item_value(self, item_id):
-        item_id = str(item_id or "").strip().lower()
-        if not item_id:
-            return self._STREET_DEFAULT_VALUE
-        if item_id in self._STREET_ITEM_OVERRIDES:
-            return int(self._STREET_ITEM_OVERRIDES[item_id])
-        item_def = ITEM_CATALOG.get(item_id, {})
-        tags = set(str(t).strip().lower() for t in item_def.get("tags", ()))
-        category = str(item_def.get("category", "")).strip().lower()
-        for tag, val in self._STREET_ITEM_VALUE.items():
-            if tag in tags or (category and tag == category):
-                return int(val)
-        return self._STREET_DEFAULT_VALUE
+        return int(_street_item_value(item_id))
 
     def _street_item_price(self, entry, *, mult=1.0):
-        item_id = str((entry or {}).get("item_id", "") or "").strip().lower()
-        if not item_id or is_credstick_item(item_id):
-            return 0
-        quantity = max(1, int((entry or {}).get("quantity", 1) or 1))
-        base = float(self._street_item_value(item_id))
-        condition = item_instance_condition(
-            item_id,
-            metadata=(entry or {}).get("metadata"),
-            item_catalog=ITEM_CATALOG,
-        )
-        quality = str(condition.get("quality", "standard")).strip().lower() or "standard"
-        quality_mult = {
-            "poor": 0.78,
-            "standard": 1.0,
-            "good": 1.18,
-            "excellent": 1.34,
-        }.get(quality, 1.0)
-        if bool((condition.get("profile") or {}).get("supports_durability")):
-            quality_mult *= 0.72 + (float(condition.get("durability_ratio", 1.0) or 1.0) * 0.4)
-        total = base * quantity * max(0.2, float(mult or 1.0)) * quality_mult
-        return max(1, int(round(total)))
-
-    def _street_drug_item_ids(self):
-        rows = []
-        for item_id, item_def in ITEM_CATALOG.items():
-            tags = {str(tag).strip().lower() for tag in item_def.get("tags", ()) if str(tag).strip()}
-            legal_status = str(item_def.get("legal_status", "legal")).strip().lower()
-            if legal_status != "illegal":
-                continue
-            if "consumable" not in tags:
-                continue
-            if not tags.intersection({"drug", "stimulant", "injectable", "social"}):
-                continue
-            rows.append(str(item_id).strip().lower())
-        rows.sort()
-        return tuple(rows)
+        return int(_street_item_price(entry, mult=mult))
 
     def _street_buy_terms_for(self, npc_eid, context):
-        buy_desired_drug = _actor_behavior_value(self.sim, npc_eid, BEHAVIOR_BUY_DESIRED_DRUG, 0.0)
-        buy_player_goods = _actor_behavior_value(self.sim, npc_eid, BEHAVIOR_BUY_PLAYER_GOODS, 0.0)
-        if buy_desired_drug < 0.2 and buy_player_goods < 0.2:
-            return None
-
-        preferred_item_ids = self._street_behavior_preference(npc_eid, "street_buy_item_ids", ())
-        item_ids = [
-            str(item_id or "").strip().lower()
-            for item_id in (preferred_item_ids if isinstance(preferred_item_ids, (list, tuple, set, frozenset)) else (preferred_item_ids,))
-            if str(item_id or "").strip()
-        ]
-        desired_item_id = str(self._street_behavior_preference(npc_eid, "desired_drug_item_id", "") or "").strip().lower()
-        if not desired_item_id and buy_desired_drug >= 0.2:
-            pool = self._street_drug_item_ids()
-            if pool:
-                district_type = str((context or {}).get("district_type", "") or "").strip().lower()
-                occupation = context.get("occupation") if isinstance(context, dict) else None
-                career = str(getattr(occupation, "career", "") or "").strip().lower()
-                chooser = random.Random(
-                    f"{self.sim.seed}:street-buy:{int(npc_eid)}:{career}:{district_type}:{len(pool)}"
-                )
-                desired_item_id = pool[chooser.randrange(len(pool))]
-        if desired_item_id and desired_item_id not in item_ids:
-            item_ids.insert(0, desired_item_id)
-
-        preferred_categories = self._street_behavior_preference(npc_eid, "street_buy_categories", ())
-        categories = {
-            str(value or "").strip().lower()
-            for value in (preferred_categories if isinstance(preferred_categories, (list, tuple, set, frozenset)) else (preferred_categories,))
-            if str(value or "").strip()
-        }
-        preferred_tags = self._street_behavior_preference(npc_eid, "street_buy_tags", ())
-        tags = {
-            str(value or "").strip().lower()
-            for value in (preferred_tags if isinstance(preferred_tags, (list, tuple, set, frozenset)) else (preferred_tags,))
-            if str(value or "").strip()
-        }
-
-        if buy_player_goods >= 0.2 and not categories and not tags:
-            categories.update({"tool", "weapon", "armor", "medical", "device", "token"})
-            tags.update({"tool", "weapon", "armor", "medical", "stimulant", "drug", "communication", "ammo"})
-
-        generic_mult = max(
-            1.2,
-            float(self._street_behavior_preference(npc_eid, "street_buy_price_mult", 1.18 + (buy_player_goods * 0.95)) or 1.2),
+        district_type = str((context or {}).get("district_type", "") or "").strip().lower()
+        occupation = context.get("occupation") if isinstance(context, dict) else None
+        career = str(getattr(occupation, "career", "") or "").strip().lower()
+        return _street_buy_terms(
+            self.sim,
+            npc_eid,
+            district_type=district_type,
+            career=career,
         )
-        desired_mult = max(
-            generic_mult,
-            float(self._street_behavior_preference(npc_eid, "desired_drug_price_mult", 1.55 + (buy_desired_drug * 1.15)) or generic_mult),
-        )
-        return {
-            "item_ids": tuple(item_ids),
-            "categories": tuple(sorted(categories)),
-            "tags": tuple(sorted(tags)),
-            "desired_item_id": desired_item_id,
-            "generic_mult": float(generic_mult),
-            "desired_mult": float(desired_mult),
-        }
 
     def _street_buy_candidate_rows(self, npc_eid, context):
-        terms = self._street_buy_terms_for(npc_eid, context)
         inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
-        if not terms or not inventory:
+        if not inventory:
             return []
-
-        wanted_item_ids = {str(item_id).strip().lower() for item_id in terms.get("item_ids", ()) if str(item_id).strip()}
-        wanted_categories = {str(value).strip().lower() for value in terms.get("categories", ()) if str(value).strip()}
-        wanted_tags = {str(value).strip().lower() for value in terms.get("tags", ()) if str(value).strip()}
-        desired_item_id = str(terms.get("desired_item_id", "") or "").strip().lower()
-
-        rows = []
-        for entry in inventory.items:
-            item_id = str(entry.get("item_id", "") or "").strip().lower()
-            if not item_id or is_credstick_item(item_id):
-                continue
-            category = item_category(entry, item_catalog=ITEM_CATALOG)
-            if category == "credential":
-                continue
-            tags = item_tags(entry, item_catalog=ITEM_CATALOG)
-            matched = item_id in wanted_item_ids
-            matched = matched or bool(wanted_categories and category in wanted_categories)
-            matched = matched or bool(wanted_tags and tags.intersection(wanted_tags))
-            if not matched:
-                continue
-            mult = float(terms.get("desired_mult", 1.0) if desired_item_id and item_id == desired_item_id else terms.get("generic_mult", 1.0))
-            price = self._street_item_price(entry, mult=mult)
-            if price <= 0:
-                continue
-            rows.append({
-                "entry": entry,
-                "instance_id": entry.get("instance_id"),
-                "item_id": item_id,
-                "item_name": item_display_name(item_id, metadata=entry.get("metadata"), item_catalog=ITEM_CATALOG),
-                "quantity": int(max(1, entry.get("quantity", 1) or 1)),
-                "price": int(price),
-                "desired": bool(desired_item_id and item_id == desired_item_id),
-                "illegal": item_legal_status(entry, item_catalog=ITEM_CATALOG) in {"illegal", "stolen"},
-            })
-        rows.sort(key=lambda row: (-int(row.get("price", 0)), not bool(row.get("desired")), str(row.get("item_id", ""))))
-        return rows
+        district_type = str((context or {}).get("district_type", "") or "").strip().lower()
+        occupation = context.get("occupation") if isinstance(context, dict) else None
+        career = str(getattr(occupation, "career", "") or "").strip().lower()
+        return _street_buy_candidate_rows_for_inventory(
+            self.sim,
+            npc_eid,
+            inventory,
+            district_type=district_type,
+            career=career,
+        )
 
     def _street_buy_preview(self, npc_eid, context):
         rows = self._street_buy_candidate_rows(npc_eid, context)
@@ -3822,47 +3858,11 @@ class NPCInteractionSystem(System):
         return bool(self._street_buy_candidate_rows(npc_eid, context))
 
     def _street_appraise_candidates(self, npc_eid):
-        inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
-        if not inventory:
-            return {"identify": [], "appraise": []}
-
-        identify_strength = _actor_behavior_value(self.sim, npc_eid, BEHAVIOR_IDENTIFY_STREET_DRUGS, 0.0)
-        appraise_strength = _actor_behavior_value(self.sim, npc_eid, BEHAVIOR_APPRAISE_STREET_GOODS, 0.0)
-        identify_rows = []
-        appraise_rows = []
-
-        for entry in inventory.items:
-            legal_status = item_legal_status(entry, item_catalog=ITEM_CATALOG)
-            if identify_strength >= 0.2 and item_requires_identification(entry, item_catalog=ITEM_CATALOG):
-                if not item_is_identified_for_actor(self.sim, self.player_eid, entry, item_catalog=ITEM_CATALOG):
-                    if legal_status in {"illegal", "restricted", "suspicious"}:
-                        identify_rows.append(entry)
-            if appraise_strength >= 0.2:
-                condition = item_instance_condition(
-                    str(entry.get("item_id", "") or "").strip().lower(),
-                    metadata=entry.get("metadata"),
-                    item_catalog=ITEM_CATALOG,
-                )
-                profile = condition.get("profile", {}) if isinstance(condition.get("profile"), dict) else {}
-                needs_quality = (
-                    ("item_quality" in (entry.get("metadata") or {}) or profile.get("supports_quality"))
-                    and not item_is_appraised_for_actor(self.sim, self.player_eid, entry, "item_quality")
-                )
-                needs_durability = (
-                    (
-                        "item_durability" in (entry.get("metadata") or {})
-                        or "item_max_durability" in (entry.get("metadata") or {})
-                        or profile.get("supports_durability")
-                    )
-                    and not (
-                        item_is_appraised_for_actor(self.sim, self.player_eid, entry, "item_durability")
-                        and item_is_appraised_for_actor(self.sim, self.player_eid, entry, "item_max_durability")
-                    )
-                )
-                if needs_quality or needs_durability:
-                    appraise_rows.append(entry)
-
-        return {"identify": identify_rows, "appraise": appraise_rows}
+        return _street_appraise_candidates_for_actor(
+            self.sim,
+            npc_eid,
+            self.player_eid,
+        )
 
     def _street_appraise_preview(self, npc_eid):
         candidates = self._street_appraise_candidates(npc_eid)
@@ -3883,35 +3883,19 @@ class NPCInteractionSystem(System):
 
     def _resolve_street_appraise_topic(self, context, *, topic_id, ask_count):
         npc_eid = context.get("npc_eid")
-        candidates = self._street_appraise_candidates(npc_eid)
-        identified_names = []
-        identify_count = 0
-        for entry in list(candidates.get("identify", ()) or ()):
-            if identify_item_for_actor(
-                self.sim,
-                self.player_eid,
-                entry,
-                source_kind="npc_street_appraise",
-                item_catalog=ITEM_CATALOG,
-            ):
-                identify_count += 1
-                identified_names.append(
-                    item_display_name(
-                        entry.get("item_id"),
-                        metadata=entry.get("metadata"),
-                        item_catalog=ITEM_CATALOG,
-                    )
-                )
-        appraise_count = 0
-        for entry in list(candidates.get("appraise", ()) or ()):
-            revealed = appraise_item_for_actor(
-                self.sim,
-                self.player_eid,
-                entry,
-                item_catalog=ITEM_CATALOG,
-            )
-            if revealed:
-                appraise_count += 1
+        result = _resolve_street_appraise_between_actors(
+            self.sim,
+            npc_eid,
+            self.player_eid,
+        )
+        if result is None:
+            identify_count = 0
+            appraise_count = 0
+            identified_names = []
+        else:
+            identify_count = int(result.get("identify_count", 0) or 0)
+            appraise_count = int(result.get("appraise_count", 0) or 0)
+            identified_names = list(result.get("identified_item_names", ()) or ())
         if identify_count <= 0 and appraise_count <= 0:
             return {
                 "npc_lines": [
@@ -4267,6 +4251,11 @@ class NPCInteractionSystem(System):
         for prop in (workplace_prop, current_prop):
             if not prop or not _property_is_storefront(prop):
                 continue
+            service = _storefront_service_profile(self.sim, prop)
+            if not service.get("available"):
+                continue
+            if service.get("service_eid") not in {None, npc_eid}:
+                continue
             access = _evaluate_property_access(
                 self.sim,
                 self.player_eid,
@@ -4275,12 +4264,15 @@ class NPCInteractionSystem(System):
                 y=player_pos.y,
                 z=player_pos.z,
             )
-            if not access.can_use_services:
-                continue
-            service = _storefront_service_profile(self.sim, prop)
-            if not service.get("available"):
-                continue
-            if service.get("service_eid") not in {None, npc_eid}:
+            dialogue_trade_only = bool(_property_metadata(prop).get("dialogue_trade_only"))
+            if (
+                not access.can_use_services
+                and not (
+                    dialogue_trade_only
+                    and int(player_pos.z) == int(prop.get("z", player_pos.z))
+                    and _property_distance(player_pos.x, player_pos.y, prop) <= 2
+                )
+            ):
                 continue
             return {"property_id": prop["id"], "prop": prop, "service": service}
         return None
@@ -8152,9 +8144,38 @@ class NPCInteractionSystem(System):
             available.append({"id": topic_id, "label": _dialogue_topic_label(topic_id, context=context)})
         return self._augment_repeat_dialogue_rows(context, available)
 
-    def _open_dialogue(self, context):
+    def _prioritize_dialog_topics(self, topics, highlight_topic_ids=()):
+        highlight = {
+            str(topic_id or "").strip().lower()
+            for topic_id in tuple(highlight_topic_ids or ())
+            if str(topic_id or "").strip()
+        }
+        if not highlight:
+            return list(topics or ())
+
+        preferred = []
+        remainder = []
+        seen = set()
+        for row in list(topics or ()):
+            topic_id = str((row or {}).get("id", "") or "").strip().lower()
+            if topic_id in highlight and topic_id not in seen:
+                preferred.append(row)
+                seen.add(topic_id)
+            else:
+                remainder.append(row)
+        return preferred + remainder
+
+    def _open_dialogue(self, context, *, prompt_lines=(), highlight_topic_ids=()):
         memory = self._dialogue_memory(context["npc_eid"])
         state = self._dialog_ui_state()
+        transcript = self._dialogue_opening_lines(context)
+        for raw_line in tuple(prompt_lines or ()):
+            line = str(raw_line or "").strip()
+            if not line:
+                continue
+            formatted = self._dialogue_npc_line(context["npc_name"], line)
+            if formatted and formatted not in transcript:
+                transcript.append(formatted)
         self.sim.set_time_paused(True, reason="dialog")
         state.update({
             "open": True,
@@ -8163,8 +8184,11 @@ class NPCInteractionSystem(System):
             "property_id": None,
             "title": f"Conversation: {context['npc_name']}",
             "subtitle": context.get("subtitle", ""),
-            "transcript": self._dialogue_opening_lines(context),
-            "topics": self._available_dialog_topics(context),
+            "transcript": transcript,
+            "topics": self._prioritize_dialog_topics(
+                self._available_dialog_topics(context),
+                highlight_topic_ids=highlight_topic_ids,
+            ),
             "selected_index": 0,
             "scroll": 0,
             "hint": self._dialogue_hint_text(context),
@@ -8566,6 +8590,7 @@ class NPCInteractionSystem(System):
                     source_eid=npc_eid,
                     lead_kind=str(spec.get("lead_kind", "service")).strip().lower() or "service",
                     confidence=max(0.56, float(context.get("lead_confidence", 0.6)) - 0.02),
+                    hidden=True if bool(spec.get("hidden_lead")) else None,
                 )
             summary = str(locator.get("summary", "")).strip()
             service_label = str(locator.get("service_label", "service")).strip() or "service"
@@ -9582,16 +9607,13 @@ class NPCInteractionSystem(System):
                 lines.append(self._social_need_line(context.get("npc_needs"), context.get("bond")))
         self.sim.emit(Event("npc_interacted", eid=self.player_eid, npc_eid=npc_eid, lines=lines[:4], guarded=bool(context.get("guarded"))))
 
-    def on_npc_interact(self, event):
-        if event.data.get("eid") != self.player_eid:
-            return
-        npc_eid = event.data.get("npc_eid")
+    def _start_dialogue_with_npc(self, npc_eid, *, prompt_lines=(), highlight_topic_ids=()):
         if npc_eid is None:
-            return
+            return False
         self._remember_opportunity_npc_interaction(npc_eid)
         context = self._dialogue_context(npc_eid)
         if not context:
-            return
+            return False
         fresh = not self._recently_interacted(npc_eid)
         bond = self._conversation_bond(
             npc_eid=npc_eid,
@@ -9612,12 +9634,58 @@ class NPCInteractionSystem(System):
                 context["npc_needs"].social = _clamp(context["npc_needs"].social + max(0.25, social_gain * 0.45))
         context = self._dialogue_context(npc_eid, bond=bond)
         if not context:
-            return
+            return False
         if not context.get("human"):
             self._emit_simple_npc_interaction(context)
+            return False
+        self._open_dialogue(
+            context,
+            prompt_lines=prompt_lines,
+            highlight_topic_ids=highlight_topic_ids,
+        )
+        self.sim.emit(Event(
+            "npc_interacted",
+            eid=self.player_eid,
+            npc_eid=npc_eid,
+            lines=(),
+            guarded=bool(context.get("guarded")),
+            dialog_modal=True,
+            initiated_by_npc=bool(tuple(prompt_lines or ())),
+        ))
+        return True
+
+    def on_npc_interact(self, event):
+        if event.data.get("eid") != self.player_eid:
             return
-        self._open_dialogue(context)
-        self.sim.emit(Event("npc_interacted", eid=self.player_eid, npc_eid=npc_eid, lines=(), guarded=bool(context.get("guarded")), dialog_modal=True))
+        self._start_dialogue_with_npc(event.data.get("npc_eid"))
+
+    def on_npc_dialogue_request(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        npc_eid = event.data.get("npc_eid")
+        if npc_eid is None:
+            return
+        state = self._dialog_ui_state()
+        if state.get("open"):
+            return
+
+        raw_prompt_lines = event.data.get("prompt_lines", ())
+        if isinstance(raw_prompt_lines, str):
+            prompt_lines = (raw_prompt_lines,)
+        else:
+            prompt_lines = tuple(raw_prompt_lines or ())
+
+        raw_highlights = event.data.get("highlight_topic_ids", ())
+        if isinstance(raw_highlights, str):
+            highlight_topic_ids = (raw_highlights,)
+        else:
+            highlight_topic_ids = tuple(raw_highlights or ())
+
+        self._start_dialogue_with_npc(
+            npc_eid,
+            prompt_lines=prompt_lines,
+            highlight_topic_ids=highlight_topic_ids,
+        )
 
     def on_dialog_topic_request(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -9686,7 +9754,9 @@ class NPCInteractionSystem(System):
             self._close_dialog()
             trade_property_id = str(response.get("trade_property_id", "") or "").strip()
             trade_prop = self.sim.properties.get(trade_property_id) if trade_property_id else None
-            if isinstance(trade_prop, dict):
+            if isinstance(trade_prop, dict) and bool(_property_metadata(trade_prop).get("dialogue_trade_only")):
+                self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="buy", property_id=trade_property_id))
+            elif isinstance(trade_prop, dict):
                 self.sim.emit(Event(
                     "property_interact",
                     eid=self.player_eid,

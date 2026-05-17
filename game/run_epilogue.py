@@ -32,6 +32,7 @@ from game.justice_runtime import justice_summary_rows
 from game.organization_reputation import top_organization_snapshots
 from game.property_runtime import property_covering as _property_covering
 from game.run_pressure import pressure_snapshot
+from game.system_support.entity_naming import _entity_display_name
 from game.weapons import weapon_by_id
 
 try:  # Incident runtime is present in current BAKERRRR, but keep this module soft.
@@ -193,15 +194,18 @@ class RunEpilogueLedgerSystem(System):
             eid = int(eid)
         except (TypeError, ValueError):
             return fallback
+        label = _entity_display_name(self.sim, eid, title_case=True)
+        if label and str(label).strip().lower() not in {"entity", "someone"}:
+            return str(label).strip()
         ident = self.sim.ecs.get(CreatureIdentity).get(eid)
         if ident is not None:
             personal = str(getattr(ident, "personal_name", "") or "").strip()
             if personal:
-                return f"{personal}#{eid}"
+                return personal
             common = str(getattr(ident, "common_name", "") or "").strip()
             if common:
-                return f"{common}#{eid}"
-        return f"{fallback}#{eid}"
+                return common
+        return fallback
 
     def _player_component(self, component_cls):
         try:
