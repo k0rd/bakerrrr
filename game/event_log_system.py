@@ -2180,8 +2180,17 @@ class EventLogSystem(System):
             return
         property_name = str(event.data.get("property_name", "property")).strip() or "property"
         lead_kind = str(event.data.get("lead_kind", "")).strip().lower()
+        lead_label = str(event.data.get("lead_label", "")).strip() or "covert contact"
+        hidden = bool(event.data.get("hidden"))
+        newly_known = bool(event.data.get("newly_known"))
         confidence = max(0, min(100, int(round(float(event.data.get("confidence", 0.0) or 0.0) * 100.0))))
-        if lead_kind == "contraband":
+        if hidden:
+            if newly_known:
+                text = f"Overheard covert lead: {property_name} sounds like a {lead_label} ({confidence}% confidence). Added to hidden locations."
+            else:
+                text = f"Overheard covert lead: {property_name} sounds more likely to be a {lead_label} ({confidence}% confidence)."
+            channel = "social"
+        elif lead_kind == "contraband":
             text = f"Street rumor: {property_name} may move illegal goods ({confidence}% confidence)."
             channel = "opportunity"
         elif lead_kind == "hours":
@@ -2195,7 +2204,7 @@ class EventLogSystem(System):
             channel=channel,
             priority="normal",
             dedupe_window=14,
-            dedupe_key=f"eavesdrop-property:{event.data.get('property_id')}:{lead_kind}",
+            dedupe_key=f"eavesdrop-property:{event.data.get('property_id')}:{lead_kind}:{int(hidden)}",
         )
 
     def on_dialogue_guard_resolution(self, event):
@@ -2574,7 +2583,23 @@ class EventLogSystem(System):
         lines = event.data.get("lines") or []
         display_limit = max(1, min(8, _int_or_default(event.data.get("display_limit"), 4)))
         note = _sentence_from_note(event.data.get("skill_note", ""))
-        if not lines:
+        lead_item_name = str(event.data.get("lead_item_name", "") or "").strip()
+        lead_delivery = str(event.data.get("lead_delivery", "") or "").strip().lower()
+        lead_line = ""
+        if lead_item_name:
+            if lead_delivery == "ground":
+                lead_line = f"Relay dead drop: {lead_item_name} falls beside the terminal."
+            else:
+                lead_line = f"Relay dead drop: {lead_item_name} slides into your bag."
+        opportunity_title = str(event.data.get("lead_opportunity_title", "") or "").strip()
+        opportunity_property_name = str(event.data.get("lead_opportunity_property_name", "") or "").strip()
+        opportunity_line = ""
+        if opportunity_title:
+            if opportunity_property_name:
+                opportunity_line = f"Lead opened: {opportunity_title} at {opportunity_property_name}."
+            else:
+                opportunity_line = f"Lead opened: {opportunity_title}."
+        if not lines and not lead_line and not opportunity_line:
             self.sim.log.add(f"Intel: {prop_name} has nothing useful right now.")
             return
 
@@ -2593,6 +2618,10 @@ class EventLogSystem(System):
             else:
                 self.sim.log.add(_line_text(entry))
             first = False
+        if lead_line:
+            self.sim.log.add(lead_line)
+        if opportunity_line:
+            self.sim.log.add(opportunity_line)
 
     def on_vehicle_delivered(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -4040,6 +4069,9 @@ class EventLogSystem(System):
         base_price = int(event.data.get("base_price", price))
         store = event.data.get("store_name", "store")
         contact_note = str(event.data.get("contact_note", "")).strip()
+        if bool(event.data.get("owner_transfer")):
+            self.sim.log.add(f"Withdrew {item_name} from {store} stock.")
+            return
         if contact_note and price != base_price:
             self.sim.log.add(f"Bought {item_name} for {price} credits at {store}. {contact_note}.")
             return
@@ -4083,6 +4115,9 @@ class EventLogSystem(System):
         price = int(event.data.get("price", 0))
         store = event.data.get("store_name", "store")
         contact_note = str(event.data.get("contact_note", "")).strip()
+        if bool(event.data.get("owner_transfer")):
+            self.sim.log.add(f"Stocked {item_name} into {store}.")
+            return
         if contact_note:
             self.sim.log.add(f"Sold {item_name} for {price} credits at {store}. {contact_note}.")
             return
@@ -4820,6 +4855,33 @@ class EventLogSystem(System):
             dedupe_window=18,
             dedupe_key=f"rival-spotted:{event.data.get('rival_id')}:{summary.lower()}",
         )
+        self._note_rival_target_property(event, confidence_floor=0.9)
+
+    def _note_rival_target_property(self, event, *, confidence_floor=0.72):
+        if event.data.get("eid") != self.player_eid:
+            return False
+        if event.data.get("truthful") is False:
+            return False
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        if not property_id or not hasattr(self.sim, "properties"):
+            return False
+        prop = self.sim.properties.get(property_id)
+        if not isinstance(prop, dict):
+            return False
+        knowledge = self.sim.ecs.get(PropertyKnowledge).get(self.player_eid)
+        existing = knowledge.known.get(property_id) if knowledge else None
+        changed = _remember_property_lead_for_actor(
+            self.sim,
+            self.player_eid,
+            prop,
+            source_eid=None,
+            lead_kind="location",
+            confidence=max(float(confidence_floor), float(event.data.get("confidence", 0.0) or 0.0)),
+        )
+        if changed and existing is None:
+            property_name = str(prop.get("name", prop.get("id", "that place"))).strip() or "that place"
+            self.sim.log.add(f"  Lead noted: {property_name} added to notebook.")
+        return bool(changed)
 
     def on_rival_operator_activity(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -4843,6 +4905,7 @@ class EventLogSystem(System):
         )
         if player_distance <= 2 and confidence >= 0.58:
             self.sim.log.add(f"  {rival_name} sounds close enough to matter.")
+        self._note_rival_target_property(event, confidence_floor=0.74)
 
     def on_rival_opportunity_resolved(self, event):
         if event.data.get("eid") != self.player_eid:

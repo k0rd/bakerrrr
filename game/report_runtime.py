@@ -45,6 +45,10 @@ from game.service_runtime import (
     _overworld_travel_profile,
     _overworld_travel_tax_text,
 )
+from game.systems_business_reputation import (
+    property_business_reputation_designations,
+    property_business_reputation_scope_profile,
+)
 
 
 def _segment(text, color=None, attrs=0, **extras):
@@ -882,6 +886,10 @@ def _known_location_summary_bits(sim, prop, known):
     return bits
 
 
+def _known_location_business_sentiment_legend_text():
+    return "Rep legend: * staple | ~ chill | + quality | - rough | $ gouger | ! trouble"
+
+
 def _known_location_fact_lines(
     sim,
     player_eid,
@@ -1261,6 +1269,8 @@ def build_known_locations_report(
             "hidden": hidden,
             "summary_bits": summary_bits,
             "fact_lines": fact_lines,
+            "business_sentiment_designations": tuple(property_business_reputation_designations(sim, property_id)),
+            "business_reputation_scope": dict(property_business_reputation_scope_profile(sim, property_id)),
         })
         seen_property_ids.add(property_id)
 
@@ -1349,6 +1359,7 @@ def build_known_locations_report(
         lines.append(f"{total_count} location{'s' if total_count != 1 else ''} hidden.")
     else:
         lines.append(f"{total_count} location{'s' if total_count != 1 else ''} tracked.")
+    lines.append(_known_location_business_sentiment_legend_text())
     lines.append("")
     for row in rows:
         legend_line = row.get("legend_line")
@@ -1359,6 +1370,22 @@ def build_known_locations_report(
         summary_bits = [f"{int(round(float(row.get('confidence', 0.0)) * 100.0))}% confident"]
         summary_bits.extend(str(bit).strip() for bit in row.get("summary_bits", ()) if str(bit).strip())
         lines.append(" | ".join(summary_bits))
+        designations = tuple(row.get("business_sentiment_designations", ()) or ())
+        if designations:
+            lines.append(
+                "Street read: "
+                + " | ".join(
+                    f"{str(designation.get('symbol', '')).strip()} {str(designation.get('label', '')).strip()}"
+                    for designation in designations
+                    if isinstance(designation, dict)
+                    and str(designation.get("symbol", "")).strip()
+                    and str(designation.get("label", "")).strip()
+                )
+            )
+        scope = row.get("business_reputation_scope", {}) if isinstance(row.get("business_reputation_scope", {}), dict) else {}
+        scope_label = str(scope.get("label", "")).strip()
+        if scope_label:
+            lines.append(f"Street reach: {scope_label}")
         for fact in row.get("fact_lines", ()):
             lines.append(f"- {fact}")
         lines.append("")

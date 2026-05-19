@@ -25,6 +25,12 @@ from game.components import (
 from game.economy import chunk_economy_profile
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
 from game.organization_reputation import apply_organization_reputation_delta
+from game.property_access import (
+    finance_services_for_property,
+    property_is_public,
+    property_is_storefront,
+    site_services_for_property,
+)
 from game.property_runtime import (
     building_id_from_property,
     building_id_from_structure,
@@ -1503,6 +1509,317 @@ def _required_item_seizure_reason(opportunity, *, site_name="", during_booking=F
     if site_name:
         return f"{site_name} is holding {item_phrase}"
     return f"justice seized {item_phrase}"
+
+
+def _site_label_from_requirement(sim, requirements, *, property_key="property_id", building_key="building_id", name_key="property_name"):
+    requirements = requirements if isinstance(requirements, dict) else {}
+    name = str(requirements.get(name_key, "")).strip()
+    if name:
+        return name
+
+    property_id = str(requirements.get(property_key, "")).strip()
+    if property_id and sim is not None and hasattr(sim, "properties"):
+        prop = sim.properties.get(property_id)
+        if isinstance(prop, dict):
+            return _property_label(prop, property_id)
+
+    building_id = str(requirements.get(building_key, "")).strip()
+    if building_id and sim is not None and hasattr(sim, "properties"):
+        for prop in getattr(sim, "properties", {}).values():
+            if building_id_from_property(prop) == building_id:
+                return _property_label(prop, prop.get("id") if isinstance(prop, dict) else building_id)
+    return ""
+
+
+def _site_phrase(label):
+    label = str(label or "").strip()
+    return f" at {label}" if label else ""
+
+
+def _resolve_required_property(sim, requirements, *, property_key="property_id", building_key="building_id"):
+    requirements = requirements if isinstance(requirements, dict) else {}
+    if sim is None or not hasattr(sim, "properties"):
+        return None
+
+    property_id = str(requirements.get(property_key, "")).strip()
+    if property_id:
+        prop = sim.properties.get(property_id)
+        if isinstance(prop, dict):
+            return prop
+
+    building_id = str(requirements.get(building_key, "")).strip()
+    if building_id:
+        for prop in getattr(sim, "properties", {}).values():
+            if building_id_from_property(prop) == building_id:
+                return prop
+    return None
+
+
+def _property_supported_activity_tags(prop):
+    if not isinstance(prop, dict):
+        return set()
+    supported = set()
+    if property_is_storefront(prop):
+        supported.update({"trade", "contact"})
+    if property_is_public(prop):
+        supported.add("contact")
+
+    finance_services = {
+        str(service).strip().lower()
+        for service in finance_services_for_property(prop)
+        if str(service).strip()
+    }
+    if finance_services:
+        supported.update({"finance", "contact"})
+
+    site_services = {
+        str(service).strip().lower()
+        for service in site_services_for_property(prop)
+        if str(service).strip()
+    }
+    if site_services:
+        supported.update({"service", "contact"})
+    if "intel" in site_services:
+        supported.add("intel")
+    if property_focus_position(prop) is not None:
+        supported.add("stakeout")
+    return supported
+
+
+def _activity_lane_closed_reason(site_label, tags):
+    site_label = str(site_label or "").strip() or "the site"
+    ordered = [str(tag).strip().lower() for tag in tuple(tags or ()) if str(tag).strip()]
+    tag_set = set(ordered)
+    if "finance" in tag_set:
+        return f"{site_label} is no longer running the finance lane this lead depends on"
+    if "trade" in tag_set:
+        return f"{site_label} is no longer running the counter this lead depends on"
+    if "service" in tag_set:
+        return f"{site_label} is no longer offering the service this lead depends on"
+    if "contact" in tag_set:
+        return f"{site_label} is no longer taking the kind of walk-in contact this lead depends on"
+    if "intel" in tag_set:
+        return f"the intel lane at {site_label} dried up"
+    if "stakeout" in tag_set:
+        return f"the watch angle around {site_label} went dead"
+    return f"{site_label} is no longer supporting the work this lead depends on"
+
+
+def _expired_failure_reason(sim, opportunity):
+    if sim is None or not isinstance(opportunity, dict):
+        return "the window expired"
+
+    requirements = _opportunity_requirements(opportunity)
+    kind = str((opportunity or {}).get("kind", "")).strip().lower()
+    tags = set(_normalize_activity_tags(requirements.get("recent_activity_tags")))
+    item_id = str(requirements.get("require_item_id", "")).strip().lower()
+    item_label = _required_item_label_for_opportunity(opportunity) if item_id else ""
+    acquisition_hint = str(requirements.get("acquisition_hint", "")).strip().lower()
+    contact_name = str(requirements.get("interact_npc_name", "")).strip()
+    pickup_contact_name = str(requirements.get("pickup_interact_npc_name", "")).strip()
+
+    visit_label = _site_label_from_requirement(sim, requirements)
+    delivery_label = _site_label_from_requirement(
+        sim,
+        requirements,
+        property_key="delivery_property_id",
+        building_key="delivery_building_id",
+        name_key="delivery_property_name",
+    )
+    pickup_label = _site_label_from_requirement(
+        sim,
+        requirements,
+        property_key="pickup_property_id",
+        building_key="pickup_building_id",
+        name_key="pickup_property_name",
+    )
+    primary_label = visit_label or delivery_label or pickup_label
+
+    if kind in {"watch_post", "relay_watch", "sightline_check", "intel_scout"} or "stakeout" in tags:
+        return f"the watch window{_site_phrase(primary_label)} closed"
+
+    if kind in {"records_pull", "paper_trail"}:
+        return f"the paper trail{_site_phrase(primary_label)} cooled off"
+    if kind == "claims_chase":
+        return f"the claims trail{_site_phrase(primary_label)} cooled off"
+    if kind == "debt_marker":
+        return f"the debt trail{_site_phrase(primary_label)} cooled off"
+
+    if "discovery_salvage" in tags or kind in {"salvage_sweep", "parts_recovery", "yard_strip"}:
+        return f"the salvage{_site_phrase(primary_label)} was stripped clean"
+    if "discovery_supplies" in tags or kind == "refuge_resupply":
+        return f"the cache{_site_phrase(primary_label)} was stripped clean"
+    if "discovery_water" in tags or kind in {"water_run", "spring_run"}:
+        return f"the water route{_site_phrase(primary_label)} ran dry"
+    if "discovery_landmark" in tags or kind == "landmark_survey":
+        return f"the survey window{_site_phrase(primary_label)} closed"
+
+    if kind in {"distance_pickup", "dead_drop_return", "tool_pickup", "supply_grab", "route_stash"} or acquisition_hint == "pickup":
+        if pickup_contact_name:
+            return f"{pickup_contact_name} stopped holding the pickup"
+        if pickup_label:
+            return f"the pickup route through {pickup_label} went stale"
+        if item_label:
+            return f"the pickup route for {item_label} went stale"
+        return "the pickup route went stale"
+
+    if kind in {"distance_delivery", "distance_delivery_procure", "medical_drop"} or item_id:
+        if contact_name:
+            return f"{contact_name} stopped holding the handoff"
+        if delivery_label:
+            return f"the handoff window at {delivery_label} closed"
+        if item_label:
+            return f"the handoff window for {item_label} closed"
+        return "the handoff window closed"
+
+    if kind in {
+        "contact_run",
+        "missing_person",
+        "property_dispute",
+        "service_friction",
+        "lead_followup",
+        "local_lead",
+        "layover_shuffle",
+        "district_contract",
+    } or "contact" in tags:
+        if contact_name:
+            return f"{contact_name} stopped taking the meeting"
+        return f"the local contact window{_site_phrase(primary_label)} went cold"
+
+    if kind in {"trade_loop", "backroom_buyback", "supply_shortage"} or "trade" in tags:
+        return f"the buyer interest{_site_phrase(primary_label)} cooled off"
+
+    if kind in {"shelter_stop", "field_repair_call"} or "service" in tags:
+        return f"the service window{_site_phrase(primary_label)} closed"
+
+    return "the window expired"
+
+
+def _npc_custody_record(sim, npc_eid):
+    if sim is None or npc_eid is None:
+        return {}
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        return {}
+    justice_state = traits.get("criminal_justice")
+    if not isinstance(justice_state, dict):
+        return {}
+    records = justice_state.get("npc_custody")
+    if not isinstance(records, dict):
+        return {}
+    record = records.get(str(int(npc_eid)))
+    return record if isinstance(record, dict) else {}
+
+
+def _named_contact_unavailable_failure_detail(sim, opportunity, metrics):
+    if sim is None or not isinstance(opportunity, dict):
+        return None
+    killed_eids = metrics.get("killed_npc_eids", frozenset()) if isinstance(metrics, dict) else frozenset()
+    positions = sim.ecs.get(Position)
+    identities = sim.ecs.get(CreatureIdentity)
+    for target_eid, target_name, stage in _opportunity_target_specs(opportunity):
+        if target_eid in killed_eids:
+            continue
+        record = _npc_custody_record(sim, target_eid)
+        if bool(record.get("active", False)):
+            if stage == "pickup":
+                reason = f"{target_name} is in custody and missed the pickup"
+            else:
+                reason = f"{target_name} is in custody and missed the handoff"
+            return {
+                "failure_code": "contact_unavailable",
+                "failure_reason": reason,
+            }
+        if positions.get(target_eid) is None and identities.get(target_eid) is None:
+            if stage == "pickup":
+                reason = f"{target_name} dropped out before the pickup"
+            else:
+                reason = f"{target_name} dropped out before the handoff"
+            return {
+                "failure_code": "contact_unavailable",
+                "failure_reason": reason,
+            }
+    return None
+
+
+def _anchor_unavailable_failure_detail(sim, opportunity):
+    if sim is None or not isinstance(opportunity, dict):
+        return None
+
+    requirements = _opportunity_requirements(opportunity)
+    require_item_id = str(requirements.get("require_item_id", "")).strip().lower()
+    interact_npc_eid = _safe_int(requirements.get("interact_npc_eid"), default=0)
+    recent_activity_tags = _normalize_activity_tags(requirements.get("recent_activity_tags"))
+
+    pickup_prop = _resolve_required_property(
+        sim,
+        requirements,
+        property_key="pickup_property_id",
+        building_key="pickup_building_id",
+    )
+    pickup_label = _site_label_from_requirement(
+        sim,
+        requirements,
+        property_key="pickup_property_id",
+        building_key="pickup_building_id",
+        name_key="pickup_property_name",
+    )
+    if (str(requirements.get("pickup_property_id", "")).strip() or str(requirements.get("pickup_building_id", "")).strip()) and pickup_prop is None:
+        if pickup_label:
+            reason = f"{pickup_label} is no longer holding the pickup"
+        else:
+            reason = "the pickup site is no longer available"
+        return {
+            "failure_code": "pickup_unavailable",
+            "failure_reason": reason,
+        }
+
+    delivery_prop = _resolve_required_property(
+        sim,
+        requirements,
+        property_key="delivery_property_id",
+        building_key="delivery_building_id",
+    )
+    delivery_label = _site_label_from_requirement(
+        sim,
+        requirements,
+        property_key="delivery_property_id",
+        building_key="delivery_building_id",
+        name_key="delivery_property_name",
+    )
+    if (str(requirements.get("delivery_property_id", "")).strip() or str(requirements.get("delivery_building_id", "")).strip()) and delivery_prop is None:
+        if delivery_label:
+            reason = f"{delivery_label} is no longer taking the handoff"
+        else:
+            reason = "the handoff site is no longer available"
+        return {
+            "failure_code": "handoff_unavailable",
+            "failure_reason": reason,
+        }
+
+    target_prop = _resolve_required_property(sim, requirements)
+    target_label = _site_label_from_requirement(sim, requirements)
+    if (str(requirements.get("property_id", "")).strip() or str(requirements.get("building_id", "")).strip()) and target_prop is None:
+        label = target_label or "the target site"
+        return {
+            "failure_code": "site_unavailable",
+            "failure_reason": f"{label} is no longer available",
+        }
+
+    if interact_npc_eid > 0 or require_item_id or not recent_activity_tags or target_prop is None:
+        return None
+
+    if any(tag == "discovery" or tag.startswith("discovery_") for tag in recent_activity_tags):
+        return None
+
+    supported_tags = _property_supported_activity_tags(target_prop)
+    if supported_tags.intersection(recent_activity_tags):
+        return None
+
+    return {
+        "failure_code": "activity_unavailable",
+        "failure_reason": _activity_lane_closed_reason(target_label or _property_label(target_prop), recent_activity_tags),
+    }
 
 
 def _matches_property_target(sim, metrics, property_id):
@@ -5040,23 +5357,29 @@ def _failure_detail(sim, opportunity, metrics, *, include_item_loss=True):
         return None
 
     _ensure_lifecycle_fields(sim, opportunity)
-    now = int(getattr(sim, "tick", 0))
-    expire_tick = _safe_int(opportunity.get("expire_tick"), default=0)
-    if expire_tick > 0 and now >= expire_tick:
-        return {
-            "failure_code": "expired",
-            "failure_reason": "the window expired",
-        }
-
     policy = opportunity.get("failure_policy", {}) if isinstance(opportunity.get("failure_policy"), dict) else {}
     if bool(policy.get("fail_on_target_killed")):
         target_failure = _target_killed_failure_detail(opportunity, metrics)
         if isinstance(target_failure, dict):
             return target_failure
+        unavailable_contact = _named_contact_unavailable_failure_detail(sim, opportunity, metrics)
+        if isinstance(unavailable_contact, dict):
+            return unavailable_contact
     if bool(policy.get("fail_on_legal_compromise")):
         legal_failure = _legal_compromise_failure_detail(opportunity, metrics)
         if isinstance(legal_failure, dict):
             return legal_failure
+    anchor_failure = _anchor_unavailable_failure_detail(sim, opportunity)
+    if isinstance(anchor_failure, dict):
+        return anchor_failure
+
+    now = int(getattr(sim, "tick", 0))
+    expire_tick = _safe_int(opportunity.get("expire_tick"), default=0)
+    if expire_tick > 0 and now >= expire_tick:
+        return {
+            "failure_code": "expired",
+            "failure_reason": _expired_failure_reason(sim, opportunity),
+        }
 
     if not include_item_loss or not bool(policy.get("fail_on_missing_provided_item")):
         return None

@@ -70,6 +70,7 @@ from game.organizations import ensure_property_organization, seed_property_organ
 from game.population import human_max_hp_for_role, seed_chunk_items, seed_npc_finance, spawn_chunk_npcs
 from game.player_businesses import PlayerBusinessSystem
 from game.systems_incidents import IncidentKnowledgeSystem
+from game.systems_business_reputation import BusinessReputationSystem
 from game.vehicles import (
     generate_chunk_vehicle_records,
     roll_vehicle_profile,
@@ -296,6 +297,7 @@ def _register_runtime_systems(sim, view, player):
     npc_memory_system = NPCMemorySystem(sim)
     animal_social_system = AnimalSocialSystem(sim)
     rumor_system = RumorSystem(sim)
+    business_reputation_system = BusinessReputationSystem(sim)
     npc_needs_system = NPCNeedsSystem(sim)
     npc_settlement_system = NPCSettlementSystem(sim)
     status_effect_system = StatusEffectSystem(sim)
@@ -355,6 +357,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(npc_memory_system)
     sim.register_system(animal_social_system)
     sim.register_system(rumor_system)
+    sim.register_system(business_reputation_system)
     sim.register_system(npc_needs_system)
     sim.register_system(npc_settlement_system)
     sim.register_system(status_effect_system)

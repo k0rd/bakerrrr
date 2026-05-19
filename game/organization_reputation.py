@@ -651,6 +651,8 @@ class OrganizationReputationSystem(System):
     def on_trade_bought(self, event):
         if event.data.get("eid") != self.player_eid:
             return
+        if bool(event.data.get("owner_transfer")):
+            return
         prop = self._property_from_event(event)
         if not isinstance(prop, dict):
             return
@@ -664,6 +666,8 @@ class OrganizationReputationSystem(System):
 
     def on_trade_sold(self, event):
         if event.data.get("eid") != self.player_eid:
+            return
+        if bool(event.data.get("owner_transfer")):
             return
         prop = self._property_from_event(event)
         if not isinstance(prop, dict):

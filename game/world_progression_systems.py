@@ -85,6 +85,7 @@ from game.items import (
 )
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
+    _opportunity_requirements,
     advance_opportunity_lifecycle,
     append_external_opportunity,
     evaluate_opportunity_board,
@@ -221,15 +222,19 @@ def _generate_human_personal_name(*args, **kwargs):
 
 _UNDERPASS_CACHE_CONTENT_ROWS = (
     ("transit_daypass", 10, 1, 1),
+    ("city_pass_token", 7, 1, 2),
     ("battery_pack", 9, 1, 1),
     ("scrap_circuit", 9, 1, 2),
     ("energy_bar", 8, 1, 2),
     ("bottled_water", 8, 1, 2),
+    ("hydration_salts", 6, 1, 1),
     ("signal_jammer", 4, 1, 1),
     ("lockpick_kit", 4, 1, 1),
     ("med_gel", 6, 1, 1),
     ("micro_medkit", 3, 1, 1),
     ("credstick_chip", 8, 1, 1),
+    ("pocket_notebook", 2, 1, 1),
+    ("spark_brew", 2, 1, 1),
 )
 
 class WorldStreamingSystem(System):
@@ -320,7 +325,7 @@ class WorldStreamingSystem(System):
         if not rows:
             return 0
 
-        target_count = 2 + (1 if rng.random() < 0.55 else 0)
+        target_count = 2 + (1 if rng.random() < 0.7 else 0) + (1 if rng.random() < 0.24 else 0)
         while rows and len(cache_items) < target_count:
             pick_index = rng.choices(
                 range(len(rows)),
@@ -388,6 +393,64 @@ class WorldStreamingSystem(System):
             metadata=metadata,
         )
         self._seed_underpass_cache_contents(property_id, seed_token=seed_token)
+        records.append({
+            "id": property_id,
+            "kind": "asset",
+            "x": int(x),
+            "y": int(y),
+            "z": int(z),
+            "archetype": metadata.get("archetype"),
+            "building_id": None,
+        })
+        return property_id
+
+    def _register_underground_service_asset(
+        self,
+        records,
+        *,
+        key,
+        name,
+        x,
+        y,
+        z,
+        site_services=(),
+        linked_property_id=None,
+        fixture_type="service_terminal",
+        glyph="i",
+        lead_mode=None,
+    ):
+        self._ensure_property_anchor(x, y, z)
+        metadata = {
+            "archetype": str(fixture_type).strip().lower() or "service_terminal",
+            "fixture_type": str(fixture_type).strip().lower() or "service_terminal",
+            "interaction_role": "service_terminal",
+            "site_services": [
+                str(service).strip().lower()
+                for service in tuple(site_services or ())
+                if str(service).strip()
+            ],
+            "display_glyph": str(glyph)[:1] or "i",
+            "display_color": "property_service",
+            "cover_kind": "low",
+            "cover_value": 0.28,
+            "public": True,
+            "chunk": key,
+        }
+        if linked_property_id:
+            metadata["linked_property_id"] = str(linked_property_id)
+        lead_mode = str(lead_mode or "").strip().lower()
+        if lead_mode:
+            metadata["lead_mode"] = lead_mode
+        property_id = self.sim.register_property(
+            name=str(name).strip() or "Signal Relay",
+            kind="asset",
+            x=int(x),
+            y=int(y),
+            z=int(z),
+            owner_eid=None,
+            owner_tag="public",
+            metadata=metadata,
+        )
         records.append({
             "id": property_id,
             "kind": "asset",
@@ -691,7 +754,11 @@ class WorldStreamingSystem(System):
                     "floors": int(plan.get("floors", 1) or 1),
                     "rooms": list(plan.get("rooms", ())),
                     "footprint": dict(footprint),
-                    "footprint_excluded_cells": [],
+                    "footprint_excluded_cells": [
+                        dict(cell)
+                        for cell in tuple(plan.get("footprint_excluded_cells", ()) or ())
+                        if isinstance(cell, dict)
+                    ],
                     "entry": dict(entry),
                     "apertures": [dict(aperture) for aperture in plan.get("apertures", ()) if isinstance(aperture, dict)],
                     "skip_ambient_population": True,
@@ -781,6 +848,22 @@ class WorldStreamingSystem(System):
                         f"{int(cache_spec.get('x', x))}:{int(cache_spec.get('y', y))}:{int(cache_spec.get('z', z))}:"
                         f"{cache_index}"
                     ),
+                )
+            for service_spec in tuple(plan.get("service_sites", ()) or ()):
+                if not isinstance(service_spec, dict):
+                    continue
+                self._register_underground_service_asset(
+                    records,
+                    key=key,
+                    name=str(service_spec.get("name", "Signal Relay")).strip() or "Signal Relay",
+                    x=int(service_spec.get("x", x)),
+                    y=int(service_spec.get("y", y)),
+                    z=int(service_spec.get("z", z)),
+                    site_services=tuple(service_spec.get("site_services", ()) or ()),
+                    linked_property_id=property_id,
+                    fixture_type=str(service_spec.get("fixture_type", "service_terminal")).strip().lower() or "service_terminal",
+                    glyph=str(service_spec.get("glyph", "i"))[:1] or "i",
+                    lead_mode=str(service_spec.get("lead_mode", "") or "").strip().lower() or None,
                 )
             for hazard_spec in tuple(plan.get("ambient_hazard_spawns", ()) or ()):
                 if not isinstance(hazard_spec, dict):
@@ -1764,10 +1847,14 @@ class OpportunitySystem(System):
     def on_trade_bought(self, event):
         if event.data.get("eid") != self.player_eid:
             return
+        if bool(event.data.get("owner_transfer")):
+            return
         self._remember_opportunity_activity_for_property(event.data.get("property_id"), "trade")
 
     def on_trade_sold(self, event):
         if event.data.get("eid") != self.player_eid:
+            return
+        if bool(event.data.get("owner_transfer")):
             return
         property_id = event.data.get("property_id")
         self._remember_opportunity_activity_for_property(property_id, "trade")
@@ -1933,6 +2020,7 @@ class RivalOperatorSystem(System):
     ACTION_INTERVAL = 210
     LOCAL_ACTION_INTERVAL = 72
     RUMOR_INTERVAL = 150
+    SCENE_HOLD_HOURS = 3.0
     HOME_MIN_DISTANCE = 2
     HOME_MAX_DISTANCE = 7
     TARGET_DECAY_TICKS = 320
@@ -2021,6 +2109,23 @@ class RivalOperatorSystem(System):
         second = self._normalize_chunk(b)
         return _manhattan(first[0], first[1], second[0], second[1])
 
+    def _ticks_per_hour(self):
+        traits = getattr(self.sim, "world_traits", {})
+        clock = traits.get("clock", {}) if isinstance(traits, dict) else {}
+        if not isinstance(clock, dict):
+            clock = {}
+        try:
+            ticks = int(clock.get("ticks_per_hour", 600))
+        except (TypeError, ValueError):
+            ticks = 600
+        return max(1, ticks)
+
+    def _scene_hold_ticks(self):
+        return max(90, int(round(float(self.SCENE_HOLD_HOURS) * float(self._ticks_per_hour()))))
+
+    def _scene_rumor_interval(self):
+        return max(int(self.RUMOR_INTERVAL), max(1, int(self._scene_hold_ticks()) // 2))
+
     def _normalize_rival_runtime_state(self, rival):
         if not isinstance(rival, dict):
             return
@@ -2034,6 +2139,8 @@ class RivalOperatorSystem(System):
         rival.setdefault("last_materialized_tick", -10_000)
         rival.setdefault("last_spotted_tick", -10_000)
         rival.setdefault("recover_until_tick", -1)
+        rival.setdefault("scene_opportunity_id", 0)
+        rival.setdefault("scene_until_tick", -1)
         if not isinstance(rival.get("inventory_snapshot"), list):
             rival["inventory_snapshot"] = []
         if not isinstance(rival.get("weapon_loadout_snapshot"), dict):
@@ -2042,6 +2149,28 @@ class RivalOperatorSystem(System):
             rival["armor_loadout_snapshot"] = {}
         if not isinstance(rival.get("vitality_snapshot"), dict):
             rival["vitality_snapshot"] = {}
+
+    def _clear_scene_hold(self, rival, *, opportunity_id=None):
+        if not isinstance(rival, dict):
+            return
+        current_scene_id = _int_or_default(rival.get("scene_opportunity_id"), default=0)
+        if opportunity_id is not None and current_scene_id not in {0, int(opportunity_id)}:
+            return
+        rival["scene_opportunity_id"] = 0
+        rival["scene_until_tick"] = -1
+
+    def _scene_hold_active(self, rival, entry=None):
+        if not isinstance(rival, dict):
+            return False
+        current_scene_id = _int_or_default(rival.get("scene_opportunity_id"), default=0)
+        scene_until_tick = _int_or_default(rival.get("scene_until_tick"), default=-1)
+        if current_scene_id <= 0 or scene_until_tick <= 0:
+            return False
+        if isinstance(entry, dict):
+            entry_id = _int_or_default(entry.get("id"), default=0)
+            if entry_id > 0 and current_scene_id != entry_id:
+                return False
+        return scene_until_tick > int(self.sim.tick)
 
     def _rival_is_available(self, rival):
         self._normalize_rival_runtime_state(rival)
@@ -2585,22 +2714,32 @@ class RivalOperatorSystem(System):
         return home
 
     def _refresh_target_for_rival(self, rival):
+        current_target_id = int(rival.get("target_opportunity_id", 0) or 0)
         target = self._target_entry(rival)
         if target is not None:
             age = int(self.sim.tick) - int(rival.get("last_decision_tick", -10_000))
             if age <= self.TARGET_DECAY_TICKS:
+                target_id = int(target.get("id", 0) or 0)
+                if target_id != current_target_id:
+                    self._clear_scene_hold(rival, opportunity_id=current_target_id or None)
+                rival["target_opportunity_id"] = target_id
                 rival["target_chunk"] = self._normalize_chunk(target.get("chunk"), fallback=rival.get("current_chunk"))
                 return target
+            self._clear_scene_hold(rival, opportunity_id=current_target_id or None)
 
         selected = self._choose_target_for_rival(rival)
         if selected is None:
+            self._clear_scene_hold(rival, opportunity_id=current_target_id or None)
             rival["target_opportunity_id"] = 0
             rival["target_chunk"] = self._choose_wander_chunk(rival)
             rival["status"] = "circling"
             rival["last_decision_tick"] = int(self.sim.tick)
             return None
 
-        rival["target_opportunity_id"] = int(selected.get("id", 0) or 0)
+        selected_id = int(selected.get("id", 0) or 0)
+        if selected_id != current_target_id:
+            self._clear_scene_hold(rival, opportunity_id=current_target_id or None)
+        rival["target_opportunity_id"] = selected_id
         rival["target_chunk"] = self._normalize_chunk(selected.get("chunk"), fallback=rival.get("current_chunk"))
         rival["status"] = "working"
         rival["last_decision_tick"] = int(self.sim.tick)
@@ -2679,11 +2818,42 @@ class RivalOperatorSystem(System):
             return center
         return None
 
+    def _property_for_building_id(self, building_id):
+        building_id = str(building_id or "").strip()
+        if not building_id or not hasattr(self.sim, "properties"):
+            return None
+        for prop in list(self.sim.properties.values()):
+            if _building_id_from_property(prop) == building_id:
+                return prop
+        return None
+
+    def _opportunity_anchor_ids(self, entry):
+        if not isinstance(entry, dict):
+            return "", ""
+        requirements = _opportunity_requirements(entry)
+        for property_key, building_key in (
+            ("delivery_property_id", "delivery_building_id"),
+            ("property_id", "building_id"),
+            ("pickup_property_id", "pickup_building_id"),
+        ):
+            property_id = str(requirements.get(property_key, "") or "").strip()
+            building_id = str(requirements.get(building_key, "") or "").strip()
+            if property_id or building_id:
+                return property_id, building_id
+        return str(entry.get("property_id", "") or "").strip(), str(entry.get("building_id", "") or "").strip()
+
     def _opportunity_property(self, entry):
         if not isinstance(entry, dict):
             return None
-        requirements = entry.get("requirements", {}) if isinstance(entry.get("requirements", {}), dict) else {}
-        property_id = requirements.get("property_id") or entry.get("property_id")
+        property_id, building_id = self._opportunity_anchor_ids(entry)
+        if property_id:
+            prop = self.sim.properties.get(property_id)
+            if isinstance(prop, dict):
+                return prop
+        if building_id:
+            prop = self._property_for_building_id(building_id)
+            if isinstance(prop, dict):
+                return prop
         if not property_id:
             key = str(entry.get("key", "")).strip().lower()
             if ":" in key:
@@ -2696,6 +2866,57 @@ class RivalOperatorSystem(System):
         if not property_id:
             return None
         return self.sim.properties.get(property_id)
+
+    def _opportunity_anchor_name(self, entry):
+        prop = self._opportunity_property(entry)
+        if isinstance(prop, dict):
+            return str(prop.get("name", prop.get("id", "that place"))).strip() or "that place"
+        title = str((entry or {}).get("title", "a local lead")).strip()
+        return title or "a local lead"
+
+    def _reveal_rival_target_to_player(self, entry, *, confidence=0.0, source="rival_activity"):
+        if not isinstance(entry, dict):
+            return None
+        opportunity_id = int(entry.get("id", 0) or 0)
+        if opportunity_id <= 0:
+            return None
+        awareness_state = "confirmed" if float(confidence) >= 0.84 else "heard"
+        reveal_opportunity_to_observer(
+            self.sim,
+            self.player_eid,
+            opportunity_id,
+            awareness_state=awareness_state,
+            confidence=max(0.0, min(1.0, float(confidence))),
+            source=str(source or "rival_activity").strip().lower() or "rival_activity",
+        )
+        return opportunity_intel_for_observer(self.sim, self.player_eid, opportunity_id)
+
+    def _begin_scene_hold(self, rival, entry):
+        if not isinstance(rival, dict) or not isinstance(entry, dict):
+            return False
+        opportunity_id = int(entry.get("id", 0) or 0)
+        if opportunity_id <= 0 or self._scene_hold_active(rival, entry):
+            return False
+        if _int_or_default(rival.get("scene_opportunity_id"), default=0) == opportunity_id and _int_or_default(rival.get("scene_until_tick"), default=-1) > 0:
+            return False
+        self._clear_scene_hold(rival)
+        rival["scene_opportunity_id"] = opportunity_id
+        rival["scene_until_tick"] = int(self.sim.tick) + int(self._scene_hold_ticks())
+        target_chunk = self._normalize_chunk(entry.get("chunk"), fallback=rival.get("current_chunk"))
+        distance_text = opportunity_distance_text(
+            self._chunk_distance(self._player_chunk_coord(), target_chunk),
+            self._step_direction(self._player_chunk_coord(), target_chunk),
+        )
+        self._emit_rival_activity(
+            rival,
+            entry=entry,
+            summary=f"{rival.get('name', 'Someone')} is said to be {self._spotted_summary(rival, entry)} {distance_text}",
+            confidence=0.78,
+            truthful=True,
+            source="rival_scene",
+        )
+        rival["last_rumor_tick"] = int(self.sim.tick)
+        return True
 
     def _opportunity_focus(self, rival, entry, *, fallback_chunk=None):
         if not isinstance(entry, dict):
@@ -2916,10 +3137,7 @@ class RivalOperatorSystem(System):
     def _spotted_summary(self, rival, entry):
         if not isinstance(entry, dict):
             return "working the block"
-        intel = opportunity_intel_for_observer(self.sim, self.player_eid, int(entry.get("id", 0) or 0))
-        title = str(entry.get("title", "a local lead")).strip() or "a local lead"
-        if not intel:
-            title = "a local lead"
+        title = self._opportunity_anchor_name(entry)
         hustle = str(rival.get("hustle", "cash")).strip().lower() or "cash"
         if hustle == "intel":
             return f"casing {title}"
@@ -2935,6 +3153,9 @@ class RivalOperatorSystem(System):
         if int(self.sim.tick) - int(rival.get("last_spotted_tick", -10_000)) < self.LOCAL_SPOTTED_COOLDOWN:
             return
         entry = self._target_entry(rival)
+        prop = self._opportunity_property(entry)
+        if isinstance(entry, dict):
+            self._reveal_rival_target_to_player(entry, confidence=0.96, source="rival_spotted")
         self.sim.emit(Event(
             "rival_operator_spotted",
             eid=self.player_eid,
@@ -2944,6 +3165,13 @@ class RivalOperatorSystem(System):
             rival_reputation=str(rival.get("reputation", "steady")).strip().lower() or "steady",
             hustle=str(rival.get("hustle", "cash")).strip().lower() or "cash",
             chunk=self._normalize_chunk(rival.get("current_chunk")),
+            opportunity_id=int((entry or {}).get("id", 0) or 0),
+            title=str((entry or {}).get("title", "Opportunity")).strip() or "Opportunity",
+            property_id=str((prop or {}).get("id", "")).strip(),
+            property_name=str((prop or {}).get("name", "")).strip(),
+            building_id=_building_id_from_property(prop) if isinstance(prop, dict) else "",
+            confidence=0.96,
+            truthful=True,
             summary=self._spotted_summary(rival, entry),
         ))
         rival["last_spotted_tick"] = int(self.sim.tick)
@@ -3169,6 +3397,9 @@ class RivalOperatorSystem(System):
             "credits": 10,
             "intel": 1,
         }
+        requirements = _opportunity_requirements(resolved)
+        tags = set(self._rival_followup_activity_tags(resolved))
+        discovery_tags = {tag for tag in tags if tag == "discovery" or tag.startswith("discovery_")}
         risk = str((resolved or {}).get("risk", "low")).strip().lower() or "low"
         hustle = str(rival.get("hustle", "cash")).strip().lower() or "cash"
         if resolution == "burned":
@@ -3187,7 +3418,206 @@ class RivalOperatorSystem(System):
             reward["intel"] += 1
         else:
             reward["credits"] += 6
+        if tags & {"stakeout", "intel"}:
+            reward["intel"] += 1
+        if tags & {"trade", "finance", "service"}:
+            reward["credits"] += 4
+        if tags & {"contact"} and resolution != "burned":
+            reward["standing"] = max(1, int(reward.get("standing", 0) or 0))
+        if discovery_tags and not (tags & {"stakeout", "intel", "trade", "finance", "service"}):
+            reward["credits"] += 4
+        if bool(requirements.get("require_item_id")) and casualty != "dead":
+            reward["credits"] += 4
         return {key: int(value) for key, value in reward.items() if int(value) > 0}
+
+    def _rival_followup_activity_tags(self, resolved):
+        requirements = _opportunity_requirements(resolved)
+        raw_tags = requirements.get("recent_activity_tags")
+        if isinstance(raw_tags, str):
+            raw_tags = (raw_tags,)
+        tags = []
+        for raw in tuple(raw_tags or ()):
+            tag = str(raw or "").strip().lower()
+            if tag and tag not in tags:
+                tags.append(tag)
+        if tags:
+            return tuple(tags)
+
+        for flag, tag in (
+            ("prefer_finance_services", "finance"),
+            ("prefer_site_services", "service"),
+            ("prefer_storefront", "trade"),
+        ):
+            if bool(requirements.get(flag)) and tag not in tags:
+                tags.append(tag)
+
+        if (
+            _int_or_default(requirements.get("interact_npc_eid"), default=0) > 0
+            or _int_or_default(requirements.get("pickup_interact_npc_eid"), default=0) > 0
+        ) and "contact" not in tags:
+            tags.append("contact")
+
+        if str(requirements.get("require_item_id", "") or "").strip().lower():
+            for tag in ("trade", "contact"):
+                if tag not in tags:
+                    tags.append(tag)
+
+        return tuple(tags)
+
+    def _rival_followup_anchor(self, resolved):
+        requirements = _opportunity_requirements(resolved)
+        for property_key, building_key in (
+            ("delivery_property_id", "delivery_building_id"),
+            ("property_id", "building_id"),
+            ("pickup_property_id", "pickup_building_id"),
+        ):
+            property_id = str(requirements.get(property_key, "") or "").strip()
+            building_id = str(requirements.get(building_key, "") or "").strip()
+            if property_id or building_id:
+                return property_id, building_id
+
+        issuer = resolved.get("issuer") if isinstance(resolved.get("issuer"), dict) else {}
+        property_id = str(issuer.get("property_id", "") or "").strip()
+        return property_id, ""
+
+    def _rival_followup_requirements(self, resolved, *, chunk):
+        requirements = _opportunity_requirements(resolved)
+        activity_tags = self._rival_followup_activity_tags(resolved)
+        property_id, building_id = self._rival_followup_anchor(resolved)
+        followup_requirements = {
+            "visit_chunk": chunk,
+            "rival_followup": True,
+            "followup_from_opportunity_id": int(resolved.get("id", 0) or 0),
+        }
+        if property_id:
+            followup_requirements["property_id"] = property_id
+        if building_id:
+            followup_requirements["building_id"] = building_id
+        if activity_tags:
+            followup_requirements["recent_activity_tags"] = activity_tags
+        for flag in ("prefer_storefront", "prefer_finance_services", "prefer_site_services", "prefer_public"):
+            if flag in requirements:
+                followup_requirements[flag] = bool(requirements.get(flag))
+        return followup_requirements
+
+    def _rival_followup_action_phrase(self, resolved):
+        activity_tags = set(self._rival_followup_activity_tags(resolved))
+        property_id, building_id = self._rival_followup_anchor(resolved)
+        location_word = "there" if property_id or building_id else "in the area"
+        discovery_tags = {tag for tag in activity_tags if tag == "discovery" or tag.startswith("discovery_")}
+
+        if activity_tags & {"stakeout", "intel"}:
+            return f"hold a quiet watch or pull intel {location_word}"
+        if activity_tags & {"contact"} and activity_tags & {"trade", "finance", "service"}:
+            return f"talk to locals or work the local counter {location_word}"
+        if activity_tags & {"finance"} and not (activity_tags & {"contact", "intel", "stakeout"}):
+            return f"lean on the local finance desk {location_word}"
+        if activity_tags & {"service", "trade", "finance"}:
+            return f"work the local counter or services {location_word}"
+        if activity_tags & {"contact"}:
+            return f"talk to people {location_word} while nerves are still hot"
+        if discovery_tags:
+            return f"survey the ground {location_word}"
+        if bool(_opportunity_requirements(resolved).get("require_item_id")):
+            return f"work the same handoff ground {location_word}"
+        return f"move on the same ground {location_word}"
+
+    def _rival_followup_playstyles(self, rival, resolved):
+        playstyles = []
+        for raw in tuple((resolved or {}).get("playstyles", ()) or ()):
+            style = str(raw or "").strip().lower()
+            if not style or style == "combat" or style in playstyles:
+                continue
+            playstyles.append(style)
+
+        activity_tags = set(self._rival_followup_activity_tags(resolved))
+        if activity_tags & {"trade", "finance", "service"} and "economic" not in playstyles:
+            playstyles.append("economic")
+        if activity_tags & {"contact"} and "social" not in playstyles:
+            playstyles.append("social")
+        if activity_tags & {"stakeout", "intel"} and "stealth" not in playstyles:
+            playstyles.append("stealth")
+
+        if playstyles:
+            return tuple(playstyles[:3])
+
+        hustle = str(rival.get("hustle", "cash")).strip().lower() or "cash"
+        if hustle == "network":
+            return ("social", "stealth")
+        if hustle == "intel":
+            return ("stealth", "social")
+        return ("economic", "stealth")
+
+    def _is_consumptive_rival_job(self, resolved):
+        if not isinstance(resolved, dict):
+            return False
+        kind = str(resolved.get("kind", "")).strip().lower()
+        if kind in {
+            "distance_delivery",
+            "distance_delivery_procure",
+            "distance_pickup",
+            "medical_drop",
+            "dead_drop_return",
+        }:
+            return True
+        requirements = _opportunity_requirements(resolved)
+        return bool(str(requirements.get("require_item_id", "")).strip().lower())
+
+    def _rival_resolution_reason(self, rival, resolved, *, resolution):
+        rival_name = str(rival.get("name", "a rival")).strip() or "a rival"
+        if not isinstance(resolved, dict):
+            if resolution == "burned":
+                return f"{rival_name} burned the scene"
+            return f"{rival_name} got there first"
+
+        requirements = _opportunity_requirements(resolved)
+        kind = str(resolved.get("kind", "")).strip().lower()
+        item_id = str(requirements.get("require_item_id", "")).strip().lower()
+        acquisition_hint = str(requirements.get("acquisition_hint", "")).strip().lower()
+        def _has_chunk(value):
+            return isinstance(value, (tuple, list)) and len(value) >= 2
+
+        has_delivery_leg = any(
+            (
+                _has_chunk(requirements.get("delivery_chunk")),
+                str(requirements.get("delivery_property_id", "")).strip(),
+                str(requirements.get("delivery_building_id", "")).strip(),
+                _int_or_default(requirements.get("interact_npc_eid"), default=0) > 0,
+            )
+        )
+        has_pickup_leg = any(
+            (
+                _has_chunk(requirements.get("pickup_chunk")),
+                str(requirements.get("pickup_property_id", "")).strip(),
+                str(requirements.get("pickup_building_id", "")).strip(),
+                _int_or_default(requirements.get("pickup_interact_npc_eid"), default=0) > 0,
+                acquisition_hint == "pickup",
+            )
+        )
+        if resolution == "claimed":
+            if kind in {"distance_delivery", "distance_delivery_procure", "medical_drop"} or (
+                item_id and has_delivery_leg and acquisition_hint != "pickup"
+            ):
+                return f"{rival_name} completed the handoff first"
+            if kind in {"distance_pickup", "dead_drop_return"} or (
+                item_id and has_pickup_leg and has_delivery_leg and acquisition_hint == "pickup"
+            ):
+                return f"{rival_name} lifted the pickup first"
+            if item_id:
+                return f"{rival_name} took the objective first"
+            return f"{rival_name} got there first"
+
+        if kind in {"distance_delivery", "distance_delivery_procure", "medical_drop"} or (
+            item_id and has_delivery_leg and acquisition_hint != "pickup"
+        ):
+            return f"{rival_name} burned the handoff route"
+        if kind in {"distance_pickup", "dead_drop_return"} or (
+            item_id and has_pickup_leg and has_delivery_leg and acquisition_hint == "pickup"
+        ):
+            return f"{rival_name} burned the pickup route"
+        if item_id:
+            return f"{rival_name} burned the objective trail"
+        return f"{rival_name} burned the scene"
 
     def _should_spawn_rival_followup(self, resolved, *, resolution, casualty=""):
         if not isinstance(resolved, dict):
@@ -3208,6 +3638,8 @@ class RivalOperatorSystem(System):
             return False
         if casualty == "dead":
             return True
+        if self._is_consumptive_rival_job(resolved):
+            return False
         return resolution in {"claimed", "burned"}
 
     def _spawn_rival_followup(self, rival, resolved, *, resolution, casualty=""):
@@ -3216,6 +3648,8 @@ class RivalOperatorSystem(System):
         if not self._should_spawn_rival_followup(resolved, resolution=resolution, casualty=casualty):
             return None
         chunk = self._normalize_chunk(resolved.get("chunk"), fallback=rival.get("current_chunk"))
+        followup_requirements = self._rival_followup_requirements(resolved, chunk=chunk)
+        action_phrase = self._rival_followup_action_phrase(resolved)
         rival_name = str(rival.get("name", "rival")).strip() or "rival"
         title = self._collapse_repeated_rival_followup_labels(resolved.get("title", "Opportunity")) or "Opportunity"
         risk = str(resolved.get("risk", "low")).strip().lower() or "low"
@@ -3223,20 +3657,20 @@ class RivalOperatorSystem(System):
         if casualty == "dead":
             followup_title = f"Last Trace: {rival_name}"
             summary = (
-                f"{rival_name} may have died working {title}. Loose gear, chatter, or "
-                "panicked contacts could still be in play if you move fast."
+                f"{rival_name} may have died working {title}. Loose gear, chatter, or a last opening "
+                f"could still be in play if you {action_phrase} fast."
             )
         elif resolution == "burned":
             followup_title = f"Burned Trail: {title}"
             summary = (
-                f"{rival_name} scorched {title}. The scene may still pay in salvage, "
-                "fresh intel, or a quick opening if you get there first."
+                f"{rival_name} scorched {title}. The blowback may still pay if you {action_phrase} "
+                "before the scene settles."
             )
         else:
             followup_title = f"Rival Aftermath: {title}"
             summary = (
-                f"{rival_name} got to {title} first. Their wake may still hold loose intel, "
-                "rattled contacts, or quick margin if you move before it cools."
+                f"{rival_name} got to {title} first. Their wake may still hold rattled contacts, "
+                f"loose margin, or a fresh read if you {action_phrase} before it cools."
             )
 
         if casualty == "dead":
@@ -3246,12 +3680,7 @@ class RivalOperatorSystem(System):
         else:
             risk_label = risk
 
-        hustle = str(rival.get("hustle", "cash")).strip().lower() or "cash"
-        playstyles = ("economic", "stealth")
-        if hustle == "network":
-            playstyles = ("social", "stealth")
-        elif hustle == "intel":
-            playstyles = ("stealth", "social")
+        playstyles = self._rival_followup_playstyles(rival, resolved)
 
         added = append_external_opportunity(
             self.sim,
@@ -3266,11 +3695,7 @@ class RivalOperatorSystem(System):
                 "reward": self._rival_followup_reward(rival, resolved, resolution=resolution, casualty=casualty),
                 "risk": risk_label,
                 "pressure": 3 if risk_label == "hazardous" else 2 if risk_label == "exposed" else 1,
-                "requirements": {
-                    "visit_chunk": chunk,
-                    "rival_followup": True,
-                    "followup_from_opportunity_id": int(resolved.get("id", 0) or 0),
-                },
+                "requirements": followup_requirements,
                 "seed_tick": int(self.sim.tick),
             },
             observer_eid=self.player_eid,
@@ -3303,12 +3728,16 @@ class RivalOperatorSystem(System):
             confidence -= 0.05
         return max(0.38, min(0.92, confidence))
 
-    def _emit_rival_activity(self, rival, *, entry=None, summary="", confidence=0.5, truthful=True):
+    def _emit_rival_activity(self, rival, *, entry=None, summary="", confidence=0.5, truthful=True, source="street_rumor"):
         chunk = self._normalize_chunk((entry or {}).get("chunk"), fallback=rival.get("current_chunk"))
         player_distance = self._chunk_distance(self._player_chunk_coord(), chunk)
         known_to_player = False
+        prop = self._opportunity_property(entry) if isinstance(entry, dict) else None
         if isinstance(entry, dict):
-            intel = opportunity_intel_for_observer(self.sim, self.player_eid, int(entry.get("id", 0) or 0))
+            if truthful:
+                intel = self._reveal_rival_target_to_player(entry, confidence=confidence, source=source)
+            else:
+                intel = opportunity_intel_for_observer(self.sim, self.player_eid, int(entry.get("id", 0) or 0))
             known_to_player = bool(intel)
         self.sim.emit(Event(
             "rival_operator_activity",
@@ -3322,17 +3751,41 @@ class RivalOperatorSystem(System):
             player_distance=player_distance,
             known_to_player=bool(known_to_player),
             confidence=max(0.0, min(1.0, float(confidence))),
+            opportunity_id=int((entry or {}).get("id", 0) or 0),
+            title=str((entry or {}).get("title", "Opportunity")).strip() or "Opportunity",
+            property_id=str((prop or {}).get("id", "")).strip(),
+            property_name=str((prop or {}).get("name", "")).strip(),
+            building_id=_building_id_from_property(prop) if isinstance(prop, dict) else "",
             summary=str(summary).strip(),
             truthful=bool(truthful),
         ))
 
     def _maybe_emit_rival_rumor(self, rival):
-        if int(self.sim.tick) - int(rival.get("last_rumor_tick", -10_000)) < self.RUMOR_INTERVAL:
-            return
-        if self._materialized_eid(rival) and self._player_can_notice_rival(rival):
-            return
         target = self._target_entry(rival)
         if not isinstance(target, dict):
+            return
+        current_tick = int(self.sim.tick)
+        if self._scene_hold_active(rival, target):
+            if current_tick - int(rival.get("last_rumor_tick", -10_000)) < self._scene_rumor_interval():
+                return
+            target_chunk = self._normalize_chunk(target.get("chunk"), fallback=rival.get("current_chunk"))
+            distance_text = opportunity_distance_text(
+                self._chunk_distance(self._player_chunk_coord(), target_chunk),
+                self._step_direction(self._player_chunk_coord(), target_chunk),
+            )
+            self._emit_rival_activity(
+                rival,
+                entry=target,
+                summary=f"{rival.get('name', 'Someone')} is said to be {self._spotted_summary(rival, target)} {distance_text}",
+                confidence=0.72,
+                truthful=True,
+                source="rival_scene",
+            )
+            rival["last_rumor_tick"] = current_tick
+            return
+        if current_tick - int(rival.get("last_rumor_tick", -10_000)) < self.RUMOR_INTERVAL:
+            return
+        if self._materialized_eid(rival) and self._player_can_notice_rival(rival):
             return
 
         truthful_threshold = 0.24 + (float(rival.get("honesty", 0.5)) * 0.62)
@@ -3355,10 +3808,7 @@ class RivalOperatorSystem(System):
             self._chunk_distance(player_chunk, report_chunk),
             self._step_direction(player_chunk, report_chunk),
         )
-        summary = (
-            f"{rival.get('name', 'Someone')} is said to be working "
-            f"{str(reported.get('title', 'a lead')).strip() or 'a lead'} {distance_text}"
-        )
+        summary = f"{rival.get('name', 'Someone')} is said to be {self._spotted_summary(rival, reported)} {distance_text}"
         confidence = 0.42 + (float(rival.get("honesty", 0.5)) * 0.18) + (float(rival.get("charm", 0.5)) * 0.08)
         if not truthful:
             confidence -= 0.12
@@ -3368,8 +3818,9 @@ class RivalOperatorSystem(System):
             summary=summary,
             confidence=max(0.32, min(0.82, confidence)),
             truthful=truthful,
+            source="street_rumor",
         )
-        rival["last_rumor_tick"] = int(self.sim.tick)
+        rival["last_rumor_tick"] = current_tick
 
     def _step_direction(self, origin_chunk, target_chunk):
         origin = self._normalize_chunk(origin_chunk)
@@ -3390,6 +3841,7 @@ class RivalOperatorSystem(System):
     def _resolve_target_for_rival(self, rival):
         entry = self._target_entry(rival)
         if not isinstance(entry, dict):
+            self._clear_scene_hold(rival)
             rival["target_opportunity_id"] = 0
             return
 
@@ -3416,13 +3868,12 @@ class RivalOperatorSystem(System):
             self._emit_rival_activity(
                 rival,
                 entry=entry,
-                summary=(
-                    f"{rival.get('name', 'Someone')} looks to be casing "
-                    f"{str(entry.get('title', 'a lead')).strip() or 'a lead'}"
-                ),
+                summary=f"{rival.get('name', 'Someone')} looks to be {self._spotted_summary(rival, entry)}",
                 confidence=0.54 + (float(rival.get("honesty", 0.5)) * 0.1),
                 truthful=True,
+                source="rival_casing",
             )
+            self._clear_scene_hold(rival, opportunity_id=int(entry.get("id", 0) or 0))
             rival["last_action_tick"] = int(self.sim.tick)
             return
 
@@ -3430,20 +3881,20 @@ class RivalOperatorSystem(System):
         reward = dict(entry.get("reward", {}))
         entry_kind = str(entry.get("kind", "")).strip().lower()
         is_followup = self._is_rival_followup_entry(entry)
-        rival_name = str(rival.get("name", "a rival")).strip() or "a rival"
         if resolution == "claimed":
             self._apply_rival_reward(rival, reward)
             self._mirror_reward_to_materialized_inventory(rival, reward)
             rival["heat"] = int(_clamp(int(rival.get("heat", 0) or 0) + max(2, int(reward.get("standing", 0) or 0)), 0, 100))
             if entry_kind == "contract_kill" or is_followup:
+                rival_name = str(rival.get("name", "a rival")).strip() or "a rival"
                 reason = f"claimed by {rival_name} ({rival.get('hustle', 'cash')})"
                 status = "completed"
             else:
-                reason = f"{rival_name} got there first"
+                reason = self._rival_resolution_reason(rival, entry, resolution=resolution)
                 status = "rival_claimed"
         else:
             rival["heat"] = int(_clamp(int(rival.get("heat", 0) or 0) + 5, 0, 100))
-            reason = f"{rival_name} burned the scene"
+            reason = self._rival_resolution_reason(rival, entry, resolution=resolution)
             status = "rival_burned"
 
         resolved = resolve_external_opportunity(
@@ -3462,11 +3913,13 @@ class RivalOperatorSystem(System):
             },
         )
         if resolved is None:
+            self._clear_scene_hold(rival, opportunity_id=int(entry.get("id", 0) or 0))
             rival["target_opportunity_id"] = 0
             return
 
         rival["resolved_count"] = int(rival.get("resolved_count", 0) or 0) + 1
         rival["last_action_tick"] = int(self.sim.tick)
+        self._clear_scene_hold(rival, opportunity_id=int(entry.get("id", 0) or 0))
         rival["target_opportunity_id"] = 0
         casualty = self._apply_offscreen_casualty(rival, entry, resolution=resolution)
         if not casualty:
@@ -3508,6 +3961,7 @@ class RivalOperatorSystem(System):
         if str(rival.get("status", "")).strip().lower() in {"dead", "retired"}:
             return
         self._capture_materialized_state(rival)
+        self._clear_scene_hold(rival)
         rival["status"] = "wounded"
         rival["recover_until_tick"] = int(self.sim.tick) + int(self.RECOVERY_TICKS)
         rival["target_opportunity_id"] = 0
@@ -3519,6 +3973,7 @@ class RivalOperatorSystem(System):
         rival = self._rival_for_materialized_eid(event.data.get("target_eid"))
         if rival is None:
             return
+        self._clear_scene_hold(rival)
         rival["status"] = "dead"
         rival["recover_until_tick"] = -1
         rival["target_opportunity_id"] = 0
@@ -3554,7 +4009,6 @@ class RivalOperatorSystem(System):
             if tick - int(rival.get("last_move_tick", -10_000)) >= self.TRAVEL_INTERVAL:
                 self._move_rival(rival)
             self._sync_materialization(rival)
-            self._maybe_emit_rival_rumor(rival)
 
             target = self._target_entry(rival)
             if not isinstance(target, dict):
@@ -3562,13 +4016,21 @@ class RivalOperatorSystem(System):
             target_chunk = self._normalize_chunk(target.get("chunk"), fallback=rival.get("current_chunk"))
             current_chunk = self._normalize_chunk(rival.get("current_chunk"), fallback=target_chunk)
             if current_chunk != target_chunk:
+                self._maybe_emit_rival_rumor(rival)
                 continue
             action_interval = self.LOCAL_ACTION_INTERVAL if self._materialized_eid(rival) else self.ACTION_INTERVAL
             if tick - int(rival.get("last_action_tick", -10_000)) < int(action_interval):
+                self._maybe_emit_rival_rumor(rival)
                 continue
             if current_chunk == self._player_chunk_coord() and self._materialized_eid(rival):
                 if not self._local_resolution_ready(rival, target):
+                    self._maybe_emit_rival_rumor(rival)
                     continue
+            if self._scene_hold_active(rival, target):
+                self._maybe_emit_rival_rumor(rival)
+                continue
+            if self._begin_scene_hold(rival, target):
+                continue
             self._resolve_target_for_rival(rival)
 
 class FinalOperationSystem(System):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 
 from engine.events import Event
-from game.components import AI, BehaviorProfile, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, Position, StatusEffects, Vitality
+from game.components import AI, BehaviorProfile, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, Position, PropertyKnowledge, StatusEffects, Vitality
 from game.item_semantics import (
     appraise_item_for_actor,
     identify_item_for_actor,
@@ -21,8 +21,11 @@ from game.property_access import evaluate_property_access as _evaluate_property_
 from game.property_runtime import (
     property_covering as _property_covering,
     property_focus_position as _property_focus_position,
+    property_is_public as _property_is_public,
+    property_is_storefront as _property_is_storefront,
     site_services_for_property as _site_services_for_property,
 )
+from game.systems_business_reputation import business_opinion_profile, social_secret_site_trust_gate
 from game.system_support.container_runtime import _unlink_removed_item_from_gear
 from game.system_support.interaction_ordering import _manhattan
 
@@ -57,7 +60,7 @@ _SALVAGE_ARCHETYPES = frozenset({
 _THRIFT_ARCHETYPES = frozenset({
     "thrift_store",
 })
-_SCAVENGE_SALE_ARCHETYPES = _SALVAGE_ARCHETYPES | _THRIFT_ARCHETYPES
+_SCAVENGE_SALE_ARCHETYPES = _SALVAGE_ARCHETYPES | _THRIFT_ARCHETYPES | frozenset({"backroom_market"})
 _NIGHTLIFE_ARCHETYPES = frozenset({
     "nightclub",
     "bar",
@@ -67,6 +70,23 @@ _NIGHTLIFE_ARCHETYPES = frozenset({
     "theater",
     "karaoke_box",
     "pool_hall",
+})
+_SOCIAL_VENUE_ARCHETYPES = _NIGHTLIFE_ARCHETYPES | frozenset({
+    "cafe",
+    "restaurant",
+    "diner",
+    "tavern",
+    "lounge",
+    "park",
+    "plaza",
+    "market",
+    "library",
+    "gym",
+    "barbershop",
+    "salon",
+    "street_kitchen",
+    "food_cart",
+    "arcade",
 })
 _DRUG_IDENTIFICATION_CAREERS = frozenset({
     "broker",
@@ -200,6 +220,7 @@ _SCAVENGE_SALE_PAYOUT_MULTS = {
     "breaker_yard": 0.48,
     "drydock_yard": 0.48,
     "thrift_store": 0.5,
+    "backroom_market": 0.64,
 }
 _REST_SERVICE_COST = 25
 RARE_EXTRA_BEHAVIOR_CHANCE = 0.02
@@ -241,6 +262,21 @@ def _clamp_need_value(value):
     except (TypeError, ValueError):
         number = 0.0
     return float(max(0.0, min(100.0, number)))
+
+
+def _preferred_hidden_contact_match(prop, preferred_property_id, *, hidden_kind=""):
+    property_id = str((prop or {}).get("id", "") or "").strip()
+    preferred_property_id = str(preferred_property_id or "").strip()
+    if not property_id or not preferred_property_id or property_id != preferred_property_id:
+        return False
+    metadata = (prop.get("metadata") or {}) if isinstance(prop, dict) else {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    actual_kind = _behavior_token(metadata.get("hidden_contact_kind") or metadata.get("archetype"))
+    expected_kind = _behavior_token(hidden_kind)
+    if expected_kind:
+        return actual_kind == expected_kind
+    return actual_kind in {"backroom_market", "backroom_clinic"}
 
 
 def _seed_behavior(behaviors, name, value):
@@ -1419,6 +1455,256 @@ def _find_authority_avoidance_target(sim, actor_eid, pos, *, radius=None):
     return nearest
 
 
+def _business_target_reputation_bonus(sim, actor_eid, property_id, *, purpose="", urgency=0.0, budget_pressure=0.0):
+    property_key = str(property_id or "").strip()
+    if not property_key:
+        return 0.0
+    profile = business_opinion_profile(sim, actor_eid, property_key)
+    trust = _clamp_behavior_value(profile.get("trust", 0.0), default=0.0)
+    reliability = _clamp_behavior_value(profile.get("reliability", 0.0), default=0.0)
+    familiarity = _clamp_behavior_value(profile.get("familiarity", 0.0), default=0.0)
+    loyalty = _clamp_behavior_value(profile.get("loyalty", 0.0), default=0.0)
+    fear = _clamp_behavior_value(profile.get("fear", 0.0), default=0.0)
+    heat = _clamp_behavior_value(profile.get("heat", 0.0), default=0.0)
+    resentment = _clamp_behavior_value(profile.get("resentment", 0.0), default=0.0)
+    incident_pressure = _clamp_behavior_value(profile.get("incident_pressure", 0.0), default=0.0)
+    try:
+        price_fairness = float(profile.get("price_fairness", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        price_fairness = 0.0
+    price_fairness = max(-1.0, min(1.0, price_fairness))
+    urgency = _clamp_behavior_value(urgency, default=0.0)
+    budget_pressure = _clamp_behavior_value(budget_pressure, default=0.0)
+
+    if _behavior_token(purpose) == "medical_aid":
+        fear_penalty = fear * (7.5 * max(0.35, 1.0 - urgency))
+        price_penalty = max(0.0, -price_fairness) * (5.5 * max(0.3, 1.0 - urgency))
+        return float(
+            (trust * 12.0)
+            + (reliability * 13.5)
+            + (loyalty * 4.5)
+            + (familiarity * 2.5)
+            + (max(0.0, price_fairness) * 3.5)
+            - fear_penalty
+            - (heat * 5.0)
+            - (resentment * 3.2)
+            - price_penalty
+            - (incident_pressure * 2.0)
+        )
+
+    if _behavior_token(purpose) == "scavenge_sale":
+        return float(
+            (trust * 7.0)
+            + (reliability * 5.0)
+            + (loyalty * 3.0)
+            + (familiarity * 2.0)
+            + (max(0.0, price_fairness) * 13.0)
+            - (max(0.0, -price_fairness) * 13.0)
+            - (fear * 3.5)
+            - (heat * 2.5)
+            - (resentment * 4.0)
+            - (incident_pressure * 1.5)
+        )
+
+    if _behavior_token(purpose) == "social_venue":
+        price_good = max(0.0, price_fairness)
+        price_pain = max(0.0, -price_fairness)
+        return float(
+            (trust * 8.5)
+            + (reliability * 6.5)
+            + (loyalty * 4.5)
+            + (familiarity * 4.0)
+            + (price_good * (4.0 - (budget_pressure * 1.4)))
+            - (price_pain * (3.5 + (budget_pressure * 7.0)))
+            - (fear * 5.2)
+            - (heat * 4.5)
+            - (resentment * 4.4)
+            - (incident_pressure * 2.2)
+        )
+
+    return float(
+        (trust * 5.0)
+        + (reliability * 5.0)
+        + (loyalty * 2.5)
+        + (familiarity * 1.5)
+        + (max(0.0, price_fairness) * 6.0)
+        - (max(0.0, -price_fairness) * 6.0)
+        - (fear * 3.0)
+        - (heat * 3.0)
+        - (resentment * 3.0)
+        - incident_pressure
+    )
+
+
+def _social_venue_secret_access(sim, actor_eid, prop):
+    property_key = str((prop or {}).get("id", "") or "").strip() if isinstance(prop, dict) else ""
+    if sim is None or actor_eid is None or not property_key:
+        return {"allowed": False, "lead_bonus": 0.0}
+
+    secret_gate = social_secret_site_trust_gate(prop)
+    if secret_gate <= 0.0:
+        return {"allowed": True, "lead_bonus": 0.0}
+
+    property_knowledge = sim.ecs.get(PropertyKnowledge).get(actor_eid)
+    lead_entry = property_knowledge.property_entry(property_key) if isinstance(property_knowledge, PropertyKnowledge) else None
+    lead_kind = _behavior_token((lead_entry or {}).get("lead_kind"))
+    hidden_lead = bool(property_knowledge.is_hidden(property_key)) if isinstance(property_knowledge, PropertyKnowledge) else False
+    lead_confidence = _clamp_behavior_value((lead_entry or {}).get("confidence", 0.0), default=0.0)
+
+    profile = business_opinion_profile(sim, actor_eid, property_key)
+    trust = _clamp_behavior_value(profile.get("trust", 0.0), default=0.0)
+    reliability = _clamp_behavior_value(profile.get("reliability", 0.0), default=0.0)
+    familiarity = _clamp_behavior_value(profile.get("familiarity", 0.0), default=0.0)
+    coherence = _clamp_behavior_value(profile.get("coherence", 0.0), default=0.0)
+    propagation_depth = max(0, int(profile.get("propagation_depth", 0) or 0))
+
+    has_actionable_lead = (
+        isinstance(lead_entry, dict)
+        and (
+            hidden_lead
+            or lead_kind == "social"
+            or lead_confidence >= max(0.44, secret_gate * 0.62)
+        )
+    )
+    has_firsthand_familiarity = familiarity >= max(0.54, secret_gate * 0.72) and propagation_depth <= 0
+    if not has_actionable_lead and not has_firsthand_familiarity:
+        return {"allowed": False, "lead_bonus": 0.0}
+
+    clearance = (
+        (trust * 0.42)
+        + (familiarity * 0.28)
+        + (reliability * 0.14)
+        + (coherence * 0.08)
+        + (lead_confidence * 0.22)
+    )
+    if hidden_lead or lead_kind == "social":
+        clearance += 0.1
+    if has_firsthand_familiarity:
+        clearance = max(clearance, (familiarity * 0.68) + (trust * 0.24) + (reliability * 0.12))
+    if clearance < secret_gate:
+        return {"allowed": False, "lead_bonus": 0.0}
+
+    return {
+        "allowed": True,
+        "lead_bonus": max(0.0, clearance - secret_gate) * 1.8,
+    }
+
+
+def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12):
+    """Return a (property, focus_position) pair for a nearby social venue.
+
+    This uses the actor's own business knowledge rather than a global truth
+    layer, so trusted rumors and direct experience can change where they
+    choose to spend off-shift time.
+    """
+    if sim is None:
+        return None, None
+
+    try:
+        origin_x = int(x)
+        origin_y = int(y)
+        origin_z = int(z)
+        actor_eid = int(eid)
+        search_radius = max(2, int(radius))
+    except (TypeError, ValueError):
+        return None, None
+
+    rng = random.Random(f"{getattr(sim, 'seed', 0)}:{actor_eid}:{int(getattr(sim, 'tick', 0) or 0)}:socialize")
+    inventory = sim.ecs.get(Inventory).get(actor_eid)
+    liquid_credits = _inventory_liquid_credits(inventory)
+    if liquid_credits <= 6:
+        budget_pressure = 1.0
+    elif liquid_credits <= 18:
+        budget_pressure = 0.7
+    elif liquid_credits <= 42:
+        budget_pressure = 0.35
+    else:
+        budget_pressure = 0.08
+
+    scored = []
+    for prop in sim.properties_in_radius(origin_x, origin_y, origin_z, r=search_radius):
+        if not isinstance(prop, dict):
+            continue
+        pid = str(prop.get("id", "") or "").strip()
+        if pid and own_prop_id and pid == str(own_prop_id):
+            continue
+        focus = _property_focus_position(prop)
+        if focus is None:
+            continue
+        fx, fy, fz = focus
+        if int(fz) != origin_z:
+            continue
+        distance = _manhattan(origin_x, origin_y, int(fx), int(fy))
+        if distance <= 0:
+            continue
+
+        archetype = _behavior_token(((prop.get("metadata") or {}) if isinstance(prop, dict) else {}).get("archetype"))
+        is_public = bool(_property_is_public(prop))
+        is_storefront = bool(_property_is_storefront(prop))
+        if archetype in _NIGHTLIFE_ARCHETYPES:
+            base_score = 6.8
+        elif archetype in _SOCIAL_VENUE_ARCHETYPES:
+            base_score = 5.6
+        elif is_public:
+            base_score = 4.2
+        elif is_storefront:
+            base_score = 3.4
+        else:
+            continue
+
+        access = _evaluate_property_access(
+            sim,
+            actor_eid,
+            prop,
+            x=int(fx),
+            y=int(fy),
+            z=int(fz),
+        )
+        if not access.permitted and not access.can_use_services and not (is_public or is_storefront):
+            continue
+        if not access.permitted and not access.can_use_services:
+            base_score *= 0.82
+        secret_access = _social_venue_secret_access(sim, actor_eid, prop)
+        if not secret_access.get("allowed", False):
+            continue
+
+        score = base_score + max(0.0, (search_radius + 2 - distance) * 0.42)
+        if archetype in _NIGHTLIFE_ARCHETYPES and liquid_credits <= 4:
+            score -= 1.8
+        score += _business_target_reputation_bonus(
+            sim,
+            actor_eid,
+            pid,
+            purpose="social_venue",
+            budget_pressure=budget_pressure,
+        )
+        score += float(secret_access.get("lead_bonus", 0.0) or 0.0)
+        scored.append((float(score), prop, (int(fx), int(fy), int(fz))))
+
+    if not scored:
+        return None, None
+
+    scored.sort(key=lambda row: row[0], reverse=True)
+    top = scored[: max(1, min(4, len(scored)))]
+    floor = min(float(row[0]) for row in top)
+    weighted = []
+    total = 0.0
+    for score, prop, focus in top:
+        weight = max(0.05, (float(score) - floor) + 0.2)
+        weighted.append((weight, prop, focus))
+        total += weight
+
+    pick = rng.uniform(0.0, total)
+    running = 0.0
+    chosen_prop, chosen_focus = weighted[-1][1], weighted[-1][2]
+    for weight, prop, focus in weighted:
+        running += weight
+        if pick <= running:
+            chosen_prop, chosen_focus = prop, focus
+            break
+    return chosen_prop, chosen_focus
+
+
 def _find_medical_aid_target(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):
     if not pos:
         return None
@@ -1459,11 +1745,23 @@ def _find_medical_aid_target(sim, actor_eid, pos, *, radius=None, preferred_prop
             y=int(fy),
             z=int(fz),
         )
-        if not access.can_use_services and not access.permitted:
+        covert_referral = _preferred_hidden_contact_match(
+            prop,
+            preferred_property_id,
+            hidden_kind="backroom_clinic",
+        )
+        if not access.can_use_services and not access.permitted and not covert_referral:
             continue
         distance = _manhattan(pos.x, pos.y, fx, fy)
         score = max(0.0, (health_gap * 62.0) + 10.0 - (distance * 2.1))
         property_id = str(prop.get("id", "")).strip() or None
+        score += _business_target_reputation_bonus(
+            sim,
+            actor_eid,
+            property_id,
+            purpose="medical_aid",
+            urgency=health_gap,
+        )
         if preferred_property_id and property_id and str(preferred_property_id).strip() == property_id:
             score += float(max(0.0, preferred_score_bonus or 0.0))
         candidate = {
@@ -1473,6 +1771,7 @@ def _find_medical_aid_target(sim, actor_eid, pos, *, radius=None, preferred_prop
             "target": (int(fx), int(fy), int(fz)),
             "distance": int(distance),
             "score": float(score),
+            "covert_referral": bool(covert_referral),
         }
         if best is None or candidate["score"] > best["score"]:
             best = candidate
@@ -1754,7 +2053,7 @@ def _find_safe_spot_target(sim, actor_eid, pos, *, radius=None, preferred_proper
     return best
 
 
-def _receive_medical_aid_at_actor(sim, actor_eid, pos=None):
+def _receive_medical_aid_at_actor(sim, actor_eid, pos=None, *, preferred_property_id=None):
     if pos is None:
         pos = sim.ecs.get(Position).get(actor_eid)
     if not pos:
@@ -1768,7 +2067,14 @@ def _receive_medical_aid_at_actor(sim, actor_eid, pos=None):
     if before_hp >= max_hp:
         return None
 
-    target = _find_medical_aid_target(sim, actor_eid, pos, radius=2)
+    target = _find_medical_aid_target(
+        sim,
+        actor_eid,
+        pos,
+        radius=2,
+        preferred_property_id=preferred_property_id,
+        preferred_score_bonus=22.0 if preferred_property_id else 0.0,
+    )
     if not target:
         return None
 
@@ -1786,6 +2092,7 @@ def _receive_medical_aid_at_actor(sim, actor_eid, pos=None):
         property_id=target.get("property_id"),
         property_name=target.get("property_name"),
         archetype=target.get("archetype"),
+        covert_referral=bool(target.get("covert_referral")),
         healed_hp=int(healed),
         before_hp=int(before_hp),
         after_hp=int(vitality.hp),
@@ -1798,6 +2105,7 @@ def _receive_medical_aid_at_actor(sim, actor_eid, pos=None):
         "property_name": target.get("property_name"),
         "healed_hp": int(healed),
         "after_hp": int(vitality.hp),
+        "covert_referral": bool(target.get("covert_referral")),
     }
 
 
@@ -2129,7 +2437,7 @@ def _inventory_scavenge_sale_rows(sim, actor_eid):
     return rows
 
 
-def _find_scavenged_sale_target(sim, actor_eid, pos, *, radius=None):
+def _find_scavenged_sale_target(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):
     if not pos:
         return None
 
@@ -2165,13 +2473,27 @@ def _find_scavenged_sale_target(sim, actor_eid, pos, *, radius=None):
             y=int(fy),
             z=int(fz),
         )
-        if not access.can_use_services and not access.permitted:
+        covert_referral = _preferred_hidden_contact_match(
+            prop,
+            preferred_property_id,
+            hidden_kind="backroom_market",
+        )
+        if not access.can_use_services and not access.permitted and not covert_referral:
             continue
         distance = _manhattan(pos.x, pos.y, fx, fy)
         payout_mult = float(_SCAVENGE_SALE_PAYOUT_MULTS.get(archetype, 0.46))
         score = max(0.0, (inventory_value * payout_mult) + 8.0 - (distance * 1.8))
+        property_id = str(prop.get("id", "")).strip() or None
+        score += _business_target_reputation_bonus(
+            sim,
+            actor_eid,
+            property_id,
+            purpose="scavenge_sale",
+        )
+        if preferred_property_id and property_id and str(preferred_property_id).strip() == property_id:
+            score += float(max(0.0, preferred_score_bonus or 0.0))
         candidate = {
-            "property_id": str(prop.get("id", "")).strip() or None,
+            "property_id": property_id,
             "property_name": str(prop.get("name", prop.get("id", "site"))).strip() or "site",
             "archetype": archetype,
             "target": (int(fx), int(fy), int(fz)),
@@ -2179,13 +2501,14 @@ def _find_scavenged_sale_target(sim, actor_eid, pos, *, radius=None):
             "score": float(score),
             "inventory_value": float(inventory_value),
             "sale_rows": sale_rows,
+            "covert_referral": bool(covert_referral),
         }
         if best is None or candidate["score"] > best["score"]:
             best = candidate
     return best
 
 
-def _sell_scavenged_inventory_at_actor(sim, actor_eid, pos=None):
+def _sell_scavenged_inventory_at_actor(sim, actor_eid, pos=None, *, preferred_property_id=None):
     if pos is None:
         pos = sim.ecs.get(Position).get(actor_eid)
     if not pos:
@@ -2207,13 +2530,28 @@ def _sell_scavenged_inventory_at_actor(sim, actor_eid, pos=None):
         if not focus:
             continue
         distance = _manhattan(pos.x, pos.y, int(focus[0]), int(focus[1]))
-        if best_distance is None or distance < best_distance:
+        property_id = str(candidate.get("id", "")).strip() or None
+        preferred_match = bool(
+            preferred_property_id
+            and property_id
+            and str(preferred_property_id).strip() == property_id
+        )
+        if (
+            best_distance is None
+            or preferred_match
+            or distance < best_distance
+        ):
             prop = candidate
             best_distance = distance
     if not isinstance(prop, dict):
         return None
 
     archetype = _behavior_token(((prop.get("metadata") or {}) if isinstance(prop, dict) else {}).get("archetype"))
+    covert_referral = _preferred_hidden_contact_match(
+        prop,
+        preferred_property_id,
+        hidden_kind="backroom_market",
+    )
     payout_mult = float(_SCAVENGE_SALE_PAYOUT_MULTS.get(archetype, 0.46))
     sale_rows = _inventory_scavenge_sale_rows(sim, actor_eid)
     if not sale_rows:
@@ -2256,6 +2594,7 @@ def _sell_scavenged_inventory_at_actor(sim, actor_eid, pos=None):
         property_id=str(prop.get("id", "")).strip() or None,
         property_name=str(prop.get("name", prop.get("id", "site"))).strip() or "site",
         archetype=archetype,
+        covert_referral=bool(covert_referral),
         item_count=len(sold_rows),
         credits_gained=int(credits_total),
         sold_rows=tuple(sold_rows),
@@ -2269,6 +2608,7 @@ def _sell_scavenged_inventory_at_actor(sim, actor_eid, pos=None):
         "credits_gained": int(credits_total),
         "item_count": len(sold_rows),
         "sold_rows": tuple(sold_rows),
+        "covert_referral": bool(covert_referral),
     }
 
 

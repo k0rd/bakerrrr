@@ -9,12 +9,16 @@ from game.player_businesses import (
     player_business_customer_policy_label,
     player_business_hours_mode,
     player_business_hours_mode_label,
+    player_business_markup_mode,
+    player_business_markup_mode_label,
     player_business_next_customer_policy,
     player_business_next_hours_mode,
+    player_business_next_markup_mode,
     player_business_remodel_options,
     player_business_remodel_quote,
     player_business_set_customer_policy,
     player_business_set_hours_mode,
+    player_business_set_markup_mode,
     player_business_status_snapshot,
     player_business_summary,
     player_owned_businesses_for_actor,
@@ -175,6 +179,22 @@ class ServiceMenuSystem(System):
     def _wallet_credits(self):
         assets = self._assets_for(self.player_eid)
         return int(getattr(assets, "credits", 0)) if assets else 0
+
+    def _player_owns_property(self, prop):
+        if not isinstance(prop, dict):
+            return False
+        owner_eid = prop.get("owner_eid")
+        try:
+            if owner_eid is not None and int(owner_eid) == int(self.player_eid):
+                return True
+        except (TypeError, ValueError):
+            if owner_eid == self.player_eid:
+                return True
+        assets = self._assets_for(self.player_eid)
+        if not assets:
+            return False
+        property_id = str(prop.get("id", "")).strip()
+        return bool(property_id and property_id in getattr(assets, "owned_property_ids", set()))
 
     def _inventory_item_count(self, item_id):
         inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
@@ -1457,6 +1477,7 @@ class ServiceMenuSystem(System):
         hours_text = str(snapshot.get("hours_text", "")).strip() or self._business_hours_text(snapshot.get("opening_window"))
         hours_mode_label = str(snapshot.get("hours_mode_label", "")).strip() or player_business_hours_mode_label(snapshot.get("hours_mode"))
         customer_policy_label = str(snapshot.get("customer_policy_label", "")).strip() or player_business_customer_policy_label(snapshot.get("customer_policy"))
+        markup_mode_label = str(snapshot.get("markup_mode_label", "")).strip() or player_business_markup_mode_label(snapshot.get("markup_mode"))
         open_roles = tuple(
             str(role).strip().lower()
             for role in tuple(snapshot.get("open_roles", ()) or ())
@@ -1474,6 +1495,7 @@ class ServiceMenuSystem(System):
                 lines.append(fit_line)
         lines.append(f"Policy: {customer_policy_label}.")
         lines.append(f"Hours: {hours_mode_label} | {hours_text}.")
+        lines.append(f"Markup: {markup_mode_label}.")
         lines.append(f"Status: {'open' if open_now else 'closed'} | {note}.")
         if open_roles:
             role_labels = ["manager" if role == "manager" else "staff" for role in open_roles]
@@ -1485,6 +1507,22 @@ class ServiceMenuSystem(System):
             lines.append("Hiring: no immediate open slot.")
         if market_note:
             lines.append(f"Market: {market_note}.")
+        reputation_note = str(snapshot.get("last_reputation_note", "")).strip() or str(snapshot.get("reputation_note", "")).strip()
+        reputation_awareness = int(snapshot.get("last_reputation_awareness", snapshot.get("reputation_awareness", 0)) or 0)
+        footfall_delta = int(snapshot.get("last_footfall_delta_pct", snapshot.get("footfall_delta_pct", 0)) or 0)
+        churn_delta = int(snapshot.get("last_churn_delta_pct", snapshot.get("churn_delta_pct", 0)) or 0)
+        if reputation_note and reputation_awareness > 0:
+            lines.append(
+                f"Neighborhood: {reputation_note} | footfall {footfall_delta:+d}% | churn {churn_delta:+d}%."
+            )
+        community_signal_note = str(snapshot.get("last_community_signal_note", "")).strip() or str(snapshot.get("community_signal_note", "")).strip()
+        community_note = str(snapshot.get("last_community_note", "")).strip() or str(snapshot.get("community_note", "")).strip()
+        if community_signal_note and community_note:
+            lines.append(f"Ripple: {community_signal_note} | block mood {community_note}.")
+        elif community_signal_note:
+            lines.append(f"Ripple: {community_signal_note}.")
+        elif community_note:
+            lines.append(f"Block mood: {community_note}.")
 
         gross_revenue = int(snapshot.get("gross_revenue", 0))
         realized_revenue = int(snapshot.get("realized_revenue", gross_revenue))
@@ -1570,6 +1608,22 @@ class ServiceMenuSystem(System):
             f"Open window: {hours_text}.",
         ]
 
+    def _business_markup_result_lines(self, prop, mode):
+        business_name = str(prop.get("metadata", {}).get("business_name", prop.get("name", "Business"))).strip() or "Business"
+        label = player_business_markup_mode_label(mode)
+        if mode == "discount":
+            detail = "Public shelves run lighter margins to pull more foot traffic through the door."
+        elif mode == "premium":
+            detail = "The counter leans into stronger per-item margin without going full gouge."
+        elif mode == "steep":
+            detail = "The counter is pushing a sharp markup; margins rise, but demand tolerance gets touchier."
+        else:
+            detail = "The counter returns to its usual everyday pricing balance."
+        return [
+            f"{business_name} markup set to {label}.",
+            detail,
+        ]
+
     def _business_role_fit_line(self, role_name, fit):
         if not isinstance(fit, dict):
             return ""
@@ -1641,6 +1695,8 @@ class ServiceMenuSystem(System):
             next_policy = player_business_next_customer_policy(business_prop)
             current_hours_mode = player_business_hours_mode(business_prop)
             next_hours_mode = player_business_next_hours_mode(business_prop)
+            current_markup_mode = player_business_markup_mode(business_prop)
+            next_markup_mode = player_business_next_markup_mode(business_prop)
             for amount in self._bank_amount_choices(business_balance, withdraw_step):
                 options.append({
                     "id": f"banking_business:withdraw:{int(amount)}:{business_id}",
@@ -1669,6 +1725,14 @@ class ServiceMenuSystem(System):
                     f"Business hours [{business_name}]: "
                     f"{player_business_hours_mode_label(current_hours_mode)} -> "
                     f"{player_business_hours_mode_label(next_hours_mode)}"
+                ),
+            })
+            options.append({
+                "id": f"banking_business_markup:{business_id}:{next_markup_mode}",
+                "label": (
+                    f"Business markup [{business_name}]: "
+                    f"{player_business_markup_mode_label(current_markup_mode)} -> "
+                    f"{player_business_markup_mode_label(next_markup_mode)}"
                 ),
             })
         return options
@@ -2040,7 +2104,7 @@ class ServiceMenuSystem(System):
     def _machine_service_profile(self, prop):
         if not _property_is_storefront(prop):
             return None
-        service = _storefront_service_profile(self.sim, prop)
+        service = _storefront_service_profile(self.sim, prop, actor_eid=self.player_eid)
         mode = str(service.get("mode", "")).strip().lower()
         if mode == "automated" or bool(service.get("fallback_self_serve")):
             return service
@@ -2092,7 +2156,7 @@ class ServiceMenuSystem(System):
         options = []
         storefront_service = None
         if _property_is_storefront(prop):
-            storefront_service = _storefront_service_profile(self.sim, prop)
+            storefront_service = _storefront_service_profile(self.sim, prop, actor_eid=eid)
             if storefront_service.get("available") and not self._machine_service_profile(prop):
                 options.append({"id": "trade_buy", "label": _service_menu_option_label("trade_buy")})
                 options.append({"id": "trade_sell", "label": _service_menu_option_label("trade_sell")})
@@ -2159,11 +2223,12 @@ class ServiceMenuSystem(System):
                 note = str(summary.get("note", "")).strip() or "steady"
                 policy_label = str(summary.get("customer_policy_label", "")).strip() or player_business_customer_policy_label(summary.get("customer_policy"))
                 hours_label = str(summary.get("hours_mode_label", "")).strip() or player_business_hours_mode_label(summary.get("hours_mode"))
+                markup_label = str(summary.get("markup_mode_label", "")).strip() or player_business_markup_mode_label(summary.get("markup_mode"))
                 hours_text = str(summary.get("hours_text", "")).strip() or self._business_hours_text(summary.get("opening_window"))
                 transcript.append(
                     f"{business_name}: account {_credit_amount_label(business_balance)} | staff {staff_total}/{required_staff} | {note}."
                 )
-                transcript.append(f"Policy {policy_label} | Hours {hours_label} ({hours_text}).")
+                transcript.append(f"Policy {policy_label} | Hours {hours_label} ({hours_text}) | Markup {markup_label}.")
             remaining_businesses = max(0, len(business_contexts) - 3)
             if remaining_businesses > 0:
                 transcript.append(f"... and {remaining_businesses} more business account{'s' if remaining_businesses != 1 else ''}.")
@@ -2217,18 +2282,32 @@ class ServiceMenuSystem(System):
         prop_name = str(prop.get("name", prop.get("id", "Casino"))).strip() or "Casino"
         assets = self._assets_for(self.player_eid)
         wallet_credits = int(getattr(assets, "credits", 0)) if assets else 0
+        base_bets = tuple(int(amount) for amount in tuple(profile.get("bet_options", ()) or ()) if int(amount) > 0)
+        owner_limit = self._player_owns_property(prop) and bool(base_bets)
+        wager_values = list(base_bets)
+        if owner_limit:
+            high_limit = int(max(base_bets)) * 2
+            if high_limit not in wager_values:
+                wager_values.append(high_limit)
+        wager_values = sorted(set(wager_values))
         wager_options = [
             {
                 "id": f"{str(service).strip().lower()}:bet:{int(amount)}",
-                "label": f"Bet {_credit_amount_label(amount)}",
+                "label": (
+                    f"Bet {_credit_amount_label(amount)} [owner limit]"
+                    if owner_limit and amount > max(base_bets)
+                    else f"Bet {_credit_amount_label(amount)}"
+                ),
             }
-            for amount in profile.get("bet_options", ())
+            for amount in wager_values
         ]
         transcript = [
             str(profile.get("prompt", "Choose a wager.")).strip() or "Choose a wager.",
             str(profile.get("note", "")).strip() or "Pick a stake and play a round.",
             f"Wallet {_credit_amount_label(wallet_credits)}.",
         ]
+        if owner_limit:
+            transcript.append("Owner perk: this floor will book one higher posted stake for you.")
 
         self.sim.set_time_paused(True, reason="dialog")
         state.update({
@@ -2597,6 +2676,8 @@ class ServiceMenuSystem(System):
             return "Business policy", ["That business record is no longer available through this terminal."]
         if option_id.startswith("banking_business_hours:"):
             return "Business hours", ["That business record is no longer available through this terminal."]
+        if option_id.startswith("banking_business_markup:"):
+            return "Business markup", ["That business record is no longer available through this terminal."]
         if option_id == "building_repair" or option_id.startswith("building_repair:target|"):
             return "Building Repair", ["That contractor quote is no longer available here."]
         if option_id == "business_remodel" or option_id.startswith("business_remodel:"):
@@ -3327,6 +3408,29 @@ class ServiceMenuSystem(System):
                 property_id=property_id,
             )
             return
+        if option_id.startswith("banking_business_markup:"):
+            parts = option_id.split(":")
+            if len(parts) != 3:
+                self._present_service_result("Business markup", ["That business markup option is invalid."])
+                return
+            business_property_id = str(parts[1] or "").strip()
+            next_mode = str(parts[2] or "").strip().lower()
+            if not business_property_id:
+                self._present_service_result("Business markup", ["That business markup option is invalid."])
+                return
+            business_prop = self.sim.properties.get(business_property_id)
+            if not isinstance(business_prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            mode = player_business_set_markup_mode(business_prop, next_mode)
+            business_name = str(business_prop.get("metadata", {}).get("business_name", business_prop.get("name", "Business"))).strip() or "Business"
+            self._present_service_result(
+                f"Business markup: {business_name}",
+                self._business_markup_result_lines(business_prop, mode),
+                property_id=property_id,
+            )
+            return
         if option_id == "insurance":
             if not isinstance(prop, dict):
                 title, lines = self._insurance_blocked_lines(Event("insurance_action_blocked", eid=self.player_eid, reason="no_insurance_service"))
@@ -3413,6 +3517,20 @@ class ServiceMenuSystem(System):
             text = _line_text(raw).strip()
             if text:
                 lines.append(text)
+        lead_item_name = str(event.data.get("lead_item_name", "") or "").strip()
+        lead_delivery = str(event.data.get("lead_delivery", "") or "").strip().lower()
+        if lead_item_name:
+            if lead_delivery == "ground":
+                lines.append(f"Dead drop: {lead_item_name} fell beside the relay.")
+            else:
+                lines.append(f"Dead drop: {lead_item_name} was added to your bag.")
+        opportunity_title = str(event.data.get("lead_opportunity_title", "") or "").strip()
+        opportunity_property_name = str(event.data.get("lead_opportunity_property_name", "") or "").strip()
+        if opportunity_title:
+            if opportunity_property_name:
+                lines.append(f"Lead opened: {opportunity_title} at {opportunity_property_name}.")
+            else:
+                lines.append(f"Lead opened: {opportunity_title}.")
         if not lines:
             lines = [f"{prop_name} has nothing useful right now."]
         self._present_service_result(f"Intel: {prop_name}", lines, property_id=event.data.get("property_id"))

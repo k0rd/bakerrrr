@@ -119,6 +119,14 @@ def _clamp_unit(value, default=0.5):
     return float(max(0.0, min(1.0, number)))
 
 
+def _clamp_signed_unit(value, default=0.0):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = float(default)
+    return float(max(-1.0, min(1.0, number)))
+
+
 def _safe_int(value, default=0):
     try:
         return int(value)
@@ -1100,6 +1108,249 @@ class IncidentKnowledge:
             self.social_queue = filtered
 
 
+class BusinessKnowledge:
+    def __init__(self, max_records=24, max_social=10):
+        self.max_records = max(4, int(max_records or 24))
+        self.max_social = max(1, int(max_social or 10))
+        self.records = {}
+        self.social_queue = []
+        self.last_shared = {}
+
+    def _property_key(self, property_id):
+        token = str(property_id or "").strip()
+        return token or None
+
+    def remember(
+        self,
+        property_id,
+        *,
+        learned_tick=0,
+        source_kind="",
+        source_eid=None,
+        confidence=0.5,
+        firsthand=False,
+        propagation_depth=0,
+        coherence=1.0,
+        familiarity_delta=0.0,
+        trust_delta=0.0,
+        reliability_delta=0.0,
+        fear_delta=0.0,
+        heat_delta=0.0,
+        price_fairness_delta=0.0,
+        loyalty_delta=0.0,
+        resentment_delta=0.0,
+        social_interest=0.0,
+        tags=(),
+        incident_id=None,
+    ):
+        property_key = self._property_key(property_id)
+        if property_key is None:
+            return None
+
+        try:
+            learned_tick = int(learned_tick)
+        except (TypeError, ValueError):
+            learned_tick = 0
+        incoming_learned_tick = int(learned_tick)
+        try:
+            source_eid = int(source_eid) if source_eid is not None else None
+        except (TypeError, ValueError):
+            source_eid = None
+        try:
+            propagation_depth = max(0, int(propagation_depth))
+        except (TypeError, ValueError):
+            propagation_depth = 0
+
+        confidence = _clamp_unit(confidence, default=0.5)
+        coherence = _clamp_unit(coherence, default=1.0)
+        social_interest = _clamp_unit(social_interest, default=0.0)
+        source_kind = str(source_kind or "").strip().lower()
+
+        existing = self.records.get(property_key)
+        first_tick = learned_tick
+        if isinstance(existing, dict):
+            first_tick = _safe_int(existing.get("learned_tick"), learned_tick)
+            learned_tick = min(learned_tick, first_tick)
+            confidence = max(confidence, float(existing.get("confidence", 0.0) or 0.0))
+            coherence = max(coherence, float(existing.get("coherence", 0.0) or 0.0))
+            social_interest = max(social_interest, float(existing.get("social_interest", 0.0) or 0.0))
+            firsthand = bool(firsthand or existing.get("firsthand", False))
+            if not source_kind:
+                source_kind = str(existing.get("source_kind", "") or "").strip().lower()
+            if source_eid is None:
+                source_eid = existing.get("source_eid")
+
+        record = dict(existing) if isinstance(existing, dict) else {}
+        incident_ids = set()
+        for raw_id in tuple(record.get("incident_ids", ()) or ()):
+            clean_id = _safe_int(raw_id, default=0)
+            if clean_id > 0:
+                incident_ids.add(clean_id)
+        clean_incident_id = _safe_int(incident_id, default=0)
+        if clean_incident_id > 0:
+            incident_ids.add(clean_incident_id)
+
+        tag_set = {
+            str(tag).strip().lower()
+            for tag in tuple(record.get("tags", ()) or ())
+            if str(tag).strip()
+        }
+        for tag in tuple(tags or ()) or ():
+            clean = str(tag).strip().lower()
+            if clean:
+                tag_set.add(clean)
+
+        record.update({
+            "property_id": property_key,
+            "learned_tick": int(learned_tick),
+            "last_learned_tick": int(
+                incoming_learned_tick
+                if not isinstance(existing, dict)
+                else max(
+                    _safe_int(existing.get("last_learned_tick"), _safe_int(existing.get("learned_tick"), incoming_learned_tick)),
+                    _safe_int(existing.get("learned_tick"), incoming_learned_tick),
+                    int(incoming_learned_tick),
+                )
+            ),
+            "source_kind": source_kind,
+            "source_eid": source_eid,
+            "confidence": float(confidence),
+            "firsthand": bool(firsthand),
+            "propagation_depth": int(
+                min(
+                    propagation_depth,
+                    _safe_int(existing.get("propagation_depth"), propagation_depth) if isinstance(existing, dict) else propagation_depth,
+                )
+            ),
+            "coherence": float(coherence),
+            "familiarity": _clamp_unit(float(record.get("familiarity", 0.0) or 0.0) + float(familiarity_delta), default=0.0),
+            "trust": _clamp_unit(float(record.get("trust", 0.0) or 0.0) + float(trust_delta), default=0.0),
+            "reliability": _clamp_unit(float(record.get("reliability", 0.0) or 0.0) + float(reliability_delta), default=0.0),
+            "fear": _clamp_unit(float(record.get("fear", 0.0) or 0.0) + float(fear_delta), default=0.0),
+            "heat": _clamp_unit(float(record.get("heat", 0.0) or 0.0) + float(heat_delta), default=0.0),
+            "price_fairness": _clamp_signed_unit(float(record.get("price_fairness", 0.0) or 0.0) + float(price_fairness_delta), default=0.0),
+            "loyalty": _clamp_unit(float(record.get("loyalty", 0.0) or 0.0) + float(loyalty_delta), default=0.0),
+            "resentment": _clamp_unit(float(record.get("resentment", 0.0) or 0.0) + float(resentment_delta), default=0.0),
+            "social_interest": float(social_interest),
+            "incident_ids": tuple(sorted(incident_ids)),
+            "tags": tuple(sorted(tag_set)),
+        })
+        self.records[property_key] = record
+        self._trim_records()
+        return record
+
+    def queue_property(self, property_id, *, score=0.0, tick=0):
+        property_key = self._property_key(property_id)
+        if property_key is None or property_key not in self.records:
+            return False
+        try:
+            tick = int(tick)
+        except (TypeError, ValueError):
+            tick = 0
+        score = _clamp_unit(score, default=0.0)
+
+        existing = None
+        for entry in self.social_queue:
+            if str(entry.get("property_id", "") or "").strip() == property_key:
+                existing = entry
+                break
+
+        if existing is None:
+            self.social_queue.append({
+                "property_id": property_key,
+                "score": float(score),
+                "queued_tick": int(tick),
+            })
+        else:
+            existing["score"] = max(float(existing.get("score", 0.0) or 0.0), float(score))
+            existing["queued_tick"] = max(int(existing.get("queued_tick", tick) or tick), int(tick))
+        self._trim_queue()
+        return True
+
+    def mark_shared(self, property_id, *, tick=0, channel="social"):
+        property_key = self._property_key(property_id)
+        if property_key is None:
+            return False
+        try:
+            tick = int(tick)
+        except (TypeError, ValueError):
+            tick = 0
+        channel_key = str(channel or "social").strip().lower() or "social"
+        shared = self.last_shared.get(property_key)
+        if not isinstance(shared, dict):
+            shared = {}
+            self.last_shared[property_key] = shared
+        shared[channel_key] = int(tick)
+        return True
+
+    def forget(self, property_id):
+        property_key = self._property_key(property_id)
+        if property_key is None:
+            return False
+        removed = property_key in self.records
+        self.records.pop(property_key, None)
+        self.social_queue = [
+            entry for entry in self.social_queue
+            if str(entry.get("property_id", "") or "").strip() != property_key
+        ]
+        self.last_shared.pop(property_key, None)
+        return removed
+
+    def _trim_records(self):
+        if len(self.records) <= self.max_records:
+            return
+        ranked = sorted(
+            self.records.values(),
+            key=lambda record: (
+                float(record.get("social_interest", 0.0) or 0.0),
+                float(record.get("coherence", 0.0) or 0.0),
+                float(record.get("familiarity", 0.0) or 0.0),
+                max(
+                    float(record.get("trust", 0.0) or 0.0),
+                    float(record.get("reliability", 0.0) or 0.0),
+                    float(record.get("fear", 0.0) or 0.0),
+                    float(record.get("heat", 0.0) or 0.0),
+                    float(record.get("loyalty", 0.0) or 0.0),
+                    float(record.get("resentment", 0.0) or 0.0),
+                    abs(float(record.get("price_fairness", 0.0) or 0.0)),
+                ),
+                int(record.get("last_learned_tick", 0) or 0),
+            ),
+            reverse=True,
+        )
+        keep_ids = {
+            str(record.get("property_id", "") or "").strip()
+            for record in ranked[: self.max_records]
+        }
+        for property_id in tuple(self.records.keys()):
+            if property_id not in keep_ids:
+                self.forget(property_id)
+
+    def _trim_queue(self):
+        filtered = []
+        seen = set()
+        for entry in sorted(
+            self.social_queue,
+            key=lambda row: (
+                float(row.get("score", 0.0) or 0.0),
+                int(row.get("queued_tick", 0) or 0),
+            ),
+            reverse=True,
+        ):
+            property_key = self._property_key(entry.get("property_id"))
+            if property_key is None or property_key in seen or property_key not in self.records:
+                continue
+            filtered.append({
+                "property_id": property_key,
+                "score": _clamp_unit(entry.get("score", 0.0), default=0.0),
+                "queued_tick": int(entry.get("queued_tick", 0) or 0),
+            })
+            seen.add(property_key)
+            if len(filtered) >= self.max_social:
+                break
+        self.social_queue = filtered
+
+
 class ItemKnowledge:
     def __init__(self):
         self.identified = {}
@@ -1445,6 +1696,16 @@ class PropertyKnowledge:
     def __init__(self):
         self.known = {}
         self.hidden_property_ids = set()
+
+    def property_entry(self, property_id):
+        property_id = str(property_id or "").strip()
+        if not property_id:
+            return None
+        known = getattr(self, "known", None)
+        if not isinstance(known, dict):
+            self.known = {}
+            known = self.known
+        return known.get(property_id)
 
     def remember(
         self,

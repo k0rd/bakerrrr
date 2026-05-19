@@ -9,6 +9,11 @@ import random
 
 from engine.systems import System
 from game.location_presentation_runtime import _location_building_category
+from game.player_businesses import (
+    player_business_customer_policy as _player_business_customer_policy,
+    player_business_open_roles as _player_business_open_roles,
+    player_business_summary as _player_business_summary,
+)
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
     building_id_from_structure as _building_id_from_structure,
@@ -20,6 +25,7 @@ from game.property_runtime import (
     property_status_text as _property_status_text,
     property_runtime_container_entries as _property_runtime_container_entries,
 )
+from game.systems_business_reputation import property_business_reputation_snapshot, property_supports_business_reputation
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
 from game.system_support.ai_intent_runtime import _sync_ai_intent
 from game.system_support.business_event_state import (
@@ -107,10 +113,13 @@ _BUSINESS_EVENT_QUEUE_PHASES = {
     "visitor_screening",
     "booking_queue",
     "release_queue",
+    "owner_screening",
 }
 _BUSINESS_EVENT_GATHERING_PHASES = {
     "paperwork_surge",
     "manifest_check",
+    "regulars_spill",
+    "grumbling_front",
 }
 _BUSINESS_EVENT_MEDICAL_RESPONSE_PHASES = {
     "street_triage",
@@ -157,12 +166,29 @@ _BUSINESS_EVENT_SHIFT_PHASES = {
     "gate_briefing",
     "chart_handoff",
     "quiet_handoff",
+    "owner_closed_turnover",
     "guard_rotation",
     "custody_handoff",
     "maintenance_loop",
 }
 _BUSINESS_EVENT_RARE_PHASE_CHANCES = {
     "street_triage": 0.18,
+}
+_BUSINESS_EVENT_CROWD_FORWARD_PHASES = {
+    "counter_queue",
+    "crowd_spillover",
+    "waiting_parties",
+    "last_call_spill",
+}
+_BUSINESS_EVENT_BACKPRESSURE_PHASES = {
+    "paperwork_surge",
+    "shift_handoff",
+    "reset_scramble",
+    "table_turnover",
+    "barback_reset",
+    "courier_stop",
+    "staff_handoff",
+    "supplier_drop",
 }
 _BUSINESS_EVENT_REGULAR_CHUNK_HOURLY_CHANCE = 0.16
 _BUSINESS_EVENT_SCENE_PROPERTY_COOLDOWN_HOURS = 4
@@ -705,6 +731,34 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
             "emphasis": str(aftermath_event.get("emphasis", "") or "").strip().lower(),
             "perimeter_bonus": max(0.0, float(aftermath_event.get("perimeter_bonus", 0.0) or 0.0)),
         }
+    player_business_event = _player_business_micro_event(
+        sim,
+        prop=prop,
+        base_pulse=base_pulse,
+    )
+    if isinstance(player_business_event, dict) and str(player_business_event.get("phase", "") or "").strip():
+        return {
+            "phase": str(player_business_event.get("phase", "") or "").strip().lower(),
+            "label": str(player_business_event.get("label", "") or "").strip(),
+            "street_label": str(player_business_event.get("street_label", "") or "").strip(),
+            "entry_sentence": str(player_business_event.get("entry_sentence", "") or "").strip(),
+            "emphasis": str(player_business_event.get("emphasis", "") or "").strip().lower(),
+            "perimeter_bonus": max(0.0, float(player_business_event.get("perimeter_bonus", 0.0) or 0.0)),
+        }
+    reputation_event = _business_reputation_micro_event(
+        sim,
+        prop=prop,
+        base_pulse=base_pulse,
+    )
+    if isinstance(reputation_event, dict) and str(reputation_event.get("phase", "") or "").strip():
+        return {
+            "phase": str(reputation_event.get("phase", "") or "").strip().lower(),
+            "label": str(reputation_event.get("label", "") or "").strip(),
+            "street_label": str(reputation_event.get("street_label", "") or "").strip(),
+            "entry_sentence": str(reputation_event.get("entry_sentence", "") or "").strip(),
+            "emphasis": str(reputation_event.get("emphasis", "") or "").strip().lower(),
+            "perimeter_bonus": max(0.0, float(reputation_event.get("perimeter_bonus", 0.0) or 0.0)),
+        }
     events = list(_building_micro_event_pool(category, phase, open_now=open_now))
     if not events:
         return {}
@@ -725,7 +779,33 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
     )
     seed = f"{getattr(sim, 'seed', 0)}:building-micro-event:{building_key}:{phase}:{hour}"
     rng = random.Random(seed)
-    event = rng.choice(candidate_events)
+    traffic_profile = _business_reputation_traffic_profile(sim, prop=prop, base_pulse=base_pulse)
+    weighted_events = []
+    has_bias = False
+    if traffic_profile:
+        for event_item in candidate_events:
+            if not isinstance(event_item, dict):
+                continue
+            bias = float(_business_reputation_event_visibility_bias(event_item, traffic_profile) or 0.0)
+            if abs(bias) > 1e-6:
+                has_bias = True
+            weight = max(0.05, 1.0 + bias)
+            weighted_events.append((weight, event_item))
+    if has_bias and weighted_events:
+        total_weight = sum(max(0.0, float(weight)) for weight, _event_item in weighted_events)
+        if total_weight > 0.0:
+            pick = rng.random() * total_weight
+            running = 0.0
+            event = weighted_events[-1][1]
+            for weight, event_item in weighted_events:
+                running += max(0.0, float(weight))
+                if pick <= running:
+                    event = event_item
+                    break
+        else:
+            event = rng.choice(candidate_events)
+    else:
+        event = rng.choice(candidate_events)
     if not isinstance(event, dict):
         return {}
 
@@ -740,7 +820,7 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
         if rarity_rng.random() > float(rare_phase_chance):
             return {}
 
-    return {
+    outcome = {
         "phase": str(event.get("phase", "") or "").strip().lower(),
         "label": str(event.get("label", "") or "").strip(),
         "street_label": str(event.get("street_label", "") or "").strip(),
@@ -748,6 +828,11 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
         "emphasis": str(event.get("emphasis", "") or "").strip().lower(),
         "perimeter_bonus": max(0.0, float(event.get("perimeter_bonus", 0.0) or 0.0)),
     }
+    traffic_state = str(traffic_profile.get("state", "") or "").strip().lower()
+    if traffic_state:
+        outcome["traffic_state"] = traffic_state
+        outcome["traffic_customer_delta"] = int(traffic_profile.get("customer_delta", 0) or 0)
+    return outcome
 
 
 def _building_regular_chunk_pulse_cache(sim):
@@ -774,6 +859,323 @@ def _building_regular_chunk_pulse_cache(sim):
         winners = {}
         state["winners"] = winners
     return winners
+
+
+def _player_business_scene_open_role_text(open_roles):
+    roles = []
+    for raw_role in tuple(open_roles or ()):
+        role = str(raw_role or "").strip().lower()
+        if role not in {"manager", "staff"} or role in roles:
+            continue
+        roles.append(role)
+    if not roles:
+        return ""
+    if roles == ["manager"]:
+        return "a manager"
+    if roles == ["staff"]:
+        return "more floor staff"
+    return "a manager and more floor staff"
+
+
+def _player_business_micro_event(sim, prop=None, base_pulse=None):
+    if sim is None or not isinstance(prop, dict):
+        return {}
+
+    player_eid = getattr(sim, "player_eid", None)
+    if player_eid is None:
+        return {}
+    owner_eid = prop.get("owner_eid")
+    if owner_eid is None:
+        return {}
+    try:
+        if int(owner_eid) != int(player_eid):
+            return {}
+    except (TypeError, ValueError):
+        if owner_eid != player_eid:
+            return {}
+
+    if not (
+        _property_is_storefront(prop)
+        or _property_is_public(prop)
+        or _property_access_level(prop) == "public"
+    ):
+        return {}
+
+    summary = _player_business_summary(sim, prop)
+    if not isinstance(summary, dict):
+        return {}
+
+    open_now = bool(summary.get("open_now")) if "open_now" in summary else bool((base_pulse or {}).get("open_now"))
+    if not open_now:
+        return {}
+
+    customer_policy = str(summary.get("customer_policy", "") or _player_business_customer_policy(prop)).strip().lower() or "public"
+    open_roles = tuple(_player_business_open_roles(sim, prop) or ())
+    role_text = _player_business_scene_open_role_text(open_roles)
+    staff_total = max(0, int(summary.get("staff_total", 0) or 0))
+    note = str(summary.get("note", "") or "").strip().lower()
+
+    if customer_policy == "closed" and staff_total > 0:
+        return {
+            "phase": "owner_closed_turnover",
+            "label": "closed-door turnover",
+            "street_label": "closed front, staff still turning the place over",
+            "entry_sentence": "The business is closed to customers right now, but the frontage still shows a short internal turnover: staff slipping through, quick checks, and work that has not actually stopped.",
+            "emphasis": "work",
+            "perimeter_bonus": 1.65 if note in {"tight crew", "steady", "strong trade"} else 1.45,
+        }
+
+    if customer_policy == "staff_only":
+        return {
+            "phase": "owner_screening",
+            "label": "screened entry",
+            "street_label": "screened entry and short check-ins at the door",
+            "entry_sentence": "The place is still doing business, but the front has tightened into a screened threshold where everyone gets sized up before they are let any deeper.",
+            "emphasis": "front",
+            "perimeter_bonus": 2.25,
+        }
+
+    if open_roles and customer_policy == "public":
+        needed = role_text or "more help"
+        return {
+            "phase": "help_wanted_board",
+            "label": "help wanted",
+            "street_label": "job seekers bunching around a live hiring board",
+            "entry_sentence": f"The owner has work posted out front because the floor still needs {needed}, and people are slowing down long enough to see whether the shift is real.",
+            "emphasis": "front",
+            "perimeter_bonus": 2.35 if "manager" in open_roles else 2.1,
+        }
+
+    return {}
+
+
+def _business_reputation_micro_event(sim, prop=None, base_pulse=None):
+    if sim is None or not isinstance(prop, dict):
+        return {}
+    if not property_supports_business_reputation(prop):
+        return {}
+
+    property_id = str(prop.get("id", "") or "").strip()
+    if not property_id:
+        return {}
+
+    base_pulse = base_pulse if isinstance(base_pulse, dict) else {}
+    if not bool(base_pulse.get("open_now")):
+        return {}
+
+    category = str(base_pulse.get("category", "") or "").strip().lower()
+    if category in {"secure", "residential"}:
+        return {}
+
+    snapshot = property_business_reputation_snapshot(sim, property_id)
+    awareness_count = max(0, int(snapshot.get("awareness_count", 0) or 0))
+    if awareness_count < 3:
+        return {}
+
+    staple_score = float(snapshot.get("staple_score", 0.0) or 0.0)
+    patronage_score = float(snapshot.get("patronage_score", 0.0) or 0.0)
+    trouble_score = float(snapshot.get("trouble_score", 0.0) or 0.0)
+    gouging_score = float(snapshot.get("gouging_score", 0.0) or 0.0)
+    trust = float(snapshot.get("trust", 0.0) or 0.0)
+    reliability = float(snapshot.get("reliability", 0.0) or 0.0)
+    loyalty = float(snapshot.get("loyalty", 0.0) or 0.0)
+    resentment = float(snapshot.get("resentment", 0.0) or 0.0)
+    fear = float(snapshot.get("fear", 0.0) or 0.0)
+    heat = float(snapshot.get("heat", 0.0) or 0.0)
+    price_fairness = float(snapshot.get("price_fairness", 0.0) or 0.0)
+
+    if (
+        str(snapshot.get("reputation_state", "")).strip().lower() == "staple"
+        and staple_score >= 0.39
+        and patronage_score >= 0.37
+    ):
+        if category == "medical":
+            street_label = "locals trusting the place enough to wait it out by the door"
+            entry_sentence = (
+                "People are lingering at the frontage because this is the kind of place the block actually trusts when something hurts or goes wrong."
+            )
+        elif category in {"hospitality", "entertainment"}:
+            street_label = "regulars treating the frontage like part of the room"
+            entry_sentence = (
+                "A knot of regulars is hanging off the frontage because this place has started to feel like part of the neighborhood's ordinary rhythm."
+            )
+        else:
+            street_label = "regulars bunching near the entrance without looking lost"
+            entry_sentence = (
+                "The same kinds of faces keep settling near the door because the place has built a reputation for actually coming through."
+            )
+        return {
+            "phase": "regulars_spill",
+            "label": "neighborhood staple",
+            "street_label": street_label,
+            "entry_sentence": entry_sentence,
+            "emphasis": "front",
+            "perimeter_bonus": 2.4 + min(1.2, (trust + reliability + loyalty) * 0.45),
+            "reputation_state": "staple",
+        }
+
+    if (
+        str(snapshot.get("reputation_state", "")).strip().lower() == "troubled"
+        and (trouble_score >= 0.48 or gouging_score >= 0.46)
+    ):
+        if gouging_score >= max(0.46, trouble_score * 0.92) or resentment >= 0.36 or price_fairness <= -0.18:
+            street_label = "people grumbling at the front about prices and whether it is still worth it"
+            entry_sentence = (
+                "A sour knot has formed near the door because enough people think the place has started charging harder than its reputation can cover."
+            )
+        elif heat >= 0.38 or fear >= 0.34:
+            street_label = "a tense little knot holding just outside the door"
+            entry_sentence = (
+                "The frontage has that watchful, tense feel of a place people still use, but no longer trust without keeping one eye on the exit."
+            )
+        else:
+            street_label = "customers and locals bunching into a grumbling doorstep knot"
+            entry_sentence = (
+                "Enough irritation has built up here that the frontage keeps turning into a short argument instead of a clean line."
+            )
+        return {
+            "phase": "grumbling_front",
+            "label": "front grumbling",
+            "street_label": street_label,
+            "entry_sentence": entry_sentence,
+            "emphasis": "front",
+            "perimeter_bonus": 1.9 + min(1.0, (resentment + heat + max(0.0, -price_fairness)) * 0.5),
+            "reputation_state": "troubled",
+        }
+
+    return {}
+
+
+def _business_reputation_traffic_profile(sim, prop=None, base_pulse=None):
+    if sim is None or not isinstance(prop, dict):
+        return {}
+    if not property_supports_business_reputation(prop):
+        return {}
+
+    base_pulse = base_pulse if isinstance(base_pulse, dict) else {}
+    if not bool(base_pulse.get("open_now")):
+        return {}
+
+    category = str(base_pulse.get("category", "") or "").strip().lower()
+    if category not in {"retail", "finance", "office", "hospitality", "entertainment", "medical"}:
+        return {}
+
+    property_id = str(prop.get("id", "") or "").strip()
+    if not property_id:
+        return {}
+
+    snapshot = property_business_reputation_snapshot(sim, property_id)
+    awareness = max(
+        float(snapshot.get("weighted_awareness", 0.0) or 0.0),
+        float(int(snapshot.get("awareness_count", 0) or 0)),
+    )
+    if awareness < 2.0:
+        return {}
+
+    patronage = max(0.0, float(snapshot.get("patronage_score", 0.0) or 0.0))
+    staple = max(0.0, float(snapshot.get("staple_score", 0.0) or 0.0))
+    trouble = max(0.0, float(snapshot.get("trouble_score", 0.0) or 0.0))
+    gouging = max(0.0, float(snapshot.get("gouging_score", 0.0) or 0.0))
+    trust = max(0.0, float(snapshot.get("trust", 0.0) or 0.0))
+    reliability = max(0.0, float(snapshot.get("reliability", 0.0) or 0.0))
+    loyalty = max(0.0, float(snapshot.get("loyalty", 0.0) or 0.0))
+    fear = max(0.0, float(snapshot.get("fear", 0.0) or 0.0))
+    heat = max(0.0, float(snapshot.get("heat", 0.0) or 0.0))
+    resentment = max(0.0, float(snapshot.get("resentment", 0.0) or 0.0))
+    price_fairness = float(snapshot.get("price_fairness", 0.0) or 0.0)
+    price_good = max(0.0, price_fairness)
+    price_pain = max(0.0, -price_fairness)
+
+    positive_pressure = max(
+        0.0,
+        (patronage * 0.74)
+        + (staple * 0.18)
+        + (trust * 0.08)
+        + (reliability * 0.08)
+        + (loyalty * 0.08)
+        + (price_good * 0.06)
+        - (trouble * 0.24)
+        - (gouging * 0.18)
+        - (fear * 0.14),
+    )
+    negative_pressure = max(
+        0.0,
+        (trouble * 0.56)
+        + (gouging * 0.34)
+        + (resentment * 0.08)
+        + (heat * 0.08)
+        + (fear * 0.08)
+        + (price_pain * 0.16)
+        - (patronage * 0.22)
+        - (trust * 0.1)
+        - (reliability * 0.06),
+    )
+    if positive_pressure < 0.26 and negative_pressure < 0.24:
+        return {}
+
+    state = ""
+    customer_delta = 0
+    visibility_bonus = 0.0
+    if positive_pressure >= negative_pressure + 0.07:
+        if positive_pressure >= 0.48:
+            state = "surging"
+            customer_delta = 1
+        else:
+            state = "steady_plus"
+            customer_delta = 0
+        visibility_bonus = 0.65 + (positive_pressure * 0.95)
+    elif negative_pressure >= positive_pressure + 0.05:
+        if negative_pressure >= 0.42:
+            state = "patchy"
+            customer_delta = -2
+        else:
+            state = "thin"
+            customer_delta = -1
+        visibility_bonus = -0.2 - (negative_pressure * 0.55)
+    else:
+        return {}
+
+    return {
+        "state": state,
+        "positive_pressure": max(0.0, positive_pressure),
+        "negative_pressure": max(0.0, negative_pressure),
+        "visibility_bonus": float(visibility_bonus),
+        "customer_delta": int(customer_delta),
+    }
+
+
+def _business_reputation_event_visibility_bias(event, profile):
+    if not isinstance(event, dict) or not isinstance(profile, dict):
+        return 0.0
+    state = str(profile.get("state", "") or "").strip().lower()
+    if not state:
+        return 0.0
+    event_phase = str(event.get("phase", "") or "").strip().lower()
+    emphasis = str(event.get("emphasis", "") or "").strip().lower()
+    positive_pressure = max(0.0, float(profile.get("positive_pressure", 0.0) or 0.0))
+    negative_pressure = max(0.0, float(profile.get("negative_pressure", 0.0) or 0.0))
+
+    if state in {"surging", "steady_plus"}:
+        if event_phase in _BUSINESS_EVENT_CROWD_FORWARD_PHASES:
+            return positive_pressure * 1.24
+        if emphasis in {"front", "hospitality"}:
+            return positive_pressure * 0.32
+        if event_phase in _BUSINESS_EVENT_BACKPRESSURE_PHASES:
+            return -(positive_pressure * 0.42)
+        if emphasis in {"work", "admin"}:
+            return -(positive_pressure * 0.16)
+        return 0.0
+
+    if state in {"patchy", "thin"}:
+        if event_phase in _BUSINESS_EVENT_CROWD_FORWARD_PHASES:
+            return -(negative_pressure * 1.3)
+        if event_phase in _BUSINESS_EVENT_BACKPRESSURE_PHASES:
+            return negative_pressure * 0.54
+        if emphasis in {"front", "hospitality"}:
+            return -(negative_pressure * 0.22)
+        if emphasis in {"work", "admin"}:
+            return negative_pressure * 0.12
+    return 0.0
 
 
 def _base_building_pulse_snapshot(sim, prop=None, structure=None):
@@ -1002,6 +1404,8 @@ def _base_building_pulse_snapshot(sim, prop=None, structure=None):
         "event_phase": "",
         "event_label": "",
         "perimeter_bonus": 0.0,
+        "traffic_state": "",
+        "traffic_customer_delta": 0,
     }
     return pulse
 
@@ -1063,6 +1467,9 @@ def _regular_building_micro_event_visible_property_ids(sim, chunk):
             continue
 
         score = float(event.get("perimeter_bonus", 0.0) or 0.0)
+        traffic_profile = _business_reputation_traffic_profile(sim, prop=prop, base_pulse=base_pulse)
+        score += float(traffic_profile.get("visibility_bonus", 0.0) or 0.0)
+        score += _business_reputation_event_visibility_bias(event, traffic_profile)
         if _property_is_storefront(prop) or _property_is_public(prop):
             score += 0.75
         if _property_access_level(prop) == "public":
@@ -1145,6 +1552,11 @@ def _building_pulse_snapshot(sim, prop=None, structure=None, *, respect_chunk_ca
             pulse["perimeter_bonus"] = max(0.0, float(event.get("perimeter_bonus", 0.0) or 0.0))
         except (TypeError, ValueError):
             pulse["perimeter_bonus"] = 0.0
+        pulse["traffic_state"] = str(event.get("traffic_state", "") or "").strip().lower()
+        try:
+            pulse["traffic_customer_delta"] = int(event.get("traffic_customer_delta", 0) or 0)
+        except (TypeError, ValueError):
+            pulse["traffic_customer_delta"] = 0
     return pulse
 def _next_business_event_seed_id(sim):
     state = _business_event_seed_state(sim)
@@ -1556,6 +1968,36 @@ def _business_event_inspection_blueprint(category):
 def _business_event_admin_review_blueprint(category, *, event_phase=""):
     category = str(category or "").strip().lower()
     event_phase = str(event_phase or "").strip().lower()
+    if event_phase == "regulars_spill":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Regulars Table",
+            "fixture_type": "regulars_table",
+            "fixture_glyph": "r",
+            "actor_specs": [
+                {"role": "civilian", "career": "regular", "linger_ticks": 22},
+                {"role": "civilian", "career": "regular", "linger_ticks": 20},
+                {"role": "worker", "career": "site_rep", "linger_ticks": 18, "site_affiliated": True},
+            ],
+            "keep_hours": 2,
+            "release_budget": 0,
+            "drift_preferred": True,
+        }
+    if event_phase == "grumbling_front":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Complaint Crate",
+            "fixture_type": "complaint_board",
+            "fixture_glyph": "g",
+            "actor_specs": [
+                {"role": "civilian", "career": "disgruntled_customer", "linger_ticks": 20},
+                {"role": "civilian", "career": "regular", "linger_ticks": 18},
+                {"role": "worker", "career": "site_rep", "linger_ticks": 16, "site_affiliated": True},
+            ],
+            "keep_hours": 1,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
     if event_phase == "manifest_check":
         fixture_name = "Dispatch Clipboard" if category == "transit" else "Manifest Clipboard"
         fixture_type = "manifest_clipboard"
@@ -2263,6 +2705,7 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
     scene_type = str((scene or {}).get("scene_type", "") or "").strip().lower()
     category = str((scene or {}).get("category", "") or "").strip().lower()
     event_phase = str((scene or {}).get("event_phase", "") or "").strip().lower()
+    traffic_state = str((scene or {}).get("traffic_state", "") or "").strip().lower()
     scene_id = str((scene or {}).get("scene_id", "") or "").strip()
     actor_spec = actor_spec if isinstance(actor_spec, dict) else {}
     role = str(actor_spec.get("role", "") or "").strip().lower()
@@ -2272,9 +2715,64 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
     hours_text = _dialogue_hours_text(controller.get("opening_window")) if isinstance(controller, dict) else ""
     requirement = _controller_access_requirement_text(controller) if isinstance(controller, dict) else ""
 
-    if event_phase == "paperwork_surge":
-        local_line = f"They are trying to clear a paperwork jam at {current_name} before the front side bogs down."
+    if event_phase == "owner_screening":
+        if career == "door_host" or role == "worker":
+            local_line = f"We are only waving people through {current_name} if they belong here right now."
+        else:
+            local_line = f"They are checking who belongs at {current_name} before they let anybody deeper in."
         if hours_text and requirement:
+            detail_line = f"{current_name} is screening people at the door during {hours_text}. Anyone getting past the threshold still needs {requirement}."
+        elif hours_text:
+            detail_line = f"{current_name} is still open during {hours_text}, but the front has tightened into a short screening line."
+        elif requirement:
+            detail_line = f"{current_name} is trading behind a screened front. Anyone getting past the threshold still needs {requirement}."
+        else:
+            detail_line = f"The frontage at {current_name} has tightened into a screened threshold instead of an ordinary open door."
+        return {
+            "property_id": str(prop.get("id", "") or "").strip(),
+            "target_property_id": str(prop.get("id", "") or "").strip(),
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "access" if requirement else "hours",
+            "shared": False,
+        }
+
+    if event_phase == "owner_closed_turnover":
+        if role == "worker":
+            local_line = f"We are closed to walk-ins while {current_name} turns the floor over and catches up."
+        else:
+            local_line = f"The place looks closed, but staff at {current_name} are clearly still working inside the shut front."
+        if hours_text and requirement:
+            detail_line = f"{current_name} is closed to customers for now, with staff still working through a short turnover during what is usually {hours_text}. Once it opens again the front wants {requirement}."
+        elif hours_text:
+            detail_line = f"{current_name} is closed to customers for now, but staff are still working through a short turnover during what is usually {hours_text}."
+        elif requirement:
+            detail_line = f"{current_name} is closed to customers for now, but the staff are still cycling through short internal tasks. When it opens again the front wants {requirement}."
+        else:
+            detail_line = f"{current_name} is closed to customers for now, but the staff are still cycling through short internal tasks behind the shut front."
+        return {
+            "property_id": str(prop.get("id", "") or "").strip(),
+            "target_property_id": str(prop.get("id", "") or "").strip(),
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "hours",
+            "shared": False,
+        }
+
+    if event_phase == "paperwork_surge":
+        if traffic_state in {"patchy", "thin"}:
+            local_line = f"The front at {current_name} is thinner than it should be, so the paperwork side is getting all the blame."
+        else:
+            local_line = f"They are trying to clear a paperwork jam at {current_name} before the front side bogs down."
+        if traffic_state in {"patchy", "thin"} and hours_text and requirement:
+            detail_line = f"{current_name} is chewing through approvals during {hours_text}, but the public side is also running thin enough that the quiet feels noticeable. Once that breaks, the front still wants {requirement}."
+        elif traffic_state in {"patchy", "thin"} and hours_text:
+            detail_line = f"{current_name} is buried in review work during {hours_text}, and the front looks thinner than this hour ought to allow."
+        elif traffic_state in {"patchy", "thin"} and requirement:
+            detail_line = f"The staff here are buried in receipts and approvals, but the real tell is how thin the public side has gone. Once they catch up, the front still wants {requirement}."
+        elif traffic_state in {"patchy", "thin"}:
+            detail_line = f"The front looks quiet at {current_name} for two reasons: the staff are catching up on paperwork, and the public side is not pulling people the way it should."
+        elif hours_text and requirement:
             detail_line = f"{current_name} is chewing through approvals during {hours_text}. After that the front wants {requirement}."
         elif hours_text:
             detail_line = f"{current_name} is buried in review work during {hours_text}, so the public side is thinning out."
@@ -2461,11 +2959,23 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
         }
 
     if event_phase == "table_turnover":
-        if career == "host":
+        if traffic_state in {"patchy", "thin"} and career == "host":
+            local_line = f"We keep clearing tables at {current_name}, but the room is refilling in fits instead of waves."
+        elif career == "host":
             local_line = f"We barely clear a table at {current_name} before the next party wants it."
+        elif traffic_state in {"patchy", "thin"}:
+            local_line = f"The room at {current_name} is still turning, but not every clean table is getting claimed as fast as it should."
         else:
             local_line = f"The room is turning over so fast nobody at {current_name} gets to admire a clean table for long."
-        if hours_text and requirement:
+        if traffic_state in {"patchy", "thin"} and hours_text and requirement:
+            detail_line = f"{current_name} is still flipping tables during {hours_text}, but the room is not refilling cleanly. Once the softer rush loosens, the front still wants {requirement}."
+        elif traffic_state in {"patchy", "thin"} and hours_text:
+            detail_line = f"{current_name} is in turnover during {hours_text}, but the public room feels patchier than a true crush should."
+        elif traffic_state in {"patchy", "thin"} and requirement:
+            detail_line = f"They are trying to keep the room moving at {current_name}, but the next wave is landing unevenly. Once it settles, the front still wants {requirement}."
+        elif traffic_state in {"patchy", "thin"}:
+            detail_line = f"The public room at {current_name} is still turning tables, but not with the clean relentless pull a healthy rush usually has."
+        elif hours_text and requirement:
             detail_line = f"{current_name} is in its turnover crush during {hours_text}. Once the rush loosens, the front still wants {requirement}."
         elif hours_text:
             detail_line = f"{current_name} is in its turnover crunch during {hours_text}, with staff flipping tables as fast as they clear."
@@ -2481,11 +2991,23 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
         }
 
     if event_phase == "barback_reset":
-        if career == "bartender":
+        if traffic_state in {"patchy", "thin"} and career == "bartender":
+            local_line = f"We are reloading {current_name}, but the late crowd is landing softer than a room like this should."
+        elif career == "bartender":
             local_line = f"We are trying to reload {current_name} before the late side of the night notices the gaps."
+        elif traffic_state in {"patchy", "thin"}:
+            local_line = f"The late rhythm at {current_name} is still running, just not with the crowd pressure that usually hides the reset loop."
         else:
             local_line = f"The late rhythm here runs on ice, glass, and whoever can keep the reset loop moving."
-        if hours_text and requirement:
+        if traffic_state in {"patchy", "thin"} and hours_text and requirement:
+            detail_line = f"{current_name} is running a late restock during {hours_text}, but the room feels softer than it should for this stretch. Once it steadies, the front still wants {requirement}."
+        elif traffic_state in {"patchy", "thin"} and hours_text:
+            detail_line = f"{current_name} is in a late reset pocket during {hours_text}, and the thinner-than-usual crowd is making the gaps easier to see."
+        elif traffic_state in {"patchy", "thin"} and requirement:
+            detail_line = f"They are reloading the late-service side of {current_name}, but the room is not pressing the front the way it usually would. The front still wants {requirement} once it steadies."
+        elif traffic_state in {"patchy", "thin"}:
+            detail_line = f"This is the late reset loop at {current_name}, but with enough slack in the room that the missing crowd is part of the story."
+        elif hours_text and requirement:
             detail_line = f"{current_name} is running a late restock during {hours_text}. Once the room settles, the front still wants {requirement}."
         elif hours_text:
             detail_line = f"{current_name} is in a late reset pocket during {hours_text}, all glass runs, ice checks, and quick bottle counts."
@@ -3618,7 +4140,7 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             pool = [item_id for item_id in ("credstick_chip", "city_pass_token", "transit_daypass", "caff_shot") if item_id in ITEM_CATALOG]
             item_count += 1
             read_only_reason = "You can lift something from the dispatch satchel, but stuffing your own gear into live route paperwork would be a good way to get remembered."
-    elif scene_type == "gathering" and fixture_type in {"meeting_sign", "meeting_marker", "meeting_board", "inspection_packet", "admin_packet", "manifest_clipboard", "trauma_kit", "school_bags", "stoop_cooler", "incident_tape", "memorial_candles", "help_wanted_board", "outreach_table", "crew_call_sheet", "route_welcome_board", "tenant_welcome_box", "mutual_aid_table"}:
+    elif scene_type == "gathering" and fixture_type in {"meeting_sign", "meeting_marker", "meeting_board", "inspection_packet", "admin_packet", "manifest_clipboard", "trauma_kit", "school_bags", "stoop_cooler", "incident_tape", "memorial_candles", "help_wanted_board", "outreach_table", "crew_call_sheet", "route_welcome_board", "tenant_welcome_box", "mutual_aid_table", "regulars_table", "complaint_board"}:
         org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
         org_name = str((org_snapshot or {}).get("organization_name", "") or "").strip()
         org_label = org_name or prop_name
@@ -3644,6 +4166,10 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             container_label = "Tenant Welcome Box"
         elif fixture_type == "mutual_aid_table" or event_phase == "mutual_aid_table":
             container_label = "Mutual Aid Table"
+        elif fixture_type == "regulars_table" or event_phase == "regulars_spill":
+            container_label = "Regulars Table"
+        elif fixture_type == "complaint_board" or event_phase == "grumbling_front":
+            container_label = "Complaint Crate"
         elif fixture_type == "manifest_clipboard" or event_phase == "manifest_check":
             container_label = "Manifest Clipboard"
         elif fixture_type == "admin_packet" or event_phase == "paperwork_surge":
@@ -3758,6 +4284,28 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             note = f"Tenant welcome box: {prop_name} has a small stoop meetup going, all keys, names, repairs, and practical advice for someone new to the building."
         elif event_phase == "mutual_aid_table":
             note = f"Mutual aid table: {prop_name} is moving food, water, names, and work tips through the frontage; some of those names may stay local."
+        elif event_phase == "regulars_spill" and hours_text and requirement:
+            note = (
+                f"Regulars table: people are treating {prop_name} like the kind of place the block has started trusting to come through during {hours_text}. "
+                f"Anyone moving deeper still has to clear {requirement}."
+            )
+        elif event_phase == "regulars_spill" and hours_text:
+            note = f"Regulars table: the same faces keep gathering at {prop_name} during {hours_text} because the block has started trusting the place to come through."
+        elif event_phase == "regulars_spill" and requirement:
+            note = f"Regulars table: the frontage at {prop_name} has become a familiar, trusted stop, though anyone stepping deeper still has to clear {requirement}."
+        elif event_phase == "regulars_spill":
+            note = f"Regulars table: {prop_name} has started reading like a trusted neighborhood staple, with familiar faces treating the frontage like part of the room."
+        elif event_phase == "grumbling_front" and hours_text and requirement:
+            note = (
+                f"Complaint crate: people are grumbling outside {prop_name} during {hours_text}, whether about the prices, the pressure, or the way the front has gone sharp. "
+                f"Anyone pushing deeper still has to clear {requirement}."
+            )
+        elif event_phase == "grumbling_front" and hours_text:
+            note = f"Complaint crate: the knot outside {prop_name} is all low complaints and side-eye during {hours_text}, the way a useful place starts sounding when locals think it is slipping."
+        elif event_phase == "grumbling_front" and requirement:
+            note = f"Complaint crate: people keep bunching up outside {prop_name} to complain, but anyone going deeper still has to clear {requirement}."
+        elif event_phase == "grumbling_front":
+            note = f"Complaint crate: enough irritation has built up around {prop_name} that the frontage keeps turning into a short grumbling knot instead of a clean line."
         elif event_phase == "paperwork_surge" and hours_text and requirement:
             note = (
                 f"Audit packet: {prop_name} is chewing through a paperwork surge during {hours_text}. "
@@ -3869,6 +4417,14 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             pool = [item_id for item_id in ("meal_voucher", "bottled_water", "calm_patch", "city_pass_token") if item_id in ITEM_CATALOG]
             item_count += 1
             read_only_reason = "You can take from the aid table, but using it as a private stash would get remembered."
+        elif event_phase == "regulars_spill":
+            pool = [item_id for item_id in ("spark_brew", "bottled_water", "mint_strip", "city_pass_token", "meal_voucher") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can pocket something from the regulars table, but using a neighborhood staple as your private stash would sour a place people actually care about."
+        elif event_phase == "grumbling_front":
+            pool = [item_id for item_id in ("spark_brew", "calm_patch", "bottled_water", "city_pass_token") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can pull something from the complaint crate, but turning a live grumbling knot into your own stash would be a fast way to get remembered for the wrong reason."
         elif event_phase == "paperwork_surge":
             packet_pool = ("credstick_chip", "city_pass_token", "focus_inhaler", "protein_wrap")
             pool = [item_id for item_id in packet_pool if item_id in ITEM_CATALOG]
@@ -3993,7 +4549,33 @@ def _business_event_seed_scene_actor_note(sim, scene, prop, actor_spec, *, rng):
         org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
         org_name = str((org_snapshot or {}).get("organization_name", "") or "").strip()
         org_label = org_name or prop_name
-        if event_phase == "delivery_inspection":
+        if event_phase == "regulars_spill":
+            if career in {"site_rep", "host", "coordinator"} or role == "worker":
+                local_line = f"The same faces keep coming back to {prop_name} because it has started feeling dependable."
+                detail_line = (
+                    f"The frontage at {prop_name} has turned into a regular stop for people who trust it to come through"
+                    + (f" during {hours_text}." if hours_text else ".")
+                )
+            else:
+                local_line = f"I keep circling back to {prop_name} because it is one of the few places that usually feels worth the stop."
+                detail_line = (
+                    f"People around here have started treating {prop_name} like part of the neighborhood's ordinary rhythm"
+                    + (f" during {hours_text}." if hours_text else ".")
+                )
+        elif event_phase == "grumbling_front":
+            if career in {"site_rep", "host", "coordinator"} or role == "worker":
+                local_line = f"The front at {prop_name} keeps getting hung up on complaints, and nobody wants it to tip into a bigger problem."
+                detail_line = (
+                    f"People keep bunching up at {prop_name} to grumble about the prices, the pressure, or the way the front has gone sharp"
+                    + (f" during {hours_text}." if hours_text else ".")
+                )
+            else:
+                local_line = f"People still use {prop_name}, but more of them are starting to talk like the place is slipping."
+                detail_line = (
+                    f"The knot at the frontage is not random; it is the sound a useful place makes when locals start doubting what it costs them"
+                    + (f" during {hours_text}." if hours_text else ".")
+                )
+        elif event_phase == "delivery_inspection":
             local_line = f"The last drop here is pulling a quick inspection back to {prop_name}."
             detail_line = (
                 f"Inspectors are expected to cycle through {prop_name}"
@@ -4032,6 +4614,11 @@ def _business_event_scene_blueprint(prop, pulse):
     pulse = pulse if isinstance(pulse, dict) else {}
     event_phase = str(pulse.get("event_phase", "") or "").strip().lower()
     category = str(pulse.get("category", "") or "").strip().lower()
+    traffic_state = str(pulse.get("traffic_state", "") or "").strip().lower()
+    try:
+        traffic_customer_delta = int(pulse.get("traffic_customer_delta", 0) or 0)
+    except (TypeError, ValueError):
+        traffic_customer_delta = 0
     if not event_phase:
         return None
 
@@ -4039,7 +4626,16 @@ def _business_event_scene_blueprint(prop, pulse):
         return _business_event_delivery_blueprint(category)
 
     if event_phase in _BUSINESS_EVENT_QUEUE_PHASES:
-        if category == "secure" and event_phase in {"visitor_screening", "booking_queue", "release_queue"}:
+        if event_phase == "owner_screening":
+            fixture_name = "Door Roster"
+            fixture_type = "queue_marker"
+            fixture_glyph = "q"
+            actor_specs = [
+                {"role": "civilian", "career": "visitor", "linger_ticks": 18},
+                {"role": "civilian", "career": "visitor", "linger_ticks": 16},
+                {"role": "worker", "career": "door_host", "linger_ticks": 16, "site_affiliated": True},
+            ]
+        elif category == "secure" and event_phase in {"visitor_screening", "booking_queue", "release_queue"}:
             if event_phase == "visitor_screening":
                 fixture_name = "Screening Rail"
                 actor_specs = [{"role": "civilian", "career": "visitor", "linger_ticks": 18} for _ in range(3)]
@@ -4067,6 +4663,22 @@ def _business_event_scene_blueprint(prop, pulse):
             fixture_glyph = "q"
             count = 3 if event_phase in {"crowd_spillover", "waiting_parties"} else 2
             actor_specs = [{"role": "civilian", "career": "visitor", "linger_ticks": 18} for _ in range(count)]
+        if event_phase in _BUSINESS_EVENT_CROWD_FORWARD_PHASES:
+            if traffic_state in {"surging", "steady_plus"} and traffic_customer_delta >= 0:
+                bonus_count = 1 if traffic_state == "surging" else 0
+                for _ in range(max(0, bonus_count)):
+                    actor_specs.append({
+                        "role": "civilian",
+                        "career": "regular" if event_phase in {"crowd_spillover", "waiting_parties", "last_call_spill"} else "visitor",
+                        "linger_ticks": 20 if event_phase in {"crowd_spillover", "waiting_parties", "last_call_spill"} else 18,
+                    })
+            elif traffic_state in {"patchy", "thin"} and traffic_customer_delta < 0:
+                trim = min(max(1, len(actor_specs) - 1), abs(int(traffic_customer_delta)))
+                while trim > 0 and len(actor_specs) > 1:
+                    actor_specs.pop()
+                    trim -= 1
+                if actor_specs:
+                    actor_specs[0]["linger_ticks"] = max(12, int(actor_specs[0].get("linger_ticks", 18) or 18) - 4)
         return {
             "scene_type": "queue",
             "fixture_name": fixture_name,
@@ -4100,6 +4712,20 @@ def _business_event_scene_blueprint(prop, pulse):
         return _business_event_admin_review_blueprint(category, event_phase=event_phase)
 
     if event_phase in _BUSINESS_EVENT_SHIFT_PHASES:
+        if event_phase == "owner_closed_turnover":
+            return {
+                "scene_type": "shift",
+                "fixture_name": "Closed Sign",
+                "fixture_type": "shift_board",
+                "fixture_glyph": "n",
+                "actor_specs": [
+                    {"role": "worker", "career": "closing_staff", "linger_ticks": 14, "site_affiliated": True},
+                    {"role": "worker", "career": "shift_worker", "linger_ticks": 12, "site_affiliated": True},
+                ],
+                "keep_hours": 1,
+                "release_budget": 0,
+                "drift_preferred": False,
+            }
         if event_phase == "maintenance_loop":
             actor_specs = [
                 {"role": "worker", "career": "maintenance_tech", "linger_ticks": 14},
@@ -5067,6 +5693,7 @@ class BusinessPulseSceneSystem(System):
             "chunk": spec["chunk"],
             "category": str((spec.get("pulse") or {}).get("category", "") or "").strip().lower(),
             "event_phase": str((spec.get("pulse") or {}).get("event_phase", "") or "").strip().lower(),
+            "traffic_state": str((spec.get("pulse") or {}).get("traffic_state", "") or "").strip().lower(),
             "scene_type": str(blueprint.get("scene_type", "") or "").strip().lower(),
             "source_kind": str(spec.get("source_kind", "pulse") or "pulse").strip().lower(),
             "seed_id": str(spec.get("seed_id", "") or "").strip(),

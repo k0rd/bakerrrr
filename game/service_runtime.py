@@ -1214,7 +1214,16 @@ def _actor_in_storefront_service_zone(sim, actor_eid, prop):
     return False, dist
 
 
-def _storefront_service_profile(sim, prop):
+def _actor_inside_property(sim, actor_eid, prop):
+    positions = sim.ecs.get(Position)
+    actor_pos = positions.get(actor_eid)
+    if not actor_pos or not isinstance(prop, dict):
+        return False
+    covered = _property_covering(sim, actor_pos.x, actor_pos.y, actor_pos.z)
+    return isinstance(covered, dict) and str(covered.get("id", "")).strip() == str(prop.get("id", "")).strip()
+
+
+def _storefront_service_profile(sim, prop, actor_eid=None):
     profile = {
         "mode": "",
         "available": False,
@@ -1252,16 +1261,16 @@ def _storefront_service_profile(sim, prop):
         }
 
     for member in property_org_members(sim, prop):
-        actor_eid = member.get("eid")
+        member_eid = member.get("eid")
         occupation = member.get("occupation")
-        existing = candidates_by_eid.get(actor_eid)
-        role = "owner" if actor_eid == owner_eid else str(member.get("role", "") or "").strip().lower()
+        existing = candidates_by_eid.get(member_eid)
+        role = "owner" if member_eid == owner_eid else str(member.get("role", "") or "").strip().lower()
         if role not in {"owner", "manager", "staff"}:
             role = _occupation_service_role(occupation)
         if existing and existing.get("role") == "owner":
             continue
-        candidates_by_eid[actor_eid] = {
-            "eid": actor_eid,
+        candidates_by_eid[member_eid] = {
+            "eid": member_eid,
             "role": role,
             "occupation": occupation,
             "source": member.get("source", "workplace"),
@@ -1269,10 +1278,10 @@ def _storefront_service_profile(sim, prop):
 
     available = []
     for info in candidates_by_eid.values():
-        actor_eid = info["eid"]
-        present, distance = _actor_in_storefront_service_zone(sim, actor_eid, prop)
+        service_actor_eid = info["eid"]
+        present, distance = _actor_in_storefront_service_zone(sim, service_actor_eid, prop)
         occupation = info.get("occupation")
-        ai = ais.get(actor_eid)
+        ai = ais.get(service_actor_eid)
         on_shift = False
         if occupation and (
             occupation_targets_property(prop, occupation)
@@ -1290,20 +1299,48 @@ def _storefront_service_profile(sim, prop):
             continue
         if info["role"] != "owner" and occupation and not on_shift:
             continue
-        available.append((info["role"], distance, actor_eid))
+        available.append((info["role"], distance, service_actor_eid))
 
     if available:
         available.sort(key=lambda row: (_storefront_service_role_priority(row[0]), row[1], row[2]))
         service_role, _distance, service_eid = available[0]
-        service_name = _entity_display_name(sim, service_eid, title_case=True)
+        if actor_eid is not None and int(service_eid) == int(actor_eid):
+            service_name = "you"
+        else:
+            service_name = _entity_display_name(sim, service_eid, title_case=True)
         profile.update({
             "mode": "staffed",
             "available": True,
             "service_eid": service_eid,
             "service_name": service_name,
             "service_role": service_role,
-            "service_note": f"served by {service_name}" if service_name else "counter service",
-            "summary_label": f"counter:{service_name}" if service_name else "counter",
+            "service_note": (
+                "owner-run counter"
+                if actor_eid is not None and int(service_eid) == int(actor_eid)
+                else f"served by {service_name}" if service_name else "counter service"
+            ),
+            "summary_label": (
+                "owner-run"
+                if actor_eid is not None and int(service_eid) == int(actor_eid)
+                else f"counter:{service_name}" if service_name else "counter"
+            ),
+        })
+        return profile
+
+    if (
+        actor_eid is not None
+        and owner_eid is not None
+        and int(actor_eid) == int(owner_eid)
+        and _actor_inside_property(sim, actor_eid, prop)
+    ):
+        profile.update({
+            "mode": "staffed",
+            "available": True,
+            "service_eid": actor_eid,
+            "service_name": "you",
+            "service_role": "owner",
+            "service_note": "owner-run counter",
+            "summary_label": "owner-run",
         })
         return profile
 

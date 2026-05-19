@@ -194,7 +194,9 @@ from game.system_support.npc_behavior_runtime import (
     _find_scavenged_sale_target,
     _find_ground_credit_target,
     _find_scavenge_ground_item_target,
+    _inventory_scavenge_sale_rows,
     _inventory_contraband_heat,
+    _pick_social_venue as _behavior_pick_social_venue,
     _receive_lodging_at_actor,
     _receive_medical_aid_at_actor,
     _receive_safe_spot_at_actor,
@@ -283,7 +285,7 @@ def _pick_property_roam_tile(*args, **kwargs):
     return _facade()._pick_property_roam_tile(*args, **kwargs)
 
 def _pick_social_venue(*args, **kwargs):
-    return _facade()._pick_social_venue(*args, **kwargs)
+    return _behavior_pick_social_venue(*args, **kwargs)
 
 def _resolve_ai_target(*args, **kwargs):
     return _facade()._resolve_ai_target(*args, **kwargs)
@@ -349,9 +351,17 @@ BEHAVIOR_TIP_SHELTER = "behavior_tip_shelter"
 BEHAVIOR_TIP_SAFE_SPOT = "behavior_tip_safe_spot"
 BEHAVIOR_TIP_STREET_BUY = "behavior_tip_street_buy"
 BEHAVIOR_TIP_STREET_APPRAISE = "behavior_tip_street_appraise"
+BEHAVIOR_TIP_HIDDEN_TRADE = "behavior_tip_hidden_trade"
+BEHAVIOR_TIP_HIDDEN_CLINIC = "behavior_tip_hidden_clinic"
 BEHAVIOR_TIP_MAX_AGE = 180
 BEHAVIOR_TIP_RADIUS = 6
 BEHAVIOR_TIP_COOLDOWN = 120
+HIDDEN_CONTACT_REFERRAL_RADIUS = 12
+HIDDEN_CONTACT_REFERRAL_MIN_SCORE = 0.86
+BEHAVIOR_TIP_SHARE_TARGET_LIMITS = {
+    BEHAVIOR_TIP_STREET_BUY: 2,
+    BEHAVIOR_TIP_STREET_APPRAISE: 2,
+}
 
 
 def _recent_behavior_tip(memory, kind, *, now, max_age=BEHAVIOR_TIP_MAX_AGE):
@@ -365,6 +375,235 @@ def _recent_behavior_tip(memory, kind, *, now, max_age=BEHAVIOR_TIP_MAX_AGE):
         return age <= int(max_age)
 
     return _strongest_memory_entry(memory, kind, predicate=_fresh)
+
+
+def _behavior_tip_share_target_limit(tip_kind):
+    tip_kind = str(tip_kind or "").strip().lower()
+    try:
+        limit = int(BEHAVIOR_TIP_SHARE_TARGET_LIMITS.get(tip_kind, 1) or 1)
+    except (TypeError, ValueError):
+        limit = 1
+    return max(1, min(3, limit))
+
+
+def _plan_explicit_behavior_tip_shares(sim, source_eid, pos, tip_kind, payload, strength, *, cooldowns=None, tick=0):
+    tip_kind = str(tip_kind or "").strip().lower()
+    payload = payload if isinstance(payload, dict) else {}
+    if not pos or not tip_kind or not payload:
+        return ()
+
+    ais = sim.ecs.get(AI)
+    positions = sim.ecs.get(Position)
+    memories = sim.ecs.get(NPCMemory)
+    socials = sim.ecs.get(NPCSocial)
+    source_social = socials.get(source_eid)
+    candidates = []
+    for target_eid, target_ai in ais.items():
+        if target_eid == source_eid or target_eid == getattr(sim, "player_eid", None):
+            continue
+        if str(getattr(target_ai, "role", "") or "").strip().lower() == "wildlife":
+            continue
+        target_pos = positions.get(target_eid)
+        target_memory = memories.get(target_eid)
+        if not target_pos or not target_memory or int(target_pos.z) != int(pos.z):
+            continue
+        distance = _manhattan(pos.x, pos.y, target_pos.x, target_pos.y)
+        if distance <= 0 or distance > BEHAVIOR_TIP_RADIUS:
+            continue
+        interest = _behavior_tip_interest(sim, target_eid, tip_kind, payload=payload)
+        if interest <= 0.0:
+            continue
+        existing = _recent_behavior_tip(target_memory, tip_kind, now=tick, max_age=BEHAVIOR_TIP_MAX_AGE)
+        if existing is not None:
+            existing_data = existing.get("data", {}) if isinstance(existing.get("data"), dict) else {}
+            if (
+                str(existing_data.get("property_id", "") or "").strip() == str(payload.get("property_id", "") or "").strip()
+                and str(existing_data.get("buyer_eid", "") or "").strip() == str(payload.get("buyer_eid", "") or "").strip()
+                and str(existing_data.get("appraiser_eid", "") or "").strip() == str(payload.get("appraiser_eid", "") or "").strip()
+            ):
+                if float(existing.get("strength", 0.0) or 0.0) >= float(strength) - 0.04:
+                    continue
+        anchor = str(
+            payload.get("property_id")
+            or payload.get("buyer_eid")
+            or payload.get("appraiser_eid")
+            or f"{int(payload.get('x', pos.x))}:{int(payload.get('y', pos.y))}:{int(payload.get('z', pos.z))}"
+        )
+        if isinstance(cooldowns, dict):
+            last_tick = int(cooldowns.get((int(source_eid), int(target_eid), tip_kind, anchor), -10_000) or -10_000)
+            if int(tick) - last_tick < BEHAVIOR_TIP_COOLDOWN:
+                continue
+        bond_bonus = 0.0
+        if source_social is not None:
+            bond = getattr(source_social, "bonds", {}).get(target_eid)
+            if isinstance(bond, dict):
+                bond_bonus = (float(bond.get("trust", 0.0) or 0.0) * 6.0) + (float(bond.get("closeness", 0.0) or 0.0) * 4.0)
+        score = interest + bond_bonus + max(0.0, (BEHAVIOR_TIP_RADIUS + 1 - distance) * 3.2)
+        candidates.append({
+            "kind": tip_kind,
+            "target_eid": int(target_eid),
+            "strength": float(strength),
+            "payload": dict(payload),
+            "anchor": anchor,
+            "distance": int(distance),
+            "score": float(score),
+        })
+    if not candidates:
+        return ()
+
+    candidates.sort(
+        key=lambda row: (
+            -float(row.get("score", 0.0) or 0.0),
+            -float(row.get("strength", 0.0) or 0.0),
+            int(row.get("distance", 0) or 0),
+            int(row.get("target_eid", 0) or 0),
+        )
+    )
+    limit = _behavior_tip_share_target_limit(tip_kind)
+    return tuple(
+        {
+            "kind": str(row.get("kind", "")).strip().lower(),
+            "target_eid": int(row.get("target_eid", 0) or 0),
+            "strength": float(row.get("strength", 0.0) or 0.0),
+            "payload": dict(row.get("payload") or {}),
+            "anchor": str(row.get("anchor", "")).strip(),
+        }
+        for row in candidates[:limit]
+    )
+
+
+def _hidden_contact_referral_rows(sim, source_eid, pos, *, current_prop=None, workplace_prop=None, home_prop=None, occupation=None):
+    if source_eid is None or not pos:
+        return ()
+
+    career_text = str(getattr(occupation, "career", "") or "").strip().lower()
+    ref_property_ids = set()
+    ref_building_ids = set()
+    for ref in (current_prop, workplace_prop, home_prop):
+        if not isinstance(ref, dict):
+            continue
+        ref_id = str(ref.get("id", "") or "").strip()
+        if ref_id:
+            ref_property_ids.add(ref_id)
+        ref_meta = _property_metadata(ref)
+        ref_building_id = str(ref_meta.get("building_id", "") or ref_id).strip()
+        if ref_building_id:
+            ref_building_ids.add(ref_building_id)
+
+    best_by_kind = {}
+    for prop in tuple(sim.properties.values()):
+        if not isinstance(prop, dict):
+            continue
+        metadata = _property_metadata(prop)
+        hidden_kind = str(metadata.get("hidden_contact_kind", "") or "").strip().lower()
+        if hidden_kind not in {"backroom_market", "backroom_clinic"}:
+            continue
+        focus = _property_focus_position(prop)
+        if not focus:
+            continue
+        fx, fy, fz = focus
+        if int(fz) != int(pos.z):
+            continue
+
+        property_id = str(prop.get("id", "") or "").strip()
+        if not property_id:
+            continue
+        linked_property_id = str(metadata.get("linked_property_id", "") or "").strip()
+        property_building_id = str(metadata.get("building_id", "") or property_id).strip()
+        linked_building_id = str(metadata.get("linked_building_id", "") or "").strip()
+        distance = _manhattan(pos.x, pos.y, int(fx), int(fy))
+        local_link = bool(
+            prop.get("owner_eid") == source_eid
+            or property_id in ref_property_ids
+            or (linked_property_id and linked_property_id in ref_property_ids)
+            or (property_building_id and property_building_id in ref_building_ids)
+            or (linked_building_id and linked_building_id in ref_building_ids)
+        )
+        if not local_link and distance > HIDDEN_CONTACT_REFERRAL_RADIUS:
+            continue
+
+        score = 0.0
+        if prop.get("owner_eid") == source_eid:
+            score += 1.38
+        if property_id in ref_property_ids:
+            score += 1.12
+        if linked_property_id and linked_property_id in ref_property_ids:
+            score += 0.96
+        if property_building_id and property_building_id in ref_building_ids:
+            score += 0.7
+        if linked_building_id and linked_building_id in ref_building_ids:
+            score += 0.62
+        if local_link:
+            score += max(0.0, 0.28 - (distance * 0.02))
+        else:
+            score += max(0.0, 0.18 - (distance * 0.015))
+        if hidden_kind == "backroom_clinic" and any(
+            token in career_text for token in ("doctor", "medic", "nurse", "orderly", "paramedic", "street doc", "triage")
+        ):
+            score += 0.42
+        if hidden_kind == "backroom_market" and any(
+            token in career_text for token in ("broker", "dealer", "fence", "pawnbroker", "shopkeeper", "vendor", "bartender", "fixer")
+        ):
+            score += 0.36
+        if score < HIDDEN_CONTACT_REFERRAL_MIN_SCORE:
+            continue
+
+        tip_kind = BEHAVIOR_TIP_HIDDEN_CLINIC if hidden_kind == "backroom_clinic" else BEHAVIOR_TIP_HIDDEN_TRADE
+        lead_kind = "service_medical" if hidden_kind == "backroom_clinic" else "service_trade"
+        row = {
+            "tip_kind": tip_kind,
+            "hidden_contact_kind": hidden_kind,
+            "lead_kind": lead_kind,
+            "property_id": property_id,
+            "property_name": str(prop.get("name", property_id)).strip() or property_id,
+            "x": int(fx),
+            "y": int(fy),
+            "z": int(fz),
+            "score": float(score),
+            "strength": max(0.42, min(0.92, 0.24 + (score * 0.28))),
+        }
+        prior = best_by_kind.get(hidden_kind)
+        if prior is None or float(row.get("score", 0.0) or 0.0) > float(prior.get("score", 0.0) or 0.0):
+            best_by_kind[hidden_kind] = row
+    rows = tuple(best_by_kind[kind] for kind in sorted(best_by_kind.keys()))
+    return rows
+
+
+def _plan_hidden_contact_referral_shares(sim, source_eid, pos, *, current_prop=None, workplace_prop=None, home_prop=None, occupation=None, cooldowns=None, tick=0):
+    rows = _hidden_contact_referral_rows(
+        sim,
+        source_eid,
+        pos,
+        current_prop=current_prop,
+        workplace_prop=workplace_prop,
+        home_prop=home_prop,
+        occupation=occupation,
+    )
+    if not rows:
+        return ()
+    planned = []
+    for row in rows:
+        payload = {
+            "property_id": row.get("property_id"),
+            "property_name": row.get("property_name"),
+            "hidden_contact_kind": row.get("hidden_contact_kind"),
+            "lead_kind": row.get("lead_kind"),
+            "x": int(row.get("x", pos.x) or pos.x),
+            "y": int(row.get("y", pos.y) or pos.y),
+            "z": int(row.get("z", pos.z) or pos.z),
+        }
+        shares = _plan_explicit_behavior_tip_shares(
+            sim,
+            source_eid,
+            pos,
+            str(row.get("tip_kind", "")).strip().lower(),
+            payload,
+            float(row.get("strength", 0.0) or 0.0),
+            cooldowns=cooldowns,
+            tick=tick,
+        )
+        planned.extend(shares)
+    return tuple(planned)
 
 
 def _retreat_target_from_warning(sim, pos, warning_pos, *, max_stride=4):
@@ -597,12 +836,77 @@ def _behavior_tip_interest(sim, target_eid, tip_kind, payload=None):
             return 0.0
         return float(min(92.0, (identify_count * 22.0) + (appraise_count * 16.0) + 10.0))
 
+    if tip_kind == BEHAVIOR_TIP_HIDDEN_CLINIC:
+        payload = payload if isinstance(payload, dict) else {}
+        property_id = str(payload.get("property_id", "") or "").strip()
+        if not property_id:
+            return 0.0
+        prop = sim.properties.get(property_id)
+        metadata = _property_metadata(prop)
+        if str(metadata.get("hidden_contact_kind", "") or "").strip().lower() != "backroom_clinic":
+            return 0.0
+        pos = sim.ecs.get(Position).get(target_eid)
+        if pos is None:
+            return 0.0
+        target = _property_focus_position(prop)
+        if not target or int(target[2]) != int(pos.z):
+            return 0.0
+        if vitality is None or bool(getattr(vitality, "downed", False)):
+            return 0.0
+        max_hp = max(1, int(getattr(vitality, "max_hp", 1) or 1))
+        hp = max(0, int(getattr(vitality, "hp", max_hp) or max_hp))
+        health_gap = max(0.0, 1.0 - (float(hp) / float(max_hp)))
+        if health_gap <= 0.08:
+            return 0.0
+        medical_drive = _effective_behavior_value(
+            sim,
+            target_eid,
+            BEHAVIOR_SEEK_MEDICAL_AID,
+            traits=traits,
+            needs=needs,
+            vitality=vitality,
+        )
+        distance = _manhattan(int(pos.x), int(pos.y), int(target[0]), int(target[1]))
+        return float(min(94.0, (health_gap * 82.0) + (medical_drive * 18.0) + max(0.0, 12.0 - distance)))
+
+    if tip_kind == BEHAVIOR_TIP_HIDDEN_TRADE:
+        payload = payload if isinstance(payload, dict) else {}
+        property_id = str(payload.get("property_id", "") or "").strip()
+        if not property_id:
+            return 0.0
+        prop = sim.properties.get(property_id)
+        metadata = _property_metadata(prop)
+        if str(metadata.get("hidden_contact_kind", "") or "").strip().lower() != "backroom_market":
+            return 0.0
+        pos = sim.ecs.get(Position).get(target_eid)
+        if pos is None:
+            return 0.0
+        target = _property_focus_position(prop)
+        if not target or int(target[2]) != int(pos.z):
+            return 0.0
+        sale_rows = _inventory_scavenge_sale_rows(sim, target_eid)
+        if not sale_rows:
+            return 0.0
+        total_value = sum(float(row.get("value", 0.0) or 0.0) for row in sale_rows)
+        if total_value <= 0.0:
+            return 0.0
+        sell_drive = _effective_behavior_value(
+            sim,
+            target_eid,
+            BEHAVIOR_SELL_SCAVENGED_ITEMS,
+            traits=traits,
+            needs=needs,
+        )
+        distance = _manhattan(int(pos.x), int(pos.y), int(target[0]), int(target[1]))
+        contraband_bonus = _inventory_contraband_heat(sim, target_eid) * 18.0
+        return float(min(95.0, (total_value * 0.42) + (len(sale_rows) * 5.0) + contraband_bonus + (sell_drive * 12.0) + max(0.0, 10.0 - distance)))
+
     return 0.0
 
 
-def _plan_behavior_tip_share(sim, source_eid, pos, intent, *, medical_target=None, shelter_target=None, avoidance_target=None, safe_spot_share=None, street_buy_share=None, street_appraise_share=None, cooldowns=None, tick=0):
+def _plan_behavior_tip_shares(sim, source_eid, pos, intent, *, medical_target=None, shelter_target=None, avoidance_target=None, safe_spot_share=None, street_buy_share=None, street_appraise_share=None, cooldowns=None, tick=0):
     if not pos:
-        return None
+        return ()
     intent = str(intent or "").strip().lower()
     if intent == "seeking_medical_aid" and isinstance(medical_target, dict):
         tip_kind = BEHAVIOR_TIP_MEDICAL
@@ -684,66 +988,36 @@ def _plan_behavior_tip_share(sim, source_eid, pos, intent, *, medical_target=Non
             ),
         )
     else:
-        return None
+        return ()
 
-    ais = sim.ecs.get(AI)
-    positions = sim.ecs.get(Position)
-    memories = sim.ecs.get(NPCMemory)
-    socials = sim.ecs.get(NPCSocial)
-    source_social = socials.get(source_eid)
-    best = None
-    best_score = 0.0
-    for target_eid, target_ai in ais.items():
-        if target_eid == source_eid or target_eid == getattr(sim, "player_eid", None):
-            continue
-        if str(getattr(target_ai, "role", "") or "").strip().lower() == "wildlife":
-            continue
-        target_pos = positions.get(target_eid)
-        target_memory = memories.get(target_eid)
-        if not target_pos or not target_memory or int(target_pos.z) != int(pos.z):
-            continue
-        distance = _manhattan(pos.x, pos.y, target_pos.x, target_pos.y)
-        if distance <= 0 or distance > BEHAVIOR_TIP_RADIUS:
-            continue
-        interest = _behavior_tip_interest(sim, target_eid, tip_kind, payload=payload)
-        if interest <= 0.0:
-            continue
-        existing = _recent_behavior_tip(target_memory, tip_kind, now=tick, max_age=BEHAVIOR_TIP_MAX_AGE)
-        if existing is not None:
-            existing_data = existing.get("data", {}) if isinstance(existing.get("data"), dict) else {}
-            if (
-                str(existing_data.get("property_id", "") or "").strip() == str(payload.get("property_id", "") or "").strip()
-                and str(existing_data.get("buyer_eid", "") or "").strip() == str(payload.get("buyer_eid", "") or "").strip()
-                and str(existing_data.get("appraiser_eid", "") or "").strip() == str(payload.get("appraiser_eid", "") or "").strip()
-            ):
-                if float(existing.get("strength", 0.0) or 0.0) >= strength - 0.04:
-                    continue
-        anchor = str(
-            payload.get("property_id")
-            or payload.get("buyer_eid")
-            or payload.get("appraiser_eid")
-            or f"{int(payload.get('x', pos.x))}:{int(payload.get('y', pos.y))}:{int(payload.get('z', pos.z))}"
-        )
-        if isinstance(cooldowns, dict):
-            last_tick = int(cooldowns.get((int(source_eid), int(target_eid), tip_kind, anchor), -10_000) or -10_000)
-            if int(tick) - last_tick < BEHAVIOR_TIP_COOLDOWN:
-                continue
-        bond_bonus = 0.0
-        if source_social is not None:
-            bond = getattr(source_social, "bonds", {}).get(target_eid)
-            if isinstance(bond, dict):
-                bond_bonus = (float(bond.get("trust", 0.0) or 0.0) * 6.0) + (float(bond.get("closeness", 0.0) or 0.0) * 4.0)
-        score = interest + bond_bonus + max(0.0, (BEHAVIOR_TIP_RADIUS + 1 - distance) * 3.2)
-        if best is None or score > best_score:
-            best = {
-                "kind": tip_kind,
-                "target_eid": int(target_eid),
-                "strength": float(strength),
-                "payload": dict(payload),
-                "anchor": anchor,
-            }
-            best_score = score
-    return best
+    return _plan_explicit_behavior_tip_shares(
+        sim,
+        source_eid,
+        pos,
+        tip_kind,
+        payload,
+        strength,
+        cooldowns=cooldowns,
+        tick=tick,
+    )
+
+
+def _plan_behavior_tip_share(sim, source_eid, pos, intent, *, medical_target=None, shelter_target=None, avoidance_target=None, safe_spot_share=None, street_buy_share=None, street_appraise_share=None, cooldowns=None, tick=0):
+    shares = _plan_behavior_tip_shares(
+        sim,
+        source_eid,
+        pos,
+        intent,
+        medical_target=medical_target,
+        shelter_target=shelter_target,
+        avoidance_target=avoidance_target,
+        safe_spot_share=safe_spot_share,
+        street_buy_share=street_buy_share,
+        street_appraise_share=street_appraise_share,
+        cooldowns=cooldowns,
+        tick=tick,
+    )
+    return shares[0] if shares else None
 
 
 def _apply_behavior_tip_shares(sim, pending, *, cooldowns=None, tick=0):
@@ -1044,6 +1318,8 @@ class NPCWillSystem(System):
             heat_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_HEAT, now=self.sim.tick)
             street_buy_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_STREET_BUY, now=self.sim.tick)
             street_appraise_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_STREET_APPRAISE, now=self.sim.tick)
+            hidden_trade_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_HIDDEN_TRADE, now=self.sim.tick)
+            hidden_clinic_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_HIDDEN_CLINIC, now=self.sim.tick)
             medical_target = None
             shelter_target = None
             avoidance_target = None
@@ -1374,7 +1650,10 @@ class NPCWillSystem(System):
             medical_tip_data = medical_tip.get("data", {}) if isinstance(medical_tip, dict) else {}
             medical_tip_strength = float(medical_tip.get("strength", 0.0) or 0.0) if isinstance(medical_tip, dict) else 0.0
             medical_tip_property_id = str(medical_tip_data.get("property_id", "") or "").strip() if isinstance(medical_tip_data, dict) else ""
-            if seek_medical_aid >= 0.08 or medical_tip is not None:
+            hidden_clinic_tip_data = hidden_clinic_tip.get("data", {}) if isinstance(hidden_clinic_tip, dict) else {}
+            hidden_clinic_tip_strength = float(hidden_clinic_tip.get("strength", 0.0) or 0.0) if isinstance(hidden_clinic_tip, dict) else 0.0
+            hidden_clinic_property_id = str(hidden_clinic_tip_data.get("property_id", "") or "").strip() if isinstance(hidden_clinic_tip_data, dict) else ""
+            if seek_medical_aid >= 0.08 or medical_tip is not None or hidden_clinic_tip is not None:
                 medical_target = _find_medical_aid_target(
                     self.sim,
                     eid,
@@ -1382,6 +1661,15 @@ class NPCWillSystem(System):
                     preferred_property_id=medical_tip_property_id or None,
                     preferred_score_bonus=18.0 * medical_tip_strength,
                 )
+                hidden_clinic_target = None
+                if hidden_clinic_property_id:
+                    hidden_clinic_target = _find_medical_aid_target(
+                        self.sim,
+                        eid,
+                        pos,
+                        preferred_property_id=hidden_clinic_property_id,
+                        preferred_score_bonus=22.0 * hidden_clinic_tip_strength,
+                    )
                 if medical_target:
                     medical_score = float(medical_target.get("score", 0.0) or 0.0) * (
                         0.4 + (seek_medical_aid * 0.9)
@@ -1394,6 +1682,20 @@ class NPCWillSystem(System):
                         best_intent = "seeking_medical_aid"
                         best_score = medical_score
                         best_target = medical_target["target"]
+                        best_target_eid = None
+                if hidden_clinic_target:
+                    hidden_clinic_score = float(hidden_clinic_target.get("score", 0.0) or 0.0) * (
+                        0.42 + (seek_medical_aid * 0.92)
+                    )
+                    if hidden_clinic_property_id and hidden_clinic_target.get("property_id") == hidden_clinic_property_id:
+                        hidden_clinic_score += 12.0 + (hidden_clinic_tip_strength * 24.0)
+                    if ai.state == "seeking_medical_aid" and ai.target == hidden_clinic_target.get("target"):
+                        hidden_clinic_score += 4.0
+                    if hidden_clinic_score > best_score:
+                        medical_target = hidden_clinic_target
+                        best_intent = "seeking_medical_aid"
+                        best_score = hidden_clinic_score
+                        best_target = hidden_clinic_target["target"]
                         best_target_eid = None
 
             seek_shelter = _effective_behavior_value(
@@ -1485,6 +1787,7 @@ class NPCWillSystem(System):
             social_pressure = (100.0 - needs.social) * (0.35 + (seek_social_contact * 1.05))
             workplace_prop = _workplace_property(self.sim, occupation=occupation, routine=routine)
             home_prop = _home_property(self.sim, routine=routine)
+            current_prop = _property_covering(self.sim, pos.x, pos.y, pos.z)
             work_active = work_shift_active(
                 self.sim,
                 occupation=occupation,
@@ -1522,6 +1825,9 @@ class NPCWillSystem(System):
                 traits=traits,
                 needs=needs,
             )
+            hidden_trade_tip_data = hidden_trade_tip.get("data", {}) if isinstance(hidden_trade_tip, dict) else {}
+            hidden_trade_tip_strength = float(hidden_trade_tip.get("strength", 0.0) or 0.0) if isinstance(hidden_trade_tip, dict) else 0.0
+            hidden_trade_property_id = str(hidden_trade_tip_data.get("property_id", "") or "").strip() if isinstance(hidden_trade_tip_data, dict) else ""
             if collect_ground_credits >= 0.05:
                 scavenging_target = _find_ground_credit_target(self.sim, eid, pos)
                 if scavenging_target:
@@ -1554,12 +1860,20 @@ class NPCWillSystem(System):
                         best_target = item_target["target"]
                         best_target_eid = None
 
-            if sell_scavenged_items >= 0.05:
-                sale_target = _find_scavenged_sale_target(self.sim, eid, pos)
+            if sell_scavenged_items >= 0.05 or hidden_trade_tip is not None:
+                sale_target = _find_scavenged_sale_target(
+                    self.sim,
+                    eid,
+                    pos,
+                    preferred_property_id=hidden_trade_property_id or None,
+                    preferred_score_bonus=20.0 * hidden_trade_tip_strength,
+                )
                 if sale_target:
                     sale_score = float(sale_target.get("score", 0.0) or 0.0) * (
                         0.5 + (sell_scavenged_items * 1.15)
                     )
+                    if hidden_trade_property_id and sale_target.get("property_id") == hidden_trade_property_id:
+                        sale_score += 10.0 + (hidden_trade_tip_strength * 22.0)
                     if work_active and (
                         workplace_prop is not None
                         or (occupation and getattr(occupation, "workplace", None))
@@ -1890,7 +2204,7 @@ class NPCWillSystem(System):
                     best_target_eid,
                 )
 
-            queued_tip = _plan_behavior_tip_share(
+            queued_tips = _plan_behavior_tip_shares(
                 self.sim,
                 eid,
                 pos,
@@ -1904,11 +2218,25 @@ class NPCWillSystem(System):
                 cooldowns=tip_cooldowns,
                 tick=self.sim.tick,
             )
-            if queued_tip:
+            for queued_tip in queued_tips:
                 queued_tip["source_eid"] = int(eid)
                 pending_behavior_tips.append(queued_tip)
+            hidden_contact_tips = _plan_hidden_contact_referral_shares(
+                self.sim,
+                eid,
+                pos,
+                current_prop=current_prop,
+                workplace_prop=workplace_prop,
+                home_prop=home_prop,
+                occupation=occupation,
+                cooldowns=tip_cooldowns,
+                tick=self.sim.tick,
+            )
+            for hidden_tip in hidden_contact_tips:
+                hidden_tip["source_eid"] = int(eid)
+                pending_behavior_tips.append(hidden_tip)
             if best_intent in {"seeking_shelter", "seeking_medical_aid", "evading_authority"} and isinstance(safe_spot_share, dict):
-                safe_tip = _plan_behavior_tip_share(
+                safe_tips = _plan_behavior_tip_shares(
                     self.sim,
                     eid,
                     pos,
@@ -1917,7 +2245,7 @@ class NPCWillSystem(System):
                     cooldowns=tip_cooldowns,
                     tick=self.sim.tick,
                 )
-                if safe_tip:
+                for safe_tip in safe_tips:
                     safe_tip["source_eid"] = int(eid)
                     pending_behavior_tips.append(safe_tip)
 
@@ -2101,6 +2429,14 @@ class NPCInvestigateSystem(System):
             if not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
                 continue
 
+            memory = memories.get(eid)
+            hidden_trade_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_HIDDEN_TRADE, now=self.sim.tick)
+            hidden_trade_tip_data = hidden_trade_tip.get("data", {}) if isinstance(hidden_trade_tip, dict) else {}
+            hidden_trade_property_id = str(hidden_trade_tip_data.get("property_id", "") or "").strip() if isinstance(hidden_trade_tip_data, dict) else ""
+            hidden_clinic_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_HIDDEN_CLINIC, now=self.sim.tick)
+            hidden_clinic_tip_data = hidden_clinic_tip.get("data", {}) if isinstance(hidden_clinic_tip, dict) else {}
+            hidden_clinic_property_id = str(hidden_clinic_tip_data.get("property_id", "") or "").strip() if isinstance(hidden_clinic_tip_data, dict) else ""
+
             throttle = move_throttles.get(eid)
             status_speed_mult = _entity_status_move_speed_multiplier(self.sim, eid)
 
@@ -2195,7 +2531,12 @@ class NPCInvestigateSystem(System):
                 if ai.state == "scavenging":
                     _collect_ground_items_at_actor(self.sim, eid, pos)
                 if ai.state == "selling_scavenged":
-                    _sell_scavenged_inventory_at_actor(self.sim, eid, pos)
+                    _sell_scavenged_inventory_at_actor(
+                        self.sim,
+                        eid,
+                        pos,
+                        preferred_property_id=hidden_trade_property_id or None,
+                    )
                 if ai.state == "seeking_street_buyer" and ai.target_eid is not None:
                     buyer_eid = ai.target_eid
                     buyer_pos = positions.get(buyer_eid)
@@ -2227,7 +2568,12 @@ class NPCInvestigateSystem(System):
                             eid,
                         )
                 if ai.state == "seeking_medical_aid":
-                    _receive_medical_aid_at_actor(self.sim, eid, pos)
+                    _receive_medical_aid_at_actor(
+                        self.sim,
+                        eid,
+                        pos,
+                        preferred_property_id=hidden_clinic_property_id or None,
+                    )
                 if ai.state == "seeking_safe_spot":
                     _receive_safe_spot_at_actor(self.sim, eid, pos)
                 if ai.state == "seeking_shelter":
@@ -2267,6 +2613,15 @@ class NPCInvestigateSystem(System):
                 if ai.state == "protecting":
                     self.sim.emit(Event("npc_guarding_target", npc_eid=eid, target_eid=ai.target_eid, x=tx, y=ty, z=tz))
 
+                if ai.state == "socializing":
+                    arrived_prop = _property_covering(self.sim, tx, ty, tz) or _property_covering(self.sim, pos.x, pos.y, pos.z)
+                    if isinstance(arrived_prop, dict) and str(arrived_prop.get("id", "") or "").strip():
+                        self.sim.emit(Event(
+                            "npc_social_venue_visited",
+                            npc_eid=eid,
+                            property_id=arrived_prop.get("id"),
+                            source_eid=eid,
+                        ))
                 if ai.state in {"working", "lounging", "socializing"}:
                     # Arrived at roam tile; clear target so will system picks a new one.
                     ai.target = None

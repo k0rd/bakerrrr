@@ -10,9 +10,11 @@ from game.components import Inventory, PlayerAssets, Position, VehicleState
 from game.economy import item_market_bias, store_supply_profile
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
+from game.player_businesses import player_business_markup_profile as _player_business_markup_profile
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_keys import ensure_property_lock, remove_actor_property_credentials
 from game.property_runtime import (
+    property_covering as _property_covering,
     property_distance as _property_distance,
     property_is_storefront as _property_is_storefront,
     property_is_vehicle as _property_is_vehicle,
@@ -46,6 +48,49 @@ def _item_legend_line(item_id, text):
         color=_ground_item_color(item_def),
         attrs=getattr(curses, "A_BOLD", 0),
     )
+
+
+def _metadata_float(metadata, key, default=0.0):
+    if not isinstance(metadata, dict):
+        return float(default)
+    try:
+        value = metadata.get(key, default)
+        if value is None:
+            raise TypeError
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _metadata_weight_mults(metadata):
+    if not isinstance(metadata, dict):
+        return {}
+    raw = metadata.get("trade_item_weight_mults")
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for item_id, value in raw.items():
+        key = str(item_id or "").strip().lower()
+        if not key:
+            continue
+        try:
+            out[key] = max(0.05, float(value))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _join_notes(*parts):
+    seen = set()
+    notes = []
+    for part in parts:
+        text = str(part or "").strip()
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        notes.append(text)
+    return "; ".join(notes)
 
 
 class TradeSystem(System):
@@ -995,6 +1040,7 @@ class TradeSystem(System):
                 "contact_note": "",
                 "service_note": "",
                 "service_eid": None,
+                "owner_transfer": False,
             }
         self.sim.events.subscribe("player_action", self.on_player_action)
         self.sim.events.subscribe("property_interact", self.on_property_interact)
@@ -1014,6 +1060,24 @@ class TradeSystem(System):
 
     def _trade_terms(self, eid, prop):
         return self._trade_contact_terms(self.sim, eid, prop)
+
+    def _actor_owns_property(self, eid, prop):
+        if not isinstance(prop, dict):
+            return False
+        try:
+            if int(prop.get("owner_eid") or 0) == int(eid):
+                return True
+        except (TypeError, ValueError):
+            if prop.get("owner_eid") == eid:
+                return True
+        assets = self._assets_for(eid)
+        if not assets:
+            return False
+        property_id = str(prop.get("id", "") or "").strip()
+        return bool(property_id and property_id in getattr(assets, "owned_property_ids", set()))
+
+    def _owner_transfer_enabled(self, eid, prop):
+        return bool(self._actor_owns_property(eid, prop) and _property_is_storefront(prop))
 
     def _effective_buy_price(self, base_price, terms):
         return max(1, int(round(int(base_price) * float(terms.get("buy_mult", 1.0)))))
@@ -1075,7 +1139,7 @@ class TradeSystem(System):
             if not access.can_use_services:
                 continue
             dist = _property_distance(pos.x, pos.y, prop)
-            service = _storefront_service_profile(self.sim, prop)
+            service = _storefront_service_profile(self.sim, prop, actor_eid=self.player_eid)
             if automated_only and not self._service_is_machine(service):
                 continue
             if service.get("available"):
@@ -1101,8 +1165,10 @@ class TradeSystem(System):
     def _resolve_store(self, pos, preferred_property_id=None, radius=2, automated_only=False):
         preferred = self._storefront_by_id(preferred_property_id)
         if preferred and int(preferred.get("z", 0)) == int(pos.z):
-            if _property_distance(pos.x, pos.y, preferred) <= radius:
-                preferred_service = _storefront_service_profile(self.sim, preferred)
+            covered = _property_covering(self.sim, pos.x, pos.y, pos.z)
+            inside_preferred = isinstance(covered, dict) and str(covered.get("id", "")).strip() == str(preferred.get("id", "")).strip()
+            if _property_distance(pos.x, pos.y, preferred) <= radius or inside_preferred:
+                preferred_service = _storefront_service_profile(self.sim, preferred, actor_eid=self.player_eid)
                 if not automated_only or self._service_is_machine(preferred_service):
                     return preferred, preferred_service
         return self._nearest_store(pos, radius=radius, automated_only=automated_only)
@@ -1137,11 +1203,13 @@ class TradeSystem(System):
         return rng.randint(140, 220)
 
     def _rebuild_store(self, state, prop, cycle_index):
-        metadata = prop.get("metadata", {})
+        metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
         archetype = str(metadata.get("archetype", "")).strip().lower()
         profile = self._store_profile(archetype)
         market_profile = store_supply_profile(self.sim, prop)
         rng = random.Random(f"{self.sim.seed}:store:{prop['id']}:cycle:{cycle_index}")
+        weight_mults = _metadata_weight_mults(metadata)
+        extra_supply_note = str(metadata.get("trade_supply_note", "") or metadata.get("covert_hint", "")).strip()
 
         min_slots = int(max(1, profile.get("min_slots", 3)))
         max_slots = int(max(min_slots, profile.get("max_slots", 5)))
@@ -1149,7 +1217,8 @@ class TradeSystem(System):
         weighted_pool = []
         for item_id, weight in profile.get("item_pool", ()):
             bias = item_market_bias(item_id, market_profile)
-            adjusted = int(max(1, round(float(weight) * float(bias.get("weight_mult", 1.0)))))
+            adjusted = float(weight) * float(bias.get("weight_mult", 1.0)) * float(weight_mults.get(item_id, 1.0))
+            adjusted = int(max(1, round(adjusted)))
             weighted_pool.append((item_id, adjusted))
         item_ids = self._weighted_unique(rng, weighted_pool, slots)
         if not item_ids:
@@ -1158,9 +1227,23 @@ class TradeSystem(System):
         entries = []
         min_stock = int(max(1, profile.get("min_stock", 1)))
         max_stock = int(max(min_stock, profile.get("max_stock", 4)))
-        buy_mult_lo = float(max(0.5, profile.get("buy_mult_lo", 1.0)))
-        buy_mult_hi = float(max(buy_mult_lo, profile.get("buy_mult_hi", 1.4)))
-        sell_ratio = float(max(0.1, min(0.9, profile.get("sell_ratio", 0.45))))
+        buy_mult_lo = float(max(0.5, profile.get("buy_mult_lo", 1.0) + _metadata_float(metadata, "trade_buy_mult_lo_delta", 0.0)))
+        buy_mult_hi = float(max(buy_mult_lo, profile.get("buy_mult_hi", 1.4) + _metadata_float(metadata, "trade_buy_mult_hi_delta", 0.0)))
+        sell_ratio = float(max(0.1, min(0.9, profile.get("sell_ratio", 0.45) + _metadata_float(metadata, "trade_sell_ratio_delta", 0.0))))
+        unlisted_sell_ratio = float(
+            max(
+                0.1,
+                min(
+                    0.85,
+                    profile.get("unlisted_sell_ratio", 0.3) + _metadata_float(metadata, "trade_unlisted_sell_ratio_delta", 0.0),
+                ),
+            )
+        )
+        trade_stock_mult = max(0.25, _metadata_float(metadata, "trade_stock_mult", 1.0))
+        markup_profile = _player_business_markup_profile(prop)
+        markup_mult = max(0.5, float(markup_profile.get("buy_mult", 1.0) or 1.0))
+        buy_mult_lo = max(0.5, buy_mult_lo * markup_mult)
+        buy_mult_hi = max(buy_mult_lo, buy_mult_hi * markup_mult)
 
         for item_id in item_ids:
             item_def = ITEM_CATALOG.get(item_id)
@@ -1173,7 +1256,7 @@ class TradeSystem(System):
                 int(round(base * rng.uniform(buy_mult_lo, buy_mult_hi) * float(bias.get("price_mult", 1.0)))),
             )
             sell_price = max(1, int(round(buy_price * sell_ratio)))
-            stock_mult = float(bias.get("stock_mult", 1.0))
+            stock_mult = float(bias.get("stock_mult", 1.0)) * trade_stock_mult
             item_min_stock = max(1, int(round(min_stock * max(0.6, stock_mult * 0.8))))
             item_max_stock = max(item_min_stock, int(round(max_stock * stock_mult)))
             entries.append({
@@ -1192,8 +1275,8 @@ class TradeSystem(System):
         state["buy_mult_lo"] = buy_mult_lo
         state["buy_mult_hi"] = buy_mult_hi
         state["sell_ratio"] = sell_ratio
-        state["unlisted_sell_ratio"] = float(max(0.1, min(0.85, profile.get("unlisted_sell_ratio", 0.3))))
-        state["supply_note"] = str(market_profile.get("store_note", "")).strip()
+        state["unlisted_sell_ratio"] = unlisted_sell_ratio
+        state["supply_note"] = _join_notes(market_profile.get("store_note", ""), extra_supply_note)
         state["family_profile"] = str(market_profile.get("family_profile", "")).strip()
         state["pressure_note"] = str(market_profile.get("pressure_note", "")).strip()
         state["entries"] = entries
@@ -1370,7 +1453,7 @@ class TradeSystem(System):
         ))
         return True
 
-    def _trade_sell_candidates(self, inventory, store, terms=None):
+    def _trade_sell_candidates(self, inventory, store, terms=None, owner_transfer=False):
         candidates = []
         if not inventory:
             return candidates
@@ -1387,14 +1470,18 @@ class TradeSystem(System):
                 "item_name": display_name,
                 "glyph": _item_display_glyph(item_def),
                 "quantity": int(entry.get("quantity", 1)),
-                "price": int(max(1, quote)),
-                "listed": bool(listed),
+                "price": 0 if owner_transfer else int(max(1, quote)),
+                "listed": bool(listed and not owner_transfer),
+                "action_label": "stock" if owner_transfer else "",
             })
 
-        candidates.sort(key=lambda row: (-row["price"], row["item_id"], row["instance_id"]))
+        if owner_transfer:
+            candidates.sort(key=lambda row: (row["item_id"], row["instance_id"]))
+        else:
+            candidates.sort(key=lambda row: (-row["price"], row["item_id"], row["instance_id"]))
         return candidates
 
-    def _trade_buy_rows(self, store, terms=None):
+    def _trade_buy_rows(self, store, terms=None, owner_transfer=False):
         terms = terms or {"buy_mult": 1.0}
         rows = []
         for entry in sorted(
@@ -1407,14 +1494,15 @@ class TradeSystem(System):
                 "item_id": item_id,
                 "item_name": item_display_name_for_actor(self.sim, self.player_eid, {"item_id": item_id}, item_catalog=ITEM_CATALOG),
                 "glyph": _item_display_glyph(item_def),
-                "price": self._effective_buy_price(entry.get("buy_price", 1), terms),
+                "price": 0 if owner_transfer else self._effective_buy_price(entry.get("buy_price", 1), terms),
                 "stock": int(max(0, entry.get("stock", 0))),
+                "action_label": "withdraw" if owner_transfer else "",
             })
         return rows
 
-    def _trade_sell_rows(self, inventory, store, terms=None):
+    def _trade_sell_rows(self, inventory, store, terms=None, owner_transfer=False):
         rows = []
-        for row in self._trade_sell_candidates(inventory, store, terms=terms):
+        for row in self._trade_sell_candidates(inventory, store, terms=terms, owner_transfer=owner_transfer):
             rows.append({
                 "instance_id": row["instance_id"],
                 "item_id": row["item_id"],
@@ -1423,6 +1511,7 @@ class TradeSystem(System):
                 "quantity": row["quantity"],
                 "price": row["price"],
                 "listed": row["listed"],
+                "action_label": row.get("action_label", ""),
             })
         return rows
 
@@ -1436,17 +1525,36 @@ class TradeSystem(System):
         idx = max(0, min(idx, len(rows) - 1))
         state["selected_index"] = idx
         row = rows[idx]
+        action_label = str(row.get("action_label", "")).strip().lower()
 
         if state.get("mode") == "buy":
+            if action_label:
+                state["inspect_text"] = _item_legend_line(
+                    row.get("item_id"),
+                    (
+                        f"{row.get('item_name', row.get('item_id', 'item'))} "
+                        f"{action_label} from shelf stock {int(row.get('stock', 0))}"
+                    ),
+                )
+            else:
+                state["inspect_text"] = _item_legend_line(
+                    row.get("item_id"),
+                    (
+                        f"{row.get('item_name', row.get('item_id', 'item'))} "
+                        f"{int(row.get('price', 0))} credits stock {int(row.get('stock', 0))}"
+                    ),
+                )
+            return
+
+        if action_label:
             state["inspect_text"] = _item_legend_line(
                 row.get("item_id"),
                 (
                     f"{row.get('item_name', row.get('item_id', 'item'))} "
-                    f"{int(row.get('price', 0))} credits stock {int(row.get('stock', 0))}"
+                    f"{action_label} into shelf stock qty {int(row.get('quantity', 0))}"
                 ),
             )
             return
-
         listed_text = "listed" if row.get("listed") else "unlisted"
         state["inspect_text"] = _item_legend_line(
             row.get("item_id"),
@@ -1494,6 +1602,7 @@ class TradeSystem(System):
             state["contact_note"] = ""
             state["service_note"] = ""
             state["service_eid"] = None
+            state["owner_transfer"] = False
             if emit_toggle and was_open:
                 self.sim.emit(Event("trade_panel_toggled", eid=self.player_eid, open=False))
             blocked_reason = "no_machine_store" if automated_only else "no_store"
@@ -1517,6 +1626,7 @@ class TradeSystem(System):
             state["contact_note"] = ""
             state["service_note"] = ""
             state["service_eid"] = None
+            state["owner_transfer"] = False
             if emit_toggle and was_open:
                 self.sim.emit(Event("trade_panel_toggled", eid=self.player_eid, open=False))
             self.sim.emit(
@@ -1533,10 +1643,11 @@ class TradeSystem(System):
         inventory = self._inventory_for(self.player_eid)
         terms = self._trade_terms(self.player_eid, store_prop)
         mode = state.get("mode", "buy")
+        owner_transfer = self._owner_transfer_enabled(self.player_eid, store_prop)
         rows = (
-            self._trade_buy_rows(store, terms=terms)
+            self._trade_buy_rows(store, terms=terms, owner_transfer=owner_transfer)
             if mode == "buy"
-            else self._trade_sell_rows(inventory, store, terms=terms)
+            else self._trade_sell_rows(inventory, store, terms=terms, owner_transfer=owner_transfer)
         )
 
         prev_index = int(state.get("selected_index", 0))
@@ -1570,6 +1681,7 @@ class TradeSystem(System):
         state["contact_note"] = str(terms.get("note", "")).strip()
         state["service_note"] = str(service.get("service_note", "")).strip() if isinstance(service, dict) else ""
         state["service_eid"] = service.get("service_eid") if isinstance(service, dict) else None
+        state["owner_transfer"] = bool(owner_transfer)
         self._refresh_trade_inspect_text(state)
 
         if emit_toggle:
@@ -1601,6 +1713,7 @@ class TradeSystem(System):
         state["contact_note"] = ""
         state["service_note"] = ""
         state["service_eid"] = None
+        state["owner_transfer"] = False
         if was_open:
             self.sim.emit(Event("trade_panel_toggled", eid=self.player_eid, open=False))
 
@@ -1622,6 +1735,7 @@ class TradeSystem(System):
 
         store = self._store_state(store_prop)
         terms = self._trade_terms(eid, store_prop)
+        owner_transfer = self._owner_transfer_enabled(eid, store_prop)
         cheapest = None
         choice = None
         if target_item_id:
@@ -1638,7 +1752,7 @@ class TradeSystem(System):
                 ))
                 return False
             effective_price = self._effective_buy_price(choice.get("buy_price", 0), terms)
-            if assets.credits < effective_price:
+            if not owner_transfer and assets.credits < effective_price:
                 self.sim.emit(Event(
                     "trade_buy_blocked",
                     eid=eid,
@@ -1649,7 +1763,7 @@ class TradeSystem(System):
                 ))
                 return False
         else:
-            choice, cheapest = self._best_buy_entry(store, assets.credits, terms=terms)
+            choice, cheapest = self._best_buy_entry(store, assets.credits if not owner_transfer else 10**9, terms=terms)
         if not choice:
             if cheapest:
                 self.sim.emit(Event(
@@ -1694,8 +1808,9 @@ class TradeSystem(System):
             return False
 
         base_price = int(max(1, choice.get("buy_price", 1)))
-        price = self._effective_buy_price(base_price, terms)
-        assets.credits -= price
+        price = 0 if owner_transfer else self._effective_buy_price(base_price, terms)
+        if not owner_transfer:
+            assets.credits -= price
         choice["stock"] = max(0, int(choice.get("stock", 0)) - 1)
 
         self.sim.emit(Event(
@@ -1710,6 +1825,8 @@ class TradeSystem(System):
             stock_left=choice["stock"],
             credits=assets.credits,
             instance_id=instance_id,
+            owner_transfer=bool(owner_transfer),
+            transfer_mode="withdraw" if owner_transfer else "",
             contact_source_eid=terms.get("source_eid"),
             contact_note=terms.get("note", ""),
         ))
@@ -1736,8 +1853,9 @@ class TradeSystem(System):
 
         store = self._store_state(store_prop)
         terms = self._trade_terms(eid, store_prop)
+        owner_transfer = self._owner_transfer_enabled(eid, store_prop)
 
-        candidates = self._trade_sell_candidates(inventory, store, terms=terms)
+        candidates = self._trade_sell_candidates(inventory, store, terms=terms, owner_transfer=owner_transfer)
         if target_instance_id:
             best = None
             for row in candidates:
@@ -1761,6 +1879,8 @@ class TradeSystem(System):
             return False
 
         if (
+            not owner_transfer
+            and
             str(best.get("item_id", "") or "").strip().lower() == "property_key"
             and self._store_accepts_vehicle_trade_in(store_prop)
         ):
@@ -1813,8 +1933,9 @@ class TradeSystem(System):
         item_id = removed["item_id"]
         item_def = ITEM_CATALOG.get(item_id, {"name": item_id})
         base_payout, _ = self._sell_quote(item_id, store, terms={"sell_mult": 1.0})
-        payout = int(max(1, best["price"]))
-        assets.credits += payout
+        payout = 0 if owner_transfer else int(max(1, best["price"]))
+        if not owner_transfer:
+            assets.credits += payout
 
         existing = self._entry_for_item(store, item_id)
         if existing:
@@ -1847,9 +1968,11 @@ class TradeSystem(System):
             quantity=int(max(1, removed.get("quantity", 1) or 1)),
             price=payout,
             base_price=base_payout,
-            listed=bool(best["listed"]),
+            listed=bool(best["listed"] and not owner_transfer),
             stock_now=stock_now,
             credits=assets.credits,
+            owner_transfer=bool(owner_transfer),
+            transfer_mode="stock" if owner_transfer else "",
             contact_source_eid=terms.get("source_eid"),
             contact_note=terms.get("note", ""),
         ))

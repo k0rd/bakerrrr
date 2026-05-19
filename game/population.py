@@ -2900,6 +2900,116 @@ ROOM_CURIOSITY_ENCOUNTER_ROWS = (
     },
 )
 
+_HIDDEN_STOREFRONT_PROFILES = {
+    "backroom_market": (
+        {
+            "id": "hot",
+            "weight": 3,
+            "covert_hint": "People whisper the room runs hot, so do not linger.",
+            "trade_supply_note": "Hot room: thin shelves, hard prices, eyes on the door.",
+            "trade_buy_mult_lo_delta": 0.12,
+            "trade_buy_mult_hi_delta": 0.18,
+            "trade_sell_ratio_delta": 0.04,
+            "trade_unlisted_sell_ratio_delta": 0.12,
+            "trade_stock_mult": 0.72,
+            "trade_item_weight_mults": {
+                "burner_phone": 1.35,
+                "signal_jammer": 1.25,
+                "forged_badge": 1.4,
+                "credstick_chip": 0.74,
+                "light_ammo_box": 0.82,
+            },
+        },
+        {
+            "id": "hungry",
+            "weight": 4,
+            "covert_hint": "The keeper is hungry for fresh product and fast deals.",
+            "trade_supply_note": "Hungry buyer: lighter shelves up front, better cash for off-list goods.",
+            "trade_buy_mult_lo_delta": 0.04,
+            "trade_buy_mult_hi_delta": 0.1,
+            "trade_sell_ratio_delta": 0.12,
+            "trade_unlisted_sell_ratio_delta": 0.2,
+            "trade_stock_mult": 0.82,
+            "trade_item_weight_mults": {
+                "lockpick_kit": 1.12,
+                "glass_cutter": 1.12,
+                "hotwire_leads": 1.1,
+                "cloned_thumb": 1.08,
+                "credstick_chip": 1.12,
+            },
+        },
+        {
+            "id": "selective",
+            "weight": 3,
+            "covert_hint": "The shelf is better than most, but the keeper gets choosy.",
+            "trade_supply_note": "Selective shelf: sharper kit, tighter markups.",
+            "trade_buy_mult_lo_delta": 0.08,
+            "trade_buy_mult_hi_delta": 0.14,
+            "trade_sell_ratio_delta": 0.02,
+            "trade_unlisted_sell_ratio_delta": 0.06,
+            "trade_stock_mult": 0.9,
+            "trade_item_weight_mults": {
+                "signal_jammer": 1.24,
+                "cloned_thumb": 1.35,
+                "forged_badge": 1.2,
+                "holdout_pistol": 1.25,
+                "med_gel": 0.76,
+            },
+        },
+    ),
+    "backroom_clinic": (
+        {
+            "id": "hot",
+            "weight": 3,
+            "covert_hint": "People still use it, but the room sounds watched and rushed.",
+            "trade_supply_note": "Hot clinic: short stock and rushed prices.",
+            "trade_buy_mult_lo_delta": 0.12,
+            "trade_buy_mult_hi_delta": 0.16,
+            "trade_stock_mult": 0.72,
+            "trade_item_weight_mults": {
+                "trauma_foam": 1.22,
+                "counterfeit_med_gel": 1.18,
+                "field_dressing": 1.08,
+                "hydration_salts": 0.72,
+            },
+        },
+        {
+            "id": "rough",
+            "weight": 4,
+            "covert_hint": "It patches people up, but the work sounds rough and improvised.",
+            "trade_supply_note": "Rough clinic: improvised stock, mixed quality.",
+            "trade_buy_mult_lo_delta": -0.02,
+            "trade_buy_mult_hi_delta": 0.06,
+            "trade_stock_mult": 0.94,
+            "trade_item_weight_mults": {
+                "counterfeit_med_gel": 1.7,
+                "burner_serum": 1.62,
+                "sedative_ampoule": 1.34,
+                "field_dressing": 1.24,
+                "trauma_autoinjector": 0.45,
+                "trauma_foam": 0.72,
+                "med_gel": 0.82,
+            },
+        },
+        {
+            "id": "quiet",
+            "weight": 3,
+            "covert_hint": "People swear by it if you keep your mouth shut and your visit short.",
+            "trade_supply_note": "Quiet clinic: discreet stock, not much surplus.",
+            "trade_buy_mult_lo_delta": 0.04,
+            "trade_buy_mult_hi_delta": 0.1,
+            "trade_stock_mult": 0.82,
+            "trade_item_weight_mults": {
+                "med_gel": 1.25,
+                "micro_medkit": 1.18,
+                "calm_patch": 1.18,
+                "counterfeit_med_gel": 0.72,
+                "burner_serum": 0.66,
+            },
+        },
+    ),
+}
+
 
 def _hidden_storefront_name(host_prop, *, room_kind=""):
     host_name = str((host_prop or {}).get("name", "") or "").strip()
@@ -2911,6 +3021,38 @@ def _hidden_storefront_name(host_prop, *, room_kind=""):
     return "Back Room"
 
 
+def _hidden_storefront_profile_metadata(archetype, rng):
+    archetype = str(archetype or "backroom_market").strip().lower() or "backroom_market"
+    profiles = tuple(_HIDDEN_STOREFRONT_PROFILES.get(archetype, ()))
+    if not profiles:
+        return {}
+    choice = _weighted_choice(
+        rng,
+        [(profile, int(max(1, profile.get("weight", 1) or 1))) for profile in profiles],
+    )
+    if not isinstance(choice, dict):
+        return {}
+    metadata = {
+        "backroom_profile": str(choice.get("id", "")).strip().lower() or None,
+        "covert_hint": str(choice.get("covert_hint", "")).strip() or None,
+        "trade_supply_note": str(choice.get("trade_supply_note", "")).strip() or None,
+        "trade_item_weight_mults": dict(choice.get("trade_item_weight_mults", {}) or {}),
+    }
+    for key in (
+        "trade_buy_mult_lo_delta",
+        "trade_buy_mult_hi_delta",
+        "trade_sell_ratio_delta",
+        "trade_unlisted_sell_ratio_delta",
+        "trade_stock_mult",
+    ):
+        try:
+            if choice.get(key) is not None:
+                metadata[key] = float(choice.get(key))
+        except (TypeError, ValueError):
+            continue
+    return {key: value for key, value in metadata.items() if value not in (None, "", {})}
+
+
 def _spawn_hidden_storefront(
     sim,
     host_prop,
@@ -2920,6 +3062,7 @@ def _spawn_hidden_storefront(
     archetype="backroom_market",
     room_kind="",
     dialogue_trade_only=True,
+    rng=None,
 ):
     if not isinstance(host_prop, dict) or owner_eid is None:
         return None
@@ -2963,6 +3106,8 @@ def _spawn_hidden_storefront(
             "ordinary": False,
         },
     }
+    if rng is not None:
+        metadata.update(_hidden_storefront_profile_metadata(archetype, rng))
     return sim.register_property(
         name=name,
         kind="asset",
@@ -3010,6 +3155,8 @@ def _spawn_hidden_contact_lead_item(sim, hidden_storefront, room_tiles, rng, *, 
             "placement_zone": "room_curiosity_lead",
             "placement_room_kind": str((hidden_storefront.get("metadata", {}) or {}).get("placement_room_kind", "")).strip().lower() or None,
             "hidden_contact_kind": str((hidden_storefront.get("metadata", {}) or {}).get("hidden_contact_kind", "")).strip().lower() or None,
+            "backroom_profile": str((hidden_storefront.get("metadata", {}) or {}).get("backroom_profile", "")).strip().lower() or None,
+            "covert_hint": str((hidden_storefront.get("metadata", {}) or {}).get("covert_hint", "")).strip() or None,
         },
     )
 
@@ -3220,6 +3367,7 @@ def _spawn_room_curiosity_encounter(sim, chunk, prop, rng, *, economy_profile=No
             archetype=str(hidden_store.get("archetype", "backroom_market") or "backroom_market").strip().lower(),
             room_kind=room_kind,
             dialogue_trade_only=bool(hidden_store.get("dialogue_trade_only", True)),
+            rng=rng,
         )
         hidden_storefront = sim.properties.get(hidden_storefront_id) if hidden_storefront_id else None
         occupation = sim.ecs.get(Occupation).get(eid)

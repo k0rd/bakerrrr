@@ -1834,6 +1834,18 @@ class Simulation:
                 entry = plan.get("entry")
                 if not isinstance(footprint, dict) or not isinstance(entry, dict):
                     continue
+                excluded = set()
+                for cell in tuple(plan.get("footprint_excluded_cells", ()) or ()):
+                    if isinstance(cell, dict):
+                        try:
+                            excluded.add((int(cell.get("x")), int(cell.get("y"))))
+                        except (TypeError, ValueError):
+                            continue
+                    elif isinstance(cell, (list, tuple)) and len(cell) >= 2:
+                        try:
+                            excluded.add((int(cell[0]), int(cell[1])))
+                        except (TypeError, ValueError):
+                            continue
                 try:
                     left = int(footprint.get("left"))
                     right = int(footprint.get("right"))
@@ -1884,6 +1896,7 @@ class Simulation:
                     door_y=door_y,
                     apertures=plan.get("apertures", ()),
                     room_plan=room_plan,
+                    excluded=frozenset(excluded),
                 )
                 self._mark_structure_area(
                     left=left,
@@ -1893,6 +1906,7 @@ class Simulation:
                     z=z,
                     info=structure_info,
                     room_plan=room_plan,
+                    excluded=frozenset(excluded),
                 )
 
             obstacle_count = 0

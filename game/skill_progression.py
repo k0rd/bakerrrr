@@ -255,6 +255,8 @@ class SkillProgressionSystem(System):
 
     def on_trade_bought(self, event):
         eid = event.data.get("eid")
+        if bool(event.data.get("owner_transfer")):
+            return
         property_id = str(event.data.get("property_id", "") or "").strip()
         item_id = str(event.data.get("item_id", "") or "").strip().lower()
         key = f"{property_id}:buy:{item_id}"
@@ -264,6 +266,8 @@ class SkillProgressionSystem(System):
 
     def on_trade_sold(self, event):
         eid = event.data.get("eid")
+        if bool(event.data.get("owner_transfer")):
+            return
         property_id = str(event.data.get("property_id", "") or "").strip()
         item_id = str(event.data.get("item_id", "") or "").strip().lower()
         key = f"{property_id}:sell:{item_id}"

@@ -56,6 +56,70 @@ def _weighted_choice(rng, rows):
     return normalized[-1][0]
 
 
+def _axis_step(start_axis, end_axis):
+    return 1 if int(end_axis) >= int(start_axis) else -1
+
+
+def _advance_axis_value(start_axis, end_axis, steps):
+    step = _axis_step(start_axis, end_axis)
+    candidate = int(start_axis) + (step * int(max(0, steps)))
+    axis_min = min(int(start_axis), int(end_axis))
+    axis_max = max(int(start_axis), int(end_axis))
+    return max(axis_min, min(axis_max, candidate))
+
+
+def _corridor_cells_vertical(center_x, axis_min, axis_max):
+    center_x = int(center_x)
+    axis_min = int(axis_min)
+    axis_max = int(axis_max)
+    return {
+        (center_x + offset_x, axis_value)
+        for offset_x in (-1, 0, 1)
+        for axis_value in range(axis_min, axis_max + 1)
+    }
+
+
+def _corridor_cells_horizontal(center_y, axis_min, axis_max):
+    center_y = int(center_y)
+    axis_min = int(axis_min)
+    axis_max = int(axis_max)
+    return {
+        (axis_value, center_y + offset_y)
+        for offset_y in (-1, 0, 1)
+        for axis_value in range(axis_min, axis_max + 1)
+    }
+
+
+def _shape_bounds(cells):
+    if not cells:
+        return None
+    xs = [int(cell[0]) for cell in cells]
+    ys = [int(cell[1]) for cell in cells]
+    return {
+        "left": min(xs),
+        "right": max(xs),
+        "top": min(ys),
+        "bottom": max(ys),
+    }
+
+
+def _shape_excluded_cells(cells):
+    bounds = _shape_bounds(cells)
+    if not bounds:
+        return ()
+    shape = {
+        (int(cell_x), int(cell_y))
+        for cell_x, cell_y in tuple(cells or ())
+    }
+    excluded = []
+    for cell_y in range(int(bounds["top"]), int(bounds["bottom"]) + 1):
+        for cell_x in range(int(bounds["left"]), int(bounds["right"]) + 1):
+            if (int(cell_x), int(cell_y)) in shape:
+                continue
+            excluded.append({"x": int(cell_x), "y": int(cell_y)})
+    return tuple(excluded)
+
+
 def _underpass_hazard_specs(
     *,
     chunk_x,
@@ -187,6 +251,44 @@ def _surface_exit_for_horizontal(surface_x, surface_y, *, origin_x, origin_y, ch
     return None
 
 
+def _surface_exit_aligned_vertical(surface_x, surface_y, *, origin_x, origin_y, chunk_size, occupied):
+    for exit_y in _preferred_vertical_edges(origin_y, chunk_size, surface_y):
+        candidate_x = int(surface_x)
+        candidate_y = int(exit_y)
+        if abs(int(surface_y) - candidate_y) < 4:
+            continue
+        if any(_point_in_footprint(footprint, candidate_x, candidate_y) for footprint in occupied):
+            continue
+        return candidate_x, candidate_y
+    return _surface_exit_for_vertical(
+        surface_x,
+        surface_y,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        chunk_size=chunk_size,
+        occupied=occupied,
+    )
+
+
+def _surface_exit_aligned_horizontal(surface_x, surface_y, *, origin_x, origin_y, chunk_size, occupied):
+    for exit_x in _preferred_horizontal_edges(origin_x, chunk_size, surface_x):
+        candidate_x = int(exit_x)
+        candidate_y = int(surface_y)
+        if abs(int(surface_x) - candidate_x) < 4:
+            continue
+        if any(_point_in_footprint(footprint, candidate_x, candidate_y) for footprint in occupied):
+            continue
+        return candidate_x, candidate_y
+    return _surface_exit_for_horizontal(
+        surface_x,
+        surface_y,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        chunk_size=chunk_size,
+        occupied=occupied,
+    )
+
+
 def _metro_underpass_plan(
     chunk,
     building,
@@ -209,6 +311,11 @@ def _metro_underpass_plan(
     # Keep station underpasses on the lowest station level so the metro stack
     # feels like one coherent place instead of "one more floor lower."
     tunnel_z = -max(2, int(building.get("basement_levels", 0) or 0))
+
+    layout_variant = "straight_underpass"
+    branch_return = None
+    footprint_excluded_cells = ()
+    service_sites = ()
 
     if side in {"north", "south"}:
         surface_exit = _surface_exit_for_vertical(
@@ -269,6 +376,7 @@ def _metro_underpass_plan(
         encounter_axis = max(axis_min + 1, min(axis_max - 1, encounter_axis))
         if encounter_axis == midpoint_axis:
             encounter_axis = max(axis_min + 1, min(axis_max - 1, midpoint_axis - 2))
+        corridor_cells = _corridor_cells_vertical(int(tunnel_start[0]), axis_min, axis_max)
         cache_sites = (
             {
                 "name": "Maintenance Locker",
@@ -311,6 +419,93 @@ def _metro_underpass_plan(
                 int(axis_max - 1),
             },
         )
+        branch_surface = _surface_exit_aligned_horizontal(
+            int(tunnel_start[0]),
+            int(midpoint_axis),
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+            occupied=occupied_footprints,
+        )
+        if branch_surface is not None:
+            branch_end_x = int(branch_surface[0])
+            branch_axis_min = min(int(tunnel_start[0]), branch_end_x)
+            branch_axis_max = max(int(tunnel_start[0]), branch_end_x)
+            branch_encounter_x = _advance_axis_value(int(tunnel_start[0]), branch_end_x, 2)
+            branch_cache_x = _advance_axis_value(branch_end_x, int(tunnel_start[0]), 2)
+            branch_wildlife_x = _advance_axis_value(int(tunnel_start[0]), branch_end_x, max(1, abs(branch_end_x - int(tunnel_start[0])) // 2))
+            corridor_cells.update(_corridor_cells_horizontal(int(midpoint_axis), branch_axis_min, branch_axis_max))
+            maybe_footprint = _shape_bounds(corridor_cells)
+            if isinstance(maybe_footprint, dict):
+                footprint = maybe_footprint
+                footprint_excluded_cells = _shape_excluded_cells(corridor_cells)
+            cache_sites = tuple(cache_sites) + (
+                {
+                    "name": "Signal Locker",
+                    "x": int(branch_cache_x),
+                    "y": int(midpoint_axis),
+                    "z": int(tunnel_z),
+                    "kind": "utility_cache",
+                },
+            )
+            encounter_spawns = tuple(encounter_spawns) + (
+                {
+                    "x": int(branch_encounter_x),
+                    "y": int(midpoint_axis),
+                    "z": int(tunnel_z),
+                    "profile": "underground_transient",
+                },
+            )
+            wildlife_spawns = tuple(wildlife_spawns) + (
+                {
+                    "x": int(branch_wildlife_x),
+                    "y": int(midpoint_axis),
+                    "z": int(tunnel_z),
+                    "profile": "underground_pests",
+                },
+            )
+            branch_hazards = _underpass_hazard_specs(
+                chunk_x=chunk_x,
+                chunk_y=chunk_y,
+                source_building_id=f"{source_building_id}:service_spur",
+                tunnel_z=tunnel_z,
+                orientation="horizontal",
+                fixed_axis=int(midpoint_axis),
+                axis_min=branch_axis_min,
+                axis_max=branch_axis_max,
+                reserved_axes={
+                    int(tunnel_start[0]),
+                    int(branch_end_x),
+                    int(branch_cache_x),
+                    int(branch_encounter_x),
+                },
+            )
+            hazard_sites = tuple(hazard_sites) + tuple(branch_hazards)
+            branch_return = {
+                "name": "Service Hatch",
+                "x": int(branch_end_x),
+                "y": int(midpoint_axis),
+                "z": int(tunnel_z),
+                "destination": {
+                    "x": int(branch_surface[0]),
+                    "y": int(branch_surface[1]),
+                    "z": 0,
+                    "destination_name": "service hatch",
+                    "travel_ticks": 1,
+                },
+            }
+            service_sites = (
+                {
+                    "name": "Signal Relay",
+                    "x": int(branch_encounter_x),
+                    "y": int(midpoint_axis),
+                    "z": int(tunnel_z),
+                    "site_services": ("intel",),
+                    "fixture_type": "service_terminal",
+                    "lead_mode": "hidden_contact_note",
+                },
+            )
+            layout_variant = "branched_service_spur"
     else:
         start_axis = int(tunnel_start[0])
         end_axis = int(tunnel_end[0])
@@ -321,6 +516,7 @@ def _metro_underpass_plan(
         encounter_axis = max(axis_min + 1, min(axis_max - 1, encounter_axis))
         if encounter_axis == midpoint_axis:
             encounter_axis = max(axis_min + 1, min(axis_max - 1, midpoint_axis - 2))
+        corridor_cells = _corridor_cells_horizontal(int(tunnel_start[1]), axis_min, axis_max)
         cache_sites = (
             {
                 "name": "Maintenance Locker",
@@ -363,6 +559,96 @@ def _metro_underpass_plan(
                 int(axis_max - 1),
             },
         )
+        branch_surface = _surface_exit_aligned_vertical(
+            int(midpoint_axis),
+            int(tunnel_start[1]),
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+            occupied=occupied_footprints,
+        )
+        if branch_surface is not None:
+            branch_end_y = int(branch_surface[1])
+            branch_axis_min = min(int(tunnel_start[1]), branch_end_y)
+            branch_axis_max = max(int(tunnel_start[1]), branch_end_y)
+            branch_encounter_y = _advance_axis_value(int(tunnel_start[1]), branch_end_y, 2)
+            branch_cache_y = _advance_axis_value(branch_end_y, int(tunnel_start[1]), 2)
+            branch_wildlife_y = _advance_axis_value(int(tunnel_start[1]), branch_end_y, max(1, abs(branch_end_y - int(tunnel_start[1])) // 2))
+            corridor_cells.update(_corridor_cells_vertical(int(midpoint_axis), branch_axis_min, branch_axis_max))
+            maybe_footprint = _shape_bounds(corridor_cells)
+            if isinstance(maybe_footprint, dict):
+                footprint = maybe_footprint
+                footprint_excluded_cells = _shape_excluded_cells(corridor_cells)
+            cache_sites = tuple(cache_sites) + (
+                {
+                    "name": "Signal Locker",
+                    "x": int(midpoint_axis),
+                    "y": int(branch_cache_y),
+                    "z": int(tunnel_z),
+                    "kind": "utility_cache",
+                },
+            )
+            encounter_spawns = tuple(encounter_spawns) + (
+                {
+                    "x": int(midpoint_axis),
+                    "y": int(branch_encounter_y),
+                    "z": int(tunnel_z),
+                    "profile": "underground_transient",
+                },
+            )
+            wildlife_spawns = tuple(wildlife_spawns) + (
+                {
+                    "x": int(midpoint_axis),
+                    "y": int(branch_wildlife_y),
+                    "z": int(tunnel_z),
+                    "profile": "underground_pests",
+                },
+            )
+            branch_hazards = _underpass_hazard_specs(
+                chunk_x=chunk_x,
+                chunk_y=chunk_y,
+                source_building_id=f"{source_building_id}:service_spur",
+                tunnel_z=tunnel_z,
+                orientation="vertical",
+                fixed_axis=int(midpoint_axis),
+                axis_min=branch_axis_min,
+                axis_max=branch_axis_max,
+                reserved_axes={
+                    int(tunnel_start[1]),
+                    int(branch_end_y),
+                    int(branch_cache_y),
+                    int(branch_encounter_y),
+                },
+            )
+            hazard_sites = tuple(hazard_sites) + tuple(branch_hazards)
+            branch_return = {
+                "name": "Service Hatch",
+                "x": int(midpoint_axis),
+                "y": int(branch_end_y),
+                "z": int(tunnel_z),
+                "destination": {
+                    "x": int(branch_surface[0]),
+                    "y": int(branch_surface[1]),
+                    "z": 0,
+                    "destination_name": "service hatch",
+                    "travel_ticks": 1,
+                },
+            }
+            service_sites = (
+                {
+                    "name": "Signal Relay",
+                    "x": int(midpoint_axis),
+                    "y": int(branch_encounter_y),
+                    "z": int(tunnel_z),
+                    "site_services": ("intel",),
+                    "fixture_type": "service_terminal",
+                    "lead_mode": "hidden_contact_note",
+                },
+            )
+            layout_variant = "branched_service_spur"
+
+    anchor_x = (int(footprint["left"]) + int(footprint["right"])) // 2
+    anchor_y = (int(footprint["top"]) + int(footprint["bottom"])) // 2
 
     station_destination = {
         "x": int(tunnel_start[0]),
@@ -382,6 +668,7 @@ def _metro_underpass_plan(
     return {
         "site_id": f"{chunk_x}:{chunk_y}:underpass:{_text(building.get('building_id')) or 'metro'}",
         "kind": METRO_UNDERPASS_KIND,
+        "layout_variant": layout_variant,
         "name": site_name,
         "building_id": plan_building_id,
         "source_building_id": source_building_id,
@@ -389,7 +676,7 @@ def _metro_underpass_plan(
         "anchor": {"x": int(anchor_x), "y": int(anchor_y), "z": int(tunnel_z)},
         "z": int(tunnel_z),
         "floors": 1,
-        "rooms": ("maintenance_tunnel", "junction"),
+        "rooms": ("maintenance_tunnel",),
         "ambient_encounter_profile": "underground_transient",
         "ambient_encounter_spawns": encounter_spawns,
         "ambient_wildlife_profile": "underground_pests",
@@ -397,7 +684,9 @@ def _metro_underpass_plan(
         "ambient_hazard_profile": "transit_hazards" if hazard_sites else "",
         "ambient_hazard_spawns": hazard_sites,
         "cache_sites": cache_sites,
+        "service_sites": service_sites,
         "footprint": footprint,
+        "footprint_excluded_cells": footprint_excluded_cells,
         "entry": {
             "x": int(tunnel_start[0]),
             "y": int(tunnel_start[1]),
@@ -421,7 +710,18 @@ def _metro_underpass_plan(
                 "kind": "door",
                 "ordinary": True,
             },
-        ],
+        ] + (
+            [
+                {
+                    "x": int(branch_return["x"]),
+                    "y": int(branch_return["y"]),
+                    "z": int(branch_return["z"]),
+                    "kind": "door",
+                    "ordinary": True,
+                },
+            ]
+            if isinstance(branch_return, dict) else []
+        ),
         "station_surface": {
             "origin_x": int(surface_x),
             "origin_y": int(surface_y),
@@ -462,7 +762,7 @@ def _metro_underpass_plan(
                     "travel_ticks": 1,
                 },
             },
-        ),
+        ) + ((branch_return,) if isinstance(branch_return, dict) else ()),
     }
 
 

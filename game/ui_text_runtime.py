@@ -379,6 +379,84 @@ def _known_location_summary_bit_color(bit):
     return "human"
 
 
+def _business_sentiment_color(key):
+    label = str(key or "").strip().lower()
+    if label == "staple":
+        return "player"
+    if label == "chill":
+        return "property_service"
+    if label == "quality_plus":
+        return "property_service"
+    if label == "quality_minus":
+        return "projectile"
+    if label == "gouging":
+        return "objective"
+    if label == "troubled":
+        return "projectile"
+    return "human"
+
+
+def _known_location_business_sentiment_line(row):
+    row = row if isinstance(row, dict) else {}
+    designations = [
+        designation
+        for designation in tuple(row.get("business_sentiment_designations", ()) or ())
+        if isinstance(designation, dict)
+        and str(designation.get("symbol", "")).strip()
+        and str(designation.get("label", "")).strip()
+    ]
+    if not designations:
+        return ""
+    bold = getattr(curses, "A_BOLD", 0)
+    segments = [
+        _segment("Street read: ", color="building_edge", attrs=bold),
+    ]
+    for idx, designation in enumerate(designations):
+        if idx:
+            segments.append(_segment(" | ", color="building_edge"))
+        symbol = str(designation.get("symbol", "")).strip()
+        label = str(designation.get("label", "")).strip()
+        color = _business_sentiment_color(designation.get("key"))
+        segments.append(_segment(symbol, color=color, attrs=bold))
+        segments.append(_segment(f" {label}", color="human"))
+    return _rich_line(segments, text=_segments_text(segments))
+
+
+def _known_location_business_reputation_scope_line(row):
+    row = row if isinstance(row, dict) else {}
+    scope = row.get("business_reputation_scope", {}) if isinstance(row.get("business_reputation_scope", {}), dict) else {}
+    label = str(scope.get("label", "")).strip()
+    if not label:
+        return ""
+    bold = getattr(curses, "A_BOLD", 0)
+    segments = [
+        _segment("Street reach: ", color="building_edge", attrs=bold),
+        _segment(label, color="objective"),
+    ]
+    return _rich_line(segments, text=_segments_text(segments))
+
+
+def _known_location_business_sentiment_legend_line():
+    bold = getattr(curses, "A_BOLD", 0)
+    entries = (
+        ("*", "staple", "staple"),
+        ("~", "chill", "chill"),
+        ("+", "quality_plus", "quality"),
+        ("-", "quality_minus", "rough"),
+        ("$", "gouging", "gouger"),
+        ("!", "troubled", "trouble"),
+    )
+    segments = [
+        _segment("Legend: ", color="building_edge", attrs=bold),
+    ]
+    for idx, (symbol, key, label) in enumerate(entries):
+        if idx:
+            segments.append(_segment(" | ", color="building_edge"))
+        segments.append(_segment(symbol, color=_business_sentiment_color(key), attrs=bold))
+        segments.append(_segment(f" {label}", color="human"))
+    return _rich_line(segments, text=_segments_text(segments))
+
+
 def _known_location_summary_line(row):
     row = row if isinstance(row, dict) else {}
     confidence = int(round(float(row.get("confidence", 0.0)) * 100.0))
@@ -408,6 +486,14 @@ def _known_location_detail_lines(row):
         coords = str(row.get("coords", "coords unknown")).strip() or "coords unknown"
         lines.append(f"{name} @ {coords}")
     lines.append(_known_location_summary_line(row))
+    sentiment_line = _known_location_business_sentiment_line(row)
+    if sentiment_line:
+        lines.append(sentiment_line)
+    scope_line = _known_location_business_reputation_scope_line(row)
+    if scope_line:
+        lines.append(scope_line)
+    if sentiment_line:
+        lines.append(_known_location_business_sentiment_legend_line())
     for fact in row.get("fact_lines", ()):
         bullet = _bullet_display_line(fact, bullet="-", bullet_color="building_edge")
         if bullet:
@@ -441,7 +527,21 @@ def _known_location_list_line(row, *, ordinal=1, selected=False):
         _segment(" | ", color="building_edge"),
         _segment(f"{confidence}%", color=confidence_color, attrs=marker_attrs),
     ])
-    return _rich_line(segments, text=f"{'>' if selected else ' '}{max(1, int(ordinal)):02d} {_line_text(base_line)} | {confidence}%")
+    designations = [
+        designation
+        for designation in tuple(row.get("business_sentiment_designations", ()) or ())
+        if isinstance(designation, dict) and str(designation.get("symbol", "")).strip()
+    ]
+    if designations:
+        segments.append(_segment(" | ", color="building_edge"))
+        segments.append(_segment("rep ", color="building_edge", attrs=marker_attrs))
+        for designation in designations[:3]:
+            segments.append(_segment(
+                str(designation.get("symbol", "")).strip()[:2],
+                color=_business_sentiment_color(designation.get("key")),
+                attrs=marker_attrs or getattr(curses, "A_BOLD", 0),
+            ))
+    return _rich_line(segments, text=f"{'>' if selected else ' '}{max(1, int(ordinal)):02d} {_line_text(base_line)} | {confidence}%{' | rep ' + ''.join(str(designation.get('symbol', '')).strip()[:2] for designation in designations[:3]) if designations else ''}")
 
 
 def _wrap_text_lines(text, width):

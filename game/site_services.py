@@ -3,8 +3,9 @@ import random
 from engine.events import Event
 from engine.systems import System
 from engine.underground import UNDERGROUND_ACCESS_SERVICE
-from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, StatusEffects, VehicleState, Vitality
+from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, PropertyKnowledge, StatusEffects, VehicleState, Vitality
 from game.items import ITEM_CATALOG, item_display_name
+from game.opportunities import append_external_opportunity
 from game.player_businesses import player_business_apply_remodel as _player_business_apply_remodel
 from game.player_businesses import player_business_remodel_quote as _player_business_remodel_quote
 from game.property_access import evaluate_property_access as _evaluate_property_access
@@ -81,6 +82,33 @@ def _build_vending_item_pool():
 
 
 VENDING_ITEM_POOL = _build_vending_item_pool()
+RELAY_HIDDEN_CONTACT_LEAD_ITEMS = {
+    "backroom_market": "backroom_card",
+    "backroom_clinic": "clinic_scrap",
+}
+
+
+def _hidden_contact_lead_item_id(prop):
+    metadata = _property_metadata(prop)
+    archetype = str(metadata.get("archetype", "") or "").strip().lower()
+    hidden_kind = str(metadata.get("hidden_contact_kind", "") or "").strip().lower()
+    for key in (archetype, hidden_kind):
+        if key in RELAY_HIDDEN_CONTACT_LEAD_ITEMS:
+            return RELAY_HIDDEN_CONTACT_LEAD_ITEMS[key]
+    return None
+
+
+def _relay_watch_target_property(sim, prop):
+    metadata = _property_metadata(prop)
+    linked_property_id = str(metadata.get("linked_property_id", "") or "").strip()
+    if not linked_property_id:
+        return None
+    target_prop = getattr(sim, "properties", {}).get(linked_property_id)
+    if not isinstance(target_prop, dict):
+        return None
+    if str(target_prop.get("kind", "")).strip().lower() != "building":
+        return None
+    return target_prop
 
 
 class SiteServiceSystem(System):
@@ -129,6 +157,22 @@ class SiteServiceSystem(System):
         cooldowns = self._state()["cooldowns"]
         cooldowns[self._cooldown_key(eid, prop, service)] = int(self.sim.tick) + max(1, int(duration))
 
+    def _relay_hidden_contact_awards(self):
+        state = self._state()
+        awards = state.get("relay_hidden_contact_awards")
+        if not isinstance(awards, dict):
+            awards = {}
+            state["relay_hidden_contact_awards"] = awards
+        return awards
+
+    def _relay_opportunity_awards(self):
+        state = self._state()
+        awards = state.get("relay_opportunity_awards")
+        if not isinstance(awards, dict):
+            awards = {}
+            state["relay_opportunity_awards"] = awards
+        return awards
+
     def _next_service_roll_index(self, eid, prop, service):
         return _site_service_roll_index(self.sim, eid, prop, service)
 
@@ -137,6 +181,9 @@ class SiteServiceSystem(System):
 
     def _assets_for(self, eid):
         return self.sim.ecs.get(PlayerAssets).get(eid)
+
+    def _knowledge_for(self, eid):
+        return self.sim.ecs.get(PropertyKnowledge).get(eid)
 
     def _finance_profile_for(self, eid):
         return self.sim.ecs.get(FinancialProfile).get(eid)
@@ -1925,6 +1972,233 @@ class SiteServiceSystem(System):
         candidates.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
         return [row[4] for row in candidates[:line_limit]]
 
+    def _relay_hidden_contact_candidate(self, eid, prop):
+        if str(_property_metadata(prop).get("lead_mode", "") or "").strip().lower() != "hidden_contact_note":
+            return None
+
+        relay_id = str(prop.get("id", "") or "").strip()
+        if not relay_id:
+            return None
+        if (int(eid), relay_id) in self._relay_hidden_contact_awards():
+            return None
+
+        knowledge = self._knowledge_for(eid)
+        relay_chunk = self.sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+        relay_x = int(prop.get("x", 0))
+        relay_y = int(prop.get("y", 0))
+        candidates = []
+        for candidate in getattr(self.sim, "properties", {}).values():
+            if not isinstance(candidate, dict):
+                continue
+            candidate_id = str(candidate.get("id", "") or "").strip()
+            if not candidate_id or candidate_id == relay_id:
+                continue
+
+            item_id = _hidden_contact_lead_item_id(candidate)
+            if not item_id:
+                continue
+
+            metadata = _property_metadata(candidate)
+            if not bool(metadata.get("is_storefront")):
+                continue
+            if not bool(metadata.get("dialogue_trade_only")):
+                continue
+            if bool(metadata.get("public", True)):
+                continue
+            if knowledge and candidate_id in knowledge.known:
+                continue
+
+            chunk = self.sim.chunk_coords(int(candidate.get("x", 0)), int(candidate.get("y", 0)))
+            chunk_distance = abs(int(chunk[0]) - int(relay_chunk[0])) + abs(int(chunk[1]) - int(relay_chunk[1]))
+            if chunk_distance > 6:
+                continue
+            tile_distance = _manhattan(relay_x, relay_y, int(candidate.get("x", 0)), int(candidate.get("y", 0)))
+            candidates.append((
+                chunk_distance,
+                tile_distance,
+                str(candidate.get("name", "") or "").strip().lower(),
+                candidate_id,
+                candidate,
+                item_id,
+            ))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+        _chunk_distance, _tile_distance, _name, _candidate_id, target_prop, item_id = candidates[0]
+        return target_prop, item_id
+
+    def _grant_relay_hidden_contact_lead(self, eid, prop, pos):
+        picked = self._relay_hidden_contact_candidate(eid, prop)
+        if not picked:
+            return None
+
+        target_prop, item_id = picked
+        item_def = ITEM_CATALOG.get(item_id, {}) if isinstance(ITEM_CATALOG.get(item_id), dict) else {}
+        item_name = item_display_name(item_id, item_catalog=ITEM_CATALOG)
+        target_metadata = _property_metadata(target_prop)
+        metadata = {
+            "source_property_id": str(target_prop.get("id", "") or "").strip(),
+            "relay_property_id": str(prop.get("id", "") or "").strip(),
+            "placement_zone": "relay_dead_drop",
+            "hidden_contact_kind": (
+                str(target_metadata.get("hidden_contact_kind", "") or "").strip().lower()
+                or str(target_metadata.get("archetype", "") or "").strip().lower()
+                or None
+            ),
+            "backroom_profile": str(target_metadata.get("backroom_profile", "") or "").strip().lower() or None,
+            "covert_hint": str(target_metadata.get("covert_hint", "") or "").strip() or None,
+        }
+
+        delivery = None
+        inventory = self._inventory_for(eid)
+        if inventory is not None:
+            added, _instance_id = inventory.add_item(
+                item_id,
+                quantity=1,
+                stack_max=max(1, int(item_def.get("stack_max", 1) or 1)),
+                instance_factory=getattr(self.sim, "new_item_instance_id", None),
+                owner_eid=eid,
+                owner_tag="player",
+                metadata=metadata,
+            )
+            if added:
+                delivery = "inventory"
+
+        if delivery is None:
+            ground_id = self.sim.register_ground_item(
+                item_id=item_id,
+                x=int(pos.x),
+                y=int(pos.y),
+                z=int(pos.z),
+                quantity=1,
+                owner_eid=None,
+                owner_tag="city",
+                metadata=metadata,
+            )
+            if not ground_id:
+                return None
+            delivery = "ground"
+
+        self._relay_hidden_contact_awards()[(int(eid), str(prop.get("id", "") or "").strip())] = {
+            "target_property_id": str(target_prop.get("id", "") or "").strip(),
+            "item_id": item_id,
+            "delivery": delivery,
+            "tick": int(self.sim.tick),
+        }
+        return {
+            "item_id": item_id,
+            "item_name": item_name,
+            "delivery": delivery,
+            "target_property_id": str(target_prop.get("id", "") or "").strip(),
+            "target_property_name": str(target_prop.get("name", target_prop.get("id", "hidden contact"))).strip() or "hidden contact",
+        }
+
+    def _relay_watch_key(self, prop):
+        relay_id = str(prop.get("id", "") or "").strip()
+        target_prop = _relay_watch_target_property(self.sim, prop)
+        target_property_id = str((target_prop or {}).get("id", "") or "").strip()
+        if not relay_id or not target_property_id:
+            return ""
+        return f"underground_relay_watch:{relay_id}:{target_property_id}"
+
+    def _find_active_opportunity_by_key(self, key):
+        key = str(key or "").strip().lower()
+        if not key:
+            return None
+        state = getattr(self.sim, "world_traits", {}).get("opportunities", {})
+        if not isinstance(state, dict):
+            return None
+        for entry in tuple(state.get("active", ()) or ()):
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("key", "") or "").strip().lower() == key:
+                return entry
+        return None
+
+    def _grant_relay_opportunity_lead(self, eid, prop):
+        if str(_property_metadata(prop).get("lead_mode", "") or "").strip().lower() != "hidden_contact_note":
+            return None
+
+        relay_id = str(prop.get("id", "") or "").strip()
+        if not relay_id:
+            return None
+        if (int(eid), relay_id) in self._relay_opportunity_awards():
+            return None
+
+        target_prop = _relay_watch_target_property(self.sim, prop)
+        if not isinstance(target_prop, dict):
+            return None
+
+        key = self._relay_watch_key(prop)
+        if not key:
+            return None
+
+        existing = self._find_active_opportunity_by_key(key)
+        if isinstance(existing, dict):
+            self._relay_opportunity_awards()[(int(eid), relay_id)] = {
+                "opportunity_id": int(existing.get("id", 0) or 0),
+                "target_property_id": str(target_prop.get("id", "") or "").strip(),
+                "tick": int(self.sim.tick),
+            }
+            return {
+                "opportunity_id": int(existing.get("id", 0) or 0),
+                "title": str(existing.get("title", "Relay Watch")).strip() or "Relay Watch",
+                "property_id": str(target_prop.get("id", "") or "").strip(),
+                "property_name": str(target_prop.get("name", target_prop.get("id", "underpass"))).strip() or "underpass",
+            }
+
+        try:
+            chunk = self.sim.chunk_coords(int(target_prop.get("x", 0)), int(target_prop.get("y", 0)))
+        except (TypeError, ValueError):
+            return None
+        relay_name = str(prop.get("name", "Signal Relay")).strip() or "Signal Relay"
+        target_name = str(target_prop.get("name", target_prop.get("id", "underpass"))).strip() or "underpass"
+        entry = append_external_opportunity(
+            self.sim,
+            {
+                "key": key,
+                "title": "Relay Watch",
+                "summary": (
+                    f"{relay_name} keeps catching repeat traffic through {target_name}. "
+                    f"Hold a quiet watch there and sort the real pattern from the noise."
+                ),
+                "kind": "relay_watch",
+                "source": "intel",
+                "chunk": chunk,
+                "location": "lead",
+                "playstyles": ("stealth", "social", "economic"),
+                "reward": {"credits": 8, "intel": 2},
+                "risk": "low",
+                "pressure": "low",
+                "requirements": {
+                    "visit_chunk": chunk,
+                    "property_id": str(target_prop.get("id", "") or "").strip(),
+                },
+                "status": "active",
+                "seed_tick": int(getattr(self.sim, "tick", 0)),
+            },
+            observer_eid=eid,
+            awareness_state="heard",
+            confidence=0.68,
+            source="intel",
+        )
+        if not isinstance(entry, dict):
+            return None
+
+        self._relay_opportunity_awards()[(int(eid), relay_id)] = {
+            "opportunity_id": int(entry.get("id", 0) or 0),
+            "target_property_id": str(target_prop.get("id", "") or "").strip(),
+            "tick": int(self.sim.tick),
+        }
+        return {
+            "opportunity_id": int(entry.get("id", 0) or 0),
+            "title": str(entry.get("title", "Relay Watch")).strip() or "Relay Watch",
+            "property_id": str(target_prop.get("id", "") or "").strip(),
+            "property_name": target_name,
+        }
+
     def _emit_intel(self, eid, prop, pos):
         ready_in = self._service_ready_in(eid, prop, "intel")
         if ready_in > 0:
@@ -1950,7 +2224,9 @@ class SiteServiceSystem(System):
             line_limit=line_limit,
             detail_level=detail_level,
         )
-        if not lines:
+        lead_reward = self._grant_relay_hidden_contact_lead(eid, prop, pos)
+        opportunity_reward = self._grant_relay_opportunity_lead(eid, prop)
+        if not lines and not lead_reward and not opportunity_reward:
             self.sim.emit(Event(
                 "site_service_blocked",
                 eid=eid,
@@ -1973,6 +2249,15 @@ class SiteServiceSystem(System):
             display_limit=line_limit,
             detail_level=detail_level,
             skill_note=str(terms.get("note", "") or "").strip(),
+            lead_item_id=None if not lead_reward else lead_reward.get("item_id"),
+            lead_item_name=None if not lead_reward else lead_reward.get("item_name"),
+            lead_delivery=None if not lead_reward else lead_reward.get("delivery"),
+            lead_property_id=None if not lead_reward else lead_reward.get("target_property_id"),
+            lead_property_name=None if not lead_reward else lead_reward.get("target_property_name"),
+            lead_opportunity_id=None if not opportunity_reward else opportunity_reward.get("opportunity_id"),
+            lead_opportunity_title=None if not opportunity_reward else opportunity_reward.get("title"),
+            lead_opportunity_property_id=None if not opportunity_reward else opportunity_reward.get("property_id"),
+            lead_opportunity_property_name=None if not opportunity_reward else opportunity_reward.get("property_name"),
         ))
 
     def on_property_interact(self, event):

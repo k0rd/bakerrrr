@@ -38,6 +38,7 @@ from game.property_runtime import (
     property_focus_position as _property_focus_position,
 )
 from game.skills import actor_skill as _actor_skill
+from game.systems_business_reputation import property_business_reputation_snapshot
 
 
 RESIDENTIAL_ARCHETYPES = {
@@ -116,6 +117,35 @@ BUSINESS_HOURS_MODE_LABELS = {
     "normal": "normal hours",
     "extended": "extended hours",
     "always_open": "always open",
+}
+BUSINESS_MARKUP_MODE_ORDER = ("discount", "standard", "premium", "steep")
+BUSINESS_MARKUP_MODE_LABELS = {
+    "discount": "discount board",
+    "standard": "standard pricing",
+    "premium": "premium pricing",
+    "steep": "high markup",
+}
+BUSINESS_MARKUP_MODE_PROFILES = {
+    "discount": {
+        "buy_mult": 0.88,
+        "revenue_mult": 0.94,
+        "note": "leans on foot traffic and softer shelf pricing",
+    },
+    "standard": {
+        "buy_mult": 1.0,
+        "revenue_mult": 1.0,
+        "note": "keeps the usual storefront balance",
+    },
+    "premium": {
+        "buy_mult": 1.14,
+        "revenue_mult": 1.08,
+        "note": "presses margin a little harder on each sale",
+    },
+    "steep": {
+        "buy_mult": 1.28,
+        "revenue_mult": 1.12,
+        "note": "leans on high margin and thinner demand tolerance",
+    },
 }
 GENERIC_JOBLESS_CAREERS = {
     "",
@@ -255,6 +285,19 @@ def _normalize_business_hours_mode(value):
         clean = "always_open"
     if clean not in BUSINESS_HOURS_MODE_ORDER:
         return "normal"
+    return clean
+
+
+def _normalize_business_markup_mode(value):
+    clean = _text(value).lower().replace("-", "_").replace(" ", "_")
+    if clean in {"low", "low_markup", "discounted"}:
+        clean = "discount"
+    elif clean in {"base", "default"}:
+        clean = "standard"
+    elif clean in {"high", "high_markup"}:
+        clean = "premium"
+    if clean not in BUSINESS_MARKUP_MODE_ORDER:
+        return "standard"
     return clean
 
 
@@ -521,6 +564,7 @@ def player_business_state(prop, create=False):
     state["required_staff"] = max(1, _int_or(state.get("required_staff"), default=1))
     state["customer_policy"] = _normalize_customer_policy(state.get("customer_policy"))
     state["hours_mode"] = _normalize_business_hours_mode(state.get("hours_mode"))
+    state["markup_mode"] = _normalize_business_markup_mode(state.get("markup_mode"))
     baseline_hours = _normalize_open_window(state.get("baseline_hours"))
     state["baseline_hours"] = list(baseline_hours) if baseline_hours is not None else None
 
@@ -594,6 +638,44 @@ def player_business_hours_mode(prop):
 def player_business_hours_mode_label(mode):
     clean = _normalize_business_hours_mode(mode)
     return BUSINESS_HOURS_MODE_LABELS.get(clean, "normal hours")
+
+
+def player_business_markup_mode(prop):
+    state = player_business_state(prop, create=False)
+    return _normalize_business_markup_mode(state.get("markup_mode")) if state else "standard"
+
+
+def player_business_markup_mode_label(mode):
+    clean = _normalize_business_markup_mode(mode)
+    return BUSINESS_MARKUP_MODE_LABELS.get(clean, "standard pricing")
+
+
+def player_business_next_markup_mode(prop):
+    return _cycle_choice(player_business_markup_mode(prop), BUSINESS_MARKUP_MODE_ORDER)
+
+
+def player_business_markup_profile(prop_or_mode):
+    if isinstance(prop_or_mode, dict):
+        mode = player_business_markup_mode(prop_or_mode)
+    else:
+        mode = _normalize_business_markup_mode(prop_or_mode)
+    profile = BUSINESS_MARKUP_MODE_PROFILES.get(mode, BUSINESS_MARKUP_MODE_PROFILES["standard"])
+    return {
+        "mode": mode,
+        "label": player_business_markup_mode_label(mode),
+        "buy_mult": float(profile.get("buy_mult", 1.0) or 1.0),
+        "revenue_mult": float(profile.get("revenue_mult", 1.0) or 1.0),
+        "note": str(profile.get("note", "")).strip(),
+    }
+
+
+def player_business_set_markup_mode(prop, mode):
+    state = player_business_state(prop, create=True)
+    if state is None:
+        return "standard"
+    clean = _normalize_business_markup_mode(mode)
+    state["markup_mode"] = clean
+    return clean
 
 
 def player_business_next_hours_mode(prop):
@@ -1122,7 +1204,8 @@ def _business_health(sim, prop):
     archetype = _property_archetype(prop)
     archetype_weight = float(workplace_archetype_weight(profile, archetype))
     stock_mult = float(profile.get("stock_mult", 1.0))
-    price_mult = max(0.75, float(profile.get("price_mult", 1.0)))
+    markup_profile = player_business_markup_profile(prop)
+    price_mult = max(0.75, float(profile.get("price_mult", 1.0)) * float(markup_profile.get("buy_mult", 1.0)))
 
     archetype_factor = max(0.62, min(1.32, 0.8 + ((archetype_weight - 1.0) * 0.28)))
     liquidity_factor = max(0.68, min(1.3, (stock_mult / price_mult) ** 0.5))
@@ -1134,6 +1217,116 @@ def _business_health(sim, prop):
         "note": note,
         "profile": profile,
     }
+
+
+def _business_reputation_market_effect(sim, prop):
+    base = {
+        "awareness_count": 0,
+        "weighted_awareness": 0.0,
+        "reputation_state": "",
+        "reputation_note": "",
+        "community_note": "",
+        "community_signal_note": "",
+        "community_lift": 0.0,
+        "community_drag": 0.0,
+        "community_signal_lift": 0.0,
+        "community_signal_drag": 0.0,
+        "patronage_score": 0.0,
+        "staple_score": 0.0,
+        "trouble_score": 0.0,
+        "gouging_score": 0.0,
+        "revenue_mult": 1.0,
+        "slippage_mult": 1.0,
+        "footfall_delta_pct": 0,
+        "churn_delta_pct": 0,
+    }
+    if sim is None or not isinstance(prop, dict):
+        return dict(base)
+
+    property_id = _text(prop.get("id"))
+    if not property_id:
+        return dict(base)
+
+    snapshot = property_business_reputation_snapshot(sim, property_id)
+    awareness_count = max(0, _int_or(snapshot.get("awareness_count"), default=0))
+    weighted_awareness = max(0.0, float(snapshot.get("weighted_awareness", 0.0) or 0.0))
+    trust = _clamp(snapshot.get("trust", 0.0), 0.0, 1.0)
+    reliability = _clamp(snapshot.get("reliability", 0.0), 0.0, 1.0)
+    fear = _clamp(snapshot.get("fear", 0.0), 0.0, 1.0)
+    heat = _clamp(snapshot.get("heat", 0.0), 0.0, 1.0)
+    price_fairness = _clamp(snapshot.get("price_fairness", 0.0), -1.0, 1.0)
+    loyalty = _clamp(snapshot.get("loyalty", 0.0), 0.0, 1.0)
+    resentment = _clamp(snapshot.get("resentment", 0.0), 0.0, 1.0)
+    patronage_score = _clamp(snapshot.get("patronage_score", 0.0), 0.0, 1.0)
+    staple_score = _clamp(snapshot.get("staple_score", 0.0), 0.0, 1.0)
+    trouble_score = _clamp(snapshot.get("trouble_score", 0.0), 0.0, 1.0)
+    gouging_score = _clamp(snapshot.get("gouging_score", 0.0), 0.0, 1.0)
+    community_lift = _clamp(snapshot.get("community_lift", 0.0), 0.0, 1.0)
+    community_drag = _clamp(snapshot.get("community_drag", 0.0), 0.0, 1.0)
+    community_signal_lift = _clamp(snapshot.get("community_signal_lift", 0.0), 0.0, 1.0)
+    community_signal_drag = _clamp(snapshot.get("community_signal_drag", 0.0), 0.0, 1.0)
+    community_note = _text(snapshot.get("community_note"))
+    community_signal_note = _text(snapshot.get("community_signal_note"))
+
+    awareness_strength = _clamp((awareness_count * 0.18) + (weighted_awareness * 0.12), 0.0, 1.0)
+    price_good = max(0.0, price_fairness)
+    price_pain = max(0.0, -price_fairness)
+    crowd_pull = awareness_strength * _clamp(
+        (patronage_score * 0.52)
+        + (staple_score * 0.24)
+        + (trust * 0.12)
+        + (loyalty * 0.08)
+        + (price_good * 0.04),
+        0.0,
+        1.0,
+    )
+    churn_pressure = awareness_strength * _clamp(
+        (trouble_score * 0.42)
+        + (gouging_score * 0.22)
+        + (resentment * 0.16)
+        + (price_pain * 0.10)
+        + (heat * 0.06)
+        + (fear * 0.04),
+        0.0,
+        1.0,
+    )
+    revenue_mult = _clamp(1.0 + (crowd_pull * 0.24) - (churn_pressure * 0.24), 0.74, 1.3)
+    slippage_mult = _clamp(1.0 - (crowd_pull * 0.18) + (churn_pressure * 0.36), 0.72, 1.52)
+
+    reputation_state = str(snapshot.get("reputation_state", "") or "").strip().lower()
+    reputation_note = ""
+    if awareness_count >= 3:
+        if reputation_state == "staple" and crowd_pull >= 0.22:
+            reputation_note = "neighborhood staple"
+        elif gouging_score >= max(0.46, trouble_score * 0.88):
+            reputation_note = "price grumbling"
+        elif reputation_state == "troubled" or churn_pressure >= 0.24:
+            reputation_note = "front trouble"
+        elif crowd_pull >= 0.18 and patronage_score >= 0.34:
+            reputation_note = "growing regulars"
+
+    result = dict(base)
+    result.update({
+        "awareness_count": int(awareness_count),
+        "weighted_awareness": round(float(weighted_awareness), 3),
+        "reputation_state": reputation_state,
+        "reputation_note": reputation_note,
+        "community_note": community_note,
+        "community_signal_note": community_signal_note,
+        "community_lift": round(float(community_lift), 3),
+        "community_drag": round(float(community_drag), 3),
+        "community_signal_lift": round(float(community_signal_lift), 3),
+        "community_signal_drag": round(float(community_signal_drag), 3),
+        "patronage_score": round(float(patronage_score), 3),
+        "staple_score": round(float(staple_score), 3),
+        "trouble_score": round(float(trouble_score), 3),
+        "gouging_score": round(float(gouging_score), 3),
+        "revenue_mult": round(float(revenue_mult), 3),
+        "slippage_mult": round(float(slippage_mult), 3),
+        "footfall_delta_pct": int(round((float(revenue_mult) - 1.0) * 100.0)),
+        "churn_delta_pct": int(round((float(slippage_mult) - 1.0) * 100.0)),
+    })
+    return result
 
 
 def _sync_staff_roster(sim, prop, state):
@@ -1205,11 +1398,13 @@ def player_business_summary(sim, prop):
     staffing = _sync_staff_roster(sim, prop, state)
     role_fit = player_business_staffing_fit(sim, prop)
     market = _business_health(sim, prop)
+    reputation = _business_reputation_market_effect(sim, prop)
     current_hour = _absolute_hour(sim)
     opening = _property_open_window(sim, prop)
     open_now = bool(_hour_in_window(current_hour % 24, opening)) if opening is not None else bool(_property_is_open(sim, prop))
     customer_policy = player_business_customer_policy(prop)
     hours_mode = player_business_hours_mode(prop)
+    markup_profile = player_business_markup_profile(prop)
     balance = int(state.get("account_balance", 0))
     required = int(state.get("required_staff", 1))
     staff_total = int(staffing.get("staff_total", 0))
@@ -1235,6 +1430,10 @@ def player_business_summary(sim, prop):
             note = "closed to customers"
         elif customer_policy == "staff_only" and note in {"steady", "strong trade", "soft market", "tight crew"}:
             note = "staff-only service"
+        elif note in {"steady", "strong trade", "soft market", "tight crew"}:
+            reputation_note = str(last_summary.get("reputation_note", "")).strip()
+            if reputation_note:
+                note = reputation_note
 
     return {
         "property_id": prop.get("id"),
@@ -1250,10 +1449,20 @@ def player_business_summary(sim, prop):
         "hours_text": _hours_text(opening),
         "hours_mode": hours_mode,
         "hours_mode_label": player_business_hours_mode_label(hours_mode),
+        "markup_mode": str(markup_profile.get("mode", "standard")).strip() or "standard",
+        "markup_mode_label": str(markup_profile.get("label", "standard pricing")).strip() or "standard pricing",
+        "markup_note": str(markup_profile.get("note", "")).strip(),
         "customer_policy": customer_policy,
         "customer_policy_label": player_business_customer_policy_label(customer_policy),
         "health": float(market.get("health", 1.0)),
         "market_note": str(market.get("note", "")).strip(),
+        "reputation_state": str(reputation.get("reputation_state", "")).strip(),
+        "reputation_note": str(reputation.get("reputation_note", "")).strip(),
+        "community_note": str(reputation.get("community_note", "")).strip(),
+        "community_signal_note": str(reputation.get("community_signal_note", "")).strip(),
+        "reputation_awareness": int(reputation.get("awareness_count", 0) or 0),
+        "footfall_delta_pct": int(reputation.get("footfall_delta_pct", 0) or 0),
+        "churn_delta_pct": int(reputation.get("churn_delta_pct", 0) or 0),
         "note": note,
     }
 
@@ -1277,8 +1486,18 @@ def player_business_status_snapshot(sim, prop):
         "hours_text": str(summary.get("hours_text", "")).strip(),
         "hours_mode": str(summary.get("hours_mode", "")).strip(),
         "hours_mode_label": str(summary.get("hours_mode_label", "")).strip(),
+        "markup_mode": str(summary.get("markup_mode", "")).strip(),
+        "markup_mode_label": str(summary.get("markup_mode_label", "")).strip(),
+        "markup_note": str(summary.get("markup_note", "")).strip(),
         "customer_policy": str(summary.get("customer_policy", "")).strip(),
         "customer_policy_label": str(summary.get("customer_policy_label", "")).strip(),
+        "reputation_state": str(summary.get("reputation_state", "")).strip(),
+        "reputation_note": str(summary.get("reputation_note", "")).strip(),
+        "community_note": str(summary.get("community_note", "")).strip(),
+        "community_signal_note": str(summary.get("community_signal_note", "")).strip(),
+        "reputation_awareness": _int_or(summary.get("reputation_awareness"), default=0),
+        "footfall_delta_pct": _int_or(summary.get("footfall_delta_pct"), default=0),
+        "churn_delta_pct": _int_or(summary.get("churn_delta_pct"), default=0),
         "last_summary": last_summary,
         "last_hour": None if not last_summary else _int_or(last_summary.get("hour"), default=0),
         "gross_revenue": _int_or(last_summary.get("gross_revenue"), default=0),
@@ -1288,6 +1507,13 @@ def player_business_status_snapshot(sim, prop):
         "service_reliability": float(last_summary.get("service_reliability", 0.0) or 0.0),
         "service_reliability_label": str(last_summary.get("service_reliability_label", "")).strip(),
         "operating_note": str(last_summary.get("operating_note", "")).strip(),
+        "last_reputation_state": str(last_summary.get("reputation_state", "")).strip(),
+        "last_reputation_note": str(last_summary.get("reputation_note", "")).strip(),
+        "last_community_note": str(last_summary.get("community_note", "")).strip(),
+        "last_community_signal_note": str(last_summary.get("community_signal_note", "")).strip(),
+        "last_reputation_awareness": _int_or(last_summary.get("reputation_awareness"), default=0),
+        "last_footfall_delta_pct": _int_or(last_summary.get("footfall_delta_pct"), default=_int_or(summary.get("footfall_delta_pct"), default=0)),
+        "last_churn_delta_pct": _int_or(last_summary.get("churn_delta_pct"), default=_int_or(summary.get("churn_delta_pct"), default=0)),
         "wages_paid": _int_or(last_summary.get("wages_paid"), default=0),
         "wages_due": _int_or(last_summary.get("wages_due"), default=0),
         "upkeep_paid": _int_or(last_summary.get("upkeep_paid"), default=0),
@@ -1768,6 +1994,8 @@ class PlayerBusinessSystem(System):
             role_fit=role_fit,
         )
         health = _business_health(self.sim, prop)
+        reputation = _business_reputation_market_effect(self.sim, prop)
+        markup_profile = player_business_markup_profile(prop)
         opening = _property_open_window(self.sim, prop)
         open_now = bool(_hour_in_window(hour_counter % 24, opening))
         staffing_ratio = max(0.0, min(1.15, (float(staff_total) / float(required_staff)))) if required_staff > 0 else 0.0
@@ -1792,11 +2020,18 @@ class PlayerBusinessSystem(System):
                 * float(operating.get("revenue_factor", 1.0))
                 * float(health.get("health", 1.0))
                 * float(policy_revenue_factor)
+                * float(markup_profile.get("revenue_mult", 1.0))
+                * float(reputation.get("revenue_mult", 1.0))
             )
             gross_revenue = max(1, int(round(float(self._base_revenue_for(prop)) * revenue_factor)))
             if policy_revenue_factor <= 0.0:
                 gross_revenue = 0
-            slippage = int(round(float(gross_revenue) * float(operating.get("slippage_rate", 0.0)) * float(policy_slippage_factor)))
+            slippage = int(round(
+                float(gross_revenue)
+                * float(operating.get("slippage_rate", 0.0))
+                * float(policy_slippage_factor)
+                * float(reputation.get("slippage_mult", 1.0))
+            ))
             if gross_revenue > 0:
                 ceiling = gross_revenue - 1 if gross_revenue > 1 else gross_revenue
                 slippage = max(0, min(ceiling, slippage))
@@ -1837,6 +2072,10 @@ class PlayerBusinessSystem(System):
             note = "strong trade"
         elif float(health.get("health", 1.0)) < 0.82:
             note = "soft market"
+        if note in {"steady", "strong trade", "soft market", "tight crew"}:
+            reputation_note = str(reputation.get("reputation_note", "")).strip()
+            if reputation_note:
+                note = reputation_note
 
         state["last_summary"] = {
             "hour": int(hour_counter % 24),
@@ -1859,6 +2098,8 @@ class PlayerBusinessSystem(System):
             "customer_policy_label": player_business_customer_policy_label(customer_policy),
             "hours_mode": hours_mode,
             "hours_mode_label": player_business_hours_mode_label(hours_mode),
+            "markup_mode": str(markup_profile.get("mode", "standard")).strip() or "standard",
+            "markup_mode_label": str(markup_profile.get("label", "standard pricing")).strip() or "standard pricing",
             "opening_window": list(opening) if opening is not None else None,
             "hours_text": _hours_text(opening),
             "required_staff": int(required_staff),
@@ -1871,6 +2112,15 @@ class PlayerBusinessSystem(System):
             "staff_fit_label": str(operating.get("staff_fit_label", "")).strip(),
             "health": float(health.get("health", 1.0)),
             "market_note": str(health.get("note", "")).strip(),
+            "reputation_state": str(reputation.get("reputation_state", "")).strip(),
+            "reputation_note": str(reputation.get("reputation_note", "")).strip(),
+            "community_note": str(reputation.get("community_note", "")).strip(),
+            "community_signal_note": str(reputation.get("community_signal_note", "")).strip(),
+            "reputation_awareness": int(reputation.get("awareness_count", 0) or 0),
+            "footfall_delta_pct": int(reputation.get("footfall_delta_pct", 0) or 0),
+            "churn_delta_pct": int(reputation.get("churn_delta_pct", 0) or 0),
+            "reputation_revenue_mult": float(reputation.get("revenue_mult", 1.0) or 1.0),
+            "reputation_slippage_mult": float(reputation.get("slippage_mult", 1.0) or 1.0),
             "account_balance": int(state.get("account_balance", 0)),
             "note": note,
         }
@@ -1916,8 +2166,12 @@ __all__ = [
     "player_business_hours_mode",
     "player_business_hours_mode_label",
     "player_business_hours_window",
+    "player_business_markup_mode",
+    "player_business_markup_mode_label",
+    "player_business_markup_profile",
     "player_business_next_customer_policy",
     "player_business_next_hours_mode",
+    "player_business_next_markup_mode",
     "player_business_open_role",
     "player_business_apply_remodel",
     "player_business_role_fit",
@@ -1926,6 +2180,7 @@ __all__ = [
     "player_business_remodel_quote",
     "player_business_set_customer_policy",
     "player_business_set_hours_mode",
+    "player_business_set_markup_mode",
     "player_business_operating_quality",
     "player_business_state",
     "player_business_staffing_fit",

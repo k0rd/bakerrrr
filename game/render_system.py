@@ -2361,13 +2361,20 @@ class RenderSystem(System):
                 glyph = str(row.get("glyph", "*"))[:1] or "*"
                 item_name = str(row.get("item_name", row.get("item_id", "item")))
                 price = int(row.get("price", 0))
+                action_label = str(row.get("action_label", "")).strip().lower()
                 if mode == "buy":
                     stock = int(row.get("stock", 0))
-                    label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c stk {stock}"
+                    if action_label:
+                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {action_label} stk {stock}"
+                    else:
+                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c stk {stock}"
                 else:
                     qty = int(row.get("quantity", 0))
-                    listed = "L" if row.get("listed") else "U"
-                    label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c x{qty} {listed}"
+                    if action_label:
+                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {action_label} x{qty}"
+                    else:
+                        listed = "L" if row.get("listed") else "U"
+                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c x{qty} {listed}"
                 self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2))
 
             if not rows:
@@ -2376,25 +2383,44 @@ class RenderSystem(System):
             inspect_text = trade_ui.get("inspect_text", "")
             if rows and not inspect_text:
                 selected = rows[selected_index]
+                action_label = str(selected.get("action_label", "")).strip().lower()
                 if mode == "buy":
-                    inspect_text = _item_legend_line(
-                        selected.get("item_id"),
-                        (
-                            f"{selected.get('item_name', selected.get('item_id', 'item'))} "
-                            f"price {int(selected.get('price', 0))} credits "
-                            f"stock {int(selected.get('stock', 0))}"
-                        ),
-                    )
+                    if action_label:
+                        inspect_text = _item_legend_line(
+                            selected.get("item_id"),
+                            (
+                                f"{selected.get('item_name', selected.get('item_id', 'item'))} "
+                                f"{action_label} from shelf stock {int(selected.get('stock', 0))}"
+                            ),
+                        )
+                    else:
+                        inspect_text = _item_legend_line(
+                            selected.get("item_id"),
+                            (
+                                f"{selected.get('item_name', selected.get('item_id', 'item'))} "
+                                f"price {int(selected.get('price', 0))} credits "
+                                f"stock {int(selected.get('stock', 0))}"
+                            ),
+                        )
                 else:
-                    listed_text = "listed" if selected.get("listed") else "unlisted"
-                    inspect_text = _item_legend_line(
-                        selected.get("item_id"),
-                        (
-                            f"{selected.get('item_name', selected.get('item_id', 'item'))} "
-                            f"offer {int(selected.get('price', 0))} credits ({listed_text}) "
-                            f"qty {int(selected.get('quantity', 0))}"
-                        ),
-                    )
+                    if action_label:
+                        inspect_text = _item_legend_line(
+                            selected.get("item_id"),
+                            (
+                                f"{selected.get('item_name', selected.get('item_id', 'item'))} "
+                                f"{action_label} into shelf stock qty {int(selected.get('quantity', 0))}"
+                            ),
+                        )
+                    else:
+                        listed_text = "listed" if selected.get("listed") else "unlisted"
+                        inspect_text = _item_legend_line(
+                            selected.get("item_id"),
+                            (
+                                f"{selected.get('item_name', selected.get('item_id', 'item'))} "
+                                f"offer {int(selected.get('price', 0))} credits ({listed_text}) "
+                                f"qty {int(selected.get('quantity', 0))}"
+                            ),
+                        )
 
             self._draw_display_line(
                 panel_x + 2,

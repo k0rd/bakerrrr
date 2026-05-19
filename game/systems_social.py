@@ -903,6 +903,7 @@ class EavesdropSystem(System):
         self.player_eid = player_eid
         self.runs_without_turn = True
         self.sim.events.subscribe("npc_socialized", self.on_npc_socialized)
+        self.sim.events.subscribe("npc_behavior_tip_shared", self.on_npc_behavior_tip_shared)
 
     def _state(self):
         traits = getattr(self.sim, "world_traits", None)
@@ -1076,6 +1077,65 @@ class EavesdropSystem(System):
             mention_count=int(mention.get("count", 0)),
         ))
 
+    def _hidden_lead_kind_from_tip(self, tip_kind):
+        tip_kind = str(tip_kind or "").strip().lower()
+        if tip_kind == "behavior_tip_hidden_trade":
+            return "service_trade", "discreet seller"
+        if tip_kind == "behavior_tip_hidden_clinic":
+            return "service_medical", "quiet doctor"
+        return "", ""
+
+    def _handle_hidden_behavior_tip_hint(self, event, speaker_eid):
+        prop = self._property_from_event(event)
+        if not prop:
+            return
+        lead_kind, lead_label = self._hidden_lead_kind_from_tip(event.data.get("tip_kind"))
+        if not lead_kind:
+            return
+
+        try:
+            hinted_strength = float(event.data.get("strength", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            hinted_strength = 0.0
+
+        state = self._state()
+        mention_key = f"{prop.get('id')}:{lead_kind}:hidden"
+        mention = self._note_mention(state.setdefault("property_mentions", {}), mention_key, speaker_eid)
+        knowledge = self.sim.ecs.get(PropertyKnowledge).get(self.player_eid)
+        existing = knowledge.known.get(prop["id"]) if knowledge else None
+        existing_confidence = float(existing.get("confidence", 0.0)) if isinstance(existing, dict) else 0.0
+        prior_hidden = bool(knowledge.is_hidden(prop["id"])) if knowledge else False
+        next_confidence = max(
+            existing_confidence + 0.08,
+            0.64 + (0.08 * max(0, int(mention.get("count", 1)) - 1)),
+            hinted_strength + 0.18,
+        )
+        next_confidence = min(0.94, next_confidence)
+        changed = _remember_property_lead_for_actor(
+            self.sim,
+            self.player_eid,
+            prop,
+            source_eid=speaker_eid,
+            lead_kind=lead_kind,
+            confidence=next_confidence,
+            hidden=True,
+        )
+        if not changed:
+            return
+        self.sim.emit(Event(
+            "eavesdrop_property_hint",
+            eid=self.player_eid,
+            npc_eid=speaker_eid,
+            property_id=prop.get("id"),
+            property_name=str(prop.get("name", prop.get("id", "property"))).strip() or "property",
+            lead_kind=lead_kind,
+            lead_label=lead_label,
+            hidden=True,
+            newly_known=not bool(existing) or not prior_hidden,
+            confidence=next_confidence,
+            mention_count=int(mention.get("count", 0)),
+        ))
+
     def on_npc_socialized(self, event):
         speaker_eid = event.data.get("npc_eid")
         partner_eid = event.data.get("partner_eid")
@@ -1095,3 +1155,26 @@ class EavesdropSystem(System):
             self._handle_opportunity_hint(event, speaker_eid)
         if property_id is not None and topic in {"schedule", "security", "illegal_goods"}:
             self._handle_property_hint(event, speaker_eid)
+
+    def on_npc_behavior_tip_shared(self, event):
+        speaker_eid = event.data.get("source_eid")
+        partner_eid = event.data.get("target_eid")
+        if speaker_eid is None:
+            return
+        lead_kind, _lead_label = self._hidden_lead_kind_from_tip(event.data.get("tip_kind"))
+        if not lead_kind:
+            return
+        if partner_eid is not None:
+            if not self._can_overhear_social_event(speaker_eid, partner_eid):
+                return
+        else:
+            speaker_pos = self.sim.ecs.get(Position).get(speaker_eid)
+            if not self._can_overhear_position(speaker_pos):
+                return
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        if not property_id:
+            return
+        dedupe_key = f"behavior-tip:{lead_kind}:{property_id}:{speaker_eid}"
+        if self._recently_processed(dedupe_key):
+            return
+        self._handle_hidden_behavior_tip_hint(event, speaker_eid)

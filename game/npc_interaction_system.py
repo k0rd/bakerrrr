@@ -3635,6 +3635,16 @@ class NPCInteractionSystem(System):
             summary = f"{summary}."
         return f"{summary} {clause}"
 
+    def _covert_service_locator_caution(self, spec, lead_prop):
+        if not bool((spec or {}).get("covert")) or not isinstance(lead_prop, dict):
+            return ""
+        hint = str(_property_metadata(lead_prop).get("covert_hint", "") or "").strip()
+        if not hint:
+            return ""
+        if hint[-1] not in ".!?":
+            hint = f"{hint}."
+        return hint
+
     def _service_locator_summary(self, context, topic_id):
         spec = self._service_locator_spec(topic_id)
         if not isinstance(spec, dict):
@@ -3680,6 +3690,9 @@ class NPCInteractionSystem(System):
                     best_chunk,
                     lead_prop=lead_prop,
                 )
+                caution = self._covert_service_locator_caution(spec, lead_prop)
+                if caution:
+                    summary = f"{summary} {caution}" if summary else caution
                 return {
                     "summary": summary,
                     "service_label": service_label,
@@ -3703,6 +3716,9 @@ class NPCInteractionSystem(System):
                 best_chunk,
                 lead_prop=lead_prop,
             )
+            caution = self._covert_service_locator_caution(spec, lead_prop)
+            if caution:
+                summary = f"{summary} {caution}" if summary else caution
             return {
                 "summary": summary,
                 "service_label": service_label,
