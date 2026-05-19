@@ -1178,6 +1178,74 @@ def _business_reputation_event_visibility_bias(event, profile):
     return 0.0
 
 
+def _business_reputation_scene_consequence_profile(sim, prop=None, base_pulse=None):
+    if sim is None or not isinstance(prop, dict):
+        return {}
+    if not property_supports_business_reputation(prop):
+        return {}
+
+    base_pulse = base_pulse if isinstance(base_pulse, dict) else {}
+    if not bool(base_pulse.get("open_now")):
+        return {}
+
+    category = str(base_pulse.get("category", "") or "").strip().lower()
+    if category not in {"retail", "finance", "office", "hospitality", "entertainment", "medical"}:
+        return {}
+
+    property_id = str(prop.get("id", "") or "").strip()
+    if not property_id:
+        return {}
+
+    snapshot = property_business_reputation_snapshot(sim, property_id)
+    traffic_state = str(base_pulse.get("traffic_state", "") or "").strip().lower()
+    awareness = max(
+        float(snapshot.get("weighted_awareness", 0.0) or 0.0),
+        float(int(snapshot.get("awareness_count", 0) or 0)),
+    )
+    if awareness < 1.6:
+        return {}
+
+    loyalty_pull = max(
+        max(0.0, float(snapshot.get("community_signal_lift", 0.0) or 0.0)),
+        max(0.0, float(snapshot.get("community_lift", 0.0) or 0.0)),
+    )
+    trouble_pull = max(
+        max(0.0, float(snapshot.get("community_signal_drag", 0.0) or 0.0)),
+        max(0.0, float(snapshot.get("community_drag", 0.0) or 0.0)),
+    )
+    resentment = max(0.0, float(snapshot.get("resentment", 0.0) or 0.0))
+    gouging = max(0.0, float(snapshot.get("gouging_score", 0.0) or 0.0))
+    if loyalty_pull >= trouble_pull + 0.06 and loyalty_pull >= 0.18:
+        return {
+            "tone": "loyal",
+            "strength": round(float(loyalty_pull), 3),
+        }
+
+    if trouble_pull >= loyalty_pull + 0.06 and trouble_pull >= 0.18:
+        tone = "predatory" if max(resentment, gouging) >= 0.22 else "troubled"
+        return {
+            "tone": tone,
+            "strength": round(float(trouble_pull), 3),
+        }
+
+    if (
+        traffic_state in {"patchy", "thin"}
+        and trouble_pull >= loyalty_pull + 0.04
+        and trouble_pull >= 0.1
+        and max(resentment, gouging) >= 0.36
+    ):
+        tone = "predatory" if max(resentment, gouging) >= 0.22 else "troubled"
+        return {
+            "tone": tone,
+            "strength": round(float(trouble_pull), 3),
+        }
+
+    if loyalty_pull < 0.12 and trouble_pull < 0.12:
+        return {}
+
+    return {}
+
+
 def _base_building_pulse_snapshot(sim, prop=None, structure=None):
     prop = prop if isinstance(prop, dict) else None
     structure = structure if isinstance(structure, dict) else None
@@ -1406,6 +1474,7 @@ def _base_building_pulse_snapshot(sim, prop=None, structure=None):
         "perimeter_bonus": 0.0,
         "traffic_state": "",
         "traffic_customer_delta": 0,
+        "community_tone": "",
     }
     return pulse
 
@@ -1557,6 +1626,8 @@ def _building_pulse_snapshot(sim, prop=None, structure=None, *, respect_chunk_ca
             pulse["traffic_customer_delta"] = int(event.get("traffic_customer_delta", 0) or 0)
         except (TypeError, ValueError):
             pulse["traffic_customer_delta"] = 0
+    consequence_profile = _business_reputation_scene_consequence_profile(sim, prop=prop, base_pulse=pulse)
+    pulse["community_tone"] = str(consequence_profile.get("tone", "") or "").strip().lower()
     return pulse
 def _next_business_event_seed_id(sim):
     state = _business_event_seed_state(sim)
@@ -2714,6 +2785,44 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
     controller = _property_access_controller(sim, prop)
     hours_text = _dialogue_hours_text(controller.get("opening_window")) if isinstance(controller, dict) else ""
     requirement = _controller_access_requirement_text(controller) if isinstance(controller, dict) else ""
+
+    if scene_type == "queue" and career == "block_regular":
+        local_line = f"We keep an eye on {current_name}; when a place comes through for the block, the block comes through for it."
+        if hours_text and requirement:
+            detail_line = f"People around {current_name} have started treating it like part of the neighborhood's own routine during {hours_text}. Even with that goodwill, the front still wants {requirement}."
+        elif hours_text:
+            detail_line = f"{current_name} is earning the kind of goodwill that makes regulars linger and keep half an eye on the door during {hours_text}."
+        elif requirement:
+            detail_line = f"The block has started treating {current_name} like one of its own stops, even if the door still wants {requirement}."
+        else:
+            detail_line = f"The local feeling around {current_name} has warmed enough that people are starting to watch the place like it matters to them."
+        return {
+            "property_id": str(prop.get("id", "") or "").strip(),
+            "target_property_id": str(prop.get("id", "") or "").strip(),
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "social",
+            "shared": False,
+        }
+
+    if scene_type == "queue" and career == "grifter":
+        local_line = f"When the front at {current_name} starts looking this soft, people come sniffing around for easy marks."
+        if hours_text and requirement:
+            detail_line = f"The block mood around {current_name} has gone tense enough during {hours_text} that opportunists are starting to circle the frontage, even though the door still wants {requirement}."
+        elif hours_text:
+            detail_line = f"{current_name} is drawing the kind of sour attention during {hours_text} that leaves grifters and nuisance traffic hanging just outside."
+        elif requirement:
+            detail_line = f"The frontage at {current_name} is starting to look soft enough that opportunists linger there, even if the door still wants {requirement}."
+        else:
+            detail_line = f"The mood around {current_name} has gone sour enough that some of the people lingering outside are there because they think the place might be worth working over."
+        return {
+            "property_id": str(prop.get("id", "") or "").strip(),
+            "target_property_id": str(prop.get("id", "") or "").strip(),
+            "local_line": local_line,
+            "detail_line": detail_line,
+            "lead_kind": "social",
+            "shared": False,
+        }
 
     if event_phase == "owner_screening":
         if career == "door_host" or role == "worker":
@@ -4615,6 +4724,7 @@ def _business_event_scene_blueprint(prop, pulse):
     event_phase = str(pulse.get("event_phase", "") or "").strip().lower()
     category = str(pulse.get("category", "") or "").strip().lower()
     traffic_state = str(pulse.get("traffic_state", "") or "").strip().lower()
+    community_tone = str(pulse.get("community_tone", "") or "").strip().lower()
     try:
         traffic_customer_delta = int(pulse.get("traffic_customer_delta", 0) or 0)
     except (TypeError, ValueError):
@@ -4679,6 +4789,30 @@ def _business_event_scene_blueprint(prop, pulse):
                     trim -= 1
                 if actor_specs:
                     actor_specs[0]["linger_ticks"] = max(12, int(actor_specs[0].get("linger_ticks", 18) or 18) - 4)
+        if community_tone == "loyal":
+            actor_specs.append({
+                "role": "civilian",
+                "career": "block_regular",
+                "linger_ticks": 22,
+            })
+        elif community_tone in {"predatory", "troubled"}:
+            replacement = {
+                "role": "civilian",
+                "career": "grifter",
+                "linger_ticks": 16,
+            }
+            if traffic_state in {"patchy", "thin"}:
+                replaced = False
+                for index in range(len(actor_specs) - 1, -1, -1):
+                    candidate = actor_specs[index] if isinstance(actor_specs[index], dict) else {}
+                    if str(candidate.get("role", "") or "").strip().lower() in {"civilian", "drunk"}:
+                        actor_specs[index] = dict(replacement)
+                        replaced = True
+                        break
+                if not replaced:
+                    actor_specs.append(dict(replacement))
+            else:
+                actor_specs.append(dict(replacement))
         return {
             "scene_type": "queue",
             "fixture_name": fixture_name,
@@ -5694,6 +5828,7 @@ class BusinessPulseSceneSystem(System):
             "category": str((spec.get("pulse") or {}).get("category", "") or "").strip().lower(),
             "event_phase": str((spec.get("pulse") or {}).get("event_phase", "") or "").strip().lower(),
             "traffic_state": str((spec.get("pulse") or {}).get("traffic_state", "") or "").strip().lower(),
+            "community_tone": str((spec.get("pulse") or {}).get("community_tone", "") or "").strip().lower(),
             "scene_type": str(blueprint.get("scene_type", "") or "").strip().lower(),
             "source_kind": str(spec.get("source_kind", "pulse") or "pulse").strip().lower(),
             "seed_id": str(spec.get("seed_id", "") or "").strip(),
