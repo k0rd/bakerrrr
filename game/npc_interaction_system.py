@@ -2078,6 +2078,7 @@ class NPCInteractionSystem(System):
             "objective_how_lines": (),
             "objective_activity_lines": (),
             "objective_focus_lines": (),
+            "objective_focus_rows": (),
             "opportunity_rows": (),
             "opportunity_judgments": (),
             "primary_opportunity_judgment": {},
@@ -3871,9 +3872,12 @@ class NPCInteractionSystem(System):
             return ""
         top = rows[0]
         desired_item_id = str((self._street_buy_terms_for(npc_eid, context) or {}).get("desired_item_id", "") or "").strip().lower()
-        if desired_item_id:
+        if desired_item_id and any(bool(row.get("desired")) for row in rows):
             desired_name = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG)
             return f"Wants {desired_name}; top offer about {int(top.get('price', 0))} credits."
+        if desired_item_id:
+            desired_name = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG)
+            return f"Asked for {desired_name}, but can look over other stock; top offer about {int(top.get('price', 0))} credits."
         return f"Will move {len(rows)} item(s); top offer about {int(top.get('price', 0))} credits."
 
     def _street_buy_available_for(self, npc_eid, context):
@@ -3930,7 +3934,15 @@ class NPCInteractionSystem(System):
         desired_item_id = str(terms.get("desired_item_id", "") or "").strip().lower()
         desired_name = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG) if desired_item_id else ""
         desired_rows = [dict(row) for row in rows if bool(row.get("desired"))]
-        offer_rows = desired_rows or [dict(row) for row in rows]
+        generic_rows = [dict(row) for row in rows if not bool(row.get("desired"))]
+        if desired_rows:
+            offer_rows = desired_rows
+            offer_kind = "desired"
+        elif generic_rows:
+            offer_rows = [generic_rows[0]]
+            offer_kind = "pivot" if desired_name else "generic"
+        else:
+            return None
         total_payout = sum(int(max(0, row.get("price", 0) or 0)) for row in offer_rows)
         if total_payout <= 0:
             return None
@@ -3942,7 +3954,7 @@ class NPCInteractionSystem(System):
         quantity_total = sum(int(max(1, row.get("quantity", 1) or 1)) for row in offer_rows)
         return {
             "npc_eid": npc_eid,
-            "kind": "desired" if desired_rows else "generic",
+            "kind": offer_kind,
             "desired_item_id": desired_item_id,
             "desired_name": desired_name,
             "total_payout": int(total_payout),
@@ -3970,16 +3982,24 @@ class NPCInteractionSystem(System):
         payout = int(max(0, offer.get("total_payout", 0) or 0))
         desired_name = str(offer.get("desired_name", "") or "").strip()
         item_text = self._street_buy_offer_item_text(offer)
-        if str(offer.get("kind", "")).strip().lower() == "desired" and desired_name:
+        offer_kind = str(offer.get("kind", "")).strip().lower()
+        remaining_match_count = int(offer.get("remaining_match_count", 0) or 0)
+        if offer_kind == "desired" and desired_name:
             quantity = int(max(1, offer.get("quantity_total", 1) or 1))
             unit_text = "the batch" if quantity > 1 else "it"
             line = f"That is exactly the {desired_name} I was looking for. {payout} credits for {unit_text}."
-            if int(offer.get("remaining_match_count", 0) or 0) > 0:
+            if remaining_match_count > 0:
                 line += " If you want to move anything else after that, I can take another look."
             return line
-        if desired_name:
-            return f"That is not the {desired_name} I asked for, but I can move {item_text}. {payout} credits for the lot."
-        return f"I can move {item_text}. {payout} credits for the lot."
+        if offer_kind == "pivot" and desired_name:
+            line = f"That is not the {desired_name} I asked for. Looking over what you're carrying, I can move {item_text}. {payout} credits for it."
+            if remaining_match_count > 0:
+                line += " If you want to move anything else after that, I can take another look."
+            return line
+        line = f"I can move {item_text}. {payout} credits for it."
+        if remaining_match_count > 0:
+            line += " If you want to move anything else after that, I can take another look."
+        return line
 
     def _execute_street_buy_offer(self, npc_eid, context, offer):
         inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
@@ -4933,6 +4953,7 @@ class NPCInteractionSystem(System):
         objective_how_lines = tuple(str(line).strip() for line in list((objective_eval or {}).get("how_lines", ()) or ()) if str(line).strip())
         objective_activity_lines = tuple(str(line).strip() for line in list((objective_eval or {}).get("activity_lines", ()) or ()) if str(line).strip())
         objective_focus = ()
+        objective_focus_rows = ()
         if objective_eval:
             from game.opportunities import objective_focus_facts
 
@@ -4943,6 +4964,7 @@ class NPCInteractionSystem(System):
                 limit=3,
             )
             focus_lines = []
+            normalized_focus_rows = []
             for row in focus_facts:
                 if not isinstance(row, dict):
                     continue
@@ -4961,10 +4983,16 @@ class NPCInteractionSystem(System):
                     },
                 )
                 if reason:
-                    focus_lines.append(f"{title} {distance_phrase}: {reason}.")
+                    line = f"{title} {distance_phrase}: {reason}."
                 else:
-                    focus_lines.append(f"{title} {distance_phrase}.")
+                    line = f"{title} {distance_phrase}."
+                focus_lines.append(line)
+                normalized_focus_rows.append({
+                    **dict(row),
+                    "line": line,
+                })
             objective_focus = tuple(line for line in focus_lines if line)
+            objective_focus_rows = tuple(normalized_focus_rows)
         final_operation_eval = evaluate_final_operation(self.sim, self.player_eid)
         opportunity_rows = self._dialogue_opportunity_rows(limit=3, observer_eid=npc_eid)
         fallout_rows = self._dialogue_fallout_rows(limit=6, observer_eid=npc_eid)
@@ -4979,6 +5007,7 @@ class NPCInteractionSystem(System):
             "career_text": career_text,
             "district_type": district_type,
             "objective_focus_lines": objective_focus,
+            "objective_focus_rows": objective_focus_rows,
             "opportunity_rows": opportunity_rows,
             "fallout_rows": fallout_rows,
         }
@@ -5204,6 +5233,7 @@ class NPCInteractionSystem(System):
             "objective_how_lines": objective_how_lines,
             "objective_activity_lines": objective_activity_lines,
             "objective_focus_lines": objective_focus,
+            "objective_focus_rows": objective_focus_rows,
             "final_operation_summary_line": str((final_operation_eval or {}).get("summary_line", "")).strip(),
             "final_operation_next_step": str((final_operation_eval or {}).get("next_step", "")).strip(),
             "final_operation_target_property_id": str((final_operation_eval or {}).get("target_property_id", "")).strip(),
@@ -6242,6 +6272,37 @@ class NPCInteractionSystem(System):
             return detail.strip()
         return self._opportunity_summary(context, quality=quality)
 
+    def _objective_focus_line_for_opportunity(self, context, row=None):
+        context = context if isinstance(context, dict) else {}
+        focus_rows = [
+            dict(focus)
+            for focus in tuple(context.get("objective_focus_rows", ()) or ())
+            if isinstance(focus, dict)
+        ]
+        if not focus_rows:
+            return ""
+        target_id = 0
+        if isinstance(row, dict):
+            try:
+                target_id = int(row.get("id", 0) or 0)
+            except (TypeError, ValueError):
+                target_id = 0
+        if target_id <= 0:
+            try:
+                target_id = int(context.get("primary_opportunity_id", 0) or 0)
+            except (TypeError, ValueError):
+                target_id = 0
+        if target_id <= 0:
+            return ""
+        for focus in focus_rows:
+            try:
+                focus_id = int(focus.get("id", 0) or 0)
+            except (TypeError, ValueError):
+                focus_id = 0
+            if focus_id == target_id:
+                return str(focus.get("line", focus.get("phrase", ""))).strip()
+        return ""
+
     def _retrieval_opportunity_summary(self, row, context, *, quality=None):
         if str(context.get("objective_id", "")).strip().lower() != "high_value_retrieval":
             return ""
@@ -6360,8 +6421,9 @@ class NPCInteractionSystem(System):
                     base += " Might pay, but I would verify it yourself before betting on it."
                 else:
                     base += " Might be worth checking, but verify the timing yourself."
-                if focus_lines:
-                    base = f"{base} {str(focus_lines[0]).strip()}"
+                focus_line = self._objective_focus_line_for_opportunity(context, row)
+                if focus_line:
+                    base = f"{base} {focus_line}"
                 return base.strip()
             if quality_mode == "vague":
                 base = f"{title} {distance_phrase} might be moving."
@@ -6422,7 +6484,7 @@ class NPCInteractionSystem(System):
             if extra_parts:
                 extra = " " + " and ".join(extra_parts) + "."
 
-            focus_line = str(focus_lines[0]).strip() if focus_lines else ""
+            focus_line = self._objective_focus_line_for_opportunity(context, row)
             result = f"{base}{extra}".strip()
             if followthrough_tail:
                 result = f"{result} {followthrough_tail}".strip()
@@ -9921,7 +9983,12 @@ class NPCInteractionSystem(System):
             self._close_dialog()
             return
         state["subtitle"] = refreshed.get("subtitle", "")
-        state["topics"] = self._available_dialog_topics(refreshed)
+        pending_street_buy_offer = bool(refreshed.get("street_buy_offer_pending"))
+        highlight_topic_ids = ("street_buy_accept", "street_buy_decline") if pending_street_buy_offer else ()
+        state["topics"] = self._prioritize_dialog_topics(
+            self._available_dialog_topics(refreshed),
+            highlight_topic_ids=highlight_topic_ids,
+        )
         new_topic_ids = [
             str(row.get("id", "")).strip().lower()
             for row in list(state.get("topics", ()) or ())
@@ -9937,9 +10004,19 @@ class NPCInteractionSystem(System):
             state["hint"] = self._dialogue_hint_text(refreshed, new_topic_labels=labels)
         else:
             state["hint"] = self._dialogue_hint_text(refreshed)
+        preferred_row = selected_row
+        if topic_id == "street_buy" and pending_street_buy_offer:
+            preferred_row = next(
+                (
+                    row
+                    for row in list(state.get("topics", ()) or ())
+                    if str(row.get("id", "")).strip().lower() == "street_buy_accept"
+                ),
+                preferred_row,
+            )
         self._restore_dialog_selection(
             state.get("topics", ()),
-            preferred_row=selected_row,
+            preferred_row=preferred_row,
             fallback_index=previous_index,
         )
         state["scroll"] = max(0, len(list(state.get("transcript", ()) or ())) - 1)

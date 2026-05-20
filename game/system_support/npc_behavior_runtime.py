@@ -1106,6 +1106,7 @@ def _street_buy_interest_profile(sim, actor_eid, player_eid, *, district_type=""
     }
     player_has_match = bool(rows)
     player_has_desired = any(bool(row.get("desired")) for row in rows)
+    player_has_generic_match = any(not bool(row.get("desired")) for row in rows)
     desired_name = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG) if desired_item_id else ""
     return {
         "buy_desired_drug": float(buy_desired_drug),
@@ -1115,6 +1116,7 @@ def _street_buy_interest_profile(sim, actor_eid, player_eid, *, district_type=""
         "desired_name": desired_name,
         "player_has_match": bool(player_has_match),
         "player_has_desired": bool(player_has_desired),
+        "player_has_generic_match": bool(player_has_generic_match),
         "matched_item_ids": tuple(sorted(matched_item_ids)),
     }
 

@@ -2741,6 +2741,8 @@ class NPCInvestigateSystem(System):
                             desired_name = str(interest.get("desired_name", "") or "").strip()
                             if interest.get("player_has_desired") and desired_name:
                                 prompt_lines = (f"You carrying any {desired_name}? I'll pay for it.",)
+                            elif interest.get("player_has_generic_match") and desired_name:
+                                prompt_lines = (f"I'm looking for {desired_name}, but if you've got other hot stock I can look it over.",)
                             elif desired_name:
                                 prompt_lines = (f"If you run across any {desired_name}, find me. I'm buying.",)
                             elif interest.get("player_has_match"):
