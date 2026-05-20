@@ -16,6 +16,7 @@ from engine.world import World
 from engine.events import Event
 from engine.systems import System
 from game.components import AI, NPCRoutine, NPCWill, Occupation, OrganizationAffiliations, PlayerAssets, Position
+from game.dialogue_runtime import _queue_npc_initiated_dialogue
 from game.economy import chunk_economy_profile, pick_career_for_workplace, workplace_archetype_weight
 from game.organizations import (
     ensure_property_organization,
@@ -38,7 +39,10 @@ from game.property_runtime import (
     property_focus_position as _property_focus_position,
 )
 from game.skills import actor_skill as _actor_skill
-from game.systems_business_reputation import property_business_reputation_snapshot
+from game.system_support.ai_intent_runtime import _sync_ai_intent
+from game.system_support.business_event_state import _business_event_actor_note
+from game.system_support.interaction_ordering import _manhattan
+from game.systems_business_reputation import business_opinion_profile, property_business_reputation_snapshot
 
 
 RESIDENTIAL_ARCHETYPES = {
@@ -334,6 +338,159 @@ def _property_metadata(prop):
     return metadata if isinstance(metadata, dict) else {}
 
 
+def _player_business_warning_issue(summary):
+    if not isinstance(summary, dict):
+        return ""
+    awareness = max(
+        0,
+        _int_or(
+            summary.get("reputation_awareness", summary.get("awareness_count", 0)),
+            default=0,
+        ),
+    )
+    if awareness < 2:
+        return ""
+    reputation_note = _text(summary.get("reputation_note")).lower()
+    community_signal_note = _text(summary.get("community_signal_note")).lower()
+    community_note = _text(summary.get("community_note")).lower()
+    if reputation_note == "price grumbling":
+        return "gouging"
+    if reputation_note == "front trouble":
+        return "front_trouble"
+    if community_signal_note == "making the block tense":
+        return "block_tense"
+    if community_signal_note == "souring the block":
+        return "block_sour"
+    if community_note == "tenser block":
+        return "block_tense"
+    return ""
+
+
+def _player_business_warning_signature(summary):
+    issue = _player_business_warning_issue(summary)
+    if not issue:
+        return ""
+    note = (
+        _text(summary.get("reputation_note"))
+        or _text(summary.get("community_signal_note"))
+        or _text(summary.get("community_note"))
+    ).lower()
+    return f"{issue}:{note}" if note else issue
+
+
+def _player_business_warning_transition(last_summary, current_summary):
+    current_signature = _player_business_warning_signature(current_summary)
+    if not current_signature:
+        return ""
+    if _player_business_warning_signature(last_summary) == current_signature:
+        return ""
+    return current_signature
+
+
+def _player_business_warning_history(state):
+    if not isinstance(state, dict):
+        return {}
+    history = state.get("owner_warning_history")
+    if isinstance(history, dict):
+        return history
+    history = {}
+    state["owner_warning_history"] = history
+    return history
+
+
+def _player_business_pending_warning(state):
+    if not isinstance(state, dict):
+        return {}
+    pending = state.get("pending_owner_warning")
+    return pending if isinstance(pending, dict) else {}
+
+
+def _player_business_chunk(sim, prop):
+    if sim is None or not isinstance(prop, dict):
+        return None
+    try:
+        return tuple(int(bit) for bit in sim.chunk_coords(int(prop.get("x", 0) or 0), int(prop.get("y", 0) or 0)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _player_business_warning_actor_role(sim, eid, prop):
+    property_id = _text((prop or {}).get("id"))
+    note = _business_event_actor_note(sim, eid)
+    if isinstance(note, dict) and _text(note.get("property_id")) == property_id:
+        career = _text(note.get("career")).lower()
+        if career == "block_regular":
+            return "regular"
+    occupation = sim.ecs.get(Occupation).get(eid) if sim is not None else None
+    workplace = getattr(occupation, "workplace", None) if occupation else None
+    if isinstance(workplace, dict) and _text(workplace.get("property_id")) == property_id:
+        return "staff"
+    return "local"
+
+
+def _player_business_warning_issue_score(opinion, issue_kind):
+    if not isinstance(opinion, dict):
+        return 0.0
+    price_pain = max(0.0, -float(opinion.get("price_fairness", 0.0) or 0.0))
+    trust_gap = max(0.0, 0.45 - float(opinion.get("trust", 0.0) or 0.0))
+    reliability_gap = max(0.0, 0.45 - float(opinion.get("reliability", 0.0) or 0.0))
+    familiarity = max(0.0, float(opinion.get("familiarity", 0.0) or 0.0))
+    coherence = max(0.0, float(opinion.get("coherence", 0.0) or 0.0))
+    resentment = max(0.0, float(opinion.get("resentment", 0.0) or 0.0))
+    fear = max(0.0, float(opinion.get("fear", 0.0) or 0.0))
+    heat = max(0.0, float(opinion.get("heat", 0.0) or 0.0))
+    incident_pressure = max(0.0, float(opinion.get("incident_pressure", 0.0) or 0.0))
+    if max(familiarity, coherence) < 0.12:
+        return 0.0
+    if issue_kind == "gouging":
+        return (price_pain * 0.58) + (resentment * 0.28) + (familiarity * 0.14)
+    if issue_kind == "front_trouble":
+        return (trust_gap * 0.22) + (reliability_gap * 0.18) + (resentment * 0.18) + (heat * 0.18) + (fear * 0.1) + (incident_pressure * 0.14)
+    if issue_kind == "block_tense":
+        return (heat * 0.34) + (fear * 0.18) + (incident_pressure * 0.22) + (resentment * 0.12) + (familiarity * 0.14)
+    if issue_kind == "block_sour":
+        return (resentment * 0.34) + (price_pain * 0.18) + (trust_gap * 0.16) + (reliability_gap * 0.16) + (familiarity * 0.16)
+    return 0.0
+
+
+def _player_business_warning_prompt(prop, issue_kind, opinion, summary, *, speaker_role="local"):
+    business_name = _text(_property_metadata(prop).get("business_name")) or _text((prop or {}).get("name")) or "this place"
+    price_pain = max(0.0, -float((opinion or {}).get("price_fairness", 0.0) or 0.0))
+    resentment = max(0.0, float((opinion or {}).get("resentment", 0.0) or 0.0))
+    heat = max(0.0, float((opinion or {}).get("heat", 0.0) or 0.0))
+    incident_pressure = max(0.0, float((opinion or {}).get("incident_pressure", 0.0) or 0.0))
+    trust_gap = max(0.0, 0.45 - float((opinion or {}).get("trust", 0.0) or 0.0))
+    if issue_kind == "gouging":
+        if price_pain >= 0.34 or resentment >= 0.32:
+            return (
+                f"You own {business_name}, right? People on this block think the prices there are starting to bite.",
+                "If you keep pressing it that hard, the neighborhood is going to turn on the place.",
+            )
+        return (
+            f"People around here are starting to grumble that {business_name} is getting expensive.",
+            "You might want to soften that before the place turns sour.",
+        )
+    if issue_kind == "block_tense":
+        return (
+            f"{business_name} is putting this stretch on edge.",
+            "Folks notice when a place starts making the block feel tense.",
+        )
+    if issue_kind == "block_sour":
+        return (
+            f"People around here are souring on {business_name}.",
+            "The way it feels lately is getting under the neighborhood's skin.",
+        )
+    if speaker_role == "staff" and (trust_gap >= 0.24 or heat >= 0.24 or incident_pressure >= 0.18):
+        return (
+            f"The floor at {business_name} is starting to feel hot, and people are reading it that way.",
+            "If you let it keep sliding, this place is going to lose the room.",
+        )
+    return (
+        f"People around here are starting to lose trust in {business_name}.",
+        "You should get ahead of it before the trouble becomes the whole story.",
+    )
+
+
 def _property_archetype(prop):
     return _text(_property_metadata(prop).get("archetype")).lower()
 
@@ -595,6 +752,10 @@ def player_business_state(prop, create=False):
 
     summary = state.get("last_summary")
     state["last_summary"] = dict(summary) if isinstance(summary, dict) else {}
+    state["last_scene_nuisance_note"] = str(state.get("last_scene_nuisance_note", "") or "").strip()
+    state["last_scene_nuisance_loss"] = max(0, _int_or(state.get("last_scene_nuisance_loss"), default=0))
+    raw_nuisance_tick = state.get("last_scene_nuisance_tick")
+    state["last_scene_nuisance_tick"] = None if raw_nuisance_tick in {None, ""} else _int_or(raw_nuisance_tick, default=0)
     return state
 
 
@@ -1329,6 +1490,51 @@ def _business_reputation_market_effect(sim, prop):
     return result
 
 
+def _active_business_scene_market_pressure(sim, prop):
+    base = {
+        "scene_revenue_mult": 1.0,
+        "scene_slippage_mult": 1.0,
+        "scene_pressure_note": "",
+    }
+    if sim is None or not isinstance(prop, dict):
+        return dict(base)
+
+    property_id = _text(prop.get("id"))
+    if not property_id:
+        return dict(base)
+
+    state = getattr(sim, "business_event_scene_state", None)
+    active = (state or {}).get("active", {}) if isinstance(state, dict) else {}
+    if not isinstance(active, dict):
+        return dict(base)
+
+    revenue_mult = 1.0
+    slippage_mult = 1.0
+    note = ""
+    for scene in active.values():
+        if not isinstance(scene, dict):
+            continue
+        if _text(scene.get("property_id")) != property_id:
+            continue
+        event_phase = _text(scene.get("event_phase")).lower()
+        if event_phase == "block_watch":
+            revenue_mult *= 1.04
+            slippage_mult *= 0.68
+            note = "block watch"
+        elif event_phase == "soft_front":
+            revenue_mult *= 0.94
+            slippage_mult *= 1.42
+            note = "soft-front trouble"
+
+    result = dict(base)
+    result.update({
+        "scene_revenue_mult": round(float(_clamp(revenue_mult, 0.72, 1.36)), 3),
+        "scene_slippage_mult": round(float(_clamp(slippage_mult, 0.5, 1.75)), 3),
+        "scene_pressure_note": note,
+    })
+    return result
+
+
 def _sync_staff_roster(sim, prop, state):
     roles = dict(state.get("staff_roles", {})) if isinstance(state.get("staff_roles"), dict) else {}
     owner_eid = prop.get("owner_eid")
@@ -1399,6 +1605,7 @@ def player_business_summary(sim, prop):
     role_fit = player_business_staffing_fit(sim, prop)
     market = _business_health(sim, prop)
     reputation = _business_reputation_market_effect(sim, prop)
+    scene_pressure = _active_business_scene_market_pressure(sim, prop)
     current_hour = _absolute_hour(sim)
     opening = _property_open_window(sim, prop)
     open_now = bool(_hour_in_window(current_hour % 24, opening)) if opening is not None else bool(_property_is_open(sim, prop))
@@ -1463,6 +1670,10 @@ def player_business_summary(sim, prop):
         "reputation_awareness": int(reputation.get("awareness_count", 0) or 0),
         "footfall_delta_pct": int(reputation.get("footfall_delta_pct", 0) or 0),
         "churn_delta_pct": int(reputation.get("churn_delta_pct", 0) or 0),
+        "scene_pressure_note": str(scene_pressure.get("scene_pressure_note", "")).strip(),
+        "last_scene_nuisance_note": str(state.get("last_scene_nuisance_note", "")).strip(),
+        "last_scene_nuisance_loss": _int_or(state.get("last_scene_nuisance_loss"), default=0),
+        "last_scene_nuisance_tick": None if state.get("last_scene_nuisance_tick") is None else _int_or(state.get("last_scene_nuisance_tick"), default=0),
         "note": note,
     }
 
@@ -1498,6 +1709,7 @@ def player_business_status_snapshot(sim, prop):
         "reputation_awareness": _int_or(summary.get("reputation_awareness"), default=0),
         "footfall_delta_pct": _int_or(summary.get("footfall_delta_pct"), default=0),
         "churn_delta_pct": _int_or(summary.get("churn_delta_pct"), default=0),
+        "scene_pressure_note": str(summary.get("scene_pressure_note", "")).strip(),
         "last_summary": last_summary,
         "last_hour": None if not last_summary else _int_or(last_summary.get("hour"), default=0),
         "gross_revenue": _int_or(last_summary.get("gross_revenue"), default=0),
@@ -1511,6 +1723,10 @@ def player_business_status_snapshot(sim, prop):
         "last_reputation_note": str(last_summary.get("reputation_note", "")).strip(),
         "last_community_note": str(last_summary.get("community_note", "")).strip(),
         "last_community_signal_note": str(last_summary.get("community_signal_note", "")).strip(),
+        "last_scene_pressure_note": str(last_summary.get("scene_pressure_note", "")).strip(),
+        "last_scene_nuisance_note": str(summary.get("last_scene_nuisance_note", "")).strip(),
+        "last_scene_nuisance_loss": _int_or(summary.get("last_scene_nuisance_loss"), default=0),
+        "last_scene_nuisance_tick": None if summary.get("last_scene_nuisance_tick") is None else _int_or(summary.get("last_scene_nuisance_tick"), default=0),
         "last_reputation_awareness": _int_or(last_summary.get("reputation_awareness"), default=0),
         "last_footfall_delta_pct": _int_or(last_summary.get("footfall_delta_pct"), default=_int_or(summary.get("footfall_delta_pct"), default=0)),
         "last_churn_delta_pct": _int_or(last_summary.get("churn_delta_pct"), default=_int_or(summary.get("churn_delta_pct"), default=0)),
@@ -1902,6 +2118,7 @@ class PlayerBusinessSystem(System):
         super().__init__(sim)
         self.player_eid = player_eid
         self.sim.events.subscribe("property_owner_changed", self.on_property_owner_changed)
+        self.sim.events.subscribe("player_business_owner_warning_prompted", self.on_owner_warning_prompted)
 
     def _assets(self):
         return self.sim.ecs.get(PlayerAssets).get(self.player_eid)
@@ -1940,6 +2157,223 @@ class PlayerBusinessSystem(System):
             return
         self._ensure_business_account(prop, announce=True)
 
+    def on_owner_warning_prompted(self, event):
+        if event.data.get("owner_eid") != self.player_eid:
+            return
+        prop = self.sim.properties.get(event.data.get("property_id"))
+        if not isinstance(prop, dict):
+            return
+        state = player_business_state(prop, create=True)
+        if not isinstance(state, dict):
+            return
+        pending = _player_business_pending_warning(state)
+        signature = _text(event.data.get("signature"))
+        if not pending or _text(pending.get("signature")) != signature:
+            return
+        speaker_eid = _int_or(event.data.get("npc_eid"), default=0)
+        if speaker_eid > 0:
+            _player_business_warning_history(state)[f"{signature}:{speaker_eid}"] = int(getattr(self.sim, "tick", 0) or 0)
+        state["pending_owner_warning"] = {}
+
+    def _set_dialogue_cooldown(self, npc_eid, duration):
+        if npc_eid is None:
+            return
+        cooldowns = getattr(self.sim, "npc_dialogue_cooldowns", None)
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
+            self.sim.npc_dialogue_cooldowns = cooldowns
+        cooldowns[int(npc_eid)] = int(getattr(self.sim, "tick", 0) or 0) + max(0, int(duration or 0))
+
+    def _queue_owner_warning(self, prop, state, current_summary, *, previous_summary=None):
+        if not isinstance(prop, dict) or not isinstance(state, dict) or not isinstance(current_summary, dict):
+            return
+        signature = _player_business_warning_transition(previous_summary, current_summary)
+        if not signature:
+            return
+        state["pending_owner_warning"] = {
+            "property_id": _text(prop.get("id")),
+            "signature": signature,
+            "issue_kind": _player_business_warning_issue(current_summary),
+            "reputation_note": _text(current_summary.get("reputation_note")),
+            "community_note": _text(current_summary.get("community_note")),
+            "community_signal_note": _text(current_summary.get("community_signal_note")),
+            "awareness": _int_or(current_summary.get("reputation_awareness", current_summary.get("awareness_count", 0)), default=0),
+            "created_tick": int(getattr(self.sim, "tick", 0) or 0),
+            "next_attempt_tick": int(getattr(self.sim, "tick", 0) or 0),
+            "active_speaker_eid": None,
+        }
+
+    def _prune_owner_warning(self, prop, state):
+        if not isinstance(prop, dict) or not isinstance(state, dict):
+            return {}
+        pending = _player_business_pending_warning(state)
+        if not pending:
+            return {}
+        current_signature = _player_business_warning_signature(dict(state.get("last_summary", {})) if isinstance(state.get("last_summary"), dict) else {})
+        if not current_signature or current_signature != _text(pending.get("signature")):
+            state["pending_owner_warning"] = {}
+            return {}
+        return pending
+
+    def _warning_candidate_rows(self, prop, issue_kind, player_pos, state):
+        if not isinstance(prop, dict) or not issue_kind or player_pos is None:
+            return []
+        property_id = _text(prop.get("id"))
+        property_chunk = _player_business_chunk(self.sim, prop)
+        if property_chunk is None:
+            return []
+        positions = self.sim.ecs.get(Position)
+        ais = self.sim.ecs.get(AI)
+        occupations = self.sim.ecs.get(Occupation)
+        history = _player_business_warning_history(state)
+        current_signature = _player_business_warning_signature(
+            dict(state.get("last_summary", {})) if isinstance(state.get("last_summary"), dict) else {}
+        )
+        rows = []
+        for eid, ai in ais.items():
+            if eid == self.player_eid or not ai:
+                continue
+            pos = positions.get(eid)
+            if pos is None or int(pos.z) != int(player_pos.z):
+                continue
+            try:
+                actor_chunk = tuple(int(bit) for bit in self.sim.chunk_coords(int(pos.x), int(pos.y)))
+            except (TypeError, ValueError):
+                continue
+            if actor_chunk != property_chunk:
+                continue
+            if str(getattr(ai, "role", "") or "").strip().lower() == "wildlife":
+                continue
+            opinion = business_opinion_profile(self.sim, eid, property_id)
+            score = _player_business_warning_issue_score(opinion, issue_kind)
+            if score < 0.22:
+                continue
+            signature_key = f"{current_signature}:{int(eid)}"
+            if signature_key in history:
+                continue
+            role = _player_business_warning_actor_role(self.sim, eid, prop)
+            current_cover = _property_covering(self.sim, int(pos.x), int(pos.y), int(pos.z))
+            at_property = _text((current_cover or {}).get("id")) == property_id
+            workplace = getattr(occupations.get(eid), "workplace", None)
+            works_here = isinstance(workplace, dict) and _text(workplace.get("property_id")) == property_id
+            distance_to_player = _manhattan(int(pos.x), int(pos.y), int(player_pos.x), int(player_pos.y))
+            rows.append((
+                0 if role == "regular" else 1 if works_here else 2 if at_property else 3,
+                distance_to_player,
+                -float(score),
+                -float(opinion.get("familiarity", 0.0) or 0.0),
+                int(eid),
+                role,
+                opinion,
+            ))
+        rows.sort()
+        result = []
+        for _rank, distance_to_player, _neg_score, _neg_familiarity, eid, role, opinion in rows:
+            result.append({
+                "eid": int(eid),
+                "distance_to_player": int(distance_to_player),
+                "role": role,
+                "opinion": dict(opinion),
+            })
+        return result
+
+    def _dispatch_owner_warning(self, prop, state, pending):
+        if not isinstance(prop, dict) or not isinstance(state, dict) or not isinstance(pending, dict):
+            return False
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if player_pos is None:
+            return False
+        property_chunk = _player_business_chunk(self.sim, prop)
+        if property_chunk is None:
+            return False
+        try:
+            player_chunk = tuple(int(bit) for bit in self.sim.chunk_coords(int(player_pos.x), int(player_pos.y)))
+        except (TypeError, ValueError):
+            return False
+        if player_chunk != property_chunk:
+            return False
+        if bool(getattr(self.sim, "dialog_ui", {}).get("open")):
+            return False
+        current_tick = int(getattr(self.sim, "tick", 0) or 0)
+        if current_tick < _int_or(pending.get("next_attempt_tick"), default=0):
+            return False
+        issue_kind = _text(pending.get("issue_kind")).lower()
+        if not issue_kind:
+            return False
+        candidates = self._warning_candidate_rows(prop, issue_kind, player_pos, state)
+        if not candidates:
+            pending["next_attempt_tick"] = current_tick + 48
+            state["pending_owner_warning"] = pending
+            return False
+        chosen = candidates[0]
+        speaker_eid = int(chosen.get("eid", 0) or 0)
+        if speaker_eid <= 0:
+            return False
+        prompt_lines = _player_business_warning_prompt(
+            prop,
+            issue_kind,
+            chosen.get("opinion", {}),
+            pending,
+            speaker_role=str(chosen.get("role", "")).strip().lower() or "local",
+        )
+        if not prompt_lines:
+            pending["next_attempt_tick"] = current_tick + 48
+            state["pending_owner_warning"] = pending
+            return False
+        signature = _text(pending.get("signature"))
+        if int(chosen.get("distance_to_player", 99) or 99) <= 1:
+            self._set_dialogue_cooldown(speaker_eid, 240)
+            self.sim.emit(Event(
+                "npc_dialogue_request",
+                eid=self.player_eid,
+                npc_eid=speaker_eid,
+                prompt_lines=prompt_lines,
+            ))
+            self.sim.emit(Event(
+                "player_business_owner_warning_prompted",
+                npc_eid=speaker_eid,
+                owner_eid=self.player_eid,
+                property_id=_text(prop.get("id")),
+                signature=signature,
+                issue_kind=issue_kind,
+            ))
+            return True
+
+        ai = self.sim.ecs.get(AI).get(speaker_eid)
+        will = self.sim.ecs.get(NPCWill).get(speaker_eid)
+        if ai is None:
+            pending["next_attempt_tick"] = current_tick + 48
+            state["pending_owner_warning"] = pending
+            return False
+        _queue_npc_initiated_dialogue(
+            self.sim,
+            speaker_eid,
+            prompt_lines=prompt_lines,
+            cooldown=240,
+            metadata={
+                "event_type": "player_business_owner_warning_prompted",
+                "event_data": {
+                    "owner_eid": self.player_eid,
+                    "property_id": _text(prop.get("id")),
+                    "signature": signature,
+                    "issue_kind": issue_kind,
+                },
+            },
+        )
+        _sync_ai_intent(
+            ai,
+            will,
+            int(getattr(self.sim, "tick", 0) or 0),
+            "soliciting_player",
+            score=44.0,
+            target=(int(player_pos.x), int(player_pos.y), int(player_pos.z)),
+            target_eid=self.player_eid,
+        )
+        pending["active_speaker_eid"] = int(speaker_eid)
+        pending["next_attempt_tick"] = current_tick + 72
+        state["pending_owner_warning"] = pending
+        return True
+
     def _base_revenue_for(self, prop):
         archetype = _property_archetype(prop)
         base = int(BUSINESS_BASE_REVENUE.get(archetype, 8))
@@ -1977,6 +2411,7 @@ class PlayerBusinessSystem(System):
                 ))
 
     def _process_business_hour(self, prop, state, hour_counter):
+        previous_summary = dict(state.get("last_summary", {})) if isinstance(state.get("last_summary"), dict) else {}
         state["required_staff"] = _required_staff_for(prop)
         staffing = _sync_staff_roster(self.sim, prop, state)
         required_staff = int(state.get("required_staff", 1))
@@ -1995,6 +2430,7 @@ class PlayerBusinessSystem(System):
         )
         health = _business_health(self.sim, prop)
         reputation = _business_reputation_market_effect(self.sim, prop)
+        scene_pressure = _active_business_scene_market_pressure(self.sim, prop)
         markup_profile = player_business_markup_profile(prop)
         opening = _property_open_window(self.sim, prop)
         open_now = bool(_hour_in_window(hour_counter % 24, opening))
@@ -2022,6 +2458,7 @@ class PlayerBusinessSystem(System):
                 * float(policy_revenue_factor)
                 * float(markup_profile.get("revenue_mult", 1.0))
                 * float(reputation.get("revenue_mult", 1.0))
+                * float(scene_pressure.get("scene_revenue_mult", 1.0))
             )
             gross_revenue = max(1, int(round(float(self._base_revenue_for(prop)) * revenue_factor)))
             if policy_revenue_factor <= 0.0:
@@ -2031,6 +2468,7 @@ class PlayerBusinessSystem(System):
                 * float(operating.get("slippage_rate", 0.0))
                 * float(policy_slippage_factor)
                 * float(reputation.get("slippage_mult", 1.0))
+                * float(scene_pressure.get("scene_slippage_mult", 1.0))
             ))
             if gross_revenue > 0:
                 ceiling = gross_revenue - 1 if gross_revenue > 1 else gross_revenue
@@ -2116,14 +2554,18 @@ class PlayerBusinessSystem(System):
             "reputation_note": str(reputation.get("reputation_note", "")).strip(),
             "community_note": str(reputation.get("community_note", "")).strip(),
             "community_signal_note": str(reputation.get("community_signal_note", "")).strip(),
+            "scene_pressure_note": str(scene_pressure.get("scene_pressure_note", "")).strip(),
             "reputation_awareness": int(reputation.get("awareness_count", 0) or 0),
             "footfall_delta_pct": int(reputation.get("footfall_delta_pct", 0) or 0),
             "churn_delta_pct": int(reputation.get("churn_delta_pct", 0) or 0),
             "reputation_revenue_mult": float(reputation.get("revenue_mult", 1.0) or 1.0),
             "reputation_slippage_mult": float(reputation.get("slippage_mult", 1.0) or 1.0),
+            "scene_revenue_mult": float(scene_pressure.get("scene_revenue_mult", 1.0) or 1.0),
+            "scene_slippage_mult": float(scene_pressure.get("scene_slippage_mult", 1.0) or 1.0),
             "account_balance": int(state.get("account_balance", 0)),
             "note": note,
         }
+        self._queue_owner_warning(prop, state, dict(state.get("last_summary", {})), previous_summary=previous_summary)
 
     def update(self):
         assets = self._assets()
@@ -2151,6 +2593,9 @@ class PlayerBusinessSystem(System):
                     state,
                     int(state.get("last_cycle_hour", hour_counter)),
                 )
+            pending = self._prune_owner_warning(prop, state)
+            if pending:
+                self._dispatch_owner_warning(prop, state, pending)
 
 
 __all__ = [

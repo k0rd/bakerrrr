@@ -11,6 +11,7 @@ from game.player_businesses import player_business_remodel_quote as _player_busi
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_keys import can_receive_property_key, ensure_actor_has_property_key, ensure_property_lock
 from game.property_runtime import (
+    property_covering as _property_covering,
     property_is_vehicle as _property_is_vehicle,
     property_metadata as _property_metadata,
     property_power_cut_active as _property_power_cut_active,
@@ -201,6 +202,62 @@ class SiteServiceSystem(System):
             return None
         destination = destinations.get(str(service or "").strip().lower())
         return dict(destination) if isinstance(destination, dict) else None
+
+    def _linked_access_destination_available(self, destination):
+        if not isinstance(destination, dict):
+            return False
+        try:
+            dest_x = int(destination.get("x"))
+            dest_y = int(destination.get("y"))
+            dest_z = int(destination.get("z", 0))
+        except (TypeError, ValueError):
+            return False
+        self.sim.stream_world(dest_x, dest_y)
+        self.sim.ensure_loaded_chunk_terrain()
+        tile = self.sim.tilemap.tile_at(dest_x, dest_y, dest_z)
+        if tile and tile.walkable:
+            return True
+        return self._find_walkable_near(dest_x, dest_y, z=dest_z, radius=4) is not None
+
+    def _underground_property_for_destination(self, x, y, z):
+        prop = self.sim.property_at(x, y, z)
+        if isinstance(prop, dict) and str(prop.get("kind", "")).strip().lower() == "building":
+            return prop
+        if isinstance(prop, dict):
+            linked_property_id = str(_property_metadata(prop).get("linked_property_id", "") or "").strip()
+            linked_prop = getattr(self.sim, "properties", {}).get(linked_property_id)
+            if isinstance(linked_prop, dict) and str(linked_prop.get("kind", "")).strip().lower() == "building":
+                return linked_prop
+        covered = _property_covering(self.sim, x, y, z)
+        if isinstance(covered, dict) and str(covered.get("kind", "")).strip().lower() == "building":
+            return covered
+        return None
+
+    def _underground_destination_has_verified_return_path(self, x, y, z):
+        underpass_prop = self._underground_property_for_destination(x, y, z)
+        if not isinstance(underpass_prop, dict):
+            return False
+        underpass_id = str(underpass_prop.get("id", "") or "").strip()
+        if not underpass_id:
+            return False
+        for candidate in tuple(getattr(self.sim, "properties", {}).values()):
+            metadata = _property_metadata(candidate)
+            if str(metadata.get("linked_property_id", "") or "").strip() != underpass_id:
+                continue
+            if str(metadata.get("fixture_type", "") or "").strip().lower() != "underpass_stairs":
+                continue
+            destination = self._service_destination(candidate, UNDERGROUND_ACCESS_SERVICE)
+            if not isinstance(destination, dict):
+                continue
+            try:
+                dest_z = int(destination.get("z", z))
+            except (TypeError, ValueError):
+                continue
+            if dest_z < 0:
+                continue
+            if self._linked_access_destination_available(destination):
+                return True
+        return False
 
     def _inventory_item_count(self, eid, item_id):
         inventory = self._inventory_for(eid)
@@ -1745,6 +1802,21 @@ class SiteServiceSystem(System):
                 ))
                 return
             landing_x, landing_y = landing
+
+        if (
+            service == UNDERGROUND_ACCESS_SERVICE
+            and int(dest_z) < 0
+            and not self._underground_destination_has_verified_return_path(landing_x, landing_y, dest_z)
+        ):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                reason="no_return_path",
+            ))
+            return
 
         self._move_entity(eid, pos, landing_x, landing_y, dest_z, reason=service)
 

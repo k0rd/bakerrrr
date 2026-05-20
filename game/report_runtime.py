@@ -6,6 +6,7 @@ from game.components import Inventory, PlayerAssets, Position, PropertyKnowledge
 from game.debug_overlay import current_or_nearby_property, organization_summary_rows
 from game.final_operation import evaluate_final_operation
 from game.justice_runtime import justice_summary_rows
+from game.local_situations import local_situation_report_lines
 from game.objective_progress import (
     objective_progress_explain_delta,
     objective_progress_recent_history,
@@ -763,6 +764,16 @@ def build_progress_report(sim, player_eid, opportunity_limit=8):
         )
     else:
         lines.append("No organization heat or standing established yet.")
+
+    local_situation_lines = local_situation_report_lines(sim, player_eid, limit=4)
+    if local_situation_lines:
+        lines.append("")
+        lines.append(_section_header_line("Local Situations", color="property_service"))
+        lines.extend(
+            _bullet_line(str(line).strip(), bullet=">", bullet_color="property_service")
+            for line in local_situation_lines
+            if str(line).strip()
+        )
 
     remaining = max(0, int(opportunity_count) - len(opportunity_rows))
     if opportunity_rows:

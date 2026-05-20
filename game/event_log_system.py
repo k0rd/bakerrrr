@@ -426,6 +426,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("item_used", self.on_item_used)
         self.sim.events.subscribe("item_use_blocked", self.on_item_use_blocked)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
+        self.sim.events.subscribe("business_scene_nuisance", self.on_business_scene_nuisance)
         self.sim.events.subscribe("camera_scrutiny", self.on_camera_scrutiny)
         self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
         self.sim.events.subscribe("status_applied", self.on_status_applied)
@@ -1242,6 +1243,8 @@ class EventLogSystem(System):
 
         if reason == "owner":
             quote = "What are you doing on my property?"
+        elif reason == "watcher":
+            quote = f"People on this block are watching {location}." if location != "this area" else "People on this block are watching this place."
         elif access_level == "restricted":
             quote = "This area is off-limits."
         elif role == "guard":
@@ -1267,6 +1270,8 @@ class EventLogSystem(System):
 
         if reason == "owner":
             quote = "Get off my property!"
+        elif reason == "watcher":
+            quote = f"Back off. This block watches {location}." if location != "this area" else "Back off. This block watches its own."
         elif access_level == "restricted":
             quote = "Back away, now."
         elif location != "this area":
@@ -2547,6 +2552,9 @@ class EventLogSystem(System):
         if reason == "power_cut":
             self.sim.log.add(f"{prop_name} is offline. Power is out.")
             return
+        if reason == "no_return_path" and service == "underground_access":
+            self.sim.log.add(f"Passage: {prop_name} is not safe to enter right now. No verified way back to ground could be confirmed.")
+            return
         if reason == "unavailable":
             if service == "vending":
                 self.sim.log.add(f"Vending: {prop_name} does not dispense anything right now.")
@@ -2842,11 +2850,25 @@ class EventLogSystem(System):
         site_name = self._event_site_name(event)
         site_text = f" at {site_name}" if site_name else ""
         action_label = self._action_event_label(action)
+        target_name = str(event.data.get("target_name", "") or "").strip()
+        wildlife_text = f" to {target_name}" if target_name else ""
         if context == "contraband_use":
             summary = f"Contraband exposed{site_text}: {action_label}."
             self._warn_once(
                 "contraband",
                 "Warning: obvious contraband use can alarm nearby people and provoke a harsher response.",
+            )
+        elif context == "wildlife_harassment":
+            summary = f"Wildlife harmed{site_text}: {action_label}{wildlife_text}."
+            self._warn_once(
+                "wildlife_harassment",
+                "Warning: roughing up wildlife can still draw attention, but it is not treated like assaulting a person.",
+            )
+        elif context == "wildlife_hunting":
+            summary = f"Wildlife harmed{site_text}: {action_label}{wildlife_text}."
+            self._warn_once(
+                "wildlife_hunting",
+                "Warning: harming wildlife is still noticed, but it does not carry the same civic response as attacking a person.",
             )
         elif context == "unarmed_assault":
             summary = f"Violence witnessed{site_text}: {action_label}."
@@ -3184,6 +3206,45 @@ class EventLogSystem(System):
         self._warn_once(
             "theft",
             "Warning: theft is a threatening action and can trigger pursuit, intervention, or violence.",
+        )
+
+    def on_business_scene_nuisance(self, event):
+        prop = self.sim.properties.get(event.data.get("property_id"))
+        prop_label = _property_summary(self.sim, prop, viewer_eid=self.player_eid) if prop else (
+            str(event.data.get("property_name", event.data.get("property_id", "the frontage"))).strip() or "the frontage"
+        )
+        offender_eid = event.data.get("offender_eid")
+        owner_player = False
+        if isinstance(prop, dict):
+            owner_eid = prop.get("owner_eid")
+            if owner_eid is not None and self.player_eid is not None:
+                try:
+                    owner_player = int(owner_eid) == int(self.player_eid)
+                except (TypeError, ValueError):
+                    owner_player = owner_eid == self.player_eid
+
+        if not owner_player and not (
+            self._player_can_perceive_entity(offender_eid)
+            or self._player_can_perceive_event_position(event)
+        ):
+            return
+
+        nuisance_kind = str(event.data.get("nuisance_kind", "") or "").strip().lower()
+        loss_credits = max(0, int(event.data.get("loss_credits", 0) or 0))
+        if owner_player and nuisance_kind == "skim" and loss_credits > 0:
+            message = f"Frontage skim: {prop_label} lost {loss_credits} credits."
+        elif owner_player:
+            message = f"Soft-front pressure at {prop_label}."
+        elif nuisance_kind == "skim":
+            message = f"Soft front at {prop_label}: somebody is working the crowd for easy marks."
+        else:
+            message = f"Soft-front trouble stirs at {prop_label}."
+        self._log(
+            message,
+            channel="alerts",
+            priority="high" if owner_player else "normal",
+            dedupe_window=8,
+            dedupe_key=f"business-scene-nuisance:{event.data.get('property_id')}:{nuisance_kind or 'generic'}:{int(bool(owner_player))}",
         )
 
     def on_status_applied(self, event):

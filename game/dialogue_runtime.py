@@ -117,6 +117,78 @@ def dialog_map_marker_for_player(sim, player_eid, x, y, z):
     return f"{int(x)},{int(y)},z{int(z)}"
 
 
+def npc_initiated_dialogue_state(sim):
+    state = getattr(sim, "npc_initiated_dialogue_state", None)
+    if isinstance(state, dict):
+        return state
+    state = {}
+    sim.npc_initiated_dialogue_state = state
+    return state
+
+
+def queue_npc_initiated_dialogue(
+    sim,
+    npc_eid,
+    *,
+    prompt_lines=(),
+    highlight_topic_ids=(),
+    cooldown=240,
+    metadata=None,
+):
+    if sim is None or npc_eid is None:
+        return False
+    try:
+        speaker_eid = int(npc_eid)
+    except (TypeError, ValueError):
+        return False
+    clean_lines = tuple(
+        str(line).strip()
+        for line in ((prompt_lines,) if isinstance(prompt_lines, str) else tuple(prompt_lines or ()))
+        if str(line).strip()
+    )
+    if not clean_lines:
+        return False
+    clean_highlights = tuple(
+        str(topic_id).strip().lower()
+        for topic_id in ((highlight_topic_ids,) if isinstance(highlight_topic_ids, str) else tuple(highlight_topic_ids or ()))
+        if str(topic_id).strip()
+    )
+    try:
+        cooldown_ticks = max(0, int(cooldown or 0))
+    except (TypeError, ValueError):
+        cooldown_ticks = 240
+    npc_initiated_dialogue_state(sim)[speaker_eid] = {
+        "prompt_lines": clean_lines,
+        "highlight_topic_ids": clean_highlights,
+        "cooldown": int(cooldown_ticks),
+        "metadata": dict(metadata) if isinstance(metadata, dict) else {},
+        "queued_tick": int(getattr(sim, "tick", 0) or 0),
+    }
+    return True
+
+
+def peek_npc_initiated_dialogue(sim, npc_eid):
+    if sim is None or npc_eid is None:
+        return None
+    try:
+        speaker_eid = int(npc_eid)
+    except (TypeError, ValueError):
+        return None
+    payload = npc_initiated_dialogue_state(sim).get(speaker_eid)
+    return dict(payload) if isinstance(payload, dict) else None
+
+
+def pop_npc_initiated_dialogue(sim, npc_eid):
+    if sim is None or npc_eid is None:
+        return None
+    try:
+        speaker_eid = int(npc_eid)
+    except (TypeError, ValueError):
+        return None
+    payload = npc_initiated_dialogue_state(sim).pop(speaker_eid, None)
+    return dict(payload) if isinstance(payload, dict) else None
+
+
 def dialog_backup_cursor_payload(sim, player_eid, npc_eid, x, y, z):
     if sim is None or player_eid is None:
         return {}
@@ -500,11 +572,15 @@ _disguise_role_label = disguise_role_label
 _first_blocking_entity_at = first_blocking_entity_at
 _grant_dialogue_guard_grace = grant_dialogue_guard_grace
 _infrastructure_target_property = infrastructure_target_property
+_npc_initiated_dialogue_state = npc_initiated_dialogue_state
+_peek_npc_initiated_dialogue = peek_npc_initiated_dialogue
+_pop_npc_initiated_dialogue = pop_npc_initiated_dialogue
 _person_contact_entry = person_contact_entry
 _property_access_summary = property_access_summary
 _property_contact_benefits = property_contact_benefits
 _property_contact_entry = property_contact_entry
 _property_contact_lead = property_contact_lead
+_queue_npc_initiated_dialogue = queue_npc_initiated_dialogue
 _workplace_property = workplace_property
 _world_trait_claim_text = world_trait_claim_text
 _world_trait_claim_value = world_trait_claim_value

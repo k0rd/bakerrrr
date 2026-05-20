@@ -274,6 +274,7 @@ class WorldStreamingSystem(System):
             "fixture_type": str(fixture_type).strip().lower() or "underpass_stairwell",
             "display_glyph": str(glyph)[:1] or "u",
             "display_color": "property_service",
+            "hard_traversal": True,
             "cover_kind": "low",
             "cover_value": 0.12,
             "public": bool(public),

@@ -89,6 +89,7 @@ from game.components import (
 from game.dialogue import (
     choose_dialogue_line,
     ordered_topic_ids as _ordered_dialogue_topic_ids,
+    topic_menu_label as _dialogue_topic_menu_label,
     topic_player_line as _dialogue_topic_player_line,
     topic_player_reaction_line as _dialogue_topic_player_reaction_line,
     speaker_style as _dialogue_speaker_style,

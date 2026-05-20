@@ -45,6 +45,10 @@ ASSAULT_OFFENSE_CONTEXTS = frozenset({
     "melee_assault",
     "armed_assault",
 })
+WILDLIFE_OFFENSE_CONTEXTS = frozenset({
+    "wildlife_harassment",
+    "wildlife_hunting",
+})
 VIOLENT_OFFENSE_CONTEXTS = ASSAULT_OFFENSE_CONTEXTS | frozenset({"explosive_discharge"})
 OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS = VIOLENT_OFFENSE_CONTEXTS | frozenset({
     "trespass",
@@ -63,6 +67,8 @@ DEFAULT_ACTION_OFFENSE_CONTEXT_BONUS = {
     "unarmed_assault": 14,
     "melee_assault": 28,
     "armed_assault": 56,
+    "wildlife_harassment": 2,
+    "wildlife_hunting": 4,
     "explosive_discharge": 68,
 }
 

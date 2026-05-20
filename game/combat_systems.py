@@ -9,6 +9,7 @@ from game.components import (
     ArmorLoadout,
     Collider,
     CoverState,
+    CreatureIdentity,
     Inventory,
     ItemUseProfile,
     JusticeProfile,
@@ -82,6 +83,8 @@ from game.system_support.status_runtime import (
 from game.weapons import weapon_by_id
 
 THREAT_STATES = {"protecting", "investigating"}
+PEST_WILDLIFE_TAXONOMIES = frozenset({"insect", "arachnid"})
+MAJOR_WILDLIFE_TAXONOMIES = frozenset({"canine", "feline", "ungulate"})
 
 
 class WeaponSystem(System):
@@ -101,24 +104,61 @@ class WeaponSystem(System):
         bonus = ACTION_OFFENSE_CONTEXT_BONUS.get(context, 0)
         return max(0, min(100, base + bonus))
 
-    def _emit_action_offense(self, eid, action, x, y, z, context="ordinary", score=None):
+    def _emit_action_offense(self, eid, action, x, y, z, context="ordinary", score=None, **extra):
         if score is None:
             score = self._offense_score_for(action, context=context)
         if score <= 0:
             return
 
+        payload = {
+            "offender_eid": eid,
+            "action": action,
+            "context": context,
+            "offense_score": score,
+            "offense_tier": _offense_tier(score),
+            "x": x,
+            "y": y,
+            "z": z,
+            "radius": _offense_notice_radius(score),
+        }
+        if isinstance(extra, dict):
+            payload.update(extra)
         self.sim.emit(Event(
             "action_offense",
-            offender_eid=eid,
-            action=action,
-            context=context,
-            offense_score=score,
-            offense_tier=_offense_tier(score),
-            x=x,
-            y=y,
-            z=z,
-            radius=_offense_notice_radius(score),
+            **payload,
         ))
+
+    def _wildlife_offense_profile(self, target_eid, *, action):
+        if target_eid is None:
+            return None
+        ai = self.sim.ecs.get(AI).get(target_eid)
+        identity = self.sim.ecs.get(CreatureIdentity).get(target_eid)
+        role = str(getattr(ai, "role", "") or "").strip().lower()
+        creature_type = str(getattr(identity, "creature_type", "") or "").strip().lower()
+        if role != "wildlife" and creature_type != "animal":
+            return None
+
+        taxonomy = str(getattr(identity, "taxonomy_class", "other") or "other").strip().lower() or "other"
+        target_name = _entity_display_name(self.sim, target_eid, title_case=False)
+        if taxonomy in PEST_WILDLIFE_TAXONOMIES and str(action or "").strip().lower() == "melee_attack":
+            return {
+                "context": "pest_control",
+                "score": 0,
+                "target_name": target_name,
+                "target_taxonomy": taxonomy,
+            }
+
+        context = "wildlife_hunting" if (
+            str(action or "").strip().lower() == "fire_weapon"
+            or taxonomy in MAJOR_WILDLIFE_TAXONOMIES
+        ) else "wildlife_harassment"
+        return {
+            "context": context,
+            "score": self._offense_score_for(action, context=context),
+            "target_name": target_name,
+            "target_taxonomy": taxonomy,
+        }
+
 
     def _weapon_instance_data(self, loadout, weapon_id):
         if not loadout:
@@ -365,6 +405,8 @@ class WeaponSystem(System):
         if target_pos is None:
             self.sim.emit(Event("weapon_fire_blocked", eid=eid, reason="no_target"))
             return True
+        offense_profile = self._wildlife_offense_profile(target_eid, action="melee_attack") if eid == self.player_eid else None
+        target_name = _entity_display_name(self.sim, target_eid, title_case=False)
 
         hit = self._damage_entity(
             target_eid=target_eid,
@@ -416,13 +458,21 @@ class WeaponSystem(System):
 
         if eid == self.player_eid:
             context = "unarmed_assault" if melee_weapon_id == "unarmed" else "melee_assault"
+            score = None
+            if isinstance(offense_profile, dict):
+                context = str(offense_profile.get("context", context) or context).strip().lower() or context
+                score = int(offense_profile.get("score", 0) or 0)
             self._emit_action_offense(
                 eid=eid,
                 action="melee_attack",
                 context=context,
+                score=score,
                 x=source_pos.x,
                 y=source_pos.y,
                 z=source_pos.z,
+                target_eid=target_eid,
+                target_name=target_name,
+                target_taxonomy=str((offense_profile or {}).get("target_taxonomy", "") or "").strip().lower(),
             )
         return True
 
@@ -1137,13 +1187,24 @@ class WeaponSystem(System):
 
         if eid == self.player_eid:
             context = "explosive_discharge" if int(weapon.get("explosion_radius", 0)) > 0 else "armed_assault"
+            score = None
+            offense_profile = None
+            if int(weapon.get("explosion_radius", 0)) <= 0:
+                offense_profile = self._wildlife_offense_profile(target_eid, action="fire_weapon")
+                if isinstance(offense_profile, dict):
+                    context = str(offense_profile.get("context", context) or context).strip().lower() or context
+                    score = int(offense_profile.get("score", 0) or 0)
             self._emit_action_offense(
                 eid=eid,
                 action="fire_weapon",
                 context=context,
+                score=score,
                 x=pos.x,
                 y=pos.y,
                 z=pos.z,
+                target_eid=target_eid,
+                target_name=target_name,
+                target_taxonomy=str((offense_profile or {}).get("target_taxonomy", "") or "").strip().lower(),
             )
 
     def on_melee_attack_request(self, event):

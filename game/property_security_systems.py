@@ -148,6 +148,7 @@ from game.system_support.security_disguise_runtime import (
     _npc_disguise_scrutiny_profile,
     _security_fixture_is_online,
 )
+from game.system_support.business_event_state import _business_event_actor_note
 from game.system_support.interaction_ordering import (
     _direction_step,
     _interaction_target_order_key,
@@ -166,6 +167,21 @@ from game.system_support.offense_runtime import (
     _offense_tier,
 )
 from game.system_support.player_feedback import _log_player_feedback
+
+
+def _business_scene_watch_reason(sim, eid, prop):
+    note = _business_event_actor_note(sim, eid)
+    if not isinstance(note, dict):
+        return ""
+    if str(note.get("property_id", "") or "").strip() != str((prop or {}).get("id", "") or "").strip():
+        return ""
+    if str(note.get("event_phase", "") or "").strip().lower() != "block_watch":
+        return ""
+    career = str(note.get("career", "") or "").strip().lower()
+    if career != "block_regular":
+        return ""
+    return "watcher"
+
 
 class CameraSystem(System):
     """Detects the player in camera sightlines and raises offense events.
@@ -623,6 +639,8 @@ class PropertyDefenseSystem(System):
                 z=pos.z,
                 min_standing=standing_threshold,
             )
+            if not claim_reason:
+                claim_reason = _business_scene_watch_reason(self.sim, eid, prop)
             if not claim_reason:
                 continue
             defenders[eid] = claim_reason

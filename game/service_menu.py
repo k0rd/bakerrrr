@@ -1517,12 +1517,22 @@ class ServiceMenuSystem(System):
             )
         community_signal_note = str(snapshot.get("last_community_signal_note", "")).strip() or str(snapshot.get("community_signal_note", "")).strip()
         community_note = str(snapshot.get("last_community_note", "")).strip() or str(snapshot.get("community_note", "")).strip()
+        scene_pressure_note = str(snapshot.get("last_scene_pressure_note", "")).strip() or str(snapshot.get("scene_pressure_note", "")).strip()
+        scene_nuisance_note = str(snapshot.get("last_scene_nuisance_note", "")).strip()
+        scene_nuisance_loss = int(snapshot.get("last_scene_nuisance_loss", 0) or 0)
         if community_signal_note and community_note:
             lines.append(f"Ripple: {community_signal_note} | block mood {community_note}.")
         elif community_signal_note:
             lines.append(f"Ripple: {community_signal_note}.")
         elif community_note:
             lines.append(f"Block mood: {community_note}.")
+        if scene_pressure_note:
+            lines.append(f"Frontage: {scene_pressure_note}.")
+        if scene_nuisance_note:
+            nuisance_line = f"Last hit: {scene_nuisance_note}"
+            if scene_nuisance_loss > 0:
+                nuisance_line += f" | loss {_credit_amount_label(scene_nuisance_loss)}"
+            lines.append(nuisance_line + ".")
 
         gross_revenue = int(snapshot.get("gross_revenue", 0))
         realized_revenue = int(snapshot.get("realized_revenue", gross_revenue))
@@ -2855,6 +2865,11 @@ class ServiceMenuSystem(System):
             return title, [
                 f"{prop_name} is offline.",
                 "Power is out, so this service cannot run.",
+            ]
+        if reason == "no_return_path" and service == "underground_access":
+            return title, [
+                "That passage is not safe to enter right now.",
+                "No verified way back to ground could be confirmed.",
             ]
         if reason == "unavailable":
             if service == "vending":

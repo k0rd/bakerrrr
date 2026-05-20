@@ -157,6 +157,8 @@ from game.criminal_justice_runtime import _noise_merits_attention
 from game.dialogue_runtime import (
     _active_contractor_record,
     _contractor_order_target_from_record,
+    _peek_npc_initiated_dialogue,
+    _pop_npc_initiated_dialogue,
     _workplace_property,
 )
 from game.system_support.entity_naming import _entity_display_name
@@ -2024,6 +2026,23 @@ class NPCWillSystem(System):
                 and not dialog_open
                 and int(dialog_cooldowns.get(eid, 0) or 0) <= int(self.sim.tick)
             ):
+                pending_dialogue = _peek_npc_initiated_dialogue(self.sim, eid)
+                if isinstance(pending_dialogue, dict):
+                    try:
+                        dialog_radius = max(2, int(pending_dialogue.get("radius", 6) or 6))
+                    except (TypeError, ValueError):
+                        dialog_radius = 6
+                    distance = _manhattan(pos.x, pos.y, player_pos.x, player_pos.y)
+                    if distance <= dialog_radius:
+                        solicitation_score = 24.0 + (max(0, dialog_radius + 1 - distance) * 3.6)
+                        if ai.state == "soliciting_player" and ai.target_eid == player_eid:
+                            solicitation_score += 6.0
+                        if solicitation_score > best_score:
+                            best_intent = "soliciting_player"
+                            best_score = solicitation_score
+                            best_target = (player_pos.x, player_pos.y, player_pos.z)
+                            best_target_eid = player_eid
+
                 street_buy_profile = _street_buy_interest_profile(
                     self.sim,
                     eid,
@@ -2679,47 +2698,75 @@ class NPCInvestigateSystem(System):
                     ai.target_eid = None
                     self.sim.emit(Event("npc_investigation_complete", npc_eid=eid, x=pos.x, y=pos.y, z=tz))
                 elif ai.state == "soliciting_player":
-                    occupation = occupations.get(eid)
-                    career = str(getattr(occupation, "career", "") or "").strip().lower()
-                    district_type = ""
-                    world = getattr(self.sim, "world", None)
-                    if world is not None:
-                        chunk = world.get_chunk(*self.sim.chunk_coords(pos.x, pos.y))
-                        district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
-                        if not isinstance(district, dict):
-                            district = {}
-                        district_type = str(district.get("district_type", "") or "").strip().lower()
-                    interest = None
-                    if player_eid is not None and player_pos is not None and int(player_pos.z) == int(pos.z):
-                        interest = _street_buy_interest_profile(
-                            self.sim,
-                            eid,
-                            player_eid,
-                            district_type=district_type,
-                            career=career,
-                        )
+                    pending_dialogue = _pop_npc_initiated_dialogue(self.sim, eid)
                     prompt_lines = ()
-                    if interest:
-                        desired_name = str(interest.get("desired_name", "") or "").strip()
-                        if interest.get("player_has_desired") and desired_name:
-                            prompt_lines = (f"You carrying any {desired_name}? I'll pay for it.",)
-                        elif desired_name:
-                            prompt_lines = (f"If you run across any {desired_name}, find me. I'm buying.",)
-                        elif interest.get("player_has_match"):
-                            prompt_lines = ("You carrying anything worth moving? I can pay.",)
-                    cooldown = int(max(
-                        60,
-                        _behavior_preference(self.sim, eid, "initiate_dialogue_cooldown", 240) or 240,
-                    ))
-                    dialog_cooldowns[eid] = int(self.sim.tick) + cooldown
+                    highlight_topic_ids = ()
+                    cooldown = None
+                    metadata = {}
+                    if isinstance(pending_dialogue, dict):
+                        raw_prompt_lines = pending_dialogue.get("prompt_lines", ())
+                        if isinstance(raw_prompt_lines, str):
+                            prompt_lines = (raw_prompt_lines,)
+                        else:
+                            prompt_lines = tuple(raw_prompt_lines or ())
+                        raw_highlights = pending_dialogue.get("highlight_topic_ids", ())
+                        if isinstance(raw_highlights, str):
+                            highlight_topic_ids = (raw_highlights,)
+                        else:
+                            highlight_topic_ids = tuple(raw_highlights or ())
+                        cooldown = pending_dialogue.get("cooldown")
+                        metadata = dict(pending_dialogue.get("metadata", {})) if isinstance(pending_dialogue.get("metadata"), dict) else {}
+
+                    if not prompt_lines:
+                        occupation = occupations.get(eid)
+                        career = str(getattr(occupation, "career", "") or "").strip().lower()
+                        district_type = ""
+                        world = getattr(self.sim, "world", None)
+                        if world is not None:
+                            chunk = world.get_chunk(*self.sim.chunk_coords(pos.x, pos.y))
+                            district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+                            if not isinstance(district, dict):
+                                district = {}
+                            district_type = str(district.get("district_type", "") or "").strip().lower()
+                        interest = None
+                        if player_eid is not None and player_pos is not None and int(player_pos.z) == int(pos.z):
+                            interest = _street_buy_interest_profile(
+                                self.sim,
+                                eid,
+                                player_eid,
+                                district_type=district_type,
+                                career=career,
+                            )
+                        if interest:
+                            desired_name = str(interest.get("desired_name", "") or "").strip()
+                            if interest.get("player_has_desired") and desired_name:
+                                prompt_lines = (f"You carrying any {desired_name}? I'll pay for it.",)
+                            elif desired_name:
+                                prompt_lines = (f"If you run across any {desired_name}, find me. I'm buying.",)
+                            elif interest.get("player_has_match"):
+                                prompt_lines = ("You carrying anything worth moving? I can pay.",)
+                            highlight_topic_ids = ("street_buy",)
+
+                    if cooldown is None:
+                        cooldown = max(
+                            60,
+                            _behavior_preference(self.sim, eid, "initiate_dialogue_cooldown", 240) or 240,
+                        )
+                    dialog_cooldowns[eid] = int(self.sim.tick) + int(max(0, int(cooldown or 0)))
                     if prompt_lines and player_eid is not None:
                         self.sim.emit(Event(
                             "npc_dialogue_request",
                             eid=player_eid,
                             npc_eid=eid,
                             prompt_lines=prompt_lines,
-                            highlight_topic_ids=("street_buy",),
+                            highlight_topic_ids=highlight_topic_ids,
                         ))
+                        event_type = str(metadata.get("event_type", "") or "").strip()
+                        event_data = dict(metadata.get("event_data", {})) if isinstance(metadata.get("event_data"), dict) else {}
+                        if event_type:
+                            payload = dict(event_data)
+                            payload.setdefault("npc_eid", eid)
+                            self.sim.emit(Event(event_type, **payload))
                     ai.state = "idle"
                     ai.target = None
                     ai.target_eid = None

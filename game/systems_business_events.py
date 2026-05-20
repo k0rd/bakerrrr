@@ -7,11 +7,13 @@ facade for the rest of the project.
 
 import random
 
+from engine.events import Event
 from engine.systems import System
 from game.location_presentation_runtime import _location_building_category
 from game.player_businesses import (
     player_business_customer_policy as _player_business_customer_policy,
     player_business_open_roles as _player_business_open_roles,
+    player_business_state as _player_business_state,
     player_business_summary as _player_business_summary,
 )
 from game.property_runtime import (
@@ -2001,6 +2003,42 @@ def _business_event_gathering_blueprint(category):
     }
 
 
+def _business_event_reputation_followup_blueprint(category, *, event_phase=""):
+    category = str(category or "").strip().lower()
+    event_phase = str(event_phase or "").strip().lower()
+    if event_phase == "block_watch":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Watch Card",
+            "fixture_type": "watch_board",
+            "fixture_glyph": "w",
+            "actor_specs": [
+                {"role": "civilian", "career": "block_regular", "linger_ticks": 22},
+                {"role": "civilian", "career": "block_regular", "linger_ticks": 20},
+                {"role": "civilian", "career": "regular", "linger_ticks": 18},
+            ],
+            "keep_hours": 2,
+            "release_budget": 0,
+            "drift_preferred": True,
+        }
+    if event_phase == "soft_front":
+        return {
+            "scene_type": "gathering",
+            "fixture_name": "Easy-Marks Sheet",
+            "fixture_type": "easy_marks_sheet",
+            "fixture_glyph": "!",
+            "actor_specs": [
+                {"role": "civilian", "career": "grifter", "linger_ticks": 20},
+                {"role": "civilian", "career": "grifter", "linger_ticks": 18},
+                {"role": "civilian", "career": "lookout", "linger_ticks": 18},
+            ],
+            "keep_hours": 2,
+            "release_budget": 0,
+            "drift_preferred": False,
+        }
+    return None
+
+
 def _business_event_inspection_blueprint(category):
     category = str(category or "").strip().lower()
     if category == "medical":
@@ -3608,6 +3646,7 @@ def _business_event_followup_seed(sim, scene, prop, *, rng):
 
     scene_type = str((scene or {}).get("scene_type", "") or "").strip().lower()
     category = str((scene or {}).get("category", "") or "").strip().lower()
+    community_tone = str((scene or {}).get("community_tone", "") or "").strip().lower()
     scene_id = str((scene or {}).get("scene_id", "") or "").strip()
     event_phase = str((scene or {}).get("event_phase", "") or "").strip().lower()
     if not scene_id:
@@ -3658,6 +3697,32 @@ def _business_event_followup_seed(sim, scene, prop, *, rng):
         detail_line = f"They are running one more drop after {current_name}: {target_label or target_name} around {time_text}."
         reward = {"credits": 6, "intel": 2}
         blueprint = _business_event_delivery_blueprint(target_category)
+    elif scene_type == "queue" and community_tone == "loyal" and category in {"hospitality", "entertainment", "retail", "office", "finance", "medical"}:
+        target_prop = prop
+        offset_hours = 1 + rng.randint(0, 1)
+        duration_ticks = max(90, int(_business_event_ticks_per_hour(sim) * 0.75))
+        time_text = _business_event_time_point_text(sim, offset_hours=offset_hours)
+        kind = "block_watch"
+        title = f"Block Watch: {current_name}"
+        summary = f"Locals are expected to keep informal eyes on {current_name} around {time_text}."
+        local_line = f"The block keeps half an eye on {current_name}; more of them should be out around {time_text}."
+        detail_line = f"Word around {current_name} is that the same loyal faces keep watch on the frontage around {time_text} whenever the place feels worth backing."
+        reward = {"credits": 3, "intel": 2}
+        blueprint = _business_event_reputation_followup_blueprint(category, event_phase=kind)
+        lead_kind = "hours"
+    elif scene_type == "queue" and community_tone in {"predatory", "troubled"} and category in {"hospitality", "entertainment", "retail", "office", "finance", "medical"}:
+        target_prop = prop
+        offset_hours = 1 + rng.randint(0, 1)
+        duration_ticks = max(90, int(_business_event_ticks_per_hour(sim) * 0.75))
+        time_text = _business_event_time_point_text(sim, offset_hours=offset_hours)
+        kind = "soft_front"
+        title = f"Soft Front: {current_name}"
+        summary = f"Opportunists are expected to work the soft frontage at {current_name} around {time_text}."
+        local_line = f"If the front at {current_name} keeps looking this soft, more of them will be working it around {time_text}."
+        detail_line = f"People circling {current_name} are already talking like the frontage will be soft enough for easy marks around {time_text}."
+        reward = {"credits": 4, "intel": 2}
+        blueprint = _business_event_reputation_followup_blueprint(category, event_phase=kind)
+        lead_kind = "hours"
     elif scene_type == "queue" and category in {"hospitality", "entertainment", "retail", "office", "finance"}:
         target_prop = _business_event_followup_target(
             sim,
@@ -3728,10 +3793,16 @@ def _business_event_followup_seed(sim, scene, prop, *, rng):
             "source": "business_scene",
             "chunk": target_chunk,
             "location": "lead",
-            "playstyles": ("social", "stealth", "economic"),
+            "playstyles": (
+                ("social", "stealth", "intel")
+                if kind == "block_watch"
+                else ("stealth", "social", "combat")
+                if kind == "soft_front"
+                else ("social", "stealth", "economic")
+            ),
             "reward": reward,
-            "risk": "low",
-            "pressure": "low",
+            "risk": "low" if kind == "block_watch" else "medium" if kind == "soft_front" else "low",
+            "pressure": "low" if kind == "block_watch" else "medium" if kind == "soft_front" else "low",
             "requirements": {
                 "visit_chunk": target_chunk,
                 "property_id": target_property_id,
@@ -4249,7 +4320,7 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             pool = [item_id for item_id in ("credstick_chip", "city_pass_token", "transit_daypass", "caff_shot") if item_id in ITEM_CATALOG]
             item_count += 1
             read_only_reason = "You can lift something from the dispatch satchel, but stuffing your own gear into live route paperwork would be a good way to get remembered."
-    elif scene_type == "gathering" and fixture_type in {"meeting_sign", "meeting_marker", "meeting_board", "inspection_packet", "admin_packet", "manifest_clipboard", "trauma_kit", "school_bags", "stoop_cooler", "incident_tape", "memorial_candles", "help_wanted_board", "outreach_table", "crew_call_sheet", "route_welcome_board", "tenant_welcome_box", "mutual_aid_table", "regulars_table", "complaint_board"}:
+    elif scene_type == "gathering" and fixture_type in {"meeting_sign", "meeting_marker", "meeting_board", "inspection_packet", "admin_packet", "manifest_clipboard", "trauma_kit", "school_bags", "stoop_cooler", "incident_tape", "memorial_candles", "help_wanted_board", "outreach_table", "crew_call_sheet", "route_welcome_board", "tenant_welcome_box", "mutual_aid_table", "regulars_table", "complaint_board", "watch_board", "easy_marks_sheet"}:
         org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
         org_name = str((org_snapshot or {}).get("organization_name", "") or "").strip()
         org_label = org_name or prop_name
@@ -4275,6 +4346,10 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             container_label = "Tenant Welcome Box"
         elif fixture_type == "mutual_aid_table" or event_phase == "mutual_aid_table":
             container_label = "Mutual Aid Table"
+        elif fixture_type == "watch_board" or event_phase == "block_watch":
+            container_label = "Watch Card"
+        elif fixture_type == "easy_marks_sheet" or event_phase == "soft_front":
+            container_label = "Easy-Marks Sheet"
         elif fixture_type == "regulars_table" or event_phase == "regulars_spill":
             container_label = "Regulars Table"
         elif fixture_type == "complaint_board" or event_phase == "grumbling_front":
@@ -4393,6 +4468,28 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             note = f"Tenant welcome box: {prop_name} has a small stoop meetup going, all keys, names, repairs, and practical advice for someone new to the building."
         elif event_phase == "mutual_aid_table":
             note = f"Mutual aid table: {prop_name} is moving food, water, names, and work tips through the frontage; some of those names may stay local."
+        elif event_phase == "block_watch" and hours_text and requirement:
+            note = (
+                f"Watch card: the block has started keeping informal eyes on {prop_name} during {hours_text}. "
+                f"Anyone moving deeper still has to clear {requirement}."
+            )
+        elif event_phase == "block_watch" and hours_text:
+            note = f"Watch card: people near {prop_name} have started quietly watching the frontage during {hours_text} because they think the place is worth backing."
+        elif event_phase == "block_watch" and requirement:
+            note = f"Watch card: locals have started keeping an eye on {prop_name}, even if the front still wants {requirement} once someone tries to go deeper."
+        elif event_phase == "block_watch":
+            note = f"Watch card: the neighborhood has started treating {prop_name} like a place worth minding, enough that people note who is around and when."
+        elif event_phase == "soft_front" and hours_text and requirement:
+            note = (
+                f"Easy-marks sheet: talk around {prop_name} says the frontage goes soft during {hours_text}. "
+                f"Even then the front still wants {requirement}; the problem is everyone hovering outside it."
+            )
+        elif event_phase == "soft_front" and hours_text:
+            note = f"Easy-marks sheet: people circling {prop_name} think the frontage turns soft during {hours_text}, which is exactly the kind of timing grifters love."
+        elif event_phase == "soft_front" and requirement:
+            note = f"Easy-marks sheet: the door at {prop_name} still wants {requirement}, but the opportunists outside it think the soft part is the crowd, not the lock."
+        elif event_phase == "soft_front":
+            note = f"Easy-marks sheet: the talk around {prop_name} has gone sour enough that some people are mapping the frontage like a place to work instead of a place to use."
         elif event_phase == "regulars_spill" and hours_text and requirement:
             note = (
                 f"Regulars table: people are treating {prop_name} like the kind of place the block has started trusting to come through during {hours_text}. "
@@ -4526,6 +4623,14 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             pool = [item_id for item_id in ("meal_voucher", "bottled_water", "calm_patch", "city_pass_token") if item_id in ITEM_CATALOG]
             item_count += 1
             read_only_reason = "You can take from the aid table, but using it as a private stash would get remembered."
+        elif event_phase == "block_watch":
+            pool = [item_id for item_id in ("city_pass_token", "bottled_water", "spark_brew", "calm_patch") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can pocket something from the watch card table, but turning neighborhood watch notes into your personal stash would get remembered."
+        elif event_phase == "soft_front":
+            pool = [item_id for item_id in ("credstick_chip", "city_pass_token", "spark_brew", "mint_strip") if item_id in ITEM_CATALOG]
+            item_count += 1
+            read_only_reason = "You can lift something from the easy-marks sheet, but using an active nuisance knot as your private stash would make you part of the problem fast."
         elif event_phase == "regulars_spill":
             pool = [item_id for item_id in ("spark_brew", "bottled_water", "mint_strip", "city_pass_token", "meal_voucher") if item_id in ITEM_CATALOG]
             item_count += 1
@@ -4658,7 +4763,33 @@ def _business_event_seed_scene_actor_note(sim, scene, prop, actor_spec, *, rng):
         org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
         org_name = str((org_snapshot or {}).get("organization_name", "") or "").strip()
         org_label = org_name or prop_name
-        if event_phase == "regulars_spill":
+        if event_phase == "block_watch":
+            if career == "block_regular":
+                local_line = f"We keep watch on {prop_name} because the block has started deciding the place matters."
+                detail_line = (
+                    f"People around {prop_name} have started taking informal turns watching the frontage"
+                    + (f" during {hours_text}." if hours_text else ".")
+                )
+            else:
+                local_line = f"If something feels wrong at {prop_name}, somebody from the block usually sees it before staff do."
+                detail_line = (
+                    f"The neighborhood has started treating {prop_name} like a place worth backing instead of just another stop"
+                    + (f" during {hours_text}." if hours_text else ".")
+                )
+        elif event_phase == "soft_front":
+            if career in {"grifter", "lookout"}:
+                local_line = f"When a front like {prop_name} goes soft, people start working it for easy marks."
+                detail_line = (
+                    f"The mood around {prop_name} has gone loose enough that opportunists are timing the frontage"
+                    + (f" during {hours_text}." if hours_text else ".")
+                )
+            else:
+                local_line = f"Too many people around {prop_name} are starting to look at the crowd like a pocket to work instead of a place to use."
+                detail_line = (
+                    f"{prop_name} is drawing the kind of sour side traffic that shows up when locals think the frontage has gone soft"
+                    + (f" during {hours_text}." if hours_text else ".")
+                )
+        elif event_phase == "regulars_spill":
             if career in {"site_rep", "host", "coordinator"} or role == "worker":
                 local_line = f"The same faces keep coming back to {prop_name} because it has started feeling dependable."
                 detail_line = (
@@ -6124,6 +6255,10 @@ class BusinessPulseSceneSystem(System):
             ai = ais.get(eid)
             if not pos or not ai:
                 continue
+            ai_state = str(getattr(ai, "state", "") or "").strip().lower()
+            will_state = str(getattr(wills.get(eid), "intent", "") or "").strip().lower()
+            if ai_state in {"investigating", "protecting"} or will_state in {"investigating", "protecting"}:
+                continue
             preserve_mode = self._scene_actor_preservation_mode(eid)
             if preserve_mode:
                 if str(preserve_mode).strip().lower().startswith("keep_"):
@@ -6164,6 +6299,204 @@ class BusinessPulseSceneSystem(System):
         min_diff = min(forward_diff, backward_diff)
         return min_diff < keep_hours
 
+    def _watch_scene_actor_ids(self, scene, *, careers=()):
+        actor_state = _business_event_actor_state(self.sim)
+        careers = {
+            str(career or "").strip().lower()
+            for career in tuple(careers or ())
+            if str(career or "").strip()
+        }
+        matches = []
+        for raw_eid in tuple(scene.get("spawned_entity_ids", ()) or ()):
+            try:
+                eid = int(raw_eid)
+            except (TypeError, ValueError):
+                continue
+            if self.sim.ecs.get(Position).get(eid) is None:
+                continue
+            note = actor_state.get(eid, {}) if isinstance(actor_state, dict) else {}
+            career = str((note or {}).get("career", "") or "").strip().lower()
+            if careers and career not in careers:
+                continue
+            matches.append(eid)
+        return matches
+
+    def _scene_anchor(self, prop):
+        if not isinstance(prop, dict):
+            return None
+        anchor = _business_event_frontage_anchor(self.sim, prop)
+        if isinstance(anchor, (tuple, list)) and len(anchor) >= 3:
+            return (int(anchor[0]), int(anchor[1]), int(anchor[2]))
+        focus = _property_focus_position(self.sim, prop)
+        if isinstance(focus, (tuple, list)) and len(focus) >= 3:
+            return (int(focus[0]), int(focus[1]), int(focus[2]))
+        return None
+
+    def _scene_owner_is_player(self, prop):
+        if not isinstance(prop, dict):
+            return False
+        owner_eid = prop.get("owner_eid")
+        if owner_eid is None or self.player_eid is None:
+            return False
+        try:
+            return int(owner_eid) == int(self.player_eid)
+        except (TypeError, ValueError):
+            return owner_eid == self.player_eid
+
+    def _process_block_watch_scene(self, scene, prop, player_pos):
+        if player_pos is None or not isinstance(prop, dict):
+            return
+        anchor = self._scene_anchor(prop)
+        if anchor is None or int(player_pos.z) != int(anchor[2]):
+            scene.pop("watch_loiter_since_tick", None)
+            return
+        if self._scene_owner_is_player(prop):
+            scene.pop("watch_loiter_since_tick", None)
+            return
+        current_covering = str(_property_covering(self.sim, int(player_pos.x), int(player_pos.y), int(player_pos.z))) or ""
+        if current_covering.strip() == str(prop.get("id", "") or "").strip():
+            scene.pop("watch_loiter_since_tick", None)
+            return
+
+        distance = _manhattan(int(player_pos.x), int(player_pos.y), int(anchor[0]), int(anchor[1]))
+        if distance > 4:
+            scene.pop("watch_loiter_since_tick", None)
+            return
+
+        loiter_since = int(scene.get("watch_loiter_since_tick", 0) or 0)
+        if loiter_since <= 0:
+            scene["watch_loiter_since_tick"] = int(self.sim.tick)
+            return
+        if int(self.sim.tick) - loiter_since < 8:
+            return
+        if int(self.sim.tick) < int(scene.get("watch_warn_cooldown_tick", 0) or 0):
+            return
+
+        watcher_ids = self._watch_scene_actor_ids(scene, careers=("block_regular",))
+        if not watcher_ids:
+            return
+
+        target_tile = (int(player_pos.x), int(player_pos.y), int(player_pos.z))
+        watcher_id = min(
+            watcher_ids,
+            key=lambda eid: (
+                _manhattan(
+                    int(self.sim.ecs.get(Position).get(eid).x),
+                    int(self.sim.ecs.get(Position).get(eid).y),
+                    target_tile[0],
+                    target_tile[1],
+                ),
+                eid,
+            ),
+        )
+        ai = self.sim.ecs.get(AI).get(watcher_id)
+        will = self.sim.ecs.get(NPCWill).get(watcher_id)
+        if ai and will:
+            _sync_ai_intent(ai, will, self.sim.tick, "investigating", target=target_tile, target_eid=None)
+            will.score = max(float(getattr(will, "score", 0.0) or 0.0), 46.0)
+        self.sim.emit(Event(
+            "npc_warn_property",
+            npc_eid=watcher_id,
+            offender_eid=self.player_eid,
+            property_id=str(prop.get("id", "") or "").strip(),
+            owner_eid=prop.get("owner_eid"),
+            defender_reason="watcher",
+            threat_type="loitering",
+            severity_label="suspicious",
+            ingress_kind="frontage",
+            ingress_method="loitering",
+            x=target_tile[0],
+            y=target_tile[1],
+            z=target_tile[2],
+        ))
+        scene["watch_warn_cooldown_tick"] = int(self.sim.tick) + 24
+
+    def _process_soft_front_scene(self, scene, prop, player_pos):
+        if not isinstance(prop, dict):
+            return
+        if int(scene.get("nuisance_hits", 0) or 0) >= 2:
+            return
+        if int(self.sim.tick) < int(scene.get("nuisance_next_tick", 0) or 0):
+            return
+
+        anchor = self._scene_anchor(prop)
+        if anchor is None:
+            return
+        grifter_ids = self._watch_scene_actor_ids(scene, careers=("grifter", "lookout"))
+        if not grifter_ids:
+            return
+
+        rng = random.Random(f"{self.sim.seed}:business-scene:nuisance:{scene.get('scene_id')}:{self.sim.tick}")
+        source_eid = rng.choice(tuple(grifter_ids))
+        property_id = str(prop.get("id", "") or "").strip()
+        property_name = str(prop.get("name", property_id or "the frontage")).strip() or "the frontage"
+        loss_credits = 0
+        if self._scene_owner_is_player(prop):
+            state = _player_business_state(prop, create=True)
+            if isinstance(state, dict):
+                balance = max(0, int(state.get("account_balance", 0) or 0))
+                loss_credits = min(balance, max(1, 2 + rng.randint(0, 3)))
+                if loss_credits > 0:
+                    state["account_balance"] = max(0, balance - loss_credits)
+                state["last_scene_nuisance_note"] = "frontage skim"
+                state["last_scene_nuisance_loss"] = int(loss_credits)
+                state["last_scene_nuisance_tick"] = int(self.sim.tick)
+
+        self.sim.emit(Event(
+            "business_scene_nuisance",
+            property_id=property_id,
+            property_name=property_name,
+            offender_eid=source_eid,
+            owner_eid=prop.get("owner_eid"),
+            nuisance_kind="skim",
+            loss_credits=int(loss_credits),
+            event_phase="soft_front",
+            x=int(anchor[0]),
+            y=int(anchor[1]),
+            z=int(anchor[2]),
+        ))
+        self.sim.emit(Event(
+            "item_stolen",
+            offender_eid=source_eid,
+            item_id="frontage_skim",
+            item_name="frontage skim",
+            owner_eid=prop.get("owner_eid"),
+            owner_tag=prop.get("owner_tag"),
+            property_id=property_id,
+            x=int(anchor[0]),
+            y=int(anchor[1]),
+            z=int(anchor[2]),
+        ))
+        if player_pos is not None and int(player_pos.z) == int(anchor[2]) and _manhattan(int(player_pos.x), int(player_pos.y), int(anchor[0]), int(anchor[1])) <= 7:
+            self.sim.emit(Event(
+                "property_tamper",
+                offender_eid=source_eid,
+                property_id=property_id,
+                witnessed=True,
+                severity_score=14,
+                severity_label="soft_front",
+                ingress_kind="frontage",
+                ingress_method="crowd_work",
+                x=int(anchor[0]),
+                y=int(anchor[1]),
+                z=int(anchor[2]),
+            ))
+        scene["nuisance_hits"] = int(scene.get("nuisance_hits", 0) or 0) + 1
+        scene["nuisance_next_tick"] = int(self.sim.tick) + 24 + int(rng.randint(0, 8))
+
+    def _update_scene_consequences(self, scene):
+        if not isinstance(scene, dict):
+            return
+        prop = self._scene_property(scene)
+        if not isinstance(prop, dict):
+            return
+        event_phase = str(scene.get("event_phase", "") or "").strip().lower()
+        player_pos = self._player_pos()
+        if event_phase == "block_watch":
+            self._process_block_watch_scene(scene, prop, player_pos)
+        elif event_phase == "soft_front":
+            self._process_soft_front_scene(scene, prop, player_pos)
+
     def update(self):
         active_chunk = self._active_chunk_coord()
         player_pos = self._player_pos()
@@ -6198,6 +6531,7 @@ class BusinessPulseSceneSystem(System):
 
         chunk_tallies = _chunk_entity_tallies(self.sim)
         for scene in list(active.values()):
+            self._update_scene_consequences(scene)
             self._update_scene_actor_routes(scene)
         self._prune_chunk_spillover(active_chunk, tallies=chunk_tallies)
         _prune_business_event_seeds(self.sim, active_scene_ids=active.keys())

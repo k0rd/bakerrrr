@@ -22,7 +22,7 @@ from game.incident_runtime import (
 from game.organizations import property_org_members
 from game.system_support.awareness_runtime import _watchers_for_position
 from game.system_support.intrusion_runtime import _tamper_is_noisy, _trespass_is_obvious_breach
-from game.system_support.offense_runtime import OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS
+from game.system_support.offense_runtime import OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS, WILDLIFE_OFFENSE_CONTEXTS
 
 
 CAMERA_OWNER_AI_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
@@ -368,7 +368,10 @@ class IncidentKnowledgeSystem(System):
         if context == "ordinary" and offense_score < self.MIN_ACTION_OFFENSE_SCORE:
             return
 
-        official_reportable = context in OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS or offense_score >= 24
+        official_reportable = (
+            context in OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS
+            or (context not in WILDLIFE_OFFENSE_CONTEXTS and offense_score >= 24)
+        )
         incident = self._create_incident(
             event,
             kind="action_offense",

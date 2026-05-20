@@ -191,6 +191,24 @@ class PropertyActionRuntime:
                 return prop
         return None
 
+    def hard_traversal_property_at(self, pos):
+        if pos is None:
+            return None
+        prop = self.sim.property_at(pos.x, pos.y, pos.z)
+        if not isinstance(prop, dict):
+            return None
+        metadata = prop.get("metadata", {}) if isinstance(prop.get("metadata"), dict) else {}
+        if not bool(metadata.get("hard_traversal")):
+            return None
+        services = {
+            str(service).strip().lower()
+            for service in tuple(metadata.get("site_services", ()) or ())
+            if str(service).strip()
+        }
+        if not services:
+            return None
+        return prop
+
     def handle_door_interaction(self, eid, pos):
         candidate = _door_interaction_candidate(
             self.sim,
@@ -461,6 +479,19 @@ class PropertyActionRuntime:
 
     def handle_interact_action(self, eid, pos, *, force_direction=False):
         if force_direction and self._force_interact_in_last_direction(eid, pos):
+            return
+
+        prop = self.hard_traversal_property_at(pos)
+        if prop:
+            self.remember_player_property_discovery(eid, prop, discovery_mode="interact")
+            self.sim.emit(Event(
+                "property_interact",
+                eid=eid,
+                property_id=prop["id"],
+                x=prop["x"],
+                y=prop["y"],
+                z=prop["z"],
+            ))
             return
 
         preferred_dir = self.action_system._player_interact_direction(eid, pos)

@@ -183,23 +183,23 @@ def build_dialogue_shape(sim, npc_eid, *, context=None):
 
         if urgency >= 0.62:
             if role in _AUTHORITY_ROLES:
-                line = f"Stay clear. I am checking out {label} {where}."
+                line = f"Stay clear. I am checking out {label} {where}, and I do not need another witness in the way."
             elif reported:
-                line = f"People already called this in. I would not linger around that {label}."
+                line = f"People already called this in. If you are not tied to that {label}, do not linger."
             else:
-                line = f"Something ugly happened {where}. Keep moving."
+                line = f"Something ugly happened {where}. Keep moving and keep your hands empty."
             shape["opening_lines"].append(line)
             shape["concern_line"] = line
             shape["debug_tags"].append("urgent_incident")
         elif social >= 0.34:
             if firsthand:
-                line = f"I saw enough of that {label} to keep my mouth small."
+                line = f"I saw enough of that {label} to keep my voice down."
             elif depth > 0 or source_kind in {"social_rumor", "rumor"}:
-                line = f"People are talking about some {label} {where}. Could be bent by now."
+                line = f"People are talking about some {label} {where}. Could be bent by now, but they keep repeating it."
             elif confidence < 0.48:
-                line = f"Something about {label} is going around, but I would not swear to it."
+                line = f"Something about {label} is going around, but I would not put my name under it."
             else:
-                line = f"Word is there was {label} {where}."
+                line = f"Word is there was {label} {where}, and the quiet after it feels worked-over."
             shape["local_line"] = line
             if tone in {"friendly", "open", "neutral"}:
                 shape["opening_lines"].append(line)

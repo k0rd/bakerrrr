@@ -80,6 +80,8 @@ TOPIC_ORDER = (
     "trade",
     "street_appraise",
     "street_buy",
+    "street_buy_accept",
+    "street_buy_decline",
     "bye",
     "payoff",
     "fence",
@@ -506,6 +508,16 @@ TOPIC_DEFS = {
         "root": True,
         "unlocks": (),
     },
+    "street_buy_accept": {
+        "label": "Sell it.",
+        "root": True,
+        "unlocks": (),
+    },
+    "street_buy_decline": {
+        "label": "Not this time.",
+        "root": True,
+        "unlocks": (),
+    },
     "bye": {
         "label": "Goodbye.",
         "root": True,
@@ -539,11 +551,22 @@ PLAYER_TOPIC_BANKS = {
         "So what do you do around here?",
         "What kind of work do you do?",
         "What do you do for a living?",
+        "What keeps you busy around here?",
+        "What is your corner of this place?",
+    ),
+    "routine": (
+        "What does a normal day look like for you?",
+        "When are you usually moving through here?",
+        "How does your day tend to run?",
+        "What rhythm does the work keep you on?",
+        "Where would someone usually find you during the day?",
     ),
     "workplace": (
         "Where do you usually work?",
         "What place do you work out of?",
         "Is {workplace_name} where you spend most of your time?",
+        "Where do you clock most of your hours?",
+        "What door do you usually answer to?",
     ),
     "organization": (
         "Who are you tied in with there?",
@@ -570,10 +593,154 @@ PLAYER_TOPIC_BANKS = {
         "How do I find {referenced_place_name}?",
         "Where is that place, then?",
     ),
+    "hire": (
+        "Would you be interested in work?",
+        "I might have a position for you. Interested?",
+        "How do you feel about working for me?",
+        "Want to talk about a job?",
+    ),
+    "hire_manager": (
+        "Could you run the place for me?",
+        "Would you take manager work there?",
+        "Think you could handle the operation?",
+        "I need someone steady in charge. Is that you?",
+    ),
+    "hire_staff": (
+        "Would you take a regular shift?",
+        "Could I put you on staff?",
+        "Are you looking for counter or floor work?",
+        "Want a spot on the schedule?",
+    ),
+    "fire": (
+        "We need to talk about your position.",
+        "This is not working out at {player_business_fire_name}.",
+        "I am ending your work at {player_business_fire_name}.",
+        "Your shift with me is done.",
+    ),
     "services": (
         "What does the place actually do?",
         "So what are people coming there for?",
         "What does {owner_place_name} mostly handle?",
+    ),
+    "service_fuel": (
+        "Where can I get fuel nearby?",
+        "Any place close that sells fuel?",
+        "Who handles fuel around here?",
+        "If I need fuel, where am I going?",
+    ),
+    "service_repair": (
+        "Who repairs vehicles around here?",
+        "Any repair shop close enough to matter?",
+        "Where would you take something that needs fixing?",
+        "Is there a mechanic nearby?",
+    ),
+    "service_contractor": (
+        "Any contractor office nearby?",
+        "Where do people find hired hands around here?",
+        "Who handles contractor work close by?",
+        "If I need a contractor, who is local?",
+    ),
+    "service_banking": (
+        "Where is the nearest bank or broker?",
+        "Who handles money around here?",
+        "Any banking close by?",
+        "If I need a broker, where do I start?",
+    ),
+    "service_insurance": (
+        "Any insurer or claims desk nearby?",
+        "Who handles claims around here?",
+        "Where would someone file insurance nearby?",
+        "If I need coverage talk, who is close?",
+    ),
+    "service_rest": (
+        "Anywhere close where I can sleep?",
+        "Who rents a bed around here?",
+        "Where do people rest nearby?",
+        "If I need to get off my feet, where do I go?",
+    ),
+    "service_transit": (
+        "How do people get out of this area?",
+        "Any transit close by?",
+        "Where is the nearest ride out?",
+        "What moves people through here?",
+    ),
+    "service_rail": (
+        "Where is the nearest station?",
+        "How do I find the rail line?",
+        "Any station close enough to use?",
+        "Where do people catch the train around here?",
+    ),
+    "service_bus": (
+        "Where can I catch a bus?",
+        "Any bus stop close by?",
+        "Which way to the nearest bus route?",
+        "Where does the bus pick up around here?",
+    ),
+    "service_shuttle": (
+        "Any shuttle stop around here?",
+        "Where would I catch a shuttle?",
+        "Who runs shuttle service nearby?",
+        "Is there a shuttle route close?",
+    ),
+    "service_ferry": (
+        "Any ferry landing around here?",
+        "Where do people catch the ferry?",
+        "Is there a landing close by?",
+        "Which way to the nearest ferry?",
+    ),
+    "service_intel": (
+        "Where does someone buy useful information?",
+        "Any intel sellers around here?",
+        "Who trades in local information nearby?",
+        "If I need a lead, who sells one?",
+    ),
+    "service_trade": (
+        "Any shopping around here?",
+        "Where can I buy supplies nearby?",
+        "Who has a counter open close by?",
+        "If I need to shop, where do I go?",
+    ),
+    "service_discreet_trade": (
+        "Know any discreet sellers?",
+        "Who sells things off the ordinary counter?",
+        "Where would quiet stock move around here?",
+        "Any sellers who prefer low voices?",
+    ),
+    "service_street_doctor": (
+        "Know any quiet doctors?",
+        "Who handles medical trouble off the books?",
+        "Where does someone go when a clinic is too loud?",
+        "Any doctor around here who does not ask much?",
+    ),
+    "service_outfitter": (
+        "Any outfitter nearby?",
+        "Where do people gear up around here?",
+        "Who sells field-ready kit close by?",
+        "If I need equipment, who is nearby?",
+    ),
+    "service_justice": (
+        "Where is the nearest jail or courthouse?",
+        "Who handles legal trouble around here?",
+        "Where does law business happen nearby?",
+        "If someone gets booked, where do they go?",
+    ),
+    "service_used_cars": (
+        "Anyone selling used cars nearby?",
+        "Where do people buy a cheap vehicle around here?",
+        "Any used-car lot close?",
+        "Who moves vehicles for cash nearby?",
+    ),
+    "service_vehicle_fetch": (
+        "Anyone who can retrieve a vehicle?",
+        "Who handles vehicle recovery around here?",
+        "Where would I find someone to fetch a car?",
+        "Any vehicle retrieval outfit nearby?",
+    ),
+    "service_gaming": (
+        "Any gaming around here?",
+        "Where do people gamble nearby?",
+        "Who runs games close by?",
+        "If I wanted a table or machine, where would I go?",
     ),
     "hours": (
         "When is the place actually open?",
@@ -629,21 +796,95 @@ PLAYER_TOPIC_BANKS = {
         "Anything worth chasing right now?",
         "Any angle on the street I should know about?",
         "What sounds live around here right now?",
+        "What is actually worth my time out here?",
+        "Where is the useful trouble today?",
+    ),
+    "fallout": (
+        "Any fallout from rival moves?",
+        "What did the rival activity shake loose?",
+        "Did someone else's move leave anything behind?",
+        "Anything worth salvaging from the mess?",
+    ),
+    "contract": (
+        "Any contracts going?",
+        "You mentioned work with a sharper edge?",
+        "Is there paid work that needs a quiet hand?",
+        "Anyone paying to have a problem handled?",
+    ),
+    "side_job": (
+        "Need anything handled quietly?",
+        "Any small work you would trust me with?",
+        "Is there an errand I can take off your hands?",
+        "Anything quiet that pays and helps your people?",
+    ),
+    "hire_runner": (
+        "I need backup for a few hours. Interested?",
+        "Would you watch my back for pay?",
+        "Can I hire you to stay close for a while?",
+        "How much to have you on my side for a bit?",
+    ),
+    "backup_orders": (
+        "Let's tighten the plan.",
+        "How do you want to handle this next move?",
+        "I need to set your position.",
+        "Let's change your orders.",
+    ),
+    "backup_follow": (
+        "Stay close again.",
+        "Back on my shoulder.",
+        "Return to passive cover.",
+        "Keep with me and watch the edges.",
+    ),
+    "backup_hold": (
+        "Hold this spot.",
+        "Post up here for me.",
+        "Stay here and keep watch.",
+        "Plant yourself here until I come back.",
+    ),
+    "backup_distract": (
+        "Make a distraction.",
+        "Pull some eyes off me.",
+        "Give them something else to watch.",
+        "Bend the room away from me.",
+    ),
+    "backup_goto_wait": (
+        "Head to {backup_marked_spot} and wait.",
+        "Move to {backup_marked_spot} and hold.",
+        "Post at {backup_marked_spot}.",
+        "Take {backup_marked_spot} and stay there.",
+    ),
+    "backup_wait_return": (
+        "Head to {backup_marked_spot}, wait, then return.",
+        "Touch {backup_marked_spot}, hold a beat, then come back.",
+        "Stage at {backup_marked_spot}, then return.",
+        "Move to {backup_marked_spot} and circle back after a short wait.",
+    ),
+    "backup_kill": (
+        "Take out {backup_kill_target_name}.",
+        "Handle {backup_kill_target_name}.",
+        "I need {backup_kill_target_name} stopped.",
+        "Can you remove {backup_kill_target_name}?",
     ),
     "objective": (
         "What would actually help me here?",
         "If you were me, what would you focus on?",
         "What's the move on {objective_title}?",
+        "What gets me closer to {objective_title}?",
+        "What part of {objective_title} would you push first?",
     ),
     "angle": (
         "Where would you start?",
         "What's the first move?",
         "So what's the cleanest angle?",
+        "Where is the opening?",
+        "What is the least stupid way in?",
     ),
     "risk": (
         "What's the catch?",
         "What could go wrong fastest?",
         "What's the catch with {primary_opportunity_title}?",
+        "Where does this go bad?",
+        "What am I probably underestimating?",
     ),
     "attention": (
         "How hot do I look right now?",
@@ -654,11 +895,21 @@ PLAYER_TOPIC_BANKS = {
         "Know anybody I should be talking to?",
         "Who would you point me toward?",
         "Anybody useful I should know?",
+        "Who opens doors around here?",
+        "Who would you talk to if you were me?",
     ),
     "introduction": (
         "Would you introduce me to {social_lead_name}?",
         "Think you could put me in touch with {social_lead_name}?",
         "Can you connect me with {social_lead_name}?",
+        "Could you open the door with {social_lead_name}?",
+        "Would your name help me get a minute with {social_lead_name}?",
+    ),
+    "vouch": (
+        "Can you put in a good word?",
+        "Would your name smooth this over?",
+        "Can I use your name there?",
+        "Would you vouch for me if I keep it quiet?",
     ),
     "purpose": (
         "I'm not looking for trouble.",
@@ -679,11 +930,51 @@ PLAYER_TOPIC_BANKS = {
         "Let me see what you've got.",
         "Mind if we do business?",
         "Let's talk prices.",
+        "What are you willing to move?",
+        "Can we make a clean trade?",
+    ),
+    "street_appraise": (
+        "Can you look over this stock for me?",
+        "What do you make of what I am carrying?",
+        "Can you price this out honestly?",
+        "I need a read on this stock. Interested?",
+    ),
+    "street_buy": (
+        "I have some stock you might want.",
+        "Are you buying today?",
+        "I might have what you are looking for.",
+        "Want first look at what I am carrying?",
+    ),
+    "street_buy_accept": (
+        "Sell it.",
+        "Take the deal.",
+        "Fine, it is yours.",
+        "Done. Pay me.",
+    ),
+    "street_buy_decline": (
+        "Not this time.",
+        "No deal.",
+        "I am holding onto it.",
+        "Pass. Maybe later.",
     ),
     "bye": (
         "Alright. Take care.",
         "That is enough for now. Later.",
         "Appreciate it. I'll let you get back to it.",
+        "That answers enough. Stay safe.",
+        "I have what I need. See you around.",
+    ),
+    "payoff": (
+        "I can make it worth your while to forget you saw me.",
+        "What would it cost for this to stay quiet?",
+        "There has to be a number that ends this.",
+        "Take the money and let this blur.",
+    ),
+    "fence": (
+        "I have some things I need to move quietly.",
+        "Can you make this stock disappear?",
+        "What would you pay for goods with no questions?",
+        "I need a quiet buyer. Is that you?",
     ),
     "weird": (
         {
@@ -958,6 +1249,40 @@ PLAYER_CONNECTIVE_SKIP_TOPICS = {
 }
 
 
+PLAYER_MENU_BASE_LABEL_TOPICS = {
+    "street_buy_accept",
+    "street_buy_decline",
+}
+
+
+PLAYER_CONTEXT_MENU_BANKS = {
+    "organization_owner": (
+        "Is {workplace_name} actually yours?",
+        "How much of {workplace_name} is yours?",
+        "Is this place yours, or are you fronting it?",
+        "Is {workplace_name} yours on paper too?",
+    ),
+    "supervisor_owner": (
+        "Is anyone above you here?",
+        "Does anybody sit above you at {workplace_name}?",
+        "Is there someone above you on this place?",
+        "Who, if anyone, is above you here?",
+    ),
+    "coworkers_solo": (
+        "Is it usually just you here?",
+        "Is it just you holding the place down?",
+        "At {workplace_name}, is it mostly just you?",
+        "Is just you the usual staffing plan?",
+    ),
+    "street_buy_requested": (
+        "I might have some {street_buy_hint}.",
+        "Are you still buying {street_buy_hint}?",
+        "Is {street_buy_hint} what you are looking for?",
+        "Want a look at my {street_buy_hint}?",
+    ),
+}
+
+
 AREA_STYLE_HINTS = {
     "city": {
         "farewell_tags": (
@@ -970,7 +1295,7 @@ AREA_STYLE_HINTS = {
             "This place never really sleeps.",
             "Word moves fast here.",
             "The city keeps no secrets long.",
-            "The streets talk louder than people think.",
+            "Half the city learns things by pretending not to look.",
         ),
     },
     "frontier": {
@@ -980,10 +1305,10 @@ AREA_STYLE_HINTS = {
             "Always keep one eye on the horizon.",
         ),
         "catch_phrases": (
-            "Even road dust remembers...",
+            "Even road dust keeps receipts.",
             "Nothing stays easy for long out here.",
             "The frontier holds on to things.",
-            "The distance out here is honest.",
+            "Distance makes every choice louder.",
         ),
     },
     "coastal": {
@@ -996,7 +1321,7 @@ AREA_STYLE_HINTS = {
             "The docks hear everything.",
             "The salt air carries talk farther than people think.",
             "The tide brings more than water.",
-            "The port knows what moves and what stays.",
+            "The port knows what moves and who waits too long.",
         ),
     },
     "wilderness": {
@@ -1008,7 +1333,7 @@ AREA_STYLE_HINTS = {
         "catch_phrases": (
             "The quiet tells on people.",
             "Nothing in the wild stays hidden forever.",
-            "The trees remember faces.",
+            "A quiet trail is still a trail.",
             "Out here, you can't help but listen.",
         ),
     },
@@ -1020,8 +1345,8 @@ DISTRICT_STYLE_HINTS = {
         "catch_phrases": (
             "The shift whistle never lies.",
             "Keep your gears straight.",
-            "The floor never forgets.",
-            "A person's sweat tells the honest story.",
+            "The floor remembers who misses a beat.",
+            "A person's hands tell the honest story.",
         ),
         "address_terms": (
             "friend",
@@ -1033,6 +1358,7 @@ DISTRICT_STYLE_HINTS = {
             "The block remembers faces.",
             "Our neighbors notice plenty.",
             "Nobody forgets a face on their block.",
+            "Curtains move faster than doors around here.",
         ),
         "address_terms": (
             "neighbor",
@@ -1044,6 +1370,7 @@ DISTRICT_STYLE_HINTS = {
             "The center never really sleeps.",
             "The money moves fast downtown.",
             "Speed is the price of being central.",
+            "Downtown hears a rumor and invoices it by lunch.",
         ),
         "address_terms": (
             "friend",
@@ -1058,6 +1385,7 @@ DISTRICT_STYLE_HINTS = {
             "It gets real out here.",
             "Keep your pockets close.",
             "Help has a price out here.",
+            "Every favor here leaves a thumbprint.",
         ),
         "address_terms": (
             "friend",
@@ -1073,6 +1401,7 @@ DISTRICT_STYLE_HINTS = {
             "That is above somebody's pay grade.",
             "The numbers cover a lot of ground.",
             "Every room here has a budget.",
+            "Someone always signs the silence.",
         ),
         "address_terms": (
             "friend",
@@ -1089,7 +1418,7 @@ DISTRICT_STYLE_HINTS = {
         "address_terms": (
             "citizen",
             "friend",
-            "civillian",
+            "civilian",
         ),
     },
     "entertainment": {
@@ -1099,6 +1428,7 @@ DISTRICT_STYLE_HINTS = {
             "The applause covers a lot.",
             "The applause is the loudest voice in the room.",
             "The applause is the toughest critic.",
+            "Every backstage whisper wants an audience.",
         ),
         "address_terms": (
             "friend",
@@ -1123,6 +1453,7 @@ ROLE_STYLE_HINTS = {
             "Stay where you belong.",
             "Keep it moving.",
             "Don't cause trouble here.",
+            "I notice repeats.",
         ),
         "address_terms": (
             "citizen",
@@ -1141,6 +1472,7 @@ ROLE_STYLE_HINTS = {
             "Keep it orderly.",
             "Eyes open.",
             "Head on a swivel!",
+            "Patterns matter.",
         ),
         "address_terms": (
             "citizen",
@@ -1165,12 +1497,13 @@ ROLE_STYLE_HINTS = {
             "Straight up,",
             "Look,",
             "Real talk,",
-            "Ay, peep this :",
+            "Peep this,",
         ),
         "catch_phrases": (
             "Loose talk costs.",
             "Keep it quiet.",
-            "You better not be the one time",
+            "Do not be the reason this gets loud.",
+            "Clean exits beat pretty stories.",
         ),
     },
     "drunk": {
@@ -1192,7 +1525,7 @@ ROLE_STYLE_HINTS = {
             "I hear plenty at the bar.",
             "People talk when they drink.",
             "You'd be surprised what I hear at the job.",
-            "Bartenders are the universe's secret keepers.",
+            "A wet counter collects dry secrets.",
         ),
         "address_terms": (
             "friend",
@@ -1205,12 +1538,14 @@ ROLE_STYLE_HINTS = {
         "catch_phrases": (
             "The road keeps no secrets.",
             "Every movement tells a story.",
+            "Late packages make loud enemies.",
         ),
     },
     "medic": {
         "catch_phrases": (
             "People talk when they hurt.",
             "Care comes around.",
+            "Pain makes honest witnesses.",
         ),
         "address_terms": (
             "friend",
@@ -1226,6 +1561,7 @@ ROLE_STYLE_HINTS = {
         "catch_phrases": (
             "The market keeps moving.",
             "Value finds its level... without guidance.",
+            "Risk always wants a receipt.",
         ),
         "address_terms": (
             "associate",
@@ -1468,6 +1804,9 @@ DIALOGUE_BANKS = {
         "Keep it short.",
         "Talk fast. You are pushing it.",
         "Make it quick.",
+        "Say what you came to say.",
+        "You have about a minute before this gets old.",
+        "Do not dress it up. What do you want?",
         "You have a question, ask it.",
         "I haven't shot you yet, so go on.",
     ),
@@ -1476,6 +1815,8 @@ DIALOGUE_BANKS = {
         "Need something?",
         "You stopping me for a reason?",
         "Alright. What is it?",
+        "I am listening, for now.",
+        "This better be cleaner than it looks.",
     ),
     "greet_neutral": (
         "Sure. What do you need?",
@@ -1484,34 +1825,44 @@ DIALOGUE_BANKS = {
         "You wanted something?",
         "Fair enough. What is on your mind?",
         "Yeah? Go ahead.",
+        "I have a minute. What are you after?",
+        "Ask your question.",
     ),
     "greet_friendly": (
         "Hey. What is up?",
         "Sure thing. What do you want to know?",
         "Good to see you. Need anything?",
         "Yeah, talk to me.",
+        "You caught me in a decent mood. What is it?",
+        "Alright, I am here. What do you need?",
     ),
     "greet_introduced": (
         "If {intro_source_name} pointed you my way, I can spare a minute.",
         "{intro_source_name} mentioned you. Go on.",
         "Alright. If {intro_source_name} sent you, talk.",
+        "{intro_source_name} does not send people lightly. What do you need?",
+        "You came through {intro_source_name}? Then I am listening.",
     ),
     "name_first": (
         "I am {npc_name}.",
         "Name's {npc_name}.",
         "People call me {npc_name}.",
         "{npc_name}. That is me.",
+        "You can call me {npc_name}.",
+        "{npc_name}, if you are keeping track.",
     ),
     "name_repeat": (
         "Still {npc_name}.",
         "Same answer: {npc_name}.",
         "{npc_name}, unless I missed something.",
         "You already asked. It is {npc_name}.",
+        "The name has not changed on me yet: {npc_name}.",
     ),
     "name_guarded": (
         "{npc_name}. That is enough for now.",
         "It is {npc_name}. Keep moving.",
         "{npc_name}. Do not make this strange.",
+        "{npc_name}. Do not spend it like we are friends yet.",
     ),
     "history": (
         "{history_summary}",
@@ -1523,6 +1874,8 @@ DIALOGUE_BANKS = {
         "Long enough to recognize the regulars.",
         "A while. Enough to know the rhythm.",
         "Long enough that new faces stand out.",
+        "Long enough to know which stories get better when left alone.",
+        "Not long enough to own the place, long enough to know when it shifts.",
     ),
     "job_first": (
         "I work as {career_text}.",
@@ -1534,12 +1887,15 @@ DIALOGUE_BANKS = {
         "Still {career_text}.",
         "No career change since a minute ago. {career_text}.",
         "Same job: {career_text}.",
+        "Same work, same aches: {career_text}.",
     ),
     "job_none": (
         "Nothing tidy enough to put on a sign.",
         "Odd jobs, mostly.",
         "A little of whatever keeps me moving.",
         "Nothing official worth bragging about.",
+        "Whatever pays before it turns into a problem.",
+        "I keep my name off most schedules.",
     ),
     "routine": (
         "{routine_summary}",
@@ -1551,6 +1907,8 @@ DIALOGUE_BANKS = {
         "Nothing steady enough to map out.",
         "No clean routine worth naming.",
         "It changes too much to call it a routine.",
+        "My day is mostly errands wearing different hats.",
+        "If I make a plan, the block usually laughs first.",
     ),
     "workplace_first": (
         "You can usually find me at {workplace_name}.",
@@ -1567,11 +1925,14 @@ DIALOGUE_BANKS = {
         "Still {workplace_name}.",
         "Same place as before: {workplace_name}.",
         "I already told you, {workplace_name}.",
+        "Unless the building wandered off, {workplace_name}.",
     ),
     "workplace_none": (
         "No fixed place right now.",
         "Nowhere steady enough to point to.",
         "I drift more than I clock in.",
+        "No counter, no locker, no chair with my name on it.",
+        "I work where the day leaves me standing.",
     ),
     "organization": (
         "{organization_summary}",
@@ -1583,6 +1944,8 @@ DIALOGUE_BANKS = {
         "Nothing formal enough to pin a name on.",
         "No banner over my head worth repeating.",
         "Nobody organized enough to call it a proper outfit.",
+        "No letterhead. No patch. Just people asking for things.",
+        "If there is an outfit, nobody gave me the shirt.",
     ),
     "supervisor": (
         "{supervisor_summary}",
@@ -1593,6 +1956,8 @@ DIALOGUE_BANKS = {
         "Nobody steady enough to point to.",
         "Depends on the day more than the title.",
         "No single boss worth hanging the answer on.",
+        "Whoever is loudest is not always the one in charge.",
+        "The chain of command is more chain than command.",
     ),
     "coworkers": (
         "{coworker_summary}",
@@ -1603,11 +1968,15 @@ DIALOGUE_BANKS = {
         "Nobody steady enough to name.",
         "No real crew to speak of.",
         "Not a regular enough bunch to call them coworkers.",
+        "Faces rotate too fast for me to hand you a roster.",
+        "If there is a crew, it changes before you learn the jokes.",
     ),
     "people": (
         "{people_summary}",
         "If you are looking for names, {people_summary}",
         "Start here: {people_summary}",
+        "Names worth keeping? {people_summary}",
+        "If you are building a map of people, {people_summary}",
     ),
     "where_place": (
         "{place_location_summary}",
@@ -1618,12 +1987,15 @@ DIALOGUE_BANKS = {
         "Nothing concrete enough to point at yet.",
         "I do not have a clean place to put on the map for you.",
         "Not enough there for me to point you anywhere real.",
+        "I would be guessing, and bad directions get expensive fast.",
     ),
     "people_none": (
         "No one I would point you at just yet.",
         "Nobody I feel like handing over cold.",
         "It wouldn't make sense for me to stick my neck out when your name keeps popping up on the wrong side of reports.",
         "Not a clean name worth passing along from me right now.",
+        "Ask again when your face has less weather on it.",
+        "There are names, sure. None I am spending on this conversation yet.",
     ),
     "chatter_offense": (
         "You hear about {trouble_summary}?",
@@ -1631,6 +2003,10 @@ DIALOGUE_BANKS = {
         "People keep talking about {trouble_summary}.",
         "Something went down at {topic_place}. People are still edgy about it.",
         "There was a thing with {trouble_summary}. Nerved a few people up.",
+        "Everybody keeps lowering their voice around {topic_place}. Sounds like {trouble_summary}.",
+        "{trouble_summary} is the version people keep repeating. I do not know if it got cleaner with travel.",
+        "The room gets smaller when {topic_place} comes up. People say {trouble_summary}.",
+        "Nobody wants to be the first to say {trouble_summary}, but that is where the talk keeps landing.",
     ),
     "chatter_world_trait": (
         "People keep saying {trait_claim}.",
@@ -1638,6 +2014,8 @@ DIALOGUE_BANKS = {
         "Whole block is repeating that {trait_claim_lc}",
         "{trait_claim} is the word going around.",
         "Everyone has an opinion about {trait_claim_lc}",
+        "The current story is {trait_claim_lc}",
+        "People are acting like {trait_claim_lc} explains more than it probably does.",
     ),
     "chatter_security": (
         "{topic_place} runs {security_summary}.",
@@ -1645,6 +2023,8 @@ DIALOGUE_BANKS = {
         "Everyone around there knows {security_summary_lc}",
         "Security around {topic_place}: {security_summary}.",
         "Place like {topic_place} does not take chances. {security_summary}.",
+        "{topic_place} is not casual about the door. {security_summary}.",
+        "The thing about {topic_place}: {security_summary_lc}",
     ),
     "chatter_supervisor": (
         "{supervisor_name} is the one really running {topic_place}.",
@@ -1652,6 +2032,8 @@ DIALOGUE_BANKS = {
         "{supervisor_name} keeps the floor at {topic_place} moving.",
         "If you want the real authority at {topic_place}, look at {supervisor_name}.",
         "Ask around {topic_place} and {supervisor_name} is the name that comes up.",
+        "When {topic_place} gets tense, people look toward {supervisor_name}.",
+        "{supervisor_name} is the name people use when they stop pretending it is everyone's decision.",
     ),
     "chatter_schedule": (
         "{topic_place} usually runs {schedule_text}.",
@@ -1659,6 +2041,8 @@ DIALOGUE_BANKS = {
         "If the doors move on time, {topic_place} runs {schedule_text}.",
         "Schedule around {topic_place} tends to be {schedule_text}.",
         "{topic_place} keeps regular hours: {schedule_text}.",
+        "{topic_place} has a rhythm to it: {schedule_text}.",
+        "If you are timing {topic_place}, start with {schedule_text}.",
     ),
     "chatter_shift": (
         "Staff shift at {topic_place} usually runs {schedule_text}.",
@@ -1666,6 +2050,8 @@ DIALOGUE_BANKS = {
         "If payroll lands on time, staff at {topic_place} work {schedule_text}.",
         "The shift around {topic_place} tends to be {schedule_text}.",
         "People on that floor at {topic_place} are usually on {schedule_text}.",
+        "{topic_place} has bodies moving on {schedule_text}, give or take the usual excuses.",
+        "The floor at {topic_place} wakes and clears around {schedule_text}.",
     ),
     "chatter_opportunity": (
         "{opportunity_title} sounds live {distance_phrase}. {opportunity_summary}",
@@ -1673,6 +2059,9 @@ DIALOGUE_BANKS = {
         "People keep pointing toward {opportunity_title} {distance_phrase}. {opportunity_summary}",
         "Best street lead I heard is {opportunity_title} {distance_phrase}. {opportunity_summary}",
         "{opportunity_title} is the one people still mention {distance_phrase}. {opportunity_summary}",
+        "If anything has a pulse, it is {opportunity_title} {distance_phrase}. {opportunity_summary}",
+        "The talk keeps bending back to {opportunity_title} {distance_phrase}. {opportunity_summary}",
+        "{opportunity_title} has not gone cold yet {distance_phrase}. {opportunity_summary}",
     ),
     "chatter_illegal_goods": (
         "If you want hot goods, {topic_place} is where people look.",
@@ -1680,6 +2069,8 @@ DIALOGUE_BANKS = {
         "People say {topic_place} can find things that never make the front counter.",
         "If someone needs quiet merchandise, they drift toward {topic_place}.",
         "{topic_place} has a reputation for back-counter goods.",
+        "{topic_place} gets mentioned when people stop saying item names out loud.",
+        "Quiet stock has a way of orbiting {topic_place}.",
     ),
     "chatter_check_in": (
         "How are things at {topic_place} these days?",
@@ -1687,6 +2078,8 @@ DIALOGUE_BANKS = {
         "How is {topic_place} treating you lately?",
         "What is the mood like over at {topic_place}?",
         "Any word on what is happening at {topic_place}?",
+        "{topic_place} still steady, or is it starting to tilt?",
+        "People still smiling at {topic_place}, or just showing teeth?",
     ),
     "chatter_actor_reputation": (
         "Word on {actor_name}: {reputation_read_lc}",
@@ -1694,6 +2087,8 @@ DIALOGUE_BANKS = {
         "I keep hearing the same thing about {actor_name}: {reputation_read_lc}",
         "People keep bringing up {actor_name}. {reputation_read}",
         "{actor_name} is the name in half the talk lately. {reputation_read}",
+        "{actor_name} has become a shorthand around here. {reputation_read}",
+        "The way people say {actor_name} tells you plenty. {reputation_read}",
     ),
     "chatter_conflict_side": (
         "Word is {conflict_summary_lc}",
@@ -1701,6 +2096,8 @@ DIALOGUE_BANKS = {
         "Every version of that story ends the same way: {conflict_summary_lc}",
         "If it goes loud again, {conflict_summary_lc}",
         "The room keeps leaning one way on that: {conflict_summary_lc}",
+        "Nobody says it first, but everybody lands there: {conflict_summary_lc}",
+        "The quiet read is this: {conflict_summary_lc}",
     ),
     "services": (
         "Mostly {service_summary}.",
@@ -1711,6 +2108,8 @@ DIALOGUE_BANKS = {
         "Nothing special. People come and go.",
         "No big secret. It is just a place to be.",
         "Depends on the day more than the sign.",
+        "The sign promises more than the room delivers.",
+        "Mostly it is a place where people wait for better options.",
     ),
     "service_locator": (
         "For {service_label}? {service_locator_summary}",
@@ -1721,6 +2120,9 @@ DIALOGUE_BANKS = {
         "No clean {service_label} lead from me right now.",
         "Nothing nearby I trust pointing you toward for {service_label}.",
         "If there is {service_label} close, I do not have the name for it.",
+        "No clean {service_label} lead I would put my name behind.",
+        "Nothing nearby for {service_label} that I would send you to with a straight face.",
+        "I do not have the name for it if {service_label} is closer than the map admits.",
     ),
     "hours": (
         "Usually {hours_text}.",
@@ -1731,6 +2133,8 @@ DIALOGUE_BANKS = {
         "Depends on who is around to open up.",
         "No clean schedule I would trust.",
         "Hard to pin down. It shifts.",
+        "They open like people who hate being predictable.",
+        "If there is a schedule, it is losing the argument.",
     ),
     "owner_named": (
         "{owner_name} runs it.",
@@ -1751,6 +2155,8 @@ DIALOGUE_BANKS = {
         "No single face to point at.",
         "Hard to say. It is more of a shared place.",
         "Nobody obvious owns the room from where I stand.",
+        "Ownership is foggy enough that everyone points somewhere else.",
+        "If someone owns it, they let other people take the blame.",
     ),
     "security": (
         "{security_summary}",
@@ -1762,6 +2168,8 @@ DIALOGUE_BANKS = {
         "Nothing sharper than an ordinary lock.",
         "No special security worth mentioning.",
         "About what you would expect from an ordinary place.",
+        "Mostly habit and a door that complains when it closes.",
+        "No system, just a little caution and whatever patience is on shift.",
     ),
     "access": (
         "{access_summary}",
@@ -1773,6 +2181,8 @@ DIALOGUE_BANKS = {
         "Nothing stranger than an ordinary door.",
         "No trickier than the usual threshold.",
         "It is not complicated enough to make a speech about.",
+        "Walk in when it is open, look suspicious when it is not.",
+        "The door is the whole theory, far as I can tell.",
     ),
     "entry": (
         "{entry_summary}",
@@ -1783,6 +2193,8 @@ DIALOGUE_BANKS = {
         "Just the ordinary way in, from what I know.",
         "Nothing cleverer than the front way.",
         "No side route worth hanging your hopes on.",
+        "If there is a smarter entrance, nobody smart told me.",
+        "Front way, public face, no magic trick.",
     ),
     "keyholder": (
         "{keyholder_summary}",
@@ -1793,6 +2205,8 @@ DIALOGUE_BANKS = {
         "Nobody local enough to name.",
         "No clear hand on it that I would trust telling you about.",
         "Hard to pin that down cleanly.",
+        "Keys pass around quietly; I am not guessing for you.",
+        "The people with access are not advertising it.",
     ),
     "weak_point": (
         "{weak_point_summary}",
@@ -1804,67 +2218,93 @@ DIALOGUE_BANKS = {
         "No weak point I would bet on from here.",
         "Nothing soft enough to call it a real seam.",
         "If there is a gap, I do not know it cleanly enough to name.",
+        "Nothing I would call a crack without standing closer.",
+        "It may bend somewhere, but I am not selling you a guess.",
     ),
     "purpose_defuse": (
         "Fine. Keep it quick and keep it clean.",
         "Alright. Then do not give me another reason to stop you.",
         "Maybe. Stay straight and we are done here.",
+        "Fine. You get a short leash and a shorter conversation.",
+        "Alright. Act like you know where the line is.",
     ),
     "purpose_wary": (
         "Maybe. I am still watching you.",
         "Could be. I still do not like it.",
         "I hear you. I am not convinced.",
+        "That story has room in it. I am watching the room.",
+        "Maybe. Do not mistake that for comfort.",
     ),
     "purpose_fail": (
         "I am not buying that.",
         "That is not good enough.",
         "No. Try a better story somewhere else.",
+        "That answer is too thin for where you are standing.",
+        "No. You dressed that up and it still came out wrong.",
     ),
     "apologize_defuse": (
         "Fine. Do not make it a pattern.",
         "Alright. Then clean it up and move on.",
         "I will let that sit, once. Do not press it.",
+        "Fine. Fix your feet and make this the last time.",
+        "Alright. Mistakes happen. Repeats become choices.",
     ),
     "apologize_wary": (
         "Words are cheap. I am still watching you.",
         "Maybe you mean it. I am still keeping an eye on you.",
         "Fine. I am not relaxed about it.",
+        "Apology noted. Trust not restored.",
+        "I hear the sorry. I am still counting exits.",
     ),
     "apologize_fail": (
         "Save it. You already crossed the line.",
         "Too late for a soft apology.",
         "No. You do not get to smooth it over that easily.",
+        "No. That apology arrived after the damage.",
+        "Too neat. I do not trust neat after trouble.",
     ),
     "leave_defuse": (
         "Good. Clear out and we are done.",
         "Then go. We can leave it there.",
         "Fine. Move along and let that be the end of it.",
+        "Good. Give the place some distance and we can all breathe.",
+        "Fine. Walk away clean and this stays small.",
     ),
     "leave_wary": (
         "Do that. Quickly.",
         "Good. Start moving.",
         "Then move, and do not make me ask twice.",
+        "Feet first, explanation never.",
+        "Good. Keep going until this is boring again.",
     ),
     "leave_fail": (
         "You should have done that before I had to say it.",
         "Now you are just behind the count.",
         "Move, before this gets worse.",
+        "Too slow. Now I have to treat it like a choice.",
+        "You are past polite exits. Move.",
     ),
     "local_rumor": (
         "{rumor_line}",
         "{rumor_line}",
         "If you ask me, {rumor_line_lc}",
+        "The version I heard goes like this: {rumor_line_lc}",
+        "Do not carve it in stone, but {rumor_line_lc}",
     ),
     "local_opportunity": (
         "{opportunity_summary}",
         "Word around here is: {opportunity_summary}",
         "There is something worth knowing. {opportunity_summary}",
         "Something circulating locally. {opportunity_summary}",
+        "The useful noise says this: {opportunity_summary}",
+        "If you need a thread, take this one: {opportunity_summary}",
     ),
     "local_other_bond": (
         "You should probably talk to {other_name} too.",
         "{other_name} hears more than I do.",
         "If anyone knows more, it is {other_name}.",
+        "{other_name} catches the parts that slip past me.",
+        "I would put the next question to {other_name}.",
     ),
     "local_none": (
         "Quiet enough, for the moment.",
@@ -1872,101 +2312,142 @@ DIALOGUE_BANKS = {
         "Usual street noise. Nothing sharp.",
         "Nothing worth your time from me today.",
         "Slow stretch right now. I would not count on that lasting.",
+        "The block is holding its breath, which usually means someone else is moving.",
+        "No fresh word, just old grudges changing pockets.",
+        "Nothing with a handle on it. Plenty of noise without a door.",
     ),
     "initiative_name": (
         "And you?",
         "So what should I call you?",
         "You got a name too, or are we skipping that part?",
+        "Names go both ways, usually.",
+        "If I am giving you mine, I should hear yours.",
     ),
     "initiative_history": (
         "You new here, or just taking inventory?",
         "You asking because you plan to stick around?",
         "That curiosity, or are you trying to place me?",
+        "You counting years, or counting witnesses?",
+        "Trying to learn the block, or looking for where it cracked?",
     ),
     "initiative_job": (
         "You asking out of curiosity, or is there a reason?",
         "Why the interest?",
         "That just curiosity, or are you headed somewhere with it?",
+        "Work talk usually means somebody needs something done.",
+        "You asking what I do, or what I can do for you?",
     ),
     "initiative_workplace": (
         "You looking for me there, or just drawing a map?",
         "That place matter to you for a reason?",
         "You need the location, or just the shape of my day?",
+        "People ask about workplaces when they want a door, a face, or a schedule.",
+        "You tracking me, or tracking the place?",
     ),
     "initiative_organization": (
         "You keeping score on who answers to who?",
         "That kind of hierarchy matter to you for a reason?",
         "You asking about the outfit, or about me?",
+        "Careful with org charts. They bite through paper.",
+        "You want the name on the wall or the hand on the lever?",
     ),
     "initiative_people": (
         "You looking for friends, or leverage?",
         "You collecting names, or actually looking to meet someone?",
         "That you trying to build a circle, or just pull a thread?",
+        "Names are not loose change. What are you spending them on?",
+        "A person can be a door or a warning. Which are you after?",
     ),
     "initiative_local": (
         "You looking for work, trouble, or directions?",
         "You after a lead, or just getting your bearings?",
         "You trying to get the lay of the block, or is there something specific you need?",
+        "Local talk is wide. Narrow it before it cuts you.",
+        "This block has plenty of stories. Which kind are you buying?",
     ),
     "initiative_concern": (
         "You trying to stay ahead of trouble, or step into it?",
         "That you being careful, or curious?",
         "Good question. You planning around it?",
+        "Trouble is easier to avoid before it has a name.",
+        "You asking like someone who expects a problem to move.",
     ),
     "initiative_detail": (
         "You like the useful part, I can respect that.",
         "So you are listening for the part that matters.",
         "Alright. You want the sharp version.",
+        "Good. Broad talk is cheap; detail is where it gets expensive.",
+        "Fine. You want the piece with a handle on it.",
     ),
     "initiative_opportunities": (
         "You looking for money, leverage, or just a way in?",
         "You after a score, or do you just like hearing the map out loud?",
         "That you planning something, or just taking the temperature?",
+        "Opportunities are just problems with better lighting.",
+        "You want clean work, quick work, or something nobody admits is work?",
     ),
     "initiative_risk": (
         "You planning something that needs the caution?",
         "Good. Most people ask for the angle and forget the cost.",
         "So you are thinking about how this goes bad first.",
+        "That is the question people ask after they have already chosen. Good sign you asked now.",
+        "Risk is the part that remembers your name.",
     ),
     "initiative_attention": (
         "Then keep your head down if you can.",
         "Good instinct. Too many people ignore that part.",
         "That is the right question, honestly.",
+        "Attention spends faster than money.",
+        "If you feel watched, do not make them work to prove it.",
     ),
     "initiative_contacts": (
         "If I point you at someone, are you going to handle it cleanly?",
         "You looking for a real connection, or just another name to lean on?",
         "Depends what you think you are going to do with the introduction.",
+        "Contacts are living things. Do not bruise mine.",
+        "I need to know whether you build bridges or burn them for warmth.",
     ),
     "initiative_introduction": (
         "Depends what you plan to say when you meet them.",
         "Maybe. That kind of introduction matters.",
         "That depends how clean you mean to keep it.",
+        "My name travels with you if I do this.",
+        "Introductions are small debts with long legs.",
     ),
     "initiative_services": (
         "You looking for the place, or the kind of people around it?",
         "That you scouting the room, or shopping?",
         "Useful to know the sign before you walk under it.",
+        "Services tell you what a block thinks it can survive selling.",
+        "Sometimes the service is the front and the front is the service.",
     ),
     "initiative_security": (
         "That question alone tells me you are thinking past the front door.",
         "Most people do not ask that unless they need the real picture.",
         "You are planning carefully, at least.",
+        "Security talk has fingerprints on it.",
+        "That is not a tourist question.",
     ),
     "initiative_access": (
         "Access is usually the part people underestimate.",
         "That is where places really tell you what they are.",
         "Good. Doors matter more than signs.",
+        "Access is where policy turns into metal.",
+        "The lock is the honest version of the welcome mat.",
     ),
     "initiative_entry": (
         "There is always the obvious way and the honest way.",
         "People learn a lot from how a place is entered.",
         "That is a better question than most.",
+        "Entrances tell you who a place expects and who it fears.",
+        "Every extra way in exists because somebody needed it once.",
     ),
     "initiative_weak_point": (
         "Every place pretends not to have one.",
         "Soft spots are easier to talk about than fix.",
         "That is the question owners hate most.",
+        "Weak points are usually old compromises with fresh paint.",
+        "If a place has a secret, it often starts as maintenance.",
     ),
     "concern": (
         "{concern_summary}",
@@ -1980,6 +2461,8 @@ DIALOGUE_BANKS = {
         "Same old low-grade friction, mostly.",
         "Quiet on that front, for now.",
         "Nobody is lighting fires at the moment.",
+        "People are tense, but not pointed at one thing yet.",
+        "No single problem has climbed above the rest of the static.",
     ),
     "detail_rumor": (
         "{detail_line}",
@@ -1995,12 +2478,15 @@ DIALOGUE_BANKS = {
         "That is all I have.",
         "No cleaner details than that.",
         "That is the shape of it.",
+        "Past that I would just be decorating a guess.",
+        "That is where my version runs out of road.",
     ),
     "opportunities": (
         "{opportunity_summary}",
         "Here is what sounds live from where I stand: {opportunity_summary}",
         "One worth noting: {opportunity_summary}",
         "If you are looking around, here is one: {opportunity_summary}",
+        "The one with a pulse is this: {opportunity_summary}",
     ),
     "opportunities_none": (
         "Nothing is lining up cleanly right this second.",
@@ -2009,6 +2495,9 @@ DIALOGUE_BANKS = {
         "Things are too quiet to call anything solid.",
         "Nothing sharp enough to point at from where I stand.",
         "I would not chase anything right now.",
+        "No door is open far enough to put your shoulder into it.",
+        "Everything I hear is either stale or already spoken for.",
+        "Plenty of motion, no handle. Bad time to grab at shadows.",
     ),
     "fallout": (
         "{fallout_summary}",
@@ -2020,22 +2509,28 @@ DIALOGUE_BANKS = {
         "Nothing in that lane is still warm enough to trust.",
         "No rival fallout I would point you at right now.",
         "That wake has gone cold from where I stand.",
+        "The smoke is there, but the trail has already split three ways.",
+        "Whatever broke already got swept under somebody else's rug.",
     ),
     "objective": (
         "{objective_summary}",
         "If you want my read, {objective_summary_lc}",
         "For the shape of this run, {objective_summary_lc}",
+        "If this were my problem, {objective_summary_lc}",
     ),
     "objective_none": (
         "Depends what you are chasing.",
         "That is hard to answer without a real direction.",
         "No clean answer there from me.",
+        "Point me at the problem and I can maybe point back.",
+        "Right now you are asking me to read smoke.",
     ),
     "angle": (
         "{angle_summary}",
         "Where I would push: {angle_summary}",
         "Best first move: {angle_summary}",
         "Starting point: {angle_summary}",
+        "First thing I would test: {angle_summary}",
     ),
     "angle_none": (
         "Nothing clean enough to point at first.",
@@ -2043,12 +2538,15 @@ DIALOGUE_BANKS = {
         "I do not have a clean first move for you there.",
         "Hard to say where to push without more to go on.",
         "Nothing I would commit to from here.",
+        "Every start I can see has mud on it.",
+        "I would rather say nothing than aim you at a dead wall.",
     ),
     "risk": (
         "{risk_summary}",
         "Here is the catch. {risk_summary}",
         "Worth knowing. {risk_summary}",
         "Keep this in mind. {risk_summary}",
+        "The part that bites is this: {risk_summary}",
     ),
     "risk_none": (
         "Same risk as anything else around here: people, distance, and bad timing.",
@@ -2056,11 +2554,14 @@ DIALOGUE_BANKS = {
         "No cleaner warning than the obvious one.",
         "Standard risks. Nothing unusual from where I stand.",
         "Watch for the things you always watch for.",
+        "If it goes wrong, it will probably be because someone saw more than they admit.",
+        "The boring risks are still the ones that get people caught.",
     ),
     "attention": (
         "{attention_summary}",
         "If you want the plain read, {attention_summary_lc}",
         "From where I am standing, {attention_summary_lc}",
+        "My honest read: {attention_summary_lc}",
     ),
     "attention_none": (
         "Nothing sharp enough to call real heat yet.",
@@ -2068,6 +2569,8 @@ DIALOGUE_BANKS = {
         "No more attention than the usual street noise.",
         "You are reading clean from out here.",
         "Nobody is pointing at you specifically.",
+        "You are a face in the stream, not the reason people stop talking.",
+        "Right now you are background motion. Keep it that way.",
     ),
     "weird_soft": (
         "That is a strange question, but I have heard worse.",
@@ -2118,31 +2621,44 @@ DIALOGUE_BANKS = {
         "You already asked that.",
         "Same answer as before.",
         "I heard you the first time.",
+        "You can turn it around, but it lands in the same place.",
+        "That answer has not grown legs since you last asked.",
     ),
     "repeat_wary": (
         "You keep circling the same question.",
         "You are starting to wear this thin.",
         "Ask it again and I am going to stop being polite.",
+        "That is the same door with fresh fingerprints on it.",
+        "You keep worrying at this like there is a second answer hiding under it.",
     ),
     "repeat_fail": (
         "That is enough. I already answered you.",
         "You keep grinding the same question. We are done.",
         "No. I am not doing this loop with you.",
+        "No more circles. Conversation ends there.",
+        "You got your answer and then tried to squeeze it. We are finished.",
     ),
     "repeat_bonus": (
         "Alright, the useful part is this: {extra_detail_lc}",
         "If you are going to keep at it, fine: {extra_detail_lc}",
         "Since you keep worrying at it, here is the part that matters: {extra_detail_lc}",
+        "There is one sharper piece, and then I am done with this: {extra_detail_lc}",
+        "Fine. The part I did not lead with is this: {extra_detail_lc}",
     ),
     "contacts_offer": (
         "Depends what you need, but I can point you at {contact_place}.",
         "If you are trying to get somewhere, start with {contact_place}.",
         "For a local way in, try {contact_place}.",
+        "{contact_place} is the place I would test first.",
+        "Start with {contact_place}, and listen before you spend my name.",
+        "If you can walk in without making it official, {contact_place} is the door.",
+        "The cleanest first step I have is {contact_place}. Do not stomp on it.",
     ),
     "contacts_repeat": (
         "Same answer as before: {contact_place}.",
         "Still telling you to start with {contact_place}.",
         "{contact_place} is still my best answer.",
+        "I am not improving on {contact_place} by saying it twice.",
     ),
     "contacts_soft_no": (
         "Not yet. I like to know who I am steering people toward.",
@@ -2150,26 +2666,32 @@ DIALOGUE_BANKS = {
         "Give it time. I do not spend favors that fast.",
         "I am still figuring out what I think of you.",
         "Ask me again after we have had more time.",
+        "Names are easier to give away than earn back. Not yet.",
+        "I am not opening my people to a stranger with fresh questions.",
     ),
     "contacts_caution_no": (
         "Not while attention is up. Keep your head down first.",
         "People are noticing enough already. I am not opening another line for you right now.",
         "Cool the heat off first. I am not pointing you at anyone while eyes are up.",
+        "Not now. Every new introduction gives the heat another handle.",
     ),
     "contacts_caution_no_guard": (
         "No. Patrol memory is long, and I am not putting another name in your path while the city is keyed up.",
         "Not with this much heat. The next person you touch turns into a report.",
         "No. You are too hot for me to point at someone else cleanly.",
+        "No. I am not turning a contact into another patrol note.",
     ),
     "contacts_caution_no_worker": (
         "No. I am not dragging a coworker into this while the floor is already twitchy.",
         "Not on a hot day. I like keeping my job.",
         "No. I am not putting another worker in your orbit while eyes are up.",
+        "No. One wrong name and the whole floor starts answering questions.",
     ),
     "contacts_caution_no_merchant": (
         "Not with this kind of attention on you. People remember who was seen talking at the counter.",
         "No. Bad heat turns every introduction into shop gossip.",
         "Cool it down first. I am not sending trouble through my front room.",
+        "No. A shop can survive slow business; it cannot survive becoming your meeting place.",
     ),
     "contacts_caution_no_neighbor": (
         "Not on this block. Cool it down first.",
@@ -2185,6 +2707,7 @@ DIALOGUE_BANKS = {
         "Keep it quiet, but try {contact_place}.",
         "I can point you at {contact_place}, just do not make noise about it.",
         "Start with {contact_place}, and keep my name out of your mouth unless you need it.",
+        "Keep it quiet and try {contact_place}; if anyone asks, you found it yourself.",
     ),
     "contacts_offer_caution_guard": (
         "If you need a start, try {contact_place}, but keep it clean and do not say I sent you unless you have to.",
@@ -2215,6 +2738,8 @@ DIALOGUE_BANKS = {
         "If you are after a real name, try {contact_name}. They are {contact_context}.",
         "You might want {contact_name}. They are {contact_context}.",
         "For a person, start with {contact_name}. They are {contact_context}.",
+        "{contact_name} is the name I would not ignore. They are {contact_context}.",
+        "You need a face, not just a door: {contact_name}. They are {contact_context}.",
     ),
     "contacts_person_repeat": (
         "Same name as before: {contact_name}. They are still {contact_context}.",
@@ -2225,11 +2750,14 @@ DIALOGUE_BANKS = {
         "No.",
         "Not for you.",
         "I am not putting you on anyone right now.",
+        "That door stays closed.",
     ),
     "introduction_offer": (
         "Tell {contact_name} I pointed you their way. They are {contact_context}.",
         "Use my name with {contact_name}. They are {contact_context}.",
         "If you are going to start somewhere, start with {contact_name}. They are {contact_context}.",
+        "Tell {contact_name} I said you were worth a minute. They are {contact_context}.",
+        "I will open the door a crack with {contact_name}. They are {contact_context}.",
     ),
     "introduction_repeat": (
         "Same answer: use my name with {contact_name}.",
@@ -2240,6 +2768,8 @@ DIALOGUE_BANKS = {
         "Not yet. I am not comfortable connecting that line.",
         "Maybe later. I am not opening that door this quickly.",
         "Give it time. I am not ready to hand that introduction over.",
+        "Not yet. That bridge has my weight on it too.",
+        "I need a better read on you before I spend that name.",
     ),
     "introduction_caution_no": (
         "Not with this much attention on you. That kind of introduction sticks.",
@@ -2250,11 +2780,14 @@ DIALOGUE_BANKS = {
         "You can use my name with {contact_name}, but do it quietly. They are {contact_context}.",
         "Talk to {contact_name} if you have to, just keep it subtle. They are {contact_context}.",
         "I will point you at {contact_name}, but do not burn the line. They are {contact_context}.",
+        "Use my name with {contact_name}, quietly and once. They are {contact_context}.",
     ),
     "vouch_offer": (
         "Tell them {npc_name} said you were alright.",
         "Use my name. It should smooth things a little.",
         "I can put a little weight behind your name there.",
+        "I will put my name beside yours, but do not make it wobble.",
+        "Tell them I said you can be dealt with.",
     ),
     "vouch_repeat": (
         "My answer did not change. Use my name.",
@@ -2265,7 +2798,9 @@ DIALOGUE_BANKS = {
         "Not yet. We are not there.",
         "Maybe later, once I trust the shape of you better.",
         "I am not ready to lend my name out yet.",
-        "Listen, once I trust you more, i'll reconsider.... but no.",
+        "Listen, once I trust you more, I will reconsider. But no.",
+        "My name is not loose paper. Not yet.",
+        "I am not ready to make your first impression mine.",
     ),
     "vouch_caution_no": (
         "Not with this kind of attention on you.",
@@ -2302,6 +2837,7 @@ DIALOGUE_BANKS = {
         "You can use my name, but keep the ask small.",
         "I will vouch once, quietly. Do not make me regret it.",
         "Use my name if you need to, just do not turn it into a scene.",
+        "Use my name once, quietly, and keep the ask small.",
     ),
     "vouch_offer_caution_guard": (
         "You get one quiet use of my name. Keep it clean and keep it short.",
@@ -2332,26 +2868,46 @@ DIALOGUE_BANKS = {
         "Sure. Let us see what you have got.",
         "Alright, let us do business.",
         "Yeah. Show me the goods.",
+        "Fine. Put it where I can see it.",
+        "Alright. Prices first, stories never.",
+        "Sure. Keep it square and we can both leave clean.",
+        "Alright. Hands where I can see them, numbers where I can count them.",
     ),
     "trade_yes_caution": (
         "Fine, but keep it quick.",
         "Alright. Quiet business only.",
         "Yeah, but let us not make this look like a meeting.",
+        "Fine. Short deal, low voices.",
+        "Alright. No lingering over the merchandise.",
+        "Open hands, low voices, fast count.",
+        "Fine. Buy, sell, breathe, leave.",
     ),
     "trade_yes_caution_merchant": (
         "Fine. Keep it quick and make it look like shopping.",
-        "Alright. Quick business, no crowd, no scene.",
+        "Alright. Quick counter business, no crowd, no scene.",
         "Yeah, but I am not turning my counter into gossip.",
+        "Fine. Keep it counter-clean and shopping-quiet.",
+        "Alright. If anyone looks over, this is ordinary shopping.",
+        "Keep it shopping-small and counter-quiet.",
+        "No gossip, no lingering, no strange stacks on the counter.",
     ),
     "trade_yes_caution_chaotic": (
         "Yeah. Fast hands, short words.",
         "Alright, but move it. I do not hold hot business for long.",
         "Sure. Quick deal, then disappear.",
+        "Yeah. Show it, price it, vanish.",
+        "Fine. I like hot business cold by the time anyone asks.",
+        "Hot deal, cold face. Move.",
+        "You get a fast yes. Do not make it slower.",
     ),
     "trade_no": (
         "Not here.",
         "I am not set up to sell anything.",
         "No trade from me right now.",
+        "I have nothing on me that wants a price tag.",
+        "Wrong pocket, wrong moment.",
+        "I am conversation, not inventory.",
+        "Nothing I can move across to you today.",
     ),
     "contract_offer": (
         "Word came down about a problem that needs handling. {target_description} Keep it quiet and you walk with {reward_hint}.",
@@ -2359,44 +2915,76 @@ DIALOGUE_BANKS = {
         "I have a standing job. {target_description} Nobody asks questions, you collect {reward_hint}.",
         "There is work if you can handle things. {target_description} Score is {reward_hint}.",
         "Someone is paying to have a complication removed. {target_description} Do it right, you earn {reward_hint}.",
+        "There is a job with no patience left. {target_description} Keep the trail short and it pays {reward_hint}.",
+        "Someone wants a problem made smaller. {target_description} Quiet hands, {reward_hint}.",
+        "A name came through with money attached. {target_description} Keep the shape simple and it is {reward_hint}.",
+        "This is not public work. {target_description} Finish it without theater and the envelope is {reward_hint}.",
     ),
     "contract_repeat": (
         "Same job, still open. {target_description} Confirm the work for {reward_hint}.",
         "Contract stands. {target_description} You know the rate: {reward_hint}.",
         "Still on offer. {target_description} Get it done, collect {reward_hint}.",
+        "Same shadow, same price. {target_description} Bring it back clean for {reward_hint}.",
+        "The work has not walked away. {target_description} Rate stays {reward_hint}.",
+        "No new poetry on it. {target_description} The number is still {reward_hint}.",
+        "Still waiting for someone with steady hands. {target_description} Pay remains {reward_hint}.",
     ),
     "contract_accepted": (
         "Good. No details, no noise. Come back when it is finished.",
         "Smart. Payment is ready when the work is done.",
         "Deal. I do not need a story, just results.",
         "You have my attention. Do not waste it.",
+        "Good. Make it look like the city did it to itself.",
+        "Fine. Finish it before the story grows teeth.",
+        "Accepted. Keep your name out of it, keep my name farther out.",
+        "Good. The less anyone can explain later, the better.",
     ),
     "contract_no_contract": (
         "Nothing right now.",
         "No work on offer at the moment.",
         "Check back later. Nothing on the table right now.",
+        "No name, no package, no envelope. Quiet board today.",
+        "The table is empty. Enjoy that while it lasts.",
+        "No quiet money looking for hands today.",
+        "Nothing with a price attached that I am willing to say out loud.",
     ),
     "side_job_offer": (
         "Maybe. {side_job_summary} Keep it clean and you walk with {reward_hint}, plus a better name with {favor_target}.",
         "Yeah, one small thing. {side_job_summary} Do it right and it pays {reward_hint}, and {favor_target} remembers it.",
         "There is a quiet errand going. {side_job_summary} Handle it softly and you collect {reward_hint} with a little goodwill attached.",
         "I could use a discreet hand. {side_job_summary} Bring it through without noise and that is {reward_hint}, plus a favor with {favor_target}.",
+        "I have something that should stay small. {side_job_summary} Keep it that way and it is {reward_hint}, with {favor_target} warmer to you.",
+        "There is an errand with a clean edge if you do not drag it. {side_job_summary} Pay is {reward_hint}, plus favor with {favor_target}.",
+        "One useful favor, if you can keep it from becoming a scene. {side_job_summary} That gets you {reward_hint} and standing with {favor_target}.",
+        "I need a careful hand, not a loud one. {side_job_summary} Bring it home and you get {reward_hint}, plus {favor_target} owes you a better look.",
     ),
     "side_job_repeat": (
         "Same side job. {side_job_summary} Finish it clean and the rate stays {reward_hint}.",
         "Same errand, still open. {side_job_summary} Reward is still {reward_hint}.",
         "Nothing changed. {side_job_summary} Bring it through quietly and collect {reward_hint}.",
+        "Same quiet work. {side_job_summary} Keep it quiet and {reward_hint} still waits.",
+        "The errand is still breathing. {side_job_summary} Rate remains {reward_hint}.",
+        "Still the same small ask. {side_job_summary} Do it clean and it stays worth {reward_hint}.",
+        "You already know the shape. {side_job_summary} Finish it and {reward_hint} is still there.",
     ),
     "side_job_accepted": (
         "Good. Keep it moving and do not make me regret the ask.",
         "Fine. Quiet hands, short trail, then we are square.",
         "That works. Make the drop and come back clean.",
         "Good. Do it right and I will remember it.",
+        "Alright. Small job, small shadow. Keep it that way.",
+        "Good. Bring back results, not explanations.",
+        "Fine. Make it look like nothing needed doing.",
+        "Good. Bring me the ending, not the drama.",
     ),
     "side_job_none": (
         "Nothing small and quiet right now.",
         "No side work on the table at the moment.",
         "Not the kind of errand I hand out lightly. Nothing open right now.",
+        "No errand I trust to a loose hand today.",
+        "Nothing that would stay small after I gave it away.",
+        "No favor-shaped work today.",
+        "Nothing I can hand you without making both of us more interesting.",
     ),
     "farewell": (
         "Take care.",
@@ -2406,6 +2994,9 @@ DIALOGUE_BANKS = {
         "Watch yourself.",
         "Good luck out there.",
         "Careful out there.",
+        "Leave some quiet behind you.",
+        "Do not make me hear your name twice today.",
+        "Walk like you meant to be here.",
     ),
     "payoff_accept": (
         "Fine. {payoff_cost} and I did not see anything.",
@@ -2414,6 +3005,10 @@ DIALOGUE_BANKS = {
         "Alright. {payoff_cost} and this conversation did not happen.",
         "Fair enough. {payoff_cost} and you were never here.",
         "{payoff_cost}. And stay out of my sight for a while.",
+        "{payoff_cost}. That buys quiet, not friendship.",
+        "Fine. {payoff_cost}, and I misremember the shape of this.",
+        "{payoff_cost}. I blink once. Do not be standing there when I open my eyes.",
+        "Alright. {payoff_cost} buys you a missing minute.",
     ),
     "payoff_refuse_broke": (
         "That is not enough. Come back when you are serious.",
@@ -2421,6 +3016,8 @@ DIALOGUE_BANKS = {
         "Not with that. Try again when you have something real.",
         "That does not cover it. Walk.",
         "I am worth more than that. Come back with more.",
+        "That is apology money, not silence money.",
+        "You are short, and I am not sentimental.",
     ),
     "payoff_refuse_clean": (
         "I am not that kind of person.",
@@ -2428,12 +3025,17 @@ DIALOGUE_BANKS = {
         "That is not how I do things.",
         "No. Take your credits and go.",
         "I don't work that way.",
+        "I do not sell my memory that cheap.",
+        "No. I would rather sleep clean.",
+        "Put that away before it becomes evidence.",
     ),
     "payoff_cooldown": (
         "We already handled this. Do not push it.",
         "You already paid. That window is closed.",
         "That deal was made. Don't come looking for another one.",
         "I said we were done. Stay out of trouble.",
+        "You bought one silence, not a subscription.",
+        "No second pass. Move along.",
     ),
     "fence_accept": (
         "{fence_payout} and that stock does not exist. Leave the bag.",
@@ -2441,24 +3043,35 @@ DIALOGUE_BANKS = {
         "Alright. {fence_payout} and I forget I ever saw what you were carrying.",
         "Done. {fence_payout}. You were never here with those.",
         "{fence_payout} is what I can move. Take it or walk.",
+        "{fence_payout}. I make it disappear from memory, not from consequence.",
+        "I can move it for {fence_payout}. After that, we never admired it together.",
+        "{fence_payout}. I can find it a quieter shelf.",
+        "For {fence_payout}, it stops being yours before it starts being anyone else's.",
     ),
     "fence_decline_corrupt": (
         "Not today. I am already running too much heat right now.",
         "Wrong time. Come back when things have cooled down.",
         "I can't take anything right now. The block is too hot.",
         "Not this week. You're going to have to sit on it.",
+        "No. My quiet channels are full of noise right now.",
+        "I like money, but I like not being noticed more.",
     ),
     "fence_decline_clean": (
         "That's not a conversation I have. Move on.",
         "Wrong person. I don't move product.",
         "I don't know what you're implying, but no.",
         "Keep that away from me.",
+        "Whatever you think I am, adjust it downward.",
+        "No. I do honest shelves and boring receipts.",
+        "You brought the wrong kind of question to the wrong kind of person.",
     ),
     "fence_cooldown": (
         "We just did this. Give it time.",
         "I haven't moved the last batch yet. Not yet.",
         "Come back in a few days.",
         "Too soon. You're making me nervous.",
+        "Let the last thing vanish before you hand me another.",
+        "No. Heat sticks when you stack it.",
     ),
     "hire_runner_accept": (
         "{hire_runner_cost} and I stay with you for {hire_runner_hours}. Keep moving.",
@@ -2466,69 +3079,104 @@ DIALOGUE_BANKS = {
         "{hire_runner_cost} and I am on your side for {hire_runner_hours}.",
         "Fine. {hire_runner_cost}. Stay where I can see you.",
         "You bought another pair of hands. {hire_runner_cost}. Lead.",
+        "Deal. {hire_runner_cost} buys {hire_runner_hours} of me keeping trouble off your back.",
+        "{hire_runner_cost}. For {hire_runner_hours}, your problems get one more set of eyes.",
+        "{hire_runner_cost}. For {hire_runner_hours}, I am behind you and paying attention.",
+        "Done. {hire_runner_cost}. You point, I keep the edges from closing in.",
     ),
     "hire_runner_decline_clean": (
         "I don't do that kind of arrangement. Move along.",
         "That's not something I get involved in.",
         "Wrong person for that conversation.",
         "I keep my head down. You should too.",
+        "I am not renting my trouble to yours.",
+        "No. My day stays mine.",
+        "I do not sell my shadow. Find someone else.",
     ),
     "hire_runner_decline_broke": (
         "I've got a memory like a trap, but not that cheap.",
         "That's not enough for me to forget anything.",
         "Come back when you've got real money.",
         "Not worth the risk for that amount.",
+        "You are asking for danger at errand prices.",
+        "That money barely buys a yes, never mind backup.",
     ),
     "hire_runner_already_hired": (
         "We already have an arrangement. I am with you.",
         "You're covered. Keep moving.",
         "I haven't wandered off. Lead.",
         "Still on your side. Just do not lose me.",
+        "Contract is still warm. Tell me where we are going.",
+        "I am already on the clock. Use me or release me.",
     ),
     "backup_orders": (
         "Yeah. You want me close, posted up, making noise, or putting someone down?",
         "Say it plain. I can stay on you, hold a spot, draw eyes, or handle a marked problem.",
         "Alright. Give the word. Passive cover, a position to hold, a distraction, or a harder push?",
+        "Give me the shape. Shoulder, station, noise, or teeth?",
+        "Plan it out. I can trail you, plant myself, pull attention, or hit the marked problem.",
+        "Pick the posture: close guard, fixed point, noisy misdirection, or direct force.",
     ),
     "backup_follow": (
         "Alright. Back to passive cover. I stay near you and keep my eyes open.",
         "Copy. I am back on your shoulder unless something live shows up.",
         "Fine. I stick close and watch your flank again.",
+        "Understood. I shadow you and keep the noise small.",
+        "Close cover it is. I move when you move.",
+        "Back in your pocket. I will watch the edges.",
     ),
     "backup_hold": (
         "Got it. I will hold here and keep watch.",
         "I can post here. Come find me when you are ready to move.",
         "Here works. I stay put and keep my head up.",
+        "I will make this spot look ordinary until it stops being useful.",
+        "Holding. I will keep the floor from surprising us.",
+        "I stay here. If the room changes, I will be the first to know.",
     ),
     "backup_distract": (
         "Sure. I will pull some eyes away from you.",
         "Got it. I will make enough noise to bend attention.",
         "I can stir things up a little. Move when you are ready.",
+        "I will give them something easier to watch. Use it.",
+        "I can make the room look the wrong way. Be gone by then.",
+        "Fine. I will spend a little attention so you do not have to.",
     ),
     "backup_goto_wait": (
         "Alright. I will head to {backup_marked_spot} and sit tight.",
         "Copy. I will move to {backup_marked_spot} and wait there.",
         "Marked spot, then quiet. I have it.",
+        "{backup_marked_spot}. I move, I wait, I do not improvise.",
+        "I will post at {backup_marked_spot} and keep the mark warm.",
     ),
     "backup_wait_return": (
         "Got it. I will post at {backup_marked_spot}, wait a bit, then circle back.",
         "I can do that. {backup_marked_spot}, hold for a minute, then back to you.",
         "Alright. I will stage at {backup_marked_spot} and return after a short beat.",
+        "{backup_marked_spot}, short hold, then I come back to your shoulder.",
+        "I will touch the mark, count the pause, and return.",
     ),
     "backup_kill_trusted": (
         "If that is the move, I will handle {backup_kill_target}.",
         "You are sure? Fine. I will put {backup_kill_target} down.",
         "Alright. {backup_kill_target} is mine.",
+        "If that line is crossed, {backup_kill_target} does not walk back over it.",
+        "Trusted call. I will make {backup_kill_target} stop the problem.",
+        "Say when, and {backup_kill_target} becomes my whole room.",
     ),
     "backup_kill_paid": (
         "{backup_kill_cost} and I will make {backup_kill_target} stop being your problem.",
         "That is hazard-pay territory. {backup_kill_cost}, and I will handle {backup_kill_target}.",
         "For {backup_kill_cost}, I can put {backup_kill_target} in the ground.",
+        "{backup_kill_cost}. For that, {backup_kill_target} becomes a finished sentence.",
+        "{backup_kill_cost}. That buys ugly work on {backup_kill_target}.",
+        "For {backup_kill_cost}, I stop asking why and start watching {backup_kill_target}.",
     ),
     "backup_kill_refuse": (
         "No clean shot from me on that.",
         "Mark somebody real if you want that kind of work.",
         "Not like that. Give me a real target or another order.",
+        "No target, no trigger. Give me something I can actually read.",
+        "I am not swinging at fog. Mark the problem or change the order.",
     ),
 }
 
@@ -2721,6 +3369,10 @@ def topic_label(topic_id, context=None):
         return "Do you work here?"
     if topic_id == "street_buy" and context.get("street_buy_hint"):
         return f"I might have some {context['street_buy_hint']}."
+    if topic_id == "street_buy_accept" and context.get("street_buy_offer_accept_label"):
+        return str(context["street_buy_offer_accept_label"]).strip()
+    if topic_id == "street_buy_decline" and context.get("street_buy_offer_decline_label"):
+        return str(context["street_buy_offer_decline_label"]).strip()
     if topic_id == "organization" and context.get("workplace_name"):
         if str(context.get("organization_role", "")).strip().lower() == "owner":
             return f"Is {context['workplace_name']} yours?"
@@ -2968,6 +3620,77 @@ def _render_player_topic_entry(entry, context):
     return rendered
 
 
+def _render_player_topic_text_options(options, context):
+    rendered = []
+    seen = set()
+    for raw in tuple(options or ()):
+        entry = _render_player_topic_entry(raw, context)
+        if not entry:
+            continue
+        text = str(entry.get("text", "")).strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        rendered.append(text)
+    return tuple(rendered)
+
+
+def _menu_hint_suffix(base_label):
+    base_label = str(base_label or "").strip()
+    if not base_label.endswith("]"):
+        return ""
+    start = base_label.rfind(" [")
+    if start < 0:
+        return ""
+    return base_label[start:]
+
+
+def _context_menu_options(topic_id, base_label, context):
+    topic_id = str(topic_id or "").strip().lower()
+    base_lc = str(base_label or "").strip().lower()
+    context = context if isinstance(context, dict) else {}
+    if topic_id == "organization" and "yours" in base_lc:
+        return PLAYER_CONTEXT_MENU_BANKS.get("organization_owner", ())
+    if topic_id == "supervisor" and "above you" in base_lc:
+        return PLAYER_CONTEXT_MENU_BANKS.get("supervisor_owner", ())
+    if topic_id == "coworkers" and "just you" in base_lc:
+        return PLAYER_CONTEXT_MENU_BANKS.get("coworkers_solo", ())
+    if topic_id == "street_buy" and context.get("street_buy_hint"):
+        return PLAYER_CONTEXT_MENU_BANKS.get("street_buy_requested", ())
+    return ()
+
+
+def _choose_menu_text(options, context, *, fallback, seed, npc_eid, topic_id, count=0, previous_topic_id="", total_asked=0, opened_count=0, salt=""):
+    fallback = str(fallback or "").strip()
+    rendered = _render_player_topic_text_options(options, context)
+    if not rendered:
+        return fallback
+    try:
+        count = max(1, int(count))
+    except (TypeError, ValueError):
+        count = 1
+    try:
+        total_asked = max(0, int(total_asked))
+    except (TypeError, ValueError):
+        total_asked = 0
+    try:
+        opened_count = max(0, int(opened_count))
+    except (TypeError, ValueError):
+        opened_count = 0
+    chooser = random.Random(
+        f"{seed}:dialogue-player-menu:{npc_eid}:{topic_id}:{count}:"
+        f"{previous_topic_id}:{total_asked}:{opened_count}:{salt}"
+    )
+    text = str(rendered[chooser.randrange(len(rendered))]).strip()
+    suffix = _menu_hint_suffix(fallback)
+    if suffix and suffix not in text:
+        text = f"{text}{suffix}"
+    return text or fallback
+
+
 def topic_player_prompt(topic_id, *, seed, npc_eid, count=0, context=None):
     topic_id = str(topic_id or "").strip().lower()
     label = topic_label(topic_id, context=context)
@@ -3007,16 +3730,58 @@ def topic_player_reaction_line(topic_id, *, seed, npc_eid, count=0, outcome="sof
     return str(options[chooser.randrange(len(options))]).strip()
 
 
-def topic_player_line(topic_id, *, seed, npc_eid, count=0, context=None, previous_topic_id="", total_asked=0):
+def topic_menu_label(topic_id, *, seed, npc_eid, count=0, context=None, previous_topic_id="", total_asked=0, opened_count=0):
     topic_id = str(topic_id or "").strip().lower()
-    prompt = topic_player_prompt(
-        topic_id,
+    base_label = topic_label(topic_id, context=context)
+    if topic_id in PLAYER_MENU_BASE_LABEL_TOPICS:
+        return base_label
+
+    context = context if isinstance(context, dict) else {}
+    context_options = _context_menu_options(topic_id, base_label, context)
+    if context_options:
+        return _choose_menu_text(
+            context_options,
+            context,
+            fallback=base_label,
+            seed=seed,
+            npc_eid=npc_eid,
+            topic_id=topic_id,
+            count=count,
+            previous_topic_id=previous_topic_id,
+            total_asked=total_asked,
+            opened_count=opened_count,
+            salt="context",
+        )
+
+    options = tuple(PLAYER_TOPIC_BANKS.get(topic_id, ()))
+    if not options:
+        return base_label
+    return _choose_menu_text(
+        options,
+        context,
+        fallback=base_label,
         seed=seed,
         npc_eid=npc_eid,
+        topic_id=topic_id,
         count=count,
-        context=context,
+        previous_topic_id=previous_topic_id,
+        total_asked=total_asked,
+        opened_count=opened_count,
     )
-    line = str(prompt.get("text", "")).strip() or topic_label(topic_id, context=context)
+
+
+def topic_player_line(topic_id, *, seed, npc_eid, count=0, context=None, previous_topic_id="", total_asked=0, line_override=""):
+    topic_id = str(topic_id or "").strip().lower()
+    line = str(line_override or "").strip()
+    if not line:
+        prompt = topic_player_prompt(
+            topic_id,
+            seed=seed,
+            npc_eid=npc_eid,
+            count=count,
+            context=context,
+        )
+        line = str(prompt.get("text", "")).strip() or topic_label(topic_id, context=context)
     previous_topic_id = str(previous_topic_id or "").strip().lower()
     try:
         count = max(1, int(count))

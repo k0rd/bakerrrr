@@ -218,6 +218,7 @@ from game.dialogue_pressure import (
 from game.dialogue import (
     choose_dialogue_line,
     ordered_topic_ids as _ordered_dialogue_topic_ids,
+    topic_menu_label as _dialogue_topic_menu_label,
     topic_player_line as _dialogue_topic_player_line,
     topic_player_reaction_line as _dialogue_topic_player_reaction_line,
     speaker_style as _dialogue_speaker_style,
@@ -360,6 +361,8 @@ class NPCInteractionSystem(System):
         "trade",
         "street_appraise",
         "street_buy",
+        "street_buy_accept",
+        "street_buy_decline",
         "bye",
         "purpose",
         "apologize",
@@ -389,6 +392,8 @@ class NPCInteractionSystem(System):
         "backup_goto_wait",
         "backup_wait_return",
         "backup_kill",
+        "street_buy_accept",
+        "street_buy_decline",
     }
     PAYOFF_BASE_COST = 40
     PAYOFF_COOLDOWN_TICKS = 800
@@ -590,6 +595,7 @@ class NPCInteractionSystem(System):
                 "hint": "",
                 "new_topic_ids": [],
                 "close_pending": False,
+                "street_buy_offer": None,
             }
         if not hasattr(self.sim, "dialogue_history"):
             self.sim.dialogue_history = {}
@@ -624,6 +630,7 @@ class NPCInteractionSystem(System):
                 "hint": "",
                 "new_topic_ids": [],
                 "close_pending": False,
+                "street_buy_offer": None,
                 "backup_cursor_mark": None,
                 "backup_cursor_pending_topic": "",
             }
@@ -637,6 +644,7 @@ class NPCInteractionSystem(System):
             state.setdefault("hint", "")
             state.setdefault("new_topic_ids", [])
             state.setdefault("close_pending", False)
+            state.setdefault("street_buy_offer", None)
             state.setdefault("backup_cursor_mark", None)
             state.setdefault("backup_cursor_pending_topic", "")
         return state
@@ -3873,6 +3881,219 @@ class NPCInteractionSystem(System):
             return False
         return bool(self._street_buy_candidate_rows(npc_eid, context))
 
+    def _street_buy_offer_state(self, npc_eid=None):
+        state = self._dialog_ui_state()
+        offer = state.get("street_buy_offer")
+        if not isinstance(offer, dict):
+            return None
+        if npc_eid is not None and offer.get("npc_eid") != npc_eid:
+            return None
+        return dict(offer)
+
+    def _clear_street_buy_offer(self):
+        self._dialog_ui_state()["street_buy_offer"] = None
+
+    def _street_buy_offer_item_text(self, offer, *, limit=3):
+        if not isinstance(offer, dict):
+            return "that stock"
+        item_names = [
+            str(name).strip()
+            for name in tuple(offer.get("item_names", ()) or ())
+            if str(name).strip()
+        ]
+        if not item_names:
+            return "that stock"
+        shown = item_names[:max(1, int(limit))]
+        text = _dialogue_human_join(tuple(shown))
+        extra_count = max(0, int(offer.get("item_count", len(item_names)) or 0) - len(shown))
+        if extra_count > 0:
+            text = f"{text}, and {extra_count} more item" + ("s" if extra_count != 1 else "")
+        return text
+
+    def _street_buy_offer_accept_label(self, offer):
+        if not isinstance(offer, dict):
+            return "Sell it."
+        payout = int(max(0, offer.get("total_payout", 0) or 0))
+        payout_text = f"{payout} credits" if payout > 0 else "the posted price"
+        desired_name = str(offer.get("desired_name", "") or "").strip()
+        if str(offer.get("kind", "")).strip().lower() == "desired" and desired_name:
+            quantity = int(max(1, offer.get("quantity_total", 1) or 1))
+            noun = f"the {desired_name} batch" if quantity > 1 else f"the {desired_name}"
+            return f"Sell {noun} for {payout_text}."
+        return f"Sell {self._street_buy_offer_item_text(offer)} for {payout_text}."
+
+    def _build_street_buy_offer(self, npc_eid, context):
+        rows = self._street_buy_candidate_rows(npc_eid, context)
+        if not rows:
+            return None
+        terms = self._street_buy_terms_for(npc_eid, context) or {}
+        desired_item_id = str(terms.get("desired_item_id", "") or "").strip().lower()
+        desired_name = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG) if desired_item_id else ""
+        desired_rows = [dict(row) for row in rows if bool(row.get("desired"))]
+        offer_rows = desired_rows or [dict(row) for row in rows]
+        total_payout = sum(int(max(0, row.get("price", 0) or 0)) for row in offer_rows)
+        if total_payout <= 0:
+            return None
+        item_names = tuple(
+            str(row.get("item_name", row.get("item_id", "stock"))).strip()
+            for row in offer_rows
+            if str(row.get("item_name", row.get("item_id", "stock"))).strip()
+        )
+        quantity_total = sum(int(max(1, row.get("quantity", 1) or 1)) for row in offer_rows)
+        return {
+            "npc_eid": npc_eid,
+            "kind": "desired" if desired_rows else "generic",
+            "desired_item_id": desired_item_id,
+            "desired_name": desired_name,
+            "total_payout": int(total_payout),
+            "item_count": len(offer_rows),
+            "quantity_total": int(quantity_total),
+            "item_names": item_names,
+            "remaining_match_count": max(0, len(rows) - len(offer_rows)),
+            "rows": tuple(
+                {
+                    "instance_id": row.get("instance_id"),
+                    "item_id": str(row.get("item_id", "") or "").strip().lower(),
+                    "item_name": str(row.get("item_name", row.get("item_id", "stock"))).strip(),
+                    "quantity": int(max(1, row.get("quantity", 1) or 1)),
+                    "price": int(max(0, row.get("price", 0) or 0)),
+                    "illegal": bool(row.get("illegal")),
+                    "desired": bool(row.get("desired")),
+                }
+                for row in offer_rows
+            ),
+        }
+
+    def _street_buy_offer_line(self, offer):
+        if not isinstance(offer, dict):
+            return "That stock is not moving cleanly enough for me to touch it."
+        payout = int(max(0, offer.get("total_payout", 0) or 0))
+        desired_name = str(offer.get("desired_name", "") or "").strip()
+        item_text = self._street_buy_offer_item_text(offer)
+        if str(offer.get("kind", "")).strip().lower() == "desired" and desired_name:
+            quantity = int(max(1, offer.get("quantity_total", 1) or 1))
+            unit_text = "the batch" if quantity > 1 else "it"
+            line = f"That is exactly the {desired_name} I was looking for. {payout} credits for {unit_text}."
+            if int(offer.get("remaining_match_count", 0) or 0) > 0:
+                line += " If you want to move anything else after that, I can take another look."
+            return line
+        if desired_name:
+            return f"That is not the {desired_name} I asked for, but I can move {item_text}. {payout} credits for the lot."
+        return f"I can move {item_text}. {payout} credits for the lot."
+
+    def _execute_street_buy_offer(self, npc_eid, context, offer):
+        inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
+        assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
+        if not inventory or not assets:
+            return {"npc_lines": ["You do not have the stock on you right now."]}
+
+        total_payout = 0
+        sold_rows = []
+        illegal_units = 0
+        for row in tuple((offer or {}).get("rows", ()) or ()):
+            quantity = int(max(1, row.get("quantity", 1) or 1))
+            removed = inventory.remove_item(instance_id=row.get("instance_id"), quantity=quantity)
+            if not removed:
+                continue
+            gear_changes = _unlink_removed_item_from_gear(self.sim, self.player_eid, removed, item_catalog=ITEM_CATALOG)
+            if gear_changes.get("armor_name"):
+                self.sim.emit(Event(
+                    "armor_removed",
+                    eid=self.player_eid,
+                    item_id=gear_changes.get("armor_item_id"),
+                    armor_name=gear_changes["armor_name"],
+                    reason="street_sold",
+                ))
+            if gear_changes.get("weapon_id"):
+                self.sim.emit(Event(
+                    "weapon_removed",
+                    eid=self.player_eid,
+                    weapon_id=gear_changes["weapon_id"],
+                    weapon_name=gear_changes["weapon_name"],
+                    reason="street_sold",
+                ))
+            if gear_changes.get("disguise_name"):
+                self.sim.emit(Event(
+                    "disguise_removed",
+                    eid=self.player_eid,
+                    item_id=gear_changes.get("disguise_item_id"),
+                    item_name=gear_changes["disguise_name"],
+                    reason="street_sold",
+                ))
+            if gear_changes.get("container_name"):
+                self.sim.emit(Event(
+                    "container_removed",
+                    eid=self.player_eid,
+                    item_id=gear_changes.get("container_item_id"),
+                    item_name=gear_changes["container_name"],
+                    reason="street_sold",
+                ))
+            total_payout += int(row.get("price", 0) or 0)
+            illegal_units += quantity if bool(row.get("illegal")) else 0
+            sold_rows.append({
+                "item_id": str(row.get("item_id", "") or "").strip().lower(),
+                "item_name": str(row.get("item_name", row.get("item_id", "stock"))).strip(),
+                "quantity": int(quantity),
+            })
+
+        if total_payout <= 0 or not sold_rows:
+            return {"npc_lines": ["Leave it. You are not carrying the stock we were talking about anymore."]}
+
+        assets.credits += int(total_payout)
+        desired_item_id = str((offer or {}).get("desired_item_id", "") or "").strip().lower()
+        if illegal_units > 0:
+            player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+            if player_pos:
+                score = min(28, 10 + (illegal_units * 4) + (6 if desired_item_id else 0))
+                _emit_action_offense_event(
+                    self.sim,
+                    self.player_eid,
+                    "trade_sell",
+                    player_pos.x,
+                    player_pos.y,
+                    player_pos.z,
+                    context="contraband_use",
+                    score=score,
+                )
+        self._shift_dialogue_bond(
+            npc_eid,
+            trust_delta=0.04,
+            closeness_delta=0.02,
+            guarded=False,
+        )
+        self.sim.emit(Event(
+            "street_buy_transaction",
+            eid=self.player_eid,
+            npc_eid=npc_eid,
+            payout=int(total_payout),
+            item_count=len(sold_rows),
+            illegal_units=int(illegal_units),
+            desired_item_id=desired_item_id,
+            sold_items=tuple(
+                {
+                    "item_id": str(row.get("item_id", "") or "").strip().lower(),
+                    "quantity": int(max(1, row.get("quantity", 1) or 1)),
+                }
+                for row in sold_rows
+                if str(row.get("item_id", "") or "").strip()
+            ),
+            credits=int(getattr(assets, "credits", 0) or 0),
+        ))
+
+        sold_names = [
+            str(row.get("item_name", row.get("item_id", "stock"))).strip()
+            for row in sold_rows[:3]
+            if str(row.get("item_name", row.get("item_id", "stock"))).strip()
+        ]
+        if desired_item_id and any(str(row.get("item_id", "")).strip().lower() == desired_item_id for row in sold_rows):
+            desired_name = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG)
+            line = f"Done. {int(total_payout)} credits for the {desired_name}. Keep your head down."
+        elif sold_names:
+            line = f"Done. {int(total_payout)} credits for { _dialogue_human_join(tuple(sold_names)) }."
+        else:
+            line = f"Done. {int(total_payout)} credits for the stock."
+        return {"npc_lines": [line]}
+
     def _street_appraise_candidates(self, npc_eid):
         return _street_appraise_candidates_for_actor(
             self.sim,
@@ -3936,113 +4157,12 @@ class NPCInteractionSystem(System):
 
     def _resolve_street_buy_topic(self, context, *, topic_id, ask_count):
         npc_eid = context.get("npc_eid")
-        rows = self._street_buy_candidate_rows(npc_eid, context)
-        if not rows:
+        offer = self._build_street_buy_offer(npc_eid, context)
+        if not offer:
+            self._clear_street_buy_offer()
             return {"npc_lines": ["Not tonight. You are not carrying anything I want to move."]}
-        inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
-        assets = self.sim.ecs.get(PlayerAssets).get(self.player_eid)
-        if not inventory or not assets:
-            return {"npc_lines": ["You do not have the stock on you right now."]}
-
-        total_payout = 0
-        sold_rows = []
-        illegal_units = 0
-        for row in list(rows):
-            quantity = int(max(1, row.get("quantity", 1) or 1))
-            removed = inventory.remove_item(instance_id=row.get("instance_id"), quantity=quantity)
-            if not removed:
-                continue
-            gear_changes = _unlink_removed_item_from_gear(self.sim, self.player_eid, removed, item_catalog=ITEM_CATALOG)
-            if gear_changes.get("armor_name"):
-                self.sim.emit(Event(
-                    "armor_removed",
-                    eid=self.player_eid,
-                    item_id=gear_changes.get("armor_item_id"),
-                    armor_name=gear_changes["armor_name"],
-                    reason="street_sold",
-                ))
-            if gear_changes.get("weapon_id"):
-                self.sim.emit(Event(
-                    "weapon_removed",
-                    eid=self.player_eid,
-                    weapon_id=gear_changes["weapon_id"],
-                    weapon_name=gear_changes["weapon_name"],
-                    reason="street_sold",
-                ))
-            if gear_changes.get("disguise_name"):
-                self.sim.emit(Event(
-                    "disguise_removed",
-                    eid=self.player_eid,
-                    item_id=gear_changes.get("disguise_item_id"),
-                    item_name=gear_changes["disguise_name"],
-                    reason="street_sold",
-                ))
-            if gear_changes.get("container_name"):
-                self.sim.emit(Event(
-                    "container_removed",
-                    eid=self.player_eid,
-                    item_id=gear_changes.get("container_item_id"),
-                    item_name=gear_changes["container_name"],
-                    reason="street_sold",
-                ))
-            total_payout += int(row.get("price", 0) or 0)
-            illegal_units += quantity if bool(row.get("illegal")) else 0
-            sold_rows.append(row)
-
-        if total_payout <= 0 or not sold_rows:
-            return {"npc_lines": ["That stock is not moving cleanly enough for me to touch it."]}
-
-        assets.credits += int(total_payout)
-        terms = self._street_buy_terms_for(npc_eid, context) or {}
-        desired_item_id = str(terms.get("desired_item_id", "") or "").strip().lower()
-        if illegal_units > 0:
-            player_pos = self.sim.ecs.get(Position).get(self.player_eid)
-            if player_pos:
-                score = min(28, 10 + (illegal_units * 4) + (6 if desired_item_id else 0))
-                _emit_action_offense_event(
-                    self.sim,
-                    self.player_eid,
-                    "trade_sell",
-                    player_pos.x,
-                    player_pos.y,
-                    player_pos.z,
-                    context="contraband_use",
-                    score=score,
-                )
-        self._shift_dialogue_bond(
-            npc_eid,
-            trust_delta=0.04,
-            closeness_delta=0.02,
-            guarded=False,
-        )
-        self.sim.emit(Event(
-            "street_buy_transaction",
-            eid=self.player_eid,
-            npc_eid=npc_eid,
-            payout=int(total_payout),
-            item_count=len(sold_rows),
-            illegal_units=int(illegal_units),
-            desired_item_id=desired_item_id,
-            sold_items=tuple(
-                {
-                    "item_id": str(row.get("item_id", "") or "").strip().lower(),
-                    "quantity": int(max(1, row.get("quantity", 1) or 1)),
-                }
-                for row in sold_rows
-                if str(row.get("item_id", "") or "").strip()
-            ),
-            credits=int(getattr(assets, "credits", 0) or 0),
-        ))
-
-        sold_names = [str(row.get("item_name", row.get("item_id", "stock"))).strip() for row in sold_rows[:3] if str(row.get("item_name", row.get("item_id", "stock"))).strip()]
-        if desired_item_id and any(str(row.get("item_id", "")).strip().lower() == desired_item_id for row in sold_rows):
-            desired_name = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG)
-            line = f"That is exactly the {desired_name} I was looking for. {int(total_payout)} credits, and keep your head down."
-        elif sold_names:
-            line = f"I can move { _dialogue_human_join(tuple(sold_names)) }. {int(total_payout)} credits for the lot."
-        else:
-            line = f"I can move that stock. {int(total_payout)} credits for the lot."
-        return {"npc_lines": [line]}
+        self._dialog_ui_state()["street_buy_offer"] = offer
+        return {"npc_lines": [self._street_buy_offer_line(offer)]}
 
     def _fence_illegal_items(self, player_eid):
         inventory = self.sim.ecs.get(Inventory).get(player_eid)
@@ -4911,11 +5031,15 @@ class NPCInteractionSystem(System):
         street_buy_available = self._street_buy_available_for(npc_eid, street_context)
         street_buy_preview = self._street_buy_preview(npc_eid, street_context) if street_buy_available else ""
         street_buy_terms = self._street_buy_terms_for(npc_eid, street_context) if street_buy_available else None
+        street_buy_rows = self._street_buy_candidate_rows(npc_eid, street_context) if street_buy_available else []
         street_buy_hint = ""
         if isinstance(street_buy_terms, dict):
             desired_item_id = str(street_buy_terms.get("desired_item_id", "") or "").strip().lower()
-            if desired_item_id:
+            if desired_item_id and any(bool(row.get("desired")) for row in street_buy_rows):
                 street_buy_hint = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG)
+        street_buy_offer = self._street_buy_offer_state(npc_eid)
+        street_buy_offer_pending = isinstance(street_buy_offer, dict)
+        street_buy_offer_accept_label = self._street_buy_offer_accept_label(street_buy_offer) if street_buy_offer_pending else ""
         contractor = self._active_backup_contract(npc_eid)
         peaceful_contract = self._active_peaceful_surrender(npc_eid) if peaceful_orders_only else None
         order_rec = contractor or peaceful_contract
@@ -5009,6 +5133,9 @@ class NPCInteractionSystem(System):
             "street_buy_available": street_buy_available,
             "street_buy_preview": street_buy_preview,
             "street_buy_hint": street_buy_hint,
+            "street_buy_offer_pending": street_buy_offer_pending,
+            "street_buy_offer_accept_label": street_buy_offer_accept_label,
+            "street_buy_offer_decline_label": "Pass on that offer.",
             "hire_runner_available": self._hire_runner_available_for(npc_eid, contact_standing, guarded),
             "hire_runner_cost": self.CONTRACTOR_COST,
             "hire_runner_hours": f"{max(1, self.CONTRACTOR_DURATION // 60)} hours",
@@ -8077,7 +8204,9 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "street_appraise" and not context.get("street_appraise_available"):
                 continue
-            if topic_id == "street_buy" and not context.get("street_buy_available"):
+            if topic_id == "street_buy" and (not context.get("street_buy_available") or context.get("street_buy_offer_pending")):
+                continue
+            if topic_id in {"street_buy_accept", "street_buy_decline"} and not context.get("street_buy_offer_pending"):
                 continue
             if topic_id == "routine" and not self._routine_summary(context):
                 continue
@@ -8157,7 +8286,35 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "vouch" and not context.get("vouch_place"):
                 continue
-            available.append({"id": topic_id, "label": _dialogue_topic_label(topic_id, context=context)})
+            memory = self._dialogue_memory(context["npc_eid"])
+            ask_count = self._dialogue_topic_count(context["npc_eid"], topic_id)
+            total_asked = self._dialogue_total_topics_asked(context["npc_eid"])
+            previous_topic_id = str(memory.get("last_topic_id", "")).strip().lower()
+            next_count = ask_count + 1
+            label = _dialogue_topic_menu_label(
+                topic_id,
+                seed=self.sim.seed,
+                npc_eid=context.get("npc_eid"),
+                count=next_count,
+                context=context,
+                previous_topic_id=previous_topic_id,
+                total_asked=total_asked,
+                opened_count=int(memory.get("opened_count", 0) or 0),
+            )
+            available.append({
+                "id": topic_id,
+                "label": label,
+                "player_line": _dialogue_topic_player_line(
+                    topic_id,
+                    seed=self.sim.seed,
+                    npc_eid=context.get("npc_eid"),
+                    count=next_count,
+                    context=context,
+                    previous_topic_id=previous_topic_id,
+                    total_asked=total_asked + 1,
+                    line_override=label,
+                ),
+            })
         return self._augment_repeat_dialogue_rows(context, available)
 
     def _prioritize_dialog_topics(self, topics, highlight_topic_ids=()):
@@ -8210,6 +8367,7 @@ class NPCInteractionSystem(System):
             "hint": self._dialogue_hint_text(context),
             "new_topic_ids": [],
             "close_pending": False,
+            "street_buy_offer": None,
             "machine_action": None,
             "backup_cursor_mark": None,
             "backup_cursor_pending_topic": "",
@@ -8226,6 +8384,7 @@ class NPCInteractionSystem(System):
             "hint": "Conversation over. Press Space to close.",
             "new_topic_ids": [],
             "close_pending": True,
+            "street_buy_offer": None,
             "machine_action": None,
             "backup_cursor_pending_topic": "",
         })
@@ -8248,6 +8407,7 @@ class NPCInteractionSystem(System):
             "hint": "",
             "new_topic_ids": [],
             "close_pending": False,
+            "street_buy_offer": None,
             "machine_action": None,
             "backup_cursor_mark": None,
             "backup_cursor_pending_topic": "",
@@ -9007,6 +9167,18 @@ class NPCInteractionSystem(System):
             return self._resolve_street_appraise_topic(context, topic_id=topic_id, ask_count=ask_count)
         if topic_id == "street_buy":
             return self._resolve_street_buy_topic(context, topic_id=topic_id, ask_count=ask_count)
+        if topic_id == "street_buy_accept":
+            offer = self._street_buy_offer_state(npc_eid)
+            self._clear_street_buy_offer()
+            if not offer:
+                return {"npc_lines": ["No. We do not have a price on the table right now."]}
+            return self._execute_street_buy_offer(npc_eid, context, offer)
+        if topic_id == "street_buy_decline":
+            had_offer = self._street_buy_offer_state(npc_eid)
+            self._clear_street_buy_offer()
+            if had_offer:
+                return {"npc_lines": ["Fine. Keep it moving unless you want to make a different offer."]}
+            return {"npc_lines": ["Then we do not have business right now."]}
         if topic_id == "payoff":
             npc_eid = context.get("npc_eid")
             cost_amount = int(context.get("payoff_cost_amount", self.PAYOFF_BASE_COST))
@@ -9564,21 +9736,22 @@ class NPCInteractionSystem(System):
             extra_detail_lc=_dialogue_lower_start(detail),
         )
 
-    def _append_dialogue_response(self, context, topic_id, response, *, previous_topic_id=""):
+    def _append_dialogue_response(self, context, topic_id, response, *, previous_topic_id="", player_line_override=""):
         state = self._dialog_ui_state()
         transcript = list(state.get("transcript", ()) or ())
-        transcript.append(
-            self._dialogue_player_line(
-                _dialogue_topic_player_line(
-                    topic_id,
-                    seed=getattr(self.sim, "seed", 0),
-                    npc_eid=context.get("npc_eid"),
-                    count=self._dialogue_topic_count(context.get("npc_eid"), topic_id),
-                    context=context,
-                    previous_topic_id=previous_topic_id,
-                    total_asked=self._dialogue_total_topics_asked(context.get("npc_eid")),
-                )
+        player_line = str(player_line_override or "").strip()
+        if not player_line:
+            player_line = _dialogue_topic_player_line(
+                topic_id,
+                seed=getattr(self.sim, "seed", 0),
+                npc_eid=context.get("npc_eid"),
+                count=self._dialogue_topic_count(context.get("npc_eid"), topic_id),
+                context=context,
+                previous_topic_id=previous_topic_id,
+                total_asked=self._dialogue_total_topics_asked(context.get("npc_eid")),
             )
+        transcript.append(
+            self._dialogue_player_line(player_line)
         )
         for line in response.get("npc_lines", ()) or ():
             formatted = self._dialogue_npc_line(context["npc_name"], line)
@@ -9733,11 +9906,15 @@ class NPCInteractionSystem(System):
         response = self._apply_dialogue_initiative(context, topic_id, response)
         response = self._apply_dialogue_repeat_friction(context, topic_id, response)
         self._remember_revealed_social_lead_names(context, response)
+        player_line_override = ""
+        if isinstance(selected_row, dict) and str(selected_row.get("id", "")).strip().lower() == topic_id:
+            player_line_override = str(selected_row.get("player_line") or selected_row.get("label") or "").strip()
         self._append_dialogue_response(
             context,
             topic_id,
             response,
             previous_topic_id=previous_topic_id,
+            player_line_override=player_line_override,
         )
         refreshed = self._dialogue_context(npc_eid)
         if not refreshed:

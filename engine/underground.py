@@ -120,6 +120,19 @@ def _shape_excluded_cells(cells):
     return tuple(excluded)
 
 
+def _edge_buffer_axes(axis_min, axis_max, *, buffer=2):
+    axis_min = int(axis_min)
+    axis_max = int(axis_max)
+    interior_min = axis_min + int(max(1, buffer))
+    interior_max = axis_max - int(max(1, buffer))
+    if interior_min > interior_max:
+        interior_min = axis_min + 1
+        interior_max = axis_max - 1
+    if interior_min > interior_max:
+        return ()
+    return tuple(sorted({int(interior_min), int(interior_max)}))
+
+
 def _underpass_hazard_specs(
     *,
     chunk_x,
@@ -394,6 +407,7 @@ def _metro_underpass_plan(
                 "profile": "underground_transient",
             },
         )
+        wildlife_axes = _edge_buffer_axes(axis_min, axis_max, buffer=2)
         wildlife_spawns = tuple(
             {
                 "x": int(tunnel_start[0]),
@@ -401,7 +415,7 @@ def _metro_underpass_plan(
                 "z": int(tunnel_z),
                 "profile": "underground_pests",
             }
-            for axis_value in sorted({int(axis_min + 1), int(axis_max - 1)})
+            for axis_value in wildlife_axes
         )
         hazard_sites = _underpass_hazard_specs(
             chunk_x=chunk_x,
@@ -415,8 +429,7 @@ def _metro_underpass_plan(
             reserved_axes={
                 int(midpoint_axis),
                 int(encounter_axis),
-                int(axis_min + 1),
-                int(axis_max - 1),
+                *(int(axis_value) for axis_value in wildlife_axes),
             },
         )
         branch_surface = _surface_exit_aligned_horizontal(
@@ -534,6 +547,7 @@ def _metro_underpass_plan(
                 "profile": "underground_transient",
             },
         )
+        wildlife_axes = _edge_buffer_axes(axis_min, axis_max, buffer=2)
         wildlife_spawns = tuple(
             {
                 "x": int(axis_value),
@@ -541,7 +555,7 @@ def _metro_underpass_plan(
                 "z": int(tunnel_z),
                 "profile": "underground_pests",
             }
-            for axis_value in sorted({int(axis_min + 1), int(axis_max - 1)})
+            for axis_value in wildlife_axes
         )
         hazard_sites = _underpass_hazard_specs(
             chunk_x=chunk_x,
@@ -555,8 +569,7 @@ def _metro_underpass_plan(
             reserved_axes={
                 int(midpoint_axis),
                 int(encounter_axis),
-                int(axis_min + 1),
-                int(axis_max - 1),
+                *(int(axis_value) for axis_value in wildlife_axes),
             },
         )
         branch_surface = _surface_exit_aligned_vertical(

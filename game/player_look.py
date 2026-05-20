@@ -22,6 +22,7 @@ from game.components import (
 )
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
+from game.local_situations import local_situation_look_text_for_property
 from game.organization_reputation import organization_snapshot as _organization_snapshot
 from game.organizations import organization_name
 from game.property_runtime import (
@@ -179,6 +180,9 @@ class PlayerLookRuntime:
             contact_hint = self._property_contact_hint(self.sim, eid, prop)
             if contact_hint:
                 bits.append(contact_hint)
+            situation_hint = local_situation_look_text_for_property(self.sim, prop, viewer_eid=eid)
+            if situation_hint:
+                bits.append(situation_hint)
         else:
             structure = self.sim.structure_at(x, y, z) if hasattr(self.sim, "structure_at") else None
             structure_text = self._structure_summary(structure)
