@@ -39,6 +39,11 @@ GROUND_CREDSTICK_AREA_MULTS = {
     "wilderness": 0.88,
     "coastal": 1.02,
 }
+ZERO_SLOT_ITEM_IDS = frozenset({
+    "property_key",
+    "access_badge",
+    "manager_badge",
+})
 
 
 def _normalize_item_category(item_id, tags, item):
@@ -178,6 +183,21 @@ def _string_tuple(values):
 
 def is_credstick_item(item_id):
     return str(item_id or "").strip().lower() == CREDSTICK_ITEM_ID
+
+
+def item_inventory_slot_cost(item_or_entry):
+    if isinstance(item_or_entry, dict):
+        item_id = item_or_entry.get("item_id")
+    else:
+        item_id = item_or_entry
+    item_key = str(item_id or "").strip().lower()
+    if not item_key:
+        return 1
+    return 0 if item_key in ZERO_SLOT_ITEM_IDS else 1
+
+
+def item_uses_inventory_slot(item_or_entry):
+    return item_inventory_slot_cost(item_or_entry) > 0
 
 
 def _normalize_tool_profiles(value):

@@ -188,8 +188,6 @@ from game.system_support.intrusion_runtime import (
     _is_operable_door_aperture,
     _is_side_aperture,
     _is_window_aperture,
-    _quiet_unwitnessed_tamper,
-    _trespass_is_obvious_breach,
     _trespass_label_from_score,
 )
 from engine.visibility import (
@@ -2421,14 +2419,7 @@ class CriminalJusticeSystem(System):
         if offender_eid is None:
             return
         witnessed = bool(event.data.get("witnessed", False))
-        ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
-        ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
-        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
-        if not witnessed and not _trespass_is_obvious_breach(
-            ingress_kind=ingress_kind,
-            ingress_method=ingress_method,
-            breach_severity=breach_severity,
-        ):
+        if not witnessed:
             return
         self._record_incident(
             offender_eid,
@@ -2449,13 +2440,7 @@ class CriminalJusticeSystem(System):
         property_id = str(event.data.get("property_id", "") or "").strip()
         prop = self.sim.properties.get(property_id) if property_id else None
         witnessed = bool(event.data.get("witnessed", False))
-        if _quiet_unwitnessed_tamper(
-            prop,
-            witnessed=witnessed,
-            ingress_kind=str(event.data.get("ingress_kind", "") or "").strip().lower(),
-            ingress_method=str(event.data.get("ingress_method", "") or "").strip().lower(),
-            breach_severity=float(event.data.get("breach_severity", 0.0) or 0.0),
-        ):
+        if not witnessed:
             return
         self._record_incident(
             offender_eid,

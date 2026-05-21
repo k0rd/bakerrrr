@@ -388,6 +388,9 @@ class InputSystem(System):
         self.sim.events.subscribe("zoom_mode_changed", self.on_zoom_mode_changed)
         self.sim.events.subscribe("combat_overlay_entered", self.on_combat_overlay_entered)
         self.sim.events.subscribe("vehicle_action_blocked", self.on_vehicle_action_blocked)
+        self.sim.events.subscribe("chunk_loaded", self.on_chunk_stream_changed)
+        self.sim.events.subscribe("chunk_unloaded", self.on_chunk_stream_changed)
+        self.sim.events.subscribe("chunk_focus_changed", self.on_chunk_stream_changed)
 
     def _inventory_state(self):
         state = getattr(self.sim, "inventory_ui", None)
@@ -3275,6 +3278,15 @@ class InputSystem(System):
             return
         if self._auto_drive_state().get("active"):
             self._stop_auto_drive(reason="blocked", announce=False)
+
+    def on_chunk_stream_changed(self, event):
+        del event
+        state = self._report_state()
+        if not bool(state.get("open")):
+            return
+        if str(state.get("kind", "progress")).strip().lower() != "known_locations":
+            return
+        self._refresh_known_locations_ui(reset_scroll=False)
 
     def update(self):
 

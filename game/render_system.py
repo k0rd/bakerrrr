@@ -2011,6 +2011,7 @@ class RenderSystem(System):
             aim_active=bool(look_ui.get("active")) and look_purpose == "aim",
             turn_mode=_combat_turn_pacing_active(self.sim),
             stealth_state=getattr(self.sim, "player_stealth_state", None),
+            intrusion_state=getattr(self.sim, "player_intrusion_state", None),
         )
         wrapped_sections_spec = [
             {
@@ -2163,9 +2164,14 @@ class RenderSystem(System):
                         )
                     container_count_text = f"{container_label} {container_count}"
                 if container_kind == "worn":
-                    pack_count = len(_inventory_entries_loose_for_container(inv, container_instance_id)) if inv and container_instance_id else (len(list(inv.items)) if inv else 0)
+                    pack_entries = (
+                        _inventory_entries_loose_for_container(inv, container_instance_id)
+                        if inv and container_instance_id
+                        else (list(inv.items) if inv else [])
+                    )
                 else:
-                    pack_count = len(list(inv.items)) if inv else 0
+                    pack_entries = list(inv.items) if inv else []
+                pack_count = inv.slot_count(entries=pack_entries) if inv else 0
                 pack_cap = inv.capacity if inv else 0
                 slot_line = (
                     f"View {container_label.upper() if container_view == 'container' else 'PACK'}"
@@ -2176,7 +2182,7 @@ class RenderSystem(System):
                     slot_line += f" | {note_text}"
             else:
                 cap = inv.capacity if inv else 0
-                slot_line = f"Slots {len(entries)}/{cap}"
+                slot_line = f"Slots {inv.slot_count(entries=entries) if inv else 0}/{cap}"
             self.view.draw_text(panel_x + 2, panel_y + 1, _clip(slot_line, panel_w - 4))
 
             list_y = panel_y + 2
@@ -2371,7 +2377,10 @@ class RenderSystem(System):
                 else:
                     qty = int(row.get("quantity", 0))
                     if action_label:
-                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {action_label} x{qty}"
+                        if action_label == "trade-in":
+                            label = f"{marker}{absolute + 1:02d} {glyph} {item_name} trade-in {price}c x{qty}"
+                        else:
+                            label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {action_label} x{qty}"
                     else:
                         listed = "L" if row.get("listed") else "U"
                         label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c x{qty} {listed}"
@@ -2404,13 +2413,23 @@ class RenderSystem(System):
                         )
                 else:
                     if action_label:
-                        inspect_text = _item_legend_line(
-                            selected.get("item_id"),
-                            (
-                                f"{selected.get('item_name', selected.get('item_id', 'item'))} "
-                                f"{action_label} into shelf stock qty {int(selected.get('quantity', 0))}"
-                            ),
-                        )
+                        if action_label == "trade-in":
+                            inspect_text = _item_legend_line(
+                                selected.get("item_id"),
+                                (
+                                    f"{selected.get('item_name', selected.get('item_id', 'item'))} "
+                                    f"trade-in quote {int(selected.get('price', 0))} credits "
+                                    f"qty {int(selected.get('quantity', 0))}"
+                                ),
+                            )
+                        else:
+                            inspect_text = _item_legend_line(
+                                selected.get("item_id"),
+                                (
+                                    f"{selected.get('item_name', selected.get('item_id', 'item'))} "
+                                    f"{action_label} into shelf stock qty {int(selected.get('quantity', 0))}"
+                                ),
+                            )
                     else:
                         listed_text = "listed" if selected.get("listed") else "unlisted"
                         inspect_text = _item_legend_line(

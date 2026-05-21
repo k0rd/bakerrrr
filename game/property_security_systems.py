@@ -133,8 +133,6 @@ from game.system_support.intrusion_runtime import (
     _is_operable_door_aperture,
     _is_side_aperture,
     _is_window_aperture,
-    _quiet_unwitnessed_tamper,
-    _trespass_is_obvious_breach,
     _trespass_label_from_score,
 )
 from game.system_support.actor_runtime import (
@@ -515,15 +513,7 @@ class PropertyDefenseSystem(System):
 
         if threat_type == "property_trespass" and not witnessed:
             return
-        if threat_type == "property_tamper" and _quiet_unwitnessed_tamper(
-            prop,
-            witnessed=witnessed,
-            ingress_kind=ingress_kind,
-            ingress_method=ingress_method,
-            breach_severity=float(event.data.get("breach_severity", 0.0) or 0.0),
-        ):
-            return
-        if threat_type == "property_tamper" and require_witnessed_identity and not witnessed:
+        if threat_type == "property_tamper" and not witnessed:
             return
         if threat_type == "property_trespass" and severity_score < 10:
             return

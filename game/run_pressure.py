@@ -6,8 +6,6 @@ from engine.systems import System
 from game.organization_reputation import organization_snapshot as _organization_snapshot
 from game.system_support.intrusion_runtime import (
     _is_window_aperture,
-    _quiet_unwitnessed_tamper,
-    _trespass_is_obvious_breach,
 )
 from game.system_support.offense_runtime import _offense_tier
 
@@ -432,35 +430,7 @@ class RunPressureSystem(System):
         ingress_kind = str(event.data.get("ingress_kind", "")).strip().lower()
         aperture_kind = str(event.data.get("aperture_kind", "")).strip().lower()
         ingress_method = str(event.data.get("ingress_method", "")).strip().lower()
-        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
-        obvious_breach = _trespass_is_obvious_breach(
-            ingress_kind=ingress_kind,
-            ingress_method=ingress_method,
-            breach_severity=breach_severity,
-        )
-
-        if not witnessed and not obvious_breach:
-            base = 1 if severity_label == "suspicious" else 2
-            if severity_label == "serious_trespass":
-                base = 3
-            delta = base + max(0, severity_score // 40)
-            self._emit_pressure(
-                delta=min(6, delta),
-                source="trespass",
-                reason=severity_label or "trespass",
-                source_event="property_trespass",
-                category="escalation",
-                extra={
-                    "property_id": property_id,
-                    "property_name": str((prop or {}).get("name", "") or "").strip(),
-                    "severity_label": severity_label,
-                    "severity_score": severity_score,
-                    "ingress_kind": ingress_kind,
-                    "ingress_method": ingress_method,
-                    "witnessed": witnessed,
-                    "obvious_breach": obvious_breach,
-                },
-            )
+        if not witnessed:
             return
 
         base = 1 if severity_label == "suspicious" else 3
@@ -488,7 +458,7 @@ class RunPressureSystem(System):
                 "ingress_kind": ingress_kind,
                 "ingress_method": ingress_method,
                 "witnessed": witnessed,
-                "obvious_breach": obvious_breach,
+                "obvious_breach": False,
             },
         )
 
@@ -501,25 +471,13 @@ class RunPressureSystem(System):
         witnessed = bool(event.data.get("witnessed", False))
         ingress_kind = str(event.data.get("ingress_kind", "")).strip().lower()
         ingress_method = str(event.data.get("ingress_method", "")).strip().lower()
-        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
-        prop_kind = str((prop or {}).get("kind", "") or "").strip().lower()
-        if _quiet_unwitnessed_tamper(
-            prop,
-            witnessed=witnessed,
-            ingress_kind=ingress_kind,
-            ingress_method=ingress_method,
-            breach_severity=breach_severity,
-        ):
-            if prop_kind in {"fixture", "vehicle"}:
-                delta = 1 + max(0, severity_score // 64)
-            else:
-                delta = 2 + max(0, severity_score // 40)
-        else:
-            delta = 7 + max(0, severity_score // 16)
-            if ingress_kind in {"boundary_breach", "deep_breach"}:
-                delta += 2
-            if ingress_method in {"forced_breach", "deep_breach", "crash_window_entry"}:
-                delta += 2
+        if not witnessed:
+            return
+        delta = 7 + max(0, severity_score // 16)
+        if ingress_kind in {"boundary_breach", "deep_breach"}:
+            delta += 2
+        if ingress_method in {"forced_breach", "deep_breach", "crash_window_entry"}:
+            delta += 2
         self._emit_pressure(
             delta=min(20, delta),
             source="tamper",

@@ -6,10 +6,6 @@ from engine.systems import System
 from game.organizations import organization_profile, property_organization_eid
 from game.property_access import property_access_level as _property_access_level
 from game.property_runtime import property_covering as _property_covering
-from game.system_support.intrusion_runtime import (
-    _quiet_unwitnessed_tamper,
-    _trespass_is_obvious_breach,
-)
 
 
 MAX_HISTORY = 64
@@ -562,15 +558,7 @@ class OrganizationReputationSystem(System):
         severity_label = str(event.data.get("severity_label", "trespass")).strip().lower() or "trespass"
         access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
         witnessed = bool(event.data.get("witnessed", False))
-        ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
-        ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
-        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
-        obvious_breach = _trespass_is_obvious_breach(
-            ingress_kind=ingress_kind,
-            ingress_method=ingress_method,
-            breach_severity=breach_severity,
-        )
-        if not witnessed and not obvious_breach:
+        if not witnessed:
             return
         heat_delta = 2 if severity_label == "suspicious" else 4
         standing_delta = -0.03 if severity_label == "suspicious" else -0.06
@@ -601,29 +589,13 @@ class OrganizationReputationSystem(System):
         access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
         severity_score = max(0, int(event.data.get("severity_score", 0)))
         witnessed = bool(event.data.get("witnessed", False))
-        ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
-        ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
-        breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
-        prop_kind = str(prop.get("kind", "") or "").strip().lower()
-        if _quiet_unwitnessed_tamper(
-            prop,
-            witnessed=witnessed,
-            ingress_kind=ingress_kind,
-            ingress_method=ingress_method,
-            breach_severity=breach_severity,
-        ):
-            if prop_kind in {"fixture", "vehicle"}:
-                heat_delta = 1
-                standing_delta = -0.01
-            else:
-                heat_delta = 2 + max(0, severity_score // 60)
-                standing_delta = -0.03
-        else:
-            heat_delta = 6 + max(0, severity_score // 30)
-            standing_delta = -0.1
-            if access_level == "restricted":
-                heat_delta += 2
-                standing_delta -= 0.03
+        if not witnessed:
+            return
+        heat_delta = 6 + max(0, severity_score // 30)
+        standing_delta = -0.1
+        if access_level == "restricted":
+            heat_delta += 2
+            standing_delta -= 0.03
         self._apply_org_delta(
             prop,
             heat_delta=min(20, heat_delta),

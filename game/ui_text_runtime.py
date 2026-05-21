@@ -790,7 +790,15 @@ def _fit_wrapped_sections(sections, max_rows):
     return normalized
 
 
-def _mode_line(mode_state=None, cover=None, look_active=False, aim_active=False, turn_mode=False, stealth_state=None):
+def _mode_line(
+    mode_state=None,
+    cover=None,
+    look_active=False,
+    aim_active=False,
+    turn_mode=False,
+    stealth_state=None,
+    intrusion_state=None,
+):
     bold = getattr(curses, "A_BOLD", 0)
     segments = [_segment("Modes: ")]
 
@@ -799,6 +807,16 @@ def _mode_line(mode_state=None, cover=None, look_active=False, aim_active=False,
         badges.append(("SNEAK", "scout"))
     if mode_state and getattr(mode_state, "hidden", False):
         badges.append(("HIDDEN", "player"))
+    intrusion_state = intrusion_state if isinstance(intrusion_state, dict) else {}
+    intrusion_active = bool(intrusion_state.get("active"))
+    intrusion_severity = str(intrusion_state.get("severity_label", "clear") or "clear").strip().lower()
+    if intrusion_active:
+        intrusion_badge = {
+            "suspicious": ("SUSPICIOUS", "human"),
+            "trespass": ("TRESPASS", "projectile"),
+            "serious_trespass": ("HOSTILE", "projectile"),
+        }.get(intrusion_severity, ("TRESPASS", "projectile"))
+        badges.append(intrusion_badge)
     if cover and getattr(cover, "active", False):
         badges.append(("COVER", "guard"))
     if bool(aim_active):
@@ -819,7 +837,18 @@ def _mode_line(mode_state=None, cover=None, look_active=False, aim_active=False,
         segments.append(_segment(label, color=color, attrs=bold))
         segments.append(_segment("]"))
 
-    if mode_state and getattr(mode_state, "sneak", False):
+    if intrusion_active:
+        status_text = str(intrusion_state.get("status_text", "") or "").strip().lower()
+        if status_text:
+            prefix = {
+                "suspicious": "suspicious",
+                "trespass": "trespass",
+                "serious_trespass": "hostile",
+            }.get(intrusion_severity, "trespass")
+            segments.append(_segment("  "))
+            color = "projectile" if str(status_text).startswith("seen:") else "scout"
+            segments.append(_segment(f"{prefix}:{status_text}", color=color))
+    elif mode_state and getattr(mode_state, "sneak", False):
         stealth_state = stealth_state if isinstance(stealth_state, dict) else {}
         hidden = bool(stealth_state.get("hidden"))
         witness_count = int(stealth_state.get("witness_count", 0))

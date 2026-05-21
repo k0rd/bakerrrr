@@ -166,7 +166,6 @@ from game.system_support.intrusion_runtime import (
     _is_side_aperture,
     _is_window_aperture,
     _quiet_unwitnessed_tamper,
-    _trespass_is_obvious_breach,
     _trespass_label_from_score,
 )
 from game.system_support.entity_naming import _entity_display_name
@@ -2778,26 +2777,7 @@ class EventLogSystem(System):
                 "Warning: protected spaces can escalate from suspicion to intervention if witnesses care.",
             )
         else:
-            ingress_kind = str(event.data.get("ingress_kind", "") or "").strip().lower()
-            ingress_method = str(event.data.get("ingress_method", "") or "").strip().lower()
-            breach_severity = float(event.data.get("breach_severity", 0.0) or 0.0)
-            if _trespass_is_obvious_breach(
-                ingress_kind=ingress_kind,
-                ingress_method=ingress_method,
-                breach_severity=breach_severity,
-            ):
-                self._log(
-                    f"{prefix} (unseen, evidence left): {label}.",
-                    channel="alerts",
-                    priority="high",
-                    dedupe_window=4,
-                )
-                self._warn_once(
-                    "unseen_obvious_trespass",
-                    "Warning: a forced or jimmied entry can still sour site reputation even if nobody sees you.",
-                )
-            else:
-                self._log(f"{prefix} (unseen): {label}.", channel="alerts", priority="high", dedupe_window=4)
+            self._log(f"{prefix} (unseen): {label}.", channel="alerts", priority="high", dedupe_window=4)
 
     def on_property_tamper(self, event):
         if event.data.get("offender_eid") != self.player_eid:
@@ -2827,13 +2807,20 @@ class EventLogSystem(System):
             self._log(f"Quiet tamper (unseen): {label}.", channel="alerts", priority="high", dedupe_window=4)
             self._warn_once(
                 "quiet_tamper",
-                "Warning: quiet tampering still carries some risk, but it stays much lower if nobody sees it.",
+                "Warning: quiet tampering stays quieter while unseen, but witnesses can still turn it into a real problem.",
             )
             return
-        self._log(f"Tampering: {label}.", channel="alerts", priority="high", dedupe_window=4)
+        if witnessed:
+            self._log(f"Tampering: {label}.", channel="alerts", priority="high", dedupe_window=4)
+            self._warn_once(
+                "tamper",
+                "Warning: tampering is a threatening action and can trigger armed protection.",
+            )
+            return
+        self._log(f"Tampering (unseen): {label}.", channel="alerts", priority="high", dedupe_window=4)
         self._warn_once(
-            "tamper",
-            "Warning: tampering is a threatening action and can trigger armed protection.",
+            "unseen_tamper",
+            "Warning: unseen tampering still alters the site, but it only becomes reportable once somebody actually sees you.",
         )
 
     def on_action_offense(self, event):

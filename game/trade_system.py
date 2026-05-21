@@ -12,7 +12,13 @@ from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
 from game.player_businesses import player_business_markup_profile as _player_business_markup_profile
 from game.property_access import evaluate_property_access as _evaluate_property_access
-from game.property_keys import ensure_property_lock, remove_actor_property_credentials
+from game.property_keys import (
+    PROPERTY_KEY_ITEM_ID,
+    PROPERTY_MANAGER_BADGE_ITEM_ID,
+    PROPERTY_STAFF_BADGE_ITEM_ID,
+    ensure_property_lock,
+    remove_actor_property_credentials,
+)
 from game.property_runtime import (
     property_covering as _property_covering,
     property_distance as _property_distance,
@@ -1345,6 +1351,22 @@ class TradeSystem(System):
         services = set(_site_services_for_property(store_prop))
         return "vehicle_sales_new" in services or "vehicle_sales_used" in services
 
+    def _credential_sell_action(self, entry, store_prop, *, owner_transfer=False):
+        item_id = str((entry or {}).get("item_id", "") or "").strip().lower()
+        if item_id in {PROPERTY_STAFF_BADGE_ITEM_ID, PROPERTY_MANAGER_BADGE_ITEM_ID}:
+            return None
+        if item_id != PROPERTY_KEY_ITEM_ID:
+            return ""
+        if owner_transfer or not self._store_accepts_vehicle_trade_in(store_prop):
+            return None
+
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        property_id = str(metadata.get("property_id", "") or "").strip()
+        vehicle_prop = self.sim.properties.get(property_id) if property_id else None
+        if not _property_is_vehicle(vehicle_prop):
+            return None
+        return "trade-in"
+
     def _vehicle_trade_in_quote(self, vehicle_prop):
         metadata = _property_metadata(vehicle_prop)
         quality = str(metadata.get("vehicle_quality", "used") or "used").strip().lower() or "used"
@@ -1457,9 +1479,17 @@ class TradeSystem(System):
         candidates = []
         if not inventory:
             return candidates
+        store_prop = self.sim.properties.get(store.get("property_id")) if isinstance(store, dict) else None
 
         for entry in inventory.items:
             item_id = entry.get("item_id")
+            action_label = self._credential_sell_action(
+                entry,
+                store_prop,
+                owner_transfer=owner_transfer,
+            )
+            if action_label is None:
+                continue
             quote, listed = self._sell_quote(item_id, store, terms=terms)
             item_def = ITEM_CATALOG.get(item_id, {"name": item_id, "glyph": "*"})
             display_name = item_display_name_for_actor(self.sim, self.player_eid, entry, item_catalog=ITEM_CATALOG)
@@ -1472,7 +1502,7 @@ class TradeSystem(System):
                 "quantity": int(entry.get("quantity", 1)),
                 "price": 0 if owner_transfer else int(max(1, quote)),
                 "listed": bool(listed and not owner_transfer),
-                "action_label": "stock" if owner_transfer else "",
+                "action_label": "stock" if owner_transfer else action_label,
             })
 
         if owner_transfer:
@@ -1547,13 +1577,23 @@ class TradeSystem(System):
             return
 
         if action_label:
-            state["inspect_text"] = _item_legend_line(
-                row.get("item_id"),
-                (
-                    f"{row.get('item_name', row.get('item_id', 'item'))} "
-                    f"{action_label} into shelf stock qty {int(row.get('quantity', 0))}"
-                ),
-            )
+            if action_label == "trade-in":
+                state["inspect_text"] = _item_legend_line(
+                    row.get("item_id"),
+                    (
+                        f"{row.get('item_name', row.get('item_id', 'item'))} "
+                        f"trade-in quote {int(row.get('price', 0))} credits "
+                        f"qty {int(row.get('quantity', 0))}"
+                    ),
+                )
+            else:
+                state["inspect_text"] = _item_legend_line(
+                    row.get("item_id"),
+                    (
+                        f"{row.get('item_name', row.get('item_id', 'item'))} "
+                        f"{action_label} into shelf stock qty {int(row.get('quantity', 0))}"
+                    ),
+                )
             return
         listed_text = "listed" if row.get("listed") else "unlisted"
         state["inspect_text"] = _item_legend_line(
@@ -1881,7 +1921,7 @@ class TradeSystem(System):
         if (
             not owner_transfer
             and
-            str(best.get("item_id", "") or "").strip().lower() == "property_key"
+            str(best.get("action_label", "") or "").strip().lower() == "trade-in"
             and self._store_accepts_vehicle_trade_in(store_prop)
         ):
             return self._trade_in_vehicle_from_key(

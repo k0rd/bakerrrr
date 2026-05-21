@@ -1,6 +1,11 @@
 from dataclasses import dataclass
 
-from game.items import merge_item_stack_metadata, prepare_item_stack_metadata, split_item_stack_metadata
+from game.items import (
+    item_inventory_slot_cost,
+    merge_item_stack_metadata,
+    prepare_item_stack_metadata,
+    split_item_stack_metadata,
+)
 
 
 _UNCHANGED = object()
@@ -2067,8 +2072,9 @@ class Inventory:
         self.capacity = int(max(1, capacity))
         self.items = []
 
-    def slot_count(self):
-        return len(self.items)
+    def slot_count(self, entries=None):
+        source = self.items if entries is None else list(entries or ())
+        return sum(item_inventory_slot_cost(entry) for entry in source)
 
     def add_item(
         self,
@@ -2125,7 +2131,8 @@ class Inventory:
                     return True, created_instance_id
 
         while quantity > 0:
-            if len(self.items) >= self.capacity:
+            slot_cost = item_inventory_slot_cost(item_id)
+            if slot_cost > 0 and (self.slot_count() + slot_cost) > self.capacity:
                 return False, created_instance_id
 
             amount = min(stack_max, quantity)

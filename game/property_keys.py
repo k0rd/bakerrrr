@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from game.components import Inventory
-from game.items import ITEM_CATALOG
+from game.items import ITEM_CATALOG, item_inventory_slot_cost
 
 
 PROPERTY_KEY_ITEM_ID = "property_key"
@@ -318,7 +318,9 @@ def can_receive_property_credential(sim, actor_eid, prop, *, credential_kind="me
         minimum_tier=credential_tier,
     ):
         return True
-    return len(getattr(inventory, "items", ())) < int(getattr(inventory, "capacity", 0))
+    item_id = property_credential_item_id(credential_kind)
+    slot_cost = item_inventory_slot_cost(item_id)
+    return (int(inventory.slot_count()) + int(slot_cost)) <= int(getattr(inventory, "capacity", 0))
 
 
 def ensure_actor_has_property_key(sim, actor_eid, prop, owner_tag="player"):

@@ -21,7 +21,6 @@ from game.incident_runtime import (
 )
 from game.organizations import property_org_members
 from game.system_support.awareness_runtime import _watchers_for_position
-from game.system_support.intrusion_runtime import _tamper_is_noisy, _trespass_is_obvious_breach
 from game.system_support.offense_runtime import OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS, WILDLIFE_OFFENSE_CONTEXTS
 
 
@@ -398,11 +397,7 @@ class IncidentKnowledgeSystem(System):
             kind="property_trespass",
             severity=severity,
             merge_subject=str(event.data.get("property_id", "") or "").strip(),
-            official_reportable=bool(event.data.get("witnessed", False)) or _trespass_is_obvious_breach(
-                ingress_kind=event.data.get("ingress_kind"),
-                ingress_method=event.data.get("ingress_method"),
-                breach_severity=float(event.data.get("breach_severity", 0.0) or 0.0),
-            ),
+            official_reportable=bool(event.data.get("witnessed", False)),
             note=str(event.data.get("severity_label", "trespass") or "").strip().lower(),
             tags=(
                 event.data.get("severity_label"),
@@ -430,11 +425,7 @@ class IncidentKnowledgeSystem(System):
             kind="property_tamper",
             severity=severity,
             merge_subject=str(event.data.get("property_id", "") or "").strip(),
-            official_reportable=bool(event.data.get("witnessed", False)) or _tamper_is_noisy(
-                ingress_kind=event.data.get("ingress_kind"),
-                ingress_method=event.data.get("ingress_method"),
-                breach_severity=float(event.data.get("breach_severity", 0.0) or 0.0),
-            ),
+            official_reportable=bool(event.data.get("witnessed", False)),
             note="property_tamper",
             tags=(
                 event.data.get("severity_label"),

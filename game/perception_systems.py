@@ -3,10 +3,18 @@
 from engine.events import Event
 from engine.systems import System
 from engine.visibility import update_player_visibility as _update_player_visibility
+from game.checks import crime_sensitivity as _crime_sensitivity, justice_level as _justice_level
 from game.lighting import update_lighting_state as _update_lighting_state
-from game.components import AI, CoverState, NoiseProfile, PlayerModeState, Position
+from game.components import AI, CoverState, JusticeProfile, NPCMemory, NPCNeeds, NPCTraits, NoiseProfile, PlayerModeState, Position
+from game.property_access import evaluate_property_access as _evaluate_property_access
+from game.property_runtime import (
+    property_cover_intended as _property_cover_intended,
+    property_covering as _property_covering,
+    property_enclosing_structure as _property_enclosing_structure,
+)
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import _detail_tick_allowed, _entity_is_downed
+from game.system_support.awareness_runtime import _watchers_for_position
 from game.system_support.combat_targeting_runtime import QUIET_NOISE_CAUSES
 from game.system_support.combat_pacing_runtime import _combat_overlay_state
 from game.system_support.cover_runtime import (
@@ -380,9 +388,267 @@ class VisibilitySystem(System):
 
 class StealthSystem(System):
 
+    CAMERA_ALERT_WINDOW = 18
+    PROPERTY_SNEAK_COOLDOWN = 18
+    PERSONAL_SNEAK_COOLDOWN = 12
+
     def __init__(self, sim, player_eid):
         super().__init__(sim)
         self.player_eid = player_eid
+        self._recent_camera_alerts = {}
+        self._reaction_cooldowns = {}
+        self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
+
+    def on_camera_alerted(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        camera_key = property_id or str(event.data.get("camera_property_id", "") or "").strip()
+        if not camera_key:
+            return
+        self._recent_camera_alerts[camera_key] = {
+            "tick": int(getattr(self.sim, "tick", 0)),
+            "property_id": property_id or None,
+            "camera_name": str(event.data.get("camera_name", "camera") or "camera").strip() or "camera",
+        }
+
+    def _default_intrusion_state(self):
+        return {
+            "active": False,
+            "property_id": None,
+            "property_name": "",
+            "access_level": "public",
+            "severity_score": 0,
+            "severity_label": "clear",
+            "standing_reason": "none",
+            "witness_count": 0,
+            "witness_labels": (),
+            "camera_alerted": False,
+            "camera_name": "",
+            "reportable": False,
+            "status_text": "",
+        }
+
+    def _current_intrusion_property(self, pos):
+        prop = _property_covering(self.sim, pos.x, pos.y, pos.z)
+        if prop and _property_cover_intended(prop):
+            key = (int(pos.x), int(pos.y), int(pos.z))
+            cover_index = getattr(self.sim, "property_cover_index", {})
+            prop = None
+            for property_id in cover_index.get(key, ()):
+                candidate = self.sim.properties.get(property_id)
+                if candidate is None:
+                    continue
+                prop = candidate
+                break
+        return _property_enclosing_structure(
+            self.sim,
+            pos.x,
+            pos.y,
+            pos.z,
+            prop=prop,
+        )
+
+    def _camera_alert_state(self, property_id):
+        tick = int(getattr(self.sim, "tick", 0))
+        stale_keys = []
+        for key, record in self._recent_camera_alerts.items():
+            if tick - int(record.get("tick", -10_000)) > int(self.CAMERA_ALERT_WINDOW):
+                stale_keys.append(key)
+        for key in stale_keys:
+            self._recent_camera_alerts.pop(key, None)
+
+        property_key = str(property_id or "").strip()
+        if property_key and property_key in self._recent_camera_alerts:
+            return self._recent_camera_alerts[property_key]
+        return None
+
+    def _intrusion_state_for(self, pos, watchers):
+        state = self._default_intrusion_state()
+        prop = self._current_intrusion_property(pos)
+        if not isinstance(prop, dict):
+            return state
+
+        access = _evaluate_property_access(
+            self.sim,
+            self.player_eid,
+            prop,
+            x=pos.x,
+            y=pos.y,
+            z=pos.z,
+        )
+        if not bool(access.inside_bounds) or int(access.severity_score) <= 0:
+            return state
+
+        witness_labels = tuple(
+            _entity_display_name(self.sim, watcher_eid, title_case=False)
+            for watcher_eid in watchers[:2]
+        )
+        camera_alert = self._camera_alert_state(prop.get("id"))
+        camera_name = str((camera_alert or {}).get("camera_name", "") or "").strip()
+        witness_count = len(watchers)
+        reportable = witness_count > 0 or camera_alert is not None
+
+        if witness_count > 0:
+            if witness_count == 1 and witness_labels:
+                status_text = f"seen:{witness_labels[0]}"
+            elif witness_labels:
+                status_text = f"seen:{witness_labels[0]}+{witness_count - 1}"
+            else:
+                status_text = f"seen:{witness_count}"
+        elif camera_alert is not None:
+            status_text = f"seen:{camera_name or 'camera'}"
+        else:
+            status_text = "unseen"
+
+        state.update({
+            "active": True,
+            "property_id": str(prop.get("id", "") or "").strip() or None,
+            "property_name": str(prop.get("name", prop.get("id", "property")) or "property").strip() or "property",
+            "access_level": str(access.access_level or "public").strip().lower() or "public",
+            "severity_score": int(access.severity_score),
+            "severity_label": str(access.severity_label or "clear").strip().lower() or "clear",
+            "standing_reason": str(access.standing_reason or "none").strip().lower() or "none",
+            "witness_count": witness_count,
+            "witness_labels": witness_labels,
+            "camera_alerted": camera_alert is not None,
+            "camera_name": camera_name,
+            "reportable": bool(reportable),
+            "status_text": status_text,
+        })
+        return state
+
+    def _observer_law_drive(self, observer_eid):
+        justice = self.sim.ecs.get(JusticeProfile).get(observer_eid)
+        if justice is None:
+            return 0.45
+        return (
+            (_justice_level(justice, default=0.5) * 0.65)
+            + (_crime_sensitivity(justice, default=0.5) * 0.35)
+        )
+
+    def _reaction_ready(self, observer_eid, context, subject, cooldown):
+        tick = int(getattr(self.sim, "tick", 0))
+        key = (int(observer_eid), str(context or ""), str(subject or ""))
+        last_tick = int(self._reaction_cooldowns.get(key, -10_000))
+        if tick - last_tick < int(cooldown):
+            return False
+        self._reaction_cooldowns[key] = tick
+        return True
+
+    def _emit_close_sneak_threat(self, observer_eid, pos, *, threat_strength, safety_hit, context):
+        memory = self.sim.ecs.get(NPCMemory).get(observer_eid)
+        if memory is not None:
+            memory.remember(
+                tick=int(getattr(self.sim, "tick", 0)),
+                kind="threat",
+                strength=max(0.12, min(1.0, float(threat_strength))),
+                source_eid=self.player_eid,
+                target_eid=observer_eid,
+                action="visible_sneak",
+                context=str(context or "").strip().lower() or "visible_sneak",
+                x=int(pos.x),
+                y=int(pos.y),
+                z=int(pos.z),
+            )
+        needs = self.sim.ecs.get(NPCNeeds).get(observer_eid)
+        if needs is not None:
+            needs.safety = max(0.0, min(100.0, float(getattr(needs, "safety", 100.0) or 100.0) - float(safety_hit)))
+
+    def _emit_visible_sneak_reactions(self, pos, watchers, intrusion_state):
+        modes = self.sim.ecs.get(PlayerModeState).get(self.player_eid)
+        if not modes or not bool(getattr(modes, "sneak", False)):
+            return
+        if not watchers:
+            return
+        if bool(getattr(modes, "hidden", False)):
+            return
+
+        ais = self.sim.ecs.get(AI)
+        positions = self.sim.ecs.get(Position)
+        traits_map = self.sim.ecs.get(NPCTraits)
+        severity_label = str(intrusion_state.get("severity_label", "clear") or "clear").strip().lower()
+        severity_base = {
+            "suspicious": 16,
+            "trespass": 24,
+            "serious_trespass": 34,
+        }.get(severity_label, 0)
+        property_id = str(intrusion_state.get("property_id", "") or "").strip()
+
+        for observer_eid in watchers:
+            observer_ai = ais.get(observer_eid)
+            if observer_ai is None:
+                continue
+            if str(getattr(observer_ai, "role", "") or "").strip().lower() == "wildlife":
+                continue
+
+            observer_pos = positions.get(observer_eid)
+            if observer_pos is None or int(observer_pos.z) != int(pos.z):
+                continue
+
+            dist = _manhattan(pos.x, pos.y, observer_pos.x, observer_pos.y)
+            traits = traits_map.get(observer_eid) or NPCTraits()
+            bravery = max(0.0, min(1.0, float(getattr(traits, "bravery", 0.5) or 0.5)))
+            discipline = max(0.0, min(1.0, float(getattr(traits, "discipline", 0.5) or 0.5)))
+            law_drive = self._observer_law_drive(observer_eid)
+
+            if dist <= 1:
+                if not self._reaction_ready(
+                    observer_eid,
+                    "personal_space",
+                    observer_eid,
+                    self.PERSONAL_SNEAK_COOLDOWN,
+                ):
+                    continue
+                fearful = law_drive < 0.55 and bravery < 0.28
+                if not fearful:
+                    offense_score = min(
+                        48,
+                        24 + int(round((law_drive * 8.0) + ((1.0 - bravery) * 10.0) + ((1.0 - discipline) * 4.0))),
+                    )
+                    perceived = max(0.62, min(1.0, 0.74 + (law_drive * 0.1) + ((1.0 - bravery) * 0.14)))
+                    self.sim.emit(Event(
+                        "npc_offended",
+                        npc_eid=observer_eid,
+                        offender_eid=self.player_eid,
+                        action="sneak",
+                        context="personal_space",
+                        offense_score=offense_score,
+                        perceived=round(perceived, 3),
+                    ))
+                self._emit_close_sneak_threat(
+                    observer_eid,
+                    pos,
+                    threat_strength=(0.72 if fearful else 0.56) + ((1.0 - bravery) * 0.26),
+                    safety_hit=(22.0 if fearful else 12.0) + ((1.0 - bravery) * 18.0),
+                    context="personal_space",
+                )
+                continue
+
+            if not bool(intrusion_state.get("active")) or severity_base <= 0 or not property_id:
+                continue
+            if not self._reaction_ready(
+                observer_eid,
+                "property_sneak",
+                property_id,
+                self.PROPERTY_SNEAK_COOLDOWN,
+            ):
+                continue
+
+            offense_score = min(
+                44,
+                severity_base + int(round((law_drive * 8.0) + (discipline * 4.0))),
+            )
+            perceived = max(0.45, min(0.92, 0.5 + (law_drive * 0.18) + (discipline * 0.1)))
+            self.sim.emit(Event(
+                "npc_offended",
+                npc_eid=observer_eid,
+                offender_eid=self.player_eid,
+                action="sneak",
+                context="property_sneak",
+                offense_score=offense_score,
+                perceived=round(perceived, 3),
+            ))
 
     def update(self):
         modes = self.sim.ecs.get(PlayerModeState).get(self.player_eid)
@@ -393,6 +659,7 @@ class StealthSystem(System):
                 "witness_count": 0,
                 "witness_labels": (),
             }
+            self.sim.player_intrusion_state = self._default_intrusion_state()
             return
 
         hidden, watchers = _player_hidden_status(
@@ -411,6 +678,9 @@ class StealthSystem(System):
             "witness_count": len(watchers),
             "witness_labels": witness_labels,
         }
+        intrusion_state = self._intrusion_state_for(pos, watchers)
+        self.sim.player_intrusion_state = intrusion_state
+        self._emit_visible_sneak_reactions(pos, watchers, intrusion_state)
         if bool(modes.hidden) == bool(hidden):
             return
 
