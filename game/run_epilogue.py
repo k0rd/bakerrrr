@@ -36,8 +36,11 @@ from game.system_support.entity_naming import _entity_display_name
 from game.weapons import weapon_by_id
 
 try:  # Incident runtime is present in current BAKERRRR, but keep this module soft.
-    from game.incident_runtime import incident_records
+    from game.incident_runtime import incident_record, incident_records
 except Exception:  # pragma: no cover - defensive fallback for older snapshots.
+    def incident_record(_sim, _incident_id):
+        return None
+
     def incident_records(_sim):
         return ()
 
@@ -238,6 +241,98 @@ class RunEpilogueLedgerSystem(System):
         except (TypeError, ValueError):
             return None
 
+    def _incident_entry(self, incident_id):
+        if incident_id is None:
+            return None
+        try:
+            record = incident_record(self.sim, incident_id)
+        except Exception:  # pragma: no cover - soft fallback for older snapshots/tests.
+            return None
+        return record if isinstance(record, dict) else None
+
+    def _incident_place_label(self, incident):
+        if not isinstance(incident, dict):
+            return ""
+        name = str(incident.get("property_name", "") or "").strip()
+        if name:
+            return name
+        property_id = str(incident.get("property_id", "") or "").strip()
+        props = getattr(self.sim, "properties", None)
+        prop = props.get(property_id) if property_id and isinstance(props, dict) else None
+        if isinstance(prop, dict):
+            name = str(prop.get("name", "") or "").strip()
+            if name:
+                return name
+        return self._location(incident)
+
+    def _incident_participant_name(self, incident):
+        if not isinstance(incident, dict):
+            return ""
+        name = str(incident.get("victim_name", "") or "").strip()
+        if name:
+            return name
+        return self._eid_name(incident.get("victim_eid"), "")
+
+    def _action_offense_subject(self, incident):
+        note = str((incident or {}).get("note", "") or "").strip().lower()
+        action, _, context = note.partition("/")
+        labels = {
+            "armed_assault": "gunfire",
+            "contraband_use": "visible contraband use",
+            "explosive_discharge": "an explosion",
+            "fire_weapon": "gunfire",
+            "forced_breach": "a forced breach",
+            "melee_assault": "a melee assault",
+            "melee_attack": "an assault",
+            "unarmed_assault": "an assault",
+            "use_item": "item use",
+        }
+        base = labels.get(context) or labels.get(action) or context.replace("_", " ").strip() or action.replace("_", " ").strip() or "violence"
+        victim = self._incident_participant_name(incident)
+        place = self._incident_place_label(incident)
+        if victim:
+            linker = "involving" if base == "visible contraband use" else "against"
+            base = f"{base} {linker} {victim}"
+        if place:
+            base = f"{base} at {place}"
+        return base
+
+    def _incident_subject(self, incident_id, fallback="the incident"):
+        incident = self._incident_entry(incident_id)
+        if not isinstance(incident, dict):
+            return fallback
+        kind = str(incident.get("kind", "") or "").strip().lower()
+        note = str(incident.get("note", "") or "").strip()
+        victim = self._incident_participant_name(incident)
+        place = self._incident_place_label(incident)
+
+        if kind == "action_offense":
+            return self._action_offense_subject(incident) or fallback
+        if kind == "property_trespass":
+            base = note.replace("_", " ").strip() or "trespass"
+        elif kind == "property_tamper":
+            base = "tampering"
+        elif kind == "item_stolen":
+            item = note or "something"
+            base = f"theft of {item}"
+        elif kind == "camera_alert":
+            base = "a camera alert"
+        else:
+            base = note.replace("_", " ").strip() or kind.replace("_", " ").strip() or fallback
+            if victim:
+                base = f"{base} involving {victim}"
+
+        if place:
+            return f"{base} at {place}"
+        return base or fallback
+
+    def _participant_count(self, explicit_value=None, eids_value=None):
+        if explicit_value is not None:
+            return max(0, self._safe_int(explicit_value, 0))
+        if isinstance(eids_value, (tuple, list, set)):
+            return sum(1 for eid in eids_value if eid is not None)
+        return 0
+
     # ------------------------------------------------------------------
     # Event handlers
 
@@ -267,7 +362,8 @@ class RunEpilogueLedgerSystem(System):
     def on_incident_looked_away(self, event):
         npc = self._eid_name(event.data.get("npc_eid"), "NPC")
         reason = str(event.data.get("reason", "social choice") or "social choice").replace("_", " ")
-        self._record("look_away", f"{npc} chose not to make an incident official ({reason}).", event, weight=0.75, incident_id=self._event_incident_id(event))
+        subject = self._incident_subject(self._event_incident_id(event))
+        self._record("look_away", f"{npc} chose not to make {subject} official ({reason}).", event, weight=0.75, incident_id=self._event_incident_id(event))
 
     def on_observed_response_cue(self, event):
         cue = str(event.data.get("cue_kind", "response") or "response").strip().lower()
@@ -281,32 +377,44 @@ class RunEpilogueLedgerSystem(System):
     def on_incident_authority_reported(self, event):
         method = str(event.data.get("method", event.data.get("route_method", "unknown")) or "unknown").replace("_", " ")
         reporter = self._eid_name(event.data.get("reporter_eid", event.data.get("npc_eid")), "someone")
-        self._record("authority_report", f"{reporter} reported an incident to authority by {method}.", event, weight=0.9, incident_id=self._event_incident_id(event))
+        subject = self._incident_subject(self._event_incident_id(event))
+        self._record("authority_report", f"{reporter} reported {subject} to authority by {method}.", event, weight=0.9, incident_id=self._event_incident_id(event))
 
     def on_incident_report_cue_suppressed(self, event):
         reason = str(event.data.get("reason", "duplicate") or "duplicate").replace("_", " ")
         self._record("report_suppressed", f"A duplicate authority report was suppressed ({reason}).", event, weight=0.55, incident_id=self._event_incident_id(event))
 
     def on_incident_dispatch_queued(self, event):
-        self._record("dispatch_queued", "An official report created a delayed dispatch opportunity.", event, weight=0.65, incident_id=self._event_incident_id(event))
+        subject = self._incident_subject(self._event_incident_id(event))
+        self._record("dispatch_queued", f"An official report created a delayed dispatch opportunity around {subject}.", event, weight=0.65, incident_id=self._event_incident_id(event))
 
     def on_incident_dispatch_started(self, event):
-        vigil = int(event.data.get("vigil_count", event.data.get("assigned_count", 0)) or 0)
-        peace = int(event.data.get("peace_count", 0) or 0)
+        incident_id = self._event_incident_id(event)
+        subject = self._incident_subject(incident_id)
+        vigil = self._participant_count(event.data.get("vigil_count"), event.data.get("vigil_eids"))
+        if vigil <= 0:
+            dispatched = self._participant_count(event.data.get("assigned_count"), event.data.get("dispatched_eids"))
+            peace_guess = self._participant_count(event.data.get("peace_count"), event.data.get("peace_eids"))
+            vigil = max(0, dispatched - peace_guess)
+        peace = self._participant_count(event.data.get("peace_count"), event.data.get("peace_eids"))
         if peace > 0:
-            text = f"A civic response formed around the incident; {vigil} civilian(s) and {peace} peace/security actor(s) moved."
+            text = f"A civic response formed around {subject}; {vigil} civilian(s) and {peace} peace/security actor(s) moved."
+        elif vigil <= 0:
+            text = f"A civilian vigil response was called around {subject}, but nobody arrived."
         else:
-            text = f"A civilian vigil response formed around the incident with {vigil} attendee(s)."
-        self._record("dispatch_started", text, event, weight=0.9, incident_id=self._event_incident_id(event))
+            text = f"A civilian vigil response formed around {subject} with {vigil} attendee(s)."
+        self._record("dispatch_started", text, event, weight=0.9, incident_id=incident_id)
 
     def on_incident_responder_assigned(self, event):
         responder = self._eid_name(event.data.get("responder_eid", event.data.get("npc_eid")), "responder")
         role = str(event.data.get("response_role", "responder") or "responder").replace("_", " ")
-        self._record("responder_assigned", f"{responder} was assigned as {role} for an incident.", event, weight=0.45, incident_id=self._event_incident_id(event))
+        subject = self._incident_subject(self._event_incident_id(event))
+        self._record("responder_assigned", f"{responder} was assigned as {role} for {subject}.", event, weight=0.45, incident_id=self._event_incident_id(event))
 
     def on_incident_dispatch_arrived(self, event):
         responder = self._eid_name(event.data.get("responder_eid", event.data.get("npc_eid")), "responder")
-        self._record("dispatch_arrived", f"{responder} reached the reported incident.", event, weight=0.7, incident_id=self._event_incident_id(event))
+        subject = self._incident_subject(self._event_incident_id(event))
+        self._record("dispatch_arrived", f"{responder} reached the scene for {subject}.", event, weight=0.7, incident_id=self._event_incident_id(event))
 
     def on_incident_dispatch_dropped(self, event):
         reason = str(event.data.get("reason", "no responder") or "no responder").replace("_", " ")
@@ -387,11 +495,11 @@ class RunEpilogueLedgerSystem(System):
         self._record("player_killed", "You died in the city.", event, weight=1.0)
 
     def on_npc_downed(self, event):
-        target = self._eid_name(event.data.get("target_eid", event.data.get("eid")), "NPC")
+        target = str(event.data.get("target_name", "") or "").strip() or self._eid_name(event.data.get("target_eid", event.data.get("eid")), "NPC")
         self._record("npc_downed", f"{target} was downed during the run.", event, weight=0.55)
 
     def on_npc_killed(self, event):
-        target = self._eid_name(event.data.get("target_eid", event.data.get("eid")), "NPC")
+        target = str(event.data.get("target_name", "") or "").strip() or self._eid_name(event.data.get("target_eid", event.data.get("eid")), "NPC")
         self._record("npc_killed", f"{target} died during the run.", event, weight=0.75)
 
     def on_alarm_cut(self, event):

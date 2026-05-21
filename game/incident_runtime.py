@@ -186,8 +186,10 @@ def create_or_merge_incident(
     severity=0,
     primary_actor_eid=None,
     victim_eid=None,
+    victim_name="",
     owner_eid=None,
     property_id=None,
+    property_name="",
     merge_subject="",
     source_event="",
     official_reportable=False,
@@ -201,7 +203,9 @@ def create_or_merge_incident(
     severity = max(0, min(100, _int_or_default(severity, 0)))
     merge_rule = _incident_merge_rule(kind_key)
     merge_subject = _text(merge_subject).lower()
+    victim_name = _text(victim_name)
     property_id = _text(property_id)
+    property_name = _text(property_name)
     source_event = _text(source_event).lower()
     note = _text(note)
     tags = _incident_tags(tags)
@@ -258,6 +262,10 @@ def create_or_merge_incident(
                 official_reportable=bool(candidate["official_reportable"]),
             ),
         )
+        if victim_name:
+            candidate["victim_name"] = victim_name
+        if property_name:
+            candidate["property_name"] = property_name
         candidate["tags"] = tuple(combined_tags)
         candidate["source_events"] = tuple(source_events)
         if note:
@@ -277,8 +285,10 @@ def create_or_merge_incident(
         "z": _int_or_default(z, 0),
         "primary_actor_eid": primary_actor_eid,
         "victim_eid": victim_eid,
+        "victim_name": victim_name,
         "owner_eid": owner_eid,
         "property_id": property_id,
+        "property_name": property_name,
         "severity": severity,
         "official_reportable": bool(official_reportable),
         "max_propagation": _incident_max_propagation(
