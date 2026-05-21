@@ -2150,16 +2150,17 @@ def _emit_move_access_events(
                 ),
                 breach_severity=ingress.breach_severity,
             ))
-            _emit_action_offense_event(
-                sim,
-                eid=eid,
-                action=action,
-                context="trespass" if access.severity_label != "suspicious" else "ordinary",
-                score=offense_score,
-                x=target_x,
-                y=target_y,
-                z=target_z,
-            )
+            if witnesses:
+                _emit_action_offense_event(
+                    sim,
+                    eid=eid,
+                    action=action,
+                    context="trespass" if access.severity_label != "suspicious" else "ordinary",
+                    score=offense_score,
+                    x=target_x,
+                    y=target_y,
+                    z=target_z,
+                )
             trespass_triggered = True
 
     if not trespass_triggered and emit_clear_offense:
