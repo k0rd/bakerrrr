@@ -1,6 +1,14 @@
 from engine.events import Event
 from engine.systems import System
 from game.components import FinancialProfile, Inventory, PlayerAssets, Position
+from game.casino_ui_runtime import (
+    CASINO_FLOOR_ARCHETYPES,
+    CASINO_MACHINE_SERVICE_IDS,
+    CASINO_TABLE_SERVICE_IDS,
+    casino_host_style,
+    default_casino_ui_state,
+    ensure_casino_ui_state,
+)
 from game.finance_services import _nearest_property_with_finance_service
 from game.justice_runtime import held_property_snapshot as _justice_held_property_snapshot
 from game.player_businesses import (
@@ -34,6 +42,7 @@ from game.service_runtime import (
     CASINO_KENO_DRAW_COUNT,
     CASINO_KENO_MAX_PICKS,
     CASINO_KENO_NUMBER_COUNT,
+    CASINO_KENO_PAYOUT_MULTIPLIERS,
     CASINO_ROULETTE_NUMBER_MAX,
     CASINO_GAME_SERVICE_IDS,
     CASINO_PLINKO_LANE_COUNT,
@@ -49,7 +58,10 @@ from game.service_runtime import (
     _casino_blackjack_total,
     _casino_cards_text,
     _casino_craps_normalize_session,
+    _casino_craps_market_from_key,
+    _casino_craps_remove_bet,
     _casino_craps_resolve,
+    _casino_craps_stage_bet,
     _casino_craps_start,
     _casino_game_profile,
     _casino_game_title,
@@ -61,7 +73,10 @@ from game.service_runtime import (
     _casino_holdem_start,
     _casino_plinko_resolve,
     _casino_roulette_normalize_session,
+    _casino_roulette_market_from_key,
+    _casino_roulette_remove_bet,
     _casino_roulette_resolve,
+    _casino_roulette_stage_bet,
     _casino_roulette_start,
     _casino_round_seed,
     _casino_slots_resolve,
@@ -109,6 +124,7 @@ class ServiceMenuSystem(System):
         self.pending_service_result = None
         self.sim.events.subscribe("property_interact", self.on_property_interact)
         self.sim.events.subscribe("player_action", self.on_player_action)
+        self.sim.events.subscribe("casino_ui_action", self.on_casino_ui_action)
         self.sim.events.subscribe("dialog_close_request", self.on_dialog_close_request)
         self.sim.events.subscribe("service_menu_execute_request", self.on_service_menu_execute_request)
         self.sim.events.subscribe("site_service_used", self.on_site_service_used)
@@ -146,6 +162,14 @@ class ServiceMenuSystem(System):
 
     def _position_for(self, eid):
         return self.sim.ecs.get(Position).get(eid)
+
+    def _casino_ui_state(self):
+        return ensure_casino_ui_state(self.sim)
+
+    def _close_casino_ui(self):
+        state = self._casino_ui_state()
+        state.update(default_casino_ui_state())
+        self.sim.set_time_paused(False, reason="dialog")
 
     def _assets_for(self, eid):
         return self.sim.ecs.get(PlayerAssets).get(eid)
@@ -210,17 +234,18 @@ class ServiceMenuSystem(System):
         )
 
     def _casino_session(self):
-        state = self._dialog_ui_state()
-        session = state.get("casino_session")
+        state = self._casino_ui_state()
+        session = state.get("session")
         return session if isinstance(session, dict) else None
 
     def _set_casino_session(self, session):
-        state = self._dialog_ui_state()
-        state["casino_session"] = dict(session) if isinstance(session, dict) else None
+        state = self._casino_ui_state()
+        state["session"] = dict(session) if isinstance(session, dict) else None
+        self._dialog_ui_state()["casino_session"] = None
 
     def _clear_casino_session(self):
-        state = self._dialog_ui_state()
-        state["casino_session"] = None
+        self._casino_ui_state()["session"] = None
+        self._dialog_ui_state()["casino_session"] = None
 
     def _casino_prop_name(self, prop):
         if isinstance(prop, dict):
@@ -244,37 +269,456 @@ class ServiceMenuSystem(System):
             credits = int(assets.credits)
         return True, credits
 
-    def _open_casino_modal(self, prop, service, *, subtitle="", transcript=None, topics=None, hint="", mode="root", session=None):
-        state = self._dialog_ui_state()
-        prop_name = self._casino_prop_name(prop)
+    def _casino_selectable_indices(self, rows=None):
+        source_rows = list(rows if rows is not None else self._casino_ui_state().get("rows", ()) or ())
+        return [
+            idx
+            for idx, row in enumerate(source_rows)
+            if isinstance(row, dict) and bool(row.get("selectable", True))
+        ]
+
+    def _normalize_casino_selection(self):
+        state = self._casino_ui_state()
+        rows = list(state.get("rows", ()) or ())
+        selectable = self._casino_selectable_indices(rows)
+        if not selectable:
+            state["selected_index"] = 0
+            return None
+        try:
+            selected = int(state.get("selected_index", 0))
+        except (TypeError, ValueError):
+            selected = selectable[0]
+        if selected in selectable:
+            state["selected_index"] = selected
+            return selected
+        if selected < selectable[0]:
+            state["selected_index"] = selectable[0]
+            return selectable[0]
+        for index in reversed(selectable):
+            if index <= selected:
+                state["selected_index"] = index
+                return index
+        state["selected_index"] = selectable[0]
+        return selectable[0]
+
+    def _selected_casino_row(self):
+        state = self._casino_ui_state()
+        rows = list(state.get("rows", ()) or ())
+        selected = self._normalize_casino_selection()
+        if selected is None or selected < 0 or selected >= len(rows):
+            return None
+        row = rows[selected]
+        return row if isinstance(row, dict) and bool(row.get("selectable", True)) else None
+
+    def _open_casino_ui(
+        self,
+        *,
+        mode,
+        prop,
+        host_style,
+        title,
+        subtitle="",
+        body_lines=None,
+        rail_lines=None,
+        rows=None,
+        hint="",
+        close_pending=False,
+        floor_page="games",
+        service="",
+        session=None,
+        return_to="",
+        return_option_id="",
+        selected_id="",
+    ):
+        state = self._casino_ui_state()
+        dialog_state = self._dialog_ui_state()
+        dialog_state["open"] = False
+        dialog_state["close_pending"] = False
+        dialog_state["machine_action"] = None
+        dialog_state["casino_session"] = None
         self.sim.set_time_paused(True, reason="dialog")
         state.update({
             "open": True,
-            "kind": "service_menu",
-            "npc_eid": None,
+            "mode": str(mode or "floor").strip().lower() or "floor",
+            "host_style": str(host_style or "floor").strip().lower() or "floor",
             "property_id": prop.get("id") if isinstance(prop, dict) else None,
-            "title": f"{_casino_game_title(service)}: {prop_name}",
+            "title": str(title or "Casino").strip() or "Casino",
             "subtitle": str(subtitle or "").strip(),
-            "transcript": list(transcript or ()),
-            "topics": list(topics or ()),
-            "selected_index": 0,
-            "scroll": 0,
+            "body_lines": list(body_lines or ()),
+            "rail_lines": list(rail_lines or ()),
+            "rows": list(rows or ()),
             "hint": str(hint or "").strip(),
-            "new_topic_ids": [],
-            "close_pending": False,
-            "machine_action": None,
-            "service_menu_mode": str(mode or "root").strip() or "root",
-            "casino_session": dict(session) if isinstance(session, dict) else None,
+            "close_pending": bool(close_pending),
+            "floor_page": str(floor_page or state.get("floor_page", "games")).strip().lower() or "games",
+            "service": str(service or "").strip().lower(),
+            "session": dict(session) if isinstance(session, dict) else None,
+            "return_to": str(return_to or "").strip().lower(),
+            "return_option_id": str(return_option_id or "").strip().lower(),
         })
+        if selected_id:
+            selected_key = str(selected_id).strip().lower()
+            for idx, row in enumerate(list(state.get("rows", ()) or ())):
+                if not isinstance(row, dict) or not bool(row.get("selectable", True)):
+                    continue
+                if str(row.get("id", "")).strip().lower() == selected_key:
+                    state["selected_index"] = idx
+                    break
+            else:
+                state["selected_index"] = 0
+        self._normalize_casino_selection()
+
+    def _casino_common_rail_lines(self, prop, *, service="", session=None):
+        lines = [
+            "Wallet",
+            _credit_amount_label(self._wallet_credits()),
+        ]
+        prop_name = self._casino_prop_name(prop)
+        if prop_name:
+            lines.extend([
+                "",
+                "Venue",
+                prop_name,
+            ])
+        if service:
+            lines.extend([
+                "",
+                "Game",
+                _casino_game_title(service),
+            ])
+        if isinstance(session, dict):
+            wager = max(0, int(session.get("wager", 0) or 0))
+            stake = max(0, int(session.get("stake", wager) or 0))
+            if wager > 0:
+                lines.extend([
+                    "",
+                    "Chip",
+                    _credit_amount_label(wager),
+                ])
+            if stake > 0:
+                lines.extend([
+                    "",
+                    "Posted",
+                    _credit_amount_label(stake),
+                ])
+        return lines
+
+    def _casino_partition_rows(self, prop):
+        pos = self._position_for(self.player_eid)
+        if not pos or not isinstance(prop, dict):
+            return [], []
+        options, _storefront_service = self._service_menu_options(self.player_eid, prop, pos)
+        option_map = {
+            str(option.get("id", "")).strip().lower(): dict(option)
+            for option in list(options or ())
+            if isinstance(option, dict) and str(option.get("id", "")).strip()
+        }
+
+        game_rows = []
+        machine_rows = []
+        for service_id in CASINO_MACHINE_SERVICE_IDS:
+            option = option_map.get(service_id)
+            if option:
+                machine_rows.append({
+                    "id": f"game:{service_id}",
+                    "label": str(option.get("label", _service_menu_option_label(service_id))).strip() or _service_menu_option_label(service_id),
+                    "service": service_id,
+                    "selectable": True,
+                })
+        table_rows = []
+        for service_id in CASINO_TABLE_SERVICE_IDS:
+            option = option_map.get(service_id)
+            if option:
+                table_rows.append({
+                    "id": f"game:{service_id}",
+                    "label": str(option.get("label", _service_menu_option_label(service_id))).strip() or _service_menu_option_label(service_id),
+                    "service": service_id,
+                    "selectable": True,
+                })
+        if machine_rows:
+            game_rows.append({"id": "header:machines", "label": "Machines", "selectable": False, "style": "header"})
+            game_rows.extend(machine_rows)
+        if table_rows:
+            game_rows.append({"id": "header:tables", "label": "Tables", "selectable": False, "style": "header"})
+            game_rows.extend(table_rows)
+
+        service_rows = []
+        for option_id in ("trade_buy", "trade_sell", "banking", "insurance"):
+            option = option_map.get(option_id)
+            if option:
+                service_rows.append({
+                    "id": f"service:{option_id}",
+                    "label": str(option.get("label", _service_menu_option_label(option_id))).strip() or _service_menu_option_label(option_id),
+                    "option_id": option_id,
+                    "selectable": True,
+                })
+        for option in list(options or ()):
+            if not isinstance(option, dict):
+                continue
+            option_id = str(option.get("id", "")).strip().lower()
+            if not option_id or option_id in CASINO_GAME_SERVICE_IDS or option_id in {"trade_buy", "trade_sell", "banking", "insurance"}:
+                continue
+            service_rows.append({
+                "id": f"service:{option_id}",
+                "label": str(option.get("label", option_id)).strip() or option_id,
+                "option_id": option_id,
+                "selectable": True,
+            })
+        return game_rows, service_rows
+
+    def _open_casino_floor(self, prop, *, page="games", selected_id=""):
+        prop_name = self._casino_prop_name(prop)
+        game_rows, service_rows = self._casino_partition_rows(prop)
+        floor_page = "services" if str(page).strip().lower() == "services" else "games"
+        rows = service_rows if floor_page == "services" else game_rows
+        subtitle = "Floor services" if floor_page == "services" else "Games"
+        body_lines = [
+            f"{prop_name} keeps the game list up front so the floor reads like a real getaway.",
+        ]
+        if floor_page == "services":
+            body_lines.append("House support and storefront actions stay here so they do not bury the tables.")
+            if not self._casino_selectable_indices(rows):
+                body_lines.append("No floor services are posted right now.")
+        else:
+            body_lines.append("Machines and tables are grouped separately for quick scanning.")
+            if not self._casino_selectable_indices(rows):
+                body_lines.append("No posted games are running on this floor right now.")
+        rail_lines = self._casino_common_rail_lines(prop)
+        rail_lines.extend([
+            "",
+            "Controls",
+            "Tab page",
+            "Enter select",
+            "Esc leave",
+        ])
+        self._clear_pending_service_result()
+        self._open_casino_ui(
+            mode="services" if floor_page == "services" else "floor",
+            prop=prop,
+            host_style="floor",
+            title=prop_name,
+            subtitle=subtitle,
+            body_lines=body_lines,
+            rail_lines=rail_lines,
+            rows=rows,
+            hint="Tab switches Games and Floor services. Esc leaves the floor.",
+            close_pending=False,
+            floor_page=floor_page,
+            service="",
+            session=None,
+            return_to="floor",
+            selected_id=selected_id,
+        )
+
+    def _open_casino_wager(self, prop, service, *, host_style="", return_to="", selected_id=""):
+        profile = _casino_game_profile(service)
+        if not profile:
+            self._present_service_result("Casino", ["That game is not running on this floor right now."], property_id=prop.get("id"))
+            return
+        host_style = str(host_style or casino_host_style(prop)).strip().lower() or "floor"
+        prop_name = self._casino_prop_name(prop)
+        base_bets = tuple(int(amount) for amount in tuple(profile.get("bet_options", ()) or ()) if int(amount) > 0)
+        owner_limit = self._player_owns_property(prop) and bool(base_bets)
+        wager_values = list(base_bets)
+        if owner_limit:
+            high_limit = int(max(base_bets)) * 2
+            if high_limit not in wager_values:
+                wager_values.append(high_limit)
+        wager_values = sorted(set(wager_values))
+        rows = []
+        for amount in wager_values:
+            label = f"Bet {_credit_amount_label(amount)}"
+            if owner_limit and amount > max(base_bets):
+                label += " [owner limit]"
+            rows.append({
+                "id": f"wager:{amount}",
+                "label": label,
+                "wager": int(amount),
+                "selectable": True,
+            })
+        body_lines = [
+            str(profile.get("prompt", "Choose a wager.")).strip() or "Choose a wager.",
+            str(profile.get("note", "")).strip() or "Pick a stake and play a round.",
+        ]
+        if owner_limit:
+            body_lines.append("Owner perk: this floor will book one higher posted stake for you.")
+        rail_lines = self._casino_common_rail_lines(prop, service=service)
+        rail_lines.extend([
+            "",
+            "Choose",
+            "one stake",
+        ])
+        if not rows:
+            body_lines.append("No posted wager sizes are available right now.")
+        self._clear_pending_service_result()
+        self._open_casino_ui(
+            mode="wager",
+            prop=prop,
+            host_style=host_style,
+            title=f"{_casino_game_title(service)}: {prop_name}",
+            subtitle="Choose a wager",
+            body_lines=body_lines,
+            rail_lines=rail_lines,
+            rows=rows,
+            hint="Choose a stake. Esc backs out.",
+            close_pending=False,
+            floor_page="games",
+            service=service,
+            session=None,
+            return_to=str(return_to or ("floor" if host_style == "floor" else "service_menu")).strip().lower(),
+            return_option_id=str(service or "").strip().lower(),
+            selected_id=selected_id,
+        )
+
+    def _return_from_casino_host(self, prop):
+        host_style = str(self._casino_ui_state().get("host_style", casino_host_style(prop))).strip().lower()
+        if host_style == "floor":
+            self._open_casino_floor(prop)
+            return
+        self._close_casino_ui()
+        if isinstance(prop, dict):
+            self._open_property_service_surface(prop)
+
+    def _roulette_market_order(self):
+        return [
+            *(f"straight:{number}" for number in range(0, CASINO_ROULETTE_NUMBER_MAX + 1)),
+            "color:red",
+            "color:black",
+            "parity:odd",
+            "parity:even",
+            "range:low",
+            "range:high",
+            "dozen:1",
+            "dozen:2",
+            "dozen:3",
+            "column:1",
+            "column:2",
+            "column:3",
+        ]
+
+    def _craps_market_order(self):
+        return [
+            "pass",
+            "dont_pass",
+            "field",
+            "pass_odds",
+            "dont_pass_odds",
+            "place:4",
+            "place:5",
+            "place:6",
+            "place:8",
+            "place:9",
+            "place:10",
+            "hardway:4",
+            "hardway:6",
+            "hardway:8",
+            "hardway:10",
+            "prop:2",
+            "prop:3",
+            "prop:11",
+            "prop:12",
+            "prop:any_craps",
+            "prop:any_seven",
+        ]
+
+    def _move_casino_row_selection(self, delta):
+        state = self._casino_ui_state()
+        selectable = self._casino_selectable_indices()
+        if not selectable:
+            return False
+        selected = self._normalize_casino_selection()
+        if selected is None:
+            state["selected_index"] = selectable[0]
+            return True
+        try:
+            cursor = selectable.index(selected)
+        except ValueError:
+            cursor = 0
+        cursor = max(0, min(len(selectable) - 1, cursor + int(delta)))
+        state["selected_index"] = selectable[cursor]
+        return True
+
+    def _move_keno_cursor(self, session, dx, dy):
+        current = _casino_keno_normalize_session(session)
+        if not current:
+            return None
+        cursor = max(1, min(CASINO_KENO_NUMBER_COUNT, int(current.get("cursor", 1) or 1)))
+        row = (cursor - 1) // 5
+        col = (cursor - 1) % 5
+        row = max(0, min(((CASINO_KENO_NUMBER_COUNT - 1) // 5), row + int(dy)))
+        col = max(0, min(4, col + int(dx)))
+        next_cursor = (row * 5) + col + 1
+        next_cursor = max(1, min(CASINO_KENO_NUMBER_COUNT, next_cursor))
+        current["cursor"] = next_cursor
+        return current
+
+    def _move_roulette_cursor(self, session, dx, dy):
+        current = _casino_roulette_normalize_session(session)
+        if not current:
+            return None
+        order = list(self._roulette_market_order())
+        if not order:
+            return current
+        try:
+            index = order.index(str(current.get("cursor_key", "straight:0")).strip().lower())
+        except ValueError:
+            index = 0
+        index = max(0, min(len(order) - 1, index + int(dx) + (int(dy) * 5)))
+        current["cursor_key"] = order[index]
+        return current
+
+    def _move_craps_cursor(self, session, dx, dy):
+        current = _casino_craps_normalize_session(session)
+        if not current:
+            return None
+        order = list(self._craps_market_order())
+        if not order:
+            return current
+        try:
+            index = order.index(str(current.get("cursor_key", "pass")).strip().lower())
+        except ValueError:
+            index = 0
+        index = max(0, min(len(order) - 1, index + int(dx) + (int(dy) * 3)))
+        current["cursor_key"] = order[index]
+        return current
+
+    def _open_casino_modal(self, prop, service, *, subtitle="", transcript=None, topics=None, hint="", mode="root", session=None):
+        prop_name = self._casino_prop_name(prop)
+        host_style = str(self._casino_ui_state().get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop)
+        return_to = str(self._casino_ui_state().get("return_to", "floor" if host_style == "floor" else "service_menu")).strip().lower()
+        rows = []
+        for row in list(topics or ()):
+            if not isinstance(row, dict):
+                continue
+            option_id = str(row.get("id", "")).strip().lower()
+            if not option_id:
+                continue
+            rows.append({
+                "id": option_id,
+                "label": str(row.get("label", option_id)).strip() or option_id,
+                "option_id": option_id,
+                "selectable": True,
+            })
+        rail_lines = self._casino_common_rail_lines(prop, service=service, session=session)
+        self._open_casino_ui(
+            mode="live",
+            prop=prop,
+            host_style=host_style,
+            title=f"{_casino_game_title(service)}: {prop_name}",
+            subtitle=str(subtitle or "").strip(),
+            body_lines=list(transcript or ()),
+            rail_lines=rail_lines,
+            rows=rows,
+            hint=str(hint or "").strip(),
+            close_pending=False,
+            floor_page=self._casino_ui_state().get("floor_page", "games"),
+            service=service,
+            session=session,
+            return_to=return_to,
+            return_option_id=str(service or "").strip().lower(),
+        )
 
     def _emit_casino_blocked(self, prop, service, reason, **data):
         prop_name = self._casino_prop_name(prop)
-        self._begin_pending_service_result(
-            channel="site",
-            property_id=prop.get("id") if isinstance(prop, dict) else None,
-            property_name=prop_name,
-            service=service,
-        )
         payload = {
             "eid": self.player_eid,
             "property_id": prop.get("id") if isinstance(prop, dict) else None,
@@ -283,6 +727,17 @@ class ServiceMenuSystem(System):
             "reason": str(reason or "blocked").strip().lower(),
         }
         payload.update(data)
+        if bool(self._casino_ui_state().get("open")):
+            self.sim.emit(Event("site_service_blocked", **payload))
+            title, lines = self._site_service_blocked_lines(Event("site_service_blocked", **payload))
+            self._open_casino_result(prop, service, title, lines)
+            return
+        self._begin_pending_service_result(
+            channel="site",
+            property_id=prop.get("id") if isinstance(prop, dict) else None,
+            property_name=prop_name,
+            service=service,
+        )
         self.sim.emit(Event("site_service_blocked", **payload))
 
     def _emit_casino_round(self, prop, service, round_result, *, show_result=True):
@@ -306,6 +761,54 @@ class ServiceMenuSystem(System):
                 service=service,
             )
         self.sim.emit(Event("site_service_used", **payload))
+        return True
+
+    def _open_casino_result(self, prop, service, title, lines, *, subtitle=""):
+        state = self._casino_ui_state()
+        host_style = str(state.get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop)
+        rail_lines = self._casino_common_rail_lines(prop, service=service)
+        rail_lines.extend([
+            "",
+            "Result",
+            "Space return",
+        ])
+        self._open_casino_ui(
+            mode="result",
+            prop=prop,
+            host_style=host_style,
+            title=title,
+            subtitle=str(subtitle or "").strip(),
+            body_lines=list(lines or ()),
+            rail_lines=rail_lines,
+            rows=[],
+            hint="Space returns from the result screen.",
+            close_pending=True,
+            floor_page=state.get("floor_page", "games"),
+            service=service,
+            session=None,
+            return_to=str(state.get("return_to", "floor" if host_style == "floor" else "service_menu")).strip().lower(),
+            return_option_id=str(state.get("return_option_id", service)).strip().lower(),
+        )
+
+    def _settle_casino_round(self, prop, service, round_result, *, next_session=None, continue_notice=""):
+        payload, blocked = _casino_apply_round_result(self.sim, self.player_eid, prop, service, round_result)
+        if blocked:
+            self._clear_casino_session()
+            self.sim.emit(Event("site_service_blocked", **blocked))
+            title, lines = self._site_service_blocked_lines(Event("site_service_blocked", **blocked))
+            self._open_casino_result(prop, service, title, lines)
+            return False
+        self.sim.emit(Event("site_service_used", **payload))
+        if service == "craps" and isinstance(next_session, dict):
+            normalized = _casino_craps_normalize_session(next_session)
+            if normalized and dict(normalized.get("bets", {}) or {}):
+                self._set_casino_session(normalized)
+                notice = str(continue_notice or payload.get("headline", "") or payload.get("detail", "")).strip()
+                self._open_craps_table(prop, normalized, notice=notice)
+                return True
+        self._clear_casino_session()
+        title, lines = self._site_service_result_lines(Event("site_service_used", **payload))
+        self._open_casino_result(prop, service, title, lines)
         return True
 
     def _open_plinko_lane_menu(self, prop, service, wager):
@@ -454,15 +957,27 @@ class ServiceMenuSystem(System):
         session = _casino_keno_normalize_session(session)
         picks = list(session.get("picks", ()) or ()) if isinstance(session, dict) else []
         pick_set = set(picks)
-        transcript = []
+        cursor = max(1, min(CASINO_KENO_NUMBER_COUNT, int(session.get("cursor", 1) or 1))) if isinstance(session, dict) else 1
+        body_lines = []
         notice = str(notice or "").strip()
         if notice:
-            transcript.append(notice)
-        transcript.extend([
+            body_lines.append(notice)
+        body_lines.extend([
             f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.",
+            "Board: cursor () | ticket []",
         ])
-        transcript.extend(_casino_ascii_keno_board(picks=picks))
-        transcript.extend([
+        for row_start in range(1, CASINO_KENO_NUMBER_COUNT + 1, 5):
+            cells = []
+            for number in range(row_start, min(row_start + 5, CASINO_KENO_NUMBER_COUNT + 1)):
+                if number == cursor:
+                    cell = f"({number:02d})"
+                elif number in pick_set:
+                    cell = f"[{number:02d}]"
+                else:
+                    cell = f" {number:02d} "
+                cells.append(cell)
+            body_lines.append(" ".join(cells))
+        body_lines.extend([
             f"Mark up to {CASINO_KENO_MAX_PICKS} spots from 01-{CASINO_KENO_NUMBER_COUNT:02d}.",
             (
                 f"Selected ({len(picks)}/{CASINO_KENO_MAX_PICKS}): "
@@ -471,201 +986,212 @@ class ServiceMenuSystem(System):
                 else f"Selected (0/{CASINO_KENO_MAX_PICKS}): none."
             ),
             f"The house will draw {CASINO_KENO_DRAW_COUNT} balls.",
-            f"Wallet {_credit_amount_label(self._wallet_credits())}.",
         ])
-        topics = [
-            {
-                "id": f"keno:toggle:{number}",
-                "label": f"[{'X' if number in pick_set else ' '}] {number:02d}",
-            }
-            for number in range(1, CASINO_KENO_NUMBER_COUNT + 1)
-        ]
-        topics.append({"id": "keno:clear", "label": "Clear Ticket"})
-        topics.append({"id": "keno:draw", "label": "Draw Ticket"})
-        self._open_casino_modal(
-            prop,
-            "keno",
+        rail_lines = self._casino_common_rail_lines(prop, service="keno", session=session)
+        rail_lines.extend([
+            "",
+            "Ticket",
+            f"{len(picks)}/{CASINO_KENO_MAX_PICKS} picks",
+        ])
+        if picks:
+            rail_lines.extend([
+                " ".join(f"{number:02d}" for number in picks[:8]),
+            ])
+        pay_key = max(0, min(CASINO_KENO_MAX_PICKS, len(picks)))
+        if pay_key > 0:
+            pay_row = CASINO_KENO_PAYOUT_MULTIPLIERS.get(pay_key, {})
+            rail_lines.extend([
+                "",
+                f"Pay row {pay_key}",
+            ])
+            for hit_count, mult in sorted(pay_row.items()):
+                rail_lines.append(f"{hit_count} hit -> x{int(mult)}")
+        self._open_casino_ui(
+            mode="live",
+            prop=prop,
+            host_style=str(self._casino_ui_state().get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop),
+            title=f"Keno: {self._casino_prop_name(prop)}",
             subtitle="Mark your ticket",
-            transcript=transcript,
-            topics=topics,
-            hint="Mark up to five numbers, then draw once. Esc forfeits the posted stake.",
-            mode="casino:keno:ticket",
+            body_lines=body_lines,
+            rail_lines=rail_lines,
+            rows=[],
+            hint="Move the cursor, Space marks a spot, Backspace clears it, Enter draws, Esc forfeits.",
+            close_pending=False,
+            floor_page=self._casino_ui_state().get("floor_page", "games"),
+            service="keno",
             session=session,
+            return_to=str(self._casino_ui_state().get("return_to", "floor")).strip().lower(),
+            return_option_id="keno",
         )
 
     def _open_roulette_table(self, prop, session, *, notice=""):
         session = _casino_roulette_normalize_session(session)
-        view = str(session.get("view", "board") or "board").strip().lower() if isinstance(session, dict) else "board"
-        transcript = []
+        cursor_key = str(session.get("cursor_key", "straight:0") or "straight:0").strip().lower() if isinstance(session, dict) else "straight:0"
+        bets = dict(session.get("bets", {}) or {}) if isinstance(session, dict) else {}
+        body_lines = []
         notice = str(notice or "").strip()
         if notice:
-            transcript.append(notice)
-        transcript.append(f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.")
-
-        if view == "numbers":
-            transcript.extend([
-                "Straight-up board: pick one number from 00-36.",
-                "Single number bets pay 35 to 1 plus the posted chip back.",
-                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
+            body_lines.append(notice)
+        body_lines.extend([
+            f"Posted {_credit_amount_label(session.get('stake', session.get('wager', 0)))} across the slip.",
+            "Space adds one chip to the focused market. Backspace pulls one chip back. Enter spins once.",
+            "Straight numbers pay x36. Colors, parity, and ranges pay x2. Dozens and columns pay x3.",
+            "",
+            "Straight numbers",
+        ])
+        straight_keys = [f"straight:{number}" for number in range(0, CASINO_ROULETTE_NUMBER_MAX + 1)]
+        for row_start in range(0, len(straight_keys), 5):
+            cells = []
+            for key in straight_keys[row_start: row_start + 5]:
+                market = _casino_roulette_market_from_key(key) or {"value": 0}
+                label = f"{int(market.get('value', 0)):02d}"
+                units = int(bets.get(key, 0) or 0)
+                if units > 0:
+                    label = f"{label}x{units}"
+                label = label.center(8)
+                if key == cursor_key:
+                    cells.append(f"[{label}]")
+                else:
+                    cells.append(f" {label} ")
+            body_lines.append(" ".join(cells))
+        body_lines.extend([
+            "",
+            "Outside board",
+        ])
+        outside_groups = [
+            ("color:red", "color:black"),
+            ("parity:odd", "parity:even"),
+            ("range:low", "range:high"),
+            ("dozen:1", "dozen:2", "dozen:3"),
+            ("column:1", "column:2", "column:3"),
+        ]
+        for group in outside_groups:
+            cells = []
+            for key in group:
+                market = _casino_roulette_market_from_key(key) or {"label": key}
+                label = str(market.get("label", key)).replace(" (", " ").replace(")", "")
+                units = int(bets.get(key, 0) or 0)
+                if units > 0:
+                    label = f"{label} x{units}"
+                label = label[:12].center(12)
+                if key == cursor_key:
+                    cells.append(f"[{label}]")
+                else:
+                    cells.append(f" {label} ")
+            body_lines.append(" ".join(cells))
+        rail_lines = self._casino_common_rail_lines(prop, service="roulette", session=session)
+        rail_lines.extend([
+            "",
+            "Slip",
+            f"{sum(int(units) for units in bets.values())} chip(s)",
+        ])
+        for key, units in list(sorted(bets.items()))[:8]:
+            market = _casino_roulette_market_from_key(key)
+            if not market:
+                continue
+            rail_lines.append(f"{market['label']} x{int(units)}")
+        focus_market = _casino_roulette_market_from_key(cursor_key)
+        if focus_market:
+            rail_lines.extend([
+                "",
+                "Focus",
+                str(focus_market.get("label", cursor_key)),
             ])
-            topics = [
-                {"id": f"roulette:straight:{number}", "label": f"{number:02d} (x36 return)"}
-                for number in range(0, CASINO_ROULETTE_NUMBER_MAX + 1)
-            ]
-            topics.append({"id": "roulette:back", "label": "Back to Outside Bets"})
-            subtitle = "Straight-up board"
-            hint = "Pick a single number for the spin. Esc forfeits the posted stake."
-            mode = "casino:roulette:numbers"
-        else:
-            transcript.extend([
-                "Outside board: colors, parity, ranges, dozens, and columns.",
-                "Even-money bets return x2; dozens and columns return x3. Zero beats the outside board.",
-                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
-            ])
-            topics = [
-                {"id": "roulette:view:numbers", "label": "Straight Up Number (35:1)"},
-                {"id": "roulette:red", "label": "Red (x2 return)"},
-                {"id": "roulette:black", "label": "Black (x2 return)"},
-                {"id": "roulette:odd", "label": "Odd (x2 return)"},
-                {"id": "roulette:even", "label": "Even (x2 return)"},
-                {"id": "roulette:low", "label": "1-18 (x2 return)"},
-                {"id": "roulette:high", "label": "19-36 (x2 return)"},
-                {"id": "roulette:dozen:1", "label": "1st Dozen 1-12 (x3 return)"},
-                {"id": "roulette:dozen:2", "label": "2nd Dozen 13-24 (x3 return)"},
-                {"id": "roulette:dozen:3", "label": "3rd Dozen 25-36 (x3 return)"},
-                {"id": "roulette:column:1", "label": "Column 1 (x3 return)"},
-                {"id": "roulette:column:2", "label": "Column 2 (x3 return)"},
-                {"id": "roulette:column:3", "label": "Column 3 (x3 return)"},
-            ]
-            subtitle = "Place your chip"
-            hint = "Choose a pocket or an outside section. Esc forfeits the posted stake."
-            mode = "casino:roulette:board"
-
-        self._open_casino_modal(
-            prop,
-            "roulette",
-            subtitle=subtitle,
-            transcript=transcript,
-            topics=topics,
-            hint=hint,
-            mode=mode,
+        self._open_casino_ui(
+            mode="live",
+            prop=prop,
+            host_style=str(self._casino_ui_state().get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop),
+            title=f"Roulette: {self._casino_prop_name(prop)}",
+            subtitle="Build a slip",
+            body_lines=body_lines,
+            rail_lines=rail_lines,
+            rows=[],
+            hint="Move focus, Space adds chips, Backspace removes chips, Enter spins, Esc forfeits posted chips.",
+            close_pending=False,
+            floor_page=self._casino_ui_state().get("floor_page", "games"),
+            service="roulette",
             session=session,
+            return_to=str(self._casino_ui_state().get("return_to", "floor")).strip().lower(),
+            return_option_id="roulette",
         )
 
     def _open_craps_table(self, prop, session, *, notice=""):
         session = _casino_craps_normalize_session(session)
-        view = str(session.get("view", "layout") or "layout").strip().lower() if isinstance(session, dict) else "layout"
-        transcript = []
+        cursor_key = str(session.get("cursor_key", "pass") or "pass").strip().lower() if isinstance(session, dict) else "pass"
+        bets = dict(session.get("bets", {}) or {}) if isinstance(session, dict) else {}
+        phase = str(session.get("phase", "come_out") or "come_out").strip().lower() if isinstance(session, dict) else "come_out"
+        point_number = int(session.get("point_number", 0) or 0) if isinstance(session, dict) else 0
+        roll_history = list(session.get("roll_history", ()) or ()) if isinstance(session, dict) else []
+        body_lines = []
         notice = str(notice or "").strip()
         if notice:
-            transcript.append(notice)
-        transcript.append(f"Stake {_credit_amount_label(session.get('stake', session.get('wager', 0)))} is posted.")
-        wager = int(session.get("wager", 0))
-        transcript.extend(_casino_ascii_craps_layout(view))
+            body_lines.append(notice)
+        body_lines.append(f"Posted {_credit_amount_label(session.get('stake', session.get('wager', 0)))} across the felt.")
+        body_lines.extend(_casino_ascii_craps_layout("layout"))
+        body_lines.extend([
+            f"Phase: {'Point' if phase == 'point' else 'Come-out'}",
+            f"Point: {point_number if point_number > 0 else '--'}",
+            "Space adds one chip to the focused market. Backspace removes one chip. Enter rolls one throw.",
+            "",
+            "Main",
+        ])
 
-        if view == "pass_odds":
-            transcript.extend([
-                "Back the pass line with extra odds if a point goes up.",
-                "True odds pay 2:1 on 4/10, 3:2 on 5/9, and 6:5 on 6/8.",
-                "Reserved odds chips are returned untouched when the come-out resolves before a point.",
-                "Mixed-ratio pays are rounded to the nearest credit.",
-                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
-            ])
-            topics = [
-                {"id": f"craps:pass_odds:{mult}", "label": f"Pass + {mult}x Odds (+{_credit_amount_label(wager * mult)})"}
-                for mult in (1, 2, 3)
-            ]
-            topics.append({"id": "craps:back", "label": "Back to Main Layout"})
-            subtitle = "Pass odds"
-            hint = "Choose how much odds action to tuck behind the pass line. Esc forfeits the posted base chip."
-        elif view == "dont_pass_odds":
-            transcript.extend([
-                "Lay odds behind the don't pass once the point could go up.",
-                "Lay odds win 1:2 on 4/10, 2:3 on 5/9, and 5:6 on 6/8.",
-                "Reserved odds chips are returned untouched when the come-out resolves before a point.",
-                "Mixed-ratio pays are rounded to the nearest credit.",
-                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
-            ])
-            topics = [
-                {"id": f"craps:dont_pass_odds:{mult}", "label": f"Don't Pass + {mult}x Odds (+{_credit_amount_label(wager * mult)})"}
-                for mult in (1, 2, 3)
-            ]
-            topics.append({"id": "craps:back", "label": "Back to Main Layout"})
-            subtitle = "Don't pass odds"
-            hint = "Choose how much lay odds to park behind the don't pass line. Esc forfeits the posted base chip."
-        elif view == "place":
-            transcript.extend([
-                "Place bets win if the chosen number lands before any 7.",
-                "4/10 pay 9:5, 5/9 pay 7:5, and 6/8 pay 7:6.",
-                "Mixed-ratio pays are rounded to the nearest credit.",
-                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
-            ])
-            topics = [
-                {"id": f"craps:place:{number}", "label": f"Place {number}"}
-                for number in (4, 5, 6, 8, 9, 10)
-            ]
-            topics.append({"id": "craps:back", "label": "Back to Main Layout"})
-            subtitle = "Place bets"
-            hint = "Pick a place number and ride it against the seven. Esc forfeits the posted chip."
-        elif view == "hardways":
-            transcript.extend([
-                "Hardways need doubles before an easy way of the same number or any 7.",
-                "Hard 4/10 pay 7:1. Hard 6/8 pay 9:1.",
-                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
-            ])
-            topics = [
-                {"id": f"craps:hard:{number}", "label": f"Hard {number}"}
-                for number in (4, 6, 8, 10)
-            ]
-            topics.append({"id": "craps:back", "label": "Back to Main Layout"})
-            subtitle = "Hardways"
-            hint = "Pick a hardway and sweat the doubles. Esc forfeits the posted chip."
-        elif view == "props":
-            transcript.extend([
-                "Center-table props are one-roll shots with loud payoffs.",
-                "2/12 pay 30:1, 3/11 pay 15:1, any craps pays 7:1, and any seven pays 4:1.",
-                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
-            ])
-            topics = [
-                {"id": "craps:prop:2", "label": "Snake Eyes 2 (x31 return)"},
-                {"id": "craps:prop:3", "label": "Ace-Deuce 3 (x16 return)"},
-                {"id": "craps:prop:11", "label": "Yo 11 (x16 return)"},
-                {"id": "craps:prop:12", "label": "Boxcars 12 (x31 return)"},
-                {"id": "craps:prop:any_craps", "label": "Any Craps (x8 return)"},
-                {"id": "craps:prop:any_seven", "label": "Any Seven (x5 return)"},
-                {"id": "craps:back", "label": "Back to Main Layout"},
-            ]
-            subtitle = "Prop bets"
-            hint = "Take a one-roll prop shot. Esc forfeits the posted chip."
-        else:
-            transcript.extend([
-                "Choose pass line, don't pass, or field before the shooter takes the dice.",
-                "Pass line and don't pass can also be backed with odds. Place bets, hardways, and props are on side boards.",
-                "Mixed-ratio pays are rounded to the nearest credit when the math lands between whole credits.",
-                f"Wallet {_credit_amount_label(self._wallet_credits())}.",
-            ])
-            topics = [
-                {"id": "craps:pass", "label": "Pass Line"},
-                {"id": "craps:dont_pass", "label": "Don't Pass"},
-                {"id": "craps:field", "label": "Field"},
-                {"id": "craps:view:pass_odds", "label": "Pass Odds"},
-                {"id": "craps:view:dont_pass_odds", "label": "Don't Pass Odds"},
-                {"id": "craps:view:place", "label": "Place Bets"},
-                {"id": "craps:view:hardways", "label": "Hardways"},
-                {"id": "craps:view:props", "label": "Prop Bets"},
-            ]
-            subtitle = "Place your bet"
-            hint = "Pick a line bet or open a side board. Esc forfeits the posted stake."
+        def _market_cell(key, width=12):
+            market = _casino_craps_market_from_key(key) or {"label": key}
+            label = str(market.get("label", key))
+            units = int(bets.get(key, 0) or 0)
+            if units > 0:
+                label = f"{label} x{units}"
+            label = label[:width].center(width)
+            if key == cursor_key:
+                return f"[{label}]"
+            return f" {label} "
 
-        self._open_casino_modal(
-            prop,
-            "craps",
-            subtitle=subtitle,
-            transcript=transcript,
-            topics=topics,
-            hint=hint,
-            mode=f"casino:craps:{view}",
+        for group in (
+            ("pass", "dont_pass", "field"),
+            ("pass_odds", "dont_pass_odds"),
+            ("place:4", "place:5", "place:6"),
+            ("place:8", "place:9", "place:10"),
+            ("hardway:4", "hardway:6", "hardway:8", "hardway:10"),
+            ("prop:2", "prop:3", "prop:11"),
+            ("prop:12", "prop:any_craps", "prop:any_seven"),
+        ):
+            body_lines.append(" ".join(_market_cell(key) for key in group))
+
+        rail_lines = self._casino_common_rail_lines(prop, service="craps", session=session)
+        rail_lines.extend([
+            "",
+            "Live slip",
+            f"{sum(int(units) for units in bets.values())} chip(s)",
+        ])
+        for key, units in list(sorted(bets.items()))[:8]:
+            market = _casino_craps_market_from_key(key)
+            if not market:
+                continue
+            rail_lines.append(f"{market['label']} x{int(units)}")
+        if roll_history:
+            rail_lines.extend([
+                "",
+                "Recent",
+            ])
+            for roll in roll_history[-5:]:
+                rail_lines.append(f"{int(roll.get('die_one', 0))}+{int(roll.get('die_two', 0))}={int(roll.get('total', 0))}")
+        self._open_casino_ui(
+            mode="live",
+            prop=prop,
+            host_style=str(self._casino_ui_state().get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop),
+            title=f"Craps: {self._casino_prop_name(prop)}",
+            subtitle="Shooter live",
+            body_lines=body_lines,
+            rail_lines=rail_lines,
+            rows=[],
+            hint="Move focus, Space adds chips, Backspace removes chips, Enter rolls, Esc forfeits posted chips.",
+            close_pending=False,
+            floor_page=self._casino_ui_state().get("floor_page", "games"),
+            service="craps",
             session=session,
+            return_to=str(self._casino_ui_state().get("return_to", "floor")).strip().lower(),
+            return_option_id="craps",
         )
 
     def _open_baccarat_table(self, prop, session, *, notice=""):
@@ -742,7 +1268,7 @@ class ServiceMenuSystem(System):
 
         if service == "slots":
             seed_token = self._casino_round_seed(prop, service, wager)
-            self._emit_casino_round(prop, service, _casino_slots_resolve(seed_token, wager))
+            self._settle_casino_round(prop, service, _casino_slots_resolve(seed_token, wager))
             return
 
         if service == "plinko":
@@ -780,10 +1306,6 @@ class ServiceMenuSystem(System):
             return
 
         if service == "roulette":
-            ok, credits = self._casino_commit_stake(wager)
-            if not ok:
-                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
-                return
             session = _casino_roulette_start(self._casino_round_seed(prop, service, wager), wager)
             session.update({
                 "property_id": prop.get("id"),
@@ -793,10 +1315,6 @@ class ServiceMenuSystem(System):
             return
 
         if service == "craps":
-            ok, credits = self._casino_commit_stake(wager)
-            if not ok:
-                self._emit_casino_blocked(prop, service, "no_credits", cost=wager, credits=credits, wager=wager)
-                return
             session = _casino_craps_start(self._casino_round_seed(prop, service, wager), wager)
             session.update({
                 "property_id": prop.get("id"),
@@ -847,7 +1365,7 @@ class ServiceMenuSystem(System):
             })
             next_session, round_result = _casino_twenty_one_resolve(session, "start")
             if round_result:
-                self._emit_casino_round(prop, service, round_result)
+                self._settle_casino_round(prop, service, round_result)
                 return
             self._open_twenty_one_table(prop, next_session or session)
             return
@@ -892,7 +1410,7 @@ class ServiceMenuSystem(System):
             seed_token = str(session.get("seed_token", "")).strip() or self._casino_round_seed(prop, service, session.get("wager", 0))
             round_result = _casino_plinko_resolve(seed_token, int(session.get("wager", 0)), lane)
             round_result["stake_already_paid"] = True
-            self._emit_casino_round(prop, service, round_result)
+            self._settle_casino_round(prop, service, round_result)
             return True
 
         if service == "video_poker" and option_id.startswith("video_poker:toggle:"):
@@ -917,7 +1435,7 @@ class ServiceMenuSystem(System):
                     property_id=prop.get("id"),
                 )
                 return True
-            self._emit_casino_round(prop, service, round_result)
+            self._settle_casino_round(prop, service, round_result)
             return True
 
         if service == "keno" and option_id.startswith("keno:toggle:"):
@@ -958,77 +1476,12 @@ class ServiceMenuSystem(System):
             if not round_result:
                 self._open_keno_table(prop, current, notice="That ticket lost sync with the board. Try that draw again.")
                 return True
-            self._emit_casino_round(prop, service, round_result)
-            return True
-
-        if service == "roulette" and option_id == "roulette:view:numbers":
-            current = _casino_roulette_normalize_session(session)
-            if current:
-                current["view"] = "numbers"
-                self._open_roulette_table(prop, current)
-            return True
-
-        if service == "roulette" and option_id == "roulette:back":
-            current = _casino_roulette_normalize_session(session)
-            if current:
-                current["view"] = "board"
-                self._open_roulette_table(prop, current)
+            self._settle_casino_round(prop, service, round_result)
             return True
 
         if service == "roulette":
             current = _casino_roulette_normalize_session(session)
-            bet_kind = ""
-            bet_value = None
-            if option_id in {"roulette:red", "roulette:black"}:
-                bet_kind = "color"
-                bet_value = option_id.rsplit(":", 1)[-1]
-            elif option_id in {"roulette:odd", "roulette:even"}:
-                bet_kind = "parity"
-                bet_value = option_id.rsplit(":", 1)[-1]
-            elif option_id in {"roulette:low", "roulette:high"}:
-                bet_kind = "range"
-                bet_value = option_id.rsplit(":", 1)[-1]
-            elif option_id.startswith("roulette:dozen:"):
-                bet_kind = "dozen"
-                try:
-                    bet_value = int(option_id.rsplit(":", 1)[-1])
-                except (TypeError, ValueError):
-                    bet_value = None
-            elif option_id.startswith("roulette:column:"):
-                bet_kind = "column"
-                try:
-                    bet_value = int(option_id.rsplit(":", 1)[-1])
-                except (TypeError, ValueError):
-                    bet_value = None
-            elif option_id.startswith("roulette:straight:"):
-                bet_kind = "straight"
-                try:
-                    bet_value = int(option_id.rsplit(":", 1)[-1])
-                except (TypeError, ValueError):
-                    bet_value = None
-            if bet_kind:
-                round_result = _casino_roulette_resolve(current, bet_kind, bet_value)
-                if not round_result:
-                    self._open_roulette_table(prop, current or session, notice="That spin lost sync with the wheel. Try another spin.")
-                    return True
-                self._emit_casino_round(prop, service, round_result)
-                return True
-
-        if service == "craps" and option_id.startswith("craps:view:"):
-            current = _casino_craps_normalize_session(session)
-            if not current:
-                self._present_service_result("Craps", ["That table lost the round state.", "Start a fresh round."], property_id=prop.get("id"))
-                return True
-            next_view = option_id.rsplit(":", 1)[-1]
-            current["view"] = next_view
-            self._open_craps_table(prop, current)
-            return True
-
-        if service == "craps" and option_id == "craps:back":
-            current = _casino_craps_normalize_session(session)
-            if current:
-                current["view"] = "layout"
-                self._open_craps_table(prop, current)
+            self._open_roulette_table(prop, current or session, notice="Use the board controls to add chips, remove chips, and spin.")
             return True
 
         if service == "craps":
@@ -1036,53 +1489,8 @@ class ServiceMenuSystem(System):
             if not current:
                 self._present_service_result("Craps", ["That table lost the round state.", "Start a fresh round."], property_id=prop.get("id"))
                 return True
-            bet_kind = ""
-            bet_value = None
-            odds_extra = 0
-            if option_id in {"craps:pass", "craps:dont_pass", "craps:field"}:
-                bet_kind = option_id.rsplit(":", 1)[-1]
-            elif option_id.startswith("craps:pass_odds:"):
-                bet_kind = "pass_odds"
-                try:
-                    bet_value = max(1, int(option_id.rsplit(":", 1)[-1]))
-                except (TypeError, ValueError):
-                    bet_value = None
-                odds_extra = int(current.get("wager", 0)) * int(bet_value or 0)
-            elif option_id.startswith("craps:dont_pass_odds:"):
-                bet_kind = "dont_pass_odds"
-                try:
-                    bet_value = max(1, int(option_id.rsplit(":", 1)[-1]))
-                except (TypeError, ValueError):
-                    bet_value = None
-                odds_extra = int(current.get("wager", 0)) * int(bet_value or 0)
-            elif option_id.startswith("craps:place:"):
-                bet_kind = "place"
-                try:
-                    bet_value = int(option_id.rsplit(":", 1)[-1])
-                except (TypeError, ValueError):
-                    bet_value = None
-            elif option_id.startswith("craps:hard:"):
-                bet_kind = "hardway"
-                try:
-                    bet_value = int(option_id.rsplit(":", 1)[-1])
-                except (TypeError, ValueError):
-                    bet_value = None
-            elif option_id.startswith("craps:prop:"):
-                bet_kind = "prop"
-                bet_value = option_id.split(":", 2)[-1]
-            if bet_kind:
-                if odds_extra > 0:
-                    ok, credits = self._casino_commit_stake(odds_extra)
-                    if not ok:
-                        self._emit_casino_blocked(prop, service, "no_credits", cost=odds_extra, credits=credits, wager=int(current.get("wager", 0)))
-                        return True
-                    current["stake"] = int(current.get("stake", current.get("wager", 0))) + odds_extra
-                round_result = _casino_craps_resolve(current, bet_kind, bet_value)
-                if not round_result:
-                    self._open_craps_table(prop, current, notice="That roll sequence lost sync with the table. Try another shooter.")
-                    return True
-                self._emit_casino_round(prop, service, round_result)
-                return True
+            self._open_craps_table(prop, current, notice="Use the board controls to stage chips and roll the shooter.")
+            return True
 
         if service == "baccarat" and option_id in {"baccarat:player", "baccarat:banker", "baccarat:tie"}:
             current = _casino_baccarat_normalize_session(session)
@@ -1094,7 +1502,7 @@ class ServiceMenuSystem(System):
             if not round_result:
                 self._open_baccarat_table(prop, current, notice="That hand lost sync with the shoe. Try another hand.")
                 return True
-            self._emit_casino_round(prop, service, round_result)
+            self._settle_casino_round(prop, service, round_result)
             return True
 
         if service == "three_card_poker" and option_id in {"three_card_poker:play", "three_card_poker:fold"}:
@@ -1114,14 +1522,14 @@ class ServiceMenuSystem(System):
             if not round_result:
                 self._open_three_card_poker_table(prop, current, notice="That hand lost sync with the table. Try another deal.")
                 return True
-            self._emit_casino_round(prop, service, round_result)
+            self._settle_casino_round(prop, service, round_result)
             return True
 
         if service == "twenty_one" and option_id in {"twenty_one:hit", "twenty_one:stand"}:
             action = "hit" if option_id.endswith(":hit") else "stand"
             next_session, round_result = _casino_twenty_one_resolve(session, action)
             if round_result:
-                self._emit_casino_round(prop, service, round_result)
+                self._settle_casino_round(prop, service, round_result)
             elif next_session:
                 self._open_twenty_one_table(prop, next_session)
             return True
@@ -1135,7 +1543,7 @@ class ServiceMenuSystem(System):
             action = "double" if option_id.endswith(":double") else "split"
             next_session, round_result = _casino_twenty_one_resolve(session, action)
             if round_result:
-                self._emit_casino_round(prop, service, round_result)
+                self._settle_casino_round(prop, service, round_result)
             elif next_session:
                 self._open_twenty_one_table(prop, next_session)
             return True
@@ -1151,7 +1559,7 @@ class ServiceMenuSystem(System):
                 round_result = _casino_holdem_resolve(session, "call")
             else:
                 round_result = _casino_holdem_resolve(session, "fold")
-            self._emit_casino_round(prop, service, round_result)
+            self._settle_casino_round(prop, service, round_result)
             return True
 
         return False
@@ -2137,6 +2545,10 @@ class ServiceMenuSystem(System):
         pos = self._position_for(self.player_eid)
         if not pos:
             return False
+        archetype = str(((prop.get("metadata", {}) or {}).get("archetype", "") or "").strip().lower())
+        if archetype in CASINO_FLOOR_ARCHETYPES:
+            self._open_casino_floor(prop)
+            return True
         options, storefront_service = self._service_menu_options(self.player_eid, prop, pos)
         if options:
             option_ids = [str(option.get("id", "")).strip().lower() for option in options]
@@ -2281,63 +2693,14 @@ class ServiceMenuSystem(System):
         })
 
     def _open_casino_game_menu(self, prop, service):
-        state = self._dialog_ui_state()
         self._clear_pending_service_result()
         self._clear_casino_session()
-        profile = _casino_game_profile(service)
-        if not profile:
-            self._present_service_result("Casino", ["That game is not running on this floor right now."], property_id=prop.get("id"))
-            return
-
-        prop_name = str(prop.get("name", prop.get("id", "Casino"))).strip() or "Casino"
-        assets = self._assets_for(self.player_eid)
-        wallet_credits = int(getattr(assets, "credits", 0)) if assets else 0
-        base_bets = tuple(int(amount) for amount in tuple(profile.get("bet_options", ()) or ()) if int(amount) > 0)
-        owner_limit = self._player_owns_property(prop) and bool(base_bets)
-        wager_values = list(base_bets)
-        if owner_limit:
-            high_limit = int(max(base_bets)) * 2
-            if high_limit not in wager_values:
-                wager_values.append(high_limit)
-        wager_values = sorted(set(wager_values))
-        wager_options = [
-            {
-                "id": f"{str(service).strip().lower()}:bet:{int(amount)}",
-                "label": (
-                    f"Bet {_credit_amount_label(amount)} [owner limit]"
-                    if owner_limit and amount > max(base_bets)
-                    else f"Bet {_credit_amount_label(amount)}"
-                ),
-            }
-            for amount in wager_values
-        ]
-        transcript = [
-            str(profile.get("prompt", "Choose a wager.")).strip() or "Choose a wager.",
-            str(profile.get("note", "")).strip() or "Pick a stake and play a round.",
-            f"Wallet {_credit_amount_label(wallet_credits)}.",
-        ]
-        if owner_limit:
-            transcript.append("Owner perk: this floor will book one higher posted stake for you.")
-
-        self.sim.set_time_paused(True, reason="dialog")
-        state.update({
-            "open": True,
-            "kind": "service_menu",
-            "npc_eid": None,
-            "property_id": prop.get("id"),
-            "title": f"{_casino_game_title(service)}: {prop_name}",
-            "subtitle": "Choose a wager",
-            "transcript": transcript,
-            "topics": wager_options,
-            "selected_index": 0,
-            "scroll": 0,
-            "hint": "Pick a stake to play one round. Esc closes; Space clears result messages.",
-            "new_topic_ids": [],
-            "close_pending": False,
-            "machine_action": None,
-            "service_menu_mode": f"casino:{str(service).strip().lower()}",
-            "casino_session": None,
-        })
+        self._open_casino_wager(
+            prop,
+            service,
+            host_style=casino_host_style(prop),
+            return_to="floor" if casino_host_style(prop) == "floor" else "service_menu",
+        )
 
     def _open_service_menu(self, prop, options, storefront_service=None):
         state = self._dialog_ui_state()
@@ -3053,8 +3416,221 @@ class ServiceMenuSystem(System):
             return
         self._open_banking_menu(prop)
 
+    def on_casino_ui_action(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        state = self._casino_ui_state()
+        if not bool(state.get("open")):
+            return
+        prop = self.sim.properties.get(state.get("property_id"))
+        action = str(event.data.get("action", "") or "").strip().lower()
+        mode = str(state.get("mode", "floor") or "floor").strip().lower()
+        host_style = str(state.get("host_style", casino_host_style(prop))).strip().lower() or casino_host_style(prop)
+        service = str(state.get("service", "") or "").strip().lower()
+        dx = int(event.data.get("dx", 0) or 0)
+        dy = int(event.data.get("dy", 0) or 0)
+
+        if action == "tab" and host_style == "floor" and mode in {"floor", "services"}:
+            self._open_casino_floor(prop, page="services" if mode == "floor" else "games")
+            return
+
+        if action == "back":
+            if mode == "result" or bool(state.get("close_pending")):
+                if host_style == "floor":
+                    self._open_casino_floor(prop, page=state.get("floor_page", "games"))
+                else:
+                    self._return_from_casino_host(prop)
+                return
+            if mode == "floor":
+                self._close_casino_ui()
+                return
+            if mode == "services":
+                self._open_casino_floor(prop, page="games")
+                return
+            if mode == "wager":
+                if host_style == "floor":
+                    self._open_casino_floor(prop, page=state.get("floor_page", "games"), selected_id=f"game:{service}")
+                else:
+                    self._return_from_casino_host(prop)
+                return
+            if mode == "live":
+                if self._casino_session():
+                    self._forfeit_active_casino_session()
+                if host_style == "floor":
+                    self._open_casino_floor(prop, page=state.get("floor_page", "games"), selected_id=f"game:{service}")
+                else:
+                    self._return_from_casino_host(prop)
+                return
+
+        if action == "move":
+            if mode in {"floor", "services", "wager"} or (mode == "live" and list(state.get("rows", ()) or ())):
+                step = dy if dy else dx
+                if step:
+                    self._move_casino_row_selection(step)
+                return
+            session = self._casino_session()
+            if service == "keno":
+                moved = self._move_keno_cursor(session, dx, dy)
+                if moved:
+                    self._open_keno_table(prop, moved)
+                return
+            if service == "roulette":
+                moved = self._move_roulette_cursor(session, dx, dy)
+                if moved:
+                    self._open_roulette_table(prop, moved)
+                return
+            if service == "craps":
+                moved = self._move_craps_cursor(session, dx, dy)
+                if moved:
+                    self._open_craps_table(prop, moved)
+                return
+            return
+
+        if action == "confirm":
+            if mode in {"floor", "services", "wager"} or list(state.get("rows", ()) or ()):
+                row = self._selected_casino_row()
+                if row:
+                    self.on_service_menu_execute_request(Event(
+                        "service_menu_execute_request",
+                        eid=self.player_eid,
+                        property_id=state.get("property_id"),
+                        option_id=row.get("id"),
+                    ))
+                return
+            session = self._casino_session()
+            if service == "keno":
+                current = _casino_keno_normalize_session(session)
+                if not current or not list(current.get("picks", ()) or ()):
+                    self._open_keno_table(prop, current or session, notice="Mark at least one number before the draw.")
+                    return
+                round_result = _casino_keno_draw(current)
+                if not round_result:
+                    self._open_keno_table(prop, current, notice="That ticket lost sync with the board. Try that draw again.")
+                    return
+                self._settle_casino_round(prop, service, round_result)
+                return
+            if service == "roulette":
+                current = _casino_roulette_normalize_session(session)
+                round_result = _casino_roulette_resolve(current)
+                if not round_result:
+                    self._open_roulette_table(prop, current or session, notice="Post at least one chip before the spin.")
+                    return
+                self._settle_casino_round(prop, service, round_result)
+                return
+            if service == "craps":
+                current = _casino_craps_normalize_session(session)
+                next_session, round_result = _casino_craps_resolve(current)
+                if not round_result:
+                    self._open_craps_table(prop, current or session, notice="Post at least one chip before the roll.")
+                    return
+                self._settle_casino_round(prop, service, round_result, next_session=next_session, continue_notice=round_result.get("headline", ""))
+                return
+            return
+
+        if action == "primary":
+            session = self._casino_session()
+            if service == "keno":
+                current = _casino_keno_normalize_session(session)
+                if not current:
+                    return
+                ticket_number = max(1, min(CASINO_KENO_NUMBER_COUNT, int(current.get("cursor", 1) or 1)))
+                picks = list(current.get("picks", ()) or ())
+                if ticket_number not in picks and len(picks) >= CASINO_KENO_MAX_PICKS:
+                    self._open_keno_table(prop, current, notice=f"You can only mark {CASINO_KENO_MAX_PICKS} spots on one ticket.")
+                    return
+                next_session = _casino_keno_toggle_pick(current, ticket_number)
+                if next_session:
+                    self._open_keno_table(prop, next_session)
+                return
+            if service == "roulette":
+                current = _casino_roulette_normalize_session(session)
+                if not current:
+                    return
+                chip_value = int(current.get("wager", 0) or 0)
+                ok, credits = self._casino_commit_stake(chip_value)
+                if not ok:
+                    self._open_roulette_table(prop, current, notice=f"You need {_credit_amount_label(chip_value)} for another chip. Wallet {_credit_amount_label(credits)}.")
+                    return
+                next_session = _casino_roulette_stage_bet(current, current.get("cursor_key"))
+                if not next_session:
+                    assets = self._assets_for(self.player_eid)
+                    if assets:
+                        assets.credits += chip_value
+                    self._open_roulette_table(prop, current, notice="That market is not taking action right now.")
+                    return
+                self._open_roulette_table(prop, next_session)
+                return
+            if service == "craps":
+                current = _casino_craps_normalize_session(session)
+                if not current:
+                    return
+                chip_value = int(current.get("wager", 0) or 0)
+                ok, credits = self._casino_commit_stake(chip_value)
+                if not ok:
+                    self._open_craps_table(prop, current, notice=f"You need {_credit_amount_label(chip_value)} for another chip. Wallet {_credit_amount_label(credits)}.")
+                    return
+                next_session = _casino_craps_stage_bet(current, current.get("cursor_key"))
+                if not next_session:
+                    assets = self._assets_for(self.player_eid)
+                    if assets:
+                        assets.credits += chip_value
+                    self._open_craps_table(prop, current, notice="That market is not working right now. Odds need a live point and matching line action.")
+                    return
+                self._open_craps_table(prop, next_session)
+                return
+            return
+
+        if action == "secondary":
+            session = self._casino_session()
+            if service == "keno":
+                current = _casino_keno_normalize_session(session)
+                if not current:
+                    return
+                ticket_number = max(1, min(CASINO_KENO_NUMBER_COUNT, int(current.get("cursor", 1) or 1)))
+                if ticket_number not in set(current.get("picks", ()) or ()):
+                    self._open_keno_table(prop, current, notice="That spot is not marked on your ticket.")
+                    return
+                next_session = _casino_keno_toggle_pick(current, ticket_number)
+                if next_session:
+                    self._open_keno_table(prop, next_session)
+                return
+            if service == "roulette":
+                current = _casino_roulette_normalize_session(session)
+                if not current:
+                    return
+                key = str(current.get("cursor_key", "")).strip().lower()
+                if int(dict(current.get("bets", {}) or {}).get(key, 0) or 0) <= 0:
+                    self._open_roulette_table(prop, current, notice="No chip is staged on that market.")
+                    return
+                next_session = _casino_roulette_remove_bet(current, key)
+                assets = self._assets_for(self.player_eid)
+                if assets:
+                    assets.credits += int(current.get("wager", 0) or 0)
+                self._open_roulette_table(prop, next_session or current)
+                return
+            if service == "craps":
+                current = _casino_craps_normalize_session(session)
+                if not current:
+                    return
+                key = str(current.get("cursor_key", "")).strip().lower()
+                if int(dict(current.get("bets", {}) or {}).get(key, 0) or 0) <= 0:
+                    self._open_craps_table(prop, current, notice="No chip is staged on that market.")
+                    return
+                next_session = _casino_craps_remove_bet(current, key)
+                assets = self._assets_for(self.player_eid)
+                if assets:
+                    assets.credits += int(current.get("wager", 0) or 0)
+                self._open_craps_table(prop, next_session or current)
+                return
+
     def on_dialog_close_request(self, event):
         if event.data.get("eid") != self.player_eid:
+            return
+        casino_state = self._casino_ui_state()
+        if bool(casino_state.get("open")):
+            if self._casino_session() and not bool(casino_state.get("close_pending")):
+                self._forfeit_active_casino_session()
+            self._close_casino_ui()
             return
         state = self._dialog_ui_state()
         if str(state.get("kind", "")).strip().lower() == "service_menu":
@@ -3067,6 +3643,73 @@ class ServiceMenuSystem(System):
     def on_service_menu_execute_request(self, event):
         if event.data.get("eid") != self.player_eid:
             return
+
+        casino_state = self._casino_ui_state()
+        if bool(casino_state.get("open")):
+            option_id = str(event.data.get("option_id", "") or "").strip().lower()
+            property_id = event.data.get("property_id") or casino_state.get("property_id")
+            service = str(casino_state.get("service", "") or "").strip().lower()
+            if not option_id or not property_id:
+                return
+            prop = self.sim.properties.get(property_id)
+            if option_id.startswith("game:"):
+                service_id = str(option_id.partition(":")[2] or "").strip().lower()
+                if isinstance(prop, dict) and service_id:
+                    self._open_casino_wager(prop, service_id, host_style=casino_host_style(prop), return_to="floor")
+                return
+            if option_id.startswith("service:"):
+                option_id = str(option_id.partition(":")[2] or "").strip().lower()
+            if option_id in CASINO_GAME_SERVICE_IDS:
+                if isinstance(prop, dict):
+                    self._open_casino_wager(prop, option_id, host_style=casino_host_style(prop), return_to="floor" if casino_host_style(prop) == "floor" else "service_menu")
+                return
+            if option_id == "trade_buy":
+                self._close_casino_ui()
+                self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="buy", property_id=property_id))
+                return
+            if option_id == "trade_sell":
+                self._close_casino_ui()
+                self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="sell", property_id=property_id))
+                return
+            if option_id == "banking":
+                self._close_casino_ui()
+                if isinstance(prop, dict):
+                    self._open_banking_menu(prop)
+                return
+            if option_id == "insurance":
+                self._close_casino_ui()
+                if isinstance(prop, dict):
+                    self._begin_pending_service_result(
+                        channel="insurance",
+                        property_id=property_id,
+                        property_name=prop.get("name", property_id),
+                        service="insurance",
+                    )
+                    self.sim.emit(Event(
+                        "finance_service_request",
+                        eid=self.player_eid,
+                        property_id=property_id,
+                        service="insurance",
+                    ))
+                return
+            if option_id.startswith("wager:"):
+                try:
+                    wager = int(option_id.partition(":")[2] or 0)
+                except (TypeError, ValueError):
+                    wager = 0
+                if isinstance(prop, dict):
+                    self._start_casino_round(prop, service, wager)
+                return
+            if service and option_id.startswith(f"{service}:bet:"):
+                try:
+                    wager = int(option_id.rsplit(":", 1)[-1])
+                except (TypeError, ValueError):
+                    wager = 0
+                if isinstance(prop, dict):
+                    self._start_casino_round(prop, service, wager)
+                return
+            if isinstance(prop, dict) and self._handle_active_casino_option(prop, option_id):
+                return
 
         state = self._dialog_ui_state()
         if not state.get("open") or str(state.get("kind", "")).strip().lower() != "service_menu":
@@ -3096,6 +3739,19 @@ class ServiceMenuSystem(System):
         if option_id == "trade_sell":
             self._close_service_menu()
             self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="sell", property_id=property_id))
+            return
+        if option_id in CASINO_GAME_SERVICE_IDS:
+            if isinstance(prop, dict):
+                self._close_service_menu()
+                self._open_casino_wager(
+                    prop,
+                    option_id,
+                    host_style=casino_host_style(prop),
+                    return_to="floor" if casino_host_style(prop) == "floor" else "service_menu",
+                )
+            else:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
             return
         if option_id == "banking":
             if isinstance(prop, dict):

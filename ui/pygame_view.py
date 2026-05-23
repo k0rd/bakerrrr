@@ -240,6 +240,12 @@ class PygameView:
             "cat_gray": (170, 170, 170),
             "cat_tuxedo": (215, 215, 215),
             "cat_purple": (175, 125, 220),
+            "casino_felt": (34, 112, 74),
+            "casino_gold": (228, 196, 74),
+            "casino_red": (210, 82, 68),
+            "casino_black": (78, 82, 88),
+            "casino_chip": (84, 182, 198),
+            "casino_cursor": (198, 240, 214),
         }
 
     def prompt_text_input(

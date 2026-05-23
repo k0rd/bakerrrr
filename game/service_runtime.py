@@ -1447,15 +1447,18 @@ CASINO_THREE_CARD_POKER_ANTE_BONUS_MULTIPLIERS = {
     4: 4,
     3: 1,
 }
-CASINO_KENO_NUMBER_COUNT = 20
-CASINO_KENO_DRAW_COUNT = 8
-CASINO_KENO_MAX_PICKS = 5
+CASINO_KENO_NUMBER_COUNT = 40
+CASINO_KENO_DRAW_COUNT = 20
+CASINO_KENO_MAX_PICKS = 8
 CASINO_KENO_PAYOUT_MULTIPLIERS = {
     1: {1: 2},
-    2: {2: 5},
-    3: {2: 1, 3: 8},
-    4: {2: 1, 3: 4, 4: 15},
-    5: {3: 2, 4: 8, 5: 30},
+    2: {2: 3},
+    3: {2: 1, 3: 4},
+    4: {3: 2, 4: 8},
+    5: {4: 4, 5: 10},
+    6: {4: 1, 5: 5, 6: 20},
+    7: {5: 1, 6: 8, 7: 60},
+    8: {6: 2, 7: 20, 8: 100},
 }
 CASINO_CRAPS_MAX_POINT_ROLLS = 32
 CASINO_ROULETTE_NUMBER_MAX = 36
@@ -1490,7 +1493,7 @@ CASINO_GAME_PROFILES = {
         "menu_label": "Play keno",
         "bet_options": (5, 15, 30),
         "prompt": "Pick your spots, let the blower draw, and sweat the ticket.",
-        "note": "Quick-draw house keno uses a 20-number board, one ticket, and one fast reveal.",
+        "note": "Quick-draw house keno uses a 40-number board, a 20-ball reveal, and tickets up to 8 spots.",
         "social_gain": (1, 3),
     },
     "roulette": {
@@ -1498,8 +1501,8 @@ CASINO_GAME_PROFILES = {
         "service_label": "roulette",
         "menu_label": "Play roulette",
         "bet_options": (10, 25, 50),
-        "prompt": "Post a chip, pick a pocket or an outside section, and let the wheel spin.",
-        "note": "Single-zero house wheel with straight-up numbers, colors, parity, ranges, dozens, and columns.",
+        "prompt": "Pick a chip size, stage any mix of bets you like, and spin the wheel when the slip feels right.",
+        "note": "Single-zero wheel with straight-up numbers, colors, parity, ranges, dozens, and columns on one shared slip.",
         "social_gain": (1, 4),
     },
     "craps": {
@@ -1507,8 +1510,8 @@ CASINO_GAME_PROFILES = {
         "service_label": "craps",
         "menu_label": "Play craps",
         "bet_options": (10, 25, 50),
-        "prompt": "Post a chip, choose pass line, don't pass, or field, and let the dice run.",
-        "note": "Pass line and don't pass auto-play through the point; field is a one-roll side action.",
+        "prompt": "Pick a base chip, stage the bets you want, and roll the shooter one throw at a time.",
+        "note": "Pass line, dark side, odds, place, hardways, field, and props can share the felt while the point stays live.",
         "social_gain": (2, 5),
     },
     "baccarat": {
@@ -1802,12 +1805,12 @@ def _casino_ascii_card_block(label, cards, *, hide_hole=False):
     top = " ".join(".----." for _ in shown)
     middle = " ".join(f"|{str(face).strip()[:4].ljust(4)}|" for face in shown)
     bottom = " ".join("'----'" for _ in shown)
-    prefix = f"{str(label or 'Hand').strip()}: "
-    pad = " " * len(prefix)
+    heading_text = str(label or "Hand").strip() or "Hand"
     return [
-        prefix + top,
-        pad + middle,
-        pad + bottom,
+        f"{heading_text}:",
+        top,
+        middle,
+        bottom,
     ]
 
 
@@ -2271,6 +2274,7 @@ def _casino_keno_normalize_session(session):
         "wager": int(session.get("wager", 0)),
         "stake": int(session.get("stake", session.get("wager", 0))),
         "picks": picks,
+        "cursor": max(1, min(int(session.get("cursor", 1) or 1), CASINO_KENO_NUMBER_COUNT)),
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
     }
@@ -2283,6 +2287,7 @@ def _casino_keno_start(seed_token, wager):
         "wager": int(wager),
         "stake": int(wager),
         "picks": [],
+        "cursor": 1,
     }
 
 
@@ -2303,6 +2308,7 @@ def _casino_keno_toggle_pick(session, number):
         picks.append(ticket_number)
     picks.sort()
     current["picks"] = picks
+    current["cursor"] = ticket_number
     return current
 
 
@@ -2386,6 +2392,10 @@ def _casino_keno_draw(session):
         "pick_count": int(pick_count),
         "hit_count": int(hit_count),
         "payout_mult": int(payout_mult),
+        "number_count": int(CASINO_KENO_NUMBER_COUNT),
+        "draw_count": int(CASINO_KENO_DRAW_COUNT),
+        "max_picks": int(CASINO_KENO_MAX_PICKS),
+        "payout_table_key": f"{pick_count}:{hit_count}",
         "social_gain": _casino_social_gain("keno", f"{current['seed_token']}:{pick_count}:{hit_count}"),
         "stake_already_paid": True,
     }
@@ -2394,15 +2404,29 @@ def _casino_keno_draw(session):
 def _casino_roulette_normalize_session(session):
     if not isinstance(session, dict):
         return None
-    view = str(session.get("view", "board") or "board").strip().lower()
-    if view not in {"board", "numbers"}:
-        view = "board"
+    bets = {}
+    for raw_key, raw_units in dict(session.get("bets", {}) or {}).items():
+        market = _casino_roulette_market_from_key(raw_key)
+        if not market:
+            continue
+        try:
+            units = int(raw_units)
+        except (TypeError, ValueError):
+            continue
+        if units > 0:
+            bets[market["key"]] = units
+    wager = int(session.get("wager", 0))
+    cursor_key = str(session.get("cursor_key", "straight:0") or "straight:0").strip().lower() or "straight:0"
+    if not _casino_roulette_market_from_key(cursor_key):
+        cursor_key = "straight:0"
     return {
         "service": "roulette",
         "seed_token": str(session.get("seed_token", "")).strip(),
-        "wager": int(session.get("wager", 0)),
-        "stake": int(session.get("stake", session.get("wager", 0))),
-        "view": view,
+        "wager": wager,
+        "stake": int(sum(int(units) for units in bets.values()) * max(0, wager)),
+        "bets": bets,
+        "spin_index": max(0, int(session.get("spin_index", 0) or 0)),
+        "cursor_key": cursor_key,
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
     }
@@ -2413,8 +2437,10 @@ def _casino_roulette_start(seed_token, wager):
         "service": "roulette",
         "seed_token": str(seed_token),
         "wager": int(wager),
-        "stake": int(wager),
-        "view": "board",
+        "stake": 0,
+        "bets": {},
+        "spin_index": 0,
+        "cursor_key": "straight:0",
     }
 
 
@@ -2464,6 +2490,73 @@ def _casino_roulette_bet_label(bet_kind, bet_value=None):
     return "Roulette Bet"
 
 
+def _casino_roulette_bet_key(bet_kind, bet_value=None):
+    kind = str(bet_kind or "").strip().lower()
+    if kind == "straight":
+        try:
+            return f"straight:{int(bet_value)}"
+        except (TypeError, ValueError):
+            return ""
+    if kind in {"color", "parity", "range"}:
+        value = str(bet_value or "").strip().lower()
+        return f"{kind}:{value}" if value else ""
+    if kind in {"dozen", "column"}:
+        try:
+            return f"{kind}:{int(bet_value)}"
+        except (TypeError, ValueError):
+            return ""
+    return ""
+
+
+def _casino_roulette_market_from_key(market_key):
+    key = str(market_key or "").strip().lower()
+    if not key:
+        return None
+    kind, _sep, raw_value = key.partition(":")
+    if kind == "straight":
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if value < 0 or value > CASINO_ROULETTE_NUMBER_MAX:
+            return None
+    elif kind == "color":
+        value = str(raw_value or "").strip().lower()
+        if value not in {"red", "black"}:
+            return None
+    elif kind == "parity":
+        value = str(raw_value or "").strip().lower()
+        if value not in {"odd", "even"}:
+            return None
+    elif kind == "range":
+        value = str(raw_value or "").strip().lower()
+        if value not in {"low", "high"}:
+            return None
+    elif kind == "dozen":
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if value not in {1, 2, 3}:
+            return None
+    elif kind == "column":
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if value not in {1, 2, 3}:
+            return None
+    else:
+        return None
+    normalized_key = _casino_roulette_bet_key(kind, value)
+    return {
+        "key": normalized_key,
+        "kind": kind,
+        "value": value,
+        "label": _casino_roulette_bet_label(kind, value),
+    }
+
+
 def _casino_roulette_payout_multiplier(bet_kind):
     kind = str(bet_kind or "").strip().lower()
     if kind == "straight":
@@ -2510,33 +2603,94 @@ def _casino_roulette_bet_hits(spin_number, bet_kind, bet_value=None):
     return False
 
 
-def _casino_roulette_resolve(session, bet_kind, bet_value=None):
+def _casino_roulette_stage_bet(session, market_key):
+    current = _casino_roulette_normalize_session(session)
+    market = _casino_roulette_market_from_key(market_key)
+    if not current or not market:
+        return None
+    bets = dict(current.get("bets", {}) or {})
+    bets[market["key"]] = int(bets.get(market["key"], 0) or 0) + 1
+    current["bets"] = bets
+    current["cursor_key"] = market["key"]
+    current["stake"] = int(sum(int(units) for units in bets.values()) * int(current.get("wager", 0)))
+    return current
+
+
+def _casino_roulette_remove_bet(session, market_key):
+    current = _casino_roulette_normalize_session(session)
+    market = _casino_roulette_market_from_key(market_key)
+    if not current or not market:
+        return None
+    bets = dict(current.get("bets", {}) or {})
+    units = int(bets.get(market["key"], 0) or 0)
+    if units <= 1:
+        bets.pop(market["key"], None)
+    else:
+        bets[market["key"]] = units - 1
+    current["bets"] = bets
+    current["cursor_key"] = market["key"]
+    current["stake"] = int(sum(int(raw_units) for raw_units in bets.values()) * int(current.get("wager", 0)))
+    return current
+
+
+def _casino_roulette_resolve(session):
     current = _casino_roulette_normalize_session(session)
     if not current:
         return None
+    bets = dict(current.get("bets", {}) or {})
+    if not bets:
+        return None
 
-    kind = str(bet_kind or "").strip().lower()
-    label = _casino_roulette_bet_label(kind, bet_value)
-    spin_rng = random.Random(f"{current['seed_token']}:roulette")
+    spin_rng = random.Random(f"{current['seed_token']}:roulette:{int(current.get('spin_index', 0))}")
     spin_number = spin_rng.randint(0, CASINO_ROULETTE_NUMBER_MAX)
     spin_color = _casino_roulette_color(spin_number)
-    hit = _casino_roulette_bet_hits(spin_number, kind, bet_value)
-    payout_mult = _casino_roulette_payout_multiplier(kind) if hit else 0
-    payout = int(max(0, payout_mult) * int(current.get("wager", 0)))
+    chip_value = int(current.get("wager", 0))
+    payout = 0
+    resolved_stake = 0
+    bet_slip = []
+    bet_outcomes = []
+    hit_count = 0
 
-    if hit and kind == "straight":
+    for key, units in sorted(bets.items()):
+        market = _casino_roulette_market_from_key(key)
+        if not market:
+            continue
+        unit_count = max(0, int(units))
+        if unit_count <= 0:
+            continue
+        stake = int(unit_count * chip_value)
+        hit = _casino_roulette_bet_hits(spin_number, market["kind"], market["value"])
+        payout_mult = _casino_roulette_payout_multiplier(market["kind"]) if hit else 0
+        bet_payout = int(max(0, payout_mult) * stake)
+        payout += bet_payout
+        resolved_stake += stake
+        if hit:
+            hit_count += 1
+        bet_slip.append({
+            "key": market["key"],
+            "label": market["label"],
+            "units": unit_count,
+            "stake": stake,
+        })
+        bet_outcomes.append({
+            "key": market["key"],
+            "label": market["label"],
+            "units": unit_count,
+            "stake": stake,
+            "hit": bool(hit),
+            "payout": int(bet_payout),
+            "profit": int(bet_payout - stake),
+        })
+
+    if hit_count > 0 and any(outcome["key"].startswith("straight:") and outcome["hit"] for outcome in bet_outcomes):
         headline = "Straight-up hit."
-        detail = "The ball dives straight into your pocket and the croupier builds a towering payout."
+        detail = "The ball dives straight into one of your numbers and the croupier builds a tall payout."
         outcome_key = "straight"
-    elif hit and kind in {"dozen", "column"}:
-        headline = "Section hit."
-        detail = "Your section covers the winning pocket and the layout pays 2 to 1."
-        outcome_key = kind
-    elif hit:
-        headline = "Even-money hit."
-        detail = "Your outside bet catches the winner and the table pays even money."
-        outcome_key = kind
-    elif spin_number == 0 and kind != "straight":
+    elif hit_count > 0:
+        headline = "The wheel pays."
+        detail = "One or more of your outside marks catch the winner and the felt starts flowing back your way."
+        outcome_key = "hit"
+    elif spin_number == 0:
         headline = "Zero sweeps the board."
         detail = "The ball settles on 0 green and wipes out the outside action."
         outcome_key = "zero"
@@ -2545,32 +2699,33 @@ def _casino_roulette_resolve(session, bet_kind, bet_value=None):
         detail = "The ball lands away from your mark and the house keeps the chip."
         outcome_key = "miss"
 
+    result_lines = [
+        f"Spin: {spin_number:02d} {spin_color.title()}",
+        f"Slip: {len(bet_outcomes)} market(s) at {_credit_amount_label(chip_value)} each.",
+    ]
+    for outcome in bet_outcomes:
+        result_lines.append(
+            f"{outcome['label']}: {outcome['units']} chip(s) | "
+            f"{'hit' if outcome['hit'] else 'miss'} | "
+            f"{outcome['profit']:+d}c."
+        )
+    result_lines.append(detail)
+
     return {
         "service": "roulette",
-        "wager": int(current["wager"]),
-        "stake": int(current["stake"]),
+        "wager": int(chip_value),
+        "stake": int(resolved_stake),
         "payout": int(payout),
         "outcome_key": outcome_key,
         "headline": headline,
         "detail": detail,
-        "summary": f"Spin {spin_number:02d} {spin_color}. Bet {label}. {headline}",
-        "result_lines": [
-            f"Spin: {spin_number:02d} {spin_color.title()}",
-            f"Bet: {label}",
-            (
-                f"Payout: x{payout_mult} gross return."
-                if payout_mult > 0
-                else "Payout: no return on this spin."
-            ),
-            detail,
-        ],
+        "summary": f"Spin {spin_number:02d} {spin_color}. Slip {len(bet_outcomes)} market(s). {headline}",
+        "result_lines": result_lines,
         "spin_number": int(spin_number),
         "spin_color": str(spin_color),
-        "bet_kind": kind,
-        "bet_value": bet_value,
-        "bet_label": label,
-        "payout_mult": int(payout_mult),
-        "social_gain": _casino_social_gain("roulette", f"{current['seed_token']}:{kind}:{spin_number}:{outcome_key}"),
+        "bet_slip": tuple(bet_slip),
+        "bet_outcomes": tuple(bet_outcomes),
+        "social_gain": _casino_social_gain("roulette", f"{current['seed_token']}:{spin_number}:{outcome_key}:{len(bet_outcomes)}"),
         "stake_already_paid": True,
     }
 
@@ -2578,15 +2733,44 @@ def _casino_roulette_resolve(session, bet_kind, bet_value=None):
 def _casino_craps_normalize_session(session):
     if not isinstance(session, dict):
         return None
-    view = str(session.get("view", "layout") or "layout").strip().lower()
-    if view not in {"layout", "pass_odds", "dont_pass_odds", "place", "hardways", "props"}:
-        view = "layout"
+    bets = {}
+    for raw_key, raw_units in dict(session.get("bets", {}) or {}).items():
+        market = _casino_craps_market_from_key(raw_key)
+        if not market:
+            continue
+        try:
+            units = int(raw_units)
+        except (TypeError, ValueError):
+            continue
+        if units > 0:
+            bets[market["key"]] = units
+    wager = int(session.get("wager", 0))
+    roll_history = []
+    for raw in list(session.get("roll_history", ()) or ()):
+        if not isinstance(raw, dict):
+            continue
+        roll_history.append({
+            "die_one": int(raw.get("die_one", 0) or 0),
+            "die_two": int(raw.get("die_two", 0) or 0),
+            "total": int(raw.get("total", 0) or 0),
+        })
+    phase = str(session.get("phase", "come_out") or "come_out").strip().lower()
+    if phase not in {"come_out", "point"}:
+        phase = "come_out"
+    cursor_key = str(session.get("cursor_key", "pass") or "pass").strip().lower() or "pass"
+    if not _casino_craps_market_from_key(cursor_key):
+        cursor_key = "pass"
     return {
         "service": "craps",
         "seed_token": str(session.get("seed_token", "")).strip(),
-        "wager": int(session.get("wager", 0)),
-        "stake": int(session.get("stake", session.get("wager", 0))),
-        "view": view,
+        "wager": wager,
+        "stake": int(sum(int(units) for units in bets.values()) * max(0, wager)),
+        "bets": bets,
+        "phase": phase,
+        "point_number": max(0, int(session.get("point_number", 0) or 0)),
+        "roll_index": max(0, int(session.get("roll_index", 0) or 0)),
+        "roll_history": roll_history,
+        "cursor_key": cursor_key,
         "property_id": session.get("property_id"),
         "property_name": str(session.get("property_name", "")).strip(),
     }
@@ -2597,8 +2781,13 @@ def _casino_craps_start(seed_token, wager):
         "service": "craps",
         "seed_token": str(seed_token),
         "wager": int(wager),
-        "stake": int(wager),
-        "view": "layout",
+        "stake": 0,
+        "bets": {},
+        "phase": "come_out",
+        "point_number": 0,
+        "roll_index": 0,
+        "roll_history": [],
+        "cursor_key": "pass",
     }
 
 
@@ -2644,6 +2833,66 @@ def _casino_craps_bet_label(bet_kind, bet_value=None):
         }
         return labels.get(value, "Proposition Bet")
     return "Pass Line"
+
+
+def _casino_craps_bet_key(bet_kind, bet_value=None):
+    kind = str(bet_kind or "").strip().lower()
+    if kind in {"pass", "dont_pass", "field", "pass_odds", "dont_pass_odds"}:
+        return kind
+    if kind == "place":
+        try:
+            return f"place:{int(bet_value)}"
+        except (TypeError, ValueError):
+            return ""
+    if kind == "hardway":
+        try:
+            return f"hardway:{int(bet_value)}"
+        except (TypeError, ValueError):
+            return ""
+    if kind == "prop":
+        value = str(bet_value or "").strip().lower()
+        return f"prop:{value}" if value else ""
+    return ""
+
+
+def _casino_craps_market_from_key(market_key):
+    key = str(market_key or "").strip().lower()
+    if not key:
+        return None
+    kind, _sep, raw_value = key.partition(":")
+    if kind in {"pass", "dont_pass", "field", "pass_odds", "dont_pass_odds"}:
+        value = None
+        normalized_kind = kind
+    elif kind == "place":
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if value not in {4, 5, 6, 8, 9, 10}:
+            return None
+        normalized_kind = "place"
+    elif kind == "hardway":
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if value not in {4, 6, 8, 10}:
+            return None
+        normalized_kind = "hardway"
+    elif kind == "prop":
+        value = str(raw_value or "").strip().lower()
+        if value not in {"2", "3", "11", "12", "any_craps", "any_seven"}:
+            return None
+        normalized_kind = "prop"
+    else:
+        return None
+    normalized_key = _casino_craps_bet_key(normalized_kind, value)
+    return {
+        "key": normalized_key,
+        "kind": normalized_kind,
+        "value": value,
+        "label": _casino_craps_bet_label(normalized_kind, value),
+    }
 
 
 def _casino_craps_roll_pair(rng):
@@ -2692,323 +2941,306 @@ def _casino_craps_place_profit(number, stake):
     return _casino_craps_profit_ratio(stake, ratio[0], ratio[1])
 
 
-def _casino_craps_resolve(session, bet_kind, bet_value=None):
+def _casino_craps_stage_bet(session, market_key):
+    current = _casino_craps_normalize_session(session)
+    market = _casino_craps_market_from_key(market_key)
+    if not current or not market:
+        return None
+    kind = market["kind"]
+    bets = dict(current.get("bets", {}) or {})
+    if kind in {"pass_odds", "dont_pass_odds"}:
+        if str(current.get("phase", "come_out")) != "point" or int(current.get("point_number", 0)) <= 0:
+            return None
+        line_key = "pass" if kind == "pass_odds" else "dont_pass"
+        line_units = int(bets.get(line_key, 0) or 0)
+        if line_units <= 0:
+            return None
+        if int(bets.get(market["key"], 0) or 0) >= (line_units * 3):
+            return None
+    bets[market["key"]] = int(bets.get(market["key"], 0) or 0) + 1
+    current["bets"] = bets
+    current["cursor_key"] = market["key"]
+    current["stake"] = int(sum(int(units) for units in bets.values()) * int(current.get("wager", 0)))
+    return current
+
+
+def _casino_craps_remove_bet(session, market_key):
+    current = _casino_craps_normalize_session(session)
+    market = _casino_craps_market_from_key(market_key)
+    if not current or not market:
+        return None
+    bets = dict(current.get("bets", {}) or {})
+    units = int(bets.get(market["key"], 0) or 0)
+    if units <= 1:
+        bets.pop(market["key"], None)
+    else:
+        bets[market["key"]] = units - 1
+    current["bets"] = bets
+    current["cursor_key"] = market["key"]
+    current["stake"] = int(sum(int(raw_units) for raw_units in bets.values()) * int(current.get("wager", 0)))
+    return current
+
+
+def _casino_craps_resolve(session):
     current = _casino_craps_normalize_session(session)
     if not current:
-        return None
+        return None, None
+    bets = dict(current.get("bets", {}) or {})
+    if not bets:
+        return current, None
 
-    kind = str(bet_kind or "").strip().lower()
-    if kind not in {"pass", "dont_pass", "field", "pass_odds", "dont_pass_odds", "place", "hardway", "prop"}:
-        return None
+    roll_rng = random.Random(f"{current['seed_token']}:craps:{int(current.get('roll_index', 0))}")
+    die_one, die_two, total = _casino_craps_roll_pair(roll_rng)
+    roll = {
+        "die_one": int(die_one),
+        "die_two": int(die_two),
+        "total": int(total),
+    }
+    current["roll_index"] = int(current.get("roll_index", 0)) + 1
+    current["roll_history"] = list(current.get("roll_history", ()) or ()) + [roll]
 
-    roll_rng = random.Random(f"{current['seed_token']}:craps")
-    rolls = []
+    phase_before = str(current.get("phase", "come_out"))
+    point_before = int(current.get("point_number", 0) or 0)
+    point_after = int(point_before)
+    phase_after = phase_before
+    if phase_before == "come_out" and total in {4, 5, 6, 8, 9, 10}:
+        phase_after = "point"
+        point_after = int(total)
+    elif phase_before == "point" and total in {7, point_before}:
+        phase_after = "come_out"
+        point_after = 0
 
-    def take_roll():
-        die_one, die_two, total = _casino_craps_roll_pair(roll_rng)
-        roll = {
-            "die_one": int(die_one),
-            "die_two": int(die_two),
-            "total": int(total),
-        }
-        rolls.append(roll)
-        return roll
-
-    bet_label = _casino_craps_bet_label(kind, bet_value)
-    wager = int(current.get("wager", 0))
-    stake = int(current.get("stake", wager))
-    odds_stake = max(0, stake - wager)
-    point_number = 0
+    resolved_keys = set()
     payout = 0
-    payout_mult = 0
-    outcome_key = "miss"
-    headline = "No hit."
-    detail = "The table turns against you and the house keeps the chip."
-    lines = [f"Bet: {bet_label}"]
+    resolved_stake = 0
+    messages = []
+    bet_outcomes = []
 
-    if kind in {"pass", "dont_pass", "field", "pass_odds", "dont_pass_odds"}:
-        come_out = take_roll()
-        come_out_total = int(come_out["total"])
-        lines.append(f"Come-out: {_casino_craps_roll_text(come_out)}")
+    def _resolve_market(market, units, *, hit, payout_amount, message, outcome_key):
+        nonlocal payout, resolved_stake
+        stake_amount = int(max(0, units) * int(current.get("wager", 0)))
+        resolved_stake += stake_amount
+        payout += int(max(0, payout_amount))
+        resolved_keys.add(market["key"])
+        messages.append(str(message).strip())
+        bet_outcomes.append({
+            "key": market["key"],
+            "label": market["label"],
+            "units": int(units),
+            "stake": int(stake_amount),
+            "hit": bool(hit),
+            "payout": int(max(0, payout_amount)),
+            "profit": int(max(0, payout_amount) - stake_amount),
+            "outcome_key": str(outcome_key or "table"),
+        })
 
+    prop_totals = {
+        "2": {2},
+        "3": {3},
+        "11": {11},
+        "12": {12},
+        "any_craps": {2, 3, 12},
+        "any_seven": {7},
+    }
+    prop_gross = {
+        "2": 31,
+        "3": 16,
+        "11": 16,
+        "12": 31,
+        "any_craps": 8,
+        "any_seven": 5,
+    }
+
+    for key, units in sorted(bets.items()):
+        market = _casino_craps_market_from_key(key)
+        if not market:
+            continue
+        unit_count = max(0, int(units))
+        if unit_count <= 0:
+            continue
+        stake = int(unit_count * int(current.get("wager", 0)))
+        kind = market["kind"]
+        value = market["value"]
         if kind == "field":
-            if come_out_total in {2, 12}:
-                payout_mult = 3
-                payout = int(payout_mult * wager)
-                outcome_key = "field_double"
-                headline = "Field cracks loud."
-                detail = "The dice hit the rare edge of the field and the box pays double."
-            elif come_out_total in {3, 4, 9, 10, 11}:
-                payout_mult = 2
-                payout = int(payout_mult * wager)
-                outcome_key = "field_win"
-                headline = "Field hit."
-                detail = "The roll lands inside the field and the table pays even money."
+            if total in {2, 12}:
+                _resolve_market(market, unit_count, hit=True, payout_amount=stake * 3, message="Field double pays.", outcome_key="field_double")
+            elif total in {3, 4, 9, 10, 11}:
+                _resolve_market(market, unit_count, hit=True, payout_amount=stake * 2, message="Field wins even money.", outcome_key="field_win")
             else:
-                outcome_key = "field_miss"
-                headline = "Field miss."
-                detail = "The roll lands in the dead middle and the field bet goes dark."
-            lines.append("Field pays even on 3, 4, 9, 10, and 11; 2 and 12 pay double.")
-        else:
-            pass_side = kind in {"pass", "pass_odds"}
-            odds_kind = kind in {"pass_odds", "dont_pass_odds"}
-            if odds_kind:
-                try:
-                    odds_mult = max(1, int(bet_value))
-                except (TypeError, ValueError):
-                    odds_mult = 1
-                required_odds = wager * odds_mult
-                if odds_stake < required_odds:
-                    return None
-                odds_stake = required_odds
-                lines.append(
-                    f"Odds: {odds_mult}x behind the line ({_credit_amount_label(odds_stake)} reserved)."
+                _resolve_market(market, unit_count, hit=False, payout_amount=0, message="Field misses.", outcome_key="field_miss")
+            continue
+        if kind == "prop":
+            winning_totals = prop_totals.get(str(value), set())
+            if total in winning_totals:
+                _resolve_market(
+                    market,
+                    unit_count,
+                    hit=True,
+                    payout_amount=stake * int(prop_gross.get(str(value), 0)),
+                    message=f"{market['label']} hits.",
+                    outcome_key=f"prop_{value}_hit",
                 )
-                lines.append("True-odds pays are rounded to the nearest credit when the ratio lands off-grid.")
+            else:
+                _resolve_market(market, unit_count, hit=False, payout_amount=0, message=f"{market['label']} misses.", outcome_key=f"prop_{value}_miss")
+            continue
+        if kind == "pass":
+            if phase_before == "come_out":
+                if total in {7, 11}:
+                    _resolve_market(market, unit_count, hit=True, payout_amount=stake * 2, message="Pass line wins on the natural.", outcome_key="pass_natural")
+                elif total in {2, 3, 12}:
+                    _resolve_market(market, unit_count, hit=False, payout_amount=0, message="Pass line loses on craps.", outcome_key="pass_craps")
+            else:
+                if total == point_before:
+                    _resolve_market(market, unit_count, hit=True, payout_amount=stake * 2, message=f"Pass line makes the point {point_before}.", outcome_key="pass_point")
+                elif total == 7:
+                    _resolve_market(market, unit_count, hit=False, payout_amount=0, message="Pass line drops on the seven out.", outcome_key="seven_out")
+            continue
+        if kind == "dont_pass":
+            if phase_before == "come_out":
+                if total in {2, 3}:
+                    _resolve_market(market, unit_count, hit=True, payout_amount=stake * 2, message="Don't pass wins on craps.", outcome_key="dont_pass_win")
+                elif total in {7, 11}:
+                    _resolve_market(market, unit_count, hit=False, payout_amount=0, message="Don't pass loses on the natural.", outcome_key="dont_pass_lose")
+                elif total == 12:
+                    _resolve_market(market, unit_count, hit=False, payout_amount=stake, message="Bar twelve pushes the don't pass.", outcome_key="dont_pass_push")
+            else:
+                if total == 7:
+                    _resolve_market(market, unit_count, hit=True, payout_amount=stake * 2, message="Don't pass wins on the seven out.", outcome_key="dont_pass_seven")
+                elif total == point_before:
+                    _resolve_market(market, unit_count, hit=False, payout_amount=0, message=f"Don't pass loses when {point_before} repeats.", outcome_key="dont_pass_point")
+            continue
+        if kind == "pass_odds":
+            if phase_before == "point" and point_before > 0:
+                if total == point_before:
+                    profit = _casino_craps_odds_profit(point_before, stake, lay=False)
+                    _resolve_market(market, unit_count, hit=True, payout_amount=stake + profit, message="Pass odds cash at true odds.", outcome_key="pass_point_odds")
+                elif total == 7:
+                    _resolve_market(market, unit_count, hit=False, payout_amount=0, message="Pass odds fall with the seven out.", outcome_key="seven_out_odds")
+            continue
+        if kind == "dont_pass_odds":
+            if phase_before == "point" and point_before > 0:
+                if total == 7:
+                    profit = _casino_craps_odds_profit(point_before, stake, lay=True)
+                    _resolve_market(market, unit_count, hit=True, payout_amount=stake + profit, message="Lay odds cash at true odds.", outcome_key="dont_pass_seven_odds")
+                elif total == point_before:
+                    _resolve_market(market, unit_count, hit=False, payout_amount=0, message="Lay odds lose when the point repeats.", outcome_key="dont_pass_point_odds")
+            continue
+        if kind == "place":
+            if total == int(value):
+                profit = _casino_craps_place_profit(int(value), stake)
+                _resolve_market(market, unit_count, hit=True, payout_amount=stake + profit, message=f"Place {value} hits before seven.", outcome_key=f"place_{value}_hit")
+            elif total == 7:
+                _resolve_market(market, unit_count, hit=False, payout_amount=0, message=f"Seven sweeps place {value}.", outcome_key="place_seven_out")
+            continue
+        if kind == "hardway":
+            target = int(value)
+            target_face = target // 2
+            if total == 7:
+                _resolve_market(market, unit_count, hit=False, payout_amount=0, message=f"Seven kills hard {target}.", outcome_key="hardway_seven_out")
+            elif total == target and die_one == target_face and die_two == target_face:
+                gross_mult = 10 if target in {6, 8} else 8
+                _resolve_market(market, unit_count, hit=True, payout_amount=stake * gross_mult, message=f"Hard {target} lands clean.", outcome_key=f"hard_{target}_hit")
+            elif total == target:
+                _resolve_market(market, unit_count, hit=False, payout_amount=0, message=f"Easy {target} breaks the hardway.", outcome_key=f"easy_{target}")
 
-            if pass_side and come_out_total in {7, 11}:
-                payout = int(wager * 2) + int(odds_stake)
-                outcome_key = "pass_natural_odds" if odds_kind else "pass_natural"
-                headline = "Natural winner."
-                detail = (
-                    "Seven or eleven on the come-out pays the pass line, and any reserved odds chips come right back."
-                    if odds_kind
-                    else "Seven or eleven on the come-out and the pass line pays instantly."
-                )
-            elif pass_side and come_out_total in {2, 3, 12}:
-                payout = int(odds_stake)
-                outcome_key = "pass_craps_odds" if odds_kind else "pass_craps"
-                headline = "Craps on the come-out."
-                detail = (
-                    "The shooter throws craps, so the pass line loses and the reserved odds chips are returned untouched."
-                    if odds_kind
-                    else "The shooter throws craps and the pass line loses before a point is set."
-                )
-            elif (not pass_side) and come_out_total in {2, 3}:
-                payout = int(wager * 2) + int(odds_stake)
-                outcome_key = "dont_pass_win_odds" if odds_kind else "dont_pass_win"
-                headline = "Don't pass connects."
-                detail = (
-                    "The shooter opens with craps, so the don't pass line wins and any reserved odds come back untouched."
-                    if odds_kind
-                    else "The shooter opens with craps and the don't pass side gets paid."
-                )
-            elif (not pass_side) and come_out_total in {7, 11}:
-                payout = int(odds_stake)
-                outcome_key = "dont_pass_lose_odds" if odds_kind else "dont_pass_lose"
-                headline = "Natural against you."
-                detail = (
-                    "Seven or eleven on the come-out burns the don't pass line, but the reserved odds chips come back."
-                    if odds_kind
-                    else "Seven or eleven on the come-out burns the don't pass bet."
-                )
-            elif (not pass_side) and come_out_total == 12:
-                payout = int(wager) + int(odds_stake)
-                outcome_key = "dont_pass_push_odds" if odds_kind else "dont_pass_push"
-                headline = "Bar twelve push."
-                detail = (
-                    "Twelve shows on the come-out, so the don't pass line pushes and the reserved odds chips are returned."
-                    if odds_kind
-                    else "Twelve shows on the come-out, so the don't pass bet pushes."
-                )
-            else:
-                point_number = int(come_out_total)
-                lines.append(f"Point: {point_number}")
-                for _ in range(CASINO_CRAPS_MAX_POINT_ROLLS):
-                    roll = take_roll()
-                    total = int(roll["total"])
-                    if pass_side and total == point_number:
-                        payout = int(wager * 2)
-                        if odds_kind and odds_stake > 0:
-                            odds_profit = _casino_craps_odds_profit(point_number, odds_stake, lay=False)
-                            payout += int(odds_stake + odds_profit)
-                            outcome_key = "pass_point_odds"
-                            headline = "Point made with odds."
-                            detail = "The shooter hits the point, so both the line and the true-odds bet get paid."
-                        else:
-                            outcome_key = "pass_point"
-                            headline = "Point made."
-                            detail = "The shooter hits the point before sevening out and the pass line gets paid."
-                        break
-                    if total == 7:
-                        if pass_side:
-                            outcome_key = "seven_out_odds" if odds_kind else "seven_out"
-                            headline = "Seven out."
-                            detail = (
-                                "A seven shows before the point comes back, so both the line and odds fall."
-                                if odds_kind
-                                else "A seven shows before the point comes back and the pass line goes down."
-                            )
-                        else:
-                            payout = int(wager * 2)
-                            if odds_kind and odds_stake > 0:
-                                odds_profit = _casino_craps_odds_profit(point_number, odds_stake, lay=True)
-                                payout += int(odds_stake + odds_profit)
-                                outcome_key = "dont_pass_seven_odds"
-                                headline = "Seven out pays the dark side."
-                                detail = "The shooter sevens out before the point returns, so the don't pass line and odds both cash."
-                            else:
-                                outcome_key = "dont_pass_seven"
-                                headline = "Seven out pays."
-                                detail = "The shooter sevens out before the point returns and the don't pass side wins."
-                        break
-                    if (not pass_side) and total == point_number:
-                        outcome_key = "dont_pass_point_odds" if odds_kind else "dont_pass_point"
-                        headline = "Point repeats."
-                        detail = (
-                            "The point comes back first, so the don't pass line and odds both lose."
-                            if odds_kind
-                            else "The point comes back first, so the don't pass bet loses."
-                        )
-                        break
-                else:
-                    return None
-                lines.append("After point: " + " -> ".join(_casino_craps_roll_text(roll) for roll in rolls[1:]))
-    elif kind == "place":
-        try:
-            target_number = int(bet_value)
-        except (TypeError, ValueError):
-            target_number = 0
-        if target_number not in {4, 5, 6, 8, 9, 10}:
-            return None
-        for _ in range(CASINO_CRAPS_MAX_POINT_ROLLS):
-            roll = take_roll()
-            total = int(roll["total"])
-            if total == target_number:
-                profit = _casino_craps_place_profit(target_number, wager)
-                payout = int(wager + profit)
-                outcome_key = f"place_{target_number}_hit"
-                headline = "Place number hits."
-                detail = f"Your place {target_number} lands before seven, so the box pays the bet."
-                break
-            if total == 7:
-                outcome_key = "place_seven_out"
-                headline = "Seven sweeps the place bet."
-                detail = "A seven shows before your number and the place chip is gone."
-                break
-        else:
-            return None
-        lines.append("Rolls: " + " -> ".join(_casino_craps_roll_text(roll) for roll in rolls))
-        lines.append("Place pays 9:5 on 4/10, 7:5 on 5/9, and 7:6 on 6/8, rounded to the nearest credit.")
-    elif kind == "hardway":
-        try:
-            target_number = int(bet_value)
-        except (TypeError, ValueError):
-            target_number = 0
-        if target_number not in {4, 6, 8, 10}:
-            return None
-        target_face = target_number // 2
-        for _ in range(CASINO_CRAPS_MAX_POINT_ROLLS):
-            roll = take_roll()
-            total = int(roll["total"])
-            die_one = int(roll["die_one"])
-            die_two = int(roll["die_two"])
-            if total == 7:
-                outcome_key = "hardway_seven_out"
-                headline = "Seven out kills the hardway."
-                detail = "A seven shows before the doubles arrive, and the hardway chip disappears."
-                break
-            if total == target_number and die_one == target_face and die_two == target_face:
-                payout_mult = 10 if target_number in {6, 8} else 8
-                payout = int(wager * payout_mult)
-                outcome_key = f"hard_{target_number}_hit"
-                headline = "Hardway lands."
-                detail = f"The dice pair up on hard {target_number} before an easy way or seven shows."
-                break
-            if total == target_number:
-                outcome_key = f"easy_{target_number}"
-                headline = "Easy way breaks it."
-                detail = f"The number shows the easy way before the doubles, so the hardway loses."
-                break
-        else:
-            return None
-        lines.append("Rolls: " + " -> ".join(_casino_craps_roll_text(roll) for roll in rolls))
-        lines.append("Hard 4/10 pays 7:1; hard 6/8 pays 9:1.")
+    remaining_bets = {
+        key: int(units)
+        for key, units in bets.items()
+        if int(units or 0) > 0 and key not in resolved_keys
+    }
+    current["bets"] = remaining_bets
+    current["phase"] = phase_after
+    current["point_number"] = int(point_after)
+    current["stake"] = int(sum(int(units) for units in remaining_bets.values()) * int(current.get("wager", 0)))
+
+    if phase_before == "come_out" and phase_after == "point":
+        headline = f"Point {point_after} is live."
+        detail = f"The come-out settles on {point_after}, so the table moves into the point cycle."
+        outcome_key = "point_on"
+    elif phase_before == "point" and total == 7:
+        headline = "Seven out."
+        detail = "The shooter sevens out and the table clears back to the come-out."
+        outcome_key = "seven_out"
+    elif phase_before == "point" and point_before > 0 and total == point_before:
+        headline = f"Point {point_before} made."
+        detail = "The point comes back before seven and the table resets for a fresh come-out."
+        outcome_key = "point_made"
+    elif total in {7, 11} and phase_before == "come_out":
+        headline = "Natural."
+        detail = "The shooter opens with a natural and the table pays the line side."
+        outcome_key = "natural"
+    elif total in {2, 3, 12} and phase_before == "come_out":
+        headline = "Craps on the come-out."
+        detail = "The shooter throws craps before a point can settle in."
+        outcome_key = "come_out_craps"
     else:
-        value = str(bet_value or "").strip().lower()
-        prop_totals = {
-            "2": {2},
-            "3": {3},
-            "11": {11},
-            "12": {12},
-            "any_craps": {2, 3, 12},
-            "any_seven": {7},
-        }
-        gross_payouts = {
-            "2": 31,
-            "3": 16,
-            "11": 16,
-            "12": 31,
-            "any_craps": 8,
-            "any_seven": 5,
-        }
-        winning_totals = prop_totals.get(value)
-        if not winning_totals:
-            return None
-        roll = take_roll()
-        total = int(roll["total"])
-        lines.append(f"Roll: {_casino_craps_roll_text(roll)}")
-        if total in winning_totals:
-            payout_mult = int(gross_payouts.get(value, 0))
-            payout = int(wager * payout_mult)
-            outcome_key = f"prop_{value}_hit"
-            headline = "Center action hits."
-            detail = "The one-roll proposition lands clean and the center of the table pays loud."
-        else:
-            outcome_key = f"prop_{value}_miss"
-            headline = "Prop misses."
-            detail = "The one-roll shot misses and the center action is gone."
+        headline = f"Roll {total}."
+        detail = "The dice keep moving and the working bets stay on the felt."
+        outcome_key = "table_roll"
+    if messages:
+        detail = " ".join(messages[:3])
 
-    roll_totals = tuple(int(roll.get("total", 0)) for roll in rolls)
-    roll_pairs = tuple((int(roll.get("die_one", 0)), int(roll.get("die_two", 0))) for roll in rolls)
+    active_slip = []
+    for key, units in sorted(remaining_bets.items()):
+        market = _casino_craps_market_from_key(key)
+        if not market:
+            continue
+        active_slip.append({
+            "key": market["key"],
+            "label": market["label"],
+            "units": int(units),
+            "stake": int(int(units) * int(current.get("wager", 0))),
+        })
+
     result_lines = []
-    if rolls:
-        if kind in {"pass", "dont_pass", "field", "pass_odds", "dont_pass_odds"}:
-            result_lines.extend(_casino_ascii_roll_block("Come-out", rolls[0]))
-            if len(rolls) > 1:
-                result_lines.extend(_casino_ascii_roll_block("Finish", rolls[-1]))
-        else:
-            result_lines.extend(_casino_ascii_roll_block("Roll", rolls[-1]))
-    result_lines.extend(lines)
-    if payout_mult > 0:
-        result_lines.append(f"Payout: x{payout_mult} gross return.")
-    elif payout > 0:
-        result_lines.append(f"Payout: {_credit_amount_label(payout)} returned.")
+    result_lines.extend(_casino_ascii_roll_block("Roll", roll))
+    result_lines.extend([
+        f"Phase: {'Point' if phase_after == 'point' else 'Come-out'}",
+        f"Point: {point_after if point_after > 0 else '--'}",
+    ])
+    for message in messages:
+        if message:
+            result_lines.append(message)
+    if active_slip:
+        result_lines.append(
+            "Still working: "
+            + ", ".join(f"{row['label']} x{row['units']}" for row in active_slip[:6])
+            + ("." if len(active_slip) <= 6 else " ...")
+        )
     else:
-        result_lines.append("Payout: no return on this hand.")
-    result_lines.append(detail)
+        result_lines.append("Still working: no active chips on the felt.")
+    if payout > 0:
+        result_lines.append(f"Payout returned: {_credit_amount_label(payout)}.")
+    elif resolved_stake > 0:
+        result_lines.append("Payout returned: no credits on this roll.")
+    else:
+        result_lines.append("Payout returned: no settled chips on this roll.")
 
-    return {
+    round_result = {
         "service": "craps",
-        "wager": int(wager),
-        "stake": int(stake),
+        "wager": int(current.get("wager", 0)),
+        "stake": int(resolved_stake),
         "payout": int(payout),
         "outcome_key": outcome_key,
         "headline": headline,
         "detail": detail,
-        "summary": (
-            f"{bet_label}"
-            + (
-                f" with come-out {roll_totals[0]}"
-                if roll_totals and kind in {"pass", "dont_pass", "field", "pass_odds", "dont_pass_odds"}
-                else ""
-            )
-            + (f", point {point_number}" if point_number > 0 else "")
-            + f". {headline}"
-        ),
+        "summary": f"{headline} {_casino_craps_roll_text(roll)}",
         "result_lines": result_lines,
-        "bet_kind": kind,
-        "bet_value": bet_value,
-        "bet_label": bet_label,
-        "come_out_total": int(roll_totals[0]) if roll_totals else 0,
-        "point_number": int(point_number),
-        "roll_totals": roll_totals,
-        "roll_pairs": roll_pairs,
-        "payout_mult": int(payout_mult),
-        "odds_stake": int(odds_stake),
-        "social_gain": _casino_social_gain("craps", f"{current['seed_token']}:{kind}:{bet_value}:{outcome_key}:{point_number}"),
+        "phase": str(phase_after),
+        "point_number": int(point_after),
+        "roll_history": tuple(dict(entry) for entry in current.get("roll_history", ()) or ()),
+        "bet_slip": tuple(active_slip),
+        "bet_outcomes": tuple(bet_outcomes),
+        "come_out_total": int(current["roll_history"][0]["total"]) if current.get("roll_history") else int(total),
+        "roll_totals": tuple(int(entry.get("total", 0)) for entry in current.get("roll_history", ()) or ()),
+        "roll_pairs": tuple(
+            (int(entry.get("die_one", 0)), int(entry.get("die_two", 0)))
+            for entry in current.get("roll_history", ()) or ()
+        ),
+        "social_gain": _casino_social_gain("craps", f"{current['seed_token']}:{current['roll_index']}:{outcome_key}:{len(bet_outcomes)}"),
         "stake_already_paid": True,
     }
+    return current, round_result
 
 
 def _casino_baccarat_normalize_session(session):

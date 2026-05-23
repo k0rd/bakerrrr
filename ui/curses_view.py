@@ -126,6 +126,12 @@ class CursesView:
             _register("cat_gray", 246)
             _register("cat_tuxedo", 250)
             _register("cat_purple", 135)
+            _register("casino_felt", 29)
+            _register("casino_gold", 221)
+            _register("casino_red", 203)
+            _register("casino_black", 240)
+            _register("casino_chip", 45)
+            _register("casino_cursor", 159)
         else:
             _register("floor_coarse", curses.COLOR_BLUE)
             _register("floor_industrial", curses.COLOR_WHITE)
@@ -191,6 +197,12 @@ class CursesView:
             _register("cat_gray", curses.COLOR_CYAN)
             _register("cat_tuxedo", curses.COLOR_WHITE)
             _register("cat_purple", curses.COLOR_MAGENTA)
+            _register("casino_felt", curses.COLOR_GREEN)
+            _register("casino_gold", curses.COLOR_YELLOW)
+            _register("casino_red", curses.COLOR_RED)
+            _register("casino_black", curses.COLOR_WHITE)
+            _register("casino_chip", curses.COLOR_CYAN)
+            _register("casino_cursor", curses.COLOR_CYAN)
 
     def _attr_for(self, color):
         if not self.color_enabled or color is None:

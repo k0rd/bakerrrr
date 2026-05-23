@@ -76,6 +76,7 @@ from game.character_sheet import (
     build_character_sheet_pages as _build_character_sheet_pages,
 )
 import game.report_debug_ui as _report_debug_ui
+from game.casino_ui_runtime import ensure_casino_ui_state
 from game.report_runtime import build_progress_report as _build_progress_report
 from game.dialogue_runtime import (
     _dialog_backup_cursor_payload,
@@ -335,6 +336,7 @@ class InputSystem(System):
                 "backup_cursor_mark": None,
                 "backup_cursor_pending_topic": "",
             }
+        ensure_casino_ui_state(self.sim)
         if not hasattr(self.sim, "help_ui"):
             self.sim.help_ui = {
                 "open": False,
@@ -488,6 +490,9 @@ class InputSystem(System):
             state.setdefault("backup_cursor_mark", None)
             state.setdefault("backup_cursor_pending_topic", "")
         return state
+
+    def _casino_state(self):
+        return ensure_casino_ui_state(self.sim)
 
     def _look_state(self):
         state = getattr(self.sim, "look_ui", None)
@@ -1566,6 +1571,77 @@ class InputSystem(System):
 
     def _close_dialog_ui(self):
         self.sim.emit(Event("dialog_close_request", eid=self.player_eid))
+
+    def _handle_casino_input(self, key):
+        state = self._casino_state()
+        if not bool(state.get("open")):
+            return False
+
+        if key in (ord("?"), ord("/")):
+            self._help_state()["open"] = True
+            return True
+
+        if key in (27, ord("q"), ord("Q")):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="back"))
+            return True
+
+        if key in (ord("o"), ord("O")):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="back"))
+            self._refresh_report_ui(reset_scroll=True)
+            return True
+
+        if key in (ord("y"), ord("Y")):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="back"))
+            self._refresh_known_locations_ui(reset_scroll=True)
+            return True
+
+        if key == ord("L"):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="back"))
+            self._refresh_log_ui(reset_scroll=True, focus_end=True)
+            return True
+
+        if key == ord("D"):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="back"))
+            self._refresh_debug_ui(reset_scroll=True)
+            return True
+
+        if key == ord("\t"):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="tab"))
+            return True
+
+        if key in (KEY_UP, ord("k"), ord("K")):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="move", dx=0, dy=-1))
+            return True
+
+        if key in (KEY_DOWN, ord("j"), ord("J")):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="move", dx=0, dy=1))
+            return True
+
+        if key in (KEY_LEFT, ord("h"), ord("H")):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="move", dx=-1, dy=0))
+            return True
+
+        if key in (KEY_RIGHT, ord("l")):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="move", dx=1, dy=0))
+            return True
+
+        if key == ord(" "):
+            if bool(state.get("close_pending")):
+                self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="back"))
+            else:
+                self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="primary"))
+            return True
+
+        key_backspace = getattr(curses, "KEY_BACKSPACE", None)
+        if key in (127, 8, key_backspace):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="secondary"))
+            return True
+
+        if key in ENTER_KEYS or key in (ord("e"), ord("E")):
+            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="confirm"))
+            return True
+
+        return True
 
     def _handle_dialog_input(self, key):
         state = self._dialog_state()
@@ -3360,6 +3436,10 @@ class InputSystem(System):
 
         if look_state.get("active"):
             self._handle_look_input(key, zoom_mode)
+            return
+
+        if self._casino_state().get("open"):
+            self._handle_casino_input(key)
             return
 
         if dialog_state.get("open"):

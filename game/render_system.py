@@ -2,6 +2,7 @@
 
 import curses
 from engine.systems import System
+from game.casino_ui_runtime import ensure_casino_ui_state
 from game.appearance import (
     creature_color_key as _appearance_creature_color_key,
     district_floor_color as _appearance_district_floor_color,
@@ -790,6 +791,7 @@ class RenderSystem(System):
             "supply_note": "",
             "contact_note": "",
         })
+        casino_ui = ensure_casino_ui_state(self.sim)
         dialog_ui = getattr(self.sim, "dialog_ui", {
             "open": False,
             "npc_eid": None,
@@ -1972,6 +1974,14 @@ class RenderSystem(System):
                 controls = "Inventory: browse, U use/equip/stow, R drop, E inspect, O ops, Y locations, L log, D debug, I/Esc close, ? help"
         elif trade_ui.get("open"):
             controls = "Trade: browse, B/S mode, E trade, X inspect, O ops, Y locations, L log, D debug, M close, ? help"
+        elif casino_ui.get("open"):
+            casino_mode = str(casino_ui.get("mode", "floor") or "floor").strip().lower()
+            if casino_mode in {"floor", "services", "wager"}:
+                controls = "Casino: Up/Down browse, Enter select, Tab switch page, O ops, Y locations, L log, D debug, Esc leave, ? help"
+            elif bool(casino_ui.get("close_pending")) or casino_mode == "result":
+                controls = "Casino result: Space return, O ops, Y locations, L log, D debug, Esc return, ? help"
+            else:
+                controls = "Casino live: arrows move focus, Space stage, Backspace pull chip, Enter resolve, O ops, Y locations, L log, D debug, Esc back, ? help"
         elif dialog_ui.get("open"):
             dialog_topic_ids = {
                 str(row.get("id", "")).strip().lower()
@@ -2449,6 +2459,99 @@ class RenderSystem(System):
             )
             hint = "E trade  B buy  S sell  X inspect  O ops  Y locations  L log  D debug  M close"
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, panel_w - 4))
+        elif casino_ui.get("open"):
+            panel_w = min(max(78, map_w - 4), map_w)
+            panel_w = max(42, panel_w)
+            panel_h = min(max(16, map_h - 1), map_h)
+            panel_h = max(12, panel_h)
+            panel_x = max(0, (map_w - panel_w) // 2)
+            panel_y = max(0, (map_h - panel_h) // 2)
+
+            if panel_w >= 2 and panel_h >= 2:
+                top = "+" + ("=" * (panel_w - 2)) + "+"
+                mid = "|" + (" " * (panel_w - 2)) + "|"
+                bot = "+" + ("=" * (panel_w - 2)) + "+"
+                self.view.draw_text(panel_x, panel_y, top)
+                for row in range(1, panel_h - 1):
+                    self.view.draw_text(panel_x, panel_y + row, mid)
+                self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
+
+            title = str(casino_ui.get("title", "Casino")).strip() or "Casino"
+            title_line = {
+                "text": f" {title} ",
+                "segments": [{"text": f" {title} ", "color": "casino_gold"}],
+            }
+            self._draw_display_line(panel_x + 2, panel_y + 1, _clip_display_line(title_line, panel_w - 4), panel_w - 4)
+
+            subtitle = str(casino_ui.get("subtitle", "")).strip()
+            rail_w = max(16, min(24, panel_w // 4))
+            rows = list(casino_ui.get("rows", ()) or [])
+            rows_h = max(1, min(6, len(rows) if rows else 1))
+            footer_y = panel_y + panel_h - 2
+            body_top = panel_y + 2
+            if subtitle:
+                self._draw_display_line(panel_x + 2, body_top, _clip_display_line(subtitle, panel_w - 4), panel_w - 4)
+                body_top += 1
+            divider_y = max(body_top + 1, footer_y - rows_h - 1)
+            body_h = max(1, divider_y - body_top)
+            body_x = panel_x + 2
+            rail_x = panel_x + panel_w - rail_w - 2
+            body_w = max(12, rail_x - body_x - 2)
+            rail_h = max(1, divider_y - body_top)
+
+            wrapped_body = []
+            for raw in list(casino_ui.get("body_lines", ()) or ()) or ["The floor is quiet."]:
+                wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
+                wrapped_body.extend(wrapped)
+            for idx, line in enumerate(wrapped_body[:body_h]):
+                self._draw_display_line(body_x, body_top + idx, _clip_display_line(line, body_w), body_w)
+
+            self.view.draw_text(rail_x - 1, body_top, "|")
+            for offset in range(1, rail_h):
+                self.view.draw_text(rail_x - 1, body_top + offset, "|")
+
+            wrapped_rail = []
+            for raw in list(casino_ui.get("rail_lines", ()) or ()):
+                wrapped = _wrap_display_lines(raw, rail_w) if _line_text(raw).strip() else [""]
+                wrapped_rail.extend(wrapped)
+            for idx, line in enumerate(wrapped_rail[:rail_h]):
+                self._draw_display_line(rail_x, body_top + idx, _clip_display_line(line, rail_w), rail_w)
+
+            self.view.draw_text(panel_x + 2, divider_y, "-" * max(1, panel_w - 4))
+
+            selected_index = int(casino_ui.get("selected_index", 0) or 0)
+            options_y = divider_y + 1
+            visible_row_h = max(1, footer_y - options_y)
+            row_start = 0
+            if selected_index >= visible_row_h:
+                row_start = selected_index - visible_row_h + 1
+            visible_rows = rows[row_start: row_start + visible_row_h]
+            for idx, row in enumerate(visible_rows):
+                if not isinstance(row, dict):
+                    continue
+                label = str(row.get("label", row.get("id", "option"))).strip() or "option"
+                absolute = row_start + idx
+                if not bool(row.get("selectable", True)):
+                    line = {
+                        "text": f"  {label}",
+                        "segments": [{"text": f"  {label}", "color": "casino_gold"}],
+                    }
+                else:
+                    prefix = ">" if absolute == selected_index else " "
+                    color = "casino_cursor" if absolute == selected_index else "default"
+                    line = {
+                        "text": f"{prefix} {label}",
+                        "segments": [{"text": f"{prefix} {label}", "color": color}],
+                    }
+                self._draw_display_line(panel_x + 2, options_y + idx, _clip_display_line(line, panel_w - 4), panel_w - 4)
+
+            if not rows:
+                empty_text = "(press Space to return)" if bool(casino_ui.get("close_pending")) else "(live controls on the board)"
+                self.view.draw_text(panel_x + 2, options_y, empty_text[: max(1, panel_w - 4)])
+
+            hint = str(casino_ui.get("hint", "")).strip()
+            footer = hint or "Casino floor"
+            self.view.draw_text(panel_x + 2, footer_y, footer[: max(1, panel_w - 4)])
         elif dialog_ui.get("open"):
             panel_w = min(max(62, map_w - 4), map_w)
             panel_w = max(30, panel_w)
