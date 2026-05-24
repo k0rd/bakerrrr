@@ -14,6 +14,7 @@ from game.property_doors import (
     _door_interaction_candidate,
     _door_lock_action_text,
     _door_open_attempt,
+    _set_door_locked_state,
     _set_property_locked_override,
 )
 from game.property_access import property_access_controller as _property_access_controller
@@ -286,13 +287,6 @@ class PropertyActionRuntime:
         prop = candidate.get("prop")
         if prop:
             self.remember_player_property_discovery(eid, prop, discovery_mode="interact")
-        if not isinstance(prop, dict):
-            _log_player_feedback(
-                self.sim,
-                _door_lock_action_text("not_property_door"),
-                kind="interaction",
-            )
-            return True
 
         access_entry = self.action_system._property_lock_access_for(eid, prop)
 
@@ -300,6 +294,42 @@ class PropertyActionRuntime:
         y = int(candidate["y"])
         z = int(candidate["z"])
         state = candidate.get("state") or {}
+        if not isinstance(prop, dict):
+            currently_locked = bool(state.get("locked", False))
+            if bool(state.get("open", False)):
+                success, reason = _door_close_attempt(self.sim, eid, x, y, z)
+                if not success:
+                    _log_player_feedback(
+                        self.sim,
+                        _door_lock_action_text(reason),
+                        kind="interaction",
+                    )
+                    return True
+                if currently_locked:
+                    _log_player_feedback(
+                        self.sim,
+                        _door_lock_action_text("closed_locked"),
+                        kind="interaction",
+                    )
+                    return True
+                success = _set_door_locked_state(self.sim, x, y, z, True)
+                _log_player_feedback(
+                    self.sim,
+                    _door_lock_action_text("closed_then_locked" if success else "not_property_door"),
+                    kind="interaction",
+                )
+                return True
+
+            success = _set_door_locked_state(self.sim, x, y, z, not currently_locked)
+            _log_player_feedback(
+                self.sim,
+                _door_lock_action_text(
+                    "unlocked" if currently_locked and success else "locked" if success else "not_property_door"
+                ),
+                kind="interaction",
+            )
+            return True
+
         lock_state = property_lock_state(prop)
         currently_locked = bool(lock_state.get("locked"))
         access_mode = str((access_entry or {}).get("mode", "authorized")).strip().lower() or "authorized"

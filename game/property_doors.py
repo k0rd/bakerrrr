@@ -110,6 +110,18 @@ def _set_door_open_state(sim, x, y, z, is_open):
     return True
 
 
+def _set_door_locked_state(sim, x, y, z, is_locked):
+    helper = getattr(sim, "set_door_state", None)
+    if callable(helper):
+        state = helper(x, y, z, locked=bool(is_locked))
+        return isinstance(state, dict)
+    state = _operable_door_state_at(sim, x, y, z)
+    if state is None:
+        return False
+    state["locked"] = bool(is_locked)
+    return True
+
+
 def _door_open_attempt(sim, eid, x, y, z, *, allow_override=False):
     state = _operable_door_state_at(sim, x, y, z)
     if state is None:
@@ -162,6 +174,8 @@ def _door_open_attempt(sim, eid, x, y, z, *, allow_override=False):
             return False, "closed_property"
         return False, "door_access_denied"
 
+    if bool(state.get("locked", False)):
+        return False, "locked_door"
     return (_set_door_open_state(sim, x, y, z, True), "opened")
 
 
@@ -246,7 +260,7 @@ def _door_action_text(reason, *, opening=False):
             return "The door is already open."
         if reason_key in {"authorized_open", "opened", "opened_inside", "opened_unlocked", "override_open", "picked_front_door", "manual_front_door_override"}:
             return "You open the door."
-        if reason_key == "locked_property":
+        if reason_key in {"locked_property", "locked_door"}:
             return "The door is locked."
         if reason_key == "closed_property":
             return "The place is closed."

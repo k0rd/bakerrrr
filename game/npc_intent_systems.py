@@ -633,6 +633,71 @@ def _retreat_target_from_warning(sim, pos, warning_pos, *, max_stride=4):
     return None
 
 
+def _live_target_position(sim, target_eid, *, positions=None, vitalities=None, z=None):
+    if sim is None or target_eid is None:
+        return None
+    positions = positions or sim.ecs.get(Position)
+    vitalities = vitalities or sim.ecs.get(Vitality)
+    target_pos = positions.get(target_eid)
+    if target_pos is None:
+        return None
+    if z is not None and int(target_pos.z) != int(z):
+        return None
+    target_vitality = vitalities.get(target_eid)
+    if target_vitality and bool(getattr(target_vitality, "downed", False)):
+        return None
+    return target_pos
+
+
+def _npc_live_threat_context(
+    sim,
+    eid,
+    pos,
+    *,
+    target_eid=None,
+    memory=None,
+    needs=None,
+    traits=None,
+    vitality=None,
+    suppression=None,
+    max_steps=5,
+):
+    if sim is None or pos is None:
+        return None
+    threat_focus = _known_threat_position_for_npc(
+        sim,
+        eid,
+        pos,
+        target_eid=target_eid,
+        memory=memory,
+        radius=12,
+    )
+    if threat_focus is None:
+        return None
+    _loadout, held_weapon, _instance = _weapon_context_for_entity(sim, eid)
+    metrics = _npc_combat_metrics(
+        needs=needs,
+        traits=traits or NPCTraits(),
+        vitality=vitality,
+        suppression=suppression,
+        weapon=held_weapon,
+        **_npc_status_metric_args(sim, eid),
+    )
+    retreat_target = _pick_npc_retreat_target(
+        sim,
+        eid,
+        pos,
+        threat_focus,
+        metrics=metrics,
+        max_steps=max_steps,
+    )
+    return {
+        "threat_focus": threat_focus,
+        "metrics": metrics,
+        "retreat_target": retreat_target,
+    }
+
+
 def _find_tipped_street_buyer_target(sim, actor_eid, pos, tip_data):
     if not pos or not isinstance(tip_data, dict):
         return None
@@ -1120,6 +1185,10 @@ class NPCWillSystem(System):
         previous = (ai.state, ai.target, ai.target_eid)
         next_state = (intent, target, target_eid)
         if previous == next_state and will.intent == intent:
+            will.score = score
+            will.target = target
+            will.target_eid = target_eid
+            will.last_tick = self.sim.tick
             return
 
         ai.state = intent
@@ -1371,40 +1440,87 @@ class NPCWillSystem(System):
                 will.last_tick = self.sim.tick
                 continue
 
-            if ai.state == "seeking_safety" and ai.target and getattr(ai, "incident_id", None) is not None:
-                will.intent = ai.state
-                will.target = ai.target
-                will.target_eid = ai.target_eid
-                will.last_tick = self.sim.tick
-                continue
+            active_threat_context = None
+            if ai.state in {"protecting", "seeking_safety"} and (ai.target or ai.target_eid is not None):
+                active_threat_context = _npc_live_threat_context(
+                    self.sim,
+                    eid,
+                    pos,
+                    target_eid=ai.target_eid,
+                    memory=memory,
+                    needs=needs,
+                    traits=traits,
+                    vitality=vitality,
+                    suppression=suppression,
+                    max_steps=5,
+                )
 
-            if ai.state == "protecting" and ai.target:
+            if ai.state == "seeking_safety" and ai.target:
+                if getattr(ai, "incident_id", None) is not None or active_threat_context:
+                    retreat_target = None
+                    if active_threat_context:
+                        retreat_target = active_threat_context.get("retreat_target")
+                        if retreat_target is None:
+                            threat_focus = active_threat_context.get("threat_focus")
+                            current_target = tuple(ai.target or ())
+                            if (
+                                threat_focus
+                                and len(current_target) >= 3
+                                and int(current_target[2]) == int(pos.z)
+                                and _manhattan(int(current_target[0]), int(current_target[1]), threat_focus[0], threat_focus[1])
+                                > _manhattan(int(pos.x), int(pos.y), threat_focus[0], threat_focus[1])
+                            ):
+                                retreat_target = (
+                                    int(current_target[0]),
+                                    int(current_target[1]),
+                                    int(current_target[2]),
+                                )
+                    else:
+                        retreat_target = ai.target
+                    if retreat_target and retreat_target != (int(pos.x), int(pos.y), int(pos.z)):
+                        retreat_bias = float(((active_threat_context or {}).get("metrics") or {}).get("retreat_bias", 0.55) or 0.55)
+                        self._set_intent(
+                            eid,
+                            ai,
+                            will,
+                            "seeking_safety",
+                            max(82.0, 68.0 + (retreat_bias * 26.0)),
+                            retreat_target,
+                            ai.target_eid,
+                        )
+                        continue
+
+            if ai.state == "protecting" and (ai.target or ai.target_eid is not None):
                 recent_threat = memory.strongest("ally_threatened") if memory else None
                 recent_property = _strongest_memory_entry(
                     memory,
                     "property_threat",
                     predicate=_memory_visible,
                 )
-                if (recent_threat and recent_threat["strength"] > 0.25) or (
+                live_target = _live_target_position(
+                    self.sim,
+                    ai.target_eid,
+                    positions=positions,
+                    vitalities=vitalities,
+                    z=pos.z,
+                )
+                if live_target or (recent_threat and recent_threat["strength"] > 0.25) or (
                     recent_property and recent_property["strength"] > 0.25
                 ):
-                    threat_focus = _known_threat_position_for_npc(
-                        self.sim,
-                        eid,
-                        pos,
-                        target_eid=ai.target_eid,
-                        memory=memory,
-                        radius=12,
-                    )
-                    _loadout, held_weapon, _instance = _weapon_context_for_entity(self.sim, eid)
-                    metrics = _npc_combat_metrics(
-                        needs=needs,
-                        traits=traits,
-                        vitality=vitality,
-                        suppression=suppression,
-                        weapon=held_weapon,
-                        **_npc_status_metric_args(self.sim, eid),
-                    )
+                    threat_focus = (active_threat_context or {}).get("threat_focus")
+                    metrics = (active_threat_context or {}).get("metrics")
+                    if metrics is None:
+                        _loadout, held_weapon, _instance = _weapon_context_for_entity(self.sim, eid)
+                        metrics = _npc_combat_metrics(
+                            needs=needs,
+                            traits=traits,
+                            vitality=vitality,
+                            suppression=suppression,
+                            weapon=held_weapon,
+                            **_npc_status_metric_args(self.sim, eid),
+                        )
+                    if threat_focus is None and live_target is not None:
+                        threat_focus = (int(live_target.x), int(live_target.y), int(live_target.z))
                     role_key = str(getattr(ai, "role", "") or "").strip().lower()
                     retreat_threshold = 0.62 if role_key in {"guard", "scout"} and metrics["has_ranged"] else 0.46
                     should_seek_safety = bool(
@@ -1423,14 +1539,7 @@ class NPCWillSystem(System):
                         )
                     )
                     if should_seek_safety:
-                        retreat_target = _pick_npc_retreat_target(
-                            self.sim,
-                            eid,
-                            pos,
-                            threat_focus,
-                            metrics=metrics,
-                            max_steps=5,
-                        )
+                        retreat_target = (active_threat_context or {}).get("retreat_target")
                         if retreat_target and retreat_target != (int(pos.x), int(pos.y), int(pos.z)):
                             self._set_intent(
                                 eid,
@@ -1439,20 +1548,31 @@ class NPCWillSystem(System):
                                 "seeking_safety",
                                 max(82.0, 68.0 + (metrics["retreat_bias"] * 26.0)),
                                 retreat_target,
-                                None,
+                                ai.target_eid,
                             )
                             continue
                     # Pinned NPCs stay put instead of advancing.
                     if suppression and suppression.pinned():
-                        will.intent = "protecting"
-                        will.target = (pos.x, pos.y, pos.z)
-                        will.target_eid = ai.target_eid
-                        will.last_tick = self.sim.tick
+                        self._set_intent(
+                            eid,
+                            ai,
+                            will,
+                            "protecting",
+                            max(76.0, 66.0 + (metrics["assault_bias"] * 10.0)),
+                            (int(pos.x), int(pos.y), int(pos.z)),
+                            ai.target_eid,
+                        )
                         continue
-                    will.intent = "protecting"
-                    will.target = ai.target
-                    will.target_eid = ai.target_eid
-                    will.last_tick = self.sim.tick
+                    protect_target = threat_focus or ai.target or (int(pos.x), int(pos.y), int(pos.z))
+                    self._set_intent(
+                        eid,
+                        ai,
+                        will,
+                        "protecting",
+                        max(74.0, 70.0 + (metrics["assault_bias"] * 12.0) - (metrics["retreat_bias"] * 6.0)),
+                        protect_target,
+                        ai.target_eid,
+                    )
                     continue
 
             best_intent = "idle"
@@ -1628,18 +1748,28 @@ class NPCWillSystem(System):
             safety_pressure = (100.0 - needs.safety) * (0.5 + (avoid_threat * 0.75))
             threat = memory.strongest("threat") if memory else None
             if threat and safety_pressure > best_score:
-                tx = threat["data"].get("x", pos.x)
-                ty = threat["data"].get("y", pos.y)
-                tz = threat["data"].get("z", pos.z)
-                if tz == pos.z:
-                    dx = 1 if pos.x - tx >= 0 else -1
-                    dy = 1 if pos.y - ty >= 0 else -1
-                    safe_x = pos.x + (dx * 4)
-                    safe_y = pos.y + (dy * 4)
+                threat_data = threat.get("data", {}) if isinstance(threat.get("data"), dict) else {}
+                threat_source_eid = threat_data.get("source_eid")
+                if threat_source_eid is None:
+                    threat_source_eid = threat_data.get("offender_eid")
+                threat_context = _npc_live_threat_context(
+                    self.sim,
+                    eid,
+                    pos,
+                    target_eid=threat_source_eid,
+                    memory=memory,
+                    needs=needs,
+                    traits=traits,
+                    vitality=vitality,
+                    suppression=suppression,
+                    max_steps=5,
+                )
+                retreat_target = (threat_context or {}).get("retreat_target")
+                if retreat_target and retreat_target != (int(pos.x), int(pos.y), int(pos.z)):
                     best_intent = "seeking_safety"
                     best_score = safety_pressure
-                    best_target = (safe_x, safe_y, pos.z)
-                    best_target_eid = None
+                    best_target = retreat_target
+                    best_target_eid = threat_source_eid
 
             seek_medical_aid = _effective_behavior_value(
                 self.sim,
@@ -2641,7 +2771,26 @@ class NPCInvestigateSystem(System):
                             property_id=arrived_prop.get("id"),
                             source_eid=eid,
                         ))
-                if ai.state in {"working", "lounging", "socializing"}:
+                if ai.state == "seeking_safety":
+                    live_threat = _npc_live_threat_context(
+                        self.sim,
+                        eid,
+                        pos,
+                        target_eid=ai.target_eid,
+                        memory=memory,
+                        needs=needs_map.get(eid),
+                        traits=traits_map.get(eid) or NPCTraits(),
+                        vitality=vitalities.get(eid),
+                        suppression=suppressions.get(eid),
+                        max_steps=5,
+                    )
+                    if live_threat:
+                        ai.target = (int(pos.x), int(pos.y), int(pos.z))
+                    else:
+                        ai.state = "idle"
+                        ai.target = None
+                        ai.target_eid = None
+                elif ai.state in {"working", "lounging", "socializing"}:
                     # Arrived at roam tile; clear target so will system picks a new one.
                     ai.target = None
                 elif ai.state not in {"protecting", "resting", "following", "holding"}:

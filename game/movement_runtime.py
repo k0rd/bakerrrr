@@ -90,6 +90,8 @@ def _closed_door_move_block_reason(sim, eid, x, y, z):
         if access.access_level == "public" and access.currently_open is False:
             return "closed_property"
         return "door_access_denied"
+    if bool(state.get("locked", False)):
+        return "locked_door"
     return "closed_door"
 
 

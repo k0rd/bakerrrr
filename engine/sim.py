@@ -323,6 +323,7 @@ class Simulation:
         z=0,
         *,
         open=None,
+        locked=None,
         kind=None,
         ordinary=None,
         property_id=None,
@@ -338,6 +339,8 @@ class Simulation:
 
         if open is not None:
             state["open"] = bool(open)
+        if locked is not None:
+            state["locked"] = bool(locked)
         if kind is not None:
             state["kind"] = str(kind or "door").strip().lower() or "door"
         if ordinary is not None:
@@ -1161,6 +1164,7 @@ class Simulation:
             }
 
         interior_wall_cells = set()
+        interior_room_doors = set()
         for wall in (room_plan or {}).get("walls", ()):
             if not isinstance(wall, (list, tuple)) or len(wall) < 2:
                 continue
@@ -1179,6 +1183,7 @@ class Simulation:
                 dy = int(door[1])
             except (TypeError, ValueError):
                 continue
+            interior_room_doors.add((dx, dy, int(z)))
             aperture_map[(dx, dy, int(z))] = {
                 "kind": "door",
                 "ordinary": True,
@@ -1194,6 +1199,16 @@ class Simulation:
                         if nx < left or nx > right or ny < top or ny > bottom or (nx, ny) in excluded:
                             edge = True
                             break
+                    if not edge:
+                        for nx, ny in (
+                            (x - 1, y - 1),
+                            (x + 1, y - 1),
+                            (x + 1, y + 1),
+                            (x - 1, y + 1),
+                        ):
+                            if (nx, ny) in excluded:
+                                edge = True
+                                break
                 else:
                     edge = (x in (left, right)) or (y in (top, bottom))
                 interior_wall = (int(x), int(y), int(z)) in interior_wall_cells
@@ -1210,13 +1225,32 @@ class Simulation:
                 if aperture:
                     kind = aperture.get("kind", "door")
                     ordinary = bool(aperture.get("ordinary"))
-                    glyph = '"' if kind in {"window", "skylight"} else "+"
-                    walkable = ordinary and kind == "door"
-                    transparent = bool(walkable or kind in {"window", "skylight"})
-                    if kind in {"window", "skylight"}:
+                    interior_room_door = (int(x), int(y), int(z)) in interior_room_doors
+                    if interior_room_door and kind == "door" and ordinary:
+                        self.set_door_state(
+                            x,
+                            y,
+                            z,
+                            kind="door",
+                            ordinary=True,
+                        )
+                        door_state = self.door_state_at(x, y, z) or {}
+                        is_open = bool(door_state.get("open", False))
+                        glyph = "'" if is_open else "+"
+                        walkable = bool(is_open)
+                        transparent = bool(is_open)
+                        tile_color = "feature_door"
+                        tile_semantic = "feature_door"
+                    elif kind in {"window", "skylight"}:
+                        glyph = '"'
+                        walkable = False
+                        transparent = True
                         tile_color = "feature_window"
                         tile_semantic = "feature_window"
                     else:
+                        glyph = "+"
+                        walkable = ordinary and kind == "door"
+                        transparent = bool(walkable)
                         tile_color = "feature_door"
                         tile_semantic = "feature_door"
 
@@ -1277,14 +1311,93 @@ class Simulation:
             self.tilemap.add_floor_link(int(x), int(y), from_z=from_z, to_z=from_z + 1, kind=kind)
         return top_floor - bottom_floor
 
-    def _pick_building_connector_cell(self, left, right, top, bottom, kind, excluded=None):
+    def _building_shell_edge_cell(self, x, y, *, left, right, top, bottom, excluded=None):
         excluded = set(excluded or ())
-        interior_cells = [
-            (int(x), int(y))
-            for y in range(int(top) + 1, int(bottom))
-            for x in range(int(left) + 1, int(right))
-            if (int(x), int(y)) not in excluded
-        ]
+        cell = (int(x), int(y))
+        if cell in excluded:
+            return False
+        if int(x) in {int(left), int(right)} or int(y) in {int(top), int(bottom)}:
+            return True
+        for nx, ny in (
+            (int(x) - 1, int(y)),
+            (int(x) + 1, int(y)),
+            (int(x), int(y) - 1),
+            (int(x), int(y) + 1),
+        ):
+            if nx < int(left) or nx > int(right) or ny < int(top) or ny > int(bottom):
+                return True
+            if (nx, ny) in excluded:
+                return True
+        for nx, ny in (
+            (int(x) - 1, int(y) - 1),
+            (int(x) + 1, int(y) - 1),
+            (int(x) + 1, int(y) + 1),
+            (int(x) - 1, int(y) + 1),
+        ):
+            if (nx, ny) in excluded:
+                return True
+        return False
+
+    def _pick_building_connector_cell(
+        self,
+        left,
+        right,
+        top,
+        bottom,
+        kind,
+        excluded=None,
+        *,
+        building_id=None,
+        bottom_floor=0,
+        top_floor=0,
+    ):
+        excluded = set(excluded or ())
+        interior_cells = []
+        for y in range(int(top) + 1, int(bottom)):
+            for x in range(int(left) + 1, int(right)):
+                cell = (int(x), int(y))
+                if cell in excluded:
+                    continue
+                if self._building_shell_edge_cell(
+                    int(x),
+                    int(y),
+                    left=left,
+                    right=right,
+                    top=top,
+                    bottom=bottom,
+                    excluded=excluded,
+                ):
+                    continue
+
+                walkable_levels = 0
+                carved_levels = 0
+                blocked = False
+                for z in range(int(bottom_floor), int(top_floor) + 1):
+                    info = self.structure_at(int(x), int(y), int(z))
+                    if building_id is not None:
+                        info_building_id = str((info or {}).get("building_id", "") or "").strip() if isinstance(info, dict) else ""
+                        if info_building_id != str(building_id).strip():
+                            blocked = True
+                            break
+                    tile = self.tilemap.tile_at(int(x), int(y), int(z))
+                    if tile is None:
+                        blocked = True
+                        break
+                    semantic = str(getattr(tile, "semantic_id", "") or "").strip().lower()
+                    if semantic.startswith("feature_"):
+                        blocked = True
+                        break
+                    if bool(getattr(tile, "walkable", False)):
+                        walkable_levels += 1
+                    elif semantic == "wall_building":
+                        carved_levels += 1
+                    else:
+                        blocked = True
+                        break
+                if blocked:
+                    continue
+                interior_cells.append((int(x), int(y), int(walkable_levels), int(carved_levels)))
+
         if not interior_cells:
             return None
 
@@ -1308,18 +1421,22 @@ class Simulation:
         center_y = (int(top) + int(bottom)) // 2
 
         def _score(cell):
-            cell_x, cell_y = cell
+            cell_x, cell_y, walkable_levels, carved_levels = cell
             preferred_offsets = tuple(
                 max(abs(cell_x - pref_x), abs(cell_y - pref_y))
                 for pref_x, pref_y in preferred_cells
             )
-            return preferred_offsets + (
+            return (
+                -int(walkable_levels),
+                int(carved_levels),
+            ) + preferred_offsets + (
                 abs(cell_x - center_x) + abs(cell_y - center_y),
                 cell_y,
                 cell_x,
             )
 
-        return min(interior_cells, key=_score)
+        best_x, best_y, _walkable_levels, _carved_levels = min(interior_cells, key=_score)
+        return int(best_x), int(best_y)
 
     def _core_area_clear(self, center_x, center_y, top_floor):
         left = int(center_x) - 1
@@ -1799,28 +1916,13 @@ class Simulation:
                             bottom=bottom,
                             kind=connector_kind,
                             excluded=shape_excluded,
+                            building_id=chunk_building_id,
+                            bottom_floor=-basement_levels,
+                            top_floor=floors - 1,
                         )
                         if connector_cell is None:
-                            fallback_cells = [
-                                (int(x), int(y))
-                                for y in range(int(top), int(bottom) + 1)
-                                for x in range(int(left), int(right) + 1)
-                                if (int(x), int(y)) not in set(shape_excluded or ())
-                            ]
-                            if not fallback_cells:
-                                continue
-                            center_x = (int(left) + int(right)) // 2
-                            center_y = (int(top) + int(bottom)) // 2
-                            connector_x, connector_y = min(
-                                fallback_cells,
-                                key=lambda cell: (
-                                    abs(int(cell[0]) - center_x) + abs(int(cell[1]) - center_y),
-                                    int(cell[1]),
-                                    int(cell[0]),
-                                ),
-                            )
-                        else:
-                            connector_x, connector_y = connector_cell
+                            continue
+                        connector_x, connector_y = connector_cell
                         self._add_vertical_link_stack(
                             connector_x,
                             connector_y,

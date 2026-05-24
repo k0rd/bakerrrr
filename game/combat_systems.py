@@ -1370,12 +1370,11 @@ class NPCWeaponSystem(System):
                     weapon=None,
                     **_npc_status_metric_args(self.sim, eid),
                 )
-                if metrics["retreat_bias"] >= 0.38 and self.rng.random() < 0.9:
-                    continue
-                aggression = float(getattr(profile, "aggression", 0.55) if profile else 0.55)
-                commit = (aggression * 0.55) + (metrics["assault_bias"] * 0.6) - (metrics["retreat_bias"] * 0.7)
-                if self.rng.random() > max(0.08, min(0.92, commit + 0.18)):
-                    continue
+                if metrics["retreat_bias"] < 0.38:
+                    aggression = float(getattr(profile, "aggression", 0.55) if profile else 0.55)
+                    commit = (aggression * 0.55) + (metrics["assault_bias"] * 0.6) - (metrics["retreat_bias"] * 0.7)
+                    if self.rng.random() > max(0.32, min(0.92, commit + 0.24)):
+                        continue
                 self.sim.emit(Event(
                     "melee_attack_request",
                     eid=eid,
@@ -1424,8 +1423,6 @@ class NPCWeaponSystem(System):
 
             max_range = min(int(weapon.get("range", 1)), int(profile.max_range))
             if dist < profile.min_range or dist > max_range:
-                continue
-            if _weapon_is_melee(weapon) and metrics["retreat_bias"] >= 0.45 and self.rng.random() < 0.82:
                 continue
 
             viability = _weapon_target_viability(
