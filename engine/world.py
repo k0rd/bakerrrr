@@ -641,19 +641,9 @@ class World:
         "entertainment": ("theater", "music_venue", "gaming_hall", "karaoke_box", "pool_hall", "casino"),
     }
 
-    # Each world rolls a subset of optional archetypes for each district.
-    DISTRICT_OPTIONAL_PICK_RANGE = {
-        "industrial": (2, 4),
-        "residential": (2, 4),
-        "downtown": (2, 4),
-        "slums": (2, 4),
-        "corporate": (2, 4),
-        "military": (2, 4),
-        "entertainment": (2, 4),
-    }
-    ALWAYS_INCLUDED_OPTIONAL_BUILDINGS_BY_DISTRICT = {
-        "downtown": ("metro_exchange",),
-    }
+    # Optional archetypes stay seed-available; city variation should come from
+    # district placement and local rolls rather than pruning whole businesses
+    # out of a world upfront.
 
     ROOM_TEMPLATES = {
         "warehouse": ("loading_bay", "receiving", "storage", "dispatch", "office", "secure_cage"),
@@ -1280,24 +1270,7 @@ class World:
         for district in self.DISTRICT_TYPES:
             core = list(self.CORE_BUILDINGS_BY_DISTRICT.get(district, ()))
             optional = list(self.OPTIONAL_BUILDINGS_BY_DISTRICT.get(district, ()))
-            selected = list(core)
-
-            if optional:
-                rng = random.Random(f"{self.seed}:district_buildings:{district}")
-                lo, hi = self.DISTRICT_OPTIONAL_PICK_RANGE.get(
-                    district,
-                    (1, len(optional)),
-                )
-                lo = max(0, min(len(optional), int(lo)))
-                hi = max(lo, min(len(optional), int(hi)))
-                count = rng.randint(lo, hi)
-                if count > 0:
-                    selected.extend(rng.sample(optional, count))
-            for archetype in self.ALWAYS_INCLUDED_OPTIONAL_BUILDINGS_BY_DISTRICT.get(district, ()):
-                if archetype in optional and archetype not in selected:
-                    selected.append(archetype)
-
-            pools[district] = tuple(dict.fromkeys(selected))
+            pools[district] = tuple(dict.fromkeys(core + optional))
 
         return pools
 
