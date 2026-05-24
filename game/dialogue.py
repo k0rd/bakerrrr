@@ -81,6 +81,7 @@ TOPIC_ORDER = (
     "street_appraise",
     "street_buy",
     "street_buy_accept",
+    "street_buy_next",
     "street_buy_decline",
     "bye",
     "payoff",
@@ -510,6 +511,11 @@ TOPIC_DEFS = {
     },
     "street_buy_accept": {
         "label": "Sell it.",
+        "root": True,
+        "unlocks": (),
+    },
+    "street_buy_next": {
+        "label": "What about the next item?",
         "root": True,
         "unlocks": (),
     },
@@ -951,6 +957,12 @@ PLAYER_TOPIC_BANKS = {
         "Fine, it is yours.",
         "Done. Pay me.",
     ),
+    "street_buy_next": (
+        "What about the next item?",
+        "What else would you buy?",
+        "What about the rest of my stock?",
+        "What is the next thing you'd move?",
+    ),
     "street_buy_decline": (
         "Not this time.",
         "No deal.",
@@ -1251,6 +1263,7 @@ PLAYER_CONNECTIVE_SKIP_TOPICS = {
 
 PLAYER_MENU_BASE_LABEL_TOPICS = {
     "street_buy_accept",
+    "street_buy_next",
     "street_buy_decline",
 }
 
@@ -3371,6 +3384,8 @@ def topic_label(topic_id, context=None):
         return f"I might have some {context['street_buy_hint']}."
     if topic_id == "street_buy_accept" and context.get("street_buy_offer_accept_label"):
         return str(context["street_buy_offer_accept_label"]).strip()
+    if topic_id == "street_buy_next" and context.get("street_buy_offer_next_label"):
+        return str(context["street_buy_offer_next_label"]).strip()
     if topic_id == "street_buy_decline" and context.get("street_buy_offer_decline_label"):
         return str(context["street_buy_offer_decline_label"]).strip()
     if topic_id == "organization" and context.get("workplace_name"):

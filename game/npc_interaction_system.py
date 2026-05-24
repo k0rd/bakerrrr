@@ -362,6 +362,7 @@ class NPCInteractionSystem(System):
         "street_appraise",
         "street_buy",
         "street_buy_accept",
+        "street_buy_next",
         "street_buy_decline",
         "bye",
         "purpose",
@@ -392,7 +393,9 @@ class NPCInteractionSystem(System):
         "backup_goto_wait",
         "backup_wait_return",
         "backup_kill",
+        "street_buy",
         "street_buy_accept",
+        "street_buy_next",
         "street_buy_decline",
     }
     PAYOFF_BASE_COST = 40
@@ -596,6 +599,7 @@ class NPCInteractionSystem(System):
                 "new_topic_ids": [],
                 "close_pending": False,
                 "street_buy_offer": None,
+                "street_buy_skipped_instance_ids": [],
             }
         if not hasattr(self.sim, "dialogue_history"):
             self.sim.dialogue_history = {}
@@ -631,6 +635,7 @@ class NPCInteractionSystem(System):
                 "new_topic_ids": [],
                 "close_pending": False,
                 "street_buy_offer": None,
+                "street_buy_skipped_instance_ids": [],
                 "backup_cursor_mark": None,
                 "backup_cursor_pending_topic": "",
             }
@@ -645,6 +650,7 @@ class NPCInteractionSystem(System):
             state.setdefault("new_topic_ids", [])
             state.setdefault("close_pending", False)
             state.setdefault("street_buy_offer", None)
+            state.setdefault("street_buy_skipped_instance_ids", [])
             state.setdefault("backup_cursor_mark", None)
             state.setdefault("backup_cursor_pending_topic", "")
         return state
@@ -3858,13 +3864,26 @@ class NPCInteractionSystem(System):
         district_type = str((context or {}).get("district_type", "") or "").strip().lower()
         occupation = context.get("occupation") if isinstance(context, dict) else None
         career = str(getattr(occupation, "career", "") or "").strip().lower()
-        return _street_buy_candidate_rows_for_inventory(
+        rows = _street_buy_candidate_rows_for_inventory(
             self.sim,
             npc_eid,
             inventory,
             district_type=district_type,
             career=career,
         )
+        skipped = self._street_buy_skipped_instance_ids()
+        if not skipped:
+            return rows
+        filtered = []
+        for row in rows:
+            if bool(row.get("desired")):
+                filtered.append(row)
+                continue
+            instance_key = self._street_buy_instance_key(row.get("instance_id"))
+            if instance_key and instance_key in skipped:
+                continue
+            filtered.append(row)
+        return filtered
 
     def _street_buy_preview(self, npc_eid, context):
         rows = self._street_buy_candidate_rows(npc_eid, context)
@@ -3897,6 +3916,33 @@ class NPCInteractionSystem(System):
     def _clear_street_buy_offer(self):
         self._dialog_ui_state()["street_buy_offer"] = None
 
+    def _street_buy_instance_key(self, instance_id):
+        return str(instance_id or "").strip()
+
+    def _street_buy_skipped_instance_ids(self):
+        state = self._dialog_ui_state()
+        raw = state.get("street_buy_skipped_instance_ids", ())
+        if isinstance(raw, str):
+            raw = (raw,)
+        return {
+            self._street_buy_instance_key(instance_id)
+            for instance_id in tuple(raw or ())
+            if self._street_buy_instance_key(instance_id)
+        }
+
+    def _remember_street_buy_skipped_offer(self, offer):
+        if not isinstance(offer, dict):
+            return
+        offer_kind = str(offer.get("kind", "")).strip().lower()
+        if offer_kind not in {"pivot", "generic"}:
+            return
+        skipped = self._street_buy_skipped_instance_ids()
+        for row in tuple(offer.get("rows", ()) or ()):
+            key = self._street_buy_instance_key((row or {}).get("instance_id"))
+            if key:
+                skipped.add(key)
+        self._dialog_ui_state()["street_buy_skipped_instance_ids"] = sorted(skipped)
+
     def _street_buy_offer_item_text(self, offer, *, limit=3):
         if not isinstance(offer, dict):
             return "that stock"
@@ -3926,6 +3972,22 @@ class NPCInteractionSystem(System):
             return f"Sell {noun} for {payout_text}."
         return f"Sell {self._street_buy_offer_item_text(offer)} for {payout_text}."
 
+    def _street_buy_offer_next_available(self, offer):
+        if not isinstance(offer, dict):
+            return False
+        offer_kind = str(offer.get("kind", "")).strip().lower()
+        if offer_kind not in {"pivot", "generic"}:
+            return False
+        return int(offer.get("remaining_match_count", 0) or 0) > 0
+
+    def _street_buy_offer_next_label(self, offer):
+        if not self._street_buy_offer_next_available(offer):
+            return ""
+        next_item_name = str(offer.get("next_item_name", "") or "").strip()
+        if next_item_name:
+            return f"What about {next_item_name}?"
+        return "What about the next item?"
+
     def _build_street_buy_offer(self, npc_eid, context):
         rows = self._street_buy_candidate_rows(npc_eid, context)
         if not rows:
@@ -3938,9 +4000,13 @@ class NPCInteractionSystem(System):
         if desired_rows:
             offer_rows = desired_rows
             offer_kind = "desired"
+            next_item_name = ""
         elif generic_rows:
             offer_rows = [generic_rows[0]]
             offer_kind = "pivot" if desired_name else "generic"
+            next_item_name = ""
+            if len(generic_rows) > 1:
+                next_item_name = str(generic_rows[1].get("item_name", generic_rows[1].get("item_id", "stock"))).strip()
         else:
             return None
         total_payout = sum(int(max(0, row.get("price", 0) or 0)) for row in offer_rows)
@@ -3961,6 +4027,7 @@ class NPCInteractionSystem(System):
             "item_count": len(offer_rows),
             "quantity_total": int(quantity_total),
             "item_names": item_names,
+            "next_item_name": next_item_name,
             "remaining_match_count": max(0, len(rows) - len(offer_rows)),
             "rows": tuple(
                 {
@@ -5069,6 +5136,8 @@ class NPCInteractionSystem(System):
         street_buy_offer = self._street_buy_offer_state(npc_eid)
         street_buy_offer_pending = isinstance(street_buy_offer, dict)
         street_buy_offer_accept_label = self._street_buy_offer_accept_label(street_buy_offer) if street_buy_offer_pending else ""
+        street_buy_offer_next_available = self._street_buy_offer_next_available(street_buy_offer) if street_buy_offer_pending else False
+        street_buy_offer_next_label = self._street_buy_offer_next_label(street_buy_offer) if street_buy_offer_next_available else ""
         contractor = self._active_backup_contract(npc_eid)
         peaceful_contract = self._active_peaceful_surrender(npc_eid) if peaceful_orders_only else None
         order_rec = contractor or peaceful_contract
@@ -5164,6 +5233,8 @@ class NPCInteractionSystem(System):
             "street_buy_hint": street_buy_hint,
             "street_buy_offer_pending": street_buy_offer_pending,
             "street_buy_offer_accept_label": street_buy_offer_accept_label,
+            "street_buy_offer_next_available": street_buy_offer_next_available,
+            "street_buy_offer_next_label": street_buy_offer_next_label,
             "street_buy_offer_decline_label": "Pass on that offer.",
             "hire_runner_available": self._hire_runner_available_for(npc_eid, contact_standing, guarded),
             "hire_runner_cost": self.CONTRACTOR_COST,
@@ -8268,6 +8339,11 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "street_buy" and (not context.get("street_buy_available") or context.get("street_buy_offer_pending")):
                 continue
+            if topic_id == "street_buy_next" and (
+                not context.get("street_buy_offer_pending")
+                or not context.get("street_buy_offer_next_available")
+            ):
+                continue
             if topic_id in {"street_buy_accept", "street_buy_decline"} and not context.get("street_buy_offer_pending"):
                 continue
             if topic_id == "routine" and not self._routine_summary(context):
@@ -8430,6 +8506,7 @@ class NPCInteractionSystem(System):
             "new_topic_ids": [],
             "close_pending": False,
             "street_buy_offer": None,
+            "street_buy_skipped_instance_ids": [],
             "machine_action": None,
             "backup_cursor_mark": None,
             "backup_cursor_pending_topic": "",
@@ -8447,6 +8524,7 @@ class NPCInteractionSystem(System):
             "new_topic_ids": [],
             "close_pending": True,
             "street_buy_offer": None,
+            "street_buy_skipped_instance_ids": [],
             "machine_action": None,
             "backup_cursor_pending_topic": "",
         })
@@ -8470,6 +8548,7 @@ class NPCInteractionSystem(System):
             "new_topic_ids": [],
             "close_pending": False,
             "street_buy_offer": None,
+            "street_buy_skipped_instance_ids": [],
             "machine_action": None,
             "backup_cursor_mark": None,
             "backup_cursor_pending_topic": "",
@@ -9235,10 +9314,24 @@ class NPCInteractionSystem(System):
             if not offer:
                 return {"npc_lines": ["No. We do not have a price on the table right now."]}
             return self._execute_street_buy_offer(npc_eid, context, offer)
+        if topic_id == "street_buy_next":
+            offer = self._street_buy_offer_state(npc_eid)
+            if not offer:
+                return {"npc_lines": ["No. We do not have another item on deck right now."]}
+            has_next_offer = self._street_buy_offer_next_available(offer)
+            self._remember_street_buy_skipped_offer(offer)
+            self._clear_street_buy_offer()
+            if not has_next_offer:
+                return {"npc_lines": ["That is the rest of what I would move tonight."]}
+            return self._resolve_street_buy_topic(context, topic_id="street_buy", ask_count=ask_count)
         if topic_id == "street_buy_decline":
             had_offer = self._street_buy_offer_state(npc_eid)
+            has_next_offer = self._street_buy_offer_next_available(had_offer)
+            self._remember_street_buy_skipped_offer(had_offer)
             self._clear_street_buy_offer()
             if had_offer:
+                if has_next_offer:
+                    return {"npc_lines": ["Fine. Keep it. If you want me to look over the rest, ask."]}
                 return {"npc_lines": ["Fine. Keep it moving unless you want to make a different offer."]}
             return {"npc_lines": ["Then we do not have business right now."]}
         if topic_id == "payoff":
@@ -9984,7 +10077,7 @@ class NPCInteractionSystem(System):
             return
         state["subtitle"] = refreshed.get("subtitle", "")
         pending_street_buy_offer = bool(refreshed.get("street_buy_offer_pending"))
-        highlight_topic_ids = ("street_buy_accept", "street_buy_decline") if pending_street_buy_offer else ()
+        highlight_topic_ids = ("street_buy_accept", "street_buy_next", "street_buy_decline") if pending_street_buy_offer else ()
         state["topics"] = self._prioritize_dialog_topics(
             self._available_dialog_topics(refreshed),
             highlight_topic_ids=highlight_topic_ids,
@@ -10005,7 +10098,7 @@ class NPCInteractionSystem(System):
         else:
             state["hint"] = self._dialogue_hint_text(refreshed)
         preferred_row = selected_row
-        if topic_id == "street_buy" and pending_street_buy_offer:
+        if topic_id in {"street_buy", "street_buy_next"} and pending_street_buy_offer:
             preferred_row = next(
                 (
                     row

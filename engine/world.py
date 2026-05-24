@@ -7,6 +7,7 @@ from pathlib import Path
 from engine.sites import site_gameplay_profile
 from game.content_warnings import warn_content_fallback
 from game.npc_names import CATALOG as NPC_NAME_CATALOG, DEFAULT_NAME_CATALOG
+from game.property_access import default_site_services_for_archetype
 
 
 BUSINESS_NAME_DATA_PATH = Path(__file__).resolve().parent.parent / "game" / "business_names.json"
@@ -340,6 +341,11 @@ class World:
         "herbalist_camp",
         "bait_shop",
         "coast_watch",
+    }
+    NON_CITY_OUTSIDER_SITE_CHANCE_BY_AREA = {
+        "frontier": 0.032,
+        "wilderness": 0.028,
+        "coastal": 0.04,
     }
 
     OVERWORLD_TRAVEL_BASE = {
@@ -1656,7 +1662,7 @@ class World:
         used_site_names = used_site_names if isinstance(used_site_names, set) else set()
         site_name = self.NON_CITY_SITE_LABELS.get(kind, kind.replace("_", " ").title())
         business_founder = None
-        if kind in self.NAMED_NON_CITY_SITE_KINDS:
+        if kind in self.NAMED_NON_CITY_SITE_KINDS or kind in self.NAMED_BUSINESS_ARCHETYPES:
             name_rng = random.Random(
                 f"{self.seed}:non_city_site_name:{descriptor.get('cx')}:{descriptor.get('cy')}:{idx}:{kind}"
             )
@@ -1673,7 +1679,117 @@ class World:
             "public": kind in self.PUBLIC_NON_CITY_SITE_KINDS,
         }
 
-    def generate_non_city_sites(self, descriptor, rng):
+    def _non_city_outsider_site_candidates(self, descriptor, *, existing_kinds=()):
+        descriptor = descriptor if isinstance(descriptor, dict) else {}
+        native_kinds = {
+            str(kind).strip().lower()
+            for kind in tuple(self._non_city_site_pool(descriptor) or ())
+            if str(kind).strip()
+        }
+        existing = {
+            str(kind).strip().lower()
+            for kind in tuple(existing_kinds or ())
+            if str(kind).strip()
+        }
+
+        cross_area = []
+        for kind in sorted(self.NON_CITY_SITE_LABELS):
+            if kind in native_kinds or kind in existing:
+                continue
+            profile = site_gameplay_profile({"kind": kind})
+            if not (
+                bool(profile.get("public"))
+                or bool(profile.get("is_storefront"))
+                or tuple(profile.get("finance_services", ()))
+                or tuple(profile.get("site_services", ()))
+            ):
+                continue
+            cross_area.append(kind)
+
+        city_like = []
+        for kind in tuple(self.building_archetypes or ()):
+            key = str(kind).strip().lower()
+            if not key or key in native_kinds or key in existing:
+                continue
+            if key in self.STOREFRONT_ARCHETYPES or key in self.PUBLIC_BUILDING_ARCHETYPES:
+                city_like.append(key)
+                continue
+            if default_site_services_for_archetype(key):
+                city_like.append(key)
+
+        # Bias toward true outsider buildings while still allowing cross-area
+        # site kinds from other non-city biomes to show up once in a while.
+        return tuple(cross_area + city_like + city_like)
+
+    def _build_non_city_outsider_site_record(self, descriptor, kind, idx, used_site_names=None):
+        descriptor = descriptor if isinstance(descriptor, dict) else {}
+        key = str(kind or "").strip().lower()
+        site = self._build_non_city_site_record(descriptor, key, idx, used_site_names)
+        if not site:
+            return {}
+
+        if key not in self.NON_CITY_SITE_LABELS:
+            seed_token = (
+                f"non-city-outsider:{self.seed}:{descriptor.get('cx')}:{descriptor.get('cy')}:"
+                f"{descriptor.get('area_type', '')}:{descriptor.get('district_type', '')}:{idx}:{key}"
+            )
+            site_services = list(default_site_services_for_archetype(key, seed_token=seed_token))
+            if site_services:
+                site["site_services"] = list(site_services)
+            if key in self.STOREFRONT_ARCHETYPES:
+                site["is_storefront"] = True
+            site["public"] = bool(
+                site.get("public")
+                or key in self.STOREFRONT_ARCHETYPES
+                or key in self.PUBLIC_BUILDING_ARCHETYPES
+                or site_services
+            )
+            site["outsider_source"] = "city_building"
+        else:
+            site["outsider_source"] = "cross_area_site"
+
+        site["outsider"] = True
+        site["native_area_type"] = str(descriptor.get("area_type", "") or "").strip().lower()
+        site["native_district_type"] = str(descriptor.get("district_type", "") or "").strip().lower()
+        return site
+
+    def _apply_non_city_outsider_sites(self, descriptor, rng, sites):
+        prepared = [dict(site) for site in tuple(sites or ()) if isinstance(site, dict)]
+        if not prepared or len(prepared) >= 2:
+            return prepared
+
+        descriptor = descriptor if isinstance(descriptor, dict) else {}
+        area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
+        chance = float(self.NON_CITY_OUTSIDER_SITE_CHANCE_BY_AREA.get(area_type, 0.03))
+        if chance <= 0.0 or rng.random() >= chance:
+            return prepared
+
+        existing_kinds = [
+            str(site.get("kind", "") or "").strip().lower()
+            for site in prepared
+            if str(site.get("kind", "") or "").strip()
+        ]
+        candidates = list(self._non_city_outsider_site_candidates(descriptor, existing_kinds=existing_kinds))
+        if not candidates:
+            return prepared
+
+        used_site_names = {
+            str(site.get("name", "")).strip()
+            for site in prepared
+            if str(site.get("name", "")).strip()
+        }
+        outsider_kind = str(rng.choice(candidates)).strip().lower()
+        outsider_site = self._build_non_city_outsider_site_record(
+            descriptor,
+            outsider_kind,
+            len(prepared),
+            used_site_names,
+        )
+        if outsider_site:
+            prepared.append(outsider_site)
+        return prepared
+
+    def _generate_non_city_sites_base(self, descriptor, rng):
         area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
         if area_type == "city":
             return []
@@ -1699,7 +1815,13 @@ class World:
             used_kinds.add(kind)
             sites.append(self._build_non_city_site_record(descriptor, kind, idx, used_site_names))
 
-        return self._apply_non_city_specialty(descriptor, sites)
+        return self._apply_non_city_outsider_sites(descriptor, rng, sites)
+
+    def generate_non_city_sites(self, descriptor, rng):
+        return self._apply_non_city_specialty(
+            descriptor,
+            self._generate_non_city_sites_base(descriptor, rng),
+        )
 
     def predict_non_city_sites(self, cx, cy, descriptor=None):
         cx = int(cx)
