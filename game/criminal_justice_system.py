@@ -1751,6 +1751,7 @@ class CriminalJusticeSystem(System):
                         or (former_building_id and site_building_id == former_building_id)
                     ):
                         membership["active"] = False
+                        membership["primary"] = False
                         membership["site_property_id"] = None
                         membership["site_building_id"] = None
             occupation.workplace = None

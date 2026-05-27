@@ -66,7 +66,12 @@ from game.npc_names import (
     generate_human_personal_name,
     human_descriptor,
 )
-from game.organizations import ensure_property_organization, seed_property_organization_defaults, sync_actor_organization_affiliations
+from game.organizations import (
+    ensure_property_organization,
+    seed_chunk_organizations,
+    seed_property_organization_defaults,
+    sync_actor_organization_affiliations,
+)
 from game.population import human_max_hp_for_role, seed_chunk_items, seed_npc_finance, spawn_chunk_npcs
 from game.player_businesses import PlayerBusinessSystem
 from game.systems_incidents import IncidentKnowledgeSystem
@@ -684,6 +689,7 @@ def _bond_pair(sim, left_eid, right_eid, relation, closeness=0.75, trust=0.75):
 
 
 def _register_chunk_properties(sim, chunk):
+    seed_chunk_organizations(sim, chunk)
     rng = random.Random(f"{sim.seed}:{chunk['cx']}:{chunk['cy']}:properties")
     records = []
 

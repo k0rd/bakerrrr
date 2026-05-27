@@ -1,0 +1,124 @@
+{
+  "_meta": {
+    "schema_version": 1
+  },
+  "shared": {
+    "roots": [
+      "Anchor",
+      "Beacon",
+      "Cinder",
+      "Crown",
+      "Signal",
+      "Spire",
+      "Union",
+      "Vertex"
+    ],
+    "colors": [
+      "Black",
+      "Blue",
+      "Copper",
+      "Ember",
+      "Gray",
+      "Iron",
+      "Neon",
+      "Red",
+      "Rust",
+      "Silver"
+    ],
+    "symbols": [
+      "Anchors",
+      "Blades",
+      "Ghosts",
+      "Hands",
+      "Kings",
+      "Saints",
+      "Shadows",
+      "Vultures"
+    ]
+  },
+  "gang": {
+    "collectives": [
+      "Crew",
+      "Set",
+      "Outfit",
+      "Ring",
+      "Hands",
+      "Boys",
+      "Line"
+    ],
+    "templates": [
+      "{street} {collective}",
+      "The {street} {collective}",
+      "{settlement} {collective}",
+      "{surname} {collective}",
+      "{color} {symbol}"
+    ]
+  },
+  "corporate": {
+    "generic_suffixes": [
+      "Group",
+      "Holdings",
+      "Systems",
+      "Industries",
+      "Partners",
+      "Collective"
+    ],
+    "domains": {
+      "logistics": [
+        "Logistics",
+        "Freight",
+        "Haulage",
+        "Distribution"
+      ],
+      "finance": [
+        "Capital",
+        "Trust",
+        "Credit",
+        "Holdings"
+      ],
+      "security": [
+        "Security",
+        "Protective",
+        "Response",
+        "Risk"
+      ],
+      "media": [
+        "Media",
+        "Signal",
+        "Broadcast",
+        "Studios"
+      ],
+      "biotech": [
+        "Biotech",
+        "Life Systems",
+        "Vital Labs",
+        "Genetics"
+      ],
+      "retail": [
+        "Markets",
+        "Supply",
+        "Exchange",
+        "Stores"
+      ],
+      "hospitality": [
+        "Hospitality",
+        "Suites",
+        "Leisure",
+        "Ventures"
+      ],
+      "technology": [
+        "Systems",
+        "Networks",
+        "Dynamics",
+        "Informatics"
+      ]
+    },
+    "templates": [
+      "{surname} {domain}",
+      "{root} {domain}",
+      "{settlement} {domain}",
+      "{surname} & {surname2} {domain}",
+      "{root} {generic_suffix}"
+    ]
+  }
+}

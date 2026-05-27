@@ -2086,6 +2086,7 @@ def fire_actor_from_player_business(sim, owner_eid, actor_eid, prop=None):
         membership = component.memberships.get(int(organization_eid))
         if isinstance(membership, dict):
             membership["active"] = False
+            membership["primary"] = False
             membership["site_property_id"] = None
             membership["site_building_id"] = None
         else:

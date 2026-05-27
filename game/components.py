@@ -1651,14 +1651,20 @@ class Occupation:
 
 
 class OrganizationProfile:
-    def __init__(self, name, kind="organization", key=None, tags=None):
+    def __init__(self, name, kind="other", key=None, tags=None, parent_org_eid=None):
         self.name = str(name or "Organization").strip() or "Organization"
-        self.kind = str(kind or "organization").strip().lower() or "organization"
+        self.kind = str(kind or "other").strip().lower() or "other"
         self.key = str(key or "").strip()
         self.tags = set(str(tag).strip().lower() for tag in (tags or ()) if str(tag).strip())
+        try:
+            self.parent_org_eid = int(parent_org_eid) if parent_org_eid is not None else None
+        except (TypeError, ValueError):
+            self.parent_org_eid = None
         self.site_property_ids = set()
         self.site_building_ids = set()
         self.member_eids = set()
+        self.site_links = []
+        self.relations = []
 
 
 class OrganizationAffiliations:
@@ -1673,12 +1679,23 @@ class OrganizationAffiliations:
         site_property_id=None,
         site_building_id=None,
         title=None,
+        primary=False,
+        authority_rank=70,
+        supervisor_eid=None,
         active=True,
     ):
         try:
             organization_eid = int(organization_eid)
         except (TypeError, ValueError):
             return False
+        try:
+            authority_rank = int(authority_rank)
+        except (TypeError, ValueError):
+            authority_rank = 70
+        try:
+            supervisor_eid = int(supervisor_eid) if supervisor_eid is not None else None
+        except (TypeError, ValueError):
+            supervisor_eid = None
 
         self.memberships[organization_eid] = {
             "organization_eid": organization_eid,
@@ -1687,9 +1704,26 @@ class OrganizationAffiliations:
             "site_property_id": str(site_property_id or "").strip() or None,
             "site_building_id": str(site_building_id or "").strip() or None,
             "title": str(title or "").strip() or None,
+            "primary": bool(primary),
+            "authority_rank": authority_rank,
+            "supervisor_eid": supervisor_eid,
             "active": bool(active),
         }
         return True
+
+
+class OrganizationVocabulary:
+    def __init__(self, max_entries=64):
+        self.max_entries = max(8, int(max_entries or 64))
+        self.next_entry_id = 1
+        self.entries = {}
+
+
+class OrganizationPractices:
+    def __init__(self, max_entries=48):
+        self.max_entries = max(8, int(max_entries or 48))
+        self.next_entry_id = 1
+        self.entries = {}
 
 
 class PropertyPortfolio:

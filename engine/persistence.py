@@ -11,6 +11,7 @@ from .events import EventBus
 from .sim import Simulation
 from game.appearance import AppearanceManager
 from game.components import Position
+from game.organizations import rebuild_organization_index
 
 
 def _inventory_item_instance_ids_from_sim(sim):
@@ -535,6 +536,8 @@ def restore_simulation(snapshot):
         sim.chunk_saved_states = {}
     if not hasattr(sim, "organization_index"):
         sim.organization_index = {}
+    if not getattr(sim, "organization_index", None):
+        rebuild_organization_index(sim)
 
     active_chunk_coord = _chunk_key(getattr(sim, "active_chunk_coord", None))
     if active_chunk_coord is not None and getattr(sim, "world", None) is not None:

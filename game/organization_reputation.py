@@ -3,7 +3,7 @@ from __future__ import annotations
 from engine.events import Event
 from engine.systems import System
 
-from game.organizations import organization_profile, property_organization_eid
+from game.organizations import organization_policy_snapshot, organization_profile, property_organization_eid
 from game.property_access import property_access_level as _property_access_level
 from game.property_runtime import property_covering as _property_covering
 
@@ -90,7 +90,7 @@ def _normalize_entry(entry):
     entry["organization_eid"] = _safe_int(entry.get("organization_eid"), default=0) or None
     entry["organization_key"] = _text(entry.get("organization_key"))
     entry["organization_name"] = _text(entry.get("organization_name")) or "Organization"
-    entry["organization_kind"] = _text(entry.get("organization_kind")).lower() or "organization"
+    entry["organization_kind"] = _text(entry.get("organization_kind")).lower() or "other"
     entry["standing"] = _clamp(_safe_float(entry.get("standing"), default=0.0), -1.0, 1.0)
     entry["heat"] = max(0, min(100, _safe_int(entry.get("heat"), default=0)))
     entry["peak_heat"] = max(int(entry["heat"]), _safe_int(entry.get("peak_heat"), default=int(entry["heat"])))
@@ -125,7 +125,7 @@ def ensure_organization_reputation(sim, organization_eid=None, prop=None):
     entry["organization_eid"] = int(organization_eid)
     entry["organization_key"] = _text(getattr(profile, "key", "")) or key
     entry["organization_name"] = _text(getattr(profile, "name", "")) or "Organization"
-    entry["organization_kind"] = _text(getattr(profile, "kind", "")).lower() or "organization"
+    entry["organization_kind"] = _text(getattr(profile, "kind", "")).lower() or "other"
     entry["peak_heat"] = max(int(entry["peak_heat"]), int(entry["heat"]))
     return entry
 
@@ -145,11 +145,11 @@ def organization_snapshot(sim, organization_eid=None, prop=None, ensure=False):
     member_count = len(getattr(profile, "member_eids", ())) if profile is not None else 0
     standing = float(entry.get("standing", 0.0))
     heat = int(entry.get("heat", 0))
-    return {
+    snapshot = {
         "organization_eid": int(organization_eid),
         "organization_key": _text(entry.get("organization_key")),
         "name": _text(entry.get("organization_name")) or "Organization",
-        "kind": _text(entry.get("organization_kind")).lower() or "organization",
+        "kind": _text(entry.get("organization_kind")).lower() or "other",
         "standing": standing,
         "standing_tier": organization_standing_tier(standing),
         "heat": heat,
@@ -161,6 +161,20 @@ def organization_snapshot(sim, organization_eid=None, prop=None, ensure=False):
         "site_count": int(site_count),
         "member_count": int(member_count),
     }
+    policy = organization_policy_snapshot(sim, organization_eid=organization_eid)
+    if isinstance(policy, dict):
+        snapshot.update(
+            {
+                "family": _text(policy.get("family")).lower() or snapshot.get("kind", "other"),
+                "structure": _text(policy.get("structure")).lower() or "flat",
+                "org_role": _text(policy.get("org_role")).lower() or "operator",
+                "root_organization_eid": _safe_int(policy.get("root_organization_eid"), default=organization_eid) or int(organization_eid),
+                "root_organization_key": _text(policy.get("root_organization_key")),
+                "root_organization_name": _text(policy.get("root_organization_name")),
+                "root_organization_kind": _text(policy.get("root_organization_kind")).lower() or snapshot.get("kind", "other"),
+            }
+        )
+    return snapshot
 
 
 def organization_snapshots(sim):
@@ -176,7 +190,7 @@ def organization_snapshots(sim):
                 "organization_eid": None,
                 "organization_key": _text(entry.get("organization_key")),
                 "name": _text(entry.get("organization_name")) or "Organization",
-                "kind": _text(entry.get("organization_kind")).lower() or "organization",
+                "kind": _text(entry.get("organization_kind")).lower() or "other",
                 "standing": float(entry.get("standing", 0.0)),
                 "standing_tier": organization_standing_tier(entry.get("standing", 0.0)),
                 "heat": int(entry.get("heat", 0)),
@@ -359,7 +373,7 @@ def apply_organization_reputation_delta(
         "organization_eid": organization_eid,
         "organization_key": _text(entry.get("organization_key")),
         "organization_name": _text(entry.get("organization_name")) or "Organization",
-        "organization_kind": _text(entry.get("organization_kind")).lower() or "organization",
+        "organization_kind": _text(entry.get("organization_kind")).lower() or "other",
         "heat_delta": int(actual_heat),
         "standing_delta": float(actual_standing),
         "before_heat": int(before_heat),
@@ -458,7 +472,7 @@ class OrganizationReputationSystem(System):
             "organization_eid": change.get("organization_eid"),
             "organization_key": str(change.get("organization_key", "")).strip(),
             "organization_name": str(change.get("organization_name", "Organization")).strip() or "Organization",
-            "organization_kind": str(change.get("organization_kind", "organization")).strip().lower() or "organization",
+            "organization_kind": str(change.get("organization_kind", "other")).strip().lower() or "other",
             "property_id": property_id,
             "source": str(change.get("source", "unknown")).strip().lower() or "unknown",
             "reason": str(change.get("reason", "")).strip().lower(),

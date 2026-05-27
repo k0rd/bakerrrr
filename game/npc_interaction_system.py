@@ -308,6 +308,7 @@ from game.organizations import (
     ensure_property_organization,
     occupation_targets_property,
     organization_name,
+    primary_actor_membership,
     property_org_members,
     property_organization_eid,
     seed_property_organization_defaults,
@@ -4791,14 +4792,22 @@ class NPCInteractionSystem(System):
             if row.get("eid") is not None
         }
         self_member = member_by_eid.get(int(npc_eid))
-        organization_role = str((self_member or {}).get("role", "") or "").strip().lower()
+        membership_row = primary_actor_membership(self.sim, npc_eid, organization_eid=organization_eid)
+        organization_role = str(
+            (membership_row or {}).get("role")
+            or (self_member or {}).get("role")
+            or ""
+        ).strip().lower()
         if not organization_role and workplace_prop and workplace_prop.get("owner_eid") == npc_eid:
             organization_role = "owner"
 
         supervisor_row = None
+        supervisor_eid = (membership_row or {}).get("supervisor_eid")
+        if supervisor_eid is not None:
+            supervisor_row = member_by_eid.get(int(supervisor_eid))
         if organization_role == "owner":
             supervisor_row = self_member
-        else:
+        elif supervisor_row is None:
             preferred_roles = ("owner", "manager")
             if organization_role == "manager":
                 preferred_roles = ("owner",)

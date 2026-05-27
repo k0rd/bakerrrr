@@ -107,6 +107,7 @@ from game.organizations import (
     organization_name,
     property_org_members,
     property_organization_eid,
+    seed_chunk_organizations,
     seed_property_organization_defaults,
     sync_actor_organization_affiliations,
 )
@@ -512,6 +513,7 @@ class WorldStreamingSystem(System):
             return
 
         chunk = self.sim.world.get_chunk(key[0], key[1])
+        seed_chunk_organizations(self.sim, chunk)
         rng = random.Random(f"{self.sim.seed}:{key[0]}:{key[1]}:properties")
         records = []
 
