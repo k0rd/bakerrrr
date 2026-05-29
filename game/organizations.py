@@ -2897,6 +2897,7 @@ def record_organization_practice(
     component.entries[int(normalized_entry_id)] = normalized
     component.next_entry_id = max(int(component.next_entry_id), int(normalized_entry_id) + 1)
     _trim_organization_practices(component)
+    _invalidate_organization_runtime_caches(sim)
     _hydrate_linked_branch_records_for_organization(sim, organization_eid)
     return dict(normalized)
 
@@ -3443,6 +3444,7 @@ def record_organization_watchlist(
     component.entries[int(normalized_entry_id)] = normalized
     component.next_entry_id = max(int(component.next_entry_id), int(normalized_entry_id) + 1)
     _trim_organization_watchlists(component)
+    _invalidate_organization_runtime_caches(sim)
     _hydrate_linked_branch_records_for_organization(sim, organization_eid)
     return dict(normalized)
 
@@ -4976,6 +4978,47 @@ def _organization_actor_briefing_state(sim):
     return state
 
 
+def _organization_runtime_cache_state(sim):
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        sim.world_traits = {}
+        traits = sim.world_traits
+    state = traits.get("organization_runtime_cache")
+    if not isinstance(state, dict):
+        state = {}
+        traits["organization_runtime_cache"] = state
+    sim_tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    if _safe_int(state.get("sim_tick"), default=-1) != sim_tick:
+        state.clear()
+        state["sim_tick"] = sim_tick
+    for key in ("workplace_posture", "protective_pressure"):
+        cache = state.get(key)
+        if not isinstance(cache, dict):
+            cache = {}
+            state[key] = cache
+    return state
+
+
+def _organization_runtime_property_cache_key(prop, *, actor_eid=None, current_tick=None):
+    if not isinstance(prop, dict):
+        return None
+    metadata = _property_metadata(prop)
+    return (
+        _safe_int(current_tick, default=0),
+        _text(prop.get("id")),
+        _text(metadata.get("building_id")) or _text(metadata.get("local_building_id")),
+        _safe_int(actor_eid, default=0),
+    )
+
+
+def _invalidate_organization_runtime_caches(sim):
+    state = _organization_runtime_cache_state(sim)
+    for key in ("workplace_posture", "protective_pressure"):
+        cache = state.get(key)
+        if isinstance(cache, dict):
+            cache.clear()
+
+
 def _actor_branch_packet_key(actor_eid, organization_eid, *, property_id=None, building_id=None):
     actor_eid = _safe_int(actor_eid, default=0)
     organization_eid = _safe_int(organization_eid, default=0)
@@ -5741,6 +5784,18 @@ def local_workplace_org_posture(sim, prop, *, actor_eid=None, current_tick=None)
         }
 
     tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    actor_eid = _safe_int(actor_eid, default=0)
+    cache_state = _organization_runtime_cache_state(sim)
+    cache = cache_state.get("workplace_posture", {})
+    cache_key = _organization_runtime_property_cache_key(
+        prop,
+        actor_eid=actor_eid,
+        current_tick=tick,
+    )
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        return cached
+
     practice_rows = _workplace_practice_rows(sim, prop, current_tick=tick)
     corporate_rows = [row for row in practice_rows if _text(row.get("posture_family")) == "corporate"]
     collective_rows = [row for row in practice_rows if _text(row.get("posture_family")) == "collective"]
@@ -5881,7 +5936,7 @@ def local_workplace_org_posture(sim, prop, *, actor_eid=None, current_tick=None)
         reason_tags.append("staffing_pressure")
 
     note_texts = _briefing_note_texts(corporate_notes, collective_notes, relation_notes)
-    return {
+    result = {
         "active": bool(corporate_rows or collective_rows or relation_rows),
         "corporate_rows": tuple(corporate_rows),
         "collective_rows": tuple(collective_rows),
@@ -5909,6 +5964,9 @@ def local_workplace_org_posture(sim, prop, *, actor_eid=None, current_tick=None)
         "note_texts": note_texts,
         "note_text": "; ".join(note_texts),
     }
+    if cache_key is not None:
+        cache[cache_key] = result
+    return result
 
 
 def _legacy_property_denial_state(sim, prop, *, viewer_eid=None, current_tick=None):
@@ -6064,6 +6122,12 @@ def local_protective_pressure_snapshot(sim, prop, *, current_tick=None):
             "recent_dispatch_count": 0,
         }
     tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    cache_state = _organization_runtime_cache_state(sim)
+    cache = cache_state.get("protective_pressure", {})
+    cache_key = _organization_runtime_property_cache_key(prop, current_tick=tick)
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        return cached
     metadata = _property_metadata(prop)
     archetype = _text(metadata.get("archetype", prop.get("kind"))).lower()
     watch_rows = property_org_watch_state(sim, prop, active_only=True, current_tick=tick)
@@ -6172,7 +6236,7 @@ def local_protective_pressure_snapshot(sim, prop, *, current_tick=None):
     if response_rows:
         reason_tags.append("recent_response")
     merged_notes = _briefing_note_texts(note_texts)
-    return {
+    result = {
         "active": bool(state_key),
         "state_key": state_key,
         "state_label": state_label,
@@ -6195,6 +6259,9 @@ def local_protective_pressure_snapshot(sim, prop, *, current_tick=None):
         "note_texts": merged_notes,
         "note_text": "; ".join(merged_notes),
     }
+    if cache_key is not None:
+        cache[cache_key] = result
+    return result
 
 
 def effective_org_access_posture(sim, actor_eid, prop, current_tick=None):
@@ -6524,6 +6591,7 @@ def link_property_organization(
         metadata["organization_key"] = _text(profile.key)
         metadata["organization_name"] = _text(profile.name)
         metadata["organization_kind"] = _normalize_org_kind(profile.kind, default="business")
+    _invalidate_organization_runtime_caches(sim)
     hydrate_property_organization_branches(
         sim,
         prop,
@@ -6649,6 +6717,7 @@ def relate_organizations(
                 "directed": False,
             },
         )
+    _invalidate_organization_runtime_caches(sim)
     _hydrate_linked_branch_records_for_organization(sim, source_org_eid)
     if int(target_org_eid) != int(source_org_eid):
         _hydrate_linked_branch_records_for_organization(sim, target_org_eid)
@@ -6992,6 +7061,7 @@ def assign_actor_organization(
         profile.member_eids.discard(int(actor_eid))
     _reconcile_primary_memberships(affiliations)
     _refresh_profile_member_cache(sim, organization_eid)
+    _invalidate_organization_runtime_caches(sim)
     property_id = _text(site_property_id)
     prop = sim.properties.get(property_id) if property_id else None
     refresh_actor_branch_briefing(

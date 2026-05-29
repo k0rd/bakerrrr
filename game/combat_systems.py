@@ -1250,7 +1250,10 @@ class WeaponSystem(System):
             if isinstance(offense_profile, dict):
                 context = str(offense_profile.get("context", context) or context).strip().lower() or context
                 score = int(offense_profile.get("score", 0) or 0)
-        target_prop = self.sim.property_covering(target_pos.x, target_pos.y, target_pos.z) if hasattr(self.sim, "property_covering") else None
+        target_x = int(target.get("x", pos.x))
+        target_y = int(target.get("y", pos.y))
+        target_z = int(target.get("z", pos.z))
+        target_prop = self.sim.property_covering(target_x, target_y, target_z) if hasattr(self.sim, "property_covering") else None
         self._emit_action_offense(
             eid=eid,
             action="fire_weapon",
@@ -1263,9 +1266,9 @@ class WeaponSystem(System):
             victim_eid=target_eid,
             victim_name=target_name,
             target_name=target_name,
-            target_x=target_pos.x,
-            target_y=target_pos.y,
-            target_z=target_pos.z,
+            target_x=target_x,
+            target_y=target_y,
+            target_z=target_z,
             property_id=(target_prop or {}).get("id"),
             property_name=(target_prop or {}).get("name"),
             target_taxonomy=str((offense_profile or {}).get("target_taxonomy", "") or "").strip().lower(),
