@@ -4975,6 +4975,10 @@ def _organization_actor_briefing_state(sim):
     if not isinstance(packets, dict):
         packets = {}
         state["packets"] = packets
+    query_cache = state.get("query_cache")
+    if not isinstance(query_cache, dict):
+        query_cache = {}
+        state["query_cache"] = query_cache
     return state
 
 
@@ -4991,7 +4995,7 @@ def _organization_runtime_cache_state(sim):
     if _safe_int(state.get("sim_tick"), default=-1) != sim_tick:
         state.clear()
         state["sim_tick"] = sim_tick
-    for key in ("workplace_posture", "protective_pressure"):
+    for key in ("workplace_posture", "protective_pressure", "property_links", "access_posture"):
         cache = state.get(key)
         if not isinstance(cache, dict):
             cache = {}
@@ -5013,7 +5017,7 @@ def _organization_runtime_property_cache_key(prop, *, actor_eid=None, current_ti
 
 def _invalidate_organization_runtime_caches(sim):
     state = _organization_runtime_cache_state(sim)
-    for key in ("workplace_posture", "protective_pressure"):
+    for key in ("workplace_posture", "protective_pressure", "property_links", "access_posture"):
         cache = state.get(key)
         if isinstance(cache, dict):
             cache.clear()
@@ -5231,6 +5235,24 @@ def _briefing_branch_packets(sim, actor_eid, prop=None):
     return tuple(packets)
 
 
+def _briefing_query_cache_key(actor_eid, prop=None):
+    actor_eid = _safe_int(actor_eid, default=0)
+    property_id = _text((prop or {}).get("id")) if isinstance(prop, dict) else ""
+    return f"{actor_eid}:{property_id or '-'}"
+
+
+def _briefing_packets_token(packets):
+    return tuple(
+        (
+            _text(packet.get("packet_key")),
+            packet.get("packet_token"),
+            _safe_int(packet.get("source_update_tick"), default=0),
+        )
+        for packet in tuple(packets or ())
+        if isinstance(packet, dict)
+    )
+
+
 def refresh_actor_branch_briefing(sim, actor_eid, prop=None, reason=""):
     actor_eid = _safe_int(actor_eid, default=0)
     if actor_eid <= 0:
@@ -5250,6 +5272,7 @@ def refresh_actor_branch_briefing(sim, actor_eid, prop=None, reason=""):
             seen_property_ids.add(property_id)
             props.append(candidate)
     state = _organization_actor_briefing_state(sim)
+    state.get("query_cache", {}).clear()
     packets = state["packets"]
     if not props:
         stale_keys = [
@@ -5500,9 +5523,38 @@ def refresh_actor_branch_briefing(sim, actor_eid, prop=None, reason=""):
 
 def actor_branch_briefing_packet(sim, actor_eid, prop=None, current_tick=None):
     del current_tick
-    packets = refresh_actor_branch_briefing(sim, actor_eid, prop=prop, reason="query")
+    state = _organization_actor_briefing_state(sim)
+    query_cache = state.get("query_cache", {})
+    cache_key = _briefing_query_cache_key(actor_eid, prop=prop)
+    packets = _briefing_branch_packets(sim, actor_eid, prop=prop)
     if not packets:
-        packets = _briefing_branch_packets(sim, actor_eid, prop=prop)
+        packets = refresh_actor_branch_briefing(sim, actor_eid, prop=prop, reason="query")
+    if not packets:
+        query_cache.pop(cache_key, None)
+        return {
+            "actor_eid": _safe_int(actor_eid, default=0) or None,
+            "property_id": _text((prop or {}).get("id")) if isinstance(prop, dict) else None,
+            "building_id": _text(_property_metadata(prop).get("building_id")) if isinstance(prop, dict) else None,
+            "packet_count": 0,
+            "organization_eids": (),
+            "organization_keys": (),
+            "directive_rows": (),
+            "watch_rows": (),
+            "access_grace_rows": (),
+            "crime_plan_rows": (),
+            "practice_note_texts": (),
+            "response_watchfulness": 0,
+            "note_texts": (),
+            "note_text": "",
+            "source_update_tick": 0,
+            "branch_packets": (),
+        }
+    packet_tokens = _briefing_packets_token(packets)
+    cached = query_cache.get(cache_key)
+    if isinstance(cached, dict) and cached.get("packet_tokens") == packet_tokens:
+        cached_packet = cached.get("packet")
+        if isinstance(cached_packet, dict):
+            return cached_packet
     directive_rows = []
     watch_rows = []
     access_rows = []
@@ -5575,7 +5627,7 @@ def actor_branch_briefing_packet(sim, actor_eid, prop=None, current_tick=None):
             seen_plan_rows.add(key)
             crime_plan_rows.append(dict(row))
     merged_notes = _briefing_note_texts(note_texts, practice_note_texts)
-    return {
+    result = {
         "actor_eid": _safe_int(actor_eid, default=0) or None,
         "property_id": property_id or (_text(packets[0].get("property_id")) if packets else None),
         "building_id": building_id or None,
@@ -5602,6 +5654,11 @@ def actor_branch_briefing_packet(sim, actor_eid, prop=None, current_tick=None):
         "source_update_tick": int(source_update_tick),
         "branch_packets": packets,
     }
+    query_cache[cache_key] = {
+        "packet_tokens": packet_tokens,
+        "packet": result,
+    }
+    return result
 
 
 def _workplace_practice_rows(sim, prop, *, current_tick=None):
@@ -6285,6 +6342,17 @@ def effective_org_access_posture(sim, actor_eid, prop, current_tick=None):
             "legacy_denial": None,
         }
     tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    actor_eid = _safe_int(actor_eid, default=0)
+    cache_state = _organization_runtime_cache_state(sim)
+    cache = cache_state.get("access_posture", {})
+    cache_key = _organization_runtime_property_cache_key(
+        prop,
+        actor_eid=actor_eid,
+        current_tick=tick,
+    )
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        return cached
     briefing = actor_branch_briefing_packet(sim, actor_eid, prop=prop, current_tick=tick)
     watch_rows = property_org_watch_state(
         sim,
@@ -6392,7 +6460,7 @@ def effective_org_access_posture(sim, actor_eid, prop, current_tick=None):
         note_texts.append(_text(workplace.get("note_text")))
     note_texts.extend(briefing.get("note_texts", ()) or ())
     merged_notes = _briefing_note_texts(note_texts)
-    return {
+    result = {
         "briefing": briefing,
         "watch_rows": tuple(watch_rows),
         "relation_rows": tuple(relation_rows),
@@ -6412,6 +6480,9 @@ def effective_org_access_posture(sim, actor_eid, prop, current_tick=None):
         "legacy_denial": dict(legacy_denial) if isinstance(legacy_denial, dict) else None,
         "protective_pressure": dict(protective) if isinstance(protective, dict) else {},
     }
+    if cache_key is not None:
+        cache[cache_key] = result
+    return result
 
 
 def organization_guard_grace_active(sim, actor_eid, prop, current_tick=None):
@@ -6605,6 +6676,17 @@ def link_property_organization(
 def property_org_links(sim, prop, *, active_only=True):
     if not isinstance(prop, dict):
         return ()
+    cache_state = _organization_runtime_cache_state(sim)
+    cache = cache_state.get("property_links", {})
+    metadata = _property_metadata(prop)
+    cache_key = (
+        _text(prop.get("id")),
+        _text(metadata.get("building_id")) or _text(metadata.get("local_building_id")),
+        bool(active_only),
+    )
+    cached = cache.get(cache_key)
+    if isinstance(cached, tuple):
+        return cached
     primary_org_eid = property_organization_eid(sim, prop, ensure=False)
     if primary_org_eid is not None:
         profile = organization_profile(sim, primary_org_eid)
@@ -6641,7 +6723,9 @@ def property_org_links(sim, prop, *, active_only=True):
             _safe_int(row.get("organization_eid"), default=0),
         )
     )
-    return tuple(rows)
+    result = tuple(rows)
+    cache[cache_key] = result
+    return result
 
 
 def _upsert_profile_relation(profile, row):
