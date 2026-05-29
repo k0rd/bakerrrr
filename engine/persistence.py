@@ -475,6 +475,8 @@ def restore_chunk_state(sim, key):
     sim.property_registry_dirty = True
     if hasattr(sim, "rebuild_spatial_indexes"):
         sim.rebuild_spatial_indexes()
+    if hasattr(sim, "reapply_door_states"):
+        sim.reapply_door_states(chunk=key)
     refresh_loaded_organization_branch_briefings(
         sim,
         property_ids=tuple(snapshot.get("properties", {}).keys()),
@@ -555,6 +557,8 @@ def restore_simulation(snapshot):
         }
     if hasattr(sim, "rebuild_spatial_indexes"):
         sim.rebuild_spatial_indexes()
+    if hasattr(sim, "reapply_door_states"):
+        sim.reapply_door_states()
     refresh_loaded_organization_branch_briefings(
         sim,
         property_ids=tuple(getattr(sim, "properties", {}).keys()),

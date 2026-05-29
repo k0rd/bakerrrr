@@ -376,6 +376,24 @@ class Simulation:
         )
         return True
 
+    def reapply_door_states(self, *, chunk=None):
+        target_chunk = self._normalize_chunk_key(chunk) if chunk is not None else None
+        count = 0
+        for key in tuple(sorted(getattr(self, "door_states", {}).keys())):
+            if not isinstance(key, (tuple, list)) or len(key) < 3:
+                continue
+            try:
+                x = int(key[0])
+                y = int(key[1])
+                z = int(key[2])
+            except (TypeError, ValueError):
+                continue
+            if target_chunk is not None and self.chunk_coords(x, y) != target_chunk:
+                continue
+            if self.apply_door_state(x, y, z):
+                count += 1
+        return count
+
     def set_time_paused(self, active=True, *, reason="modal"):
         reason_key = str(reason or "modal").strip().lower() or "modal"
         if active:
@@ -1269,6 +1287,8 @@ class Simulation:
                     ),
                     z=z,
                 )
+                if aperture and str(aperture.get("kind", "door") or "door").strip().lower() in {"door", "side_door", "service_door", "employee_door"}:
+                    self.apply_door_state(x, y, z)
 
     def _mark_structure_area(self, left, right, top, bottom, z, info, room_plan=None, excluded=None):
         excluded = excluded or frozenset()
