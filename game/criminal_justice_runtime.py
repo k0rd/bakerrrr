@@ -19,6 +19,7 @@ from game.justice_runtime import (
     mark_in_custody as _mark_justice_in_custody,
     record_booking_completion as _record_justice_booking_completion,
     record_incident as _record_justice_incident,
+    record_questioning_resolution as _record_justice_questioning_resolution,
     record_restitution_claim as _record_justice_restitution_claim,
     replace_held_property as _replace_justice_held_property,
     release_from_custody as _release_justice_from_custody,

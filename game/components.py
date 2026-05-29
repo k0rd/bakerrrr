@@ -873,6 +873,8 @@ class IncidentKnowledge:
         x=None,
         y=None,
         z=None,
+        official_item_links=None,
+        official_item_link_counts=None,
     ):
         incident_key = self._incident_key(incident_id)
         if incident_key is None:
@@ -986,6 +988,39 @@ class IncidentKnowledge:
             "z": z,
             "dismissed": bool((existing or {}).get("dismissed", False)) if isinstance(existing, dict) else False,
         })
+        if category == "official" or str(record.get("category", "")).strip().lower() == "official":
+            if isinstance(official_item_link_counts, dict):
+                counts = {}
+                for raw_key, raw_value in official_item_link_counts.items():
+                    key = str(raw_key or "").strip().lower().replace(" ", "_")
+                    if not key:
+                        continue
+                    counts[key] = max(0, _safe_int(raw_value, 0))
+                record["official_item_link_counts"] = counts
+            elif isinstance(existing, dict) and isinstance(existing.get("official_item_link_counts"), dict):
+                record["official_item_link_counts"] = dict(existing.get("official_item_link_counts") or {})
+
+            if official_item_links is not None and source_kind != "social_rumor":
+                cleaned = []
+                seen = set()
+                for raw_row in tuple(official_item_links or ()):
+                    if not isinstance(raw_row, dict):
+                        continue
+                    instance_id = str(raw_row.get("instance_id", "") or "").strip()
+                    if not instance_id or instance_id in seen:
+                        continue
+                    seen.add(instance_id)
+                    cleaned.append({
+                        "instance_id": instance_id,
+                        "item_id": str(raw_row.get("item_id", "") or "").strip().lower() or None,
+                        "link_kind": str(raw_row.get("link_kind", "") or "").strip().lower() or None,
+                        "property_id": str(raw_row.get("property_id", "") or "").strip() or None,
+                        "victim_eid": raw_row.get("victim_eid"),
+                        "summary_label": str(raw_row.get("summary_label", "") or "").strip() or None,
+                    })
+                record["official_item_links"] = tuple(cleaned)
+            elif isinstance(existing, dict) and existing.get("official_item_links") is not None:
+                record["official_item_links"] = tuple(existing.get("official_item_links") or ())
         self.records[incident_key] = record
         self._trim_records()
         return record
@@ -1726,9 +1761,71 @@ class OrganizationPractices:
         self.entries = {}
 
 
+class OrganizationPracticeProgress:
+    def __init__(self, max_entries=96):
+        self.max_entries = max(8, int(max_entries or 96))
+        self.entries = {}
+
+
+class OrganizationCrimePlans:
+    def __init__(self, max_entries=24):
+        self.max_entries = max(4, int(max_entries or 24))
+        self.next_entry_id = 1
+        self.entries = {}
+
+
+class OrganizationWatchlists:
+    def __init__(self, max_entries=48):
+        self.max_entries = max(8, int(max_entries or 48))
+        self.next_entry_id = 1
+        self.entries = {}
+
+
 class PropertyPortfolio:
     def __init__(self):
         self.owned_property_ids = set()
+
+
+class CriminalDriveState:
+    def __init__(
+        self,
+        pressure=0.0,
+        confidence=0.0,
+        affiliation_interest=0.0,
+        last_eval_tick=0,
+        last_attempt_tick=0,
+        last_success_tick=0,
+        last_failure_tick=0,
+        last_affiliation_seek_tick=0,
+        cooldown_until_tick=0,
+        current_plan_key=None,
+        current_target_property_id=None,
+    ):
+        self.pressure = float(pressure)
+        self.confidence = float(confidence)
+        self.affiliation_interest = float(affiliation_interest)
+        self.last_eval_tick = int(last_eval_tick or 0)
+        self.last_attempt_tick = int(last_attempt_tick or 0)
+        self.last_success_tick = int(last_success_tick or 0)
+        self.last_failure_tick = int(last_failure_tick or 0)
+        self.last_affiliation_seek_tick = int(last_affiliation_seek_tick or 0)
+        self.cooldown_until_tick = int(cooldown_until_tick or 0)
+        self.current_plan_key = str(current_plan_key or "").strip() or None
+        self.current_target_property_id = str(current_target_property_id or "").strip() or None
+        self.opportunistic_crime_score = 0.0
+        self.planned_crime_score = 0.0
+        self.affiliation_seek_score = 0.0
+        self.current_target_ground_item_id = None
+        self.current_target_building_id = None
+        self.current_target_x = None
+        self.current_target_y = None
+        self.current_target_z = None
+        self.current_disposal_property_id = None
+        self.current_affiliation_target_property_id = None
+        self.current_affiliation_organization_eid = None
+        self.current_activity_kind = None
+        self.current_activity_stage = None
+        self.current_activity_summary = None
 
 
 class PropertyKnowledge:

@@ -105,7 +105,7 @@ def _set_door_open_state(sim, x, y, z, is_open):
     tile.set_appearance(
         glyph="'" if is_open else "+",
         color="feature_door",
-        semantic_id=None,
+        semantic_id="feature_door",
     )
     return True
 
@@ -230,6 +230,7 @@ def _door_interaction_candidate(sim, pos, *, preferred_dir=None):
         state = _operable_door_state_at(sim, x, y, z)
         if state is None:
             continue
+        open_penalty = 1 if bool(state.get("open", False)) else 0
         ranked.append((
             _interaction_target_order_key(
                 pos.x,
@@ -237,7 +238,7 @@ def _door_interaction_candidate(sim, pos, *, preferred_dir=None):
                 x,
                 y,
                 preferred_dir=preferred_dir,
-                stable_tiebreaker=(index,),
+                stable_tiebreaker=(open_penalty, index),
             ),
             {
                 "x": x,

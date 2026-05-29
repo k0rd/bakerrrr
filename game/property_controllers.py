@@ -494,6 +494,7 @@ class PropertySystem(System):
             y=int(panel_prop.get("y", entry[1])),
             z=int(panel_prop.get("z", entry[2])),
             method=method,
+            tool_terms=tool_terms,
         )
         attempt = _resolve_access_skill_check(
             self.sim,

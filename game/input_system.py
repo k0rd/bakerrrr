@@ -1654,13 +1654,15 @@ class InputSystem(System):
             self._help_state()["open"] = True
             return True
 
-        if dialog_kind == "justice_surrender":
+        if dialog_kind in {"justice_surrender", "justice_questioning"}:
             if key in (27, ord("q"), ord("Q")):
+                event_type = "justice_questioning_choice" if dialog_kind == "justice_questioning" else "justice_surrender_choice"
+                choice_id = "refuse" if dialog_kind == "justice_questioning" else "resist"
                 self.sim.emit(Event(
-                    "justice_surrender_choice",
+                    event_type,
                     eid=self.player_eid,
                     npc_eid=state.get("npc_eid"),
-                    choice_id="resist",
+                    choice_id=choice_id,
                 ))
                 return True
             if key in (ord("o"), ord("O"), ord("y"), ord("Y"), ord("L"), ord("D"), ord("m"), ord("M")):
@@ -1769,6 +1771,14 @@ class InputSystem(System):
                 if dialog_kind == "justice_surrender":
                     self.sim.emit(Event(
                         "justice_surrender_choice",
+                        eid=self.player_eid,
+                        npc_eid=state.get("npc_eid"),
+                        choice_id=topic.get("id"),
+                    ))
+                    return True
+                if dialog_kind == "justice_questioning":
+                    self.sim.emit(Event(
+                        "justice_questioning_choice",
                         eid=self.player_eid,
                         npc_eid=state.get("npc_eid"),
                         choice_id=topic.get("id"),

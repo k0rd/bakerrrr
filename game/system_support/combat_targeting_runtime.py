@@ -10,7 +10,7 @@ from game.property_runtime import property_aperture_at as _property_aperture_at
 from game.property_runtime import property_covering as _property_covering
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import _entity_is_downed
-from game.system_support.awareness_runtime import _watchers_for_position
+from game.system_support.awareness_runtime import observation_payload_for_position
 from game.system_support.building_repair_runtime import record_building_damage as _record_building_damage
 from game.system_support.combat_pacing_runtime import _combat_turn_pacing_active
 from game.system_support.entity_naming import _entity_display_name
@@ -724,14 +724,17 @@ def _shatter_window_for_projectile(sim, offender_eid, x, y, z):
 
     offender_pos = sim.ecs.get(Position).get(offender_eid)
     witnesses = []
-    for observer_eid in _watchers_for_position(
+    raw_observation = observation_payload_for_position(
         sim,
         int(x),
         int(y),
         int(z),
         exclude_eid=offender_eid,
         offender_eid=offender_eid,
-    ):
+        observation_channels=("actor_witness",),
+        max_legacy_witnesses=6,
+    )
+    for observer_eid in tuple(raw_observation.get("observer_eids", ())):
         if not offender_pos:
             continue
         if _facade()._observer_can_notice_position(
@@ -742,6 +745,22 @@ def _shatter_window_for_projectile(sim, offender_eid, x, y, z):
             offender_pos.z,
         ):
             witnesses.append(observer_eid)
+    visible_witnesses = tuple(witnesses)
+    visible_set = set(visible_witnesses)
+    observation = {
+        **raw_observation,
+        "observer_eids": visible_witnesses,
+        "observer_count": len(visible_witnesses),
+        "accountable_observer_eids": tuple(
+            observer_eid
+            for observer_eid in tuple(raw_observation.get("accountable_observer_eids", ()))
+            if observer_eid in visible_set
+        ),
+    }
+    observation["accountable_observer_count"] = len(observation["accountable_observer_eids"])
+    observation["witnessed"] = bool(observation["accountable_observer_eids"])
+    observation["witness_count"] = len(observation["accountable_observer_eids"])
+    observation["witnesses"] = tuple(observation["accountable_observer_eids"][:6])
     access_level = _property_access_level(prop)
     severity_score = 28 + (6 if access_level == "restricted" else 0)
     sim.emit(Event(
@@ -752,9 +771,7 @@ def _shatter_window_for_projectile(sim, offender_eid, x, y, z):
         x=int(x),
         y=int(y),
         z=int(z),
-        witnessed=bool(witnesses),
-        witness_count=len(witnesses),
-        witnesses=tuple(witnesses[:6]),
+        **observation,
         access_level=access_level,
         severity_score=min(100, severity_score),
         severity_label=_trespass_label_from_score(severity_score),

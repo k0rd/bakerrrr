@@ -3,7 +3,12 @@ from dataclasses import dataclass
 
 from game.components import ContactLedger, Inventory, NPCSocial, NPCRoutine, Occupation, PlayerAssets, PropertyPortfolio
 from game.justice_runtime import custody_release_grace_active as _custody_release_grace_active
-from game.organizations import occupation_targets_property, property_org_members, workplace_targets_property
+from game.organizations import (
+    effective_org_access_posture,
+    occupation_targets_property,
+    property_org_members,
+    workplace_targets_property,
+)
 from game.property_keys import inventory_matching_property_credential, property_lock_state
 
 
@@ -1434,6 +1439,12 @@ class PropertyAccessResult:
     can_use_services: bool
     severity_score: int
     severity_label: str
+    organization_watchfulness: int = 0
+    organization_note: str = ""
+    organization_reason_tags: tuple[str, ...] = ()
+    organization_denied_entry: bool = False
+    organization_denied_service: bool = False
+    organization_guard_grace: bool = False
 
 
 @dataclass(frozen=True)
@@ -1747,6 +1758,40 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
         permission_threshold = 0.62
         temporal_legitimacy = 0.5
 
+    org_posture = effective_org_access_posture(
+        sim,
+        actor_eid,
+        prop,
+        current_tick=getattr(sim, "tick", 0),
+    )
+    org_reason_tags = tuple(org_posture.get("reason_tags", ()) or ())
+    if "oversight_access" in org_reason_tags:
+        org_reason = "oversight"
+    elif "service_relation" in org_reason_tags:
+        org_reason = "service_partner"
+    elif "represented_access" in org_reason_tags:
+        org_reason = "represented"
+    else:
+        org_reason = "organization"
+    if float(org_posture.get("standing_floor", 0.0) or 0.0) > 0.0:
+        standing, standing_reason = _standing_candidate(
+            standing,
+            standing_reason,
+            float(org_posture.get("standing_floor", 0.0) or 0.0),
+            org_reason,
+        )
+    if (
+        public_facing
+        and currently_open is not False
+        and bool(org_posture.get("public_entry_grace"))
+    ):
+        standing, standing_reason = _standing_candidate(
+            standing,
+            standing_reason,
+            max(float(permission_threshold), 0.34),
+            org_reason,
+        )
+
     permitted = standing >= permission_threshold
     can_use_services = bool(
         public_facing
@@ -1766,6 +1811,19 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
         and _door_service_courtesy(sim, actor_eid, prop)
     ):
         can_use_services = True
+    if (
+        not can_use_services
+        and public_facing
+        and currently_open is not False
+        and bool(org_posture.get("service_grace"))
+        and not bool(org_posture.get("deny_entry"))
+    ):
+        can_use_services = True
+    if bool(org_posture.get("deny_entry")):
+        permitted = False
+        can_use_services = False
+    elif bool(org_posture.get("deny_service")):
+        can_use_services = False
 
     severity_score = 0
     if inside_bounds and not permitted:
@@ -1780,6 +1838,22 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
         social_relief = int(round(social_cover * 12.0))
         breach_penalty = int(round(max(0.0, float(breach_severity)) * 18.0))
         severity_score = max(4, min(80, base + temporal_penalty + breach_penalty - social_relief))
+    if inside_bounds and bool(org_posture.get("deny_entry")):
+        severity_score = max(
+            severity_score,
+            min(
+                80,
+                18 + int(round(float(org_posture.get("watchfulness", 0) or 0) * 0.35)),
+            ),
+        )
+    elif inside_bounds and severity_score > 0 and int(org_posture.get("watchfulness", 0) or 0) > 0:
+        severity_score = max(
+            severity_score,
+            min(
+                80,
+                severity_score + int(round(float(org_posture.get("watchfulness", 0) or 0) * 0.08)),
+            ),
+        )
 
     if severity_score <= 0:
         severity_label = "clear"
@@ -1806,7 +1880,23 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
         can_use_services=can_use_services,
         severity_score=severity_score,
         severity_label=severity_label,
+        organization_watchfulness=int(org_posture.get("watchfulness", 0) or 0),
+        organization_note=str(org_posture.get("note_text", "") or ""),
+        organization_reason_tags=org_reason_tags,
+        organization_denied_entry=bool(org_posture.get("deny_entry")),
+        organization_denied_service=bool(org_posture.get("deny_service")),
+        organization_guard_grace=bool(org_posture.get("guard_grace")),
     )
+
+
+def organization_guard_grace_active(sim, actor_eid, prop, current_tick=None):
+    posture = effective_org_access_posture(
+        sim,
+        actor_eid,
+        prop,
+        current_tick=current_tick,
+    )
+    return bool(posture.get("guard_grace")) and not bool(posture.get("deny_entry"))
 
 
 def property_claim_reason(sim, actor_eid, prop, x=None, y=None, z=None, min_standing=0.58):

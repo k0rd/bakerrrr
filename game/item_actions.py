@@ -32,6 +32,12 @@ from game.system_support.item_runtime import (
     _item_weapon_id,
     _weapon_uses_ammo,
 )
+from game.system_support.awareness_runtime import observation_payload_for_position
+from game.system_support.item_provenance_runtime import (
+    CLAIM_PRIVATE_EFFECT,
+    item_entitlement_for_actor,
+    stamp_item_provenance,
+)
 from game.system_support.player_feedback import _log_player_feedback
 from game.weapons import roll_weapon_instance, weapon_by_id
 
@@ -367,41 +373,16 @@ class ItemActionRuntime:
         return nearby[0]
 
     def _is_theft(self, actor_eid, item_entry):
-        owner_eid = item_entry.get("owner_eid")
-        owner_tag = str(item_entry.get("owner_tag", "") or "").strip().lower() or None
+        entitlement = item_entitlement_for_actor(self.sim, actor_eid, item_entry)
+        return bool(entitlement and not entitlement.get("lawful_take"))
 
-        if owner_eid == actor_eid:
-            return False
-        if owner_tag == "player" and actor_eid == self.player_eid:
-            return False
-
-        item_x = item_entry.get("x")
-        item_y = item_entry.get("y")
-        item_z = item_entry.get("z", 0)
-        prop = _property_covering(self.sim, item_x, item_y, item_z)
-        if prop:
-            access = _evaluate_property_access(
-                self.sim,
-                actor_eid,
-                prop,
-                x=item_x,
-                y=item_y,
-                z=item_z,
-            )
-            if not access.permitted:
-                prop_owner_eid = prop.get("owner_eid")
-                prop_owner_tag = str(prop.get("owner_tag", "") or "").strip().lower()
-                if prop_owner_eid not in {None, actor_eid}:
-                    return True
-                if prop_owner_eid is None and prop_owner_tag not in {"", "public", "unowned", "none", "neutral"}:
-                    return True
-
-        if owner_eid is None and owner_tag in {None, "public", "unowned", "city"}:
-            return False
-        return True
-
-    def _apply_item_effects(self, eid, item_def):
-        return _apply_item_effects_to_entity(self.sim, eid, item_def)
+    def _apply_item_effects(self, eid, item_def, *, item_metadata=None):
+        return _apply_item_effects_to_entity(
+            self.sim,
+            eid,
+            item_def,
+            item_metadata=item_metadata,
+        )
 
     def _property_matches_item_lead_profile(self, prop, lead_profile):
         if not isinstance(prop, dict):
@@ -523,6 +504,7 @@ class ItemActionRuntime:
                 hidden=hidden,
             ))
 
+        entry_metadata = dict(entry.get("metadata") or {}) if isinstance(entry.get("metadata"), dict) else {}
         self.sim.emit(Event(
             "item_used",
             eid=eid,
@@ -538,6 +520,11 @@ class ItemActionRuntime:
             discovery_mode=str(lead_profile.get("discovery_mode", "advertisement") or "advertisement").strip().lower() or "advertisement",
             hidden=hidden,
             consumed=bool(removed),
+            item_metadata=entry_metadata,
+            source_property_id=str(entry_metadata.get("source_property_id", "") or "").strip() or None,
+            source_organization_eid=entry_metadata.get("source_organization_eid"),
+            source_organization_key=str(entry_metadata.get("source_organization_key", "") or "").strip() or None,
+            source_practice_key=str(entry_metadata.get("source_practice_key", "") or "").strip() or None,
         ))
 
         self.item_system._emit_action_offense(
@@ -670,7 +657,8 @@ class ItemActionRuntime:
             ))
             return False
 
-        applied = self._apply_item_effects(eid, item_def)
+        entry_metadata = dict(entry.get("metadata") or {}) if isinstance(entry.get("metadata"), dict) else {}
+        applied = self._apply_item_effects(eid, item_def, item_metadata=entry_metadata)
         if not applied:
             self.sim.emit(Event(
                 "item_use_blocked",
@@ -710,6 +698,11 @@ class ItemActionRuntime:
             ),
             reason=reason,
             applied=applied,
+            item_metadata=entry_metadata,
+            source_property_id=str(entry_metadata.get("source_property_id", "") or "").strip() or None,
+            source_organization_eid=entry_metadata.get("source_organization_eid"),
+            source_organization_key=str(entry_metadata.get("source_organization_key", "") or "").strip() or None,
+            source_practice_key=str(entry_metadata.get("source_practice_key", "") or "").strip() or None,
         ))
 
         self.item_system._emit_action_offense(
@@ -735,15 +728,40 @@ class ItemActionRuntime:
 
         item_def = self._item_def(ground["item_id"])
         ground_metadata = ground.get("metadata") if isinstance(ground.get("metadata"), dict) else {}
-        is_theft = self._is_theft(eid, ground)
+        entitlement = item_entitlement_for_actor(self.sim, eid, ground)
+        is_theft = bool(entitlement and not entitlement.get("lawful_take"))
         stolen_prop = _property_covering(self.sim, ground.get("x"), ground.get("y"), ground.get("z", z)) if is_theft else None
-        stolen_metadata = {
-            "justice_stolen": True,
-            "stolen_tick": int(getattr(self.sim, "tick", 0)),
-            "stolen_owner_eid": ground.get("owner_eid"),
-            "stolen_owner_tag": ground.get("owner_tag"),
-            "stolen_property_id": str((stolen_prop or {}).get("id", "")).strip(),
-        } if is_theft else {}
+        theft_observation = observation_payload_for_position(
+            self.sim,
+            ground.get("x"),
+            ground.get("y"),
+            ground.get("z", z),
+            exclude_eid=eid,
+            offender_eid=eid,
+            observation_channels=("actor_witness",),
+        ) if is_theft else {}
+        item_metadata = stamp_item_provenance(
+            self.sim,
+            {
+                **ground,
+                "metadata": ground_metadata,
+            },
+            prop=stolen_prop,
+            source_context=ground_metadata.get("source_context", "ground_pickup"),
+            latent_claim_violation=bool(entitlement and entitlement.get("latent_claim_violation")),
+            source_owner_eid=(entitlement or {}).get("source_owner_eid", ground.get("owner_eid")),
+            source_owner_tag=(entitlement or {}).get("source_owner_tag", ground.get("owner_tag")),
+            source_property_id=(entitlement or {}).get("source_property_id", str((stolen_prop or {}).get("id", "")).strip() or None),
+            last_transfer_tick=int(getattr(self.sim, "tick", 0)),
+            last_transfer_kind="ground_pickup",
+            last_holder_eid=eid,
+        )
+        if is_theft:
+            item_metadata["stolen_tick"] = int(getattr(self.sim, "tick", 0))
+            item_metadata["stolen_owner_eid"] = ground.get("owner_eid")
+            item_metadata["stolen_owner_tag"] = ground.get("owner_tag")
+            item_metadata["stolen_property_id"] = str((stolen_prop or {}).get("id", "")).strip()
+            item_metadata["justice_stolen"] = True
         if eid == self.player_eid and is_credstick_item(ground["item_id"]):
             assets = self._assets_for(eid)
             if assets is not None:
@@ -775,9 +793,11 @@ class ItemActionRuntime:
                         item_name=item_display_name("credstick_chip", metadata={"stored_credits": int(credits_gained)}, item_catalog=self.catalog),
                         owner_eid=ground.get("owner_eid"),
                         owner_tag=ground.get("owner_tag"),
+                        property_id=(stolen_prop or {}).get("id"),
                         x=ground["x"],
                         y=ground["y"],
                         z=ground["z"],
+                        **theft_observation,
                     ))
                     self.item_system._emit_action_offense(
                         eid=eid,
@@ -786,6 +806,8 @@ class ItemActionRuntime:
                         x=ground["x"],
                         y=ground["y"],
                         z=ground["z"],
+                        property_id=(stolen_prop or {}).get("id"),
+                        **theft_observation,
                     )
                 else:
                     self.item_system._emit_action_offense(
@@ -805,7 +827,7 @@ class ItemActionRuntime:
             instance_factory=self.sim.new_item_instance_id,
             owner_eid=eid,
             owner_tag="player" if eid == self.player_eid else "npc",
-            metadata={**ground_metadata, "origin_ground_id": ground["ground_item_id"], **stolen_metadata},
+            metadata={**item_metadata, "origin_ground_id": ground["ground_item_id"]},
         )
         if not added:
             self.sim.emit(Event(
@@ -839,9 +861,11 @@ class ItemActionRuntime:
                 item_name=self._display_name_for_actor(eid, ground),
                 owner_eid=ground.get("owner_eid"),
                 owner_tag=ground.get("owner_tag"),
+                property_id=(stolen_prop or {}).get("id"),
                 x=ground["x"],
                 y=ground["y"],
                 z=ground["z"],
+                **theft_observation,
             ))
             self.item_system._emit_action_offense(
                 eid=eid,
@@ -850,6 +874,8 @@ class ItemActionRuntime:
                 x=ground["x"],
                 y=ground["y"],
                 z=ground["z"],
+                property_id=(stolen_prop or {}).get("id"),
+                **theft_observation,
             )
         else:
             self.item_system._emit_action_offense(
@@ -891,6 +917,26 @@ class ItemActionRuntime:
             return
 
         self.emit_removed_gear_events(eid, removed, reason="dropped")
+        drop_metadata = stamp_item_provenance(
+            self.sim,
+            {
+                **removed,
+                "x": x,
+                "y": y,
+                "z": z,
+                "metadata": removed.get("metadata"),
+            },
+            source_context="actor_drop",
+            claim_class=CLAIM_PRIVATE_EFFECT,
+            source_owner_eid=eid,
+            source_owner_tag="player" if eid == self.player_eid else "npc",
+            source_actor_eid=eid,
+            source_property_id=str((_property_covering(self.sim, x, y, z) or {}).get("id", "")).strip() or None,
+            latent_claim_violation=bool((removed.get("metadata") or {}).get("latent_claim_violation", False)),
+            last_transfer_tick=int(getattr(self.sim, "tick", 0)),
+            last_transfer_kind="actor_drop",
+            last_holder_eid=eid,
+        )
         ground_id = self.sim.register_ground_item(
             item_id=removed["item_id"],
             x=x,
@@ -900,7 +946,7 @@ class ItemActionRuntime:
             owner_eid=eid,
             owner_tag="player" if eid == self.player_eid else "npc",
             instance_id=removed["instance_id"],
-            metadata=removed.get("metadata"),
+            metadata=drop_metadata,
         )
         self._item_def(removed["item_id"])
         self.sim.emit(Event(

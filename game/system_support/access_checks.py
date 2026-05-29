@@ -156,9 +156,15 @@ def _maybe_damage_access_tool(sim, eid, tool_terms, *, prop, score, required, co
         return None
 
     fail_gap = max(0.0, float(required) - float(score))
+    try:
+        tool_wear_mult = float(tool_terms.get("tool_wear_mult", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        tool_wear_mult = 1.0
+    tool_wear_mult = max(0.25, min(4.0, tool_wear_mult))
     strain_chance = 0.09 + min(0.45, fail_gap * 0.11)
     if fumbled:
         strain_chance += 0.16
+    strain_chance *= tool_wear_mult
     strain_chance = max(0.01, min(0.85, strain_chance))
 
     if _access_attempt_roll_impl()(sim, eid=eid, prop=prop, context=context, channel=f"{channel}:tool_break") >= strain_chance:
@@ -175,6 +181,7 @@ def _maybe_damage_access_tool(sim, eid, tool_terms, *, prop, score, required, co
         wear_amount += 1
     if fail_gap >= 2.5:
         wear_amount += 1
+    wear_amount = max(1, int(round(float(wear_amount) * tool_wear_mult)))
 
     wear = apply_item_durability_loss(
         item_id,

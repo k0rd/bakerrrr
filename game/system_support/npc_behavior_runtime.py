@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 
 from engine.events import Event
-from game.components import AI, BehaviorProfile, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, Position, PropertyKnowledge, StatusEffects, Vitality
+from game.components import AI, BehaviorProfile, CriminalDriveState, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, Position, PropertyKnowledge, StatusEffects, Vitality
 from game.item_semantics import (
     appraise_item_for_actor,
     identify_item_for_actor,
@@ -28,6 +28,7 @@ from game.property_runtime import (
 from game.systems_business_reputation import business_opinion_profile, social_secret_site_trust_gate
 from game.system_support.container_runtime import _unlink_removed_item_from_gear
 from game.system_support.interaction_ordering import _manhattan
+from game.system_support.item_provenance_runtime import item_entitlement_for_actor, stamp_item_provenance
 
 
 BEHAVIOR_COLLECT_GROUND_CREDITS = "collect_ground_credits"
@@ -46,6 +47,9 @@ BEHAVIOR_SEEK_SOCIAL_CONTACT = "seek_social_contact"
 BEHAVIOR_SEEK_MEDICAL_AID = "seek_medical_aid"
 BEHAVIOR_SEEK_SHELTER = "seek_shelter"
 BEHAVIOR_FOLLOW_DUTY = "follow_duty"
+BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME = "commit_opportunistic_crime"
+BEHAVIOR_COMMIT_PLANNED_CRIME = "commit_planned_crime"
+BEHAVIOR_SEEK_CRIMINAL_AFFILIATION = "seek_criminal_affiliation"
 
 _PUBLIC_GROUND_OWNER_TAGS = {None, "", "public", "unowned", "city"}
 _PUBLIC_PROPERTY_OWNER_TAGS = {"", "public", "unowned", "none", "neutral"}
@@ -241,6 +245,9 @@ _RARE_EXTRA_BEHAVIOR_WEIGHTS = (
     (BEHAVIOR_SEEK_MEDICAL_AID, 5, 0.18, 0.32),
     (BEHAVIOR_SEEK_SHELTER, 5, 0.18, 0.32),
     (BEHAVIOR_FOLLOW_DUTY, 5, 0.18, 0.32),
+    (BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME, 3, 0.12, 0.24),
+    (BEHAVIOR_COMMIT_PLANNED_CRIME, 2, 0.1, 0.2),
+    (BEHAVIOR_SEEK_CRIMINAL_AFFILIATION, 3, 0.12, 0.24),
 )
 
 
@@ -384,6 +391,9 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
             BEHAVIOR_SEEK_MEDICAL_AID: 0.18,
             BEHAVIOR_SEEK_SHELTER: 0.08,
             BEHAVIOR_FOLLOW_DUTY: 0.94,
+            BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME: 0.0,
+            BEHAVIOR_COMMIT_PLANNED_CRIME: 0.0,
+            BEHAVIOR_SEEK_CRIMINAL_AFFILIATION: 0.0,
         },
         "scout": {
             BEHAVIOR_AVOID_THREAT: 0.26,
@@ -394,6 +404,9 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
             BEHAVIOR_SEEK_MEDICAL_AID: 0.2,
             BEHAVIOR_SEEK_SHELTER: 0.1,
             BEHAVIOR_FOLLOW_DUTY: 0.84,
+            BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME: 0.0,
+            BEHAVIOR_COMMIT_PLANNED_CRIME: 0.0,
+            BEHAVIOR_SEEK_CRIMINAL_AFFILIATION: 0.0,
         },
         "worker": {
             BEHAVIOR_AVOID_THREAT: 0.42,
@@ -404,6 +417,9 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
             BEHAVIOR_SEEK_MEDICAL_AID: 0.26,
             BEHAVIOR_SEEK_SHELTER: 0.18,
             BEHAVIOR_FOLLOW_DUTY: 0.76,
+            BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME: 0.04,
+            BEHAVIOR_COMMIT_PLANNED_CRIME: 0.02,
+            BEHAVIOR_SEEK_CRIMINAL_AFFILIATION: 0.04,
         },
         "civilian": {
             BEHAVIOR_AVOID_THREAT: 0.55,
@@ -414,6 +430,9 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
             BEHAVIOR_SEEK_MEDICAL_AID: 0.34,
             BEHAVIOR_SEEK_SHELTER: 0.36,
             BEHAVIOR_FOLLOW_DUTY: 0.24,
+            BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME: 0.06,
+            BEHAVIOR_COMMIT_PLANNED_CRIME: 0.02,
+            BEHAVIOR_SEEK_CRIMINAL_AFFILIATION: 0.06,
         },
         "resident": {
             BEHAVIOR_AVOID_THREAT: 0.48,
@@ -424,6 +443,9 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
             BEHAVIOR_SEEK_MEDICAL_AID: 0.38,
             BEHAVIOR_SEEK_SHELTER: 0.28,
             BEHAVIOR_FOLLOW_DUTY: 0.18,
+            BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME: 0.04,
+            BEHAVIOR_COMMIT_PLANNED_CRIME: 0.02,
+            BEHAVIOR_SEEK_CRIMINAL_AFFILIATION: 0.04,
         },
         "thief": {
             BEHAVIOR_AVOID_THREAT: 0.74,
@@ -434,6 +456,9 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
             BEHAVIOR_SEEK_MEDICAL_AID: 0.18,
             BEHAVIOR_SEEK_SHELTER: 0.44,
             BEHAVIOR_FOLLOW_DUTY: 0.12,
+            BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME: 0.9,
+            BEHAVIOR_COMMIT_PLANNED_CRIME: 0.56,
+            BEHAVIOR_SEEK_CRIMINAL_AFFILIATION: 0.44,
         },
         "drunk": {
             BEHAVIOR_AVOID_THREAT: 0.68,
@@ -444,6 +469,9 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
             BEHAVIOR_SEEK_MEDICAL_AID: 0.42,
             BEHAVIOR_SEEK_SHELTER: 0.78,
             BEHAVIOR_FOLLOW_DUTY: 0.06,
+            BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME: 0.18,
+            BEHAVIOR_COMMIT_PLANNED_CRIME: 0.02,
+            BEHAVIOR_SEEK_CRIMINAL_AFFILIATION: 0.08,
         },
     }
     for name, value in role_behavior_defaults.get(
@@ -457,6 +485,9 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
             BEHAVIOR_SEEK_MEDICAL_AID: 0.24,
             BEHAVIOR_SEEK_SHELTER: 0.24,
             BEHAVIOR_FOLLOW_DUTY: 0.28,
+            BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME: 0.04,
+            BEHAVIOR_COMMIT_PLANNED_CRIME: 0.02,
+            BEHAVIOR_SEEK_CRIMINAL_AFFILIATION: 0.04,
         },
     ).items():
         _seed_behavior(behaviors, name, value)
@@ -465,6 +496,8 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
         _seed_behavior(behaviors, BEHAVIOR_COLLECT_GROUND_CREDITS, 0.95)
         _seed_behavior(behaviors, BEHAVIOR_SCAVENGE_LOOSE_ITEMS, 0.88)
         _seed_behavior(behaviors, BEHAVIOR_SELL_SCAVENGED_ITEMS, 0.82)
+        _seed_behavior(behaviors, BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME, 0.95)
+        _seed_behavior(behaviors, BEHAVIOR_COMMIT_PLANNED_CRIME, 0.62)
         preferences["ground_credit_search_radius"] = 8
     elif role_key == "drunk":
         _seed_behavior(behaviors, BEHAVIOR_COLLECT_GROUND_CREDITS, 0.56)
@@ -529,6 +562,17 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
         _seed_behavior(behaviors, BEHAVIOR_BUY_DESIRED_DRUG, 0.82)
         _seed_behavior(behaviors, BEHAVIOR_INITIATE_DIALOGUE, 0.46)
         _seed_behavior(behaviors, BEHAVIOR_AVOID_AUTHORITIES, 0.44)
+        _seed_behavior(behaviors, BEHAVIOR_COMMIT_PLANNED_CRIME, 0.44)
+
+    if any(token in career_key for token in ("thief", "runner", "dealer", "fence", "drifter", "scav", "fixer")):
+        _seed_behavior(behaviors, BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME, 0.52)
+        _seed_behavior(behaviors, BEHAVIOR_SEEK_CRIMINAL_AFFILIATION, 0.42)
+
+    if any(token in career_key for token in ("dealer", "runner", "fence", "fixer", "lookout", "smuggler")):
+        _seed_behavior(behaviors, BEHAVIOR_COMMIT_PLANNED_CRIME, 0.58)
+
+    if any(token in career_key for token in _SHELTER_CAREER_TOKENS) or "runaway" in career_key:
+        _seed_behavior(behaviors, BEHAVIOR_SEEK_CRIMINAL_AFFILIATION, 0.38)
 
     if any(token in career_key for token in _SHELTER_CAREER_TOKENS):
         _seed_behavior(behaviors, BEHAVIOR_SEEK_SHELTER, 0.86)
@@ -764,6 +808,63 @@ def _effective_behavior_value(sim, eid, behavior, *, traits=None, needs=None, ju
         if base is None:
             return situational
         return _clamp_behavior_value((base * 0.74) + (situational * 0.26))
+
+    if token in {
+        BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME,
+        BEHAVIOR_COMMIT_PLANNED_CRIME,
+        BEHAVIOR_SEEK_CRIMINAL_AFFILIATION,
+    }:
+        drive = sim.ecs.get(CriminalDriveState).get(eid)
+        pressure = _clamp_behavior_value(getattr(drive, "pressure", 0.0), default=0.0)
+        confidence = _clamp_behavior_value(getattr(drive, "confidence", 0.0), default=0.0)
+        affiliation_interest = _clamp_behavior_value(getattr(drive, "affiliation_interest", 0.0), default=0.0)
+        try:
+            planned_score = _clamp_behavior_value(float(getattr(drive, "planned_crime_score", 0.0) or 0.0) / 100.0)
+        except (TypeError, ValueError):
+            planned_score = 0.0
+        try:
+            opportunistic_score = _clamp_behavior_value(float(getattr(drive, "opportunistic_crime_score", 0.0) or 0.0) / 100.0)
+        except (TypeError, ValueError):
+            opportunistic_score = 0.0
+        try:
+            affiliation_score = _clamp_behavior_value(float(getattr(drive, "affiliation_seek_score", 0.0) or 0.0) / 100.0)
+        except (TypeError, ValueError):
+            affiliation_score = 0.0
+        safety_gap = _clamp_behavior_value(
+            (100.0 - float(getattr(needs, "safety", 75.0) or 75.0)) / 100.0,
+            default=0.25,
+        )
+        bravery = _clamp_behavior_value(getattr(traits, "bravery", 0.5), default=0.5)
+        discipline = _clamp_behavior_value(getattr(traits, "discipline", 0.5), default=0.5)
+        if token == BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME:
+            situational = _clamp_behavior_value(
+                (pressure * 0.42)
+                + (confidence * 0.18)
+                + (opportunistic_score * 0.24)
+                + ((1.0 - discipline) * 0.08)
+                + ((1.0 - bravery) * 0.05)
+                + (safety_gap * 0.03)
+            )
+        elif token == BEHAVIOR_COMMIT_PLANNED_CRIME:
+            situational = _clamp_behavior_value(
+                (pressure * 0.22)
+                + (confidence * 0.2)
+                + (planned_score * 0.4)
+                + (affiliation_interest * 0.12)
+                + ((1.0 - discipline) * 0.03)
+                + ((1.0 - bravery) * 0.03)
+            )
+        else:
+            situational = _clamp_behavior_value(
+                (pressure * 0.28)
+                + ((1.0 - confidence) * 0.24)
+                + (affiliation_interest * 0.28)
+                + (affiliation_score * 0.16)
+                + ((1.0 - discipline) * 0.04)
+            )
+        if base is None:
+            return situational
+        return _clamp_behavior_value((base * 0.68) + (situational * 0.32))
 
     if base is not None:
         return base
@@ -1240,36 +1341,8 @@ def _resolve_street_appraise_between_actors(sim, appraiser_eid, subject_eid):
 
 
 def _ground_item_pickup_is_safe(sim, actor_eid, ground):
-    if not isinstance(ground, dict):
-        return False
-    owner_eid = ground.get("owner_eid")
-    owner_tag = _behavior_token(ground.get("owner_tag")) or None
-
-    if owner_eid == actor_eid:
-        return True
-
-    item_x = ground.get("x")
-    item_y = ground.get("y")
-    item_z = ground.get("z", 0)
-    prop = _property_covering(sim, item_x, item_y, item_z)
-    if prop:
-        access = _evaluate_property_access(
-            sim,
-            actor_eid,
-            prop,
-            x=item_x,
-            y=item_y,
-            z=item_z,
-        )
-        if not access.permitted:
-            prop_owner_eid = prop.get("owner_eid")
-            prop_owner_tag = _behavior_token(prop.get("owner_tag"))
-            if prop_owner_eid not in {None, actor_eid}:
-                return False
-            if prop_owner_eid is None and prop_owner_tag not in _PUBLIC_PROPERTY_OWNER_TAGS:
-                return False
-
-    return owner_eid is None and owner_tag in _PUBLIC_GROUND_OWNER_TAGS
+    entitlement = item_entitlement_for_actor(sim, actor_eid, ground)
+    return bool(entitlement and entitlement.get("lawful_take"))
 
 
 def _inventory_can_accept_credsticks(inventory, *, owner_eid):
@@ -2651,7 +2724,18 @@ def _collect_ground_credits_at_actor(sim, actor_eid, pos=None):
         instance_factory=sim.new_item_instance_id,
         owner_eid=actor_eid,
         owner_tag="npc",
-        metadata=metadata,
+        metadata=stamp_item_provenance(
+            sim,
+            {
+                **ground,
+                "metadata": metadata,
+            },
+            source_context=metadata.get("source_context", "ground_pickup"),
+            latent_claim_violation=bool((metadata or {}).get("latent_claim_violation", False)),
+            last_transfer_tick=int(getattr(sim, "tick", 0)),
+            last_transfer_kind="ground_pickup",
+            last_holder_eid=actor_eid,
+        ),
     )
     if not added:
         return None
@@ -2751,7 +2835,18 @@ def _collect_ground_items_at_actor(sim, actor_eid, pos=None):
             instance_factory=sim.new_item_instance_id,
             owner_eid=actor_eid,
             owner_tag="npc",
-            metadata=metadata,
+            metadata=stamp_item_provenance(
+                sim,
+                {
+                    **ground,
+                    "metadata": metadata,
+                },
+                source_context=metadata.get("source_context", "ground_pickup"),
+                latent_claim_violation=bool((metadata or {}).get("latent_claim_violation", False)),
+                last_transfer_tick=int(getattr(sim, "tick", 0)),
+                last_transfer_kind="ground_pickup",
+                last_holder_eid=actor_eid,
+            ),
         )
         if not added:
             continue

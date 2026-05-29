@@ -26,6 +26,13 @@ DEFAULT_INCIDENT_MAX_AGE = {
     "disturbance": 90,
 }
 
+INCIDENT_LINK_KINDS = {
+    "victim_inventory",
+    "scene_claimed",
+    "precombat_stolen_from_victim",
+    "scene_residue",
+}
+
 
 def _int_or_default(value, default=0):
     try:
@@ -45,6 +52,123 @@ def _incident_tags(tags):
         if text and text not in cleaned:
             cleaned.append(text)
     return tuple(cleaned)
+
+
+def _normalize_incident_link_kind(value, default="scene_claimed"):
+    key = _text(value).lower().replace(" ", "_")
+    if key not in INCIDENT_LINK_KINDS:
+        key = str(default or "scene_claimed")
+    return key
+
+
+def _normalize_linked_item_row(row, *, incident_id=None, capture_tick=0, property_id="", building_id=""):
+    row = dict(row or {})
+    instance_id = _text(row.get("instance_id"))
+    if not instance_id:
+        return None
+    normalized = {
+        "instance_id": instance_id,
+        "item_id": _text(row.get("item_id")).lower() or None,
+        "link_kind": _normalize_incident_link_kind(row.get("link_kind"), default="scene_claimed"),
+        "claim_class": _text(row.get("claim_class")).lower() or None,
+        "owner_eid": row.get("owner_eid"),
+        "holder_eid_at_capture": row.get("holder_eid_at_capture"),
+        "property_id": _text(row.get("property_id") or property_id) or None,
+        "building_id": _text(row.get("building_id") or building_id) or None,
+        "captured_tick": _int_or_default(row.get("captured_tick"), _int_or_default(capture_tick, 0)),
+        "source_victim_eid": row.get("source_victim_eid"),
+        "source_incident_id": _int_or_default(row.get("source_incident_id"), _int_or_default(incident_id, 0)) or None,
+    }
+    return normalized
+
+
+def incident_linked_items(record):
+    if not isinstance(record, dict):
+        return ()
+    rows = []
+    for row in tuple(record.get("linked_items", ()) or ()):
+        normalized = _normalize_linked_item_row(
+            row,
+            incident_id=record.get("id"),
+            capture_tick=record.get("scene_capture_tick", record.get("created_tick", 0)),
+            property_id=record.get("scene_capture_property_id", record.get("property_id", "")),
+            building_id=record.get("scene_capture_building_id", ""),
+        )
+        if normalized is not None:
+            rows.append(normalized)
+    return tuple(rows)
+
+
+def incident_linked_item_counts(record):
+    if not isinstance(record, dict):
+        return {}
+    counts = {"total": 0}
+    for row in incident_linked_items(record):
+        counts["total"] += 1
+        link_kind = _normalize_incident_link_kind(row.get("link_kind"), default="scene_claimed")
+        counts[link_kind] = int(counts.get(link_kind, 0) or 0) + 1
+    return counts
+
+
+def record_incident_scene_items(
+    sim,
+    incident_id,
+    *,
+    capture_tick=None,
+    property_id=None,
+    building_id=None,
+    linked_items=(),
+):
+    incident = incident_record(sim, incident_id)
+    if not isinstance(incident, dict):
+        return None
+    capture_tick = _int_or_default(
+        capture_tick,
+        _int_or_default(incident.get("scene_capture_tick"), _int_or_default(incident.get("created_tick"), 0)),
+    )
+    property_id = _text(property_id or incident.get("scene_capture_property_id") or incident.get("property_id"))
+    building_id = _text(building_id or incident.get("scene_capture_building_id"))
+    rows = list(incident_linked_items(incident))
+    seen = {
+        (
+            _text(row.get("instance_id")).lower(),
+            _normalize_incident_link_kind(row.get("link_kind"), default="scene_claimed"),
+        )
+        for row in rows
+    }
+    for raw_row in tuple(linked_items or ()):
+        normalized = _normalize_linked_item_row(
+            raw_row,
+            incident_id=incident.get("id"),
+            capture_tick=capture_tick,
+            property_id=property_id,
+            building_id=building_id,
+        )
+        if normalized is None:
+            continue
+        key = (
+            _text(normalized.get("instance_id")).lower(),
+            _normalize_incident_link_kind(normalized.get("link_kind"), default="scene_claimed"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(normalized)
+
+    if "scene_capture_tick" not in incident:
+        incident["scene_capture_tick"] = capture_tick
+    else:
+        incident["scene_capture_tick"] = min(
+            _int_or_default(incident.get("scene_capture_tick"), capture_tick),
+            capture_tick,
+        )
+    if property_id:
+        incident["scene_capture_property_id"] = property_id
+    if building_id:
+        incident["scene_capture_building_id"] = building_id
+    incident["linked_items"] = tuple(rows)
+    incident["linked_item_counts"] = incident_linked_item_counts(incident)
+    return incident
 
 
 def _incident_state(sim):
@@ -302,6 +426,11 @@ def create_or_merge_incident(
         "note": note,
         "tags": tags,
         "source_events": tuple(tag for tag in (source_event,) if tag),
+        "scene_capture_tick": None,
+        "scene_capture_property_id": None,
+        "scene_capture_building_id": None,
+        "linked_items": (),
+        "linked_item_counts": {"total": 0},
     }
     incidents[incident_id] = record
     recent_ids.append(incident_id)

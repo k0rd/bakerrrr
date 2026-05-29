@@ -260,7 +260,21 @@ def _offender_record(state, offender_eid, *, create=False):
             "last_booking_fine_due": 0,
             "last_booking_fine_paid": 0,
             "last_booking_debt_added": 0,
+            "last_booking_evidence_surcharge": 0,
             "last_booking_seized_entries": [],
+            "last_inspection_tick": -10_000,
+            "last_inspected_lawful_count": 0,
+            "last_inspected_contraband_count": 0,
+            "last_inspected_latent_claim_count": 0,
+            "last_inspected_reported_stolen_count": 0,
+            "last_inspected_incident_evidence_count": 0,
+            "last_inspection_match_summaries": [],
+            "last_inspection_match_labels": [],
+            "last_inspection_match_reasons": [],
+            "last_questioning_tick": -10_000,
+            "last_questioning_disposition": "",
+            "last_questioning_kept_contraband_count": 0,
+            "last_questioning_evidence_surcharge": 0,
             "restitution_entries": [],
         }
         offenders[offender_key] = record
@@ -304,10 +318,33 @@ def _offender_record(state, offender_eid, *, create=False):
     record["last_booking_fine_due"] = max(0, _safe_int(record.get("last_booking_fine_due"), default=0))
     record["last_booking_fine_paid"] = max(0, _safe_int(record.get("last_booking_fine_paid"), default=0))
     record["last_booking_debt_added"] = max(0, _safe_int(record.get("last_booking_debt_added"), default=0))
+    record["last_booking_evidence_surcharge"] = max(0, _safe_int(record.get("last_booking_evidence_surcharge"), default=0))
     booking_entries = record.get("last_booking_seized_entries")
     if not isinstance(booking_entries, list):
         booking_entries = []
     record["last_booking_seized_entries"] = _normalize_property_entries(booking_entries)
+    record["last_inspection_tick"] = _safe_int(record.get("last_inspection_tick"), default=-10_000)
+    record["last_inspected_lawful_count"] = max(0, _safe_int(record.get("last_inspected_lawful_count"), default=0))
+    record["last_inspected_contraband_count"] = max(0, _safe_int(record.get("last_inspected_contraband_count"), default=0))
+    record["last_inspected_latent_claim_count"] = max(0, _safe_int(record.get("last_inspected_latent_claim_count"), default=0))
+    record["last_inspected_reported_stolen_count"] = max(0, _safe_int(record.get("last_inspected_reported_stolen_count"), default=0))
+    record["last_inspected_incident_evidence_count"] = max(0, _safe_int(record.get("last_inspected_incident_evidence_count"), default=0))
+    summaries = record.get("last_inspection_match_summaries")
+    if not isinstance(summaries, list):
+        summaries = []
+    record["last_inspection_match_summaries"] = [_text(value) for value in summaries if _text(value)]
+    labels = record.get("last_inspection_match_labels")
+    if not isinstance(labels, list):
+        labels = []
+    record["last_inspection_match_labels"] = [_text(value) for value in labels if _text(value)]
+    reasons = record.get("last_inspection_match_reasons")
+    if not isinstance(reasons, list):
+        reasons = []
+    record["last_inspection_match_reasons"] = [_text(value).lower() for value in reasons if _text(value)]
+    record["last_questioning_tick"] = _safe_int(record.get("last_questioning_tick"), default=-10_000)
+    record["last_questioning_disposition"] = _text(record.get("last_questioning_disposition")).lower()
+    record["last_questioning_kept_contraband_count"] = max(0, _safe_int(record.get("last_questioning_kept_contraband_count"), default=0))
+    record["last_questioning_evidence_surcharge"] = max(0, _safe_int(record.get("last_questioning_evidence_surcharge"), default=0))
     restitution_entries = record.get("restitution_entries")
     if not isinstance(restitution_entries, list):
         restitution_entries = []
@@ -371,6 +408,17 @@ def justice_snapshot(sim, offender_eid):
             "last_booking_fine_paid": 0,
             "last_booking_debt_added": 0,
             "last_booking_seized_count": 0,
+            "last_inspection_tick": -10_000,
+            "last_inspected_contraband_count": 0,
+            "last_inspected_latent_claim_count": 0,
+            "last_inspected_reported_stolen_count": 0,
+            "last_inspected_incident_evidence_count": 0,
+            "last_inspection_match_labels": (),
+            "last_inspection_match_reasons": (),
+            "last_questioning_tick": -10_000,
+            "last_questioning_disposition": "",
+            "last_questioning_kept_contraband_count": 0,
+            "last_questioning_evidence_surcharge": 0,
             "restitution_due": 0,
             "restitution_property_count": 0,
         }
@@ -402,7 +450,20 @@ def justice_snapshot(sim, offender_eid):
         "last_booking_fine_due": max(0, _safe_int(record.get("last_booking_fine_due"), default=0)),
         "last_booking_fine_paid": max(0, _safe_int(record.get("last_booking_fine_paid"), default=0)),
         "last_booking_debt_added": max(0, _safe_int(record.get("last_booking_debt_added"), default=0)),
+        "last_booking_evidence_surcharge": max(0, _safe_int(record.get("last_booking_evidence_surcharge"), default=0)),
         "last_booking_seized_count": int(sum(max(1, _safe_int(entry.get("quantity"), default=1)) for entry in record.get("last_booking_seized_entries", ()) if isinstance(entry, dict))),
+        "last_inspection_tick": int(record.get("last_inspection_tick", -10_000)),
+        "last_inspected_contraband_count": max(0, _safe_int(record.get("last_inspected_contraband_count"), default=0)),
+        "last_inspected_latent_claim_count": max(0, _safe_int(record.get("last_inspected_latent_claim_count"), default=0)),
+        "last_inspected_reported_stolen_count": max(0, _safe_int(record.get("last_inspected_reported_stolen_count"), default=0)),
+        "last_inspected_incident_evidence_count": max(0, _safe_int(record.get("last_inspected_incident_evidence_count"), default=0)),
+        "last_inspection_match_summaries": tuple(_text(value) for value in record.get("last_inspection_match_summaries", ()) if _text(value))[:4],
+        "last_inspection_match_labels": tuple(_text(value) for value in record.get("last_inspection_match_labels", ()) if _text(value))[:4],
+        "last_inspection_match_reasons": tuple(_text(value).lower() for value in record.get("last_inspection_match_reasons", ()) if _text(value))[:4],
+        "last_questioning_tick": int(record.get("last_questioning_tick", -10_000)),
+        "last_questioning_disposition": _text(record.get("last_questioning_disposition")).lower(),
+        "last_questioning_kept_contraband_count": max(0, _safe_int(record.get("last_questioning_kept_contraband_count"), default=0)),
+        "last_questioning_evidence_surcharge": max(0, _safe_int(record.get("last_questioning_evidence_surcharge"), default=0)),
         "restitution_due": int(sum(max(0, _safe_int(entry.get("amount"), default=0)) for entry in record.get("restitution_entries", ()) if isinstance(entry, dict))),
         "restitution_property_count": int(sum(1 for entry in record.get("restitution_entries", ()) if isinstance(entry, dict) and max(0, _safe_int(entry.get("amount"), default=0)) > 0)),
     }
@@ -853,6 +914,7 @@ def record_booking_completion(
     fine_due=0,
     fine_paid=0,
     debt_added=0,
+    evidence_surcharge=0,
     seized_entries=(),
 ):
     state = _state(sim)
@@ -868,7 +930,41 @@ def record_booking_completion(
     record["last_booking_fine_due"] = max(0, _safe_int(fine_due, default=0))
     record["last_booking_fine_paid"] = max(0, _safe_int(fine_paid, default=0))
     record["last_booking_debt_added"] = max(0, _safe_int(debt_added, default=0))
+    record["last_booking_evidence_surcharge"] = max(0, _safe_int(evidence_surcharge, default=0))
     record["last_booking_seized_entries"] = _normalize_property_entries(seized_entries)
+    return justice_snapshot(sim, offender_eid)
+
+
+def record_questioning_resolution(
+    sim,
+    offender_eid,
+    *,
+    disposition="",
+    inspected_counts=None,
+    kept_contraband_count=0,
+    match_summaries=(),
+    match_labels=(),
+    match_reasons=(),
+    evidence_surcharge=0,
+):
+    state = _state(sim)
+    record = _offender_record(state, offender_eid, create=True)
+    if not isinstance(record, dict):
+        return None
+    inspected_counts = inspected_counts if isinstance(inspected_counts, dict) else {}
+    record["last_inspection_tick"] = _safe_int(getattr(sim, "tick", 0), default=0)
+    record["last_inspected_lawful_count"] = max(0, _safe_int(inspected_counts.get("lawful"), default=0))
+    record["last_inspected_contraband_count"] = max(0, _safe_int(inspected_counts.get("contraband"), default=0))
+    record["last_inspected_latent_claim_count"] = max(0, _safe_int(inspected_counts.get("latent_claim_violation"), default=0))
+    record["last_inspected_reported_stolen_count"] = max(0, _safe_int(inspected_counts.get("reported_stolen"), default=0))
+    record["last_inspected_incident_evidence_count"] = max(0, _safe_int(inspected_counts.get("incident_evidence"), default=0))
+    record["last_inspection_match_summaries"] = [_text(value) for value in tuple(match_summaries or ()) if _text(value)][:4]
+    record["last_inspection_match_labels"] = [_text(value) for value in tuple(match_labels or ()) if _text(value)][:4]
+    record["last_inspection_match_reasons"] = [_text(value).lower() for value in tuple(match_reasons or ()) if _text(value)][:4]
+    record["last_questioning_tick"] = _safe_int(getattr(sim, "tick", 0), default=0)
+    record["last_questioning_disposition"] = _text(disposition).lower()
+    record["last_questioning_kept_contraband_count"] = max(0, _safe_int(kept_contraband_count, default=0))
+    record["last_questioning_evidence_surcharge"] = max(0, _safe_int(evidence_surcharge, default=0))
     return justice_snapshot(sim, offender_eid)
 
 

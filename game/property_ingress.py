@@ -24,7 +24,7 @@ from game.property_runtime import (
 )
 from game.skills import actor_skill as _actor_skill
 from game.system_support.access_runtime import _attempt_locked_property_entry_with_sim
-from game.system_support.awareness_runtime import _watchers_for_position
+from game.system_support.awareness_runtime import observation_payload_for_position
 from game.system_support.building_repair_runtime import record_building_damage as _record_building_damage
 from game.system_support.access_checks import (
     _maybe_damage_access_tool,
@@ -244,12 +244,14 @@ class PropertyIngressRuntime:
             z=candidate["z"],
             breach_severity=ingress.breach_severity,
         )
-        witnesses = _watchers_for_position(
+        observation = observation_payload_for_position(
             self.sim,
             candidate["x"],
             candidate["y"],
             candidate["z"],
             exclude_eid=eid,
+            offender_eid=eid,
+            observation_channels=("actor_witness",),
         )
         severity_score = max(
             18,
@@ -264,9 +266,7 @@ class PropertyIngressRuntime:
             x=candidate["x"],
             y=candidate["y"],
             z=candidate["z"],
-            witnessed=bool(witnesses),
-            witness_count=len(witnesses),
-            witnesses=tuple(witnesses[:4]),
+            **observation,
             access_level=access.access_level,
             severity_score=severity_score,
             severity_label=_trespass_label_from_score(severity_score),
@@ -613,12 +613,14 @@ class PropertyIngressRuntime:
             z=candidate["z"],
             breach_severity=ingress.breach_severity,
         )
-        witnesses = _watchers_for_position(
+        observation = observation_payload_for_position(
             self.sim,
             candidate["x"],
             candidate["y"],
             candidate["z"],
             exclude_eid=eid,
+            offender_eid=eid,
+            observation_channels=("actor_witness",),
         )
         ingress_kind = str(ingress.ingress_kind or "").strip().lower()
         aperture_kind = str(ingress.aperture_kind or "").strip().lower()
@@ -670,9 +672,7 @@ class PropertyIngressRuntime:
                 x=candidate["x"],
                 y=candidate["y"],
                 z=candidate["z"],
-                witnessed=bool(witnesses),
-                witness_count=len(witnesses),
-                witnesses=tuple(witnesses[:4]),
+                **observation,
                 access_level=access.access_level,
                 severity_score=severity_score,
                 severity_label=severity_label,
@@ -712,9 +712,7 @@ class PropertyIngressRuntime:
                 x=candidate["x"],
                 y=candidate["y"],
                 z=candidate["z"],
-                witnessed=bool(witnesses),
-                witness_count=len(witnesses),
-                witnesses=tuple(witnesses[:4]),
+                **observation,
                 access_level=access.access_level,
                 severity_score=severity_score,
                 severity_label=severity_label,

@@ -199,6 +199,7 @@ from game.property_access import (
     controller_intrusion_state as _controller_intrusion_state,
     default_site_services_for_archetype as _default_site_services_for_archetype,
     _property_archetype,
+    organization_guard_grace_active as _organization_guard_grace_active,
     property_access_controller as _property_access_controller,
     evaluate_property_access as _evaluate_property_access,
     sync_property_access_controller as _sync_property_access_controller,
@@ -306,6 +307,7 @@ from game.npc_judgment import evaluate_opportunity_judgment
 from game.run_objectives import evaluate_run_objective
 from game.organizations import (
     ensure_property_organization,
+    local_protective_pressure_snapshot,
     occupation_targets_property,
     organization_name,
     primary_actor_membership,
@@ -337,7 +339,12 @@ class NPCInteractionSystem(System):
         "protecting": "covering someone",
         "following": "watching your back",
         "holding": "holding position",
+        "reporting_incident": "reporting trouble",
+        "casing_target": "casing the block",
+        "committing_property_crime": "working a soft target",
+        "rendezvousing_crew": "waiting on a crew handoff",
         "evading_authority": "keeping clear of the law",
+        "seeking_criminal_affiliation": "looking for a crew",
         "seeking_street_buyer": "trying to move some stock",
         "seeking_street_appraiser": "looking for someone to size up their stock",
         "seeking_social": "looking for company",
@@ -713,7 +720,11 @@ class NPCInteractionSystem(System):
         return _dialogue_guard_grace_key(npc_eid, prop)
 
     def _guard_grace_active(self, npc_eid, prop):
-        return _dialogue_guard_grace_active(self.sim, npc_eid, prop)
+        return _dialogue_guard_grace_active(self.sim, npc_eid, prop) or _organization_guard_grace_active(
+            self.sim,
+            self.player_eid,
+            prop,
+        )
 
     def _grant_guard_grace(self, npc_eid, prop, *, duration=18, tactic=""):
         return _grant_dialogue_guard_grace(
@@ -837,6 +848,35 @@ class NPCInteractionSystem(System):
         if not ai:
             return "hard to read"
         state = str(ai.state or "idle").strip().lower() or "idle"
+        if state in {"investigating", "protecting", "reporting_incident"}:
+            pos = self.sim.ecs.get(Position).get(getattr(ai, "eid", None)) if hasattr(ai, "eid") else None
+            if pos is None:
+                for candidate_eid, candidate_ai in self.sim.ecs.get(AI).items():
+                    if candidate_ai is ai:
+                        pos = self.sim.ecs.get(Position).get(candidate_eid)
+                        break
+            if pos is not None:
+                prop = _property_covering(self.sim, pos.x, pos.y, pos.z)
+                if not isinstance(prop, dict) and hasattr(self.sim, "property_at"):
+                    prop = self.sim.property_at(pos.x, pos.y, pos.z)
+                pressure = local_protective_pressure_snapshot(self.sim, prop) if isinstance(prop, dict) else {}
+                label = str((pressure or {}).get("state_label", "") or "").strip()
+                if state == "investigating":
+                    if label == "Checkpoint Questioning":
+                        return "working checkpoint questions"
+                    if label == "Justice Sweep":
+                        return "working a justice sweep"
+                    if label == "Block Watch Active":
+                        return "watching the block"
+                    if label == "Residents on Alert":
+                        return "reading the block"
+                elif state == "protecting":
+                    if label == "Block Watch Active":
+                        return "holding a watch line"
+                    if label == "Justice Sweep":
+                        return "backing the sweep"
+                elif state == "reporting_incident" and label:
+                    return "calling in the scene"
         return self.STATE_TEXT.get(state, state.replace("_", " "))
 
     def _dialogue_topic_count(self, npc_eid, topic_id):
@@ -5825,13 +5865,13 @@ class NPCInteractionSystem(System):
         if distance <= 3:
             if can_use_direction:
                 if direction_knowledge == "approx":
-                    return f"across town, around {spoken_dir}"
+                    return f"across town, in the general vicinity of {spoken_dir}"
                 return f"across town {dir_to_phrase}"
             return "across town"
 
         if distance <= 6:
             if can_use_direction:
-                return f"not far off, probably {spoken_dir}"
+                return f"not far off, probably to {spoken_dir}"
             return "not far off"
 
         # Far range (7+ chunks): kilometer-level phrasing with softer certainty.
@@ -5845,7 +5885,7 @@ class NPCInteractionSystem(System):
 
         if can_use_direction:
             if direction_knowledge == "approx":
-                return f"{km_phrase} or so, somewhere {spoken_dir}"
+                return f"{km_phrase} or so, somewhere to {spoken_dir}"
             return f"{km_phrase} {spoken_dir}"
         return f"{km_phrase} out"
 

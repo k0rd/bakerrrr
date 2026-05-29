@@ -3,9 +3,11 @@ from __future__ import annotations
 from engine.events import Event
 from engine.systems import System
 
+from game.incident_runtime import incident_record
 from game.organizations import organization_policy_snapshot, organization_profile, property_organization_eid
 from game.property_access import property_access_level as _property_access_level
 from game.property_runtime import property_covering as _property_covering
+from game.system_support.awareness_runtime import event_observation_accountability
 
 
 MAX_HISTORY = 64
@@ -175,6 +177,66 @@ def organization_snapshot(sim, organization_eid=None, prop=None, ensure=False):
             }
         )
     return snapshot
+
+
+def organization_instability_profile(sim, organization_eid=None, prop=None, ensure=False):
+    snapshot = organization_snapshot(sim, organization_eid=organization_eid, prop=prop, ensure=ensure)
+    if snapshot is None:
+        return None
+
+    site_count = max(0, int(snapshot.get("site_count", 0) or 0))
+    member_count = max(0, int(snapshot.get("member_count", 0) or 0))
+    standing = float(snapshot.get("standing", 0.0) or 0.0)
+    heat = max(0, int(snapshot.get("heat", 0) or 0))
+    family = _text(snapshot.get("family")).lower() or _text(snapshot.get("kind")).lower() or "other"
+
+    coverage_ratio = 1.0
+    coverage_pressure = 0.0
+    underrepresented = False
+    if site_count > 1:
+        coverage_ratio = max(0.0, min(2.0, float(member_count) / float(max(1, site_count))))
+        underrepresented = member_count < site_count
+        coverage_pressure = _clamp((1.0 - min(1.0, coverage_ratio)) * 0.9, 0.0, 0.9)
+
+    standing_pressure = _clamp(abs(min(0.0, standing)), 0.0, 1.0)
+    heat_pressure = _clamp(max(0.0, float(heat - 10) / 70.0), 0.0, 1.0)
+    instability = _clamp(
+        (standing_pressure * 0.42) + (heat_pressure * 0.36) + (coverage_pressure * 0.22),
+        0.0,
+        1.0,
+    )
+    operational_pressure = float(instability)
+    if family in {"street_gang", "criminal_network", "criminal"}:
+        operational_pressure = _clamp(
+            operational_pressure + (heat_pressure * 0.12) + (0.08 if underrepresented else 0.0),
+            0.0,
+            1.0,
+        )
+
+    if instability >= 0.6:
+        note = "the branch is running ragged"
+    elif underrepresented:
+        note = "the branch looks thinly staffed"
+    elif heat_pressure >= 0.45:
+        note = "the branch is working under pressure"
+    elif instability >= 0.22:
+        note = "the branch looks uneven"
+    else:
+        note = ""
+
+    return {
+        **snapshot,
+        "coverage_ratio": float(coverage_ratio),
+        "coverage_pressure": float(coverage_pressure),
+        "standing_pressure": float(standing_pressure),
+        "heat_pressure": float(heat_pressure),
+        "instability": float(instability),
+        "operational_pressure": float(operational_pressure),
+        "underrepresented": bool(underrepresented),
+        "unstable": bool(instability >= 0.22 or underrepresented),
+        "ragged": bool(instability >= 0.6),
+        "note": note,
+    }
 
 
 def organization_snapshots(sim):
@@ -438,6 +500,7 @@ class OrganizationReputationSystem(System):
         self.sim.events.subscribe("property_trespass", self.on_property_trespass)
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
+        self.sim.events.subscribe("incident_authority_reported", self.on_incident_authority_reported)
         self.sim.events.subscribe("trade_bought", self.on_trade_bought)
         self.sim.events.subscribe("trade_sold", self.on_trade_sold)
         self.sim.events.subscribe("bank_transaction", self.on_bank_transaction)
@@ -445,16 +508,19 @@ class OrganizationReputationSystem(System):
         self.sim.events.subscribe("site_service_used", self.on_site_service_used)
 
     def _property_from_event(self, event):
-        property_id = str(event.data.get("property_id", "") or "").strip()
+        data = getattr(event, "data", event)
+        if not isinstance(data, dict):
+            return None
+        property_id = str(data.get("property_id", "") or "").strip()
         if property_id:
             prop = self.sim.properties.get(property_id)
             if isinstance(prop, dict):
                 return prop
 
         try:
-            x = int(event.data.get("x"))
-            y = int(event.data.get("y"))
-            z = int(event.data.get("z", 0))
+            x = int(data.get("x"))
+            y = int(data.get("y"))
+            z = int(data.get("z", 0))
         except (TypeError, ValueError):
             return None
 
@@ -462,6 +528,71 @@ class OrganizationReputationSystem(System):
         if prop is None:
             prop = self.sim.property_at(x, y, z)
         return prop if isinstance(prop, dict) else None
+
+    def _event_accountability(self, event, *, offender_eid=None):
+        return event_observation_accountability(
+            self.sim,
+            event,
+            offender_eid=offender_eid,
+            default_channels=("actor_witness",),
+        )
+
+    def _mark_incident_accounted(self, incident_id):
+        incident = incident_record(self.sim, incident_id)
+        if not isinstance(incident, dict):
+            return None
+        incident["organization_reputation_accounted"] = True
+        incident["organization_reputation_accounted_tick"] = int(getattr(self.sim, "tick", 0))
+        return incident
+
+    def _apply_trespass_reputation(self, prop, data, *, source_event="property_trespass"):
+        severity_label = str(data.get("severity_label", "trespass")).strip().lower() or "trespass"
+        access_level = str(data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
+        heat_delta = 2 if severity_label == "suspicious" else 4
+        standing_delta = -0.03 if severity_label == "suspicious" else -0.06
+        if severity_label == "serious_trespass":
+            heat_delta = 7
+            standing_delta = -0.12
+        heat_delta += 2
+        standing_delta -= 0.02
+        if access_level == "restricted":
+            heat_delta += 2
+            standing_delta -= 0.02
+        return self._apply_org_delta(
+            prop,
+            heat_delta=min(18, heat_delta),
+            standing_delta=max(-0.24, standing_delta),
+            source="trespass",
+            reason=severity_label,
+            source_event=source_event,
+        )
+
+    def _apply_tamper_reputation(self, prop, data, *, source_event="property_tamper"):
+        access_level = str(data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
+        severity_score = max(0, int(data.get("severity_score", 0) or 0))
+        heat_delta = 6 + max(0, severity_score // 30)
+        standing_delta = -0.1
+        if access_level == "restricted":
+            heat_delta += 2
+            standing_delta -= 0.03
+        return self._apply_org_delta(
+            prop,
+            heat_delta=min(20, heat_delta),
+            standing_delta=max(-0.28, standing_delta),
+            source="tamper",
+            reason="property_tamper",
+            source_event=source_event,
+        )
+
+    def _apply_theft_reputation(self, prop, *, source_event="item_stolen"):
+        return self._apply_org_delta(
+            prop,
+            heat_delta=5,
+            standing_delta=-0.08,
+            source="theft",
+            reason="item_stolen",
+            source_event=source_event,
+        )
 
     def _emit_org_change_events(self, change, *, property_id=None):
         if not isinstance(change, dict):
@@ -568,31 +699,12 @@ class OrganizationReputationSystem(System):
         prop = self._property_from_event(event)
         if not isinstance(prop, dict):
             return
-
-        severity_label = str(event.data.get("severity_label", "trespass")).strip().lower() or "trespass"
-        access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
-        witnessed = bool(event.data.get("witnessed", False))
-        if not witnessed:
+        observation = self._event_accountability(event, offender_eid=self.player_eid)
+        if not bool(observation.get("has_accountable_observation")):
             return
-        heat_delta = 2 if severity_label == "suspicious" else 4
-        standing_delta = -0.03 if severity_label == "suspicious" else -0.06
-        if severity_label == "serious_trespass":
-            heat_delta = 7
-            standing_delta = -0.12
-        if witnessed:
-            heat_delta += 2
-            standing_delta -= 0.02
-        if access_level == "restricted":
-            heat_delta += 2
-            standing_delta -= 0.02
-        self._apply_org_delta(
-            prop,
-            heat_delta=min(18, heat_delta),
-            standing_delta=max(-0.24, standing_delta),
-            source="trespass",
-            reason=severity_label,
-            source_event="property_trespass",
-        )
+        change = self._apply_trespass_reputation(prop, event.data, source_event="property_trespass")
+        if change is not None:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_property_tamper(self, event):
         if event.data.get("offender_eid") != self.player_eid:
@@ -600,24 +712,12 @@ class OrganizationReputationSystem(System):
         prop = self._property_from_event(event)
         if not isinstance(prop, dict):
             return
-        access_level = str(event.data.get("access_level", _property_access_level(prop))).strip().lower() or _property_access_level(prop)
-        severity_score = max(0, int(event.data.get("severity_score", 0)))
-        witnessed = bool(event.data.get("witnessed", False))
-        if not witnessed:
+        observation = self._event_accountability(event, offender_eid=self.player_eid)
+        if not bool(observation.get("has_accountable_observation")):
             return
-        heat_delta = 6 + max(0, severity_score // 30)
-        standing_delta = -0.1
-        if access_level == "restricted":
-            heat_delta += 2
-            standing_delta -= 0.03
-        self._apply_org_delta(
-            prop,
-            heat_delta=min(20, heat_delta),
-            standing_delta=max(-0.28, standing_delta),
-            source="tamper",
-            reason="property_tamper",
-            source_event="property_tamper",
-        )
+        change = self._apply_tamper_reputation(prop, event.data, source_event="property_tamper")
+        if change is not None:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_item_stolen(self, event):
         if event.data.get("offender_eid") != self.player_eid:
@@ -625,14 +725,38 @@ class OrganizationReputationSystem(System):
         prop = self._property_from_event(event)
         if not isinstance(prop, dict):
             return
-        self._apply_org_delta(
-            prop,
-            heat_delta=5,
-            standing_delta=-0.08,
-            source="theft",
-            reason="item_stolen",
-            source_event="item_stolen",
-        )
+        observation = self._event_accountability(event, offender_eid=self.player_eid)
+        if not bool(observation.get("has_accountable_observation")):
+            return
+        change = self._apply_theft_reputation(prop, source_event="item_stolen")
+        if change is not None:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
+
+    def on_incident_authority_reported(self, event):
+        incident = incident_record(self.sim, event.data.get("incident_id"))
+        if not isinstance(incident, dict):
+            return
+        if incident.get("primary_actor_eid") != self.player_eid:
+            return
+        if bool(incident.get("organization_reputation_accounted")):
+            return
+        report_observation = self._event_accountability(event, offender_eid=self.player_eid)
+        if not bool(report_observation.get("has_accountable_observation")):
+            return
+        prop = self._property_from_event(incident)
+        if not isinstance(prop, dict):
+            return
+        kind = str(incident.get("kind", "") or "").strip().lower()
+        if kind in {"camera_alert", "property_trespass"}:
+            change = self._apply_trespass_reputation(prop, incident, source_event="incident_authority_reported")
+        elif kind == "property_tamper":
+            change = self._apply_tamper_reputation(prop, incident, source_event="incident_authority_reported")
+        elif kind == "item_stolen":
+            change = self._apply_theft_reputation(prop, source_event="incident_authority_reported")
+        else:
+            return
+        if change is not None:
+            self._mark_incident_accounted(incident.get("id"))
 
     def on_trade_bought(self, event):
         if event.data.get("eid") != self.player_eid:

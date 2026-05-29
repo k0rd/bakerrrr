@@ -58,9 +58,11 @@ from game.system_support.combat_targeting_runtime import (
     _weapon_reserve_ammo,
     _weapon_target_viability,
 )
+from game.system_support.awareness_runtime import observation_payload_for_position
 from game.system_support.cover_runtime import _effective_cover_value
 from game.system_support.entity_naming import _entity_display_name
 from game.system_support.interaction_ordering import _direction_step, _manhattan
+from game.system_support.item_provenance_runtime import CLAIM_PRIVATE_EFFECT, stamp_item_provenance
 from game.system_support.item_runtime import (
     _apply_item_effects_to_entity,
     _default_weapon_reserve_ammo,
@@ -123,6 +125,21 @@ class WeaponSystem(System):
         }
         if isinstance(extra, dict):
             payload.update(extra)
+        if not any(
+            key in payload
+            for key in ("observer_eids", "accountable_observer_eids", "observation_channels", "witnessed", "witnesses")
+        ):
+            payload.update(
+                observation_payload_for_position(
+                    self.sim,
+                    x,
+                    y,
+                    z,
+                    exclude_eid=eid,
+                    offender_eid=eid,
+                    observation_channels=("actor_witness",),
+                )
+            )
         self.sim.emit(Event(
             "action_offense",
             **payload,
@@ -230,7 +247,13 @@ class WeaponSystem(System):
         if not removed:
             return False
 
-        applied = _apply_item_effects_to_entity(self.sim, self.player_eid, item_def)
+        removed_metadata = removed.get("metadata") if isinstance(removed.get("metadata"), dict) else {}
+        applied = _apply_item_effects_to_entity(
+            self.sim,
+            self.player_eid,
+            item_def,
+            item_metadata=removed_metadata,
+        )
         vitality = self.sim.ecs.get(Vitality).get(self.player_eid)
         if not vitality or int(getattr(vitality, "hp", 0)) <= 0:
             return False
@@ -238,7 +261,6 @@ class WeaponSystem(System):
         vitality.downed = False
         vitality.downed_tick = None
 
-        removed_metadata = removed.get("metadata") if isinstance(removed.get("metadata"), dict) else {}
         item_name = item_display_name(item_def["id"], metadata=removed_metadata, item_catalog=ITEM_CATALOG)
         self.sim.emit(Event(
             "item_used",
@@ -247,6 +269,11 @@ class WeaponSystem(System):
             item_name=item_name,
             reason="critical_auto",
             applied=applied,
+            item_metadata=dict(removed_metadata),
+            source_property_id=str(removed_metadata.get("source_property_id", "") or "").strip() or None,
+            source_organization_eid=removed_metadata.get("source_organization_eid"),
+            source_organization_key=str(removed_metadata.get("source_organization_key", "") or "").strip() or None,
+            source_practice_key=str(removed_metadata.get("source_practice_key", "") or "").strip() or None,
         ))
         self.sim.emit(Event(
             "player_critical_saved",
@@ -456,24 +483,33 @@ class WeaponSystem(System):
             loadout.last_fire_tick = int(self.sim.tick)
             loadout.cooldown_until_tick = int(self.sim.tick) + int(max(1, cooldown_ticks))
 
-        if eid == self.player_eid:
-            context = "unarmed_assault" if melee_weapon_id == "unarmed" else "melee_assault"
-            score = None
-            if isinstance(offense_profile, dict):
-                context = str(offense_profile.get("context", context) or context).strip().lower() or context
-                score = int(offense_profile.get("score", 0) or 0)
-            self._emit_action_offense(
-                eid=eid,
-                action="melee_attack",
-                context=context,
-                score=score,
-                x=source_pos.x,
-                y=source_pos.y,
-                z=source_pos.z,
-                target_eid=target_eid,
-                target_name=target_name,
-                target_taxonomy=str((offense_profile or {}).get("target_taxonomy", "") or "").strip().lower(),
-            )
+        context = "unarmed_assault" if melee_weapon_id == "unarmed" else "melee_assault"
+        score = None
+        target_taxonomy = ""
+        if eid == self.player_eid and isinstance(offense_profile, dict):
+            context = str(offense_profile.get("context", context) or context).strip().lower() or context
+            score = int(offense_profile.get("score", 0) or 0)
+            target_taxonomy = str((offense_profile or {}).get("target_taxonomy", "") or "").strip().lower()
+        target_prop = self.sim.property_covering(target.get("x"), target.get("y"), target.get("z", 0)) if hasattr(self.sim, "property_covering") else None
+        self._emit_action_offense(
+            eid=eid,
+            action="melee_attack",
+            context=context,
+            score=score,
+            x=source_pos.x,
+            y=source_pos.y,
+            z=source_pos.z,
+            target_eid=target_eid,
+            victim_eid=target_eid,
+            victim_name=target_name,
+            target_name=target_name,
+            target_x=target.get("x"),
+            target_y=target.get("y"),
+            target_z=target.get("z", 0),
+            property_id=(target_prop or {}).get("id"),
+            property_name=(target_prop or {}).get("name"),
+            target_taxonomy=target_taxonomy,
+        )
         return True
 
     def _weapon_label(self, loadout, weapon):
@@ -859,6 +895,27 @@ class WeaponSystem(System):
                         continue
                     qty = int(entry.get("quantity", 1))
                     meta = dict(entry.get("metadata") or {})
+                    meta = stamp_item_provenance(
+                        self.sim,
+                        {
+                            **entry,
+                            "x": drop_x,
+                            "y": drop_y,
+                            "z": drop_z,
+                            "metadata": meta,
+                        },
+                        source_context="corpse_drop",
+                        claim_class=CLAIM_PRIVATE_EFFECT,
+                        source_owner_eid=eid,
+                        source_owner_tag="npc",
+                        source_actor_eid=eid,
+                        source_victim_eid=eid,
+                        source_property_id=str((self.sim.property_covering(drop_x, drop_y, drop_z) or {}).get("id", "")).strip() or None,
+                        latent_claim_violation=bool(meta.get("latent_claim_violation", False)),
+                        last_transfer_tick=int(getattr(self.sim, "tick", 0)),
+                        last_transfer_kind="corpse_drop",
+                        last_holder_eid=eid,
+                    )
                     self.sim.register_ground_item(
                         item_id=item_id,
                         x=drop_x,
@@ -1185,27 +1242,34 @@ class WeaponSystem(System):
             cause="fire_weapon",
         ))
 
-        if eid == self.player_eid:
-            context = "explosive_discharge" if int(weapon.get("explosion_radius", 0)) > 0 else "armed_assault"
-            score = None
-            offense_profile = None
-            if int(weapon.get("explosion_radius", 0)) <= 0:
-                offense_profile = self._wildlife_offense_profile(target_eid, action="fire_weapon")
-                if isinstance(offense_profile, dict):
-                    context = str(offense_profile.get("context", context) or context).strip().lower() or context
-                    score = int(offense_profile.get("score", 0) or 0)
-            self._emit_action_offense(
-                eid=eid,
-                action="fire_weapon",
-                context=context,
-                score=score,
-                x=pos.x,
-                y=pos.y,
-                z=pos.z,
-                target_eid=target_eid,
-                target_name=target_name,
-                target_taxonomy=str((offense_profile or {}).get("target_taxonomy", "") or "").strip().lower(),
-            )
+        context = "explosive_discharge" if int(weapon.get("explosion_radius", 0)) > 0 else "armed_assault"
+        score = None
+        offense_profile = None
+        if eid == self.player_eid and int(weapon.get("explosion_radius", 0)) <= 0:
+            offense_profile = self._wildlife_offense_profile(target_eid, action="fire_weapon")
+            if isinstance(offense_profile, dict):
+                context = str(offense_profile.get("context", context) or context).strip().lower() or context
+                score = int(offense_profile.get("score", 0) or 0)
+        target_prop = self.sim.property_covering(target_pos.x, target_pos.y, target_pos.z) if hasattr(self.sim, "property_covering") else None
+        self._emit_action_offense(
+            eid=eid,
+            action="fire_weapon",
+            context=context,
+            score=score,
+            x=pos.x,
+            y=pos.y,
+            z=pos.z,
+            target_eid=target_eid,
+            victim_eid=target_eid,
+            victim_name=target_name,
+            target_name=target_name,
+            target_x=target_pos.x,
+            target_y=target_pos.y,
+            target_z=target_pos.z,
+            property_id=(target_prop or {}).get("id"),
+            property_name=(target_prop or {}).get("name"),
+            target_taxonomy=str((offense_profile or {}).get("target_taxonomy", "") or "").strip().lower(),
+        )
 
     def on_melee_attack_request(self, event):
         eid = event.data.get("eid")

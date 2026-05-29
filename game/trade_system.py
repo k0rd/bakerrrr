@@ -10,6 +10,14 @@ from game.components import Inventory, PlayerAssets, Position, VehicleState
 from game.economy import item_market_bias, store_supply_profile
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
+from game.organization_reputation import organization_instability_profile
+from game.organization_response import property_vigilante_denial
+from game.organizations import (
+    local_workplace_org_posture,
+    property_item_practice_bundle,
+    property_trade_practice_bundle,
+    realize_item_instance_metadata,
+)
 from game.player_businesses import player_business_markup_profile as _player_business_markup_profile
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_keys import (
@@ -31,6 +39,7 @@ from game.property_runtime import (
 )
 from game.service_runtime import _int_or_default, _legend_line, _storefront_service_profile
 from game.system_support.container_runtime import _unlink_removed_item_from_gear
+from game.system_support.item_provenance_runtime import CLAIM_MERCHANDISE, stamp_item_provenance
 
 
 def _default_trade_contact_terms(_sim, _viewer_eid, _prop):
@@ -97,6 +106,79 @@ def _join_notes(*parts):
         seen.add(key)
         notes.append(text)
     return "; ".join(notes)
+
+
+def _clamp_float(value, low, high, default=0.0):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = float(default)
+    return max(float(low), min(float(high), number))
+
+
+def _item_tags(item_id):
+    item_def = ITEM_CATALOG.get(str(item_id or "").strip().lower(), {})
+    tags = {
+        str(tag).strip().lower()
+        for tag in item_def.get("tags", ())
+        if str(tag).strip()
+    }
+    appearance_family = str(item_def.get("appearance_family", "") or "").strip().lower()
+    if appearance_family:
+        tags.add(appearance_family)
+    category = str(item_def.get("category", "") or "").strip().lower()
+    if category:
+        tags.add(category)
+    if item_def.get("legal_status") == "illegal" and tags.intersection({"stimulant", "medical", "injectable"}):
+        tags.add("drug")
+    return tags
+
+
+def _merge_effect_modifiers(base, extra):
+    merged = dict(base or {})
+    for raw_key, raw_value in dict(extra or {}).items():
+        key = str(raw_key or "").strip().lower().replace(" ", "_")
+        if not key:
+            continue
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if key.endswith("_mult") or key.endswith("_scalar"):
+            current = float(merged.get(key, 1.0) or 1.0)
+            merged[key] = current * max(0.0, value)
+        else:
+            current = float(merged.get(key, 0.0) or 0.0)
+            merged[key] = current + value
+    return merged
+
+
+def _merged_practice_bundle(bundle, *, extra_modifiers=None, extra_note="", source_fields=None):
+    base = bundle if isinstance(bundle, dict) else {}
+    extra_modifiers = dict(extra_modifiers or {})
+    note = str(extra_note or "").strip()
+    if not extra_modifiers and not note and not source_fields:
+        return dict(base)
+
+    notes = [
+        str(text).strip()
+        for text in tuple(base.get("notes", ()) or ())
+        if str(text).strip()
+    ]
+    if note and note not in notes:
+        notes.append(note)
+    merged = {
+        **base,
+        "rows": tuple(base.get("rows", ()) or ()),
+        "entry_keys": tuple(base.get("entry_keys", ()) or ()),
+        "effect_modifiers": _merge_effect_modifiers(base.get("effect_modifiers"), extra_modifiers),
+        "notes": tuple(notes),
+        "note_text": "; ".join(notes),
+        "count": int(base.get("count", len(tuple(base.get("rows", ()) or ())))) + (1 if extra_modifiers else 0),
+    }
+    if isinstance(source_fields, dict):
+        merged.update(source_fields)
+    return merged
 
 
 class TradeSystem(System):
@@ -1179,6 +1261,118 @@ class TradeSystem(System):
                     return preferred, preferred_service
         return self._nearest_store(pos, radius=radius, automated_only=automated_only)
 
+    def _trade_practice_bundle(self, prop):
+        bundle = property_trade_practice_bundle(
+            self.sim,
+            prop,
+            current_tick=getattr(self.sim, "tick", 0),
+        )
+        workplace = local_workplace_org_posture(
+            self.sim,
+            prop,
+            current_tick=getattr(self.sim, "tick", 0),
+        )
+        instability = organization_instability_profile(self.sim, prop=prop, ensure=True)
+        if (not isinstance(instability, dict) or not bool(instability.get("unstable"))) and not workplace.get("note_text"):
+            return bundle
+
+        extra_modifiers = {}
+        extra_notes = []
+        if isinstance(instability, dict) and bool(instability.get("unstable")):
+            instability_value = float(instability.get("instability", 0.0) or 0.0)
+            underrepresented = bool(instability.get("underrepresented", False))
+            extra_modifiers.update(
+                {
+                    "trade_stock_mult": max(0.55, 1.0 - (instability_value * 0.14) - (0.08 if underrepresented else 0.0)),
+                    "trade_buy_price_mult": min(1.25, 1.0 + (instability_value * 0.06) + (0.05 if underrepresented else 0.0)),
+                }
+            )
+            note = str(instability.get("note", "") or "").strip()
+            if note:
+                extra_notes.append(f"{note} and the stock looks inconsistent")
+            else:
+                extra_notes.append("the stock looks inconsistent")
+        workplace_note = str(workplace.get("note_text", "") or "").strip()
+        if workplace_note:
+            extra_notes.append(workplace_note)
+        return _merged_practice_bundle(bundle, extra_modifiers=extra_modifiers, extra_note=_join_notes(*extra_notes))
+
+    def _item_realization_bundle(self, prop, item_id):
+        bundle = property_item_practice_bundle(
+            self.sim,
+            prop,
+            item_id,
+            current_tick=getattr(self.sim, "tick", 0),
+            realization_kind="trade_purchase",
+        )
+        instability = organization_instability_profile(self.sim, prop=prop, ensure=True)
+        if not isinstance(instability, dict) or not bool(instability.get("unstable")):
+            return bundle
+
+        tags = _item_tags(item_id)
+        instability_value = float(instability.get("instability", 0.0) or 0.0)
+        pressure = float(instability.get("operational_pressure", instability_value) or instability_value)
+        underrepresented = bool(instability.get("underrepresented", False))
+        extra_modifiers = {}
+        extra_note = ""
+
+        if "tool" in tags:
+            if instability_value >= 0.25:
+                extra_modifiers["item_quality_shift"] = -1
+                extra_modifiers["item_max_durability_bonus"] = -1
+            if instability_value >= 0.55:
+                extra_modifiers["item_durability_bonus"] = -1
+            extra_modifiers["tool_wear_mult"] = 1.0 + (instability_value * 0.28) + (0.12 if underrepresented else 0.0)
+            extra_modifiers["tamper_severity_mult"] = 1.0 + (instability_value * 0.14)
+            extra_note = "the tools look rough and inconsistent"
+        elif tags.intersection({"drug", "stimulant"}) or ("illegal" in tags and tags.intersection({"medical", "injectable", "social"})):
+            if instability_value >= 0.24:
+                extra_modifiers["item_quality_shift"] = -1
+            extra_modifiers["item_positive_effect_scalar"] = max(0.8, 1.0 - (instability_value * 0.14))
+            extra_modifiers["item_negative_effect_scalar"] = min(1.8, 1.0 + (instability_value * 0.26) + (pressure * 0.08))
+            extra_modifiers["item_status_duration_scalar"] = 1.0 + (instability_value * 0.12)
+            if instability_value >= 0.22:
+                extra_modifiers["item_extra_safety_delta"] = -max(1.0, round((instability_value * 2.5) + (0.5 if pressure >= 0.5 else 0.0)))
+            extra_note = "the lot feels dirty and unstable"
+        elif tags.intersection({"medical", "injectable"}):
+            if instability_value >= 0.35:
+                extra_modifiers["item_quality_shift"] = -1
+            extra_modifiers["item_positive_effect_scalar"] = max(
+                0.78,
+                1.0 - (instability_value * 0.18) - (0.06 if underrepresented else 0.0),
+            )
+            extra_modifiers["item_negative_effect_scalar"] = min(1.5, 1.0 + (instability_value * 0.16))
+            extra_modifiers["item_status_duration_scalar"] = 1.0 + (instability_value * 0.08)
+            if instability_value >= 0.22:
+                extra_modifiers["item_extra_safety_delta"] = -max(1.0, round((instability_value * 1.5) + (0.5 if underrepresented else 0.0)))
+            extra_note = "the restorative stock looks degraded"
+
+        if not extra_modifiers:
+            return bundle
+
+        return _merged_practice_bundle(
+            bundle,
+            extra_modifiers=extra_modifiers,
+            extra_note=extra_note or str(instability.get("note", "") or "").strip(),
+            source_fields={
+                "source_organization_eid": int(instability.get("organization_eid", 0) or 0) or None,
+                "source_organization_key": str(instability.get("organization_key", "") or "").strip() or None,
+                "source_practice_key": f"org_instability:{prop.get('id')}:{str(item_id or '').strip().lower()}",
+                "instability_applied": True,
+            },
+        )
+
+    def _trade_modifier_mult(self, modifiers, key, *, default=1.0, low=0.6, high=1.6):
+        modifiers = modifiers if isinstance(modifiers, dict) else {}
+        try:
+            value = float(modifiers.get(key, default) or default)
+        except (TypeError, ValueError):
+            value = float(default)
+        return max(float(low), min(float(high), value))
+
+    def _trade_denial(self, eid, prop):
+        return property_vigilante_denial(self.sim, prop, viewer_eid=eid)
+
     def _weighted_unique(self, rng, pool, count):
         entries = []
         for item_id, weight in pool:
@@ -1213,9 +1407,18 @@ class TradeSystem(System):
         archetype = str(metadata.get("archetype", "")).strip().lower()
         profile = self._store_profile(archetype)
         market_profile = store_supply_profile(self.sim, prop)
+        practice = self._trade_practice_bundle(prop)
+        practice_modifiers = dict(practice.get("effect_modifiers", {}))
         rng = random.Random(f"{self.sim.seed}:store:{prop['id']}:cycle:{cycle_index}")
         weight_mults = _metadata_weight_mults(metadata)
-        extra_supply_note = str(metadata.get("trade_supply_note", "") or metadata.get("covert_hint", "")).strip()
+        extra_supply_note = _join_notes(
+            metadata.get("trade_supply_note", ""),
+            metadata.get("covert_hint", ""),
+            practice.get("note_text", ""),
+        )
+        practice_stock_mult = self._trade_modifier_mult(practice_modifiers, "trade_stock_mult", default=1.0, low=0.5, high=2.0)
+        practice_buy_price_mult = self._trade_modifier_mult(practice_modifiers, "trade_buy_price_mult", default=1.0, low=0.75, high=1.4)
+        practice_sell_ratio_mult = self._trade_modifier_mult(practice_modifiers, "trade_sell_ratio_mult", default=1.0, low=0.75, high=1.35)
 
         min_slots = int(max(1, profile.get("min_slots", 3)))
         max_slots = int(max(min_slots, profile.get("max_slots", 5)))
@@ -1245,11 +1448,13 @@ class TradeSystem(System):
                 ),
             )
         )
-        trade_stock_mult = max(0.25, _metadata_float(metadata, "trade_stock_mult", 1.0))
+        trade_stock_mult = max(0.25, _metadata_float(metadata, "trade_stock_mult", 1.0) * practice_stock_mult)
         markup_profile = _player_business_markup_profile(prop)
         markup_mult = max(0.5, float(markup_profile.get("buy_mult", 1.0) or 1.0))
-        buy_mult_lo = max(0.5, buy_mult_lo * markup_mult)
-        buy_mult_hi = max(buy_mult_lo, buy_mult_hi * markup_mult)
+        buy_mult_lo = max(0.5, buy_mult_lo * markup_mult * practice_buy_price_mult)
+        buy_mult_hi = max(buy_mult_lo, buy_mult_hi * markup_mult * practice_buy_price_mult)
+        sell_ratio = max(0.1, min(0.9, sell_ratio * practice_sell_ratio_mult))
+        unlisted_sell_ratio = max(0.1, min(0.85, unlisted_sell_ratio * practice_sell_ratio_mult))
 
         for item_id in item_ids:
             item_def = ITEM_CATALOG.get(item_id)
@@ -1270,6 +1475,7 @@ class TradeSystem(System):
                 "stock": rng.randint(item_min_stock, item_max_stock),
                 "buy_price": buy_price,
                 "sell_price": sell_price,
+                "sale_count": 0,
             })
 
         entries.sort(key=lambda row: (row["buy_price"], row["item_id"]))
@@ -1679,6 +1885,32 @@ class TradeSystem(System):
             )
             return False
 
+        denial = self._trade_denial(self.player_eid, store_prop)
+        if denial is not None:
+            was_open = bool(state.get("open"))
+            state["open"] = False
+            state["rows"] = []
+            state["selected_index"] = 0
+            state["inspect_text"] = ""
+            state["store_name"] = ""
+            state["property_id"] = None
+            state["supply_note"] = ""
+            state["contact_note"] = ""
+            state["service_note"] = ""
+            state["service_eid"] = None
+            state["owner_transfer"] = False
+            if emit_toggle and was_open:
+                self.sim.emit(Event("trade_panel_toggled", eid=self.player_eid, open=False))
+            self.sim.emit(Event(
+                "trade_panel_blocked",
+                eid=self.player_eid,
+                reason="organization_denial",
+                property_id=store_prop.get("id"),
+                organization_key=denial.get("root_organization_key") or denial.get("organization_key"),
+                organization_name=denial.get("root_organization_name") or denial.get("organization_name"),
+            ))
+            return False
+
         store = self._store_state(store_prop)
         inventory = self._inventory_for(self.player_eid)
         terms = self._trade_terms(self.player_eid, store_prop)
@@ -1772,6 +2004,17 @@ class TradeSystem(System):
         if not store_prop:
             self.sim.emit(Event("trade_buy_blocked", eid=eid, reason="no_store"))
             return False
+        denial = self._trade_denial(eid, store_prop)
+        if denial is not None:
+            self.sim.emit(Event(
+                "trade_buy_blocked",
+                eid=eid,
+                reason="organization_denial",
+                property_id=store_prop.get("id"),
+                organization_key=denial.get("root_organization_key") or denial.get("organization_key"),
+                organization_name=denial.get("root_organization_name") or denial.get("organization_name"),
+            ))
+            return False
 
         store = self._store_state(store_prop)
         terms = self._trade_terms(eid, store_prop)
@@ -1825,6 +2068,51 @@ class TradeSystem(System):
 
         item_id = choice["item_id"]
         item_def = ITEM_CATALOG.get(item_id, {"name": item_id, "stack_max": 1})
+        item_practice = self._item_realization_bundle(store_prop, item_id)
+        source_row = next(iter(item_practice.get("rows", ())), None)
+        source_organization_eid = (source_row or {}).get("organization_eid")
+        source_organization_key = (source_row or {}).get("organization_key")
+        source_practice_key = (source_row or {}).get("entry_key")
+        if source_organization_eid in (None, 0, "0") and item_practice.get("source_organization_eid"):
+            source_organization_eid = item_practice.get("source_organization_eid")
+        if not str(source_organization_key or "").strip() and item_practice.get("source_organization_key"):
+            source_organization_key = item_practice.get("source_organization_key")
+        if not str(source_practice_key or "").strip() and item_practice.get("source_practice_key"):
+            source_practice_key = item_practice.get("source_practice_key")
+        next_sale_count = int(choice.get("sale_count", 0) or 0) + 1
+        item_metadata = realize_item_instance_metadata(
+            item_id,
+            {
+                "purchased_from": store_prop["id"],
+                "store_cycle": store.get("cycle_index"),
+            },
+            practice_bundle=item_practice,
+            source_property_id=store_prop["id"],
+            source_organization_eid=source_organization_eid,
+            source_organization_key=source_organization_key,
+            source_practice_key=source_practice_key,
+            serial_seed=f"{store_prop['id']}:{store.get('cycle_index')}:{item_id}:{next_sale_count}",
+        )
+        item_metadata = stamp_item_provenance(
+            self.sim,
+            {
+                "item_id": item_id,
+                "owner_eid": store_prop.get("owner_eid"),
+                "owner_tag": store_prop.get("owner_tag"),
+                "metadata": item_metadata,
+            },
+            prop=store_prop,
+            source_context="trade_purchase",
+            claim_class=CLAIM_MERCHANDISE,
+            source_owner_eid=store_prop.get("owner_eid"),
+            source_owner_tag=store_prop.get("owner_tag"),
+            source_property_id=store_prop.get("id"),
+            source_organization_eid=source_organization_eid,
+            latent_claim_violation=False,
+            last_transfer_tick=int(getattr(self.sim, "tick", 0)),
+            last_transfer_kind="trade_purchase",
+            last_holder_eid=eid,
+        )
         added, instance_id = inventory.add_item(
             item_id=item_id,
             quantity=1,
@@ -1832,10 +2120,7 @@ class TradeSystem(System):
             instance_factory=self.sim.new_item_instance_id,
             owner_eid=eid,
             owner_tag="player" if eid == self.player_eid else "npc",
-            metadata={
-                "purchased_from": store_prop["id"],
-                "store_cycle": store.get("cycle_index"),
-            },
+            metadata=item_metadata,
         )
         if not added:
             self.sim.emit(Event(
@@ -1852,6 +2137,7 @@ class TradeSystem(System):
         if not owner_transfer:
             assets.credits -= price
         choice["stock"] = max(0, int(choice.get("stock", 0)) - 1)
+        choice["sale_count"] = next_sale_count
 
         self.sim.emit(Event(
             "trade_bought",
@@ -1869,6 +2155,7 @@ class TradeSystem(System):
             transfer_mode="withdraw" if owner_transfer else "",
             contact_source_eid=terms.get("source_eid"),
             contact_note=terms.get("note", ""),
+            practice_note=item_practice.get("note_text", ""),
         ))
         return True
 
@@ -1889,6 +2176,17 @@ class TradeSystem(System):
         store_prop, _service = self._resolve_store(pos, preferred_property_id=state.get("property_id"), radius=2)
         if not store_prop:
             self.sim.emit(Event("trade_sell_blocked", eid=eid, reason="no_store"))
+            return False
+        denial = self._trade_denial(eid, store_prop)
+        if denial is not None:
+            self.sim.emit(Event(
+                "trade_sell_blocked",
+                eid=eid,
+                reason="organization_denial",
+                property_id=store_prop.get("id"),
+                organization_key=denial.get("root_organization_key") or denial.get("organization_key"),
+                organization_name=denial.get("root_organization_name") or denial.get("organization_name"),
+            ))
             return False
 
         store = self._store_state(store_prop)
@@ -1993,6 +2291,7 @@ class TradeSystem(System):
                 "stock": int(max(1, removed.get("quantity", 1))),
                 "buy_price": buy_price,
                 "sell_price": sell_price,
+                "sale_count": 0,
             }
             store["entries"].append(existing)
             store["entries"].sort(key=lambda row: (int(row.get("buy_price", 0)), row.get("item_id", "")))

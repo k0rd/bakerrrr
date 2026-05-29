@@ -7,6 +7,7 @@ state and turns it into compact report/look cues the player can choose to pursue
 from __future__ import annotations
 
 from game.components import Position
+from game.organizations import local_protective_pressure_snapshot
 from game.property_runtime import (
     building_id_from_property,
     property_display_position,
@@ -383,6 +384,49 @@ def local_situation_rows(sim, player_eid=None, *, limit=4, current_chunk_only=Tr
         if current_chunk_only and not _same_chunk(sim, player_pos, row.get("anchor")):
             continue
         rows.append(row)
+    seen_properties = {
+        _text(row.get("property_id")).lower()
+        for row in rows
+        if _text(row.get("property_id"))
+    }
+    for prop in getattr(sim, "properties", {}).values():
+        if not isinstance(prop, dict):
+            continue
+        property_id = _text(prop.get("id"))
+        if property_id.lower() in seen_properties:
+            continue
+        anchor = property_focus_position(prop) or property_display_position(prop)
+        if anchor is None:
+            continue
+        if current_chunk_only and not _same_chunk(sim, player_pos, anchor):
+            continue
+        pressure = local_protective_pressure_snapshot(sim, prop)
+        if not pressure.get("active"):
+            continue
+        dx = dy = distance = 0
+        if player_pos is not None:
+            dx = int(anchor[0]) - int(player_pos.x)
+            dy = int(anchor[1]) - int(player_pos.y)
+            distance = abs(dx) + abs(dy)
+        rows.append(
+            {
+                "scene_id": f"protective:{property_id}",
+                "property_id": property_id,
+                "property_name": _property_name(prop),
+                "title": _text(pressure.get("state_label")) or "Local Pressure",
+                "summary": _text(pressure.get("summary")) or "the block has turned watchful",
+                "action": _text(pressure.get("action")) or "read the posture or keep moving",
+                "event_phase": _text(pressure.get("state_key")).lower(),
+                "scene_type": "protective_pressure",
+                "traffic_state": "",
+                "community_tone": "",
+                "source_kind": "protective_pressure",
+                "anchor": anchor,
+                "distance": int(distance),
+                "distance_text": _distance_text(distance, dx, dy),
+                "fixture_names": (),
+            }
+        )
     rows.sort(key=lambda row: (int(row.get("distance", 0)), str(row.get("title", "")), str(row.get("property_name", ""))))
     return tuple(rows[: max(0, int(limit))])
 
@@ -436,7 +480,14 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
 
     scene = _scene_for_property(sim, prop)
     if scene is None:
-        return ""
+        pressure = local_protective_pressure_snapshot(sim, prop)
+        if not pressure.get("active"):
+            return ""
+        return (
+            f"situation:{_text(pressure.get('state_label')) or 'Local Pressure'} active here - "
+            f"{_text(pressure.get('summary')) or 'the area is on alert'}; "
+            f"{_text(pressure.get('action')) or 'read the posture or keep moving'}"
+        )
     property_id = _text(scene.get("property_id"))
     scene_prop = getattr(sim, "properties", {}).get(property_id)
     if not isinstance(scene_prop, dict):

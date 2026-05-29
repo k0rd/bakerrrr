@@ -3,7 +3,9 @@ from __future__ import annotations
 from engine.events import Event
 from engine.systems import System
 
+from game.incident_runtime import incident_record
 from game.organization_reputation import organization_snapshot as _organization_snapshot
+from game.system_support.awareness_runtime import event_observation_accountability
 from game.system_support.intrusion_runtime import (
     _is_window_aperture,
 )
@@ -194,6 +196,7 @@ class RunPressureSystem(System):
         self.sim.events.subscribe("action_offense", self.on_action_offense)
         self.sim.events.subscribe("property_trespass", self.on_property_trespass)
         self.sim.events.subscribe("property_tamper", self.on_property_tamper)
+        self.sim.events.subscribe("incident_authority_reported", self.on_incident_authority_reported)
         self.sim.events.subscribe("npc_warn_property", self.on_npc_warn_property)
         self.sim.events.subscribe("npc_defend_property", self.on_npc_defend_property)
         self.sim.events.subscribe("dialogue_guard_resolution", self.on_dialogue_guard_resolution)
@@ -324,6 +327,22 @@ class RunPressureSystem(System):
             self.sim.emit(Event("run_pressure_mitigated", **payload))
         return payload
 
+    def _event_accountability(self, event, *, offender_eid=None):
+        return event_observation_accountability(
+            self.sim,
+            event,
+            offender_eid=offender_eid,
+            default_channels=("actor_witness",),
+        )
+
+    def _mark_incident_accounted(self, incident_id):
+        incident = incident_record(self.sim, incident_id)
+        if not isinstance(incident, dict):
+            return None
+        incident["run_pressure_accounted"] = True
+        incident["run_pressure_accounted_tick"] = int(getattr(self.sim, "tick", 0))
+        return incident
+
     def _offense_delta(self, offense_score, context):
         offense_score = max(0, int(offense_score))
         context = str(context or "ordinary").strip().lower() or "ordinary"
@@ -352,6 +371,92 @@ class RunPressureSystem(System):
         if tier == "high":
             tier_bonus = 1
         return max(0, min(16, base + context_bonus + tier_bonus))
+
+    def _apply_action_offense_pressure(self, data, *, source_event="action_offense"):
+        offense_score = int(data.get("offense_score", 0) or 0)
+        context = str(data.get("context", "ordinary") or "ordinary").strip().lower()
+        action = str(data.get("action", "action") or "action").strip().lower()
+        delta = self._offense_delta(offense_score, context=context)
+        if delta <= 0:
+            return None
+        return self._emit_pressure(
+            delta=delta,
+            source="offense",
+            reason=f"{action}/{context}",
+            source_event=source_event,
+            category="escalation",
+            extra={
+                "offense_score": int(offense_score),
+                "offense_tier": str(data.get("offense_tier", _offense_tier(offense_score))),
+                "context": context,
+                "x": data.get("x"),
+                "y": data.get("y"),
+                "z": data.get("z"),
+            },
+        )
+
+    def _apply_trespass_pressure(self, data, *, source_event="property_trespass"):
+        property_id = str(data.get("property_id", "") or "").strip()
+        prop = self.sim.properties.get(property_id) if property_id else None
+        severity_label = str(data.get("severity_label", "trespass") or "trespass").strip().lower()
+        severity_score = max(0, int(data.get("severity_score", 0) or 0))
+        ingress_kind = str(data.get("ingress_kind", "") or "").strip().lower()
+        aperture_kind = str(data.get("aperture_kind", "") or "").strip().lower()
+        ingress_method = str(data.get("ingress_method", "") or "").strip().lower()
+        base = 1 if severity_label == "suspicious" else 3
+        if severity_label == "serious_trespass":
+            base = 6
+        delta = base + max(0, severity_score // 24)
+        if ingress_kind in {"boundary_breach", "deep_breach"}:
+            delta += 2
+        elif ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
+            delta += 1
+        if ingress_method in {"forced_breach", "deep_breach", "crash_window_entry"}:
+            delta += 1
+        return self._emit_pressure(
+            delta=min(14, delta),
+            source="trespass",
+            reason=severity_label or "trespass",
+            source_event=source_event,
+            category="escalation",
+            extra={
+                "property_id": property_id,
+                "property_name": str((prop or {}).get("name", "") or "").strip(),
+                "severity_label": severity_label,
+                "severity_score": severity_score,
+                "ingress_kind": ingress_kind,
+                "ingress_method": ingress_method,
+                "witnessed": True,
+                "obvious_breach": False,
+            },
+        )
+
+    def _apply_tamper_pressure(self, data, *, source_event="property_tamper"):
+        property_id = str(data.get("property_id", "") or "").strip()
+        prop = self.sim.properties.get(property_id) if property_id else None
+        severity_score = max(0, int(data.get("severity_score", 0) or 0))
+        ingress_kind = str(data.get("ingress_kind", "") or "").strip().lower()
+        ingress_method = str(data.get("ingress_method", "") or "").strip().lower()
+        delta = 7 + max(0, severity_score // 16)
+        if ingress_kind in {"boundary_breach", "deep_breach"}:
+            delta += 2
+        if ingress_method in {"forced_breach", "deep_breach", "crash_window_entry"}:
+            delta += 2
+        return self._emit_pressure(
+            delta=min(20, delta),
+            source="tamper",
+            reason="property_tamper",
+            source_event=source_event,
+            category="escalation",
+            extra={
+                "property_id": property_id,
+                "property_name": str((prop or {}).get("name", "") or "").strip(),
+                "severity_score": severity_score,
+                "ingress_kind": ingress_kind,
+                "ingress_method": ingress_method,
+                "witnessed": True,
+            },
+        )
 
     def _banking_mitigation_key(self, event):
         property_id = str(event.data.get("property_id", "") or "").strip()
@@ -396,103 +501,70 @@ class RunPressureSystem(System):
     def on_action_offense(self, event):
         if event.data.get("offender_eid") != self.player_eid:
             return
-        offense_score = int(event.data.get("offense_score", 0))
-        context = str(event.data.get("context", "ordinary")).strip().lower()
-        action = str(event.data.get("action", "action")).strip().lower()
-        delta = self._offense_delta(offense_score, context=context)
-        if delta <= 0:
+        observation = self._event_accountability(event, offender_eid=self.player_eid)
+        if not bool(observation.get("has_accountable_observation")):
             return
-        self._emit_pressure(
-            delta=delta,
-            source="offense",
-            reason=f"{action}/{context}",
-            source_event="action_offense",
-            category="escalation",
-            extra={
-                "offense_score": int(offense_score),
-                "offense_tier": str(event.data.get("offense_tier", _offense_tier(offense_score))),
-                "context": context,
-                "x": event.data.get("x"),
-                "y": event.data.get("y"),
-                "z": event.data.get("z"),
-            },
-        )
+        change = self._apply_action_offense_pressure(event.data, source_event="action_offense")
+        if change is not None:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_property_trespass(self, event):
         if event.data.get("offender_eid") != self.player_eid:
             return
-
-        property_id = str(event.data.get("property_id", "") or "").strip()
-        prop = self.sim.properties.get(property_id) if property_id else None
-        severity_label = str(event.data.get("severity_label", "trespass")).strip().lower()
-        severity_score = max(0, int(event.data.get("severity_score", 0)))
-        witnessed = bool(event.data.get("witnessed", False))
-        ingress_kind = str(event.data.get("ingress_kind", "")).strip().lower()
-        aperture_kind = str(event.data.get("aperture_kind", "")).strip().lower()
-        ingress_method = str(event.data.get("ingress_method", "")).strip().lower()
-        if not witnessed:
+        observation = self._event_accountability(event, offender_eid=self.player_eid)
+        if not bool(observation.get("has_accountable_observation")):
             return
-
-        base = 1 if severity_label == "suspicious" else 3
-        if severity_label == "serious_trespass":
-            base = 6
-        delta = base + max(0, severity_score // 24)
-        if ingress_kind in {"boundary_breach", "deep_breach"}:
-            delta += 2
-        elif ingress_kind == "alternate_aperture" and _is_window_aperture(aperture_kind):
-            delta += 1
-        if ingress_method in {"forced_breach", "deep_breach", "crash_window_entry"}:
-            delta += 1
-
-        self._emit_pressure(
-            delta=min(14, delta),
-            source="trespass",
-            reason=severity_label or "trespass",
-            source_event="property_trespass",
-            category="escalation",
-            extra={
-                "property_id": property_id,
-                "property_name": str((prop or {}).get("name", "") or "").strip(),
-                "severity_label": severity_label,
-                "severity_score": severity_score,
-                "ingress_kind": ingress_kind,
-                "ingress_method": ingress_method,
-                "witnessed": witnessed,
-                "obvious_breach": False,
-            },
-        )
+        change = self._apply_trespass_pressure(event.data, source_event="property_trespass")
+        if change is not None:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_property_tamper(self, event):
         if event.data.get("offender_eid") != self.player_eid:
             return
-        property_id = str(event.data.get("property_id", "") or "").strip()
-        prop = self.sim.properties.get(property_id) if property_id else None
-        severity_score = max(0, int(event.data.get("severity_score", 0)))
-        witnessed = bool(event.data.get("witnessed", False))
-        ingress_kind = str(event.data.get("ingress_kind", "")).strip().lower()
-        ingress_method = str(event.data.get("ingress_method", "")).strip().lower()
-        if not witnessed:
+        observation = self._event_accountability(event, offender_eid=self.player_eid)
+        if not bool(observation.get("has_accountable_observation")):
             return
-        delta = 7 + max(0, severity_score // 16)
-        if ingress_kind in {"boundary_breach", "deep_breach"}:
-            delta += 2
-        if ingress_method in {"forced_breach", "deep_breach", "crash_window_entry"}:
-            delta += 2
-        self._emit_pressure(
-            delta=min(20, delta),
-            source="tamper",
-            reason="property_tamper",
-            source_event="property_tamper",
-            category="escalation",
-            extra={
-                "property_id": property_id,
-                "property_name": str((prop or {}).get("name", "") or "").strip(),
-                "severity_score": severity_score,
-                "ingress_kind": ingress_kind,
-                "ingress_method": ingress_method,
-                "witnessed": witnessed,
-            },
-        )
+        change = self._apply_tamper_pressure(event.data, source_event="property_tamper")
+        if change is not None:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
+
+    def on_incident_authority_reported(self, event):
+        incident = incident_record(self.sim, event.data.get("incident_id"))
+        if not isinstance(incident, dict):
+            return
+        if incident.get("primary_actor_eid") != self.player_eid:
+            return
+        if bool(incident.get("run_pressure_accounted")):
+            return
+        report_observation = self._event_accountability(event, offender_eid=self.player_eid)
+        if not bool(report_observation.get("has_accountable_observation")):
+            return
+        kind = str(incident.get("kind", "") or "").strip().lower()
+        if kind == "property_trespass":
+            change = self._apply_trespass_pressure(incident, source_event="incident_authority_reported")
+        elif kind == "property_tamper":
+            change = self._apply_tamper_pressure(incident, source_event="incident_authority_reported")
+        elif kind == "item_stolen":
+            change = self._apply_action_offense_pressure(
+                {
+                    "action": "pickup_item",
+                    "context": "item_theft",
+                    "offense_score": max(48, int(incident.get("severity", 0) or 0)),
+                    "offense_tier": incident.get("offense_tier", _offense_tier(max(48, int(incident.get("severity", 0) or 0)))),
+                    "x": incident.get("x"),
+                    "y": incident.get("y"),
+                    "z": incident.get("z"),
+                },
+                source_event="incident_authority_reported",
+            )
+        elif kind == "action_offense":
+            change = self._apply_action_offense_pressure(incident, source_event="incident_authority_reported")
+        elif kind == "camera_alert":
+            change = self._apply_trespass_pressure(incident, source_event="incident_authority_reported")
+        else:
+            return
+        if change is not None:
+            self._mark_incident_accounted(incident.get("id"))
 
     def on_npc_warn_property(self, event):
         if event.data.get("offender_eid") != self.player_eid:

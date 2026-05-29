@@ -98,12 +98,33 @@ def _item_substance_intoxication_duration(item_def):
     return max(durations) if durations else 0
 
 
-def _apply_item_effects_to_entity(sim, eid, item_def):
+def _apply_item_effects_to_entity(sim, eid, item_def, *, item_metadata=None):
     needs = sim.ecs.get(NPCNeeds).get(eid)
     vitality = sim.ecs.get(Vitality).get(eid)
     statuses = sim.ecs.get(StatusEffects).get(eid)
     substance_states = sim.ecs.get(SubstanceUseState)
     assets = sim.ecs.get(PlayerAssets).get(eid)
+    metadata = item_metadata if isinstance(item_metadata, dict) else {}
+    try:
+        effect_scalar = float(metadata.get("item_effect_scalar", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        effect_scalar = 1.0
+    effect_scalar = max(0.25, min(3.0, effect_scalar))
+    try:
+        positive_effect_scalar = float(metadata.get("item_positive_effect_scalar", effect_scalar) or effect_scalar)
+    except (TypeError, ValueError):
+        positive_effect_scalar = effect_scalar
+    positive_effect_scalar = max(0.25, min(3.0, positive_effect_scalar))
+    try:
+        negative_effect_scalar = float(metadata.get("item_negative_effect_scalar", effect_scalar) or effect_scalar)
+    except (TypeError, ValueError):
+        negative_effect_scalar = effect_scalar
+    negative_effect_scalar = max(0.25, min(3.0, negative_effect_scalar))
+    try:
+        duration_scalar = float(metadata.get("item_status_duration_scalar", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        duration_scalar = 1.0
+    duration_scalar = max(0.25, min(3.0, duration_scalar))
 
     applied = []
     for effect in item_def.get("effects", []):
@@ -112,9 +133,10 @@ def _apply_item_effects_to_entity(sim, eid, item_def):
         if effect_type == "modify_need":
             need = effect.get("need")
             try:
-                delta = float(effect.get("delta", 0))
+                raw_delta = float(effect.get("delta", 0))
             except (TypeError, ValueError):
                 continue
+            delta = raw_delta * (positive_effect_scalar if raw_delta >= 0.0 else negative_effect_scalar)
 
             if not needs or not hasattr(needs, need):
                 continue
@@ -130,7 +152,7 @@ def _apply_item_effects_to_entity(sim, eid, item_def):
 
         if effect_type == "restore_hp":
             try:
-                delta = int(effect.get("delta", 0))
+                delta = int(round(float(effect.get("delta", 0) or 0) * positive_effect_scalar))
             except (TypeError, ValueError):
                 continue
             if delta <= 0 or not vitality:
@@ -154,7 +176,7 @@ def _apply_item_effects_to_entity(sim, eid, item_def):
             if not statuses:
                 continue
             status = effect.get("status")
-            duration = int(max(1, effect.get("duration", 1)))
+            duration = int(max(1, round(float(effect.get("duration", 1) or 1) * duration_scalar)))
             modifiers = effect.get("modifiers", {})
             if not isinstance(modifiers, dict):
                 modifiers = {}
@@ -264,6 +286,23 @@ def _apply_item_effects_to_entity(sim, eid, item_def):
                 "targets": updated,
             })
             continue
+
+    if needs:
+        for need in ("energy", "safety", "social"):
+            try:
+                delta = float(metadata.get(f"item_extra_{need}_delta", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                delta = 0.0
+            if abs(delta) <= 1e-6 or not hasattr(needs, need):
+                continue
+            current = getattr(needs, need)
+            setattr(needs, need, _clamp(current + delta))
+            applied.append({
+                "type": "modify_need",
+                "need": need,
+                "delta": float(delta),
+                "source": "item_metadata",
+            })
 
     substance_profile = item_def.get("substance_profile", {})
     if isinstance(substance_profile, dict) and substance_profile.get("substance_id") and statuses:

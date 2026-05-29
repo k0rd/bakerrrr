@@ -39,6 +39,7 @@ from game.property_keys import (
     inventory_matching_property_key,
     property_lock_state,
 )
+from game.system_support.awareness_runtime import observation_payload_for_position
 from game.property_runtime import (
     controller_access_requirement_text as _controller_access_requirement_text,
     controller_holder_for_actor as _controller_holder_for_actor,
@@ -78,7 +79,6 @@ from game.system_support.access_runtime import (
     _lock_override_required_for_prop,
 )
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
-from game.system_support.awareness_runtime import _watchers_for_position
 from game.system_support.combat_targeting_runtime import _manual_fire_preview, _target_condition_descriptor
 from game.system_support.interaction_ordering import (
     _interaction_target_order_key,
@@ -457,24 +457,41 @@ class PlayerActionSystem(System):
         bonus = ACTION_OFFENSE_CONTEXT_BONUS.get(context, 0)
         return max(0, min(100, base + bonus))
 
-    def _emit_action_offense(self, eid, action, x, y, z, context="ordinary", score=None):
+    def _emit_action_offense(self, eid, action, x, y, z, context="ordinary", score=None, **extra):
         if score is None:
             score = self._offense_score_for(action, context=context)
         if score <= 0:
             return
 
-        self.sim.emit(Event(
-            "action_offense",
-            offender_eid=eid,
-            action=action,
-            context=context,
-            offense_score=score,
-            offense_tier=_offense_tier(score),
-            x=x,
-            y=y,
-            z=z,
-            radius=_offense_notice_radius(score),
-        ))
+        payload = {
+            "offender_eid": eid,
+            "action": action,
+            "context": context,
+            "offense_score": score,
+            "offense_tier": _offense_tier(score),
+            "x": x,
+            "y": y,
+            "z": z,
+            "radius": _offense_notice_radius(score),
+        }
+        if isinstance(extra, dict):
+            payload.update(extra)
+        if not any(
+            key in payload
+            for key in ("observer_eids", "accountable_observer_eids", "observation_channels", "witnessed", "witnesses")
+        ):
+            payload.update(
+                observation_payload_for_position(
+                    self.sim,
+                    x,
+                    y,
+                    z,
+                    exclude_eid=eid,
+                    offender_eid=eid,
+                    observation_channels=("actor_witness",),
+                )
+            )
+        self.sim.emit(Event("action_offense", **payload))
 
     def _player_has_item(self, eid, item_id):
         inventory = self.sim.ecs.get(Inventory).get(eid)
@@ -611,7 +628,7 @@ class PlayerActionSystem(System):
     def _vehicle_hotwire_score(self, eid, *, tool_terms=None):
         return self._access_override_score(eid, tool_terms=tool_terms, ignition=True)
 
-    def _emit_property_lock_tamper(self, eid, prop, *, x, y, z, method):
+    def _emit_property_lock_tamper(self, eid, prop, *, x, y, z, method, tool_terms=None):
         _emit_property_lock_tamper_event(
             self.sim,
             eid,
@@ -620,6 +637,7 @@ class PlayerActionSystem(System):
             y=y,
             z=z,
             method=method,
+            tool_terms=tool_terms,
         )
 
     def _emit_vehicle_tamper(self, eid, vehicle_prop, method):
@@ -629,15 +647,16 @@ class PlayerActionSystem(System):
         vy = int(vehicle_prop.get("y", 0))
         vz = int(vehicle_prop.get("z", 0))
         lock_state = property_lock_state(vehicle_prop)
-        witnesses = _watchers_for_position(
+        observation = observation_payload_for_position(
             self.sim,
             vx,
             vy,
             vz,
             exclude_eid=eid,
             offender_eid=eid,
+            observation_channels=("actor_witness",),
         )
-        witnessed = bool(witnesses)
+        witnessed = bool(observation.get("witnessed", False))
         severity_score = min(100, 22 + (lock_state["lock_tier"] * 8))
         self.sim.emit(Event(
             "property_tamper",
@@ -647,9 +666,7 @@ class PlayerActionSystem(System):
             x=vx,
             y=vy,
             z=vz,
-            witnessed=witnessed,
-            witness_count=len(witnesses),
-            witnesses=tuple(witnesses[:4]),
+            **observation,
             access_level="protected",
             severity_score=severity_score,
             severity_label=_trespass_label_from_score(severity_score),

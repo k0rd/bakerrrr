@@ -14,6 +14,7 @@ from game.property_runtime import (
     property_infrastructure_role as _property_infrastructure_role,
     property_runtime_container_entries as _property_runtime_container_entries,
 )
+from game.system_support.awareness_runtime import observation_payload_for_position
 from game.system_support.container_runtime import (
     ITEM_STOWED_CONTAINER_METADATA_KEY,
     _entry_stowed_container_instance,
@@ -22,6 +23,11 @@ from game.system_support.container_runtime import (
     _unlink_removed_item_from_gear,
 )
 from game.system_support.interaction_ordering import _manhattan
+from game.system_support.item_provenance_runtime import (
+    CLAIM_SCENE_SALVAGE,
+    item_entitlement_for_actor,
+    stamp_item_provenance,
+)
 from game.system_support.player_feedback import _log_player_feedback
 
 
@@ -561,6 +567,32 @@ class PlayerInteractionRuntime:
         quantity = max(1, _int_or_default(entry.get("quantity"), 1))
         item_def = ITEM_CATALOG.get(item_id, {})
         stack_max = max(1, int(item_def.get("stack_max", 1) or 1))
+        entry_payload = {
+            **entry,
+            "x": (prop or {}).get("x"),
+            "y": (prop or {}).get("y"),
+            "z": (prop or {}).get("z", 0),
+        }
+        source_context = f"{container_kind}_withdraw"
+        claim_class = CLAIM_SCENE_SALVAGE if container_kind in {"cache", "bones"} else None
+        entitlement = item_entitlement_for_actor(
+            self.sim,
+            eid,
+            entry_payload,
+            prop=prop,
+            source_context=source_context,
+        )
+        item_metadata = stamp_item_provenance(
+            self.sim,
+            entry_payload,
+            prop=prop,
+            source_context=source_context,
+            claim_class=claim_class,
+            latent_claim_violation=bool(entitlement and entitlement.get("latent_claim_violation")),
+            last_transfer_tick=int(getattr(self.sim, "tick", 0)),
+            last_transfer_kind=source_context,
+            last_holder_eid=eid,
+        )
         success, _instance_id = inventory.add_item(
             item_id,
             quantity=quantity,
@@ -568,7 +600,7 @@ class PlayerInteractionRuntime:
             instance_factory=getattr(self.sim, "new_item_instance_id", None),
             owner_eid=eid,
             owner_tag="player",
-            metadata=entry.get("metadata"),
+            metadata=item_metadata,
         )
         if not success:
             _log_player_feedback(
@@ -596,6 +628,40 @@ class PlayerInteractionRuntime:
                 item_id=item_id,
                 quantity=quantity,
             ))
+        if entitlement and not entitlement.get("lawful_take"):
+            theft_observation = observation_payload_for_position(
+                self.sim,
+                int((prop or {}).get("x", 0) or 0),
+                int((prop or {}).get("y", 0) or 0),
+                int((prop or {}).get("z", 0) or 0),
+                exclude_eid=eid,
+                offender_eid=eid,
+                observation_channels=("actor_witness",),
+            )
+            self.sim.emit(Event(
+                "item_stolen",
+                offender_eid=eid,
+                item_id=item_id,
+                item_name=name,
+                owner_eid=entry.get("owner_eid"),
+                owner_tag=entry.get("owner_tag"),
+                property_id=prop_id,
+                property_name=(prop or {}).get("name"),
+                x=int((prop or {}).get("x", 0) or 0),
+                y=int((prop or {}).get("y", 0) or 0),
+                z=int((prop or {}).get("z", 0) or 0),
+                **theft_observation,
+            ))
+            self.action_system.item_system._emit_action_offense(
+                eid=eid,
+                action="pickup_item",
+                context="item_theft",
+                x=int((prop or {}).get("x", 0) or 0),
+                y=int((prop or {}).get("y", 0) or 0),
+                z=int((prop or {}).get("z", 0) or 0),
+                property_id=prop_id,
+                **theft_observation,
+            )
         inventory_ui = getattr(self.sim, "inventory_ui", None)
         if isinstance(inventory_ui, dict):
             inventory_ui["inspect_text"] = ""

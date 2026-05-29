@@ -8,10 +8,11 @@ from game.property_access import (
     property_access_level as _property_access_level,
 )
 from game.property_keys import property_lock_state
+from game.organizations import actor_org_practices
 from game.property_runtime import _int_or_default, property_metadata as _property_metadata
 from game.skills import actor_skill as _actor_skill, actor_tool_terms as _actor_tool_terms
 from game.system_support.access_checks import _maybe_damage_access_tool, _resolve_access_skill_check
-from game.system_support.awareness_runtime import _watchers_for_position
+from game.system_support.awareness_runtime import observation_payload_for_position
 from game.system_support.intrusion_runtime import _trespass_label_from_score
 from game.system_support.offense_runtime import _emit_action_offense_event
 
@@ -38,12 +39,76 @@ def _access_tool_context_for(sim, prop=None, *, ignition=False, context=None):
     return "mechanical_lock"
 
 
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _bounded_mult(value, *, default=1.0, low=0.25, high=4.0):
+    return max(float(low), min(float(high), _safe_float(value, default=default)))
+
+
 def _access_tool_terms_for_actor(sim, eid, prop=None, *, ignition=False, context=None):
-    return _actor_tool_terms(
+    tool_terms = dict(
+        _actor_tool_terms(
+            sim,
+            eid,
+            _access_tool_context_for(sim, prop, ignition=ignition, context=context),
+        )
+    )
+    if not isinstance(prop, dict):
+        return tool_terms
+
+    practice_rows = []
+    practice_notes = []
+    aggregated = {}
+    for row in actor_org_practices(
         sim,
         eid,
-        _access_tool_context_for(sim, prop, ignition=ignition, context=context),
+        active_only=True,
+        current_tick=getattr(sim, "tick", 0),
+    ):
+        property_id = str(row.get("membership_site_property_id", "") or "").strip()
+        if property_id and property_id != str(prop.get("id", "")).strip():
+            continue
+        practice_rows.append(row)
+        note = str(row.get("summary") or row.get("label") or "").strip()
+        if note and note not in practice_notes:
+            practice_notes.append(note)
+        for raw_key, raw_value in dict(row.get("effect_modifiers", {}) or {}).items():
+            key = str(raw_key or "").strip().lower().replace(" ", "_")
+            if not key:
+                continue
+            value = _safe_float(raw_value, default=0.0)
+            if key.endswith("_mult") or key.endswith("_scalar"):
+                aggregated[key] = _safe_float(aggregated.get(key), default=1.0) * max(0.0, value)
+            else:
+                aggregated[key] = _safe_float(aggregated.get(key), default=0.0) + value
+
+    modifiers = aggregated
+    if not modifiers:
+        return tool_terms
+
+    for key in ("intrusion_bonus", "mechanics_bonus", "perception_bonus", "score_bonus", "requirement_delta"):
+        tool_terms[key] = _safe_float(tool_terms.get(key), default=0.0) + _safe_float(modifiers.get(key), default=0.0)
+    tool_terms["tool_wear_mult"] = _bounded_mult(
+        _safe_float(tool_terms.get("tool_wear_mult"), default=1.0) * _safe_float(modifiers.get("tool_wear_mult"), default=1.0),
+        default=1.0,
+        low=0.25,
+        high=4.0,
     )
+    tool_terms["tamper_severity_mult"] = _bounded_mult(
+        _safe_float(tool_terms.get("tamper_severity_mult"), default=1.0) * _safe_float(modifiers.get("tamper_severity_mult"), default=1.0),
+        default=1.0,
+        low=0.4,
+        high=2.0,
+    )
+    practice_note = "; ".join(practice_notes[:3])
+    if practice_note:
+        tool_terms["practice_note"] = practice_note
+    return tool_terms
 
 
 def _access_override_score_for_actor(sim, eid, *, tool_terms=None, ignition=False):
@@ -83,18 +148,19 @@ def _lock_override_required_for_prop(sim, prop, *, tool_terms=None, ignition=Fal
     return max(1.0, required)
 
 
-def _emit_property_lock_tamper_event(sim, eid, prop, *, x, y, z, method):
+def _emit_property_lock_tamper_event(sim, eid, prop, *, x, y, z, method, tool_terms=None):
     if not isinstance(prop, dict):
         return
     lock_state = property_lock_state(prop)
     access_level = _property_access_level(prop)
-    witnesses = _watchers_for_position(
+    observation = observation_payload_for_position(
         sim,
         int(x),
         int(y),
         int(z),
         exclude_eid=eid,
         offender_eid=eid,
+        observation_channels=("actor_witness",),
     )
     method_key = str(method or "").strip().lower()
     severity_score = min(
@@ -103,6 +169,8 @@ def _emit_property_lock_tamper_event(sim, eid, prop, *, x, y, z, method):
     )
     if method_key in {"badge_reader_spoof", "biometric_spoof", "biometric_jam"}:
         severity_score = max(8, severity_score - (6 if method_key == "badge_reader_spoof" else 4))
+    severity_mult = _bounded_mult((tool_terms or {}).get("tamper_severity_mult"), default=1.0, low=0.4, high=2.0)
+    severity_score = max(4, min(100, int(round(float(severity_score) * severity_mult))))
     sim.emit(Event(
         "property_tamper",
         offender_eid=eid,
@@ -111,9 +179,7 @@ def _emit_property_lock_tamper_event(sim, eid, prop, *, x, y, z, method):
         x=int(x),
         y=int(y),
         z=int(z),
-        witnessed=bool(witnesses),
-        witness_count=len(witnesses),
-        witnesses=tuple(witnesses[:4]),
+        **observation,
         access_level=access_level,
         severity_score=severity_score,
         severity_label=_trespass_label_from_score(severity_score),
@@ -154,6 +220,7 @@ def _attempt_locked_property_entry_with_sim(sim, eid, prop, *, target_x, target_
         y=target_y,
         z=target_z,
         method=method,
+        tool_terms=tool_terms,
     )
     attempt = _resolve_access_skill_check(
         sim,

@@ -448,23 +448,39 @@ class PropertyActionRuntime:
             z=pos.z,
         ))
 
+    def _door_candidate_for_player(self, eid, pos, *, preferred_dir=None):
+        if preferred_dir is None:
+            preferred_dir = self.action_system._player_interact_direction(eid, pos)
+        return _door_interaction_candidate(
+            self.sim,
+            pos,
+            preferred_dir=preferred_dir,
+        )
+
+    def _door_candidate_is_open(self, candidate):
+        return bool(isinstance(candidate, dict) and bool((candidate.get("state") or {}).get("open", False)))
+
+    def _door_candidate_matches_direction(self, candidate, pos, preferred_dir):
+        if not isinstance(candidate, dict) or preferred_dir is None:
+            return False
+        step = _normalized_direction(
+            int(candidate.get("x", pos.x)) - int(pos.x),
+            int(candidate.get("y", pos.y)) - int(pos.y),
+        )
+        return step == tuple(preferred_dir)
+
     def _force_interact_in_last_direction(self, eid, pos):
         preferred_dir = self.action_system._player_interact_direction(eid, pos)
         if preferred_dir is None:
             return False
 
-        candidate = _door_interaction_candidate(
-            self.sim,
+        candidate = self._door_candidate_for_player(
+            eid,
             pos,
             preferred_dir=preferred_dir,
         )
-        if isinstance(candidate, dict):
-            step = _normalized_direction(
-                int(candidate.get("x", pos.x)) - int(pos.x),
-                int(candidate.get("y", pos.y)) - int(pos.y),
-            )
-            if step == tuple(preferred_dir):
-                return self.handle_door_interaction(eid, pos)
+        if self._door_candidate_matches_direction(candidate, pos, preferred_dir) and not self._door_candidate_is_open(candidate):
+            return self.handle_door_interaction(eid, pos)
 
         npc_eid = self.action_system._npc_for_player_action(
             eid,
@@ -487,6 +503,9 @@ class PropertyActionRuntime:
         if vehicle_prop is not None:
             self.action_system._enter_vehicle(eid=eid, pos=pos, vehicle_prop=vehicle_prop)
             return True
+
+        if self._door_candidate_matches_direction(candidate, pos, preferred_dir):
+            return self.handle_door_interaction(eid, pos)
 
         target_x = int(pos.x) + int(preferred_dir[0])
         target_y = int(pos.y) + int(preferred_dir[1])
@@ -526,6 +545,11 @@ class PropertyActionRuntime:
 
         preferred_dir = self.action_system._player_interact_direction(eid, pos)
         prop = self.active_interact_property_near(pos)
+        door_candidate = self._door_candidate_for_player(
+            eid,
+            pos,
+            preferred_dir=preferred_dir,
+        )
         npc_eid = None if prop else self.action_system._npc_for_player_action(
             eid,
             pos,
@@ -536,7 +560,7 @@ class PropertyActionRuntime:
             self._emit_npc_interact(eid, npc_eid, pos)
             return
 
-        if self.handle_door_interaction(eid, pos):
+        if door_candidate and not self._door_candidate_is_open(door_candidate) and self.handle_door_interaction(eid, pos):
             return
 
         if not prop:
@@ -549,6 +573,9 @@ class PropertyActionRuntime:
             if vehicle_prop is not None:
                 self.action_system._enter_vehicle(eid=eid, pos=pos, vehicle_prop=vehicle_prop)
                 return
+
+        if door_candidate and self.handle_door_interaction(eid, pos):
+            return
 
         if not prop:
             prop = self.sim.property_at(pos.x, pos.y, pos.z)

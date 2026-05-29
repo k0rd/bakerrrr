@@ -72,6 +72,7 @@ from game.item_semantics import (
     item_is_identified_for_actor,
     item_unknown_inspect_text_for_actor,
 )
+from game.organizations import local_protective_pressure_snapshot
 from game.objective_progress import (
     award_objective_progress,
     objective_progress_explain_delta,
@@ -122,6 +123,18 @@ from game.property_access import (
     property_status_text as _property_status_text,
     world_hour as _world_hour,
 )
+
+
+_BUSINESS_POSTURE_PHASE_LABELS = {
+    "owner_screening": "Screened Entry",
+    "paperwork_surge": "Paperwork Surge",
+    "manifest_check": "Manifest Check",
+    "dispatch_surge": "Dispatch Surge",
+    "day_labor_call": "Crew Call",
+    "clinic_outreach": "Clinic Outreach",
+    "mutual_aid_table": "Mutual Aid Table",
+    "loading_push": "Loading Push",
+}
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
     building_id_from_structure as _building_id_from_structure,
@@ -415,6 +428,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("npc_warn_property", self.on_npc_warn_property)
         self.sim.events.subscribe("npc_protect_ally", self.on_npc_protect_ally)
         self.sim.events.subscribe("npc_defend_property", self.on_npc_defend_property)
+        self.sim.events.subscribe("npc_crime_attempt_started", self.on_npc_crime_attempt_started)
+        self.sim.events.subscribe("npc_crime_attempt_resolved", self.on_npc_crime_attempt_resolved)
+        self.sim.events.subscribe("npc_affiliation_attempt_resolved", self.on_npc_affiliation_attempt_resolved)
         self.sim.events.subscribe("npc_need_critical", self.on_npc_need_critical)
         self.sim.events.subscribe("action_offense", self.on_action_offense)
         self.sim.events.subscribe("npc_offended", self.on_npc_offended)
@@ -425,6 +441,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("item_used", self.on_item_used)
         self.sim.events.subscribe("item_use_blocked", self.on_item_use_blocked)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
+        self.sim.events.subscribe("business_scene_posture_started", self.on_business_scene_posture_started)
         self.sim.events.subscribe("business_scene_nuisance", self.on_business_scene_nuisance)
         self.sim.events.subscribe("camera_scrutiny", self.on_camera_scrutiny)
         self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
@@ -529,7 +546,11 @@ class EventLogSystem(System):
         self.sim.events.subscribe("justice_record_changed", self.on_justice_record_changed)
         self.sim.events.subscribe("justice_wanted_tier_changed", self.on_justice_wanted_tier_changed)
         self.sim.events.subscribe("actor_detained", self.on_actor_detained)
+        self.sim.events.subscribe("justice_inventory_inspected", self.on_justice_inventory_inspected)
+        self.sim.events.subscribe("justice_questioning_resolved", self.on_justice_questioning_resolved)
         self.sim.events.subscribe("justice_booking_completed", self.on_justice_booking_completed)
+        self.sim.events.subscribe("organization_vigilante_response", self.on_organization_vigilante_response)
+        self.sim.events.subscribe("incident_dispatch_started", self.on_incident_dispatch_started)
         self.sim.events.subscribe("organization_heat_tier_changed", self.on_organization_heat_tier_changed)
         self.sim.events.subscribe("organization_standing_tier_changed", self.on_organization_standing_tier_changed)
         self.sim.events.subscribe("skill_rating_changed", self.on_skill_rating_changed)
@@ -1061,6 +1082,22 @@ class EventLogSystem(System):
         if int(player_pos.z) != int(z):
             return False
         return _manhattan(int(player_pos.x), int(player_pos.y), int(x), int(y)) <= int(max(1, radius))
+
+    def _player_is_near_property(self, prop, radius=10):
+        if not isinstance(prop, dict):
+            return False
+        player_pos = self._player_position()
+        if not player_pos:
+            return False
+        try:
+            px = int(prop.get("x", 0))
+            py = int(prop.get("y", 0))
+            pz = int(prop.get("z", 0))
+        except (TypeError, ValueError):
+            return False
+        if int(player_pos.z) != pz:
+            return False
+        return _manhattan(int(player_pos.x), int(player_pos.y), px, py) <= int(max(1, radius))
 
     def _weapon_log_profile(self, weapon_id, projectile_count=1):
         weapon = weapon_by_id(weapon_id)
@@ -2711,6 +2748,77 @@ class EventLogSystem(System):
             npc_name = self._npc_label(npc_eid)
             self._log_npc_message(npc_eid, f"{npc_name} critical {need} ({value:.1f}).")
 
+    def on_npc_crime_attempt_started(self, event):
+        npc_eid = event.data.get("npc_eid")
+        if npc_eid in {None, self.player_eid}:
+            return
+        if not (self._player_can_perceive_entity(npc_eid) or self._player_can_perceive_event_position(event)):
+            return
+        intent = str(event.data.get("intent", "") or "").strip().lower()
+        summary = str(event.data.get("summary", "") or "").strip()
+        npc_name = self._npc_label(npc_eid)
+        if intent == "rendezvousing_crew":
+            text = f"{npc_name} looks like they're linking up for a crew move."
+        elif intent == "seeking_criminal_affiliation":
+            text = f"{npc_name} looks like they're trying to find a crew."
+        elif intent == "casing_target":
+            text = f"{npc_name} is casing the block."
+        elif intent == "committing_property_crime":
+            text = f"{npc_name} looks like they're moving on a soft target."
+        else:
+            text = summary or f"{npc_name} is moving with criminal purpose."
+        self._log(
+            text,
+            channel="alerts",
+            priority="high",
+            dedupe_window=8,
+            dedupe_key=f"npc_crime_start:{npc_eid}:{intent}:{str(event.data.get('plan_key', '') or '')}",
+        )
+
+    def on_npc_crime_attempt_resolved(self, event):
+        npc_eid = event.data.get("npc_eid")
+        if npc_eid in {None, self.player_eid}:
+            return
+        if not (self._player_can_perceive_entity(npc_eid) or self._player_can_perceive_event_position(event)):
+            return
+        success = bool(event.data.get("success"))
+        reason = str(event.data.get("reason", "") or "").strip().replace("_", " ")
+        npc_name = self._npc_label(npc_eid)
+        if success:
+            text = f"{npc_name} slips something and starts clearing out."
+        else:
+            text = f"{npc_name} loses their nerve around the target."
+            if reason and reason not in {"cased target", "no loot"}:
+                text = f"{npc_name}'s move falls apart: {reason}."
+        self._log(
+            text,
+            channel="alerts",
+            priority="high" if success else "normal",
+            dedupe_window=8,
+            dedupe_key=f"npc_crime_resolved:{npc_eid}:{str(event.data.get('plan_key', '') or '')}:{int(success)}",
+        )
+
+    def on_npc_affiliation_attempt_resolved(self, event):
+        npc_eid = event.data.get("npc_eid")
+        if npc_eid in {None, self.player_eid}:
+            return
+        if not self._player_can_perceive_entity(npc_eid):
+            return
+        accepted = bool(event.data.get("accepted"))
+        org_name = str(event.data.get("organization_name", "") or "").strip() or "the crew"
+        npc_name = self._npc_label(npc_eid)
+        if accepted:
+            text = f"{npc_name} looks like they just got folded into {org_name}."
+        else:
+            text = f"{npc_name} gets brushed off trying to make a crew connection."
+        self._log(
+            text,
+            channel="alerts",
+            priority="normal",
+            dedupe_window=10,
+            dedupe_key=f"npc_affiliation:{npc_eid}:{org_name}:{int(accepted)}",
+        )
+
     def on_property_trespass(self, event):
         if event.data.get("offender_eid") != self.player_eid:
             return
@@ -3193,6 +3301,31 @@ class EventLogSystem(System):
         self._warn_once(
             "theft",
             "Warning: theft is a threatening action and can trigger pursuit, intervention, or violence.",
+        )
+
+    def on_business_scene_posture_started(self, event):
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        prop = self.sim.properties.get(property_id) if property_id else None
+        if isinstance(prop, dict):
+            if not (self._player_is_near_property(prop, radius=12) or self._player_can_perceive_event_position(event)):
+                return
+            prop_label = str(prop.get("name", property_id)).strip() or property_id
+        else:
+            if not self._player_can_perceive_event_position(event):
+                return
+            prop_label = str(event.data.get("property_name", property_id or "the site")).strip() or "the site"
+
+        phase = str(event.data.get("event_phase", "") or "").strip().lower()
+        label = _BUSINESS_POSTURE_PHASE_LABELS.get(phase)
+        if not label:
+            return
+        scene_id = str(event.data.get("scene_id", "") or "").strip()
+        self._log(
+            f"{label} at {prop_label}.",
+            channel="mission",
+            priority="normal",
+            dedupe_window=20,
+            dedupe_key=f"business-posture:{scene_id or property_id}:{phase}",
         )
 
     def on_business_scene_nuisance(self, event):
@@ -5383,7 +5516,10 @@ class EventLogSystem(System):
         restricted_count = int(event.data.get("restricted_item_count", 0) or 0)
         contraband_count = int(event.data.get("contraband_item_count", 0) or 0)
         stolen_count = int(event.data.get("stolen_item_count", 0) or 0)
+        evidence_surcharge = int(event.data.get("evidence_surcharge", 0) or 0)
         weapon_count = int(event.data.get("weapon_item_count", 0) or 0)
+        match_labels = [str(label).strip() for label in list(event.data.get("incident_match_labels", ()) or ()) if str(label).strip()]
+        posture_label = str(event.data.get("protective_posture_label", "") or "").strip()
         labels = [str(label).strip() for label in list(event.data.get("confiscated_labels", ()) or ()) if str(label).strip()]
         held_labels = [str(label).strip() for label in list(event.data.get("held_labels", ()) or ()) if str(label).strip()]
         forfeited_labels = [str(label).strip() for label in list(event.data.get("forfeited_labels", ()) or ()) if str(label).strip()]
@@ -5418,6 +5554,8 @@ class EventLogSystem(System):
                 summary += f" Fine converted to {debt_added}c debt."
             else:
                 summary += f" Fine assessed: {fine_due}c."
+        if evidence_surcharge > 0:
+            summary += f" Evidence surcharge {evidence_surcharge}c."
         if restitution_due > 0:
             site_word = "site" if restitution_property_count == 1 else "sites"
             summary += f" Restitution {restitution_due}c across {restitution_property_count} damaged {site_word}."
@@ -5451,12 +5589,118 @@ class EventLogSystem(System):
             if forfeited_labels:
                 summary += f" ({', '.join(forfeited_labels[:3])})"
             summary += "."
+        if match_labels:
+            summary += f" Strongest evidence: {match_labels[0]}."
+        if posture_label:
+            summary += f" {posture_label} shaped the local posture."
         self._log(
             summary,
             channel="mission",
             priority="high",
             dedupe_window=12,
             dedupe_key=f"justice-booking:{str(event.data.get('property_id', property_name)).strip().lower()}:{after_tier}:{after_score}",
+        )
+
+    def on_justice_inventory_inspected(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        severe = int(event.data.get("incident_evidence_count", 0) or 0)
+        stolen = int(event.data.get("reported_stolen_count", 0) or 0)
+        contraband = int(event.data.get("contraband_count", 0) or 0)
+        latent = int(event.data.get("latent_claim_count", 0) or 0)
+        match_labels = [str(label).strip() for label in list(event.data.get("incident_match_labels", ()) or ()) if str(label).strip()]
+        if severe > 0:
+            text = f"Justice search ties your gear to a reported violent incident ({severe})."
+            if match_labels:
+                text += f" Strongest read: {match_labels[0]}."
+        elif stolen > 0:
+            text = f"Justice search matches {stolen} carried item(s) to reported theft."
+            if match_labels:
+                text += f" Strongest read: {match_labels[0]}."
+        elif contraband > 0:
+            text = f"Justice search turns up {contraband} contraband item(s)."
+        elif latent > 0:
+            text = f"Justice search flags {latent} suspicious item(s) with no reported match yet."
+        else:
+            text = "Justice search turns up nothing actionable."
+        self._log(text, channel="mission", priority="high", dedupe_window=8, dedupe_key="justice-inspection")
+
+    def on_justice_questioning_resolved(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        outcome = str(event.data.get("outcome", "") or "").strip().lower()
+        evidence_surcharge = int(event.data.get("evidence_surcharge", 0) or 0)
+        match_labels = [str(label).strip() for label in list(event.data.get("incident_match_labels", ()) or ()) if str(label).strip()]
+        posture_label = str(event.data.get("protective_posture_label", "") or "").strip()
+        if outcome == "custody_escalation":
+            text = "Questioning breaks down and justice escalates to custody."
+        elif outcome == "release_keep_items":
+            text = "Questioning ends with a warning and low-severity contraband overlooked."
+        elif outcome == "citation_confiscation":
+            text = "Questioning ends in a citation and confiscation."
+        elif outcome == "fine_confiscation":
+            text = "Questioning ends in a fine and confiscation."
+        elif outcome == "full_booking":
+            text = "Questioning turns into full booking."
+        else:
+            text = "Questioning ends with a warning and release."
+        if match_labels:
+            text += f" Match: {match_labels[0]}."
+        if evidence_surcharge > 0:
+            text += f" Evidence surcharge {evidence_surcharge}c."
+        if posture_label:
+            text += f" {posture_label} stays in effect."
+        self._log(text, channel="mission", priority="high", dedupe_window=8, dedupe_key=f"justice-questioning:{outcome}")
+
+    def on_organization_vigilante_response(self, event):
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        prop = self.sim.properties.get(property_id) if property_id else None
+        if not isinstance(prop, dict):
+            return
+        if not (self._player_is_near_property(prop, radius=12) or self._player_can_perceive_event_position(event)):
+            return
+        snapshot = local_protective_pressure_snapshot(self.sim, prop)
+        label = str(snapshot.get("state_label", "") or "").strip() or "Residents on Alert"
+        summary = str(snapshot.get("summary", "") or "").strip()
+        text = f"{label} at {str(prop.get('name', property_id)).strip() or property_id}."
+        if summary:
+            text += f" {summary}."
+        self._log(
+            text,
+            channel="mission",
+            priority="high",
+            dedupe_window=14,
+            dedupe_key=f"protective-response:{property_id}:{label.lower()}",
+        )
+
+    def on_incident_dispatch_started(self, event):
+        try:
+            from game.incident_runtime import incident_record
+            incident = incident_record(self.sim, event.data.get("incident_id"))
+        except Exception:
+            incident = None
+        if not isinstance(incident, dict):
+            return
+        property_id = str(incident.get("property_id", "") or "").strip()
+        prop = self.sim.properties.get(property_id) if property_id else None
+        if not isinstance(prop, dict):
+            return
+        if not (self._player_is_near_property(prop, radius=14) or self._player_is_near_event_position(event, radius=12)):
+            return
+        snapshot = local_protective_pressure_snapshot(self.sim, prop)
+        label = str(snapshot.get("state_label", "") or "").strip()
+        if label not in {"Justice Sweep", "Checkpoint Questioning"}:
+            return
+        summary = str(snapshot.get("summary", "") or "").strip()
+        text = f"{label} at {str(prop.get('name', property_id)).strip() or property_id}."
+        if summary:
+            text += f" {summary}."
+        self._log(
+            text,
+            channel="mission",
+            priority="high",
+            dedupe_window=14,
+            dedupe_key=f"protective-dispatch:{property_id}:{label.lower()}",
         )
 
     def on_organization_heat_tier_changed(self, event):

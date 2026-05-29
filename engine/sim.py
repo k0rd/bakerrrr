@@ -351,6 +351,9 @@ class Simulation:
             state["auto_managed"] = bool(auto_managed)
 
         self.door_states[key] = state
+        tile = self.tilemap.tile_at(x, y, z)
+        if tile is not None:
+            self.apply_door_state(x, y, z)
         return state
 
     def apply_door_state(self, x, y, z=0):
@@ -369,7 +372,7 @@ class Simulation:
         tile.set_appearance(
             glyph="'" if is_open else "+",
             color="feature_door",
-            semantic_id=None,
+            semantic_id="feature_door",
         )
         return True
 

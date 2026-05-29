@@ -6,6 +6,8 @@ from engine.underground import UNDERGROUND_ACCESS_SERVICE
 from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, PropertyKnowledge, StatusEffects, VehicleState, Vitality
 from game.items import ITEM_CATALOG, item_display_name
 from game.opportunities import append_external_opportunity
+from game.organization_response import property_vigilante_denial
+from game.organizations import effective_org_access_posture, property_service_practice_bundle
 from game.player_businesses import player_business_apply_remodel as _player_business_apply_remodel
 from game.player_businesses import player_business_remodel_quote as _player_business_remodel_quote
 from game.property_access import evaluate_property_access as _evaluate_property_access
@@ -55,6 +57,36 @@ from game.system_support.building_repair_runtime import (
 )
 from game.system_support.player_feedback import _log_player_feedback
 from game.vehicles import vehicle_metadata
+
+
+def _merge_practice_bundle(bundle, *, extra_modifiers=None, extra_note=""):
+    bundle = dict(bundle or {})
+    merged = dict(bundle.get("effect_modifiers", {}))
+    for raw_key, raw_value in dict(extra_modifiers or {}).items():
+        key = str(raw_key or "").strip().lower().replace(" ", "_")
+        if not key:
+            continue
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if key.endswith("_mult") or key.endswith("_scalar"):
+            current = float(merged.get(key, 1.0))
+            merged[key] = current * max(0.0, value)
+        else:
+            current = float(merged.get(key, 0.0))
+            merged[key] = current + value
+    notes = []
+    for value in (bundle.get("note_text", ""), extra_note):
+        text = str(value or "").strip()
+        if text and text.lower() not in {note.lower() for note in notes}:
+            notes.append(text)
+    return {
+        **bundle,
+        "effect_modifiers": merged,
+        "note_text": "; ".join(notes),
+        "notes": tuple(notes),
+    }
 
 
 def _fixture_is_electronic(prop):
@@ -176,6 +208,76 @@ class SiteServiceSystem(System):
 
     def _next_service_roll_index(self, eid, prop, service):
         return _site_service_roll_index(self.sim, eid, prop, service)
+
+    def _service_practice_bundle(self, eid, prop, service):
+        bundle = property_service_practice_bundle(
+            self.sim,
+            prop,
+            service,
+            current_tick=getattr(self.sim, "tick", 0),
+        )
+        posture = effective_org_access_posture(
+            self.sim,
+            eid,
+            prop,
+            current_tick=getattr(self.sim, "tick", 0),
+        )
+        softness = float(posture.get("service_softness_bonus", 0.0) or 0.0)
+        if softness <= 0.0:
+            return bundle
+        extra_modifiers = {
+            "service_cost_mult": max(0.88, 1.0 - (softness * 0.28)),
+            "service_cooldown_mult": max(0.9, 1.0 - (softness * 0.22)),
+        }
+        return _merge_practice_bundle(
+            bundle,
+            extra_modifiers=extra_modifiers,
+            extra_note=str(posture.get("note_text", "") or "").strip(),
+        )
+
+    def _service_time_mult(self, modifiers):
+        modifiers = modifiers if isinstance(modifiers, dict) else {}
+        explicit = modifiers.get("service_time_mult")
+        if explicit is not None:
+            try:
+                return max(0.4, min(2.5, float(explicit)))
+            except (TypeError, ValueError):
+                return 1.0
+        try:
+            speed = float(modifiers.get("service_speed_mult", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            speed = 1.0
+        if speed <= 0.0:
+            return 1.0
+        return max(0.4, min(2.5, 1.0 / speed))
+
+    def _service_quality_mult(self, modifiers):
+        modifiers = modifiers if isinstance(modifiers, dict) else {}
+        try:
+            quality_mult = float(modifiers.get("service_quality_mult", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            quality_mult = 1.0
+        try:
+            quality_delta = float(modifiers.get("quality_delta", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            quality_delta = 0.0
+        return max(0.5, min(1.8, quality_mult + quality_delta))
+
+    def _service_cost_mult(self, modifiers):
+        modifiers = modifiers if isinstance(modifiers, dict) else {}
+        try:
+            value = float(modifiers.get("service_cost_mult", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            value = 1.0
+        return max(0.5, min(2.0, value))
+
+    def _service_cooldown_mult(self, modifiers):
+        modifiers = modifiers if isinstance(modifiers, dict) else {}
+        try:
+            value = float(modifiers.get("service_cooldown_mult", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            value = 1.0
+        return max(0.5, min(2.5, value))
 
     def _position_for(self, eid):
         return self.sim.ecs.get(Position).get(eid)
@@ -742,9 +844,13 @@ class SiteServiceSystem(System):
 
         power = max(1, min(10, _int_or_default(profile.get("power"), 5)))
         base_unit_price = max(8, int(self.REPAIR_POINT_PRICE) + max(0, int(power) - 4))
+        practice = self._service_practice_bundle(eid, prop, "repair")
+        practice_modifiers = dict(practice.get("effect_modifiers", {}))
         skill_terms = _mobility_service_skill_terms(self.sim, eid)
-        unit_price = max(1, int(round(float(base_unit_price) * float(skill_terms.get("price_mult", 1.0)))))
+        price_mult = float(skill_terms.get("price_mult", 1.0)) * self._service_cost_mult(practice_modifiers)
+        unit_price = max(1, int(round(float(base_unit_price) * price_mult)))
         skill_note = str(skill_terms.get("note", "") or "").strip() if unit_price < base_unit_price else ""
+        practice_note = str(practice.get("note_text", "") or "").strip()
         assets = self._assets_for(eid)
         credits = int(getattr(assets, "credits", 0)) if assets else 0
         affordable = min(missing, credits // unit_price if unit_price > 0 else 0)
@@ -769,7 +875,8 @@ class SiteServiceSystem(System):
             assets.credits = max(0, int(assets.credits) - credits_spent)
 
         metadata = _property_metadata(vehicle_prop)
-        metadata["durability"] = int(min(max_durability, durability + affordable))
+        durability_gain = max(1, int(round(float(affordable) * self._service_quality_mult(practice_modifiers))))
+        metadata["durability"] = int(min(max_durability, durability + durability_gain))
         metadata["vehicle_usable"] = True
         new_durability = max(1, min(max_durability, _int_or_default(metadata.get("durability"), durability)))
         self.sim.emit(Event(
@@ -778,7 +885,7 @@ class SiteServiceSystem(System):
             property_id=prop["id"],
             property_name=prop.get("name", prop["id"]),
             service="repair",
-            durability_gain=int(affordable),
+            durability_gain=int(durability_gain),
             durability_before=int(durability),
             durability=int(new_durability),
             durability_max=int(max_durability),
@@ -789,6 +896,7 @@ class SiteServiceSystem(System):
             vehicle_id=vehicle_prop.get("id"),
             vehicle_name=_vehicle_label(vehicle_prop),
             skill_note=skill_note,
+            practice_note=practice_note,
         ))
 
     def _owned_building_target(self, eid, target_property_id):
@@ -830,7 +938,9 @@ class SiteServiceSystem(System):
             ))
             return
 
-        quoted_cost = int(summary.get("cost", 0) or 0)
+        practice = self._service_practice_bundle(eid, prop, "building_repair")
+        practice_modifiers = dict(practice.get("effect_modifiers", {}))
+        quoted_cost = int(round(int(summary.get("cost", 0) or 0) * self._service_cost_mult(practice_modifiers)))
         credits = self._liquid_credits_for(eid)
         if credits < quoted_cost:
             self.sim.emit(Event(
@@ -881,6 +991,7 @@ class SiteServiceSystem(System):
             wall_count=int(repaired.get("wall_count", 0) or 0),
             credits_spent=int(quoted_cost),
             credits_after=int(credits_after),
+            practice_note=str(practice.get("note_text", "") or "").strip(),
         ))
 
     def _apply_business_remodel_service(self, eid, prop, request=None):
@@ -1488,9 +1599,13 @@ class SiteServiceSystem(System):
             ))
             return
 
+        practice = self._service_practice_bundle(eid, prop, "rest")
+        practice_modifiers = dict(practice.get("effect_modifiers", {}))
+        practice_note = str(practice.get("note_text", "") or "").strip()
+        rest_cost = max(1, int(round(float(self.REST_COST) * self._service_cost_mult(practice_modifiers))))
         assets = self._assets_for(eid)
         credits = int(getattr(assets, "credits", 0)) if assets else 0
-        if credits < self.REST_COST:
+        if credits < rest_cost:
             self.sim.emit(Event(
                 "site_service_blocked",
                 eid=eid,
@@ -1498,7 +1613,7 @@ class SiteServiceSystem(System):
                 property_name=prop.get("name", prop["id"]),
                 service="rest",
                 reason="no_credits",
-                cost=self.REST_COST,
+                cost=rest_cost,
                 credits=credits,
             ))
             return
@@ -1506,22 +1621,24 @@ class SiteServiceSystem(System):
         needs = self.sim.ecs.get(NPCNeeds).get(eid)
         vitality = self.sim.ecs.get(Vitality).get(eid)
         energy_gain = safety_gain = social_gain = hp_gain = 0
+        quality_mult = self._service_quality_mult(practice_modifiers)
 
         if needs:
-            energy_gain = min(40, max(10, int(round((100.0 - float(needs.energy)) * 0.7))))
-            safety_gain = min(30, max(8, int(round((100.0 - float(needs.safety)) * 0.55))))
-            social_gain = min(12, max(3, int(round((75.0 - float(needs.social)) * 0.25))))
+            energy_gain = min(60, max(10, int(round(((100.0 - float(needs.energy)) * 0.7) * quality_mult))))
+            safety_gain = min(45, max(8, int(round(((100.0 - float(needs.safety)) * 0.55) * quality_mult))))
+            social_gain = min(18, max(3, int(round(((75.0 - float(needs.social)) * 0.25) * quality_mult))))
 
         if vitality:
             missing_hp = max(0, int(vitality.max_hp) - int(vitality.hp))
-            hp_gain = min(missing_hp, max(5, int(round(missing_hp * 0.6))))
+            hp_gain = min(missing_hp, max(5, int(round((missing_hp * 0.6) * quality_mult))))
 
         effects = self.sim.ecs.get(StatusEffects).get(eid)
         if assets:
-            assets.credits = max(0, int(assets.credits) - int(self.REST_COST))
+            assets.credits = max(0, int(assets.credits) - int(rest_cost))
 
-        self._set_service_cooldown(eid, prop, "rest", self.REST_COOLDOWN_TICKS)
-        stay_ticks = self._hours_to_ticks(self.REST_STAY_HOURS)
+        cooldown_ticks = max(1, int(round(float(self.REST_COOLDOWN_TICKS) * self._service_cooldown_mult(practice_modifiers))))
+        self._set_service_cooldown(eid, prop, "rest", cooldown_ticks)
+        stay_ticks = max(1, int(round(float(self._hours_to_ticks(self.REST_STAY_HOURS)) * self._service_time_mult(practice_modifiers))))
         advanced_ticks = self._advance_time_for_service(eid, prop, "rest", stay_ticks)
 
         if needs:
@@ -1551,10 +1668,11 @@ class SiteServiceSystem(System):
             safety_gain=safety_gain,
             social_gain=social_gain,
             hp_gain=hp_gain,
-            credits_spent=self.REST_COST,
+            credits_spent=rest_cost,
             well_rested_ticks=self.REST_WELL_RESTED_TICKS,
-            cooldown_ticks=self.REST_COOLDOWN_TICKS,
+            cooldown_ticks=cooldown_ticks,
             time_advanced_ticks=advanced_ticks,
+            practice_note=practice_note,
         ))
 
     def _transit_destinations(self, prop, service):
@@ -2360,6 +2478,8 @@ class SiteServiceSystem(System):
             z=pos.z,
         )
         if not access.can_use_services:
+            if access.organization_denied_service or access.organization_denied_entry:
+                return
             return
 
         service = self._choose_site_service(eid, prop)
@@ -2396,6 +2516,20 @@ class SiteServiceSystem(System):
             z=pos.z,
         )
         if not access.can_use_services:
+            if access.organization_denied_service or access.organization_denied_entry:
+                denial = property_vigilante_denial(self.sim, prop, viewer_eid=eid)
+                self.sim.emit(Event(
+                    "site_service_blocked",
+                    eid=eid,
+                    property_id=prop["id"],
+                    property_name=prop.get("name", prop["id"]),
+                    service=service,
+                    reason="organization_denial",
+                    organization_key=(denial or {}).get("root_organization_key") or (denial or {}).get("organization_key"),
+                    organization_name=(denial or {}).get("root_organization_name") or (denial or {}).get("organization_name"),
+                    denial_reason=(denial or {}).get("reason") or access.organization_note,
+                ))
+                return
             self.sim.emit(Event(
                 "site_service_blocked",
                 eid=eid,
@@ -2403,6 +2537,21 @@ class SiteServiceSystem(System):
                 property_name=prop.get("name", prop["id"]),
                 service=service,
                 reason="unavailable",
+            ))
+            return
+
+        denial = property_vigilante_denial(self.sim, prop, viewer_eid=eid)
+        if denial is not None:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                reason="organization_denial",
+                organization_key=denial.get("root_organization_key") or denial.get("organization_key"),
+                organization_name=denial.get("root_organization_name") or denial.get("organization_name"),
+                denial_reason=denial.get("reason"),
             ))
             return
 

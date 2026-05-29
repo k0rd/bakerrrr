@@ -84,6 +84,9 @@ from game.vehicles import (
 )
 from game.opportunities import evaluate_opportunity_board, seed_run_opportunities
 from game.organization_reputation import OrganizationReputationSystem
+from game.organization_response import OrganizationResponseSystem
+from game.organization_practice_evolution import OrganizationPracticeEvolutionSystem
+from game.criminal_drive_system import CriminalDriveSystem
 from game.perception_systems import (
     CombatPacingSystem,
     CoverSystem,
@@ -310,6 +313,7 @@ def _register_runtime_systems(sim, view, player):
     npc_social_system = NPCSocialDynamicsSystem(sim)
     eavesdrop_system = EavesdropSystem(sim, player)
     door_wait_system = DoorWaitSystem(sim)
+    criminal_drive_system = CriminalDriveSystem(sim)
     npc_will_system = NPCWillSystem(sim)
     business_pulse_aftermath_system = BusinessPulseAftermathSystem(sim)
     business_pulse_scene_system = BusinessPulseSceneSystem(sim, player)
@@ -324,7 +328,9 @@ def _register_runtime_systems(sim, view, player):
     rival_operator_system = RivalOperatorSystem(sim, player)
     objective_progress_system = ObjectiveProgressSystem(sim, player)
     run_pressure_system = RunPressureSystem(sim, player)
+    organization_practice_evolution_system = OrganizationPracticeEvolutionSystem(sim)
     organization_reputation_system = OrganizationReputationSystem(sim, player)
+    organization_response_system = OrganizationResponseSystem(sim, player)
     final_operation_system = FinalOperationSystem(sim, player)
     run_epilogue_system = RunEpilogueLedgerSystem(sim, player)
 
@@ -373,6 +379,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(world_events_system)
     suppression_system = SuppressionSystem(sim, player)
     sim.register_system(door_wait_system)
+    sim.register_system(criminal_drive_system)
     sim.register_system(npc_will_system)
     sim.register_system(business_pulse_scene_system)
     sim.register_system(npc_weapon_system)
@@ -384,7 +391,9 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(rival_operator_system)
     sim.register_system(objective_progress_system)
     sim.register_system(run_pressure_system)
+    sim.register_system(organization_practice_evolution_system)
     sim.register_system(organization_reputation_system)
+    sim.register_system(organization_response_system)
     sim.register_system(final_operation_system)
     sim.register_system(run_epilogue_system)
     sim.register_system(visibility_system)

@@ -11,7 +11,7 @@ from .events import EventBus
 from .sim import Simulation
 from game.appearance import AppearanceManager
 from game.components import Position
-from game.organizations import rebuild_organization_index
+from game.organizations import rebuild_organization_index, refresh_loaded_organization_branch_briefings
 
 
 def _inventory_item_instance_ids_from_sim(sim):
@@ -475,6 +475,11 @@ def restore_chunk_state(sim, key):
     sim.property_registry_dirty = True
     if hasattr(sim, "rebuild_spatial_indexes"):
         sim.rebuild_spatial_indexes()
+    refresh_loaded_organization_branch_briefings(
+        sim,
+        property_ids=tuple(snapshot.get("properties", {}).keys()),
+        reason="chunk_restore",
+    )
     return True
 
 
@@ -550,6 +555,11 @@ def restore_simulation(snapshot):
         }
     if hasattr(sim, "rebuild_spatial_indexes"):
         sim.rebuild_spatial_indexes()
+    refresh_loaded_organization_branch_briefings(
+        sim,
+        property_ids=tuple(getattr(sim, "properties", {}).keys()),
+        reason="save_restore",
+    )
     return sim
 
 

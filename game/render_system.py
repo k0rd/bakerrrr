@@ -2663,6 +2663,8 @@ class RenderSystem(System):
                 action_tail = "Space close | Esc close | O ops | Y locations | L log | D debug | ? help"
             elif dialog_kind == "justice_surrender":
                 action_tail = "E choose | Esc resist | ? help"
+            elif dialog_kind == "justice_questioning":
+                action_tail = "E choose | Esc refuse | ? help"
             elif dialog_kind == "service_menu":
                 has_machine_action = isinstance(dialog_ui.get("machine_action"), dict) and bool(dialog_ui.get("machine_action"))
                 action_tail = "E select | Esc close | M machine | O ops | Y locations | ? help" if has_machine_action else "E select | Esc close | O ops | Y locations | ? help"
@@ -2678,6 +2680,8 @@ class RenderSystem(System):
                     footer = action_tail
                 elif dialog_kind == "justice_surrender":
                     footer = action_tail
+                elif dialog_kind == "justice_questioning":
+                    footer = "E choose | Esc refuse | ? help"
                 elif dialog_kind == "service_menu":
                     footer = f"{action_tail} | L log | D debug"
                 else:

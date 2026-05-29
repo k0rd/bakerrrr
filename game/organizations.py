@@ -1,12 +1,18 @@
 import random
 
 from game.components import (
+    OrganizationCrimePlans,
     Occupation,
+    OrganizationPracticeProgress,
     OrganizationAffiliations,
     OrganizationPractices,
     OrganizationProfile,
     OrganizationVocabulary,
+    OrganizationWatchlists,
+    Position,
 )
+from game.incident_runtime import incident_records
+from game.items import ITEM_CATALOG, ITEM_QUALITY_TIERS, item_condition_profile, normalize_item_quality
 from game.org_names import generate_organization_name
 
 
@@ -91,6 +97,58 @@ RELATION_KINDS = {
     "certifies",
     "affiliates_with",
 }
+PROTECTIVE_EFFECT_KEYS = {
+    "watchfulness_bonus",
+    "watch_priority_bonus",
+    "response_followthrough_bonus",
+    "report_conversion_bonus",
+    "dispatch_bonus",
+    "response_readiness_tier",
+    "response_score_bonus",
+    "confrontation_posture_bonus",
+}
+WORKPLACE_EFFECT_KEYS = {
+    "screening_bias",
+    "paperwork_bias",
+    "manifest_bias",
+    "dispatch_bias",
+    "handoff_bias",
+    "craft_bias",
+    "crew_bias",
+    "support_bias",
+    "aid_bias",
+    "loading_bias",
+    "service_softness_bonus",
+    "staffing_relief_bonus",
+    "service_quality_mult",
+    "service_time_mult",
+    "service_cooldown_mult",
+    "service_cost_mult",
+    "trade_stock_mult",
+    "trade_buy_price_mult",
+    "trade_sell_ratio_mult",
+    "quality_delta",
+    "item_quality_shift",
+    "item_effect_scalar",
+    "item_status_duration_scalar",
+}
+COLLECTIVE_ORG_FAMILIES = {"labor_union", "trade_guild"}
+WORKPLACE_CORPORATE_PHASES = (
+    "owner_screening",
+    "paperwork_surge",
+    "manifest_check",
+    "dispatch_surge",
+    "shift_handoff",
+)
+WORKPLACE_COLLECTIVE_PHASES = (
+    "day_labor_call",
+    "clinic_outreach",
+    "mutual_aid_table",
+    "loading_push",
+    "shift_handoff",
+)
+PROTECTIVE_PRESSURE_RECENT_TICKS = 480
+PROTECTIVE_PRESSURE_RESPONSE_TICKS = 240
 DIRECTED_RELATION_KINDS = {"oversight", "service", "represents", "bargains_with", "certifies"}
 RECIPROCAL_RELATION_KINDS = {"ally", "rival", "affiliates_with"}
 PRIMARY_MEMBERSHIP_KINDS = ("ownership", "employment")
@@ -114,6 +172,27 @@ ORGANIZATION_PRACTICE_KINDS = {
     "skill_method",
     "operational_pattern",
     "field_discovery",
+}
+ORGANIZATION_REALIZATION_KINDS = {
+    "trade_purchase",
+    "item_use",
+    "service_outcome",
+}
+ORGANIZATION_WATCH_ACTIONS = {"watch", "deny_service", "deny_entry"}
+ORGANIZATION_CRIME_PLAN_KINDS = {
+    "petty_theft",
+    "burglary",
+    "covert_sale",
+    "fence_run",
+}
+ORGANIZATION_CRIME_PLAN_STAGES = {
+    "forming",
+    "rendezvous",
+    "executing",
+    "disposing",
+    "cooldown",
+    "cancelled",
+    "resolved",
 }
 ORGANIZATION_VOCABULARY_SCOPE_ALIASES = {
     "site": "property",
@@ -319,6 +398,13 @@ def _safe_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def _property_metadata(prop):
@@ -1735,6 +1821,55 @@ def _normalize_target_filters(row):
     }
 
 
+def _normalize_realization_kind_tuple(values):
+    cleaned = []
+    for value in _normalize_text_tuple(values):
+        if value in ORGANIZATION_REALIZATION_KINDS and value not in cleaned:
+            cleaned.append(value)
+    return tuple(cleaned)
+
+
+def _normalize_item_id_tuple(values):
+    return tuple(
+        item_id
+        for item_id in _normalize_text_tuple(values)
+        if item_id in ITEM_CATALOG
+    )
+
+
+def _normalize_item_tag_tuple(values):
+    cleaned = []
+    for value in _normalize_text_tuple(values):
+        if value and value not in cleaned:
+            cleaned.append(value)
+    return tuple(cleaned)
+
+
+def _item_tags_for_id(item_id):
+    item_def = ITEM_CATALOG.get(_text(item_id))
+    if not isinstance(item_def, dict):
+        return ()
+    tags = {
+        _text(tag).lower()
+        for tag in item_def.get("tags", ())
+        if _text(tag)
+    }
+    appearance_family = _text(item_def.get("appearance_family")).lower()
+    if appearance_family:
+        tags.add(appearance_family)
+    identification_profile = item_def.get("identification_profile")
+    if isinstance(identification_profile, dict):
+        family = _text(identification_profile.get("family")).lower()
+        if family:
+            tags.add(family)
+    category = _text(item_def.get("category")).lower()
+    if category:
+        tags.add(category)
+    if item_def.get("legal_status") == "illegal" and tags.intersection({"stimulant", "medical", "injectable"}):
+        tags.add("drug")
+    return tuple(sorted(tags))
+
+
 def _normalize_vocabulary_row(row, organization_eid=None, entry_id=None):
     row = dict(row or {})
     raw_entry_id = _safe_int(row.get("entry_id"), default=entry_id or 0)
@@ -2084,6 +2219,7 @@ def record_organization_vocabulary(
     component.entries[int(normalized_entry_id)] = normalized
     component.next_entry_id = max(int(component.next_entry_id), int(normalized_entry_id) + 1)
     _trim_organization_vocabulary(component)
+    _hydrate_linked_branch_records_for_organization(sim, organization_eid)
     return dict(normalized)
 
 
@@ -2230,6 +2366,39 @@ def _vocabulary_targets_property(sim, row, prop):
 
 
 def property_org_vocabulary(
+    sim,
+    prop,
+    *,
+    organization_eid=None,
+    active_only=True,
+    vocabulary_kind=None,
+    current_tick=None,
+    include_future=False,
+    include_expired=False,
+    hydrate_branch=True,
+):
+    rows = _collect_property_org_vocabulary(
+        sim,
+        prop,
+        organization_eid=organization_eid,
+        active_only=active_only,
+        vocabulary_kind=vocabulary_kind,
+        current_tick=current_tick,
+        include_future=include_future,
+        include_expired=include_expired,
+    )
+    if hydrate_branch and isinstance(prop, dict):
+        hydrate_property_organization_branches(
+            sim,
+            prop,
+            organization_eid=organization_eid,
+            current_tick=current_tick,
+            active_only=active_only,
+        )
+    return rows
+
+
+def _collect_property_org_vocabulary(
     sim,
     prop,
     *,
@@ -2466,6 +2635,9 @@ def _normalize_practice_row(row, organization_eid=None, entry_id=None):
         "discovery_key": _text(row.get("discovery_key")).lower().replace(" ", "_") or None,
         "service_ids": _normalize_text_tuple(row.get("service_ids")),
         "skill_ids": _normalize_text_tuple(row.get("skill_ids")),
+        "item_ids": _normalize_item_id_tuple(row.get("item_ids")),
+        "item_tags": _normalize_item_tag_tuple(row.get("item_tags")),
+        "realization_kinds": _normalize_realization_kind_tuple(row.get("realization_kinds")),
         "effect_modifiers": dict(effect_modifiers),
         "target_scope": target_scope,
         "target_property_id": target_property_id,
@@ -2608,6 +2780,9 @@ def record_organization_practice(
     discovery_key=None,
     service_ids=None,
     skill_ids=None,
+    item_ids=None,
+    item_tags=None,
+    realization_kinds=None,
     effect_modifiers=None,
     target_scope=None,
     target_property_id=None,
@@ -2673,6 +2848,11 @@ def record_organization_practice(
             "discovery_key": existing.get("discovery_key") if discovery_key is None else discovery_key,
             "service_ids": existing.get("service_ids") if service_ids is None else service_ids,
             "skill_ids": existing.get("skill_ids") if skill_ids is None else skill_ids,
+            "item_ids": existing.get("item_ids") if item_ids is None else item_ids,
+            "item_tags": existing.get("item_tags") if item_tags is None else item_tags,
+            "realization_kinds": existing.get("realization_kinds")
+            if realization_kinds is None
+            else realization_kinds,
             "effect_modifiers": existing.get("effect_modifiers", {}) if effect_modifiers is None else effect_modifiers,
             "target_scope": target_scope,
             "target_property_id": existing.get("target_property_id") if target_property_id is None else target_property_id,
@@ -2717,6 +2897,7 @@ def record_organization_practice(
     component.entries[int(normalized_entry_id)] = normalized
     component.next_entry_id = max(int(component.next_entry_id), int(normalized_entry_id) + 1)
     _trim_organization_practices(component)
+    _hydrate_linked_branch_records_for_organization(sim, organization_eid)
     return dict(normalized)
 
 
@@ -2809,6 +2990,39 @@ def _practice_targets_property(sim, row, prop):
 
 
 def property_org_practices(
+    sim,
+    prop,
+    *,
+    organization_eid=None,
+    active_only=True,
+    practice_kind=None,
+    current_tick=None,
+    include_future=False,
+    include_expired=False,
+    hydrate_branch=True,
+):
+    rows = _collect_property_org_practices(
+        sim,
+        prop,
+        organization_eid=organization_eid,
+        active_only=active_only,
+        practice_kind=practice_kind,
+        current_tick=current_tick,
+        include_future=include_future,
+        include_expired=include_expired,
+    )
+    if hydrate_branch and isinstance(prop, dict):
+        hydrate_property_organization_branches(
+            sim,
+            prop,
+            organization_eid=organization_eid,
+            current_tick=current_tick,
+            active_only=active_only,
+        )
+    return rows
+
+
+def _collect_property_org_practices(
     sim,
     prop,
     *,
@@ -2918,6 +3132,3268 @@ def actor_org_practices(
                 }
             )
     return _sort_practice_rows(rows)
+
+
+def _normalize_watch_action(value, default="watch"):
+    action = _text(value).lower().replace(" ", "_")
+    if action not in ORGANIZATION_WATCH_ACTIONS:
+        action = _text(default).lower().replace(" ", "_")
+    return action if action in ORGANIZATION_WATCH_ACTIONS else "watch"
+
+
+def _normalize_watchlist_row(row, organization_eid=None, entry_id=None):
+    row = dict(row or {})
+    raw_entry_id = _safe_int(row.get("entry_id"), default=entry_id or 0)
+    target_scope = _normalize_vocabulary_scope(row.get("target_scope"), default="organization")
+    target_property_id = _text(row.get("target_property_id")) or None
+    target_building_id = _text(row.get("target_building_id")) or None
+    target_link_kind_text = _text(row.get("target_link_kind"))
+    target_link_kind = (
+        _normalize_link_kind(target_link_kind_text, default="operates")
+        if target_link_kind_text
+        else None
+    )
+    target_roles = _normalize_target_roles(row.get("target_roles"))
+    target_member_eids = _normalize_actor_eid_tuple(row.get("target_member_eids"))
+    target_filters = _normalize_target_filters(row)
+    if target_scope == "property" and target_property_id is None:
+        target_scope = "organization"
+    elif target_scope == "building" and target_building_id is None:
+        target_scope = "organization"
+    elif target_scope == "link_kind" and target_link_kind is None:
+        target_scope = "organization"
+    elif target_scope == "role" and not target_roles:
+        target_scope = "organization"
+    elif target_scope == "member" and not target_member_eids:
+        target_scope = "organization"
+    raw_expires_tick = row.get("expires_tick")
+    expires_tick = (
+        _safe_int(raw_expires_tick, default=0)
+        if raw_expires_tick not in (None, "")
+        else None
+    )
+    return {
+        "organization_eid": _safe_int(row.get("organization_eid"), default=organization_eid) or None,
+        "entry_id": raw_entry_id or None,
+        "entry_key": _text(row.get("entry_key")).lower().replace(" ", "_") or None,
+        "subject_eid": _safe_int(
+            row.get("subject_eid", row.get("subject_actor_eid")),
+            default=0,
+        ) or None,
+        "action": _normalize_watch_action(row.get("action"), default="watch"),
+        "reason": _text(row.get("reason")) or None,
+        "source_kind": _text(row.get("source_kind")).lower().replace(" ", "_") or None,
+        "source_eid": _safe_int(row.get("source_eid"), default=0) or None,
+        "source_incident_id": _safe_int(
+            row.get("source_incident_id", row.get("incident_id")),
+            default=0,
+        ) or None,
+        "target_scope": target_scope,
+        "target_property_id": target_property_id,
+        "target_building_id": target_building_id,
+        "target_link_kind": target_link_kind,
+        "target_roles": target_roles,
+        "target_member_eids": target_member_eids,
+        **target_filters,
+        "tags": _normalize_text_tuple(row.get("tags")),
+        "priority": int(_normalize_priority(row.get("priority"), default=60)),
+        "active": bool(row.get("active", True)),
+        "effective_tick": _safe_int(
+            row.get("effective_tick"),
+            default=_safe_int(row.get("created_tick"), default=0),
+        ),
+        "expires_tick": expires_tick,
+        "created_tick": _safe_int(row.get("created_tick"), default=0),
+        "last_update_tick": _safe_int(
+            row.get("last_update_tick"),
+            default=_safe_int(row.get("created_tick"), default=0),
+        ),
+    }
+
+
+def _sort_watchlist_rows(rows):
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: (
+                0 if bool(row.get("active", True)) else 1,
+                0 if _text(row.get("action")).lower() == "deny_entry" else 1 if _text(row.get("action")).lower() == "deny_service" else 2,
+                -int(row.get("priority", 60)),
+                -int(row.get("last_update_tick", 0)),
+                -int(row.get("created_tick", 0)),
+                -_safe_int(row.get("entry_id"), default=0),
+                _text(row.get("organization_name")).lower(),
+            ),
+        )
+    )
+
+
+def _trim_organization_watchlists(component):
+    if component is None:
+        return None
+    if len(component.entries) <= int(component.max_entries):
+        return component
+    keep_ids = {
+        int(row.get("entry_id"))
+        for row in _sort_watchlist_rows(component.entries.values())[: int(component.max_entries)]
+        if _safe_int(row.get("entry_id"), default=0) > 0
+    }
+    component.entries = {
+        int(stored_entry_id): row
+        for stored_entry_id, row in component.entries.items()
+        if int(stored_entry_id) in keep_ids
+    }
+    return component
+
+
+def _ensure_organization_watchlists_component(sim, organization_eid, *, create=False):
+    if organization_eid is None:
+        return None
+    component = sim.ecs.get(OrganizationWatchlists).get(int(organization_eid))
+    if component is None and create:
+        component = OrganizationWatchlists()
+        sim.ecs.add(int(organization_eid), component)
+    if component is None:
+        return None
+    component.max_entries = max(8, _safe_int(getattr(component, "max_entries", 48), default=48))
+    component.next_entry_id = max(1, _safe_int(getattr(component, "next_entry_id", 1), default=1))
+    raw_entries = getattr(component, "entries", None)
+    if not isinstance(raw_entries, dict):
+        raw_entries = {}
+    entries = {}
+    max_entry_id = 0
+    for stored_entry_id, row in raw_entries.items():
+        normalized = _normalize_watchlist_row(
+            row,
+            organization_eid=organization_eid,
+            entry_id=stored_entry_id,
+        )
+        clean_entry_id = _safe_int(normalized.get("entry_id"), default=0)
+        if clean_entry_id <= 0 or _safe_int(normalized.get("subject_eid"), default=0) <= 0:
+            continue
+        normalized["entry_id"] = int(clean_entry_id)
+        entries[int(clean_entry_id)] = normalized
+        max_entry_id = max(max_entry_id, int(clean_entry_id))
+    component.entries = entries
+    component.next_entry_id = max(int(component.next_entry_id), max_entry_id + 1)
+    _trim_organization_watchlists(component)
+    return component
+
+
+def _find_organization_watchlist_entry_id(component, *, entry_id=None, entry_key=None):
+    if component is None:
+        return None
+    clean_entry_id = _safe_int(entry_id, default=0)
+    if clean_entry_id > 0 and clean_entry_id in component.entries:
+        return int(clean_entry_id)
+    key = _text(entry_key).lower().replace(" ", "_")
+    if not key:
+        return None
+    for stored_entry_id, row in component.entries.items():
+        if _text(row.get("entry_key")).lower().replace(" ", "_") == key:
+            return int(stored_entry_id)
+    return None
+
+
+def _watchlist_row_is_current(
+    row,
+    *,
+    current_tick=0,
+    active_only=True,
+    include_future=False,
+    include_expired=False,
+):
+    if not isinstance(row, dict):
+        return False
+    if active_only and not bool(row.get("active", True)):
+        return False
+    now_tick = _safe_int(current_tick, default=0)
+    if not include_future and now_tick < _safe_int(row.get("effective_tick"), default=0):
+        return False
+    expires_tick = row.get("expires_tick")
+    if not include_expired and expires_tick is not None and now_tick > _safe_int(expires_tick, default=now_tick):
+        return False
+    return True
+
+
+def record_organization_watchlist(
+    sim,
+    *,
+    organization_eid=None,
+    organization_key=None,
+    organization_name="",
+    organization_kind="other",
+    entry_id=None,
+    entry_key=None,
+    subject_eid=None,
+    action="watch",
+    reason=None,
+    source_kind=None,
+    source_eid=None,
+    source_incident_id=None,
+    target_scope=None,
+    target_property_id=None,
+    target_building_id=None,
+    target_link_kind=None,
+    target_roles=None,
+    target_member_eids=None,
+    target_affiliated_org_eids=None,
+    target_affiliated_org_keys=None,
+    target_affiliated_org_kinds=None,
+    target_affiliated_org_tags=None,
+    target_titles=None,
+    target_careers=None,
+    target_service_ids=None,
+    target_field_domains=None,
+    tags=None,
+    priority=None,
+    active=None,
+    effective_tick=None,
+    expires_tick=None,
+    created_tick=None,
+):
+    if _safe_int(subject_eid, default=0) <= 0:
+        return None
+    if organization_eid is None:
+        organization_eid = ensure_organization(
+            sim,
+            organization_key=organization_key,
+            organization_name=organization_name,
+            organization_kind=organization_kind,
+        )
+    profile = organization_profile(sim, organization_eid)
+    if profile is None:
+        return None
+    component = _ensure_organization_watchlists_component(sim, organization_eid, create=True)
+    if component is None:
+        return None
+    now_tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    matched_entry_id = _find_organization_watchlist_entry_id(
+        component,
+        entry_id=entry_id,
+        entry_key=entry_key,
+    )
+    existing = (
+        dict(component.entries.get(int(matched_entry_id)))
+        if matched_entry_id is not None and int(matched_entry_id) in component.entries
+        else {}
+    )
+    if matched_entry_id is None:
+        matched_entry_id = _safe_int(entry_id, default=0) or int(component.next_entry_id)
+    if created_tick is None:
+        created_tick = existing.get("created_tick", now_tick)
+    if effective_tick is None:
+        effective_tick = existing.get("effective_tick", created_tick)
+    if target_scope is None:
+        target_scope = existing.get("target_scope", "organization")
+    row = dict(existing)
+    row.update(
+        {
+            "organization_eid": int(organization_eid),
+            "entry_id": int(matched_entry_id),
+            "entry_key": existing.get("entry_key") if entry_key is None else entry_key,
+            "subject_eid": existing.get("subject_eid") if subject_eid is None else subject_eid,
+            "action": existing.get("action", "watch") if action is None else action,
+            "reason": existing.get("reason") if reason is None else reason,
+            "source_kind": existing.get("source_kind") if source_kind is None else source_kind,
+            "source_eid": existing.get("source_eid") if source_eid is None else source_eid,
+            "source_incident_id": existing.get("source_incident_id") if source_incident_id is None else source_incident_id,
+            "target_scope": target_scope,
+            "target_property_id": existing.get("target_property_id") if target_property_id is None else target_property_id,
+            "target_building_id": existing.get("target_building_id") if target_building_id is None else target_building_id,
+            "target_link_kind": existing.get("target_link_kind") if target_link_kind is None else target_link_kind,
+            "target_roles": existing.get("target_roles") if target_roles is None else target_roles,
+            "target_member_eids": existing.get("target_member_eids") if target_member_eids is None else target_member_eids,
+            "target_affiliated_org_eids": existing.get("target_affiliated_org_eids")
+            if target_affiliated_org_eids is None
+            else target_affiliated_org_eids,
+            "target_affiliated_org_keys": existing.get("target_affiliated_org_keys")
+            if target_affiliated_org_keys is None
+            else target_affiliated_org_keys,
+            "target_affiliated_org_kinds": existing.get("target_affiliated_org_kinds")
+            if target_affiliated_org_kinds is None
+            else target_affiliated_org_kinds,
+            "target_affiliated_org_tags": existing.get("target_affiliated_org_tags")
+            if target_affiliated_org_tags is None
+            else target_affiliated_org_tags,
+            "target_titles": existing.get("target_titles") if target_titles is None else target_titles,
+            "target_careers": existing.get("target_careers") if target_careers is None else target_careers,
+            "target_service_ids": existing.get("target_service_ids") if target_service_ids is None else target_service_ids,
+            "target_field_domains": existing.get("target_field_domains")
+            if target_field_domains is None
+            else target_field_domains,
+            "tags": existing.get("tags") if tags is None else tags,
+            "priority": existing.get("priority", 60) if priority is None else priority,
+            "active": existing.get("active", True) if active is None else active,
+            "effective_tick": effective_tick,
+            "expires_tick": existing.get("expires_tick") if expires_tick is None else expires_tick,
+            "created_tick": created_tick,
+            "last_update_tick": now_tick,
+        }
+    )
+    normalized = _normalize_watchlist_row(
+        row,
+        organization_eid=organization_eid,
+        entry_id=matched_entry_id,
+    )
+    normalized_entry_id = _safe_int(normalized.get("entry_id"), default=0)
+    if normalized_entry_id <= 0 or _safe_int(normalized.get("subject_eid"), default=0) <= 0:
+        return None
+    normalized["entry_id"] = int(normalized_entry_id)
+    component.entries[int(normalized_entry_id)] = normalized
+    component.next_entry_id = max(int(component.next_entry_id), int(normalized_entry_id) + 1)
+    _trim_organization_watchlists(component)
+    _hydrate_linked_branch_records_for_organization(sim, organization_eid)
+    return dict(normalized)
+
+
+def organization_watchlist_rows(
+    sim,
+    organization_eid,
+    *,
+    subject_eid=None,
+    active_only=True,
+    current_tick=None,
+    include_future=False,
+    include_expired=False,
+    include_ancestors=False,
+    max_lineage_depth=8,
+):
+    requested_profile = organization_profile(sim, organization_eid)
+    if requested_profile is None:
+        return ()
+    requested_subject_eid = _safe_int(subject_eid, default=0)
+    current_tick = getattr(sim, "tick", 0) if current_tick is None else current_tick
+    rows = []
+    source_organization_eids = (
+        _organization_lineage_eids(
+            sim,
+            organization_eid,
+            include_self=True,
+            max_depth=max_lineage_depth,
+        )
+        if include_ancestors
+        else (int(organization_eid),)
+    )
+    for lineage_depth, source_organization_eid in enumerate(source_organization_eids):
+        profile = organization_profile(sim, source_organization_eid)
+        component = _ensure_organization_watchlists_component(
+            sim,
+            source_organization_eid,
+            create=False,
+        )
+        if profile is None or component is None:
+            continue
+        for entry_id, row in component.entries.items():
+            row = _normalize_watchlist_row(
+                row,
+                organization_eid=source_organization_eid,
+                entry_id=entry_id,
+            )
+            if requested_subject_eid > 0 and _safe_int(row.get("subject_eid"), default=0) != requested_subject_eid:
+                continue
+            if not _watchlist_row_is_current(
+                row,
+                current_tick=current_tick,
+                active_only=active_only,
+                include_future=include_future,
+                include_expired=include_expired,
+            ):
+                continue
+            rows.append(
+                {
+                    **row,
+                    "organization_eid": int(source_organization_eid),
+                    "organization_key": _text(profile.key),
+                    "organization_name": _text(profile.name),
+                    "organization_kind": _normalize_org_kind(profile.kind, default="other"),
+                    "requested_organization_eid": int(organization_eid),
+                    "requested_organization_key": _text(requested_profile.key),
+                    "requested_organization_name": _text(requested_profile.name),
+                    "requested_organization_kind": _normalize_org_kind(requested_profile.kind, default="other"),
+                    "lineage_depth": int(lineage_depth),
+                }
+            )
+    return _sort_watchlist_rows(rows)
+
+
+def _watchlist_targets_property(sim, row, prop):
+    if not isinstance(row, dict) or not isinstance(prop, dict):
+        return False
+    scope = _normalize_vocabulary_scope(row.get("target_scope"), default="organization")
+    if scope == "organization":
+        return _row_targets_property_filters(sim, row, prop)
+    if scope == "property":
+        return _text(row.get("target_property_id")) == _text(prop.get("id")) and _row_targets_property_filters(sim, row, prop)
+    metadata = _property_metadata(prop)
+    building_ids = {
+        _text(metadata.get("building_id")),
+        _text(metadata.get("local_building_id")),
+    }
+    if scope == "building":
+        return _text(row.get("target_building_id")) in building_ids and _row_targets_property_filters(sim, row, prop)
+    if scope == "link_kind":
+        target_link_kind = _text(row.get("target_link_kind")).lower()
+        organization_eid = _safe_int(
+            row.get("requested_organization_eid"),
+            default=_safe_int(row.get("organization_eid"), default=0),
+        )
+        return any(
+            int(link.get("organization_eid", -1)) == organization_eid
+            and _text(link.get("link_kind")).lower() == target_link_kind
+            for link in property_org_links(sim, prop, active_only=True)
+        ) and _row_targets_property_filters(sim, row, prop)
+    return False
+
+
+def _collect_property_org_watch_state(
+    sim,
+    prop,
+    *,
+    subject_eid=None,
+    organization_eid=None,
+    active_only=True,
+    current_tick=None,
+    include_future=False,
+    include_expired=False,
+):
+    if not isinstance(prop, dict):
+        return ()
+    rows = []
+    seen = set()
+    for link in property_org_links(sim, prop, active_only=active_only):
+        linked_organization_eid = _safe_int(link.get("organization_eid"), default=0)
+        if linked_organization_eid <= 0:
+            continue
+        if organization_eid is not None and linked_organization_eid != int(organization_eid):
+            continue
+        for row in organization_watchlist_rows(
+            sim,
+            linked_organization_eid,
+            subject_eid=subject_eid,
+            active_only=active_only,
+            current_tick=current_tick,
+            include_future=include_future,
+            include_expired=include_expired,
+            include_ancestors=True,
+        ):
+            scope = _normalize_vocabulary_scope(row.get("target_scope"), default="organization")
+            if scope not in {"organization", "property", "building", "link_kind"}:
+                continue
+            if not _watchlist_targets_property(sim, row, prop):
+                continue
+            key = (int(row.get("organization_eid", 0)), int(row.get("entry_id", 0)))
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append({**row, "matched_link_kind": _text(link.get("link_kind")).lower() or None})
+    return _sort_watchlist_rows(rows)
+
+
+def property_org_watch_state(
+    sim,
+    prop,
+    *,
+    subject_eid=None,
+    organization_eid=None,
+    active_only=True,
+    current_tick=None,
+    include_future=False,
+    include_expired=False,
+    hydrate_branch=False,
+):
+    rows = _collect_property_org_watch_state(
+        sim,
+        prop,
+        subject_eid=subject_eid,
+        organization_eid=organization_eid,
+        active_only=active_only,
+        current_tick=current_tick,
+        include_future=include_future,
+        include_expired=include_expired,
+    )
+    if hydrate_branch and isinstance(prop, dict):
+        hydrate_property_organization_branches(
+            sim,
+            prop,
+            organization_eid=organization_eid,
+            current_tick=current_tick,
+            active_only=active_only,
+        )
+    return rows
+
+
+def _watchlist_targets_membership(sim, row, actor_eid, membership):
+    if not isinstance(row, dict) or not isinstance(membership, dict):
+        return False
+    scope = _normalize_vocabulary_scope(row.get("target_scope"), default="organization")
+    if scope == "organization":
+        return _row_targets_membership_filters(sim, row, actor_eid, membership)
+    if scope == "property":
+        return _text(row.get("target_property_id")) == _text(membership.get("site_property_id")) and _row_targets_membership_filters(sim, row, actor_eid, membership)
+    if scope == "building":
+        return _text(row.get("target_building_id")) == _text(membership.get("site_building_id")) and _row_targets_membership_filters(sim, row, actor_eid, membership)
+    if scope == "role":
+        return _text(membership.get("role")).lower() in set(row.get("target_roles", ())) and _row_targets_membership_filters(sim, row, actor_eid, membership)
+    if scope == "member":
+        return int(actor_eid) in set(_normalize_actor_eid_tuple(row.get("target_member_eids"))) and _row_targets_membership_filters(sim, row, actor_eid, membership)
+    if scope == "link_kind":
+        return _text(row.get("target_link_kind")).lower() in set(_membership_link_kinds(sim, membership)) and _row_targets_membership_filters(sim, row, actor_eid, membership)
+    return False
+
+
+def actor_org_watch_state(
+    sim,
+    actor_eid,
+    *,
+    organization_eid=None,
+    subject_eid=None,
+    active_only=True,
+    current_tick=None,
+    include_future=False,
+    include_expired=False,
+):
+    memberships = actor_org_memberships(sim, actor_eid, active_only=active_only)
+    rows = []
+    seen = set()
+    for membership in memberships:
+        membership_org_eid = _safe_int(membership.get("organization_eid"), default=0)
+        if membership_org_eid <= 0:
+            continue
+        if organization_eid is not None and membership_org_eid != int(organization_eid):
+            continue
+        for row in organization_watchlist_rows(
+            sim,
+            membership_org_eid,
+            subject_eid=subject_eid,
+            active_only=active_only,
+            current_tick=current_tick,
+            include_future=include_future,
+            include_expired=include_expired,
+            include_ancestors=True,
+        ):
+            if not _watchlist_targets_membership(sim, row, actor_eid, membership):
+                continue
+            key = (int(row.get("organization_eid", 0)), int(row.get("entry_id", 0)))
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(
+                {
+                    **row,
+                    "membership_role": _text(membership.get("role")).lower() or "member",
+                    "membership_kind": _text(membership.get("kind")).lower() or "membership",
+                    "membership_primary": bool(membership.get("primary", False)),
+                    "membership_site_property_id": _text(membership.get("site_property_id")) or None,
+                    "membership_site_building_id": _text(membership.get("site_building_id")) or None,
+                }
+            )
+    return _sort_watchlist_rows(rows)
+
+
+def _practice_bundle_notes(rows, *, limit=3):
+    notes = []
+    seen = set()
+    for row in tuple(rows or ()):
+        text = _text(row.get("summary") or row.get("label"))
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        notes.append(text)
+        if len(notes) >= max(1, int(limit)):
+            break
+    return tuple(notes)
+
+
+def _aggregate_practice_effect_modifiers(rows):
+    modifiers = {}
+    for row in tuple(rows or ()):
+        effect_modifiers = row.get("effect_modifiers") if isinstance(row, dict) else None
+        if not isinstance(effect_modifiers, dict):
+            continue
+        for raw_key, raw_value in effect_modifiers.items():
+            key = _text(raw_key).lower().replace(" ", "_")
+            if not key:
+                continue
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if key.endswith("_mult") or key.endswith("_scalar"):
+                current = float(modifiers.get(key, 1.0))
+                modifiers[key] = current * max(0.0, value)
+            else:
+                current = float(modifiers.get(key, 0.0))
+                modifiers[key] = current + value
+    return modifiers
+
+
+def _practice_bundle(rows):
+    rows = _sort_practice_rows(tuple(rows or ()))
+    notes = _practice_bundle_notes(rows)
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "entry_keys": tuple(_text(row.get("entry_key")) for row in rows if _text(row.get("entry_key"))),
+        "effect_modifiers": _aggregate_practice_effect_modifiers(rows),
+        "notes": notes,
+        "note_text": "; ".join(notes),
+    }
+
+
+def property_service_practice_bundle(
+    sim,
+    prop,
+    service_id,
+    *,
+    organization_eid=None,
+    active_only=True,
+    current_tick=None,
+):
+    if not isinstance(prop, dict):
+        return _practice_bundle(())
+    service_key = _text(service_id).lower().replace(" ", "_")
+    rows = []
+    for row in property_org_practices(
+        sim,
+        prop,
+        organization_eid=organization_eid,
+        active_only=active_only,
+        current_tick=current_tick,
+    ):
+        kind = _text(row.get("kind")).lower()
+        if kind not in {"service_mutation", "field_discovery"}:
+            continue
+        service_ids = set(_normalize_text_tuple(row.get("service_ids")))
+        if service_ids and service_key not in service_ids:
+            continue
+        rows.append(row)
+    return _practice_bundle(rows)
+
+
+def property_trade_practice_bundle(
+    sim,
+    prop,
+    *,
+    domain_key=None,
+    organization_eid=None,
+    active_only=True,
+    current_tick=None,
+):
+    if not isinstance(prop, dict):
+        return _practice_bundle(())
+    requested_domain = _text(domain_key).lower().replace(" ", "_")
+    property_domains = set(property_field_domains(prop))
+    if requested_domain:
+        property_domains.add(requested_domain)
+    property_services = set(property_service_ids(prop))
+    rows = []
+    for row in property_org_practices(
+        sim,
+        prop,
+        organization_eid=organization_eid,
+        active_only=active_only,
+        current_tick=current_tick,
+    ):
+        kind = _text(row.get("kind")).lower()
+        if kind not in {"service_mutation", "operational_pattern", "field_discovery"}:
+            continue
+        domain_match = _text(row.get("domain_key")).lower().replace(" ", "_")
+        target_domains = set(_normalize_text_tuple(row.get("target_field_domains")))
+        service_ids = set(_normalize_text_tuple(row.get("service_ids")))
+        if requested_domain and domain_match and requested_domain != domain_match:
+            continue
+        if target_domains and not property_domains.intersection(target_domains):
+            continue
+        if service_ids and not property_services.intersection(service_ids):
+            continue
+        rows.append(row)
+    return _practice_bundle(rows)
+
+
+def local_operational_practice_bundle(
+    sim,
+    *,
+    actor_eid=None,
+    prop=None,
+    organization_eid=None,
+    active_only=True,
+    current_tick=None,
+):
+    rows = []
+    seen = set()
+    if isinstance(prop, dict):
+        for row in property_org_practices(
+            sim,
+            prop,
+            organization_eid=organization_eid,
+            active_only=active_only,
+            current_tick=current_tick,
+        ):
+            kind = _text(row.get("kind")).lower()
+            if kind not in {"operational_pattern", "skill_method", "field_discovery"}:
+                continue
+            key = (int(row.get("organization_eid", 0)), int(row.get("entry_id", 0)))
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+    if actor_eid is not None:
+        for row in actor_org_practices(
+            sim,
+            actor_eid,
+            organization_eid=organization_eid,
+            active_only=active_only,
+            current_tick=current_tick,
+        ):
+            kind = _text(row.get("kind")).lower()
+            if kind not in {"operational_pattern", "skill_method", "field_discovery"}:
+                continue
+            key = (int(row.get("organization_eid", 0)), int(row.get("entry_id", 0)))
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+    return _practice_bundle(rows)
+
+
+def _practice_targets_item_realization(row, item_id, *, item_tags=(), realization_kind="trade_purchase"):
+    row = row if isinstance(row, dict) else {}
+    requested_item_id = _text(item_id)
+    requested_tags = set(_normalize_item_tag_tuple(item_tags))
+    row_item_ids = set(_normalize_item_id_tuple(row.get("item_ids")))
+    row_item_tags = set(_normalize_item_tag_tuple(row.get("item_tags")))
+    row_realization_kinds = set(_normalize_realization_kind_tuple(row.get("realization_kinds")))
+    if row_item_ids and requested_item_id not in row_item_ids:
+        return False
+    if row_item_tags and not requested_tags.intersection(row_item_tags):
+        return False
+    if row_realization_kinds and _text(realization_kind).lower() not in row_realization_kinds:
+        return False
+    return True
+
+
+def property_item_practice_bundle(
+    sim,
+    prop,
+    item_id,
+    *,
+    current_tick=None,
+    realization_kind="trade_purchase",
+    organization_eid=None,
+    active_only=True,
+):
+    if not isinstance(prop, dict):
+        return _practice_bundle(())
+    item_key = _text(item_id)
+    if item_key not in ITEM_CATALOG:
+        return _practice_bundle(())
+    item_tags = _item_tags_for_id(item_key)
+    rows = []
+    for row in property_org_practices(
+        sim,
+        prop,
+        organization_eid=organization_eid,
+        active_only=active_only,
+        current_tick=current_tick,
+    ):
+        kind = _text(row.get("kind")).lower()
+        if kind not in {"service_mutation", "operational_pattern", "field_discovery"}:
+            continue
+        if not _practice_targets_item_realization(
+            row,
+            item_key,
+            item_tags=item_tags,
+            realization_kind=realization_kind,
+        ):
+            continue
+        rows.append(row)
+    return _practice_bundle(rows)
+
+
+def _shift_item_quality(quality, shift):
+    tiers = list(ITEM_QUALITY_TIERS)
+    base_quality = normalize_item_quality(quality, default="standard")
+    try:
+        index = tiers.index(base_quality)
+    except ValueError:
+        index = tiers.index("standard")
+    shifted = max(0, min(len(tiers) - 1, index + int(shift)))
+    return tiers[shifted]
+
+
+def realize_item_instance_metadata(
+    item_id,
+    base_metadata,
+    *,
+    practice_bundle,
+    source_property_id,
+    source_organization_eid,
+    source_organization_key,
+    source_practice_key,
+    serial_seed,
+):
+    metadata = dict(base_metadata or {})
+    bundle = practice_bundle if isinstance(practice_bundle, dict) else {}
+    modifiers = dict(bundle.get("effect_modifiers", {}))
+    if not modifiers and not source_property_id and not source_organization_eid and not source_practice_key:
+        return metadata
+
+    if _text(source_property_id):
+        metadata["source_property_id"] = _text(source_property_id)
+    if source_organization_eid is not None:
+        clean_source_org_eid = _safe_int(source_organization_eid, default=0)
+        if clean_source_org_eid > 0:
+            metadata["source_organization_eid"] = clean_source_org_eid
+    if _text(source_organization_key):
+        metadata["source_organization_key"] = _text(source_organization_key)
+    if _text(source_practice_key):
+        metadata["source_practice_key"] = _text(source_practice_key)
+
+    quality_shift = int(round(_safe_float(modifiers.get("item_quality_shift"), default=0.0)))
+    if quality_shift:
+        metadata["item_quality"] = _shift_item_quality(metadata.get("item_quality"), quality_shift)
+
+    profile = item_condition_profile(item_id, item_catalog=ITEM_CATALOG)
+    supports_durability = bool(profile.get("supports_durability"))
+    max_durability_bonus = int(round(_safe_float(modifiers.get("item_max_durability_bonus"), default=0.0)))
+    durability_bonus = int(round(_safe_float(modifiers.get("item_durability_bonus"), default=0.0)))
+    if supports_durability or max_durability_bonus or durability_bonus:
+        base_max_durability = _safe_int(
+            metadata.get("item_max_durability"),
+            default=_safe_int(profile.get("max_durability"), default=0),
+        )
+        if supports_durability and base_max_durability <= 0:
+            base_max_durability = max(1, _safe_int(profile.get("max_durability"), default=1))
+        if base_max_durability > 0 or max_durability_bonus:
+            max_durability = max(1, base_max_durability + max_durability_bonus)
+            metadata["item_max_durability"] = int(max_durability)
+            current_durability = _safe_int(
+                metadata.get("item_durability"),
+                default=max_durability,
+            )
+            if durability_bonus:
+                current_durability += durability_bonus
+            else:
+                current_durability = max(current_durability, max_durability)
+            metadata["item_durability"] = max(0, min(int(max_durability), int(current_durability)))
+
+    effect_scalar = _safe_float(modifiers.get("item_effect_scalar"), default=1.0)
+    if abs(effect_scalar - 1.0) > 1e-6:
+        metadata["item_effect_scalar"] = max(0.25, min(3.0, effect_scalar))
+    positive_effect_scalar = _safe_float(
+        modifiers.get("item_positive_effect_scalar"),
+        default=effect_scalar,
+    )
+    if abs(positive_effect_scalar - effect_scalar) > 1e-6 or "item_positive_effect_scalar" in modifiers:
+        metadata["item_positive_effect_scalar"] = max(0.25, min(3.0, positive_effect_scalar))
+    negative_effect_scalar = _safe_float(
+        modifiers.get("item_negative_effect_scalar"),
+        default=effect_scalar,
+    )
+    if abs(negative_effect_scalar - effect_scalar) > 1e-6 or "item_negative_effect_scalar" in modifiers:
+        metadata["item_negative_effect_scalar"] = max(0.25, min(3.0, negative_effect_scalar))
+
+    duration_scalar = _safe_float(modifiers.get("item_status_duration_scalar"), default=1.0)
+    if abs(duration_scalar - 1.0) > 1e-6:
+        metadata["item_status_duration_scalar"] = max(0.25, min(3.0, duration_scalar))
+    for need_key in ("energy", "safety", "social"):
+        extra_delta = _safe_float(modifiers.get(f"item_extra_{need_key}_delta"), default=0.0)
+        if abs(extra_delta) > 1e-6:
+            metadata[f"item_extra_{need_key}_delta"] = max(-100.0, min(100.0, extra_delta))
+    tool_wear_mult = _safe_float(modifiers.get("tool_wear_mult"), default=1.0)
+    if abs(tool_wear_mult - 1.0) > 1e-6:
+        metadata["tool_wear_mult"] = max(0.25, min(4.0, tool_wear_mult))
+    tamper_severity_mult = _safe_float(modifiers.get("tamper_severity_mult"), default=1.0)
+    if abs(tamper_severity_mult - 1.0) > 1e-6:
+        metadata["tamper_severity_mult"] = max(0.25, min(4.0, tamper_severity_mult))
+
+    _ = _text(serial_seed)
+    return metadata
+
+
+def _normalize_practice_progress_scope(value, default="branch"):
+    scope = _text(value).lower().replace(" ", "_")
+    if scope not in {"branch", "root"}:
+        scope = default
+    return scope
+
+
+def _normalize_practice_progress_row(row, organization_eid=None, progress_key=None):
+    row = dict(row or {})
+    return {
+        "organization_eid": _safe_int(row.get("organization_eid"), default=organization_eid) or None,
+        "progress_key": _text(row.get("progress_key", progress_key)).lower().replace(" ", "_") or None,
+        "branch_property_id": _text(row.get("branch_property_id")) or None,
+        "branch_building_id": _text(row.get("branch_building_id")) or None,
+        "domain_key": _text(row.get("domain_key")).lower().replace(" ", "_") or None,
+        "focus_key": _text(row.get("focus_key")).lower().replace(" ", "_") or None,
+        "scope": _normalize_practice_progress_scope(row.get("scope"), default="branch"),
+        "activity_points": max(0.0, _safe_float(row.get("activity_points"), default=0.0)),
+        "success_points": max(0.0, _safe_float(row.get("success_points"), default=0.0)),
+        "failure_points": max(0.0, _safe_float(row.get("failure_points"), default=0.0)),
+        "last_signal_tick": _safe_int(row.get("last_signal_tick"), default=0),
+        "last_evaluated_tick": _safe_int(row.get("last_evaluated_tick"), default=0),
+        "tier": max(0, min(2, _safe_int(row.get("tier"), default=0))),
+        "promoted_to_parent": bool(row.get("promoted_to_parent", False)),
+    }
+
+
+def _ensure_organization_practice_progress_component(sim, organization_eid, *, create=False):
+    if organization_eid is None:
+        return None
+    component = sim.ecs.get(OrganizationPracticeProgress).get(int(organization_eid))
+    if component is None and create:
+        component = OrganizationPracticeProgress()
+        sim.ecs.add(int(organization_eid), component)
+    if component is None:
+        return None
+    component.max_entries = max(8, _safe_int(getattr(component, "max_entries", 96), default=96))
+    raw_entries = getattr(component, "entries", None)
+    if not isinstance(raw_entries, dict):
+        raw_entries = {}
+    entries = {}
+    for raw_key, row in raw_entries.items():
+        normalized = _normalize_practice_progress_row(
+            row,
+            organization_eid=organization_eid,
+            progress_key=raw_key,
+        )
+        progress_key = _text(normalized.get("progress_key"))
+        if not progress_key:
+            continue
+        entries[progress_key] = normalized
+    component.entries = entries
+    return component
+
+
+def _trim_organization_practice_progress(component):
+    if component is None or len(component.entries) <= int(component.max_entries):
+        return component
+    kept = sorted(
+        component.entries.values(),
+        key=lambda row: (
+            -_safe_float(row.get("activity_points"), default=0.0),
+            -_safe_int(row.get("last_signal_tick"), default=0),
+            _text(row.get("progress_key")),
+        ),
+    )[: int(component.max_entries)]
+    component.entries = {
+        _text(row.get("progress_key")): row
+        for row in kept
+        if _text(row.get("progress_key"))
+    }
+    return component
+
+
+def record_organization_practice_progress(
+    sim,
+    *,
+    organization_eid=None,
+    organization_key=None,
+    organization_name="",
+    organization_kind="other",
+    progress_key,
+    branch_property_id=None,
+    branch_building_id=None,
+    domain_key=None,
+    focus_key=None,
+    scope="branch",
+    activity_delta=0.0,
+    success_delta=0.0,
+    failure_delta=0.0,
+    last_signal_tick=None,
+    last_evaluated_tick=None,
+    tier=None,
+    promoted_to_parent=None,
+):
+    if organization_eid is None:
+        organization_eid = ensure_organization(
+            sim,
+            organization_key=organization_key,
+            organization_name=organization_name,
+            organization_kind=organization_kind,
+        )
+    if organization_eid is None:
+        return None
+    component = _ensure_organization_practice_progress_component(sim, organization_eid, create=True)
+    if component is None:
+        return None
+    clean_key = _text(progress_key).lower().replace(" ", "_")
+    if not clean_key:
+        return None
+    now_tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    existing = dict(component.entries.get(clean_key, {}))
+    has_delta = any(
+        abs(_safe_float(value, default=0.0)) > 1e-6
+        for value in (activity_delta, success_delta, failure_delta)
+    )
+    row = dict(existing)
+    row.update(
+        {
+            "organization_eid": int(organization_eid),
+            "progress_key": clean_key,
+            "branch_property_id": existing.get("branch_property_id") if branch_property_id is None else branch_property_id,
+            "branch_building_id": existing.get("branch_building_id") if branch_building_id is None else branch_building_id,
+            "domain_key": existing.get("domain_key") if domain_key is None else domain_key,
+            "focus_key": existing.get("focus_key") if focus_key is None else focus_key,
+            "scope": existing.get("scope", "branch") if scope is None else scope,
+            "activity_points": _safe_float(existing.get("activity_points"), default=0.0)
+            + _safe_float(activity_delta, default=0.0),
+            "success_points": _safe_float(existing.get("success_points"), default=0.0)
+            + _safe_float(success_delta, default=0.0),
+            "failure_points": _safe_float(existing.get("failure_points"), default=0.0)
+            + _safe_float(failure_delta, default=0.0),
+            "last_signal_tick": (
+                existing.get("last_signal_tick", 0)
+                if last_signal_tick is None and not has_delta
+                else now_tick if last_signal_tick is None
+                else last_signal_tick
+            ),
+            "last_evaluated_tick": existing.get("last_evaluated_tick", 0)
+            if last_evaluated_tick is None
+            else last_evaluated_tick,
+            "tier": existing.get("tier", 0) if tier is None else tier,
+            "promoted_to_parent": existing.get("promoted_to_parent", False)
+            if promoted_to_parent is None
+            else promoted_to_parent,
+        }
+    )
+    normalized = _normalize_practice_progress_row(row, organization_eid=organization_eid, progress_key=clean_key)
+    component.entries[clean_key] = normalized
+    _trim_organization_practice_progress(component)
+    return normalized
+
+
+def organization_practice_progress_rows(
+    sim,
+    organization_eid,
+    *,
+    focus_key=None,
+    domain_key=None,
+    scope=None,
+):
+    component = _ensure_organization_practice_progress_component(sim, organization_eid, create=False)
+    if component is None:
+        return ()
+    requested_focus = _text(focus_key).lower().replace(" ", "_")
+    requested_domain = _text(domain_key).lower().replace(" ", "_")
+    requested_scope = _normalize_practice_progress_scope(scope, default="branch") if scope is not None else None
+    rows = []
+    for row in component.entries.values():
+        if requested_focus and _text(row.get("focus_key")).lower() != requested_focus:
+            continue
+        if requested_domain and _text(row.get("domain_key")).lower() != requested_domain:
+            continue
+        if requested_scope and _text(row.get("scope")).lower() != requested_scope:
+            continue
+        rows.append(dict(row))
+    rows.sort(
+        key=lambda row: (
+            _text(row.get("scope")),
+            _text(row.get("domain_key")),
+            _text(row.get("focus_key")),
+            _text(row.get("branch_property_id")),
+            _text(row.get("progress_key")),
+        )
+    )
+    return tuple(rows)
+
+
+def _normalize_crime_plan_kind(value, default="petty_theft"):
+    kind = _text(value).lower().replace(" ", "_")
+    if kind not in ORGANIZATION_CRIME_PLAN_KINDS:
+        kind = default
+    return kind
+
+
+def _normalize_crime_plan_stage(value, default="forming"):
+    stage = _text(value).lower().replace(" ", "_")
+    if stage not in ORGANIZATION_CRIME_PLAN_STAGES:
+        stage = default
+    return stage
+
+
+def _normalize_crime_plan_row(row, organization_eid=None, entry_id=None):
+    row = dict(row or {})
+    assigned = row.get("assigned_member_eids")
+    if isinstance(assigned, (list, tuple, set)):
+        assigned_member_eids = tuple(
+            sorted(
+                {
+                    _safe_int(value, default=0)
+                    for value in assigned
+                    if _safe_int(value, default=0) > 0
+                }
+            )
+        )
+    else:
+        assigned_member_eids = ()
+    created_tick = _safe_int(row.get("created_tick"), default=0)
+    execute_after_tick = _safe_int(row.get("execute_after_tick"), default=created_tick)
+    expires_tick = _safe_int(row.get("expires_tick"), default=execute_after_tick)
+    last_update_tick = _safe_int(
+        row.get("last_update_tick"),
+        default=max(created_tick, execute_after_tick),
+    )
+    return {
+        "entry_id": _safe_int(row.get("entry_id"), default=entry_id),
+        "organization_eid": _safe_int(row.get("organization_eid"), default=organization_eid) or None,
+        "plan_key": _text(row.get("plan_key")).lower().replace(" ", "_") or None,
+        "kind": _normalize_crime_plan_kind(row.get("kind"), default="petty_theft"),
+        "stage": _normalize_crime_plan_stage(row.get("stage"), default="forming"),
+        "leader_eid": _safe_int(row.get("leader_eid"), default=0) or None,
+        "assigned_member_eids": assigned_member_eids,
+        "target_property_id": _text(row.get("target_property_id")) or None,
+        "target_building_id": _text(row.get("target_building_id")) or None,
+        "staging_property_id": _text(row.get("staging_property_id")) or None,
+        "disposal_property_id": _text(row.get("disposal_property_id")) or None,
+        "created_tick": created_tick,
+        "execute_after_tick": execute_after_tick,
+        "expires_tick": expires_tick,
+        "required_member_count": max(1, _safe_int(row.get("required_member_count"), default=1)),
+        "source_pressure": max(0.0, min(1.5, _safe_float(row.get("source_pressure"), default=0.0))),
+        "last_update_tick": last_update_tick,
+        "resolved_tick": _safe_int(row.get("resolved_tick"), default=0) or None,
+        "result": _text(row.get("result")).lower().replace(" ", "_") or None,
+        "summary": _text(row.get("summary")) or None,
+    }
+
+
+def _ensure_organization_crime_plan_component(sim, organization_eid, *, create=False):
+    if organization_eid is None:
+        return None
+    component = sim.ecs.get(OrganizationCrimePlans).get(int(organization_eid))
+    if component is None and create:
+        component = OrganizationCrimePlans()
+        sim.ecs.add(int(organization_eid), component)
+    if component is None:
+        return None
+    component.max_entries = max(4, _safe_int(getattr(component, "max_entries", 24), default=24))
+    component.next_entry_id = max(1, _safe_int(getattr(component, "next_entry_id", 1), default=1))
+    raw_entries = getattr(component, "entries", None)
+    if not isinstance(raw_entries, dict):
+        raw_entries = {}
+    entries = {}
+    max_entry_id = 0
+    for raw_key, row in raw_entries.items():
+        normalized = _normalize_crime_plan_row(
+            row,
+            organization_eid=organization_eid,
+            entry_id=raw_key,
+        )
+        plan_key = _text(normalized.get("plan_key"))
+        if not plan_key:
+            continue
+        entries[plan_key] = normalized
+        max_entry_id = max(max_entry_id, _safe_int(normalized.get("entry_id"), default=0))
+    component.entries = entries
+    component.next_entry_id = max(component.next_entry_id, max_entry_id + 1)
+    return component
+
+
+def _trim_organization_crime_plans(component):
+    if component is None or len(component.entries) <= int(component.max_entries):
+        return component
+    kept = sorted(
+        component.entries.values(),
+        key=lambda row: (
+            0 if _text(row.get("stage")).lower() not in {"cancelled", "resolved"} else 1,
+            -_safe_int(row.get("last_update_tick"), default=0),
+            -_safe_int(row.get("created_tick"), default=0),
+            _text(row.get("plan_key")),
+        ),
+    )[: int(component.max_entries)]
+    component.entries = {
+        _text(row.get("plan_key")): row
+        for row in kept
+        if _text(row.get("plan_key"))
+    }
+    return component
+
+
+def _refresh_crime_plan_briefings(sim, plan_row):
+    if not isinstance(plan_row, dict):
+        return None
+    property_ids = tuple(
+        property_id
+        for property_id in (
+            _text(plan_row.get("staging_property_id")),
+            _text(plan_row.get("target_property_id")),
+            _text(plan_row.get("disposal_property_id")),
+        )
+        if property_id
+    )
+    if property_ids:
+        refresh_loaded_organization_branch_briefings(
+            sim,
+            property_ids=property_ids,
+            reason="crime_plan_update",
+        )
+    for actor_eid in set(plan_row.get("assigned_member_eids", ())) | {
+        _safe_int(plan_row.get("leader_eid"), default=0)
+    }:
+        if actor_eid > 0:
+            refresh_actor_branch_briefing(sim, actor_eid, reason="crime_plan_update")
+    return None
+
+
+def record_organization_crime_plan(
+    sim,
+    *,
+    organization_eid=None,
+    organization_key=None,
+    organization_name="",
+    organization_kind="other",
+    plan_key,
+    kind="petty_theft",
+    stage="forming",
+    leader_eid=None,
+    assigned_member_eids=(),
+    target_property_id=None,
+    target_building_id=None,
+    staging_property_id=None,
+    disposal_property_id=None,
+    created_tick=None,
+    execute_after_tick=None,
+    expires_tick=None,
+    required_member_count=1,
+    source_pressure=0.0,
+    summary=None,
+    resolved_tick=None,
+    result=None,
+):
+    if organization_eid is None:
+        organization_eid = ensure_organization(
+            sim,
+            organization_key=organization_key,
+            organization_name=organization_name,
+            organization_kind=organization_kind,
+        )
+    if organization_eid is None:
+        return None
+    component = _ensure_organization_crime_plan_component(sim, organization_eid, create=True)
+    if component is None:
+        return None
+    clean_key = _text(plan_key).lower().replace(" ", "_")
+    if not clean_key:
+        return None
+    now_tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    existing = dict(component.entries.get(clean_key, {}))
+    entry_id = _safe_int(existing.get("entry_id"), default=0)
+    if entry_id <= 0:
+        entry_id = int(component.next_entry_id)
+        component.next_entry_id += 1
+    row = {
+        **existing,
+        "entry_id": entry_id,
+        "organization_eid": int(organization_eid),
+        "plan_key": clean_key,
+        "kind": existing.get("kind", kind) if kind is None else kind,
+        "stage": existing.get("stage", stage) if stage is None else stage,
+        "leader_eid": existing.get("leader_eid") if leader_eid is None else leader_eid,
+        "assigned_member_eids": existing.get("assigned_member_eids", assigned_member_eids)
+        if assigned_member_eids is None
+        else assigned_member_eids,
+        "target_property_id": existing.get("target_property_id") if target_property_id is None else target_property_id,
+        "target_building_id": existing.get("target_building_id") if target_building_id is None else target_building_id,
+        "staging_property_id": existing.get("staging_property_id") if staging_property_id is None else staging_property_id,
+        "disposal_property_id": existing.get("disposal_property_id") if disposal_property_id is None else disposal_property_id,
+        "created_tick": existing.get("created_tick", now_tick) if created_tick is None else created_tick,
+        "execute_after_tick": existing.get("execute_after_tick", now_tick) if execute_after_tick is None else execute_after_tick,
+        "expires_tick": existing.get("expires_tick", now_tick + 120) if expires_tick is None else expires_tick,
+        "required_member_count": existing.get("required_member_count", required_member_count)
+        if required_member_count is None
+        else required_member_count,
+        "source_pressure": existing.get("source_pressure", source_pressure)
+        if source_pressure is None
+        else source_pressure,
+        "last_update_tick": now_tick,
+        "resolved_tick": existing.get("resolved_tick") if resolved_tick is None else resolved_tick,
+        "result": existing.get("result") if result is None else result,
+        "summary": existing.get("summary") if summary is None else summary,
+    }
+    normalized = _normalize_crime_plan_row(row, organization_eid=organization_eid, entry_id=entry_id)
+    component.entries[clean_key] = normalized
+    _trim_organization_crime_plans(component)
+    _refresh_crime_plan_briefings(sim, normalized)
+    return dict(normalized)
+
+
+def advance_organization_crime_plan(
+    sim,
+    organization_eid,
+    plan_key,
+    *,
+    stage=None,
+    leader_eid=None,
+    assigned_member_eids=None,
+    execute_after_tick=None,
+    expires_tick=None,
+    target_property_id=None,
+    target_building_id=None,
+    staging_property_id=None,
+    disposal_property_id=None,
+    required_member_count=None,
+    source_pressure=None,
+    summary=None,
+    resolved_tick=None,
+    result=None,
+):
+    component = _ensure_organization_crime_plan_component(sim, organization_eid, create=False)
+    if component is None:
+        return None
+    clean_key = _text(plan_key).lower().replace(" ", "_")
+    existing = component.entries.get(clean_key)
+    if not isinstance(existing, dict):
+        return None
+    return record_organization_crime_plan(
+        sim,
+        organization_eid=organization_eid,
+        plan_key=clean_key,
+        kind=existing.get("kind"),
+        stage=existing.get("stage") if stage is None else stage,
+        leader_eid=existing.get("leader_eid") if leader_eid is None else leader_eid,
+        assigned_member_eids=existing.get("assigned_member_eids") if assigned_member_eids is None else assigned_member_eids,
+        target_property_id=existing.get("target_property_id") if target_property_id is None else target_property_id,
+        target_building_id=existing.get("target_building_id") if target_building_id is None else target_building_id,
+        staging_property_id=existing.get("staging_property_id") if staging_property_id is None else staging_property_id,
+        disposal_property_id=existing.get("disposal_property_id") if disposal_property_id is None else disposal_property_id,
+        created_tick=existing.get("created_tick"),
+        execute_after_tick=existing.get("execute_after_tick") if execute_after_tick is None else execute_after_tick,
+        expires_tick=existing.get("expires_tick") if expires_tick is None else expires_tick,
+        required_member_count=existing.get("required_member_count") if required_member_count is None else required_member_count,
+        source_pressure=existing.get("source_pressure") if source_pressure is None else source_pressure,
+        summary=existing.get("summary") if summary is None else summary,
+        resolved_tick=existing.get("resolved_tick") if resolved_tick is None else resolved_tick,
+        result=existing.get("result") if result is None else result,
+    )
+
+
+def cancel_organization_crime_plan(sim, organization_eid, plan_key, *, result="cancelled", resolved_tick=None, summary=None):
+    return advance_organization_crime_plan(
+        sim,
+        organization_eid,
+        plan_key,
+        stage="cancelled",
+        result=result,
+        resolved_tick=_safe_int(getattr(sim, "tick", 0), default=0) if resolved_tick is None else resolved_tick,
+        summary=summary,
+    )
+
+
+def organization_crime_plans(
+    sim,
+    organization_eid,
+    *,
+    stage=None,
+    plan_kind=None,
+    current_tick=None,
+    include_inactive=False,
+):
+    component = _ensure_organization_crime_plan_component(sim, organization_eid, create=False)
+    if component is None:
+        return ()
+    requested_stage = _normalize_crime_plan_stage(stage) if stage is not None else None
+    requested_kind = _normalize_crime_plan_kind(plan_kind) if plan_kind is not None else None
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    rows = []
+    for row in component.entries.values():
+        normalized = _normalize_crime_plan_row(row, organization_eid=organization_eid, entry_id=row.get("entry_id"))
+        component.entries[_text(normalized.get("plan_key"))] = normalized
+        if requested_stage and _text(normalized.get("stage")).lower() != requested_stage:
+            continue
+        if requested_kind and _text(normalized.get("kind")).lower() != requested_kind:
+            continue
+        if not include_inactive:
+            if _text(normalized.get("stage")).lower() in {"cancelled", "resolved"}:
+                continue
+            expires_tick = _safe_int(normalized.get("expires_tick"), default=0)
+            if expires_tick > 0 and tick > expires_tick and _text(normalized.get("stage")).lower() != "cooldown":
+                continue
+        rows.append(dict(normalized))
+    rows.sort(
+        key=lambda row: (
+            0 if _text(row.get("stage")).lower() in {"executing", "disposing"} else 1,
+            -_safe_int(row.get("last_update_tick"), default=0),
+            _text(row.get("plan_key")),
+        )
+    )
+    return tuple(rows)
+
+
+def actor_assigned_crime_plans(sim, actor_eid, *, current_tick=None, include_inactive=False):
+    actor_eid = _safe_int(actor_eid, default=0)
+    if actor_eid <= 0:
+        return ()
+    rows = []
+    for organization_eid in sim.ecs.get(OrganizationCrimePlans).keys():
+        for row in organization_crime_plans(
+            sim,
+            organization_eid,
+            current_tick=current_tick,
+            include_inactive=include_inactive,
+        ):
+            assigned = set(row.get("assigned_member_eids", ()))
+            if actor_eid != _safe_int(row.get("leader_eid"), default=0) and actor_eid not in assigned:
+                continue
+            profile = organization_profile(sim, organization_eid)
+            rows.append(
+                {
+                    **row,
+                    "organization_key": _text(getattr(profile, "key", "")),
+                    "organization_name": _text(getattr(profile, "name", "")),
+                    "organization_kind": _normalize_org_kind(getattr(profile, "kind", ""), default="other") if profile else "other",
+                }
+            )
+    rows.sort(
+        key=lambda row: (
+            0 if _text(row.get("stage")).lower() == "executing" else 1,
+            -_safe_int(row.get("last_update_tick"), default=0),
+            _text(row.get("plan_key")),
+        )
+    )
+    return tuple(rows)
+
+
+def _organization_branch_state(sim):
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        sim.world_traits = {}
+        traits = sim.world_traits
+    state = traits.get("organization_branch_hydration")
+    if not isinstance(state, dict):
+        state = {}
+        traits["organization_branch_hydration"] = state
+    records = state.get("records")
+    if not isinstance(records, dict):
+        records = {}
+        state["records"] = records
+    return state
+
+
+def _organization_branch_key(organization_eid, *, property_id=None, building_id=None):
+    organization_eid = _safe_int(organization_eid, default=0)
+    property_id = _text(property_id)
+    building_id = _text(building_id)
+    if organization_eid <= 0 or (not property_id and not building_id):
+        return None
+    return f"{organization_eid}:{property_id or '-'}:{building_id or '-'}"
+
+
+def _branch_effective_response_state(sim, *, property_id="", organization_eid=None, root_organization_eid=None, current_tick=None):
+    property_id = _text(property_id)
+    if not property_id:
+        return {}
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        return {}
+    response_state = traits.get("organization_response")
+    if not isinstance(response_state, dict):
+        return {}
+    denials = response_state.get("property_denials")
+    if not isinstance(denials, dict):
+        return {}
+    denial = denials.get(property_id)
+    if not isinstance(denial, dict):
+        return {}
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    if tick > _safe_int(denial.get("service_denial_until_tick"), default=-1):
+        return {}
+    denial_org_eid = _safe_int(denial.get("organization_eid"), default=0)
+    denial_root_eid = _safe_int(denial.get("root_organization_eid"), default=0)
+    requested_org_eid = _safe_int(organization_eid, default=0)
+    requested_root_eid = _safe_int(root_organization_eid, default=0)
+    if requested_org_eid > 0 and denial_org_eid not in {0, requested_org_eid} and denial_root_eid not in {0, requested_root_eid}:
+        return {}
+    if requested_root_eid > 0 and denial_root_eid not in {0, requested_root_eid} and denial_org_eid not in {0, requested_org_eid}:
+        return {}
+    return {
+        "response_reason": _text(denial.get("reason")) or None,
+        "response_source_event": _text(denial.get("source_event")) or None,
+        "response_watchfulness": _safe_int(denial.get("watchfulness"), default=0),
+        "response_service_denial_until_tick": _safe_int(denial.get("service_denial_until_tick"), default=0) or None,
+        "response_target_eid": _safe_int(denial.get("target_eid"), default=0) or None,
+        "response_last_trigger_tick": _safe_int(denial.get("last_trigger_tick"), default=0) or None,
+        "response_practice_note": _text(denial.get("practice_note")) or None,
+    }
+
+
+def organization_branch_records(
+    sim,
+    *,
+    organization_eid=None,
+    property_id=None,
+    building_id=None,
+    active_only=True,
+):
+    records = _organization_branch_state(sim).get("records", {})
+    property_id = _text(property_id)
+    building_id = _text(building_id)
+    requested_org_eid = _safe_int(organization_eid, default=0)
+    rows = []
+    for branch_key, row in records.items():
+        if not isinstance(row, dict):
+            continue
+        row = dict(row)
+        if requested_org_eid > 0 and _safe_int(row.get("organization_eid"), default=0) != requested_org_eid:
+            continue
+        if property_id and _text(row.get("property_id")) != property_id:
+            continue
+        if building_id and _text(row.get("building_id")) != building_id:
+            continue
+        if active_only and not bool(row.get("active", True)):
+            continue
+        row["branch_key"] = _text(row.get("branch_key")) or _text(branch_key)
+        rows.append(row)
+    rows.sort(
+        key=lambda row: (
+            0 if bool(row.get("primary_operates", False)) else 1,
+            _text(row.get("organization_name")).lower(),
+            _safe_int(row.get("organization_eid"), default=0),
+        )
+    )
+    return tuple(rows)
+
+
+def hydrate_property_organization_branches(
+    sim,
+    prop,
+    *,
+    organization_eid=None,
+    current_tick=None,
+    active_only=True,
+):
+    if not isinstance(prop, dict):
+        return ()
+    metadata = _property_metadata(prop)
+    property_id = _text(prop.get("id")) or None
+    building_id = _text(metadata.get("building_id")) or _text(metadata.get("local_building_id")) or None
+    if property_id is None and building_id is None:
+        return ()
+
+    requested_org_eid = _safe_int(organization_eid, default=0)
+    grouped_links = {}
+    for link in property_org_links(sim, prop, active_only=False):
+        linked_org_eid = _safe_int(link.get("organization_eid"), default=0)
+        if linked_org_eid <= 0:
+            continue
+        if requested_org_eid > 0 and linked_org_eid != requested_org_eid:
+            continue
+        grouped_links.setdefault(linked_org_eid, []).append(dict(link))
+
+    state = _organization_branch_state(sim)
+    records = state["records"]
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    hydrated = []
+    for linked_org_eid, link_rows in grouped_links.items():
+        profile = organization_profile(sim, linked_org_eid)
+        if profile is None:
+            continue
+        active_links = tuple(link for link in link_rows if bool(link.get("active", True)))
+        branch_key = _organization_branch_key(
+            linked_org_eid,
+            property_id=property_id,
+            building_id=building_id,
+        )
+        if branch_key is None:
+            continue
+        existing = records.get(branch_key)
+        existing = dict(existing) if isinstance(existing, dict) else {}
+        policy = organization_policy_snapshot(sim, organization_eid=linked_org_eid)
+        vocabulary_rows = _collect_property_org_vocabulary(
+            sim,
+            prop,
+            organization_eid=linked_org_eid,
+            active_only=active_only,
+            current_tick=tick,
+            include_future=False,
+            include_expired=False,
+        ) if active_links else ()
+        watchlist_rows = _collect_property_org_watch_state(
+            sim,
+            prop,
+            subject_eid=None,
+            organization_eid=linked_org_eid,
+            active_only=active_only,
+            current_tick=tick,
+            include_future=False,
+            include_expired=False,
+        ) if active_links else ()
+        practice_rows = _collect_property_org_practices(
+            sim,
+            prop,
+            organization_eid=linked_org_eid,
+            active_only=active_only,
+            current_tick=tick,
+            include_future=False,
+            include_expired=False,
+        ) if active_links else ()
+        vocabulary_notes = _practice_bundle_notes(vocabulary_rows)
+        practice_notes = _practice_bundle_notes(practice_rows)
+        watchlist_latest_update_tick = max(
+            (
+                _safe_int(row.get("last_update_tick"), default=_safe_int(row.get("created_tick"), default=0))
+                for row in watchlist_rows
+            ),
+            default=0,
+        )
+        vocabulary_latest_update_tick = max(
+            (
+                _safe_int(row.get("last_update_tick"), default=_safe_int(row.get("created_tick"), default=0))
+                for row in vocabulary_rows
+            ),
+            default=0,
+        )
+        practice_latest_update_tick = max(
+            (
+                _safe_int(row.get("last_update_tick"), default=_safe_int(row.get("created_tick"), default=0))
+                for row in practice_rows
+            ),
+            default=0,
+        )
+        root_org_eid = _safe_int(policy.get("root_organization_eid"), default=linked_org_eid) or linked_org_eid
+        record = {
+            "branch_key": branch_key,
+            "organization_eid": int(linked_org_eid),
+            "organization_key": _text(profile.key),
+            "organization_name": _text(profile.name),
+            "organization_kind": _normalize_org_kind(profile.kind, default="other"),
+            "organization_family": _text(policy.get("family")) or None,
+            "organization_structure": _text(policy.get("structure")) or None,
+            "organization_role": _text(policy.get("org_role")) or None,
+            "root_organization_eid": root_org_eid,
+            "root_organization_key": _text(policy.get("root_organization_key")) or _text(profile.key),
+            "root_organization_name": _text(policy.get("root_organization_name")) or _text(profile.name),
+            "root_organization_kind": _text(policy.get("root_organization_kind")) or _normalize_org_kind(profile.kind, default="other"),
+            "property_id": property_id,
+            "building_id": building_id,
+            "active": bool(active_links),
+            "primary_operates": any(
+                bool(link.get("primary", False)) and _text(link.get("link_kind")).lower() == "operates"
+                for link in link_rows
+            ),
+            "link_kinds": tuple(
+                sorted(
+                    {
+                        _text(link.get("link_kind")).lower()
+                        for link in link_rows
+                        if _text(link.get("link_kind"))
+                    }
+                )
+            ),
+            "service_ids": property_service_ids(prop),
+            "field_domains": property_field_domains(prop),
+            "watchlist_entry_ids": tuple(
+                row.get("entry_id")
+                for row in watchlist_rows
+                if _safe_int(row.get("entry_id"), default=0) > 0
+            ),
+            "watchlist_entry_keys": tuple(
+                _text(row.get("entry_key"))
+                for row in watchlist_rows
+                if _text(row.get("entry_key"))
+            ),
+            "watchlist_actions": tuple(
+                sorted(
+                    {
+                        _text(row.get("action")).lower()
+                        for row in watchlist_rows
+                        if _text(row.get("action"))
+                    }
+                )
+            ),
+            "watchlist_count": len(watchlist_rows),
+            "watchlist_latest_update_tick": int(watchlist_latest_update_tick),
+            "vocabulary_entry_ids": tuple(
+                row.get("entry_id")
+                for row in vocabulary_rows
+                if _safe_int(row.get("entry_id"), default=0) > 0
+            ),
+            "vocabulary_entry_keys": tuple(
+                _text(row.get("entry_key"))
+                for row in vocabulary_rows
+                if _text(row.get("entry_key"))
+            ),
+            "vocabulary_kinds": tuple(
+                sorted(
+                    {
+                        _text(row.get("kind")).lower()
+                        for row in vocabulary_rows
+                        if _text(row.get("kind"))
+                    }
+                )
+            ),
+            "vocabulary_count": len(vocabulary_rows),
+            "vocabulary_note_text": "; ".join(vocabulary_notes),
+            "vocabulary_latest_update_tick": int(vocabulary_latest_update_tick),
+            "practice_entry_ids": tuple(
+                row.get("entry_id")
+                for row in practice_rows
+                if _safe_int(row.get("entry_id"), default=0) > 0
+            ),
+            "practice_entry_keys": tuple(
+                _text(row.get("entry_key"))
+                for row in practice_rows
+                if _text(row.get("entry_key"))
+            ),
+            "practice_kinds": tuple(
+                sorted(
+                    {
+                        _text(row.get("kind")).lower()
+                        for row in practice_rows
+                        if _text(row.get("kind"))
+                    }
+                )
+            ),
+            "practice_count": len(practice_rows),
+            "practice_note_text": "; ".join(practice_notes),
+            "practice_latest_update_tick": int(practice_latest_update_tick),
+            "practice_effect_modifiers": dict(_aggregate_practice_effect_modifiers(practice_rows)),
+            "first_hydrated_tick": _safe_int(existing.get("first_hydrated_tick"), default=tick) or tick,
+            "last_hydrated_tick": int(tick),
+            "source_update_tick": int(
+                max(
+                    vocabulary_latest_update_tick,
+                    practice_latest_update_tick,
+                    watchlist_latest_update_tick,
+                )
+            ),
+        }
+        record.update(
+            _branch_effective_response_state(
+                sim,
+                property_id=property_id or "",
+                organization_eid=linked_org_eid,
+                root_organization_eid=root_org_eid,
+                current_tick=tick,
+            )
+        )
+        records[branch_key] = record
+        hydrated.append(dict(record))
+    hydrated = tuple(
+        sorted(
+            hydrated,
+            key=lambda row: (
+                0 if bool(row.get("primary_operates", False)) else 1,
+                _text(row.get("organization_name")).lower(),
+                _safe_int(row.get("organization_eid"), default=0),
+            ),
+        )
+    )
+    if hydrated and property_id:
+        refresh_loaded_organization_branch_briefings(
+            sim,
+            property_ids=(property_id,),
+            reason="branch_hydrate",
+        )
+    return hydrated
+
+
+def property_org_branch_hydration(
+    sim,
+    prop,
+    *,
+    organization_eid=None,
+    current_tick=None,
+    active_only=True,
+    hydrate=True,
+):
+    if not isinstance(prop, dict):
+        return ()
+    if hydrate:
+        return hydrate_property_organization_branches(
+            sim,
+            prop,
+            organization_eid=organization_eid,
+            current_tick=current_tick,
+            active_only=active_only,
+        )
+    metadata = _property_metadata(prop)
+    property_id = _text(prop.get("id")) or None
+    building_id = _text(metadata.get("building_id")) or _text(metadata.get("local_building_id")) or None
+    return organization_branch_records(
+        sim,
+        organization_eid=organization_eid,
+        property_id=property_id,
+        building_id=building_id,
+        active_only=active_only,
+    )
+
+
+def _hydrate_linked_branch_records_for_organization(sim, organization_eid):
+    target_org_eid = _safe_int(organization_eid, default=0)
+    if target_org_eid <= 0:
+        return ()
+    target_org_eids = [target_org_eid]
+    target_org_eids.extend(
+        int(row.get("organization_eid", 0))
+        for row in organization_child_organizations(sim, target_org_eid, recursive=True)
+        if _safe_int(row.get("organization_eid"), default=0) > 0
+    )
+    props_by_id = {}
+    for current_org_eid in target_org_eids:
+        profile = organization_profile(sim, current_org_eid)
+        if profile is None:
+            continue
+        for property_id in tuple(getattr(profile, "site_property_ids", ()) or ()):
+            prop = sim.properties.get(property_id)
+            if isinstance(prop, dict):
+                props_by_id[_text(property_id)] = prop
+    hydrated = []
+    for prop in props_by_id.values():
+        hydrated.extend(
+            hydrate_property_organization_branches(
+                sim,
+                prop,
+                current_tick=getattr(sim, "tick", 0),
+                active_only=True,
+            )
+        )
+    if props_by_id:
+        refresh_loaded_organization_branch_briefings(
+            sim,
+            property_ids=tuple(props_by_id.keys()),
+            reason="organization_refresh",
+        )
+    return tuple(hydrated)
+
+
+def _organization_actor_briefing_state(sim):
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        sim.world_traits = {}
+        traits = sim.world_traits
+    state = traits.get("organization_actor_briefings")
+    if not isinstance(state, dict):
+        state = {}
+        traits["organization_actor_briefings"] = state
+    packets = state.get("packets")
+    if not isinstance(packets, dict):
+        packets = {}
+        state["packets"] = packets
+    return state
+
+
+def _actor_branch_packet_key(actor_eid, organization_eid, *, property_id=None, building_id=None):
+    actor_eid = _safe_int(actor_eid, default=0)
+    organization_eid = _safe_int(organization_eid, default=0)
+    property_id = _text(property_id)
+    building_id = _text(building_id)
+    if actor_eid <= 0 or organization_eid <= 0 or (not property_id and not building_id):
+        return None
+    return f"{actor_eid}:{organization_eid}:{property_id or '-'}:{building_id or '-'}"
+
+
+def _briefing_note_texts(*groups, limit=6):
+    notes = []
+    seen = set()
+    for group in groups:
+        values = group if isinstance(group, (list, tuple)) else (group,)
+        for value in values:
+            text = _text(value)
+            key = text.lower()
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            notes.append(text)
+            if len(notes) >= max(1, int(limit)):
+                return tuple(notes)
+    return tuple(notes)
+
+
+def _relation_access_effect(kind):
+    relation_kind = _text(kind).lower()
+    if relation_kind == "oversight":
+        return {
+            "reason_tag": "oversight_access",
+            "standing_floor": 0.86,
+            "public_entry_grace": True,
+            "service_grace": False,
+            "guard_grace": True,
+            "service_softness_bonus": 0.0,
+            "staffing_relief_bonus": 0.0,
+            "note": "Oversight access applies here.",
+        }
+    if relation_kind == "service":
+        return {
+            "reason_tag": "service_relation",
+            "standing_floor": 0.0,
+            "public_entry_grace": True,
+            "service_grace": True,
+            "guard_grace": True,
+            "service_softness_bonus": 0.06,
+            "staffing_relief_bonus": 0.0,
+            "note": "Service affiliation softens the front here.",
+        }
+    if relation_kind == "represents":
+        return {
+            "reason_tag": "represented_access",
+            "standing_floor": 0.0,
+            "public_entry_grace": True,
+            "service_grace": True,
+            "guard_grace": True,
+            "service_softness_bonus": 0.08,
+            "staffing_relief_bonus": 0.05,
+            "note": "Representation buys some front-door grace here.",
+        }
+    if relation_kind == "bargains_with":
+        return {
+            "reason_tag": "bargained_service",
+            "standing_floor": 0.0,
+            "public_entry_grace": False,
+            "service_grace": True,
+            "guard_grace": False,
+            "service_softness_bonus": 0.1,
+            "staffing_relief_bonus": 0.14,
+            "note": "A bargaining line softens service friction here.",
+        }
+    return {
+        "reason_tag": "",
+        "standing_floor": 0.0,
+        "public_entry_grace": False,
+        "service_grace": False,
+        "guard_grace": False,
+        "service_softness_bonus": 0.0,
+        "staffing_relief_bonus": 0.0,
+        "note": "",
+    }
+
+
+def _organization_relation_access_rows(
+    sim,
+    actor_eid,
+    prop,
+    *,
+    membership_organization_eid=None,
+):
+    if actor_eid is None or not isinstance(prop, dict):
+        return ()
+    property_target_eids = set()
+    for link in property_org_links(sim, prop, active_only=True):
+        linked_org_eid = _safe_int(link.get("organization_eid"), default=0)
+        if linked_org_eid <= 0:
+            continue
+        property_target_eids.update(
+            _organization_lineage_eids(
+                sim,
+                linked_org_eid,
+                include_self=True,
+                max_depth=8,
+            )
+        )
+    if not property_target_eids:
+        return ()
+    requested_membership_org_eid = _safe_int(membership_organization_eid, default=0)
+    rows = []
+    seen = set()
+    for membership in actor_org_memberships(sim, actor_eid, active_only=True):
+        membership_org_eid = _safe_int(membership.get("organization_eid"), default=0)
+        if membership_org_eid <= 0:
+            continue
+        if requested_membership_org_eid > 0 and membership_org_eid != requested_membership_org_eid:
+            continue
+        membership_lineage = _organization_lineage_eids(
+            sim,
+            membership_org_eid,
+            include_self=True,
+            max_depth=8,
+        )
+        for source_org_eid in membership_lineage:
+            for relation in organization_relations(sim, source_org_eid, active_only=True):
+                relation_kind = _text(relation.get("kind")).lower()
+                if relation_kind not in {"oversight", "service", "represents", "bargains_with"}:
+                    continue
+                target_org_eid = _safe_int(relation.get("target_org_eid"), default=0)
+                if target_org_eid <= 0 or target_org_eid not in property_target_eids:
+                    continue
+                effect = _relation_access_effect(relation_kind)
+                key = (membership_org_eid, source_org_eid, target_org_eid, relation_kind)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(
+                    {
+                        **relation,
+                        **effect,
+                        "actor_eid": int(actor_eid),
+                        "membership_organization_eid": int(membership_org_eid),
+                        "membership_role": _text(membership.get("role")).lower() or "member",
+                        "membership_title": _text(membership.get("title")) or None,
+                        "source_organization_eid": int(source_org_eid),
+                    }
+                )
+        for source_org_eid in property_target_eids:
+            for relation in organization_relations(sim, source_org_eid, active_only=True):
+                relation_kind = _text(relation.get("kind")).lower()
+                if relation_kind != "bargains_with":
+                    continue
+                target_org_eid = _safe_int(relation.get("target_org_eid"), default=0)
+                if target_org_eid <= 0 or target_org_eid not in membership_lineage:
+                    continue
+                effect = _relation_access_effect(relation_kind)
+                key = (membership_org_eid, source_org_eid, target_org_eid, relation_kind)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(
+                    {
+                        **relation,
+                        **effect,
+                        "actor_eid": int(actor_eid),
+                        "membership_organization_eid": int(membership_org_eid),
+                        "membership_role": _text(membership.get("role")).lower() or "member",
+                        "membership_title": _text(membership.get("title")) or None,
+                        "source_organization_eid": int(source_org_eid),
+                    }
+                )
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: (
+                0
+                if _text(row.get("kind")).lower() == "oversight"
+                else 1
+                if _text(row.get("kind")).lower() == "service"
+                else 2
+                if _text(row.get("kind")).lower() == "represents"
+                else 3,
+                _text(row.get("organization_name")).lower(),
+                _safe_int(row.get("target_org_eid"), default=0),
+            ),
+        )
+    )
+
+
+def _briefing_branch_packets(sim, actor_eid, prop=None):
+    state = _organization_actor_briefing_state(sim)
+    property_id = _text((prop or {}).get("id")) if isinstance(prop, dict) else ""
+    packets = []
+    for row in state.get("packets", {}).values():
+        if not isinstance(row, dict):
+            continue
+        if _safe_int(row.get("actor_eid"), default=0) != _safe_int(actor_eid, default=0):
+            continue
+        if property_id and _text(row.get("property_id")) != property_id:
+            continue
+        packets.append(dict(row))
+    packets.sort(
+        key=lambda row: (
+            int(row.get("authority_rank", 70)),
+            _text(row.get("organization_name")).lower(),
+            _safe_int(row.get("organization_eid"), default=0),
+        )
+    )
+    return tuple(packets)
+
+
+def refresh_actor_branch_briefing(sim, actor_eid, prop=None, reason=""):
+    actor_eid = _safe_int(actor_eid, default=0)
+    if actor_eid <= 0:
+        return ()
+    props = []
+    if isinstance(prop, dict):
+        props.append(prop)
+    else:
+        seen_property_ids = set()
+        for membership in actor_org_memberships(sim, actor_eid, active_only=True):
+            property_id = _text(membership.get("site_property_id"))
+            if not property_id or property_id in seen_property_ids:
+                continue
+            candidate = sim.properties.get(property_id)
+            if not isinstance(candidate, dict):
+                continue
+            seen_property_ids.add(property_id)
+            props.append(candidate)
+    state = _organization_actor_briefing_state(sim)
+    packets = state["packets"]
+    if not props:
+        stale_keys = [
+            packet_key
+            for packet_key, row in packets.items()
+            if _safe_int((row or {}).get("actor_eid"), default=0) == actor_eid
+        ]
+        for packet_key in stale_keys:
+            packets.pop(packet_key, None)
+        return ()
+
+    built_keys = set()
+    built_packets = []
+    memberships = actor_org_memberships(sim, actor_eid, active_only=True)
+    for current_prop in props:
+        property_id = _text(current_prop.get("id"))
+        building_id = _text(_property_metadata(current_prop).get("building_id")) or _text(_property_metadata(current_prop).get("local_building_id"))
+        workplace_posture = local_workplace_org_posture(
+            sim,
+            current_prop,
+            actor_eid=actor_eid,
+            current_tick=getattr(sim, "tick", 0),
+        )
+        workplace_lineage_eids = set()
+        for linked_org_eid in tuple(workplace_posture.get("corporate_org_eids", ())) + tuple(workplace_posture.get("collective_org_eids", ())):
+            workplace_lineage_eids.update(
+                _organization_lineage_eids(
+                    sim,
+                    linked_org_eid,
+                    include_self=True,
+                    max_depth=8,
+                )
+            )
+        for membership in memberships:
+            membership_org_eid = _safe_int(membership.get("organization_eid"), default=0)
+            if membership_org_eid <= 0 or not _membership_targets_property(current_prop, membership_org_eid, membership):
+                continue
+            branch_rows = property_org_branch_hydration(
+                sim,
+                current_prop,
+                organization_eid=membership_org_eid,
+                current_tick=getattr(sim, "tick", 0),
+                active_only=True,
+                hydrate=False,
+            )
+            if not branch_rows:
+                branch_rows = property_org_branch_hydration(
+                    sim,
+                    current_prop,
+                    organization_eid=membership_org_eid,
+                    current_tick=getattr(sim, "tick", 0),
+                    active_only=True,
+                    hydrate=True,
+                )
+            branch_row = next(
+                (
+                    row
+                    for row in branch_rows
+                    if _safe_int(row.get("organization_eid"), default=0) == membership_org_eid
+                ),
+                None,
+            )
+            if not isinstance(branch_row, dict):
+                continue
+            directive_rows = [
+                row
+                for row in actor_org_vocabulary(
+                    sim,
+                    actor_eid,
+                    organization_eid=membership_org_eid,
+                    active_only=True,
+                    current_tick=getattr(sim, "tick", 0),
+                )
+                if _text(row.get("kind")).lower() in {"directive", "site_brief", "subject_notice"}
+            ]
+            watch_rows = list(
+                actor_org_watch_state(
+                    sim,
+                    actor_eid,
+                    organization_eid=membership_org_eid,
+                    active_only=True,
+                    current_tick=getattr(sim, "tick", 0),
+                )
+            )
+            practice_bundle = local_operational_practice_bundle(
+                sim,
+                actor_eid=actor_eid,
+                prop=current_prop,
+                organization_eid=membership_org_eid,
+                active_only=True,
+                current_tick=getattr(sim, "tick", 0),
+            )
+            crime_plan_rows = [
+                row
+                for row in actor_assigned_crime_plans(
+                    sim,
+                    actor_eid,
+                    current_tick=getattr(sim, "tick", 0),
+                )
+                if _safe_int(row.get("organization_eid"), default=0) == membership_org_eid
+                and property_id in {
+                    _text(row.get("target_property_id")),
+                    _text(row.get("staging_property_id")),
+                    _text(row.get("disposal_property_id")),
+                }
+            ]
+            relation_rows = list(
+                _organization_relation_access_rows(
+                    sim,
+                    actor_eid,
+                    current_prop,
+                    membership_organization_eid=membership_org_eid,
+                )
+            )
+            response_watchfulness = _safe_int(branch_row.get("response_watchfulness"), default=0)
+            response_reason = _text(branch_row.get("response_reason")).replace("_", " ")
+            response_note = _text(branch_row.get("response_practice_note"))
+            if not response_note and response_watchfulness > 0:
+                response_note = f"Branch is on alert after {response_reason or 'recent trouble'}."
+            workplace_notes = ()
+            if membership_org_eid in workplace_lineage_eids:
+                workplace_notes = tuple(workplace_posture.get("note_texts", ()) or ())
+            note_texts = _briefing_note_texts(
+                _practice_bundle_notes(directive_rows, limit=3),
+                tuple(_text(row.get("reason")) for row in watch_rows),
+                practice_bundle.get("note_text"),
+                response_note,
+                workplace_notes,
+                tuple(_text(row.get("note")) for row in relation_rows),
+                tuple(
+                    f"Active crew plan: {_text(row.get('kind')).replace('_', ' ')} ({_text(row.get('stage')).replace('_', ' ')})"
+                    for row in crime_plan_rows
+                ),
+            )
+            directive_entry_keys = tuple(
+                _text(row.get("entry_key"))
+                for row in directive_rows
+                if _text(row.get("entry_key"))
+            )
+            watch_entry_keys = tuple(
+                _text(row.get("entry_key"))
+                for row in watch_rows
+                if _text(row.get("entry_key"))
+            )
+            relation_token = tuple(
+                f"{_text(row.get('kind'))}:{_safe_int(row.get('source_organization_eid'), default=0)}:{_safe_int(row.get('target_org_eid'), default=0)}"
+                for row in relation_rows
+            )
+            crime_plan_token = tuple(
+                f"{_text(row.get('plan_key'))}:{_text(row.get('stage'))}:{_text(row.get('kind'))}"
+                for row in crime_plan_rows
+            )
+            packet_token = (
+                int(branch_row.get("source_update_tick", 0)),
+                int(branch_row.get("response_last_trigger_tick") or 0),
+                tuple(sorted(directive_entry_keys)),
+                tuple(sorted(watch_entry_keys)),
+                relation_token,
+                crime_plan_token,
+                _text(membership.get("role")).lower(),
+                _text(membership.get("title")).lower(),
+                int(membership.get("authority_rank", 70)),
+            )
+            packet_key = _actor_branch_packet_key(
+                actor_eid,
+                membership_org_eid,
+                property_id=property_id,
+                building_id=building_id,
+            )
+            if packet_key is None:
+                continue
+            built_keys.add(packet_key)
+            packet = {
+                "packet_key": packet_key,
+                "actor_eid": int(actor_eid),
+                "organization_eid": int(membership_org_eid),
+                "organization_key": _text(membership.get("organization_key")),
+                "organization_name": _text(membership.get("organization_name")),
+                "root_organization_eid": _safe_int(branch_row.get("root_organization_eid"), default=membership_org_eid),
+                "root_organization_key": _text(branch_row.get("root_organization_key")),
+                "root_organization_name": _text(branch_row.get("root_organization_name")),
+                "branch_key": _text(branch_row.get("branch_key")),
+                "property_id": property_id or None,
+                "building_id": building_id or None,
+                "membership_role": _text(membership.get("role")).lower() or "member",
+                "membership_kind": _text(membership.get("kind")).lower() or "membership",
+                "membership_title": _text(membership.get("title")) or None,
+                "membership_primary": bool(membership.get("primary", False)),
+                "authority_rank": int(membership.get("authority_rank", 70)),
+                "directive_rows": tuple(directive_rows),
+                "directive_entry_keys": directive_entry_keys,
+                "watch_rows": tuple(watch_rows),
+                "watch_entry_keys": watch_entry_keys,
+                "crime_plan_rows": tuple(crime_plan_rows),
+                "crime_plan_keys": tuple(
+                    _text(row.get("plan_key"))
+                    for row in crime_plan_rows
+                    if _text(row.get("plan_key"))
+                ),
+                "practice_note_text": _text(practice_bundle.get("note_text")) or None,
+                "practice_effect_modifiers": dict(practice_bundle.get("effect_modifiers", {})),
+                "branch_note_text": _text(branch_row.get("vocabulary_note_text")) or None,
+                "workplace_state_label": _text(workplace_posture.get("dominant_label")) or None,
+                "workplace_note_text": "; ".join(workplace_notes) if workplace_notes else None,
+                "response_watchfulness": response_watchfulness,
+                "response_service_denial_until_tick": _safe_int(branch_row.get("response_service_denial_until_tick"), default=0) or None,
+                "response_target_eid": _safe_int(branch_row.get("response_target_eid"), default=0) or None,
+                "response_note_text": response_note or None,
+                "access_grace_rows": tuple(relation_rows),
+                "access_grace_reasons": tuple(
+                    _text(row.get("reason_tag"))
+                    for row in relation_rows
+                    if _text(row.get("reason_tag"))
+                ),
+                "note_texts": note_texts,
+                "note_text": "; ".join(note_texts),
+                "source_update_tick": int(
+                    max(
+                        _safe_int(branch_row.get("source_update_tick"), default=0),
+                        _safe_int(branch_row.get("response_last_trigger_tick"), default=0),
+                    )
+                ),
+                "cache_reason": _text(reason) or None,
+                "packet_token": packet_token,
+            }
+            packets[packet_key] = packet
+            built_packets.append(dict(packet))
+        stale_keys = [
+            packet_key
+            for packet_key, row in packets.items()
+            if _safe_int((row or {}).get("actor_eid"), default=0) == actor_eid
+            and _text((row or {}).get("property_id")) == property_id
+            and packet_key not in built_keys
+        ]
+        for packet_key in stale_keys:
+            packets.pop(packet_key, None)
+    return tuple(
+        sorted(
+            built_packets,
+            key=lambda row: (
+                int(row.get("authority_rank", 70)),
+                _text(row.get("organization_name")).lower(),
+                _safe_int(row.get("organization_eid"), default=0),
+            ),
+        )
+    )
+
+
+def actor_branch_briefing_packet(sim, actor_eid, prop=None, current_tick=None):
+    del current_tick
+    packets = refresh_actor_branch_briefing(sim, actor_eid, prop=prop, reason="query")
+    if not packets:
+        packets = _briefing_branch_packets(sim, actor_eid, prop=prop)
+    directive_rows = []
+    watch_rows = []
+    access_rows = []
+    crime_plan_rows = []
+    seen_directives = set()
+    seen_watch = set()
+    seen_access = set()
+    seen_plan_rows = set()
+    organization_eids = []
+    organization_keys = []
+    note_texts = []
+    practice_note_texts = []
+    response_watchfulness = 0
+    source_update_tick = 0
+    property_id = _text((prop or {}).get("id")) if isinstance(prop, dict) else ""
+    building_id = ""
+    for packet in packets:
+        if not building_id:
+            building_id = _text(packet.get("building_id"))
+        response_watchfulness = max(
+            response_watchfulness,
+            _safe_int(packet.get("response_watchfulness"), default=0),
+        )
+        source_update_tick = max(
+            source_update_tick,
+            _safe_int(packet.get("source_update_tick"), default=0),
+        )
+        organization_eid = _safe_int(packet.get("organization_eid"), default=0)
+        if organization_eid > 0 and organization_eid not in organization_eids:
+            organization_eids.append(organization_eid)
+        organization_key = _text(packet.get("organization_key"))
+        if organization_key and organization_key not in organization_keys:
+            organization_keys.append(organization_key)
+        practice_note = _text(packet.get("practice_note_text"))
+        if practice_note:
+            practice_note_texts.append(practice_note)
+        for text in packet.get("note_texts", ()) or ():
+            clean_text = _text(text)
+            if clean_text:
+                note_texts.append(clean_text)
+        for row in packet.get("directive_rows", ()) or ():
+            key = (int(row.get("organization_eid", 0)), int(row.get("entry_id", 0)))
+            if key in seen_directives:
+                continue
+            seen_directives.add(key)
+            directive_rows.append(dict(row))
+        for row in packet.get("watch_rows", ()) or ():
+            key = (int(row.get("organization_eid", 0)), int(row.get("entry_id", 0)))
+            if key in seen_watch:
+                continue
+            seen_watch.add(key)
+            watch_rows.append(dict(row))
+        for row in packet.get("access_grace_rows", ()) or ():
+            key = (
+                _text(row.get("kind")),
+                _safe_int(row.get("source_organization_eid"), default=0),
+                _safe_int(row.get("target_org_eid"), default=0),
+            )
+            if key in seen_access:
+                continue
+            seen_access.add(key)
+            access_rows.append(dict(row))
+        for row in packet.get("crime_plan_rows", ()) or ():
+            key = (
+                _text(row.get("plan_key")),
+                _safe_int(row.get("organization_eid"), default=0),
+            )
+            if key in seen_plan_rows:
+                continue
+            seen_plan_rows.add(key)
+            crime_plan_rows.append(dict(row))
+    merged_notes = _briefing_note_texts(note_texts, practice_note_texts)
+    return {
+        "actor_eid": _safe_int(actor_eid, default=0) or None,
+        "property_id": property_id or (_text(packets[0].get("property_id")) if packets else None),
+        "building_id": building_id or None,
+        "packet_count": len(packets),
+        "organization_eids": tuple(organization_eids),
+        "organization_keys": tuple(organization_keys),
+        "directive_rows": _sort_vocabulary_rows(directive_rows),
+        "watch_rows": _sort_watchlist_rows(watch_rows),
+        "access_grace_rows": tuple(access_rows),
+        "crime_plan_rows": tuple(
+            sorted(
+                crime_plan_rows,
+                key=lambda row: (
+                    _text(row.get("stage")).lower(),
+                    _text(row.get("kind")).lower(),
+                    _text(row.get("plan_key")),
+                ),
+            )
+        ),
+        "practice_note_texts": tuple(_briefing_note_texts(practice_note_texts)),
+        "response_watchfulness": int(response_watchfulness),
+        "note_texts": merged_notes,
+        "note_text": "; ".join(merged_notes),
+        "source_update_tick": int(source_update_tick),
+        "branch_packets": packets,
+    }
+
+
+def _workplace_practice_rows(sim, prop, *, current_tick=None):
+    rows = []
+    for row in property_org_practices(
+        sim,
+        prop,
+        active_only=True,
+        current_tick=current_tick,
+        hydrate_branch=False,
+    ):
+        modifiers = row.get("effect_modifiers") if isinstance(row.get("effect_modifiers"), dict) else {}
+        modifier_keys = {
+            _text(key).lower().replace(" ", "_")
+            for key in modifiers.keys()
+            if _text(key)
+        }
+        if not modifier_keys.intersection(WORKPLACE_EFFECT_KEYS):
+            continue
+        local_org_eid = _safe_int(
+            row.get("requested_organization_eid"),
+            default=_safe_int(row.get("organization_eid"), default=0),
+        )
+        policy = organization_policy_snapshot(sim, local_org_eid) if local_org_eid > 0 else None
+        family = _text((policy or {}).get("family")).lower()
+        if family == "corporate":
+            posture_family = "corporate"
+        elif family in COLLECTIVE_ORG_FAMILIES:
+            posture_family = "collective"
+        else:
+            continue
+        rows.append(
+            {
+                **row,
+                "local_organization_eid": local_org_eid,
+                "posture_family": posture_family,
+            }
+        )
+    return _sort_practice_rows(rows)
+
+
+def _workplace_relation_rows(sim, prop):
+    if not isinstance(prop, dict):
+        return ()
+    linked_eids = {
+        _safe_int(link.get("organization_eid"), default=0)
+        for link in property_org_links(sim, prop, active_only=True)
+        if _safe_int(link.get("organization_eid"), default=0) > 0
+    }
+    if not linked_eids:
+        return ()
+    rows = []
+    seen = set()
+    for source_org_eid in linked_eids:
+        for relation in organization_relations(sim, source_org_eid, active_only=True):
+            relation_kind = _text(relation.get("kind")).lower()
+            if relation_kind not in {"represents", "bargains_with"}:
+                continue
+            target_org_eid = _safe_int(relation.get("target_org_eid"), default=0)
+            if target_org_eid <= 0 or target_org_eid not in linked_eids:
+                continue
+            key = (source_org_eid, target_org_eid, relation_kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            effect = _relation_access_effect(relation_kind)
+            rows.append(
+                {
+                    **relation,
+                    **effect,
+                    "source_organization_eid": int(source_org_eid),
+                    "target_org_eid": int(target_org_eid),
+                }
+            )
+    return tuple(
+        sorted(
+            rows,
+            key=lambda row: (
+                0 if _text(row.get("kind")).lower() == "represents" else 1,
+                _text(row.get("organization_name")).lower(),
+                _safe_int(row.get("target_org_eid"), default=0),
+            ),
+        )
+    )
+
+
+def _workplace_allowed_phases(prop):
+    metadata = _property_metadata(prop) if isinstance(prop, dict) else {}
+    archetype = _text(metadata.get("archetype", (prop or {}).get("kind"))).lower()
+    domains = set(property_field_domains(prop)) if isinstance(prop, dict) else set()
+    services = set(property_service_ids(prop)) if isinstance(prop, dict) else set()
+    phases = set()
+
+    if archetype in {"bank", "brokerage", "office", "tower", "biotech_clinic", "data_center", "co_working_hub"} or domains.intersection({"finance", "professional_services", "technology"}):
+        phases.update({"owner_screening", "paperwork_surge", "shift_handoff"})
+    if archetype in {"courier_office", "contractor_office", "warehouse"} or domains.intersection({"logistics", "transit", "repair", "property_services"}):
+        phases.update({"manifest_check", "dispatch_surge", "loading_push", "day_labor_call", "shift_handoff"})
+    if domains.intersection({"medical", "support"}) or archetype in {"clinic", "biotech_clinic"} or services.intersection({"rest", "shelter"}):
+        phases.update({"clinic_outreach", "mutual_aid_table", "shift_handoff"})
+    if bool(metadata.get("public")) or _text(metadata.get("customer_policy")).lower() == "public":
+        phases.update({"owner_screening", "shift_handoff"})
+    if not phases:
+        phases.add("shift_handoff")
+    return phases
+
+
+def _workplace_phase_label(phase):
+    phase_key = _text(phase).lower()
+    if phase_key == "owner_screening":
+        return "Screened Entry"
+    if phase_key == "paperwork_surge":
+        return "Paperwork Surge"
+    if phase_key == "manifest_check":
+        return "Manifest Check"
+    if phase_key == "dispatch_surge":
+        return "Dispatch Surge"
+    if phase_key == "shift_handoff":
+        return "Shift Handoff"
+    if phase_key == "day_labor_call":
+        return "Crew Call"
+    if phase_key == "clinic_outreach":
+        return "Clinic Outreach"
+    if phase_key == "mutual_aid_table":
+        return "Mutual Aid Table"
+    if phase_key == "loading_push":
+        return "Loading Push"
+    return phase_key.replace("_", " ").title()
+
+
+def _actor_has_corporate_lineage_grace(sim, actor_eid, corporate_org_eids):
+    actor_eid = _safe_int(actor_eid, default=0)
+    if actor_eid <= 0:
+        return False
+    target_lineage = set()
+    for organization_eid in tuple(corporate_org_eids or ()):
+        target_lineage.update(
+            _organization_lineage_eids(
+                sim,
+                organization_eid,
+                include_self=True,
+                max_depth=8,
+            )
+        )
+    if not target_lineage:
+        return False
+    for membership in actor_org_memberships(sim, actor_eid, active_only=True):
+        membership_org_eid = _safe_int(membership.get("organization_eid"), default=0)
+        if membership_org_eid <= 0:
+            continue
+        policy = organization_policy_snapshot(sim, membership_org_eid)
+        if _text((policy or {}).get("family")).lower() != "corporate":
+            continue
+        lineage = set(
+            _organization_lineage_eids(
+                sim,
+                membership_org_eid,
+                include_self=True,
+                max_depth=8,
+            )
+        )
+        if lineage.intersection(target_lineage):
+            return True
+    return False
+
+
+def local_workplace_org_posture(sim, prop, *, actor_eid=None, current_tick=None):
+    if not isinstance(prop, dict):
+        return {
+            "active": False,
+            "dominant_phase": "",
+            "dominant_label": "",
+            "scene_biases": {},
+            "screening_grace": False,
+            "service_softness_bonus": 0.0,
+            "staffing_relief_bonus": 0.0,
+            "note_texts": (),
+            "note_text": "",
+            "reason_tags": (),
+            "open_roles": (),
+        }
+
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    practice_rows = _workplace_practice_rows(sim, prop, current_tick=tick)
+    corporate_rows = [row for row in practice_rows if _text(row.get("posture_family")) == "corporate"]
+    collective_rows = [row for row in practice_rows if _text(row.get("posture_family")) == "collective"]
+    relation_rows = list(_workplace_relation_rows(sim, prop))
+    corporate_modifiers = _aggregate_practice_effect_modifiers(corporate_rows)
+    collective_modifiers = _aggregate_practice_effect_modifiers(collective_rows)
+
+    try:
+        from game.organization_reputation import organization_instability_profile
+    except Exception:
+        organization_instability_profile = None
+    try:
+        from game.player_businesses import player_business_status_snapshot
+    except Exception:
+        player_business_status_snapshot = None
+
+    instability = (
+        organization_instability_profile(sim, prop=prop, ensure=True)
+        if callable(organization_instability_profile)
+        else {}
+    ) or {}
+    business_snapshot = (
+        player_business_status_snapshot(sim, prop)
+        if callable(player_business_status_snapshot)
+        else None
+    )
+    business_snapshot = business_snapshot if isinstance(business_snapshot, dict) else {}
+
+    open_roles = tuple(
+        _text(role).lower()
+        for role in tuple(business_snapshot.get("open_roles", ()) or ())
+        if _text(role)
+    )
+    required_staff = max(0, _safe_int(business_snapshot.get("required_staff"), default=0))
+    staff_total = max(0, _safe_int(business_snapshot.get("staff_total"), default=0))
+    shortage = max(0, required_staff - staff_total) if required_staff > 0 else 0
+    staffing_pressure = 0.0
+    if required_staff > 0:
+        staffing_pressure = max(staffing_pressure, min(1.0, float(shortage) / float(required_staff)))
+    if open_roles:
+        staffing_pressure = max(staffing_pressure, min(1.0, 0.28 + (0.16 * len(open_roles))))
+    if bool(instability.get("underrepresented", False)):
+        staffing_pressure = max(
+            staffing_pressure,
+            min(
+                1.0,
+                0.24 + (_safe_float(instability.get("coverage_pressure"), default=0.0) * 0.75),
+            ),
+        )
+
+    staffing_relief_bonus = _safe_float(collective_modifiers.get("staffing_relief_bonus"), default=0.0)
+    staffing_relief_bonus += sum(
+        _safe_float(row.get("staffing_relief_bonus"), default=0.0)
+        for row in relation_rows
+    )
+    if staffing_relief_bonus > 0.0:
+        staffing_pressure = max(0.0, staffing_pressure - min(0.4, staffing_relief_bonus))
+
+    service_softness_bonus = _safe_float(collective_modifiers.get("service_softness_bonus"), default=0.0)
+    service_softness_bonus += sum(
+        _safe_float(row.get("service_softness_bonus"), default=0.0)
+        for row in relation_rows
+    )
+
+    scene_biases = {}
+    allowed_phases = _workplace_allowed_phases(prop)
+    scene_biases["owner_screening"] = _safe_float(corporate_modifiers.get("screening_bias"), default=0.0)
+    scene_biases["paperwork_surge"] = _safe_float(corporate_modifiers.get("paperwork_bias"), default=0.0)
+    scene_biases["manifest_check"] = _safe_float(corporate_modifiers.get("manifest_bias"), default=0.0)
+    scene_biases["dispatch_surge"] = _safe_float(corporate_modifiers.get("dispatch_bias"), default=0.0)
+    scene_biases["shift_handoff"] = _safe_float(corporate_modifiers.get("handoff_bias"), default=0.0) + _safe_float(collective_modifiers.get("handoff_bias"), default=0.0)
+    scene_biases["day_labor_call"] = _safe_float(collective_modifiers.get("crew_bias"), default=0.0)
+    scene_biases["clinic_outreach"] = _safe_float(collective_modifiers.get("support_bias"), default=0.0)
+    scene_biases["mutual_aid_table"] = _safe_float(collective_modifiers.get("aid_bias"), default=0.0)
+    scene_biases["loading_push"] = _safe_float(collective_modifiers.get("loading_bias"), default=0.0)
+
+    if staffing_pressure > 0.0:
+        scene_biases["day_labor_call"] = scene_biases.get("day_labor_call", 0.0) + (staffing_pressure * 0.75)
+        scene_biases["loading_push"] = scene_biases.get("loading_push", 0.0) + (staffing_pressure * 0.45)
+        scene_biases["shift_handoff"] = scene_biases.get("shift_handoff", 0.0) + (staffing_pressure * 0.25)
+    if service_softness_bonus > 0.0:
+        scene_biases["clinic_outreach"] = scene_biases.get("clinic_outreach", 0.0) + min(0.4, service_softness_bonus * 1.5)
+        scene_biases["mutual_aid_table"] = scene_biases.get("mutual_aid_table", 0.0) + min(0.35, service_softness_bonus * 1.2)
+
+    filtered_scene_biases = {
+        phase: float(score)
+        for phase, score in scene_biases.items()
+        if phase in allowed_phases and float(score) > 0.0
+    }
+    dominant_phase = ""
+    dominant_score = 0.0
+    for phase, score in filtered_scene_biases.items():
+        if score > dominant_score:
+            dominant_phase = phase
+            dominant_score = float(score)
+
+    corporate_org_eids = tuple(
+        sorted(
+            {
+                _safe_int(row.get("local_organization_eid"), default=0)
+                for row in corporate_rows
+                if _safe_int(row.get("local_organization_eid"), default=0) > 0
+            }
+        )
+    )
+    screening_grace = bool(corporate_rows) and dominant_score >= 0.55 and _actor_has_corporate_lineage_grace(
+        sim,
+        actor_eid,
+        corporate_org_eids,
+    )
+
+    corporate_notes = list(_practice_bundle_notes(corporate_rows, limit=2))
+    collective_notes = list(_practice_bundle_notes(collective_rows, limit=2))
+    relation_notes = [
+        _text(row.get("note"))
+        for row in relation_rows
+        if _text(row.get("note"))
+    ]
+    if screening_grace:
+        corporate_notes.append("Corporate branch staff can clear the front desk with less friction here.")
+    elif corporate_rows and scene_biases.get("owner_screening", 0.0) >= 0.45:
+        corporate_notes.append("The front is running tighter screening and manifest habits than usual.")
+    if collective_rows and staffing_relief_bonus > 0.0:
+        collective_notes.append("Collective backing is helping keep the floor together under staffing strain.")
+    elif collective_rows and service_softness_bonus > 0.0:
+        collective_notes.append("Collective support is making the front read softer and more coordinated.")
+    if collective_rows and open_roles:
+        collective_notes.append("Open roles are visible, but the crew is trying to hold the shift together.")
+
+    reason_tags = []
+    if corporate_rows:
+        reason_tags.append("corporate_discipline")
+    if collective_rows:
+        reason_tags.append("collective_support")
+    if relation_rows:
+        reason_tags.append("collective_relations")
+    if staffing_pressure > 0.0:
+        reason_tags.append("staffing_pressure")
+
+    note_texts = _briefing_note_texts(corporate_notes, collective_notes, relation_notes)
+    return {
+        "active": bool(corporate_rows or collective_rows or relation_rows),
+        "corporate_rows": tuple(corporate_rows),
+        "collective_rows": tuple(collective_rows),
+        "relation_rows": tuple(relation_rows),
+        "corporate_org_eids": corporate_org_eids,
+        "collective_org_eids": tuple(
+            sorted(
+                {
+                    _safe_int(row.get("local_organization_eid"), default=0)
+                    for row in collective_rows
+                    if _safe_int(row.get("local_organization_eid"), default=0) > 0
+                }
+            )
+        ),
+        "screening_grace": bool(screening_grace),
+        "service_softness_bonus": float(service_softness_bonus),
+        "staffing_relief_bonus": float(staffing_relief_bonus),
+        "staffing_pressure": float(staffing_pressure),
+        "open_roles": tuple(open_roles),
+        "dominant_phase": dominant_phase,
+        "dominant_label": _workplace_phase_label(dominant_phase) if dominant_phase else "",
+        "dominant_score": float(dominant_score),
+        "scene_biases": dict(filtered_scene_biases),
+        "reason_tags": tuple(reason_tags),
+        "note_texts": note_texts,
+        "note_text": "; ".join(note_texts),
+    }
+
+
+def _legacy_property_denial_state(sim, prop, *, viewer_eid=None, current_tick=None):
+    if not isinstance(prop, dict):
+        return None
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        return None
+    response_state = traits.get("organization_response")
+    if not isinstance(response_state, dict):
+        return None
+    denials = response_state.get("property_denials")
+    if not isinstance(denials, dict):
+        return None
+    property_id = _text(prop.get("id"))
+    denial = denials.get(property_id)
+    if not isinstance(denial, dict):
+        return None
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    if tick > _safe_int(denial.get("service_denial_until_tick"), default=-1):
+        return None
+    target_eid = _safe_int(denial.get("target_eid"), default=0) or None
+    if viewer_eid is not None and target_eid not in {None, _safe_int(viewer_eid, default=0) or None}:
+        return None
+    return dict(denial)
+
+
+def _protective_incident_matches_property(sim, incident, prop):
+    if not isinstance(incident, dict) or not isinstance(prop, dict):
+        return False
+    property_id = _text(prop.get("id"))
+    if property_id and property_id == _text(incident.get("property_id")):
+        return True
+    prop_building_id = _text(_property_metadata(prop).get("building_id"))
+    if not prop_building_id:
+        return False
+    incident_prop = sim.properties.get(_text(incident.get("property_id")))
+    if not isinstance(incident_prop, dict):
+        return False
+    return prop_building_id == _text(_property_metadata(incident_prop).get("building_id"))
+
+
+def _organization_is_vigilante(sim, policy):
+    if not isinstance(policy, dict):
+        return False
+    if _text(policy.get("family")).lower() != "street_gang":
+        return False
+    root_eid = _safe_int(
+        policy.get("root_organization_eid"),
+        default=_safe_int(policy.get("organization_eid"), default=0),
+    )
+    if root_eid <= 0:
+        return False
+    root_profile = organization_profile(sim, root_eid)
+    root_tags = {
+        _text(tag).lower()
+        for tag in getattr(root_profile, "tags", ()) or ()
+        if _text(tag)
+    }
+    return "gang_posture:vigilante" in root_tags
+
+
+def _protective_practice_rows(sim, prop, *, current_tick=None):
+    rows = []
+    for row in property_org_practices(
+        sim,
+        prop,
+        active_only=True,
+        current_tick=current_tick,
+        hydrate_branch=False,
+    ):
+        modifiers = row.get("effect_modifiers") if isinstance(row.get("effect_modifiers"), dict) else {}
+        if not any(_text(key).lower() in PROTECTIVE_EFFECT_KEYS for key in modifiers.keys()):
+            continue
+        local_org_eid = _safe_int(
+            row.get("requested_organization_eid"),
+            default=_safe_int(row.get("organization_eid"), default=0),
+        )
+        policy = organization_policy_snapshot(sim, local_org_eid) if local_org_eid > 0 else None
+        family = _text((policy or {}).get("family")).lower()
+        if family == "municipal":
+            protective_family = "civic"
+        elif _organization_is_vigilante(sim, policy):
+            protective_family = "vigilante"
+        else:
+            continue
+        rows.append(
+            {
+                **row,
+                "local_organization_eid": local_org_eid,
+                "protective_family": protective_family,
+            }
+        )
+    return _sort_practice_rows(rows)
+
+
+def _recent_protective_history_rows(sim, prop, *, current_tick=None, max_age=PROTECTIVE_PRESSURE_RESPONSE_TICKS):
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict) or not isinstance(prop, dict):
+        return ()
+    state = traits.get("organization_response")
+    if not isinstance(state, dict):
+        return ()
+    history = state.get("history")
+    if not isinstance(history, list):
+        return ()
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    property_id = _text(prop.get("id"))
+    return tuple(
+        dict(row)
+        for row in history
+        if isinstance(row, dict)
+        and _text(row.get("property_id")) == property_id
+        and tick - _safe_int(row.get("tick"), default=-10_000) <= int(max_age)
+    )
+
+
+def _recent_official_incidents_for_property(sim, prop, *, current_tick=None, max_age=PROTECTIVE_PRESSURE_RECENT_TICKS):
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    rows = []
+    for incident in incident_records(sim):
+        if not isinstance(incident, dict):
+            continue
+        if not bool(incident.get("officially_reported") or incident.get("justice_accounted")):
+            continue
+        if not _protective_incident_matches_property(sim, incident, prop):
+            continue
+        report_tick = max(
+            _safe_int(incident.get("justice_accounted_tick"), default=0),
+            _safe_int(incident.get("reported_tick"), default=0),
+            _safe_int(incident.get("last_observed_tick"), default=0),
+        )
+        if tick - report_tick > int(max_age):
+            continue
+        rows.append(dict(incident))
+    return tuple(rows)
+
+
+def local_protective_pressure_snapshot(sim, prop, *, current_tick=None):
+    if not isinstance(prop, dict):
+        return {
+            "active": False,
+            "state_key": "",
+            "state_label": "",
+            "summary": "",
+            "action": "",
+            "watchfulness": 0,
+            "reason_tags": (),
+            "note_texts": (),
+            "note_text": "",
+            "official_incident_count": 0,
+            "recent_response_count": 0,
+            "recent_dispatch_count": 0,
+        }
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    metadata = _property_metadata(prop)
+    archetype = _text(metadata.get("archetype", prop.get("kind"))).lower()
+    watch_rows = property_org_watch_state(sim, prop, active_only=True, current_tick=tick)
+    denial_rows = [
+        row for row in watch_rows
+        if _text(row.get("action")).lower() in {"deny_service", "deny_entry"}
+    ]
+    legacy_denial = _legacy_property_denial_state(sim, prop, current_tick=tick)
+    practice_rows = _protective_practice_rows(sim, prop, current_tick=tick)
+    vigilante_rows = [row for row in practice_rows if _text(row.get("protective_family")) == "vigilante"]
+    civic_rows = [row for row in practice_rows if _text(row.get("protective_family")) == "civic"]
+    vigilante_modifiers = _aggregate_practice_effect_modifiers(vigilante_rows)
+    civic_modifiers = _aggregate_practice_effect_modifiers(civic_rows)
+    official_incidents = _recent_official_incidents_for_property(sim, prop, current_tick=tick)
+    violent_count = sum(
+        1
+        for incident in official_incidents
+        if _text(incident.get("kind")).lower() == "action_offense"
+    )
+    dispatch_count = sum(
+        1
+        for incident in official_incidents
+        if max(
+            _safe_int(incident.get("dispatch_active_tick"), default=-10_000),
+            _safe_int(incident.get("dispatch_pending_tick"), default=-10_000),
+        ) >= tick - PROTECTIVE_PRESSURE_RESPONSE_TICKS
+    )
+    response_rows = _recent_protective_history_rows(sim, prop, current_tick=tick)
+    watchfulness = 0
+    for row in watch_rows:
+        action = _text(row.get("action")).lower()
+        base = _safe_int(row.get("priority"), default=60)
+        if action == "deny_entry":
+            watchfulness = max(watchfulness, min(100, base + 18))
+        elif action == "deny_service":
+            watchfulness = max(watchfulness, min(100, base + 10))
+        else:
+            watchfulness = max(watchfulness, min(100, base))
+    if isinstance(legacy_denial, dict):
+        watchfulness = max(watchfulness, _safe_int(legacy_denial.get("watchfulness"), default=0))
+    watchfulness_bonus = int(round(
+        _safe_float(vigilante_modifiers.get("watchfulness_bonus"), default=0.0)
+        + _safe_float(civic_modifiers.get("watchfulness_bonus"), default=0.0)
+        + _safe_float(vigilante_modifiers.get("watch_priority_bonus"), default=0.0)
+        + _safe_float(civic_modifiers.get("watch_priority_bonus"), default=0.0)
+    ))
+    official_pressure = min(
+        26,
+        (len(official_incidents) * 4)
+        + (violent_count * 4)
+        + (dispatch_count * 5)
+        + (len(response_rows) * 4),
+    )
+    watchfulness = max(
+        watchfulness,
+        min(100, watchfulness + watchfulness_bonus + official_pressure),
+    )
+    readiness_tier = int(
+        max(
+            0,
+            round(_safe_float(vigilante_modifiers.get("response_readiness_tier"), default=0.0)),
+            round(_safe_float(civic_modifiers.get("response_readiness_tier"), default=0.0)),
+        )
+    )
+    response_score_bonus = float(vigilante_modifiers.get("response_score_bonus", 0.0) or 0.0) + float(civic_modifiers.get("response_score_bonus", 0.0) or 0.0)
+    confrontation_posture = float(vigilante_modifiers.get("confrontation_posture_bonus", 0.0) or 0.0) + float(civic_modifiers.get("confrontation_posture_bonus", 0.0) or 0.0)
+    report_conversion_bonus = float(vigilante_modifiers.get("report_conversion_bonus", 0.0) or 0.0) + float(civic_modifiers.get("report_conversion_bonus", 0.0) or 0.0)
+    dispatch_bonus = float(vigilante_modifiers.get("dispatch_bonus", 0.0) or 0.0) + float(civic_modifiers.get("dispatch_bonus", 0.0) or 0.0)
+    followthrough_bonus = float(vigilante_modifiers.get("response_followthrough_bonus", 0.0) or 0.0) + float(civic_modifiers.get("response_followthrough_bonus", 0.0) or 0.0)
+    note_texts = _practice_bundle_notes(practice_rows, limit=3)
+    state_key = ""
+    state_label = ""
+    summary = ""
+    action = ""
+    if archetype == "checkpoint" and (civic_rows or dispatch_count > 0 or len(official_incidents) > 0) and watchfulness >= 14:
+        state_key = "checkpoint_questioning"
+        state_label = "Checkpoint Questioning"
+        summary = "guards are slowing entries, asking harder questions, and holding the lane tighter than usual"
+        action = "expect scrutiny at the gate or look for a softer route"
+    elif (vigilante_rows or denial_rows or response_rows) and watchfulness >= 14:
+        state_key = "block_watch_active"
+        state_label = "Block Watch Active"
+        summary = "locals are watching exits, sharing names, and tightening service against trouble"
+        action = "respect the boundary, talk your way through, or press the block at a cost"
+    elif (civic_rows or dispatch_count > 0 or len(official_incidents) >= 2) and watchfulness >= 16:
+        state_key = "justice_sweep"
+        state_label = "Justice Sweep"
+        summary = "official responders are working the area harder and keeping follow-up close at hand"
+        action = "expect faster scrutiny, tighter frontage reads, and less slack"
+    elif watchfulness >= 10 or len(official_incidents) > 0 or watch_rows:
+        state_key = "residents_on_alert"
+        state_label = "Residents on Alert"
+        summary = "people nearby are reading the block carefully and treating trouble like it might return"
+        action = "move carefully, ask around, or wait for the block to cool"
+    reason_tags = []
+    if denial_rows:
+        reason_tags.append("watch_denial")
+    if vigilante_rows:
+        reason_tags.append("vigilante_readiness")
+    if civic_rows:
+        reason_tags.append("civic_readiness")
+    if dispatch_count > 0:
+        reason_tags.append("recent_dispatch")
+    if official_incidents:
+        reason_tags.append("official_incidents")
+    if response_rows:
+        reason_tags.append("recent_response")
+    merged_notes = _briefing_note_texts(note_texts)
+    return {
+        "active": bool(state_key),
+        "state_key": state_key,
+        "state_label": state_label,
+        "summary": summary,
+        "action": action,
+        "watchfulness": int(watchfulness),
+        "official_incident_count": len(official_incidents),
+        "violent_incident_count": int(violent_count),
+        "recent_response_count": len(response_rows),
+        "recent_dispatch_count": int(dispatch_count),
+        "active_watch_count": len(watch_rows),
+        "active_denial_count": len(denial_rows) + (1 if isinstance(legacy_denial, dict) else 0),
+        "response_readiness_tier": int(readiness_tier),
+        "response_score_bonus": float(response_score_bonus),
+        "confrontation_posture_bonus": float(confrontation_posture),
+        "report_conversion_bonus": float(report_conversion_bonus),
+        "dispatch_bonus": float(dispatch_bonus),
+        "response_followthrough_bonus": float(followthrough_bonus),
+        "reason_tags": tuple(reason_tags),
+        "note_texts": merged_notes,
+        "note_text": "; ".join(merged_notes),
+    }
+
+
+def effective_org_access_posture(sim, actor_eid, prop, current_tick=None):
+    if actor_eid is None or not isinstance(prop, dict):
+        return {
+            "briefing": {},
+            "watch_rows": (),
+            "relation_rows": (),
+            "workplace_posture": {},
+            "deny_entry": False,
+            "deny_service": False,
+            "watch_only": False,
+            "watchfulness": 0,
+            "standing_floor": 0.0,
+            "public_entry_grace": False,
+            "service_grace": False,
+            "guard_grace": False,
+            "service_softness_bonus": 0.0,
+            "reason_tags": (),
+            "note_text": "",
+            "legacy_denial": None,
+        }
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    briefing = actor_branch_briefing_packet(sim, actor_eid, prop=prop, current_tick=tick)
+    watch_rows = property_org_watch_state(
+        sim,
+        prop,
+        subject_eid=actor_eid,
+        active_only=True,
+        current_tick=tick,
+    )
+    relation_rows = _organization_relation_access_rows(sim, actor_eid, prop)
+    workplace = local_workplace_org_posture(
+        sim,
+        prop,
+        actor_eid=actor_eid,
+        current_tick=tick,
+    )
+    legacy_denial = _legacy_property_denial_state(
+        sim,
+        prop,
+        viewer_eid=actor_eid,
+        current_tick=tick,
+    )
+
+    deny_entry = False
+    deny_service = False
+    watch_only = False
+    watchfulness = 0
+    standing_floor = 0.0
+    public_entry_grace = False
+    service_grace = False
+    guard_grace = False
+    service_softness_bonus = 0.0
+    reason_tags = []
+    note_texts = []
+
+    for row in relation_rows:
+        standing_floor = max(standing_floor, float(row.get("standing_floor", 0.0) or 0.0))
+        public_entry_grace = bool(public_entry_grace or row.get("public_entry_grace"))
+        service_grace = bool(service_grace or row.get("service_grace"))
+        guard_grace = bool(guard_grace or row.get("guard_grace"))
+        service_softness_bonus = max(
+            service_softness_bonus,
+            _safe_float(row.get("service_softness_bonus"), default=0.0),
+        )
+        reason_tag = _text(row.get("reason_tag"))
+        if reason_tag and reason_tag not in reason_tags:
+            reason_tags.append(reason_tag)
+        note = _text(row.get("note"))
+        if note:
+            note_texts.append(note)
+
+    for row in watch_rows:
+        action = _text(row.get("action")).lower()
+        if action == "deny_entry":
+            deny_entry = True
+            deny_service = True
+            watch_only = True
+            watchfulness = max(watchfulness, min(100, int(row.get("priority", 60)) + 18))
+        elif action == "deny_service":
+            deny_service = True
+            watch_only = True
+            watchfulness = max(watchfulness, min(100, int(row.get("priority", 60)) + 10))
+        else:
+            watch_only = True
+            watchfulness = max(watchfulness, min(100, int(row.get("priority", 60))))
+        reason = _text(row.get("reason"))
+        if reason:
+            note_texts.append(reason)
+
+    if isinstance(legacy_denial, dict):
+        deny_service = True
+        watch_only = True
+        watchfulness = max(watchfulness, _safe_int(legacy_denial.get("watchfulness"), default=0))
+        legacy_reason = _text(legacy_denial.get("reason"))
+        if legacy_reason and "organization_denial" not in reason_tags:
+            reason_tags.append("organization_denial")
+        if legacy_reason:
+            note_texts.append(legacy_reason.replace("_", " "))
+
+    if briefing.get("response_watchfulness"):
+        watchfulness = max(watchfulness, _safe_int(briefing.get("response_watchfulness"), default=0))
+    protective = local_protective_pressure_snapshot(sim, prop, current_tick=tick)
+    if bool(workplace.get("screening_grace")):
+        public_entry_grace = True
+        standing_floor = max(standing_floor, 0.42)
+        if "corporate_screening" not in reason_tags:
+            reason_tags.append("corporate_screening")
+    workplace_softness = _safe_float(workplace.get("service_softness_bonus"), default=0.0)
+    if workplace_softness > 0.0 and (service_grace or bool(briefing.get("packet_count"))):
+        service_softness_bonus = max(service_softness_bonus, workplace_softness)
+        if "collective_softness" not in reason_tags:
+            reason_tags.append("collective_softness")
+    if protective.get("watchfulness"):
+        watchfulness = max(watchfulness, _safe_int(protective.get("watchfulness"), default=0))
+    if protective.get("state_key") and "protective_pressure" not in reason_tags:
+        reason_tags.append("protective_pressure")
+    if protective.get("state_label"):
+        note_texts.append(_text(protective.get("state_label")))
+    if protective.get("summary"):
+        note_texts.append(_text(protective.get("summary")))
+    if workplace.get("dominant_label") and "workplace_posture" not in reason_tags:
+        reason_tags.append("workplace_posture")
+    if workplace.get("dominant_label"):
+        note_texts.append(_text(workplace.get("dominant_label")))
+    if workplace.get("note_text"):
+        note_texts.append(_text(workplace.get("note_text")))
+    note_texts.extend(briefing.get("note_texts", ()) or ())
+    merged_notes = _briefing_note_texts(note_texts)
+    return {
+        "briefing": briefing,
+        "watch_rows": tuple(watch_rows),
+        "relation_rows": tuple(relation_rows),
+        "workplace_posture": dict(workplace) if isinstance(workplace, dict) else {},
+        "deny_entry": bool(deny_entry),
+        "deny_service": bool(deny_service),
+        "watch_only": bool(watch_only),
+        "watchfulness": int(watchfulness),
+        "standing_floor": float(standing_floor),
+        "public_entry_grace": bool(public_entry_grace),
+        "service_grace": bool(service_grace),
+        "guard_grace": bool(guard_grace),
+        "service_softness_bonus": float(service_softness_bonus),
+        "reason_tags": tuple(reason_tags),
+        "note_text": "; ".join(merged_notes),
+        "note_texts": merged_notes,
+        "legacy_denial": dict(legacy_denial) if isinstance(legacy_denial, dict) else None,
+        "protective_pressure": dict(protective) if isinstance(protective, dict) else {},
+    }
+
+
+def organization_guard_grace_active(sim, actor_eid, prop, current_tick=None):
+    posture = effective_org_access_posture(
+        sim,
+        actor_eid,
+        prop,
+        current_tick=current_tick,
+    )
+    return bool(posture.get("guard_grace")) and not bool(posture.get("deny_entry"))
+
+
+def refresh_loaded_organization_branch_briefings(sim, *, property_ids=None, reason=""):
+    state = _organization_actor_briefing_state(sim)
+    if bool(state.get("refreshing", False)):
+        return ()
+    state["refreshing"] = True
+    properties = []
+    seen_property_ids = set()
+    try:
+        for property_id in property_ids or ():
+            prop = sim.properties.get(property_id)
+            if not isinstance(prop, dict):
+                continue
+            clean_property_id = _text(prop.get("id"))
+            if not clean_property_id or clean_property_id in seen_property_ids:
+                continue
+            seen_property_ids.add(clean_property_id)
+            properties.append(prop)
+        refreshed = []
+        positions = sim.ecs.get(Position)
+        for prop in properties:
+            if not property_org_links(sim, prop, active_only=True):
+                continue
+            for row in property_org_members(sim, prop):
+                actor_eid = _safe_int(row.get("eid"), default=0)
+                if actor_eid <= 0 or positions.get(actor_eid) is None:
+                    continue
+                refreshed.extend(
+                    refresh_actor_branch_briefing(
+                        sim,
+                        actor_eid,
+                        prop=prop,
+                        reason=reason or "property_refresh",
+                    )
+                )
+        return tuple(refreshed)
+    finally:
+        state["refreshing"] = False
 
 
 def property_organization_eid(sim, prop, ensure=False):
@@ -3048,6 +6524,13 @@ def link_property_organization(
         metadata["organization_key"] = _text(profile.key)
         metadata["organization_name"] = _text(profile.name)
         metadata["organization_kind"] = _normalize_org_kind(profile.kind, default="business")
+    hydrate_property_organization_branches(
+        sim,
+        prop,
+        organization_eid=organization_eid,
+        current_tick=getattr(sim, "tick", 0),
+        active_only=True,
+    )
     return dict(row)
 
 
@@ -3166,6 +6649,9 @@ def relate_organizations(
                 "directed": False,
             },
         )
+    _hydrate_linked_branch_records_for_organization(sim, source_org_eid)
+    if int(target_org_eid) != int(source_org_eid):
+        _hydrate_linked_branch_records_for_organization(sim, target_org_eid)
     return dict(row)
 
 
@@ -3506,6 +6992,14 @@ def assign_actor_organization(
         profile.member_eids.discard(int(actor_eid))
     _reconcile_primary_memberships(affiliations)
     _refresh_profile_member_cache(sim, organization_eid)
+    property_id = _text(site_property_id)
+    prop = sim.properties.get(property_id) if property_id else None
+    refresh_actor_branch_briefing(
+        sim,
+        actor_eid,
+        prop=prop if isinstance(prop, dict) else None,
+        reason="membership_update",
+    )
     return int(organization_eid)
 
 

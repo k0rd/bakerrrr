@@ -29,6 +29,7 @@ from game.components import (
     Inventory,
     ItemUseProfile,
     JusticeProfile,
+    CriminalDriveState,
     MovementThrottle,
     NPCMemory,
     NPCNeeds,
@@ -168,10 +169,21 @@ from game.system_support.interaction_ordering import (
     _manhattan,
     _normalized_direction,
 )
+from game.system_support.access_runtime import _attempt_locked_property_entry_with_sim
+from game.system_support.criminal_drive_runtime import (
+    active_plan_for_actor,
+    attempt_criminal_affiliation,
+    criminal_drive_state,
+    criminal_affiliation_targets,
+    find_registered_item_system,
+    nearest_target_ground_item,
+)
 from game.system_support.npc_behavior_runtime import (
     BEHAVIOR_APPRAISE_STREET_GOODS,
     BEHAVIOR_AVOID_AUTHORITIES,
     BEHAVIOR_COLLECT_GROUND_CREDITS,
+    BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME,
+    BEHAVIOR_COMMIT_PLANNED_CRIME,
     BEHAVIOR_AVOID_THREAT,
     BEHAVIOR_BUY_DESIRED_DRUG,
     BEHAVIOR_BUY_PLAYER_GOODS,
@@ -181,6 +193,7 @@ from game.system_support.npc_behavior_runtime import (
     BEHAVIOR_PROTECT_ALLIES,
     BEHAVIOR_SCAVENGE_LOOSE_ITEMS,
     BEHAVIOR_SELL_SCAVENGED_ITEMS,
+    BEHAVIOR_SEEK_CRIMINAL_AFFILIATION,
     BEHAVIOR_SEEK_SHELTER,
     BEHAVIOR_SEEK_SOCIAL_CONTACT,
     BEHAVIOR_SEEK_MEDICAL_AID,
@@ -1209,6 +1222,27 @@ class NPCWillSystem(System):
             target=target,
             target_eid=target_eid,
         ))
+        if intent in {"casing_target", "committing_property_crime", "rendezvousing_crew", "seeking_criminal_affiliation"}:
+            drive = criminal_drive_state(self.sim, eid, create=False)
+            try:
+                organization_eid = int(getattr(drive, "current_affiliation_organization_eid", 0) or 0) or None
+            except (TypeError, ValueError):
+                organization_eid = None
+            self.sim.emit(Event(
+                "npc_crime_attempt_started",
+                npc_eid=eid,
+                intent=intent,
+                score=round(score, 2),
+                target=target,
+                target_eid=target_eid,
+                plan_key=str(getattr(drive, "current_plan_key", "") or "").strip() or None,
+                property_id=str(getattr(drive, "current_target_property_id", "") or "").strip() or None,
+                organization_eid=organization_eid,
+                summary=str(getattr(drive, "current_activity_summary", "") or "").strip() or None,
+                x=int(target[0]) if isinstance(target, (list, tuple)) and len(target) >= 1 else None,
+                y=int(target[1]) if isinstance(target, (list, tuple)) and len(target) >= 2 else None,
+                z=int(target[2]) if isinstance(target, (list, tuple)) and len(target) >= 3 else None,
+            ))
 
     def update(self):
         ais = self.sim.ecs.get(AI)
@@ -1225,6 +1259,7 @@ class NPCWillSystem(System):
         justices = self.sim.ecs.get(JusticeProfile)
         identities = self.sim.ecs.get(CreatureIdentity)
         vitalities = self.sim.ecs.get(Vitality)
+        criminal_drives = self.sim.ecs.get(CriminalDriveState)
         player_eid = getattr(self.sim, "player_eid", None)
         player_pos = positions.get(player_eid)
         dialog_state = getattr(self.sim, "dialog_ui", None)
@@ -1439,6 +1474,23 @@ class NPCWillSystem(System):
                 will.target_eid = ai.target_eid
                 will.last_tick = self.sim.tick
                 continue
+
+            drive_state = criminal_drives.get(eid)
+            if ai.state in {"casing_target", "committing_property_crime", "rendezvousing_crew", "seeking_criminal_affiliation"} and ai.target:
+                cooldown_until = int(getattr(drive_state, "cooldown_until_tick", 0) or 0) if drive_state is not None else 0
+                preserve_crime_state = cooldown_until <= int(self.sim.tick)
+                active_plan = active_plan_for_actor(self.sim, eid, current_tick=self.sim.tick) if preserve_crime_state else None
+                active_plan_stage = str((active_plan or {}).get("stage", "") or "").strip().lower()
+                if ai.state == "rendezvousing_crew" and active_plan_stage not in {"forming", "rendezvous"}:
+                    preserve_crime_state = False
+                elif ai.state == "committing_property_crime" and active_plan_stage in {"forming", "rendezvous"}:
+                    preserve_crime_state = False
+                if preserve_crime_state:
+                    will.intent = ai.state
+                    will.target = ai.target
+                    will.target_eid = ai.target_eid
+                    will.last_tick = self.sim.tick
+                    continue
 
             active_threat_context = None
             if ai.state in {"protecting", "seeking_safety"} and (ai.target or ai.target_eid is not None):
@@ -2129,6 +2181,87 @@ class NPCWillSystem(System):
                             best_target = avoidance_target["target"]
                             best_target_eid = avoidance_target.get("authority_eid")
 
+            if drive_state is not None and int(getattr(drive_state, "cooldown_until_tick", 0) or 0) <= int(self.sim.tick):
+                planned_behavior = _effective_behavior_value(
+                    self.sim,
+                    eid,
+                    BEHAVIOR_COMMIT_PLANNED_CRIME,
+                    traits=traits,
+                    needs=needs,
+                    vitality=vitality,
+                )
+                opportunistic_behavior = _effective_behavior_value(
+                    self.sim,
+                    eid,
+                    BEHAVIOR_COMMIT_OPPORTUNISTIC_CRIME,
+                    traits=traits,
+                    needs=needs,
+                    vitality=vitality,
+                )
+                affiliation_behavior = _effective_behavior_value(
+                    self.sim,
+                    eid,
+                    BEHAVIOR_SEEK_CRIMINAL_AFFILIATION,
+                    traits=traits,
+                    needs=needs,
+                    vitality=vitality,
+                )
+                active_plan = active_plan_for_actor(self.sim, eid, current_tick=self.sim.tick)
+                if isinstance(active_plan, dict):
+                    stage = str(active_plan.get("stage", "") or "").strip().lower()
+                    if stage in {"forming", "rendezvous"}:
+                        property_id = str(active_plan.get("staging_property_id", "") or "").strip()
+                    elif stage == "disposing":
+                        property_id = str(active_plan.get("disposal_property_id", "") or "").strip() or str(active_plan.get("target_property_id", "") or "").strip()
+                    else:
+                        property_id = str(active_plan.get("target_property_id", "") or "").strip()
+                    target_prop = self.sim.properties.get(property_id) if property_id else None
+                    target_focus = _property_focus_position(target_prop) if isinstance(target_prop, dict) else None
+                    plan_score = float(getattr(drive_state, "planned_crime_score", 0.0) or 0.0) * (0.35 + (planned_behavior * 0.7))
+                    if stage in {"forming", "rendezvous"}:
+                        plan_score += 8.0
+                        plan_intent = "rendezvousing_crew"
+                    else:
+                        plan_intent = "committing_property_crime"
+                    if target_focus and plan_score > best_score:
+                        best_intent = plan_intent
+                        best_score = plan_score
+                        best_target = target_focus
+                        best_target_eid = None
+                else:
+                    affiliation_target_property_id = str(getattr(drive_state, "current_affiliation_target_property_id", "") or "").strip()
+                    affiliation_target_prop = self.sim.properties.get(affiliation_target_property_id) if affiliation_target_property_id else None
+                    affiliation_focus = _property_focus_position(affiliation_target_prop) if isinstance(affiliation_target_prop, dict) else None
+                    affiliation_score = float(getattr(drive_state, "affiliation_seek_score", 0.0) or 0.0) * (0.4 + (affiliation_behavior * 0.75))
+                    if (
+                        affiliation_focus
+                        and affiliation_score > best_score
+                        and float(getattr(drive_state, "pressure", 0.0) or 0.0) >= 0.36
+                        and float(getattr(drive_state, "confidence", 0.0) or 0.0) <= 0.68
+                    ):
+                        best_intent = "seeking_criminal_affiliation"
+                        best_score = affiliation_score
+                        best_target = affiliation_focus
+                        best_target_eid = None
+
+                    crime_x = getattr(drive_state, "current_target_x", None)
+                    crime_y = getattr(drive_state, "current_target_y", None)
+                    crime_z = getattr(drive_state, "current_target_z", None)
+                    if crime_x is not None and crime_y is not None and crime_z is not None:
+                        opportunistic_score = float(getattr(drive_state, "opportunistic_crime_score", 0.0) or 0.0) * (
+                            0.42 + (opportunistic_behavior * 0.68)
+                        )
+                        if float(getattr(drive_state, "confidence", 0.0) or 0.0) < 0.46:
+                            intent = "casing_target"
+                            opportunistic_score *= 0.92
+                        else:
+                            intent = "committing_property_crime"
+                        if opportunistic_score > best_score:
+                            best_intent = intent
+                            best_score = opportunistic_score
+                            best_target = (int(crime_x), int(crime_y), int(crime_z))
+                            best_target_eid = None
+
             street_buy_terms = _street_buy_terms(
                 self.sim,
                 eid,
@@ -2416,6 +2549,10 @@ class NPCInvestigateSystem(System):
         "chasing": 1,
         "scavenging": 2,
         "selling_scavenged": 2,
+        "casing_target": 2,
+        "committing_property_crime": 2,
+        "rendezvousing_crew": 2,
+        "seeking_criminal_affiliation": 2,
         "evading_authority": 1,
         "seeking_street_buyer": 2,
         "seeking_street_appraiser": 2,
@@ -2542,6 +2679,10 @@ class NPCInvestigateSystem(System):
             "chasing",
             "scavenging",
             "selling_scavenged",
+            "casing_target",
+            "committing_property_crime",
+            "rendezvousing_crew",
+            "seeking_criminal_affiliation",
             "evading_authority",
             "seeking_street_buyer",
             "seeking_street_appraiser",
@@ -2669,6 +2810,107 @@ class NPCInvestigateSystem(System):
                 continue
 
             if pos.x == tx and pos.y == ty:
+                drive_state = criminal_drive_state(self.sim, eid, create=False)
+                if ai.state == "casing_target":
+                    if drive_state is not None:
+                        drive_state.current_activity_stage = "cased"
+                        drive_state.cooldown_until_tick = max(
+                            int(self.sim.tick) + 8,
+                            int(getattr(drive_state, "cooldown_until_tick", 0) or 0),
+                        )
+                    ai.state = "idle"
+                    ai.target = None
+                    ai.target_eid = None
+                    self.sim.emit(Event(
+                        "npc_crime_attempt_resolved",
+                        npc_eid=eid,
+                        success=False,
+                        reason="cased_target",
+                        plan_key=str(getattr(drive_state, "current_plan_key", "") or "").strip() or None,
+                        x=tx,
+                        y=ty,
+                        z=tz,
+                    ))
+                    if throttle:
+                        throttle.next_move_tick = self.sim.tick + 1
+                    else:
+                        self.next_move_tick[eid] = self.sim.tick + 1
+                    continue
+
+                if ai.state == "seeking_criminal_affiliation":
+                    if drive_state is not None:
+                        result = attempt_criminal_affiliation(
+                            self.sim,
+                            eid,
+                            organization_eid=getattr(drive_state, "current_affiliation_organization_eid", None),
+                            property_id=getattr(drive_state, "current_affiliation_target_property_id", None),
+                            current_tick=self.sim.tick,
+                        )
+                        success = bool((result or {}).get("accepted"))
+                        drive_state.last_affiliation_seek_tick = int(self.sim.tick)
+                        drive_state.cooldown_until_tick = int(self.sim.tick) + (24 if success else 40)
+                        if not success:
+                            drive_state.last_failure_tick = int(self.sim.tick)
+                    ai.state = "idle"
+                    ai.target = None
+                    ai.target_eid = None
+                    if throttle:
+                        throttle.next_move_tick = self.sim.tick + 1
+                    else:
+                        self.next_move_tick[eid] = self.sim.tick + 1
+                    continue
+
+                if ai.state == "rendezvousing_crew":
+                    if drive_state is not None:
+                        drive_state.current_activity_stage = "rendezvous"
+                    ai.target = (pos.x, pos.y, pos.z)
+                    if throttle:
+                        throttle.next_move_tick = self.sim.tick + hold_cooldown
+                    else:
+                        self.next_move_tick[eid] = self.sim.tick + hold_cooldown
+                    continue
+
+                if ai.state == "committing_property_crime":
+                    item_system = find_registered_item_system(self.sim)
+                    ground_item = nearest_target_ground_item(
+                        self.sim,
+                        getattr(drive_state, "current_target_property_id", None) if drive_state is not None else None,
+                        ground_item_id=getattr(drive_state, "current_target_ground_item_id", None) if drive_state is not None else None,
+                    )
+                    before_ground_id = str((ground_item or {}).get("ground_item_id", "") or "").strip()
+                    if item_system is not None and isinstance(ground_item, dict):
+                        item_system._handle_pickup(
+                            eid,
+                            int(ground_item.get("x", pos.x) or pos.x),
+                            int(ground_item.get("y", pos.y) or pos.y),
+                            int(ground_item.get("z", pos.z) or pos.z),
+                        )
+                    after_exists = bool(before_ground_id and before_ground_id in getattr(self.sim, "ground_items", {}))
+                    if before_ground_id and not after_exists:
+                        ai.state = "idle"
+                        ai.target = None
+                        ai.target_eid = None
+                    else:
+                        plan_key = str(getattr(drive_state, "current_plan_key", "") or "").strip() if drive_state is not None else ""
+                        self.sim.emit(Event(
+                            "npc_crime_attempt_resolved",
+                            npc_eid=eid,
+                            success=False,
+                            reason="no_loot",
+                            plan_key=plan_key or None,
+                            x=tx,
+                            y=ty,
+                            z=tz,
+                        ))
+                        ai.state = "idle"
+                        ai.target = None
+                        ai.target_eid = None
+                    if throttle:
+                        throttle.next_move_tick = self.sim.tick + 1
+                    else:
+                        self.next_move_tick[eid] = self.sim.tick + 1
+                    continue
+
                 if ai.state == "resting":
                     needs = needs_map.get(eid)
                     if needs:
@@ -3082,6 +3324,41 @@ class NPCInvestigateSystem(System):
                     tz,
                 )
                 if str(direct_reason or "").strip().lower() in {"locked_property", "closed_property", "door_access_denied"}:
+                    if ai.state == "committing_property_crime":
+                        crime_prop = self.sim.properties.get(str(getattr(criminal_drive_state(self.sim, eid, create=False), "current_target_property_id", "") or "").strip())
+                        if isinstance(crime_prop, dict):
+                            success, method = _attempt_locked_property_entry_with_sim(
+                                self.sim,
+                                eid,
+                                crime_prop,
+                                target_x=tx,
+                                target_y=ty,
+                                target_z=tz,
+                            )
+                            if success:
+                                if throttle:
+                                    throttle.next_move_tick = max(throttle.next_move_tick, self.sim.tick + 1)
+                                else:
+                                    self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + 1)
+                                continue
+                            self.sim.emit(Event(
+                                "npc_crime_attempt_resolved",
+                                npc_eid=eid,
+                                success=False,
+                                reason=str(method or direct_reason or "locked_property"),
+                                plan_key=str(getattr(criminal_drive_state(self.sim, eid, create=False), "current_plan_key", "") or "").strip() or None,
+                                x=tx,
+                                y=ty,
+                                z=tz,
+                            ))
+                            ai.state = "idle"
+                            ai.target = None
+                            ai.target_eid = None
+                            if throttle:
+                                throttle.next_move_tick = max(throttle.next_move_tick, self.sim.tick + 1)
+                            else:
+                                self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + 1)
+                            continue
                     knock = _door_knock_attempt(
                         self.sim,
                         eid,
@@ -3118,6 +3395,41 @@ class NPCInvestigateSystem(System):
             if not moved:
                 knock_handled = False
                 if step and str(blocked_reason or "").strip().lower() in {"locked_property", "closed_property", "door_access_denied"}:
+                    if ai.state == "committing_property_crime":
+                        crime_prop = self.sim.properties.get(str(getattr(criminal_drive_state(self.sim, eid, create=False), "current_target_property_id", "") or "").strip())
+                        if isinstance(crime_prop, dict):
+                            success, method = _attempt_locked_property_entry_with_sim(
+                                self.sim,
+                                eid,
+                                crime_prop,
+                                target_x=nx,
+                                target_y=ny,
+                                target_z=pos.z,
+                            )
+                            if success:
+                                if throttle:
+                                    throttle.next_move_tick = max(throttle.next_move_tick, self.sim.tick + 1)
+                                else:
+                                    self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + 1)
+                                continue
+                            self.sim.emit(Event(
+                                "npc_crime_attempt_resolved",
+                                npc_eid=eid,
+                                success=False,
+                                reason=str(method or blocked_reason or "locked_property"),
+                                plan_key=str(getattr(criminal_drive_state(self.sim, eid, create=False), "current_plan_key", "") or "").strip() or None,
+                                x=nx,
+                                y=ny,
+                                z=pos.z,
+                            ))
+                            ai.state = "idle"
+                            ai.target = None
+                            ai.target_eid = None
+                            if throttle:
+                                throttle.next_move_tick = max(throttle.next_move_tick, self.sim.tick + 1)
+                            else:
+                                self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + 1)
+                            continue
                     knock = _door_knock_attempt(
                         self.sim,
                         eid,

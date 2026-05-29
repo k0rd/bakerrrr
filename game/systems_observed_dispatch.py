@@ -21,6 +21,7 @@ from engine.systems import System
 
 from game.components import AI, JusticeProfile, NPCSocial, NPCTraits, NPCWill, Occupation, Position
 from game.incident_runtime import incident_record
+from game.organizations import local_protective_pressure_snapshot
 
 
 PEACE_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
@@ -275,6 +276,12 @@ class ObservedIncidentDispatchSystem(System):
     def _dispatch_delay(self, incident_id, incident):
         severity = _int(incident.get("severity"), 0) if isinstance(incident, dict) else 0
         base = max(12, DEFAULT_DISPATCH_DELAY - int(severity * 0.25))
+        prop = self.sim.properties.get(_text((incident or {}).get("property_id")))
+        pressure = local_protective_pressure_snapshot(self.sim, prop) if isinstance(prop, dict) else {}
+        dispatch_bonus = _float(pressure.get("dispatch_bonus"), 0.0)
+        followthrough_bonus = _float(pressure.get("response_followthrough_bonus"), 0.0)
+        readiness_tier = _int(pressure.get("response_readiness_tier"), 0)
+        base = max(8, base - int(round(dispatch_bonus * 14.0)) - int(round(followthrough_bonus * 10.0)) - max(0, readiness_tier * 2))
         jitter = int(_unit_roll(getattr(self.sim, "seed", ""), "dispatch_delay", incident_id) * 18)
         return base + jitter
 
@@ -286,6 +293,14 @@ class ObservedIncidentDispatchSystem(System):
         tags = {str(tag).strip().lower() for tag in incident.get("tags", ()) or ()} if isinstance(incident, dict) else set()
         base_chance = 0.18 + min(0.45, severity / 180.0)
         base_chance += _peace_dispatch_bonus(tags)
+        prop = self.sim.properties.get(_text((incident or {}).get("property_id")))
+        pressure = local_protective_pressure_snapshot(self.sim, prop) if isinstance(prop, dict) else {}
+        base_chance += min(
+            0.18,
+            (_float(pressure.get("dispatch_bonus"), 0.0) * 0.22)
+            + (_float(pressure.get("response_followthrough_bonus"), 0.0) * 0.18)
+            + (_int(pressure.get("response_readiness_tier"), 0) * 0.05),
+        )
         if _unit_roll(getattr(self.sim, "seed", ""), "peace_dispatch", incident_id, severity) > min(0.85, base_chance):
             return []
         return [eid for _, eid in self._rank_candidates(target, peace_only=True)[:max_count]]
@@ -350,6 +365,13 @@ class ObservedIncidentDispatchSystem(System):
         will = self.sim.ecs.get(NPCWill).get(eid)
         if not ai or not will:
             return False
+        incident = incident_record(self.sim, incident_id)
+        prop = self.sim.properties.get(_text((incident or {}).get("property_id"))) if isinstance(incident, dict) else None
+        pressure = local_protective_pressure_snapshot(self.sim, prop) if isinstance(prop, dict) else {}
+        adjusted_score = float(score)
+        adjusted_score += (_float(pressure.get("response_score_bonus"), 0.0) * 0.6)
+        adjusted_score += (_int(pressure.get("response_readiness_tier"), 0) * 2.0)
+        adjusted_score += (_float(pressure.get("confrontation_posture_bonus"), 0.0) * 8.0)
         target = self._offset_target(target, incident_id, eid, offset_index)
         ai.state = "investigating"
         ai.target = target
@@ -358,7 +380,7 @@ class ObservedIncidentDispatchSystem(System):
         ai.response_role = str(response_role)
         ai.suppress_report_for_incident_id = int(incident_id)
         will.intent = "investigating"
-        will.score = float(score)
+        will.score = float(adjusted_score)
         will.target = target
         will.target_eid = None
         will.last_tick = _int(getattr(self.sim, "tick", 0), 0)

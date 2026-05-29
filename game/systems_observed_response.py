@@ -20,6 +20,7 @@ from game.components import AI, IncidentKnowledge, Inventory, NPCWill, NPCRoutin
 from game.incident_runtime import incident_record
 from game.item_semantics import inventory_has_phone
 from game.property_runtime import property_infrastructure_role as _property_infrastructure_role
+from game.system_support.awareness_runtime import observation_payload_from_observers
 
 
 PEACE_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
@@ -382,31 +383,39 @@ class ObservedIncidentResponseSystem(System):
     def _emit_authority_report(self, cue, *, x=None, y=None, z=None):
         incident_id = _int(cue.get("incident_id"), -1)
         incident = incident_record(self.sim, incident_id)
+        reporter_eid = _int(cue.get("npc_eid"), -1)
         if isinstance(incident, dict):
             incident["officially_reported"] = True
             incident["reported_tick"] = int(getattr(self.sim, "tick", 0))
-            incident["reported_by_eid"] = _int(cue.get("npc_eid"), -1)
+            incident["reported_by_eid"] = reporter_eid
             incident["report_method"] = _text(cue.get("method"))
 
         reports = getattr(self.sim, "world_traits", {}).setdefault("observed_authority_reports", {})
         reports[str(incident_id)] = {
             "incident_id": incident_id,
             "reported_tick": int(getattr(self.sim, "tick", 0)),
-            "reported_by_eid": _int(cue.get("npc_eid"), -1),
+            "reported_by_eid": reporter_eid,
             "method": _text(cue.get("method")),
             "x": _int(x, 0),
             "y": _int(y, 0),
             "z": _int(z, 0),
         }
         self.sim.observed_response_stats["reported"] += 1
+        observation = observation_payload_from_observers(
+            self.sim,
+            (reporter_eid,) if reporter_eid >= 0 else (),
+            observation_channels=("authority_report",),
+            allow_player_accountable=True,
+        )
         self.sim.emit(Event(
             "incident_authority_reported",
             incident_id=incident_id,
-            npc_eid=_int(cue.get("npc_eid"), -1),
+            npc_eid=reporter_eid,
             method=_text(cue.get("method")),
             x=_int(x, 0),
             y=_int(y, 0),
             z=_int(z, 0),
+            **observation,
         ))
 
     def _finish_cue(self, npc_eid, cue):

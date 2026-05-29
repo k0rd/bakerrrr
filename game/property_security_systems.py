@@ -70,6 +70,7 @@ from game.property_access import (
     controller_intrusion_state as _controller_intrusion_state,
     default_site_services_for_archetype as _default_site_services_for_archetype,
     _property_archetype,
+    organization_guard_grace_active as _organization_guard_grace_active,
     property_access_controller as _property_access_controller,
     evaluate_property_access as _evaluate_property_access,
     sync_property_access_controller as _sync_property_access_controller,
@@ -695,7 +696,10 @@ class PropertyDefenseSystem(System):
                 continue
             if (
                 offender_eid == getattr(self.sim, "player_eid", None)
-                and _dialogue_guard_grace_active(self.sim, defender_eid, prop)
+                and (
+                    _dialogue_guard_grace_active(self.sim, defender_eid, prop)
+                    or _organization_guard_grace_active(self.sim, offender_eid, prop)
+                )
             ):
                 continue
 

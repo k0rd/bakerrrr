@@ -672,6 +672,8 @@ def _tool_terms_template(context_key):
         "perception_bonus": 0.0,
         "score_bonus": 0.0,
         "requirement_delta": 0.0,
+        "tool_wear_mult": 1.0,
+        "tamper_severity_mult": 1.0,
         "item_ids": (),
         "enabled_item_ids": (),
         "selected_item_id": "",
@@ -735,6 +737,9 @@ def actor_tool_terms(sim, eid, context):
             continue
         candidate["score_bonus"] += float(condition.get("score_bonus", 0.0))
         candidate["requirement_delta"] += float(condition.get("requirement_delta", 0.0))
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        candidate["tool_wear_mult"] *= max(0.25, min(4.0, _num(metadata.get("tool_wear_mult"), 1.0)))
+        candidate["tamper_severity_mult"] *= max(0.25, min(4.0, _num(metadata.get("tamper_severity_mult"), 1.0)))
 
         if not any(
             (

@@ -10,6 +10,7 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game.location_presentation_runtime import _location_building_category
+from game.organizations import local_workplace_org_posture
 from game.player_businesses import (
     player_business_customer_policy as _player_business_customer_policy,
     player_business_open_roles as _player_business_open_roles,
@@ -173,6 +174,16 @@ _BUSINESS_EVENT_SHIFT_PHASES = {
     "custody_handoff",
     "maintenance_loop",
 }
+_BUSINESS_EVENT_POSTURE_LOG_PHASES = {
+    "owner_screening",
+    "paperwork_surge",
+    "manifest_check",
+    "dispatch_surge",
+    "day_labor_call",
+    "clinic_outreach",
+    "mutual_aid_table",
+    "loading_push",
+}
 _BUSINESS_EVENT_RARE_PHASE_CHANCES = {
     "street_triage": 0.18,
 }
@@ -275,7 +286,7 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
 
     if category in {"retail", "finance", "office"}:
         if phase == "opening":
-            return (
+            events = [
                 {
                     "phase": "delivery_drop",
                     "label": "delivery drop",
@@ -300,9 +311,21 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                     "emphasis": "front",
                     "perimeter_bonus": 1.7,
                 },
-            )
+            ]
+            if category in {"finance", "office"}:
+                events.append(
+                    {
+                        "phase": "owner_screening",
+                        "label": "screened entry",
+                        "street_label": "screened check-ins holding at the door",
+                        "entry_sentence": "The front is running a little tighter than usual, with known faces waved through faster than strangers.",
+                        "emphasis": "front",
+                        "perimeter_bonus": 1.6,
+                    }
+                )
+            return tuple(events)
         if phase == "rush":
-            return (
+            events = [
                 {
                     "phase": "counter_queue",
                     "label": "counter queue",
@@ -319,9 +342,21 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                     "emphasis": "front",
                     "perimeter_bonus": 1.4,
                 },
-            )
+            ]
+            if category in {"finance", "office"}:
+                events.append(
+                    {
+                        "phase": "owner_screening",
+                        "label": "screened entry",
+                        "street_label": "screened entry and short check-ins at the door",
+                        "entry_sentence": "The public line still moves, but the front has tightened into quick checks and familiar-face sorting.",
+                        "emphasis": "front",
+                        "perimeter_bonus": 1.9,
+                    }
+                )
+            return tuple(events)
         if phase in {"back_office", "steady_trade"}:
-            return (
+            events = [
                 {
                     "phase": "paperwork_surge",
                     "label": "paperwork surge",
@@ -338,7 +373,8 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
                     "emphasis": "admin",
                     "perimeter_bonus": 1.0,
                 },
-            )
+            ]
+            return tuple(events)
 
     if category in {"hospitality", "entertainment"}:
         if phase in {"prep", "cleanup"}:
@@ -704,6 +740,45 @@ def _building_micro_event_pool(category, phase, *, open_now=False):
     return ()
 
 
+def _workplace_org_event_visibility_bias(event, posture):
+    if not isinstance(event, dict) or not isinstance(posture, dict):
+        return 0.0
+    phase = str(event.get("phase", "") or "").strip().lower()
+    if not phase:
+        return 0.0
+    scene_biases = posture.get("scene_biases")
+    if not isinstance(scene_biases, dict):
+        return 0.0
+    try:
+        bias = float(scene_biases.get(phase, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        bias = 0.0
+    dominant_phase = str(posture.get("dominant_phase", "") or "").strip().lower()
+    if phase and phase == dominant_phase:
+        bias += min(0.18, float(posture.get("dominant_score", 0.0) or 0.0) * 0.12)
+    return bias
+
+
+def _deterministic_back_office_bias(prop, base_pulse, event):
+    if not isinstance(prop, dict) or not isinstance(event, dict):
+        return 0.0
+    pulse = base_pulse if isinstance(base_pulse, dict) else {}
+    category = str(pulse.get("category", "") or "").strip().lower()
+    phase = str(pulse.get("phase", "") or "").strip().lower()
+    event_phase = str(event.get("phase", "") or "").strip().lower()
+    if category not in {"finance", "office"} or phase != "back_office":
+        return 0.0
+    try:
+        parity = (int(prop.get("x", 0)) + int(prop.get("y", 0))) % 2
+    except (TypeError, ValueError):
+        parity = 0
+    if event_phase == "paperwork_surge":
+        return 0.85 if parity == 0 else 0.0
+    if event_phase == "shift_handoff":
+        return 0.85 if parity == 1 else 0.0
+    return 0.0
+
+
 def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=None):
     if sim is None:
         return {}
@@ -782,18 +857,36 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
     seed = f"{getattr(sim, 'seed', 0)}:building-micro-event:{building_key}:{phase}:{hour}"
     rng = random.Random(seed)
     traffic_profile = _business_reputation_traffic_profile(sim, prop=prop, base_pulse=base_pulse)
+    workplace_posture = local_workplace_org_posture(sim, prop, current_tick=getattr(sim, "tick", 0)) if isinstance(prop, dict) else {}
     weighted_events = []
     has_bias = False
-    if traffic_profile:
-        for event_item in candidate_events:
-            if not isinstance(event_item, dict):
-                continue
-            bias = float(_business_reputation_event_visibility_bias(event_item, traffic_profile) or 0.0)
-            if abs(bias) > 1e-6:
-                has_bias = True
-            weight = max(0.05, 1.0 + bias)
-            weighted_events.append((weight, event_item))
-    if has_bias and weighted_events:
+    has_deterministic_site_bias = False
+    for event_item in candidate_events:
+        if not isinstance(event_item, dict):
+            continue
+        bias = 0.0
+        if traffic_profile:
+            bias += float(_business_reputation_event_visibility_bias(event_item, traffic_profile) or 0.0)
+        if workplace_posture:
+            bias += float(_workplace_org_event_visibility_bias(event_item, workplace_posture) or 0.0)
+        deterministic_bias = float(_deterministic_back_office_bias(prop, base_pulse, event_item) or 0.0)
+        bias += deterministic_bias
+        if abs(bias) > 1e-6:
+            has_bias = True
+        if abs(deterministic_bias) > 1e-6:
+            has_deterministic_site_bias = True
+        weight = max(0.05, 1.0 + bias)
+        weighted_events.append((weight, event_item))
+    event = None
+    if has_deterministic_site_bias and not traffic_profile and not bool((workplace_posture or {}).get("active")) and weighted_events:
+        event = max(
+            weighted_events,
+            key=lambda row: (
+                float(row[0]),
+                str((row[1] or {}).get("phase", "") or "").strip().lower(),
+            ),
+        )[1]
+    elif has_bias and weighted_events:
         total_weight = sum(max(0.0, float(weight)) for weight, _event_item in weighted_events)
         if total_weight > 0.0:
             pick = rng.random() * total_weight
@@ -5989,6 +6082,17 @@ class BusinessPulseSceneSystem(System):
             self._materialize_gathering_scene(scene, blueprint, rng)
         if scene["spawned_entity_ids"] or scene["spawned_property_ids"]:
             _business_event_scene_state(self.sim)["active"][scene["scene_id"]] = scene
+            if scene["event_phase"] in _BUSINESS_EVENT_POSTURE_LOG_PHASES and prop is not None:
+                self.sim.emit(Event(
+                    "business_scene_posture_started",
+                    scene_id=str(scene.get("scene_id", "") or "").strip(),
+                    property_id=str(prop.get("id", "") or "").strip(),
+                    property_name=str(prop.get("name", "") or "").strip(),
+                    event_phase=str(scene.get("event_phase", "") or "").strip().lower(),
+                    x=int(scene["anchor"][0]),
+                    y=int(scene["anchor"][1]),
+                    z=int(scene["anchor"][2]),
+                ))
 
     def _release_scene_actor(self, scene, eid):
         source = (

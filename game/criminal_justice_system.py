@@ -92,6 +92,7 @@ from game.criminal_justice_runtime import (
     _mark_justice_in_custody,
     _record_justice_booking_completion,
     _record_justice_incident,
+    _record_justice_questioning_resolution,
     _record_justice_restitution_claim,
     _release_justice_from_custody,
     _replace_justice_held_property,
@@ -203,7 +204,12 @@ from game.system_support.container_runtime import (
     _inventory_entries_stowed_in_container,
     _unlink_removed_item_from_gear,
 )
-from game.system_support.awareness_runtime import _watchers_for_position
+from game.system_support.awareness_runtime import event_observation_accountability
+from game.system_support.item_provenance_runtime import (
+    evaluate_inventory_for_justice,
+    justice_enforcement_profile,
+)
+from game.organizations import local_protective_pressure_snapshot
 from game.player_businesses import (
     actor_player_business_employment,
     fire_actor_from_player_business,
@@ -225,8 +231,10 @@ class CriminalJusticeSystem(System):
     PLAYER_BOOKING_RELEASE_GRACE_TICKS = 18
     SURRENDER_PROMPT_COOLDOWN_TICKS = 180
     SURRENDER_DIALOG_KIND = "justice_surrender"
+    QUESTIONING_DIALOG_KIND = "justice_questioning"
     BOOKING_ARCHETYPES = ("jail", "courthouse")
     JUSTICE_DEBT_KEY = "justice_fines"
+    EVIDENCE_SURCHARGE_PER_ITEM = 35
     NPC_CUSTODY_ARCHETYPES_BY_TIER = {
         "questioning": ("jail",),
         "wanted": ("jail",),
@@ -274,6 +282,7 @@ class CriminalJusticeSystem(System):
         self.sim.events.subscribe("npc_interact", self.on_npc_interact)
         self.sim.events.subscribe("npc_surrendered", self.on_npc_surrendered)
         self.sim.events.subscribe("justice_surrender_choice", self.on_justice_surrender_choice)
+        self.sim.events.subscribe("justice_questioning_choice", self.on_justice_questioning_choice)
 
     def _emit_change_events(self, change, *, source_event="", reason=""):
         if not isinstance(change, dict):
@@ -430,18 +439,35 @@ class CriminalJusticeSystem(System):
             self._emit_change_events(change, source_event=source_event, reason=incident_type)
         return change
 
-    def _watchers_present(self, offender_eid, x, y, z):
-        if x is None or y is None or z is None:
-            return False
-        watchers = _watchers_for_position(
+    def _event_accountability(self, event, *, offender_eid=None):
+        return event_observation_accountability(
             self.sim,
-            x,
-            y,
-            z,
-            exclude_eid=offender_eid,
+            event,
             offender_eid=offender_eid,
+            default_channels=("actor_witness",),
         )
-        return bool(watchers)
+
+    def _mark_incident_accounted(self, incident_id, field="justice_accounted"):
+        incident = incident_record(self.sim, incident_id)
+        if not isinstance(incident, dict):
+            return None
+        incident[str(field or "justice_accounted")] = True
+        incident["justice_accounted_tick"] = int(getattr(self.sim, "tick", 0))
+        return incident
+
+    def _violent_offense_allowed(self, offender_eid, context):
+        if context not in VIOLENT_OFFENSE_CONTEXTS:
+            return True
+        return offender_eid == self.player_eid
+
+    def _incident_type_from_context(self, context):
+        return {
+            "contraband_use": "contraband",
+            "unarmed_assault": "unarmed_assault",
+            "melee_assault": "melee_assault",
+            "armed_assault": "armed_assault",
+            "explosive_discharge": "explosive_discharge",
+        }.get(context, context)
 
     def _position_for(self, eid):
         return self.sim.ecs.get(Position).get(eid)
@@ -626,7 +652,10 @@ class CriminalJusticeSystem(System):
 
     def _player_surrender_prompt_open(self):
         state = self._dialog_ui_state()
-        return bool(state.get("open")) and str(state.get("kind", "")).strip().lower() == self.SURRENDER_DIALOG_KIND
+        return bool(state.get("open")) and str(state.get("kind", "")).strip().lower() in {
+            self.SURRENDER_DIALOG_KIND,
+            self.QUESTIONING_DIALOG_KIND,
+        }
 
     def _player_cash_on_hand(self):
         return self._inventory_cash_total_from_entries(self._snapshot_inventory_items(self.player_eid))
@@ -779,7 +808,9 @@ class CriminalJusticeSystem(System):
         illegal = legal_status == "illegal"
         restricted = legal_status == "restricted"
         contraband = illegal or restricted
-        stolen = bool(metadata.get("justice_stolen"))
+        stolen = bool(metadata.get("justice_reported_stolen") or (metadata.get("justice_stolen") and not metadata.get("latent_claim_violation")))
+        incident_evidence = bool(metadata.get("justice_incident_evidence"))
+        latent_claim = bool(metadata.get("latent_claim_violation"))
         objective_protected = bool(metadata.get("final_operation_target"))
         if not objective_protected:
             try:
@@ -787,9 +818,9 @@ class CriminalJusticeSystem(System):
             except (TypeError, ValueError):
                 objective_protected = False
 
-        hold_for_release = bool(objective_protected or ((weapon or restricted) and not (illegal or stolen)))
-        forfeit = bool((illegal or stolen) and not objective_protected)
-        seized = bool(weapon or contraband or stolen or objective_protected)
+        hold_for_release = bool(objective_protected or ((weapon or restricted) and not (illegal or stolen or incident_evidence)))
+        forfeit = bool((illegal or stolen or incident_evidence) and not objective_protected)
+        seized = bool(weapon or contraband or stolen or incident_evidence or objective_protected)
         return {
             "item_id": item_id,
             "weapon": weapon,
@@ -797,6 +828,8 @@ class CriminalJusticeSystem(System):
             "restricted": restricted,
             "contraband": contraband,
             "stolen": stolen,
+            "incident_evidence": incident_evidence,
+            "latent_claim_violation": latent_claim,
             "objective_protected": objective_protected,
             "hold_for_release": hold_for_release,
             "forfeit": forfeit,
@@ -1185,6 +1218,394 @@ class CriminalJusticeSystem(System):
             summary += f" Likely taken: {', '.join(labels[:3])}."
         return summary
 
+    def _inspection_match_labels(self, inspection):
+        inspection = inspection if isinstance(inspection, dict) else {}
+        return tuple(
+            str(value).strip()
+            for value in tuple(inspection.get("incident_match_labels", ()) or ())
+            if str(value).strip()
+        )[:4]
+
+    def _inspection_match_reasons(self, inspection):
+        inspection = inspection if isinstance(inspection, dict) else {}
+        return tuple(
+            str(value).strip().lower()
+            for value in tuple(inspection.get("incident_match_reasons", ()) or ())
+            if str(value).strip()
+        )[:4]
+
+    def _match_reason_text(self, match_reason):
+        reason_key = str(match_reason or "").strip().lower()
+        return {
+            "victim_inventory": "victim personal effects",
+            "precombat_stolen_from_victim": "property taken during the assault",
+            "scene_claimed": "claimed scene property",
+            "scene_residue": "scene residue",
+        }.get(reason_key, "")
+
+    def _strongest_inspection_match_text(self, inspection):
+        labels = self._inspection_match_labels(inspection)
+        reasons = self._inspection_match_reasons(inspection)
+        if labels:
+            return labels[0]
+        if reasons:
+            return self._match_reason_text(reasons[0]) or reasons[0].replace("_", " ")
+        return ""
+
+    def _inspection_evidence_surcharge(self, inspection):
+        inspection = inspection if isinstance(inspection, dict) else {}
+        counts = inspection.get("counts") if isinstance(inspection.get("counts"), dict) else {}
+        evidence_count = max(0, int(counts.get("incident_evidence", 0) or 0))
+        if evidence_count <= 0:
+            return 0
+        return int(evidence_count) * int(self.EVIDENCE_SURCHARGE_PER_ITEM)
+
+    def _inspection_summary_text(self, inspection):
+        inspection = inspection if isinstance(inspection, dict) else {}
+        counts = inspection.get("counts") if isinstance(inspection.get("counts"), dict) else {}
+        reported_stolen = int(counts.get("reported_stolen", 0) or 0)
+        incident_evidence = int(counts.get("incident_evidence", 0) or 0)
+        contraband = int(counts.get("contraband", 0) or 0)
+        latent = int(counts.get("latent_claim_violation", 0) or 0)
+        strongest_match = self._strongest_inspection_match_text(inspection)
+        if incident_evidence > 0:
+            if strongest_match:
+                return (
+                    f"Search match: {incident_evidence} item(s) tie you to a reported violent incident. "
+                    f"Strongest read: {strongest_match}."
+                )
+            return f"Search match: {incident_evidence} item(s) tie you to a reported violent incident."
+        if reported_stolen > 0:
+            if strongest_match:
+                return (
+                    f"Search match: {reported_stolen} item(s) match reported stolen property. "
+                    f"Strongest read: {strongest_match}."
+                )
+            return f"Search match: {reported_stolen} item(s) match reported stolen property."
+        if contraband > 0:
+            return f"Search result: {contraband} contraband item(s) on you."
+        if latent > 0:
+            return f"Search result: {latent} item(s) look wrongfully taken but are not yet matched to a reported crime."
+        return "Search result: nothing actionable beyond your current stop."
+
+    def _inspect_actor_inventory(self, offender_eid, *, update_inventory=True, inspector_eid=None):
+        if inspector_eid is None:
+            inspector_eid = self._find_detaining_enforcer(offender_eid)
+        inspection = evaluate_inventory_for_justice(
+            self.sim,
+            offender_eid,
+            current_tick=int(getattr(self.sim, "tick", 0)),
+            update_inventory=bool(update_inventory),
+            inspector_eid=inspector_eid,
+        )
+        counts = inspection.get("counts", {}) if isinstance(inspection, dict) else {}
+        self.sim.emit(Event(
+            "justice_inventory_inspected",
+            eid=offender_eid,
+            inspector_eid=inspector_eid,
+            lawful_count=int(counts.get("lawful", 0) or 0),
+            contraband_count=int(counts.get("contraband", 0) or 0),
+            latent_claim_count=int(counts.get("latent_claim_violation", 0) or 0),
+            reported_stolen_count=int(counts.get("reported_stolen", 0) or 0),
+            incident_evidence_count=int(counts.get("incident_evidence", 0) or 0),
+            severity_bucket=str(inspection.get("severity_bucket", "clear") or "clear").strip().lower(),
+            match_summaries=tuple(inspection.get("match_summaries", ()) or ()),
+            incident_match_labels=self._inspection_match_labels(inspection),
+            incident_match_reasons=self._inspection_match_reasons(inspection),
+            evidence_surcharge=int(self._inspection_evidence_surcharge(inspection)),
+        ))
+        return inspection
+
+    def _justice_enforcement_profile(self, *, snapshot=None, source_prop=None):
+        source_prop = source_prop if isinstance(source_prop, dict) else None
+        snapshot = snapshot if isinstance(snapshot, dict) else self._player_bookable_snapshot() or _justice_snapshot(self.sim, self.player_eid)
+        jurisdiction_key = str((snapshot or {}).get("last_jurisdiction_key", "") or "").strip().lower()
+        return justice_enforcement_profile(
+            self.sim,
+            jurisdiction_key=jurisdiction_key,
+            source_property_id=(source_prop or {}).get("id"),
+            source_property_name=(source_prop or {}).get("name"),
+            offender_eid=self.player_eid,
+        )
+
+    def _remove_inventory_rows(self, eid, rows, *, reason="confiscated"):
+        inventory = self.sim.ecs.get(Inventory).get(eid)
+        if inventory is None:
+            return {
+                "entries": (),
+                "labels": (),
+                "count": 0,
+            }
+        removed_entries = []
+        labels = []
+        for row in tuple(rows or ()):
+            if not isinstance(row, dict):
+                continue
+            quantity = max(1, int(row.get("quantity", 1) or 1))
+            removed = inventory.remove_item(instance_id=row.get("instance_id"), quantity=quantity)
+            if not removed:
+                continue
+            removed_entries.append(dict(removed))
+            labels.append(item_display_name(
+                removed.get("item_id"),
+                metadata=removed.get("metadata"),
+                item_catalog=ITEM_CATALOG,
+            ))
+            self._emit_removed_gear_events(eid, removed, reason=reason)
+        return {
+            "entries": tuple(removed_entries),
+            "labels": tuple(dict.fromkeys(label for label in labels if str(label).strip()))[:4],
+            "count": int(sum(max(1, int(entry.get("quantity", 1) or 1)) for entry in removed_entries)),
+        }
+
+    def _open_player_questioning_prompt(self, npc_eid=None, *, snapshot=None, source_prop=None):
+        snapshot = snapshot if isinstance(snapshot, dict) else self._player_bookable_snapshot()
+        if snapshot is None:
+            return False
+        source_prop = self._resolve_prompt_source_property(source_prop)
+        anchor = self._player_booking_anchor(self._position_for(self.player_eid))
+        jurisdiction_name = str((anchor or {}).get("jurisdiction_name", "Justice Office") or "Justice Office").strip() or "Justice Office"
+        incident = (snapshot or {}).get("latest_incident") if isinstance((snapshot or {}).get("latest_incident"), dict) else {}
+        cause = str(incident.get("label", "your record") or "your record").strip().lower()
+        protective = (
+            local_protective_pressure_snapshot(
+                self.sim,
+                source_prop,
+                current_tick=int(getattr(self.sim, "tick", 0)),
+            )
+            if isinstance(source_prop, dict)
+            else {}
+        )
+        posture_line = ""
+        if isinstance(protective, dict) and str(protective.get("state_label", "")).strip():
+            posture_line = (
+                f"Local posture: {str(protective.get('state_label')).strip()} - "
+                f"{str(protective.get('summary', '')).strip() or 'the area is already on alert'}."
+            )
+        state = self._dialog_ui_state()
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": self.QUESTIONING_DIALOG_KIND,
+            "npc_eid": npc_eid,
+            "property_id": source_prop.get("id") if isinstance(source_prop, dict) else None,
+            "title": f"Questioning: {_entity_display_name(self.sim, npc_eid, title_case=True) or 'Officer'}" if npc_eid else "Questioning: Justice Desk",
+            "subtitle": jurisdiction_name,
+            "transcript": [
+                f"{jurisdiction_name} wants to question you about {cause}.",
+                *([posture_line] if posture_line else []),
+                "Cooperate and they will search what you are carrying before deciding what happens next.",
+                "Refusal will escalate to custody.",
+            ],
+            "topics": [
+                {"id": "cooperate", "label": "Cooperate fully"},
+                {"id": "explain", "label": "Explain plainly"},
+                {"id": "deflect", "label": "Deflect"},
+                {"id": "refuse", "label": "Refuse"},
+            ],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "E choose | Esc refuse | ? help",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+        })
+        self.player_surrender_prompt = {
+            "kind": self.QUESTIONING_DIALOG_KIND,
+            "npc_eid": npc_eid,
+            "source_prop_id": source_prop.get("id") if isinstance(source_prop, dict) else None,
+            "opened_tick": int(getattr(self.sim, "tick", 0)),
+            "jurisdiction_key": str((anchor or {}).get("jurisdiction_key", "") or "").strip().lower(),
+            "jurisdiction_name": jurisdiction_name,
+        }
+        if npc_eid is not None:
+            self._mark_officer_surrender_prompt_opened(npc_eid)
+        return True
+
+    def _resolve_player_questioning_choice(self, choice_id, *, by_eid=None, source_prop=None, snapshot=None):
+        snapshot = snapshot if isinstance(snapshot, dict) else self._player_bookable_snapshot()
+        if snapshot is None:
+            return False
+        choice_id = str(choice_id or "").strip().lower() or "refuse"
+        if choice_id == "refuse":
+            self.sim.emit(Event(
+                "justice_questioning_resolved",
+                eid=self.player_eid,
+                outcome="custody_escalation",
+                cooperation_score=0.0,
+                severity_bucket="refusal",
+            ))
+            self._record_incident(
+                self.player_eid,
+                incident_type="resisting_custody",
+                severity=max(18, int(snapshot.get("active_score", 0) or 0) + 8),
+                source_event="justice_questioning_choice",
+                property_id=(source_prop or {}).get("id") if isinstance(source_prop, dict) else None,
+                x=getattr(self._position_for(self.player_eid), "x", 0),
+                y=getattr(self._position_for(self.player_eid), "y", 0),
+                witnessed=True,
+                note="questioning_refusal",
+            )
+            _record_justice_questioning_resolution(
+                self.sim,
+                self.player_eid,
+                disposition="custody_escalation",
+                inspected_counts={},
+                kept_contraband_count=0,
+                match_summaries=(),
+            )
+            self._escalate_player_surrender_refusal(by_eid=by_eid, source_prop=source_prop, snapshot=snapshot)
+            return True
+
+        cooperation_score = {
+            "cooperate": 1.0,
+            "explain": 0.82,
+            "deflect": 0.38,
+        }.get(choice_id, 0.0)
+        inspection = self._inspect_actor_inventory(self.player_eid, update_inventory=True, inspector_eid=by_eid)
+        counts = inspection.get("counts", {}) if isinstance(inspection, dict) else {}
+        severity_bucket = str(inspection.get("severity_bucket", "clear") or "clear").strip().lower()
+        profile = self._justice_enforcement_profile(snapshot=snapshot, source_prop=source_prop)
+        match_labels = self._inspection_match_labels(inspection)
+        match_reasons = self._inspection_match_reasons(inspection)
+        evidence_surcharge = int(self._inspection_evidence_surcharge(inspection))
+        protective = (
+            local_protective_pressure_snapshot(
+                self.sim,
+                source_prop,
+                current_tick=int(getattr(self.sim, "tick", 0)),
+            )
+            if isinstance(source_prop, dict)
+            else {}
+        )
+        disposition = "release_warning"
+        kept_contraband_count = 0
+        confiscation = {"entries": (), "labels": (), "count": 0}
+
+        if severity_bucket == "violent_evidence":
+            disposition = "full_booking"
+        elif int(counts.get("reported_stolen", 0) or 0) > 0:
+            disposition = "full_booking"
+        elif int(counts.get("contraband", 0) or 0) > 0:
+            contraband_rows = tuple(inspection.get("contraband", ()) or ())
+            if cooperation_score >= 0.98 and profile.get("keep_contraband_possible") and int(counts.get("reported_stolen", 0) or 0) <= 0 and int(counts.get("incident_evidence", 0) or 0) <= 0 and int(counts.get("latent_claim_violation", 0) or 0) <= 0:
+                disposition = "release_keep_items"
+                kept_contraband_count = int(counts.get("contraband", 0) or 0)
+            elif cooperation_score >= 0.76 and profile.get("citation_pref"):
+                disposition = "citation_confiscation"
+                confiscation = self._remove_inventory_rows(self.player_eid, contraband_rows, reason="citation_confiscated")
+            else:
+                disposition = "fine_confiscation"
+                confiscation = self._remove_inventory_rows(self.player_eid, contraband_rows, reason="fine_confiscated")
+        elif int(counts.get("latent_claim_violation", 0) or 0) > 0:
+            disposition = "release_warning" if cooperation_score >= 0.75 else "fine_confiscation"
+
+        _record_justice_questioning_resolution(
+            self.sim,
+            self.player_eid,
+            disposition=disposition,
+            inspected_counts=counts,
+            kept_contraband_count=kept_contraband_count,
+            match_summaries=inspection.get("match_summaries", ()),
+            match_labels=match_labels,
+            match_reasons=match_reasons,
+            evidence_surcharge=evidence_surcharge,
+        )
+        self.sim.emit(Event(
+            "justice_questioning_resolved",
+            eid=self.player_eid,
+            outcome=disposition,
+            cooperation_score=round(float(cooperation_score), 2),
+            severity_bucket=severity_bucket,
+            contraband_count=int(counts.get("contraband", 0) or 0),
+            latent_claim_count=int(counts.get("latent_claim_violation", 0) or 0),
+            reported_stolen_count=int(counts.get("reported_stolen", 0) or 0),
+            incident_evidence_count=int(counts.get("incident_evidence", 0) or 0),
+            kept_contraband_count=int(kept_contraband_count),
+            confiscated_item_count=int(confiscation.get("count", 0) or 0),
+            confiscated_labels=tuple(confiscation.get("labels", ()) or ()),
+            match_summaries=tuple(inspection.get("match_summaries", ()) or ()),
+            incident_match_labels=match_labels,
+            incident_match_reasons=match_reasons,
+            evidence_surcharge=evidence_surcharge,
+            protective_posture_label=str((protective or {}).get("state_label", "") or "").strip(),
+        ))
+
+        if disposition == "full_booking":
+            return self._book_player(
+                by_eid=by_eid,
+                source_prop=source_prop,
+                inspection=inspection,
+                questioning_disposition=disposition,
+            )
+
+        fine_due = 0
+        fine_result = {
+            "fine_paid": 0,
+            "cash_fine_paid": 0,
+            "wallet_fine_paid": 0,
+            "bank_fine_paid": 0,
+            "debt_added": 0,
+            "fine_outstanding": 0,
+            "wallet_credits_before": 0,
+            "wallet_credits_after": 0,
+            "asset_credits_before": 0,
+            "asset_credits_after": 0,
+            "bank_balance_before": 0,
+            "bank_balance_after": 0,
+            "debt_balance_before": 0,
+            "debt_balance_after": 0,
+        }
+        if disposition in {"citation_confiscation", "fine_confiscation"} or int(counts.get("reported_stolen", 0) or 0) > 0:
+            base_fine = int(self._player_fine_amount(snapshot))
+            if disposition == "citation_confiscation":
+                fine_due = max(10, int(round(base_fine * 0.25)))
+            elif disposition == "fine_confiscation":
+                fine_due = max(20, int(round(base_fine * 0.5)))
+            else:
+                fine_due = max(30, int(round(base_fine * 0.6)))
+            fine_result = self._collect_player_fine(fine_due)
+
+        player_pos = self._position_for(self.player_eid)
+        release_change = _release_justice_from_custody(
+            self.sim,
+            self.player_eid,
+            new_score=0,
+            x=getattr(player_pos, "x", 0),
+            y=getattr(player_pos, "y", 0),
+        )
+        self._emit_change_events(release_change, source_event="justice_questioning_resolved", reason=disposition)
+        lines = [
+            self._inspection_summary_text(inspection),
+        ]
+        strongest_match = self._strongest_inspection_match_text(inspection)
+        if strongest_match:
+            lines.append(f"Recorded match: {strongest_match}.")
+        if evidence_surcharge > 0:
+            lines.append(f"Placeholder evidence surcharge on booking: {evidence_surcharge}c.")
+        protective_label = str((protective or {}).get("state_label", "") or "").strip()
+        protective_summary = str((protective or {}).get("summary", "") or "").strip()
+        if protective_label:
+            if protective_summary:
+                lines.append(f"{protective_label}: {protective_summary}.")
+            else:
+                lines.append(f"{protective_label} is already in effect here.")
+        if disposition == "release_keep_items":
+            lines.append("They let the low-severity contraband go this time.")
+        elif disposition == "release_warning":
+            lines.append("You are warned and released.")
+        elif disposition == "citation_confiscation":
+            lines.append(f"Citation issued for {fine_due}c and the contraband is confiscated.")
+        elif disposition == "fine_confiscation":
+            lines.append(f"Fine issued for {fine_due}c and the contraband is confiscated.")
+        self._present_justice_result(
+            "Questioning Resolved",
+            lines,
+            property_id=(source_prop or {}).get("id") if isinstance(source_prop, dict) else None,
+            subtitle=str((source_prop or {}).get("name", "") if isinstance(source_prop, dict) else "").strip(),
+        )
+        return True
+
     def _open_player_surrender_prompt(self, npc_eid, *, snapshot=None, source_prop=None, respect_cooldown=False):
         try:
             npc_eid = int(npc_eid)
@@ -1269,9 +1690,25 @@ class CriminalJusticeSystem(System):
         self._mark_officer_surrender_prompt_opened(npc_eid)
         return True
 
+    def _open_player_justice_prompt(self, npc_eid=None, *, snapshot=None, source_prop=None, respect_cooldown=False):
+        snapshot = snapshot if isinstance(snapshot, dict) else self._player_bookable_snapshot()
+        if snapshot is None:
+            return False
+        tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
+        if tier == "questioning":
+            if respect_cooldown and npc_eid is not None and self._officer_surrender_offer_on_cooldown(npc_eid):
+                return False
+            return self._open_player_questioning_prompt(npc_eid, snapshot=snapshot, source_prop=source_prop)
+        return self._open_player_surrender_prompt(
+            npc_eid,
+            snapshot=snapshot,
+            source_prop=source_prop,
+            respect_cooldown=respect_cooldown,
+        )
+
     def _close_player_surrender_prompt(self):
         state = self._dialog_ui_state()
-        if bool(state.get("open")) and str(state.get("kind", "")).strip().lower() == self.SURRENDER_DIALOG_KIND:
+        if bool(state.get("open")) and str(state.get("kind", "")).strip().lower() in {self.SURRENDER_DIALOG_KIND, self.QUESTIONING_DIALOG_KIND}:
             self.sim.set_time_paused(False, reason="dialog")
             self._reset_dialog_ui(state)
         self.player_surrender_prompt = None
@@ -2050,7 +2487,7 @@ class CriminalJusticeSystem(System):
                 reason=reason,
             ))
 
-    def _player_confiscation_manifest(self, *, remove=False):
+    def _player_confiscation_manifest(self, *, remove=False, inspection=None, keep_contraband=False):
         inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
         if not inventory:
             return {
@@ -2061,6 +2498,7 @@ class CriminalJusticeSystem(System):
                 "restricted_units": 0,
                 "contraband_units": 0,
                 "stolen_units": 0,
+                "incident_evidence_units": 0,
                 "weapon_units": 0,
                 "held_entries": (),
                 "forfeited_entries": (),
@@ -2076,14 +2514,29 @@ class CriminalJusticeSystem(System):
         restricted_units = 0
         contraband_units = 0
         stolen_units = 0
+        incident_evidence_units = 0
         weapon_units = 0
         labels = []
         held_labels = []
         forfeited_labels = []
         held_entries = []
         forfeited_entries = []
+        inspection = inspection if isinstance(inspection, dict) else (
+            self._inspect_actor_inventory(self.player_eid, update_inventory=True) if remove else {}
+        )
+        bucket_by_instance = {}
+        for bucket_name in ("contraband", "latent_claim_violation", "reported_stolen", "incident_evidence", "lawful"):
+            for row in tuple(inspection.get(bucket_name, ()) or ()):
+                instance_id = str(row.get("instance_id", "") or "").strip()
+                if instance_id:
+                    bucket_by_instance[instance_id] = bucket_name
         for entry in list(getattr(inventory, "items", ()) or ()):
             hold_policy = self._justice_item_hold_policy(entry)
+            bucket_name = bucket_by_instance.get(str(entry.get("instance_id", "") or "").strip(), "")
+            if bucket_name == "latent_claim_violation" and not hold_policy.get("objective_protected"):
+                continue
+            if keep_contraband and bucket_name == "contraband" and not hold_policy.get("stolen") and not hold_policy.get("incident_evidence"):
+                continue
             if not bool(hold_policy.get("seized")):
                 continue
 
@@ -2128,6 +2581,8 @@ class CriminalJusticeSystem(System):
                 contraband_units += removed_qty
             if bool(hold_policy.get("stolen")):
                 stolen_units += removed_qty
+            if bool(hold_policy.get("incident_evidence")):
+                incident_evidence_units += removed_qty
             if bool(hold_policy.get("weapon")):
                 weapon_units += removed_qty
             labels.append(item_name)
@@ -2145,6 +2600,7 @@ class CriminalJusticeSystem(System):
             "restricted_units": restricted_units,
             "contraband_units": contraband_units,
             "stolen_units": stolen_units,
+            "incident_evidence_units": incident_evidence_units,
             "weapon_units": weapon_units,
             "held_entries": tuple(held_entries),
             "forfeited_entries": tuple(forfeited_entries),
@@ -2153,8 +2609,8 @@ class CriminalJusticeSystem(System):
             "forfeited_labels": deduped_forfeited_labels[:4],
         }
 
-    def _confiscate_player_inventory(self, *, booking_prop=None):
-        manifest = self._player_confiscation_manifest(remove=True)
+    def _confiscate_player_inventory(self, *, booking_prop=None, inspection=None, keep_contraband=False):
+        manifest = self._player_confiscation_manifest(remove=True, inspection=inspection, keep_contraband=keep_contraband)
         held_entries = tuple(manifest.get("held_entries", ()) or ())
         if held_entries:
             _store_justice_held_property(
@@ -2251,7 +2707,7 @@ class CriminalJusticeSystem(System):
             "property_name": str(held.get("property_name", "") or "").strip(),
         }
 
-    def _book_player(self, *, by_eid=None, source_prop=None):
+    def _book_player(self, *, by_eid=None, source_prop=None, inspection=None, questioning_disposition=""):
         snapshot = self._player_bookable_snapshot()
         player_pos = self._position_for(self.player_eid)
         if snapshot is None or player_pos is None:
@@ -2305,8 +2761,26 @@ class CriminalJusticeSystem(System):
             reason="justice_booking",
         )
 
-        confiscation = self._confiscate_player_inventory(booking_prop=booking_prop)
-        fine_due = int(self._player_fine_amount(snapshot))
+        inspection = inspection if isinstance(inspection, dict) else self._inspect_actor_inventory(
+            self.player_eid,
+            update_inventory=True,
+            inspector_eid=by_eid,
+        )
+        counts = inspection.get("counts", {}) if isinstance(inspection, dict) else {}
+        match_labels = self._inspection_match_labels(inspection)
+        match_reasons = self._inspection_match_reasons(inspection)
+        evidence_surcharge = int(self._inspection_evidence_surcharge(inspection))
+        protective = (
+            local_protective_pressure_snapshot(
+                self.sim,
+                source_prop,
+                current_tick=int(getattr(self.sim, "tick", 0)),
+            )
+            if isinstance(source_prop, dict)
+            else {}
+        )
+        confiscation = self._confiscate_player_inventory(booking_prop=booking_prop, inspection=inspection)
+        fine_due = int(self._player_fine_amount(snapshot)) + int(evidence_surcharge)
         restitution_due = int(snapshot.get("restitution_due", 0) or 0)
         restitution_property_count = int(snapshot.get("restitution_property_count", 0) or 0)
         fine_result = self._collect_player_fine(fine_due)
@@ -2334,6 +2808,7 @@ class CriminalJusticeSystem(System):
             fine_due=int(fine_due),
             fine_paid=int(fine_result.get("fine_paid", 0) or 0),
             debt_added=int(fine_result.get("debt_added", 0) or 0),
+            evidence_surcharge=int(evidence_surcharge),
             seized_entries=tuple(confiscation.get("held_entries", ()) or ()) + tuple(confiscation.get("forfeited_entries", ()) or ()),
         )
         self._clear_restitution_claims(self.player_eid)
@@ -2374,10 +2849,20 @@ class CriminalJusticeSystem(System):
             restricted_item_count=int(confiscation.get("restricted_units", 0) or 0),
             contraband_item_count=int(confiscation.get("contraband_units", 0) or 0),
             stolen_item_count=int(confiscation.get("stolen_units", 0) or 0),
+            incident_evidence_item_count=int(confiscation.get("incident_evidence_units", 0) or 0),
             weapon_item_count=int(confiscation.get("weapon_units", 0) or 0),
             confiscated_labels=tuple(confiscation.get("labels", ()) or ()),
             held_labels=tuple(confiscation.get("held_labels", ()) or ()),
             forfeited_labels=tuple(confiscation.get("forfeited_labels", ()) or ()),
+            inspected_contraband_count=int(counts.get("contraband", 0) or 0),
+            inspected_latent_claim_count=int(counts.get("latent_claim_violation", 0) or 0),
+            inspected_reported_stolen_count=int(counts.get("reported_stolen", 0) or 0),
+            inspected_incident_evidence_count=int(counts.get("incident_evidence", 0) or 0),
+            questioning_disposition=str(questioning_disposition or "").strip().lower(),
+            incident_match_labels=match_labels,
+            incident_match_reasons=match_reasons,
+            evidence_surcharge=int(evidence_surcharge),
+            protective_posture_label=str((protective or {}).get("state_label", "") or "").strip(),
             held_property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
             held_property_name=str((booking_prop or {}).get("name", "Justice Office") if isinstance(booking_prop, dict) else "Justice Office").strip() or "Justice Office",
             booking_anchor_x=int(anchor_x),
@@ -2419,10 +2904,10 @@ class CriminalJusticeSystem(System):
         offender_eid = event.data.get("offender_eid")
         if offender_eid is None:
             return
-        witnessed = bool(event.data.get("witnessed", False))
-        if not witnessed:
+        observation = self._event_accountability(event, offender_eid=offender_eid)
+        if not bool(observation.get("has_accountable_observation")):
             return
-        self._record_incident(
+        change = self._record_incident(
             offender_eid,
             incident_type="trespass",
             severity=int(event.data.get("severity_score", 0) or 0),
@@ -2430,9 +2915,11 @@ class CriminalJusticeSystem(System):
             property_id=event.data.get("property_id"),
             x=event.data.get("x"),
             y=event.data.get("y"),
-            witnessed=witnessed,
+            witnessed=True,
             note=str(event.data.get("severity_label", "trespass") or "").strip().lower(),
         )
+        if change is not None:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_property_tamper(self, event):
         offender_eid = event.data.get("offender_eid")
@@ -2440,10 +2927,10 @@ class CriminalJusticeSystem(System):
             return
         property_id = str(event.data.get("property_id", "") or "").strip()
         prop = self.sim.properties.get(property_id) if property_id else None
-        witnessed = bool(event.data.get("witnessed", False))
-        if not witnessed:
+        observation = self._event_accountability(event, offender_eid=offender_eid)
+        if not bool(observation.get("has_accountable_observation")):
             return
-        self._record_incident(
+        change = self._record_incident(
             offender_eid,
             incident_type="tamper",
             severity=int(event.data.get("severity_score", 0) or 0),
@@ -2451,10 +2938,12 @@ class CriminalJusticeSystem(System):
             property_id=property_id,
             x=event.data.get("x"),
             y=event.data.get("y"),
-            witnessed=witnessed,
+            witnessed=True,
             note="property_tamper",
         )
-        if witnessed and isinstance(prop, dict):
+        if change is not None:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
+        if change is not None and isinstance(prop, dict):
             self._record_structural_restitution_claim(
                 offender_eid,
                 prop,
@@ -2465,21 +2954,22 @@ class CriminalJusticeSystem(System):
         offender_eid = event.data.get("offender_eid")
         if offender_eid is None:
             return
-        x = event.data.get("x")
-        y = event.data.get("y")
-        z = event.data.get("z", 0)
-        if not self._watchers_present(offender_eid, x, y, z):
+        observation = self._event_accountability(event, offender_eid=offender_eid)
+        if not bool(observation.get("has_accountable_observation")):
             return
-        self._record_incident(
+        change = self._record_incident(
             offender_eid,
             incident_type="theft",
             severity=72,
             source_event="item_stolen",
-            x=x,
-            y=y,
+            property_id=event.data.get("property_id"),
+            x=event.data.get("x"),
+            y=event.data.get("y"),
             witnessed=True,
             note=str(event.data.get("item_name", event.data.get("item_id", "item")) or "").strip(),
         )
+        if change is not None:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_action_offense(self, event):
         offender_eid = event.data.get("offender_eid")
@@ -2488,58 +2978,128 @@ class CriminalJusticeSystem(System):
         context = str(event.data.get("context", "ordinary") or "").strip().lower() or "ordinary"
         if context not in {"contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
             return
-        if offender_eid != self.player_eid and context in VIOLENT_OFFENSE_CONTEXTS:
+        if not self._violent_offense_allowed(offender_eid, context):
             # NPC violence needs lawful-force context before it can share the
             # same consequences as the player. Keep first-pass NPC justice to
             # clearer property and theft offenses.
             return
-        x = event.data.get("x")
-        y = event.data.get("y")
-        z = event.data.get("z", 0)
-        if not self._watchers_present(offender_eid, x, y, z):
+        observation = self._event_accountability(event, offender_eid=offender_eid)
+        if not bool(observation.get("has_accountable_observation")):
             return
-        incident_type = {
-            "contraband_use": "contraband",
-            "unarmed_assault": "unarmed_assault",
-            "melee_assault": "melee_assault",
-            "armed_assault": "armed_assault",
-            "explosive_discharge": "explosive_discharge",
-        }.get(context, context)
-        self._record_incident(
+        incident_type = self._incident_type_from_context(context)
+        change = self._record_incident(
             offender_eid,
             incident_type=incident_type,
             severity=int(event.data.get("offense_score", 0) or 0),
             source_event="action_offense",
-            x=x,
-            y=y,
+            x=event.data.get("x"),
+            y=event.data.get("y"),
             witnessed=True,
             note=f"{str(event.data.get('action', 'action') or '').strip().lower()}/{context}",
         )
+        if change is not None:
+            self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_incident_authority_reported(self, event):
         incident = incident_record(self.sim, event.data.get("incident_id"))
         if not isinstance(incident, dict):
             return
-        if str(incident.get("kind", "") or "").strip().lower() != "camera_alert":
+        if bool(incident.get("justice_accounted")):
             return
+        report_observation = self._event_accountability(
+            event,
+            offender_eid=incident.get("primary_actor_eid"),
+        )
+        if not bool(report_observation.get("has_accountable_observation")):
+            return
+        incident_kind = str(incident.get("kind", "") or "").strip().lower()
         offender_eid = incident.get("primary_actor_eid")
         if offender_eid is None:
             return
-        property_id = str(incident.get("property_id", "") or "").strip()
         severity_score = int(incident.get("severity", 0) or 0)
-        if not property_id or severity_score <= 0:
+        if severity_score <= 0:
             return
-        self._record_incident(
-            offender_eid,
-            incident_type="trespass",
-            severity=severity_score,
-            source_event="property_trespass",
-            property_id=property_id,
-            x=incident.get("x"),
-            y=incident.get("y"),
-            witnessed=True,
-            note=str(incident.get("note", "camera_alert") or "camera_alert").strip().lower(),
-        )
+        if incident_kind == "camera_alert":
+            change = self._record_incident(
+                offender_eid,
+                incident_type="trespass",
+                severity=severity_score,
+                source_event="property_trespass",
+                property_id=incident.get("property_id"),
+                x=incident.get("x"),
+                y=incident.get("y"),
+                witnessed=True,
+                note=str(incident.get("note", "camera_alert") or "camera_alert").strip().lower(),
+            )
+        elif incident_kind == "property_trespass":
+            change = self._record_incident(
+                offender_eid,
+                incident_type="trespass",
+                severity=severity_score,
+                source_event="property_trespass",
+                property_id=incident.get("property_id"),
+                x=incident.get("x"),
+                y=incident.get("y"),
+                witnessed=True,
+                note=str(incident.get("note", "trespass") or "trespass").strip().lower(),
+            )
+        elif incident_kind == "property_tamper":
+            change = self._record_incident(
+                offender_eid,
+                incident_type="tamper",
+                severity=severity_score,
+                source_event="property_tamper",
+                property_id=incident.get("property_id"),
+                x=incident.get("x"),
+                y=incident.get("y"),
+                witnessed=True,
+                note="property_tamper",
+            )
+            property_id = str(incident.get("property_id", "") or "").strip()
+            prop = self.sim.properties.get(property_id) if property_id else None
+            if change is not None and isinstance(prop, dict):
+                self._record_structural_restitution_claim(
+                    offender_eid,
+                    prop,
+                    damage_tick=int(getattr(self.sim, "tick", 0)),
+                )
+        elif incident_kind == "item_stolen":
+            change = self._record_incident(
+                offender_eid,
+                incident_type="theft",
+                severity=severity_score,
+                source_event="item_stolen",
+                property_id=incident.get("property_id"),
+                x=incident.get("x"),
+                y=incident.get("y"),
+                witnessed=True,
+                note=str(incident.get("note", incident.get("item_name", "item")) or "item").strip(),
+            )
+        elif incident_kind == "action_offense":
+            context = str(incident.get("context", "") or "").strip().lower() or str(incident.get("merge_subject", "") or "").split(":")[-1].strip().lower()
+            if context not in {"contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
+                return
+            if context not in VIOLENT_OFFENSE_CONTEXTS and not self._violent_offense_allowed(offender_eid, context):
+                return
+            # Authority-reported violent incidents can become official justice
+            # records even when the original offender was not the player. This
+            # keeps later booking and evidence discovery honest without making
+            # every witnessed NPC-on-NPC fight immediately share the player's
+            # direct wanted-state path.
+            change = self._record_incident(
+                offender_eid,
+                incident_type=self._incident_type_from_context(context),
+                severity=severity_score,
+                source_event="action_offense",
+                x=incident.get("x"),
+                y=incident.get("y"),
+                witnessed=True,
+                note=f"{str(incident.get('action', 'action') or '').strip().lower()}/{context}",
+            )
+        else:
+            return
+        if change is not None:
+            self._mark_incident_accounted(incident.get("id"))
 
     def on_property_interact(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -2551,6 +3111,11 @@ class CriminalJusticeSystem(System):
             return
         snapshot = self._player_bookable_snapshot()
         if snapshot is not None:
+            tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
+            if tier == "questioning":
+                if self._open_player_questioning_prompt(None, snapshot=snapshot, source_prop=prop):
+                    event.data["handled"] = True
+                return
             if self._book_player(source_prop=prop):
                 event.data["handled"] = True
             return
@@ -2641,7 +3206,7 @@ class CriminalJusticeSystem(System):
             return
         if npc_will is not None and str(npc_will.intent or "").strip().lower() in THREAT_STATES and npc_will.target_eid == self.player_eid:
             return
-        if self._open_player_surrender_prompt(npc_eid, snapshot=snapshot, respect_cooldown=False):
+        if self._open_player_justice_prompt(npc_eid, snapshot=snapshot, respect_cooldown=False):
             event.data["handled"] = True
 
     def on_justice_surrender_choice(self, event):
@@ -2659,6 +3224,21 @@ class CriminalJusticeSystem(System):
             self._book_player(by_eid=by_eid, source_prop=source_prop)
             return
         self._escalate_player_surrender_refusal(by_eid=by_eid, source_prop=source_prop, snapshot=snapshot)
+
+    def on_justice_questioning_choice(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if not self._player_surrender_prompt_open():
+            return
+        prompt = self.player_surrender_prompt if isinstance(self.player_surrender_prompt, dict) else {}
+        if str(prompt.get("kind", "")).strip().lower() != self.QUESTIONING_DIALOG_KIND:
+            return
+        by_eid = prompt.get("npc_eid", event.data.get("npc_eid"))
+        source_prop = self.sim.properties.get(prompt.get("source_prop_id")) if prompt.get("source_prop_id") else None
+        snapshot = self._player_bookable_snapshot()
+        choice_id = str(event.data.get("choice_id", "") or "").strip().lower() or "refuse"
+        self._close_player_surrender_prompt()
+        self._resolve_player_questioning_choice(choice_id, by_eid=by_eid, source_prop=source_prop, snapshot=snapshot)
 
     def on_npc_surrendered(self, event):
         offender_eid = event.data.get("eid")
@@ -2736,7 +3316,7 @@ class CriminalJusticeSystem(System):
         held_by_eid = self._find_auto_arrest_enforcer(snapshot)
         if held_by_eid is None:
             return False
-        return bool(self._open_player_surrender_prompt(held_by_eid, snapshot=snapshot, respect_cooldown=True))
+        return bool(self._open_player_justice_prompt(held_by_eid, snapshot=snapshot, respect_cooldown=True))
 
     def _process_resolved_npc_custody(self):
         tick = int(getattr(self.sim, "tick", 0))

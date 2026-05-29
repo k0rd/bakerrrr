@@ -410,7 +410,7 @@ from game.system_support.access_checks import (
     _maybe_damage_access_tool,
     _resolve_access_skill_check,
 )
-from game.system_support.awareness_runtime import _watchers_for_position
+from game.system_support.awareness_runtime import _watchers_for_position, observation_payload_for_position
 from game.system_support.access_runtime import (
     _access_override_score_for_actor,
     _access_tool_context_for,
@@ -3639,24 +3639,41 @@ class ItemSystem(System):
         bonus = ACTION_OFFENSE_CONTEXT_BONUS.get(context, 0)
         return max(0, min(100, base + bonus))
 
-    def _emit_action_offense(self, eid, action, x, y, z, context="ordinary", score=None):
+    def _emit_action_offense(self, eid, action, x, y, z, context="ordinary", score=None, **extra):
         if score is None:
             score = self._offense_score_for(action, context=context)
         if score <= 0:
             return
 
-        self.sim.emit(Event(
-            "action_offense",
-            offender_eid=eid,
-            action=action,
-            context=context,
-            offense_score=score,
-            offense_tier=_offense_tier(score),
-            x=x,
-            y=y,
-            z=z,
-            radius=_offense_notice_radius(score),
-        ))
+        payload = {
+            "offender_eid": eid,
+            "action": action,
+            "context": context,
+            "offense_score": score,
+            "offense_tier": _offense_tier(score),
+            "x": x,
+            "y": y,
+            "z": z,
+            "radius": _offense_notice_radius(score),
+        }
+        if isinstance(extra, dict):
+            payload.update(extra)
+        if not any(
+            key in payload
+            for key in ("observer_eids", "accountable_observer_eids", "observation_channels", "witnessed", "witnesses")
+        ):
+            payload.update(
+                observation_payload_for_position(
+                    self.sim,
+                    x,
+                    y,
+                    z,
+                    exclude_eid=eid,
+                    offender_eid=eid,
+                    observation_channels=("actor_witness",),
+                )
+            )
+        self.sim.emit(Event("action_offense", **payload))
 
     def _emit_removed_gear_events(self, eid, removed_entry, reason):
         return self.item_actions.emit_removed_gear_events(eid, removed_entry, reason)
