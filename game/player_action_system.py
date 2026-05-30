@@ -945,7 +945,9 @@ class PlayerActionSystem(System):
 
     def _rehydrate_dialog_pause(self, eid=None):
         if eid is None:
-            eid = self.player_eid
+            eid = getattr(self.sim, "player_eid", None)
+        if eid is None:
+            return None
         pos = self.sim.ecs.get(Position).get(eid)
         if pos is None:
             return None
@@ -1002,7 +1004,7 @@ class PlayerActionSystem(System):
         if not transcript:
             transcript = ["No sale details are available right now."]
         self.sim.set_time_paused(True, reason="dialog")
-        self._rehydrate_dialog_pause(eid=self.player_eid)
+        self._rehydrate_dialog_pause()
         state.update({
             "open": True,
             "kind": "service_menu",
@@ -1049,7 +1051,7 @@ class PlayerActionSystem(System):
 
         state = self._dialog_ui_state()
         self.sim.set_time_paused(True, reason="dialog")
-        self._rehydrate_dialog_pause(eid=self.player_eid)
+        self._rehydrate_dialog_pause(eid=eid)
         state.update({
             "open": True,
             "kind": "service_menu",

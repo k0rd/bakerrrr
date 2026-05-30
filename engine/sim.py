@@ -364,7 +364,11 @@ class Simulation:
 
         structure = self.structure_at(int(x), int(y), int(z))
         property_id = str((state or {}).get("property_id", "") or "").strip()
-        if not isinstance(structure, dict) and not (property_id and property_id in getattr(self, "properties", {})):
+        if (
+            not isinstance(structure, dict)
+            and not (property_id and property_id in getattr(self, "properties", {}))
+            and not self._door_aperture_context_valid(int(x), int(y), int(z), tile=tile)
+        ):
             return False
 
         kind = str(state.get("kind", "door") or "door").strip().lower() or "door"
@@ -380,6 +384,41 @@ class Simulation:
             semantic_id="feature_door",
         )
         return True
+
+    def _door_aperture_context_valid(self, x, y, z=0, *, tile=None):
+        door_tile = tile if tile is not None else self.tilemap.tile_at(int(x), int(y), int(z))
+        if door_tile is None:
+            return False
+
+        def _looks_like_wall(cx, cy):
+            neighbor = self.tilemap.tile_at(int(cx), int(cy), int(z))
+            if neighbor is None:
+                return False
+            semantic = str(getattr(neighbor, "semantic_id", "") or "").strip().lower()
+            glyph = str(getattr(neighbor, "glyph", "") or "").strip()
+            return semantic == "wall_building" or glyph == "#"
+
+        def _looks_like_floor(cx, cy):
+            neighbor = self.tilemap.tile_at(int(cx), int(cy), int(z))
+            if neighbor is None:
+                return False
+            semantic = str(getattr(neighbor, "semantic_id", "") or "").strip().lower()
+            glyph = str(getattr(neighbor, "glyph", "") or "").strip()
+            if semantic == "floor_building_fill":
+                return True
+            return glyph in {".", "'", ","} and bool(getattr(neighbor, "walkable", False))
+
+        return (
+            _looks_like_wall(x, y - 1)
+            and _looks_like_wall(x, y + 1)
+            and _looks_like_floor(x - 1, y)
+            and _looks_like_floor(x + 1, y)
+        ) or (
+            _looks_like_wall(x - 1, y)
+            and _looks_like_wall(x + 1, y)
+            and _looks_like_floor(x, y - 1)
+            and _looks_like_floor(x, y + 1)
+        )
 
     def reapply_door_states(self, *, chunk=None):
         target_chunk = self._normalize_chunk_key(chunk) if chunk is not None else None
