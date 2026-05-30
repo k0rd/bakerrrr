@@ -56,7 +56,7 @@ from game.system_support.building_repair_runtime import (
     repair_building_damage as _repair_building_damage,
 )
 from game.system_support.opportunity_knowledge_runtime import (
-    rehydrate_opportunity_knowledge as _rehydrate_opportunity_knowledge,
+    rehydrate_entity_knowledge as _rehydrate_entity_knowledge,
 )
 from game.system_support.player_feedback import _log_player_feedback
 from game.vehicles import vehicle_metadata
@@ -145,6 +145,15 @@ def _relay_watch_target_property(sim, prop):
     if str(target_prop.get("kind", "")).strip().lower() != "building":
         return None
     return target_prop
+
+
+def _service_rehydrate_lead_kinds(service):
+    service_key = str(service or "").strip().lower()
+    if service_key in {"medical"}:
+        return ("medical", "safe_spot")
+    if service_key in {"rest", "shelter"}:
+        return ("lodging", "local_housing", "safe_spot")
+    return ()
 
 
 class SiteServiceSystem(System):
@@ -457,24 +466,23 @@ class SiteServiceSystem(System):
                     status=status,
                 ))
         center = None
-        if pos is not None:
-            center = (int(pos.x), int(pos.y), int(pos.z))
-        elif isinstance(prop, dict):
+        if pos is None and isinstance(prop, dict):
             center = (
                 int(prop.get("x", 0) or 0),
                 int(prop.get("y", 0) or 0),
                 int(prop.get("z", 0) or 0),
             )
-        if center is not None:
-            _rehydrate_opportunity_knowledge(
-                self.sim,
-                center=center,
-                radius=20,
-                search_radius=10,
-                current_tick=int(getattr(self.sim, "tick", 0)),
-                reason=f"service_{service}",
-                force_routine_rethink=True,
-            )
+        _rehydrate_entity_knowledge(
+            self.sim,
+            eid,
+            center=center,
+            radius=20,
+            search_radius=10,
+            current_tick=int(getattr(self.sim, "tick", 0)),
+            reason=f"service_{service}",
+            force_routine_rethink=True,
+            lead_kinds=_service_rehydrate_lead_kinds(service),
+        )
         return advanced_ticks
 
     def _choose_vending_item(self, eid, prop):

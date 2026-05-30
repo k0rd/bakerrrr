@@ -123,7 +123,7 @@ from game.system_support.settlement_runtime import (
     _track_entity_in_chunk_population,
 )
 from game.system_support.opportunity_knowledge_runtime import (
-    rehydrate_opportunity_knowledge as _rehydrate_opportunity_knowledge,
+    rehydrate_entity_knowledge as _rehydrate_entity_knowledge,
 )
 from game.system_support.interaction_ordering import (
     _direction_step,
@@ -572,20 +572,16 @@ class CriminalJusticeSystem(System):
         return advanced_ticks
 
     def _rehydrate_local_opportunity_knowledge(self, *, source_prop=None, reason="dialog", force_routine_rethink=False):
-        player_pos = self._position_for(self.player_eid)
         center = None
-        if player_pos is not None:
-            center = (int(player_pos.x), int(player_pos.y), int(player_pos.z))
-        elif isinstance(source_prop, dict):
+        if isinstance(source_prop, dict):
             center = (
                 int(source_prop.get("x", 0) or 0),
                 int(source_prop.get("y", 0) or 0),
                 int(source_prop.get("z", 0) or 0),
             )
-        if center is None:
-            return None
-        return _rehydrate_opportunity_knowledge(
+        return _rehydrate_entity_knowledge(
             self.sim,
+            self.player_eid,
             center=center,
             radius=20,
             search_radius=10,

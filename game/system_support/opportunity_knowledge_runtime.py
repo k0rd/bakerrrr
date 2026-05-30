@@ -8,6 +8,8 @@ from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.components import AI, NPCOpportunityKnowledge, Position
 from game.movement_runtime import _can_step_transition_for
 from game.property_runtime import (
+    property_covering as _property_covering,
+    property_entry_position as _property_entry_position,
     property_focus_position as _property_focus_position,
     property_is_public as _property_is_public,
     property_is_storefront as _property_is_storefront,
@@ -19,6 +21,7 @@ _CHUNK_SNAPSHOT_CACHE_TICKS = 300
 _MAX_LEADS_PER_KIND = 4
 _DEFAULT_STALE_AFTER_TICKS = 90
 _DEFAULT_EXPIRES_TICKS = 360
+_REFRESH_ENTITY_KEY = "__entity__"
 
 _MEDICAL_ARCHETYPES = frozenset({
     "backroom_clinic",
@@ -96,6 +99,21 @@ def _float(value, default=0.0):
 
 def _text(value):
     return str(value or "").strip()
+
+
+def _normalize_lead_kinds(lead_kinds=None, lead_kind=None):
+    values = []
+    if lead_kinds is not None:
+        iterable = lead_kinds if isinstance(lead_kinds, (tuple, list, set, frozenset)) else (lead_kinds,)
+    elif lead_kind is not None:
+        iterable = (lead_kind,)
+    else:
+        iterable = ()
+    for raw in iterable:
+        kind = _text(raw).lower()
+        if kind and kind not in values:
+            values.append(kind)
+    return tuple(values)
 
 
 def _runtime_state(sim):
@@ -315,7 +333,7 @@ def property_surface_snapshot(sim, prop, *, current_tick=None):
     return snapshot
 
 
-def nearby_opportunity_rows(sim, pos, *, radius, lead_kind=None, current_tick=None):
+def nearby_opportunity_rows(sim, pos, *, radius, lead_kind=None, lead_kinds=None, current_tick=None):
     if pos is None:
         return []
     try:
@@ -323,7 +341,7 @@ def nearby_opportunity_rows(sim, pos, *, radius, lead_kind=None, current_tick=No
     except (TypeError, ValueError):
         search_radius = 1
     rows = []
-    wanted = _text(lead_kind).lower()
+    wanted = set(_normalize_lead_kinds(lead_kinds, lead_kind))
     for prop in sim.properties_in_radius(int(pos.x), int(pos.y), int(pos.z), r=search_radius):
         row = property_surface_snapshot(sim, prop, current_tick=current_tick)
         if not isinstance(row, dict):
@@ -331,10 +349,48 @@ def nearby_opportunity_rows(sim, pos, *, radius, lead_kind=None, current_tick=No
         target = row.get("target")
         if not isinstance(target, (tuple, list)) or len(target) < 3 or _int(target[2]) != _int(pos.z):
             continue
-        if wanted and wanted not in set(row.get("opportunity_tags", ()) or ()):
+        if wanted and not (wanted & set(row.get("opportunity_tags", ()) or ())):
             continue
         rows.append(row)
     return rows
+
+
+def _note_refresh_tick(knowledge, *, current_tick, lead_kinds=()):
+    if knowledge is None:
+        return
+    if not isinstance(knowledge.last_refresh_tick_by_kind, dict):
+        knowledge.last_refresh_tick_by_kind = {}
+    knowledge.last_refresh_tick_by_kind[_REFRESH_ENTITY_KEY] = int(current_tick)
+    for kind in tuple(lead_kinds or ()):
+        clean_kind = _text(kind).lower()
+        if clean_kind:
+            knowledge.last_refresh_tick_by_kind[clean_kind] = int(current_tick)
+
+
+def _recent_refresh_active(knowledge, *, current_tick, recency_ticks=0, lead_kinds=()):
+    if knowledge is None:
+        return False
+    try:
+        threshold = max(0, int(recency_ticks))
+    except (TypeError, ValueError):
+        threshold = 0
+    if threshold <= 0:
+        return False
+    stamps = getattr(knowledge, "last_refresh_tick_by_kind", None)
+    if not isinstance(stamps, dict):
+        return False
+    keys = [_REFRESH_ENTITY_KEY]
+    keys.extend(tuple(lead_kinds or ()))
+    latest = None
+    for key in keys:
+        if key not in stamps:
+            continue
+        tick = _int(stamps.get(key), -1)
+        if latest is None or tick > latest:
+            latest = tick
+    if latest is None:
+        return False
+    return int(current_tick) - int(latest) < threshold
 
 
 def opportunity_snapshot_for_chunk(sim, chunk, *, current_tick=None):
@@ -363,15 +419,33 @@ def opportunity_snapshot_for_chunk(sim, chunk, *, current_tick=None):
     path_kind = _text(descriptor.get("path")).lower()
     loaded_property_ids = []
     tag_counts = {}
-    for record in tuple(getattr(sim, "chunk_property_records", {}).get(chunk, ()) or ()):
-        prop_id = _text((record or {}).get("id"))
-        prop = sim.properties.get(prop_id)
+    seen_property_ids = set()
+
+    def _ingest_prop(prop_id, prop):
         if not isinstance(prop, dict):
-            continue
-        loaded_property_ids.append(prop_id)
+            return
+        clean_id = _text(prop_id) or _text(prop.get("id"))
+        if not clean_id or clean_id in seen_property_ids:
+            return
+        seen_property_ids.add(clean_id)
+        loaded_property_ids.append(clean_id)
         row = property_surface_snapshot(sim, prop, current_tick=current_tick)
         for tag in tuple((row or {}).get("opportunity_tags", ()) or ()):
             tag_counts[tag] = _int(tag_counts.get(tag), 0) + 1
+
+    for record in tuple(getattr(sim, "chunk_property_records", {}).get(chunk, ()) or ()):
+        prop_id = _text((record or {}).get("id"))
+        _ingest_prop(prop_id, sim.properties.get(prop_id))
+    for prop_id, prop in tuple(getattr(sim, "properties", {}).items()):
+        if not isinstance(prop, dict):
+            continue
+        try:
+            prop_chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+        except (TypeError, ValueError):
+            continue
+        if prop_chunk != chunk:
+            continue
+        _ingest_prop(prop_id, prop)
     score = (wealth * 0.28) + (security * 0.48) - (crime * 0.34)
     score += float(tag_counts.get("local_housing", 0) or 0) * 0.75
     score += float(tag_counts.get("local_workplace", 0) or 0) * 0.7
@@ -488,6 +562,8 @@ def rehydrate_opportunity_knowledge(
     current_tick=None,
     reason="pause",
     force_routine_rethink=False,
+    lead_kinds=None,
+    skip_recent_ticks=0,
 ):
     if current_tick is None:
         current_tick = _int(getattr(sim, "tick", 0), 0)
@@ -502,6 +578,11 @@ def rehydrate_opportunity_knowledge(
         search_radius = max(1, int(search_radius))
     except (TypeError, ValueError):
         search_radius = 10
+    try:
+        skip_recent_ticks = max(0, int(skip_recent_ticks))
+    except (TypeError, ValueError):
+        skip_recent_ticks = 0
+    wanted_kinds = _normalize_lead_kinds(lead_kinds)
 
     center_pos = None
     if isinstance(center, (tuple, list)) and len(center) >= 3:
@@ -527,6 +608,7 @@ def rehydrate_opportunity_knowledge(
 
     actors = 0
     leads = 0
+    skipped_recent = 0
     warmed_chunks = set()
     for eid in candidate_ids:
         pos = positions.get(eid)
@@ -537,6 +619,15 @@ def rehydrate_opportunity_knowledge(
                 continue
             if abs(_int(pos.x) - center_pos[0]) + abs(_int(pos.y) - center_pos[1]) > radius:
                 continue
+        knowledge = npc_opportunity_knowledge(sim, eid, create=False)
+        if skip_recent_ticks > 0 and _recent_refresh_active(
+            knowledge,
+            current_tick=current_tick,
+            recency_ticks=skip_recent_ticks,
+            lead_kinds=wanted_kinds,
+        ):
+            skipped_recent += 1
+            continue
         chunk = sim.chunk_coords(_int(pos.x), _int(pos.y)) if hasattr(sim, "chunk_coords") else None
         if chunk is not None:
             warmed_chunks.add((_int(chunk[0]), _int(chunk[1])))
@@ -545,14 +636,18 @@ def rehydrate_opportunity_knowledge(
             sim,
             pos,
             radius=search_radius,
+            lead_kinds=wanted_kinds,
             current_tick=current_tick,
         )
         actors += 1
         if force_routine_rethink:
             clear_will_rethink(sim, eid)
+        refreshed_kinds = set(wanted_kinds)
         for row in rows:
             tags = tuple(row.get("opportunity_tags", ()) or ())
             for tag in tags:
+                if wanted_kinds and tag not in wanted_kinds:
+                    continue
                 remembered = remember_opportunity_lead(
                     sim,
                     eid,
@@ -564,6 +659,13 @@ def rehydrate_opportunity_knowledge(
                 )
                 if remembered is not None:
                     leads += 1
+                    refreshed_kinds.add(tag)
+        knowledge = npc_opportunity_knowledge(sim, eid, create=True)
+        _note_refresh_tick(
+            knowledge,
+            current_tick=current_tick,
+            lead_kinds=refreshed_kinds,
+        )
     if center_pos is not None and hasattr(sim, "chunk_coords"):
         center_chunk = sim.chunk_coords(center_pos[0], center_pos[1])
         opportunity_snapshot_for_chunk(sim, center_chunk, current_tick=current_tick)
@@ -573,7 +675,47 @@ def rehydrate_opportunity_knowledge(
         "leads": leads,
         "chunks": len(warmed_chunks),
         "reason": reason_key,
+        "skipped_recent": skipped_recent,
+        "lead_kinds": wanted_kinds,
     }
+
+
+def rehydrate_entity_knowledge(
+    sim,
+    actor_eid,
+    *,
+    center=None,
+    radius=18,
+    search_radius=10,
+    current_tick=None,
+    reason="entity_refresh",
+    force_routine_rethink=False,
+    lead_kinds=None,
+    skip_recent_ticks=0,
+):
+    eid = _int(actor_eid, 0)
+    if eid <= 0:
+        return None
+    pos = sim.ecs.get(Position).get(eid)
+    if pos is not None:
+        center = (_int(pos.x), _int(pos.y), _int(pos.z))
+    elif not (isinstance(center, (tuple, list)) and len(center) >= 3):
+        return None
+    summary = rehydrate_opportunity_knowledge(
+        sim,
+        actor_eids=(eid,),
+        center=center,
+        radius=radius,
+        search_radius=search_radius,
+        current_tick=current_tick,
+        reason=reason,
+        force_routine_rethink=force_routine_rethink,
+        lead_kinds=lead_kinds,
+        skip_recent_ticks=skip_recent_ticks,
+    )
+    if isinstance(summary, dict):
+        summary["actor_eid"] = eid
+    return summary
 
 
 def mark_opportunity_failure(sim, actor_eid, lead_kind, *, lead=None, cooldown_ticks=180, reason="failed_verification"):
@@ -783,6 +925,24 @@ def _greedy_visible_step(sim, eid, sx, sy, tx, ty, z):
     return None
 
 
+def _routine_movement_goal(sim, pos, target):
+    if pos is None or not isinstance(target, (tuple, list)) or len(target) < 3:
+        return None
+    goal = (_int(target[0]), _int(target[1]), _int(target[2]))
+    actor_prop = _property_covering(sim, _int(pos.x), _int(pos.y), _int(pos.z))
+    target_prop = _property_covering(sim, goal[0], goal[1], goal[2])
+    if not isinstance(target_prop, dict):
+        return goal
+    actor_prop_id = _text((actor_prop or {}).get("id")).lower()
+    target_prop_id = _text(target_prop.get("id")).lower()
+    if actor_prop_id and actor_prop_id == target_prop_id:
+        return goal
+    entry = _property_entry_position(target_prop)
+    if isinstance(entry, (tuple, list)) and len(entry) >= 3:
+        return (_int(entry[0]), _int(entry[1]), _int(entry[2]))
+    return goal
+
+
 def next_active_target_step(sim, actor_eid, state, pos, target, *, max_nodes=512):
     state_key = _text(state).lower()
     if state_key not in _PATH_ROUTINE_STATES:
@@ -792,7 +952,9 @@ def next_active_target_step(sim, actor_eid, state, pos, target, *, max_nodes=512
     row = remember_active_target(sim, actor_eid, state_key, target, timeout_ticks=180)
     if not isinstance(row, dict):
         return None
-    goal = (_int(target[0]), _int(target[1]), _int(target[2]))
+    goal = _routine_movement_goal(sim, pos, target)
+    if goal is None:
+        return None
     current_xy = (_int(pos.x), _int(pos.y))
     direct_step = _greedy_visible_step(
         sim,

@@ -252,9 +252,50 @@ def _player_business_cache_key(prop):
     if not isinstance(prop, dict):
         return ""
     property_id = _text(prop.get("id"))
+    state = player_business_state(prop, create=False)
+    revision = _int_or((state or {}).get("_cache_revision"), default=0)
     if property_id:
-        return property_id
-    return f"prop-object:{id(prop)}"
+        return f"{property_id}:rev:{revision}"
+    return f"prop-object:{id(prop)}:rev:{revision}"
+
+
+def _touch_player_business_runtime(prop, *, sim=None):
+    state = player_business_state(prop, create=True)
+    if state is None:
+        return False
+    state["_cache_revision"] = max(0, _int_or(state.get("_cache_revision"), default=0)) + 1
+    _invalidate_player_business_runtime_cache(sim, prop)
+    return True
+
+
+def refresh_player_business_runtime(sim, prop):
+    return _touch_player_business_runtime(prop, sim=sim)
+
+
+def _invalidate_player_business_runtime_cache(sim, prop=None):
+    if sim is None:
+        return False
+    state = getattr(sim, "_player_business_runtime_cache", None)
+    if not isinstance(state, dict):
+        return False
+    if prop is None:
+        sim._player_business_runtime_cache = {
+            "tick": _int_or(getattr(sim, "tick", 0), default=0),
+            "summary": {},
+            "status": {},
+            "open_roles": {},
+        }
+        return True
+    cache_key = _player_business_cache_key(prop)
+    if not cache_key:
+        return False
+    changed = False
+    for bucket_name in ("summary", "status", "open_roles"):
+        bucket = state.get(bucket_name)
+        if isinstance(bucket, dict) and cache_key in bucket:
+            bucket.pop(cache_key, None)
+            changed = True
+    return changed
 
 
 def _clamp(value, minimum, maximum):
@@ -785,6 +826,7 @@ def player_business_state(prop, create=False):
     state["last_scene_nuisance_loss"] = max(0, _int_or(state.get("last_scene_nuisance_loss"), default=0))
     raw_nuisance_tick = state.get("last_scene_nuisance_tick")
     state["last_scene_nuisance_tick"] = None if raw_nuisance_tick in {None, ""} else _int_or(raw_nuisance_tick, default=0)
+    state["_cache_revision"] = max(0, _int_or(state.get("_cache_revision"), default=0))
     return state
 
 
@@ -809,12 +851,13 @@ def player_business_next_customer_policy(prop):
     return _cycle_choice(player_business_customer_policy(prop), CUSTOMER_POLICY_ORDER)
 
 
-def player_business_set_customer_policy(prop, policy):
+def player_business_set_customer_policy(prop, policy, *, sim=None):
     state = player_business_state(prop, create=True)
     if state is None:
         return "public"
     clean = "public" if _property_supports_lodging_service(prop) else _normalize_customer_policy(policy)
     state["customer_policy"] = clean
+    _touch_player_business_runtime(prop, sim=sim)
     return clean
 
 
@@ -859,12 +902,13 @@ def player_business_markup_profile(prop_or_mode):
     }
 
 
-def player_business_set_markup_mode(prop, mode):
+def player_business_set_markup_mode(prop, mode, *, sim=None):
     state = player_business_state(prop, create=True)
     if state is None:
         return "standard"
     clean = _normalize_business_markup_mode(mode)
     state["markup_mode"] = clean
+    _touch_player_business_runtime(prop, sim=sim)
     return clean
 
 
@@ -904,6 +948,7 @@ def player_business_set_hours_mode(sim, prop, mode):
         metadata["access_controller_hours"] = [int(opening[0]) % 24, int(opening[1]) % 24]
     else:
         metadata.pop("access_controller_hours", None)
+    _touch_player_business_runtime(prop, sim=sim)
 
     return {
         "hours_mode": clean,
@@ -2087,6 +2132,7 @@ def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role="")
         state["staff_roles"] = roles
         state["staff_roster"] = sorted(roster)
         _sync_staff_roster(sim, prop, state)
+        _touch_player_business_runtime(prop, sim=sim)
 
     return {
         "actor_eid": int(actor_eid),
@@ -2161,6 +2207,7 @@ def fire_actor_from_player_business(sim, owner_eid, actor_eid, prop=None):
             if _int_or(raw_eid, default=0) > 0 and int(_int_or(raw_eid, default=0)) != int(actor_eid)
         ]
         _sync_staff_roster(sim, employed_prop, state)
+        _touch_player_business_runtime(employed_prop, sim=sim)
 
     return {
         "actor_eid": int(actor_eid),
@@ -2682,6 +2729,7 @@ __all__ = [
     "player_business_role_weights",
     "player_business_remodel_options",
     "player_business_remodel_quote",
+    "refresh_player_business_runtime",
     "player_business_set_customer_policy",
     "player_business_set_hours_mode",
     "player_business_set_markup_mode",

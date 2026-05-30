@@ -4048,7 +4048,7 @@ class ServiceMenuSystem(System):
                 title, lines = self._stale_service_option_lines(option_id)
                 self._present_service_result(title, lines)
                 return
-            policy = player_business_set_customer_policy(business_prop, next_policy)
+            policy = player_business_set_customer_policy(business_prop, next_policy, sim=self.sim)
             business_name = str(business_prop.get("metadata", {}).get("business_name", business_prop.get("name", "Business"))).strip() or "Business"
             self._present_service_result(
                 f"Business policy: {business_name}",
@@ -4094,7 +4094,7 @@ class ServiceMenuSystem(System):
                 title, lines = self._stale_service_option_lines(option_id)
                 self._present_service_result(title, lines)
                 return
-            mode = player_business_set_markup_mode(business_prop, next_mode)
+            mode = player_business_set_markup_mode(business_prop, next_mode, sim=self.sim)
             business_name = str(business_prop.get("metadata", {}).get("business_name", business_prop.get("name", "Business"))).strip() or "Business"
             self._present_service_result(
                 f"Business markup: {business_name}",

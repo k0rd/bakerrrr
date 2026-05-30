@@ -915,7 +915,14 @@ def _find_tipped_safe_spot_target(sim, actor_eid, pos, tip_data):
     )
     if not target or str(target.get("property_id", "") or "").strip() != property_id:
         return None
-    return target
+    resolved = dict(target)
+    safe_kind = str(tip_data.get("safe_kind", "") or "").strip().lower()
+    service = str(tip_data.get("service", "") or "").strip().lower()
+    if safe_kind:
+        resolved["safe_kind"] = safe_kind
+    if service:
+        resolved["service"] = service
+    return resolved
 
 
 def _behavior_tip_interest(sim, target_eid, tip_kind, payload=None):
@@ -1215,6 +1222,7 @@ def _apply_behavior_tip_shares(sim, pending, *, cooldowns=None, tick=0):
         return 0
     memories = sim.ecs.get(NPCMemory)
     applied = 0
+    current_tick = int(tick or 0)
     for share in pending:
         if not isinstance(share, dict):
             continue
@@ -1237,7 +1245,13 @@ def _apply_behavior_tip_shares(sim, pending, *, cooldowns=None, tick=0):
                 int(target_eid),
                 str(share.get("kind", "")).strip().lower(),
                 str(share.get("anchor", "")).strip(),
-            )] = int(tick or 0)
+            )] = current_tick
+        _schedule_will_rethink(
+            sim,
+            int(target_eid),
+            current_tick=current_tick,
+            delay_ticks=0,
+        )
         sim.emit(Event(
             "npc_behavior_tip_shared",
             source_eid=int(share.get("source_eid")),

@@ -41,7 +41,7 @@ from game.property_keys import (
 )
 from game.system_support.awareness_runtime import observation_payload_for_position
 from game.system_support.opportunity_knowledge_runtime import (
-    rehydrate_opportunity_knowledge as _rehydrate_opportunity_knowledge,
+    rehydrate_entity_knowledge as _rehydrate_entity_knowledge,
 )
 from game.property_runtime import (
     controller_access_requirement_text as _controller_access_requirement_text,
@@ -948,12 +948,9 @@ class PlayerActionSystem(System):
             eid = getattr(self.sim, "player_eid", None)
         if eid is None:
             return None
-        pos = self.sim.ecs.get(Position).get(eid)
-        if pos is None:
-            return None
-        return _rehydrate_opportunity_knowledge(
+        return _rehydrate_entity_knowledge(
             self.sim,
-            center=(int(pos.x), int(pos.y), int(pos.z)),
+            eid,
             radius=18,
             search_radius=10,
             current_tick=int(getattr(self.sim, "tick", 0)),
