@@ -28,6 +28,13 @@ from game.property_runtime import (
 from game.systems_business_reputation import business_opinion_profile, social_secret_site_trust_gate
 from game.system_support.container_runtime import _unlink_removed_item_from_gear
 from game.system_support.interaction_ordering import _manhattan
+from game.system_support.opportunity_knowledge_runtime import (
+    best_opportunity_lead as _best_opportunity_lead,
+    mark_opportunity_failure as _mark_opportunity_failure,
+    nearby_opportunity_rows as _nearby_opportunity_rows,
+    note_opportunity_success as _note_opportunity_success,
+    remember_opportunity_lead as _remember_opportunity_lead,
+)
 from game.system_support.item_provenance_runtime import item_entitlement_for_actor, stamp_item_provenance
 
 
@@ -163,6 +170,8 @@ _AUTHORITY_ROLES = frozenset({
     "scout",
 })
 _LODGING_SERVICE_IDS = frozenset({"rest", "shelter"})
+_LODGING_TARGET_CACHE_TICKS = 3
+_LODGING_TARGET_CACHE_JITTER = 2
 _STREET_BUY_DEFAULT_CATEGORIES = frozenset({
     "tool",
     "weapon",
@@ -269,6 +278,56 @@ def _clamp_need_value(value):
     except (TypeError, ValueError):
         number = 0.0
     return float(max(0.0, min(100.0, number)))
+
+
+def _npc_behavior_runtime_cache(sim, *, current_tick=None):
+    if current_tick is None:
+        current_tick = getattr(sim, "tick", 0)
+    try:
+        tick = int(current_tick)
+    except (TypeError, ValueError):
+        tick = int(getattr(sim, "tick", 0) or 0)
+    state = getattr(sim, "npc_behavior_runtime_cache", None)
+    if not isinstance(state, dict) or int(state.get("tick", -1) or -1) != tick:
+        state = {
+            "tick": tick,
+            "property_access": {},
+        }
+        sim.npc_behavior_runtime_cache = state
+    return state
+
+
+def _npc_behavior_search_cache(sim):
+    state = getattr(sim, "npc_behavior_search_cache", None)
+    if not isinstance(state, dict):
+        state = {
+            "lodging_targets": {},
+        }
+        sim.npc_behavior_search_cache = state
+    state.setdefault("lodging_targets", {})
+    return state
+
+
+def _cached_behavior_property_access(sim, actor_eid, prop, *, x=None, y=None, z=None):
+    if not isinstance(prop, dict):
+        return _evaluate_property_access(sim, actor_eid, prop, x=x, y=y, z=z)
+    property_id = str(prop.get("id", "") or "").strip()
+    if not property_id:
+        return _evaluate_property_access(sim, actor_eid, prop, x=x, y=y, z=z)
+    cache = _npc_behavior_runtime_cache(sim).setdefault("property_access", {})
+    key = (
+        int(actor_eid) if actor_eid is not None else 0,
+        property_id,
+        int(x) if x is not None else None,
+        int(y) if y is not None else None,
+        int(z) if z is not None else None,
+    )
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    result = _evaluate_property_access(sim, actor_eid, prop, x=x, y=y, z=z)
+    cache[key] = result
+    return result
 
 
 def _preferred_hidden_contact_match(prop, preferred_property_id, *, hidden_kind=""):
@@ -1727,7 +1786,7 @@ def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12):
         else:
             continue
 
-        access = _evaluate_property_access(
+        access = _cached_behavior_property_access(
             sim,
             actor_eid,
             prop,
@@ -1781,6 +1840,81 @@ def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12):
 
 
 def _find_medical_aid_target(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):
+    lead = _best_opportunity_lead(sim, actor_eid, "medical")
+    if isinstance(lead, dict):
+        if preferred_property_id and str(preferred_property_id).strip() and str(lead.get("property_id", "")).strip() == str(preferred_property_id).strip():
+            lead["score"] = float(lead.get("score", 0.0) or 0.0) + float(max(0.0, preferred_score_bonus or 0.0))
+        return lead
+    if not pos:
+        return None
+
+    vitality = sim.ecs.get(Vitality).get(actor_eid)
+    if vitality is None or bool(getattr(vitality, "downed", False)):
+        return None
+    max_hp = max(1, int(getattr(vitality, "max_hp", 1) or 1))
+    hp = max(0, int(getattr(vitality, "hp", max_hp) or max_hp))
+    if hp >= max_hp:
+        return None
+
+    search_radius = radius
+    if search_radius is None:
+        search_radius = _behavior_preference(sim, actor_eid, "medical_aid_search_radius", 12)
+    try:
+        search_radius = max(4, int(search_radius))
+    except (TypeError, ValueError):
+        search_radius = 12
+
+    health_gap = max(0.0, 1.0 - (float(hp) / float(max_hp)))
+    best = None
+    for row in _nearby_opportunity_rows(sim, pos, radius=search_radius, lead_kind="medical", current_tick=int(getattr(sim, "tick", 0) or 0)):
+        target = row.get("target")
+        if not isinstance(target, (tuple, list)) or len(target) < 3:
+            continue
+        distance = _manhattan(pos.x, pos.y, int(target[0]), int(target[1]))
+        score = max(0.0, (health_gap * 62.0) + 10.0 - (distance * 1.85))
+        property_id = str(row.get("property_id", "")).strip() or None
+        score += _business_target_reputation_bonus(
+            sim,
+            actor_eid,
+            property_id,
+            purpose="medical_aid",
+            urgency=health_gap,
+        )
+        if preferred_property_id and property_id and str(preferred_property_id).strip() == property_id:
+            score += float(max(0.0, preferred_score_bonus or 0.0))
+        candidate = {
+            "property_id": property_id,
+            "property_name": str(row.get("property_name", property_id or "clinic")).strip() or "clinic",
+            "archetype": str(row.get("archetype", "") or "").strip().lower(),
+            "target": (int(target[0]), int(target[1]), int(target[2])),
+            "distance": int(distance),
+            "score": float(score),
+            "covert_referral": bool(
+                preferred_property_id
+                and property_id
+                and str(preferred_property_id).strip() == property_id
+            ),
+            "confidence": min(0.95, 0.55 + (health_gap * 0.25)),
+            "verification_required": True,
+            "service_id": "medical",
+            "opportunity_tag": "medical",
+        }
+        if best is None or float(candidate["score"]) > float(best["score"]):
+            best = candidate
+    if best is not None:
+        _remember_opportunity_lead(
+            sim,
+            actor_eid,
+            "medical",
+            best,
+            source_kind="surface_snapshot",
+            stale_after_ticks=90,
+            expires_ticks=360,
+        )
+    return best
+
+
+def _find_medical_aid_target_exact(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):
     if not pos:
         return None
 
@@ -1812,7 +1946,7 @@ def _find_medical_aid_target(sim, actor_eid, pos, *, radius=None, preferred_prop
         fx, fy, fz = focus
         if int(fz) != int(pos.z):
             continue
-        access = _evaluate_property_access(
+        access = _cached_behavior_property_access(
             sim,
             actor_eid,
             prop,
@@ -1854,6 +1988,11 @@ def _find_medical_aid_target(sim, actor_eid, pos, *, radius=None, preferred_prop
 
 
 def _find_lodging_target(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):
+    lead = _best_opportunity_lead(sim, actor_eid, "lodging")
+    if isinstance(lead, dict):
+        if preferred_property_id and str(preferred_property_id).strip() and str(lead.get("property_id", "")).strip() == str(preferred_property_id).strip():
+            lead["score"] = float(lead.get("score", 0.0) or 0.0) + float(max(0.0, preferred_score_bonus or 0.0))
+        return lead
     if not pos:
         return None
 
@@ -1891,6 +2030,144 @@ def _find_lodging_target(sim, actor_eid, pos, *, radius=None, preferred_property
         search_radius = 12
 
     best = None
+    for row in _nearby_opportunity_rows(sim, pos, radius=search_radius, lead_kind="lodging", current_tick=int(getattr(sim, "tick", 0) or 0)):
+        target = row.get("target")
+        if not isinstance(target, (tuple, list)) or len(target) < 3:
+            continue
+        services = {
+            str(service or "").strip().lower()
+            for service in tuple(row.get("services", ()) or ())
+            if str(service or "").strip()
+        }
+        service = None
+        service_score = float("-inf")
+        if "rest" in services and liquid_credits >= _REST_SERVICE_COST:
+            service = "rest"
+            service_score = (
+                10.0
+                + (energy_gap * 24.0)
+                + (safety_gap * 10.0)
+                + (social_gap * 5.0)
+                + (health_gap * 16.0)
+                + (night_bias * 6.0)
+            )
+        if "shelter" in services:
+            shelter_score = (
+                12.0
+                + (energy_gap * 14.0)
+                + (safety_gap * 20.0)
+                + (social_gap * 6.0)
+                + (health_gap * 9.0)
+                + (night_bias * 8.0)
+            )
+            if shelter_score > service_score + 1.0 or service is None:
+                service = "shelter"
+                service_score = shelter_score
+        if service is None:
+            continue
+        distance = _manhattan(pos.x, pos.y, int(target[0]), int(target[1]))
+        score = max(
+            0.0,
+            service_score
+            + (energy_gap * 22.0)
+            + (safety_gap * 18.0)
+            + (health_gap * 12.0)
+            - (distance * 1.7),
+        )
+        if isinstance(home, (tuple, list)) and len(home) >= 3 and int(home[2]) == int(pos.z):
+            score -= 14.0 if service == "shelter" else 10.0
+        elif not home:
+            score += 6.0 + (night_bias * 4.0)
+        property_id = str(row.get("property_id", "")).strip() or None
+        if preferred_property_id and property_id and str(preferred_property_id).strip() == property_id:
+            score += float(max(0.0, preferred_score_bonus or 0.0))
+        candidate = {
+            "property_id": property_id,
+            "property_name": str(row.get("property_name", property_id or "site")).strip() or "site",
+            "target": (int(target[0]), int(target[1]), int(target[2])),
+            "distance": int(distance),
+            "score": float(score),
+            "service": service,
+            "services": tuple(sorted(services.intersection(_LODGING_SERVICE_IDS))),
+            "credits_cost": int(_REST_SERVICE_COST if service == "rest" else 0),
+            "confidence": min(0.95, 0.52 + max(energy_gap, safety_gap, health_gap) * 0.28),
+            "verification_required": True,
+            "service_id": service,
+            "opportunity_tag": "lodging",
+        }
+        if best is None or float(candidate["score"]) > float(best["score"]):
+            best = candidate
+    if best is not None:
+        _remember_opportunity_lead(
+            sim,
+            actor_eid,
+            "lodging",
+            best,
+            source_kind="surface_snapshot",
+            stale_after_ticks=90,
+            expires_ticks=360,
+        )
+    return best
+
+
+def _find_lodging_target_exact(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):
+    if not pos:
+        return None
+
+    needs = sim.ecs.get(NPCNeeds).get(actor_eid)
+    if needs is None:
+        return None
+
+    vitality = sim.ecs.get(Vitality).get(actor_eid)
+    routine = sim.ecs.get(NPCRoutine).get(actor_eid)
+    home = getattr(routine, "home", None) if routine else None
+    inventory = sim.ecs.get(Inventory).get(actor_eid)
+    liquid_credits = _inventory_liquid_credits(inventory)
+
+    energy_gap = _clamp_behavior_value((100.0 - float(getattr(needs, "energy", 85.0) or 85.0)) / 100.0, default=0.15)
+    safety_gap = _clamp_behavior_value((100.0 - float(getattr(needs, "safety", 85.0) or 85.0)) / 100.0, default=0.15)
+    social_gap = _clamp_behavior_value((100.0 - float(getattr(needs, "social", 70.0) or 70.0)) / 100.0, default=0.12)
+    if vitality is not None:
+        max_hp = max(1, int(getattr(vitality, "max_hp", 1) or 1))
+        hp = max(0, int(getattr(vitality, "hp", max_hp) or max_hp))
+        health_gap = _clamp_behavior_value(1.0 - (float(hp) / float(max_hp)))
+    else:
+        health_gap = 0.0
+    night_hour = int(_world_hour(sim))
+    night_bias = 1.0 if night_hour >= 21 or night_hour < 6 else 0.0
+
+    if max(energy_gap, safety_gap, social_gap, health_gap, night_bias * 0.3) <= 0.08:
+        return None
+
+    search_radius = radius
+    if search_radius is None:
+        search_radius = _behavior_preference(sim, actor_eid, "shelter_search_radius", 12)
+    try:
+        search_radius = max(4, int(search_radius))
+    except (TypeError, ValueError):
+        search_radius = 12
+
+    current_tick = int(getattr(sim, "tick", 0) or 0)
+    credits_bucket = 1 if liquid_credits >= _REST_SERVICE_COST else 0
+    home_bucket = 1 if home else 0
+    chunk_key = sim.chunk_coords(int(pos.x), int(pos.y)) if hasattr(sim, "chunk_coords") else (int(pos.x), int(pos.y))
+    cache_key = (
+        int(actor_eid),
+        int(chunk_key[0]),
+        int(chunk_key[1]),
+        int(pos.z),
+        int(search_radius),
+        credits_bucket,
+        home_bucket,
+        str(preferred_property_id or "").strip(),
+        int(round(float(preferred_score_bonus or 0.0))),
+    )
+    cache = _npc_behavior_search_cache(sim).setdefault("lodging_targets", {})
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict) and current_tick <= int(cached.get("expires_tick", -1) or -1):
+        return cached.get("result")
+
+    best = None
     for prop in sim.properties_in_radius(pos.x, pos.y, pos.z, r=search_radius):
         services = {
             str(service or "").strip().lower()
@@ -1905,7 +2182,7 @@ def _find_lodging_target(sim, actor_eid, pos, *, radius=None, preferred_property
         fx, fy, fz = focus
         if int(fz) != int(pos.z):
             continue
-        access = _evaluate_property_access(
+        access = _cached_behavior_property_access(
             sim,
             actor_eid,
             prop,
@@ -1972,10 +2249,183 @@ def _find_lodging_target(sim, actor_eid, pos, *, radius=None, preferred_property
         }
         if best is None or candidate["score"] > best["score"]:
             best = candidate
+    cache_ttl = _LODGING_TARGET_CACHE_TICKS + (abs(int(actor_eid)) % (_LODGING_TARGET_CACHE_JITTER + 1))
+    cache[cache_key] = {
+        "expires_tick": current_tick + cache_ttl,
+        "result": dict(best) if isinstance(best, dict) else None,
+    }
     return best
 
 
 def _find_safe_spot_target(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):
+    lead = _best_opportunity_lead(sim, actor_eid, "safe_spot")
+    if isinstance(lead, dict):
+        if preferred_property_id and str(preferred_property_id).strip() and str(lead.get("property_id", "")).strip() == str(preferred_property_id).strip():
+            lead["score"] = float(lead.get("score", 0.0) or 0.0) + float(max(0.0, preferred_score_bonus or 0.0))
+        return lead
+    if not pos:
+        return None
+
+    needs = sim.ecs.get(NPCNeeds).get(actor_eid)
+    if needs is None:
+        return None
+
+    vitality = sim.ecs.get(Vitality).get(actor_eid)
+    inventory = sim.ecs.get(Inventory).get(actor_eid)
+    liquid_credits = _inventory_liquid_credits(inventory)
+
+    energy_gap = _clamp_behavior_value((100.0 - float(getattr(needs, "energy", 85.0) or 85.0)) / 100.0, default=0.12)
+    safety_gap = _clamp_behavior_value((100.0 - float(getattr(needs, "safety", 85.0) or 85.0)) / 100.0, default=0.12)
+    social_gap = _clamp_behavior_value((100.0 - float(getattr(needs, "social", 70.0) or 70.0)) / 100.0, default=0.08)
+    if vitality is not None and not bool(getattr(vitality, "downed", False)):
+        max_hp = max(1, int(getattr(vitality, "max_hp", 1) or 1))
+        hp = max(0, int(getattr(vitality, "hp", max_hp) or max_hp))
+        health_gap = _clamp_behavior_value(1.0 - (float(hp) / float(max_hp)))
+    else:
+        health_gap = 0.0
+    live_heat = _behavior_live_street_heat(sim, actor_eid)
+    night_bias = 1.0 if (int(_world_hour(sim)) >= 21 or int(_world_hour(sim)) < 6) else 0.0
+
+    if max(safety_gap, health_gap, live_heat, energy_gap * 0.55, night_bias * 0.25) <= 0.08:
+        return None
+
+    search_radius = radius
+    if search_radius is None:
+        search_radius = _behavior_preference(
+            sim,
+            actor_eid,
+            "safe_spot_search_radius",
+            _behavior_preference(sim, actor_eid, "shelter_search_radius", 12),
+        )
+    try:
+        search_radius = max(4, int(search_radius))
+    except (TypeError, ValueError):
+        search_radius = 12
+
+    best = None
+    for row in _nearby_opportunity_rows(sim, pos, radius=search_radius, lead_kind="safe_spot", current_tick=int(getattr(sim, "tick", 0) or 0)):
+        target = row.get("target")
+        if not isinstance(target, (tuple, list)) or len(target) < 3:
+            continue
+        services = {
+            str(service or "").strip().lower()
+            for service in tuple(row.get("services", ()) or ())
+            if str(service or "").strip()
+        }
+        distance = _manhattan(pos.x, pos.y, int(target[0]), int(target[1]))
+        property_id = str(row.get("property_id", "")).strip() or None
+        property_name = str(row.get("property_name", property_id or "site")).strip() or "site"
+
+        candidate = None
+        best_local_score = float("-inf")
+        if services.intersection(_LODGING_SERVICE_IDS):
+            service = None
+            service_score = float("-inf")
+            if "rest" in services and liquid_credits >= _REST_SERVICE_COST:
+                service = "rest"
+                service_score = (
+                    8.0
+                    + (energy_gap * 18.0)
+                    + (safety_gap * 18.0)
+                    + (social_gap * 5.0)
+                    + (health_gap * 10.0)
+                    + (live_heat * 22.0)
+                    + (night_bias * 4.0)
+                )
+            if "shelter" in services:
+                shelter_score = (
+                    12.0
+                    + (energy_gap * 14.0)
+                    + (safety_gap * 22.0)
+                    + (social_gap * 6.0)
+                    + (health_gap * 8.0)
+                    + (live_heat * 26.0)
+                    + (night_bias * 8.0)
+                )
+                if shelter_score > service_score + 1.0 or service is None:
+                    service = "shelter"
+                    service_score = shelter_score
+            if service is not None:
+                score = max(0.0, service_score - (distance * 1.65))
+                candidate = {
+                    "property_id": property_id,
+                    "property_name": property_name,
+                    "target": (int(target[0]), int(target[1]), int(target[2])),
+                    "distance": int(distance),
+                    "score": float(score),
+                    "safe_kind": "lodging",
+                    "service": service,
+                    "services": tuple(sorted(services.intersection(_LODGING_SERVICE_IDS))),
+                    "confidence": min(0.95, 0.5 + max(safety_gap, live_heat, health_gap) * 0.32),
+                    "verification_required": True,
+                    "service_id": service,
+                    "opportunity_tag": "safe_spot",
+                }
+                best_local_score = float(score)
+        if "medical" in set(row.get("opportunity_tags", ()) or ()):
+            med_score = max(
+                0.0,
+                10.0
+                + (safety_gap * 20.0)
+                + (health_gap * 26.0)
+                + (live_heat * 12.0)
+                - (distance * 1.75),
+            )
+            if med_score > best_local_score:
+                candidate = {
+                    "property_id": property_id,
+                    "property_name": property_name,
+                    "archetype": str(row.get("archetype", "") or "").strip().lower(),
+                    "target": (int(target[0]), int(target[1]), int(target[2])),
+                    "distance": int(distance),
+                    "score": float(med_score),
+                    "safe_kind": "medical",
+                    "service": "medical",
+                    "confidence": min(0.95, 0.52 + max(safety_gap, health_gap, live_heat) * 0.34),
+                    "verification_required": True,
+                    "service_id": "medical",
+                    "opportunity_tag": "safe_spot",
+                }
+                best_local_score = float(med_score)
+        if candidate is None:
+            fallback_score = max(
+                0.0,
+                5.0
+                + (safety_gap * 16.0)
+                + (live_heat * 18.0)
+                + (night_bias * 5.0)
+                - (distance * 1.5),
+            )
+            candidate = {
+                "property_id": property_id,
+                "property_name": property_name,
+                "target": (int(target[0]), int(target[1]), int(target[2])),
+                "distance": int(distance),
+                "score": float(fallback_score),
+                "safe_kind": "hideout",
+                "service": None,
+                "confidence": min(0.9, 0.48 + max(safety_gap, live_heat) * 0.28),
+                "verification_required": True,
+                "opportunity_tag": "safe_spot",
+            }
+        if preferred_property_id and property_id and str(preferred_property_id).strip() == property_id:
+            candidate["score"] = float(candidate.get("score", 0.0) or 0.0) + float(max(0.0, preferred_score_bonus or 0.0))
+        if best is None or float(candidate.get("score", 0.0) or 0.0) > float(best.get("score", 0.0) or 0.0):
+            best = candidate
+    if best is not None:
+        _remember_opportunity_lead(
+            sim,
+            actor_eid,
+            "safe_spot",
+            best,
+            source_kind="surface_snapshot",
+            stale_after_ticks=90,
+            expires_ticks=360,
+        )
+    return best
+
+
+def _find_safe_spot_target_exact(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):
     if not pos:
         return None
 
@@ -2032,7 +2482,7 @@ def _find_safe_spot_target(sim, actor_eid, pos, *, radius=None, preferred_proper
         fx, fy, fz = focus
         if int(fz) != int(pos.z):
             continue
-        access = _evaluate_property_access(
+        access = _cached_behavior_property_access(
             sim,
             actor_eid,
             prop,
@@ -2142,7 +2592,8 @@ def _receive_medical_aid_at_actor(sim, actor_eid, pos=None, *, preferred_propert
     if before_hp >= max_hp:
         return None
 
-    target = _find_medical_aid_target(
+    current_lead = _best_opportunity_lead(sim, actor_eid, "medical")
+    target = _find_medical_aid_target_exact(
         sim,
         actor_eid,
         pos,
@@ -2151,6 +2602,15 @@ def _receive_medical_aid_at_actor(sim, actor_eid, pos=None, *, preferred_propert
         preferred_score_bonus=22.0 if preferred_property_id else 0.0,
     )
     if not target:
+        if current_lead is not None:
+            _mark_opportunity_failure(
+                sim,
+                actor_eid,
+                "medical",
+                lead=current_lead,
+                cooldown_ticks=180,
+                reason="medical_site_unavailable",
+            )
         return None
 
     heal_amount = max(3, int(round(float(max_hp) * 0.22)))
@@ -2175,6 +2635,16 @@ def _receive_medical_aid_at_actor(sim, actor_eid, pos=None, *, preferred_propert
         y=int(pos.y),
         z=int(pos.z),
     ))
+    _remember_opportunity_lead(
+        sim,
+        actor_eid,
+        "medical",
+        dict(target),
+        source_kind="verified_arrival",
+        stale_after_ticks=120,
+        expires_ticks=480,
+    )
+    _note_opportunity_success(sim, actor_eid, "medical", lead=target)
     return {
         "property_id": target.get("property_id"),
         "property_name": target.get("property_name"),
@@ -2190,8 +2660,18 @@ def _receive_lodging_at_actor(sim, actor_eid, pos=None):
     if not pos:
         return None
 
-    target = _find_lodging_target(sim, actor_eid, pos, radius=2)
+    current_lead = _best_opportunity_lead(sim, actor_eid, "lodging")
+    target = _find_lodging_target_exact(sim, actor_eid, pos, radius=2)
     if not target:
+        if current_lead is not None:
+            _mark_opportunity_failure(
+                sim,
+                actor_eid,
+                "lodging",
+                lead=current_lead,
+                cooldown_ticks=240,
+                reason="lodging_unavailable",
+            )
         return None
 
     needs = sim.ecs.get(NPCNeeds).get(actor_eid)
@@ -2263,6 +2743,16 @@ def _receive_lodging_at_actor(sim, actor_eid, pos=None):
         y=int(pos.y),
         z=int(pos.z),
     ))
+    _remember_opportunity_lead(
+        sim,
+        actor_eid,
+        "lodging",
+        dict(target),
+        source_kind="verified_arrival",
+        stale_after_ticks=120,
+        expires_ticks=540,
+    )
+    _note_opportunity_success(sim, actor_eid, "lodging", lead=target)
     return {
         "property_id": target.get("property_id"),
         "property_name": target.get("property_name"),
@@ -2277,8 +2767,18 @@ def _receive_safe_spot_at_actor(sim, actor_eid, pos=None):
     if not pos:
         return None
 
-    target = _find_safe_spot_target(sim, actor_eid, pos, radius=2)
+    current_lead = _best_opportunity_lead(sim, actor_eid, "safe_spot")
+    target = _find_safe_spot_target_exact(sim, actor_eid, pos, radius=2)
     if not target:
+        if current_lead is not None:
+            _mark_opportunity_failure(
+                sim,
+                actor_eid,
+                "safe_spot",
+                lead=current_lead,
+                cooldown_ticks=210,
+                reason="safe_spot_invalid",
+            )
         return None
 
     safe_kind = str(target.get("safe_kind", "lodging") or "lodging").strip().lower()
@@ -2302,6 +2802,14 @@ def _receive_safe_spot_at_actor(sim, actor_eid, pos=None):
             fallback_hideout = True
 
     if result is None and not fallback_hideout:
+        _mark_opportunity_failure(
+            sim,
+            actor_eid,
+            "safe_spot",
+            lead=target,
+            cooldown_ticks=210,
+            reason="safe_spot_failed",
+        )
         return None
 
     sim.emit(Event(
@@ -2318,6 +2826,16 @@ def _receive_safe_spot_at_actor(sim, actor_eid, pos=None):
         y=int(pos.y),
         z=int(pos.z),
     ))
+    _remember_opportunity_lead(
+        sim,
+        actor_eid,
+        "safe_spot",
+        dict(target),
+        source_kind="verified_arrival",
+        stale_after_ticks=120,
+        expires_ticks=420,
+    )
+    _note_opportunity_success(sim, actor_eid, "safe_spot", lead=target)
     return {
         "property_id": target.get("property_id"),
         "property_name": target.get("property_name"),
@@ -2513,6 +3031,83 @@ def _inventory_scavenge_sale_rows(sim, actor_eid):
 
 
 def _find_scavenged_sale_target(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):
+    lead = _best_opportunity_lead(sim, actor_eid, "scavenged_sale")
+    if isinstance(lead, dict):
+        if preferred_property_id and str(preferred_property_id).strip() and str(lead.get("property_id", "")).strip() == str(preferred_property_id).strip():
+            lead["score"] = float(lead.get("score", 0.0) or 0.0) + float(max(0.0, preferred_score_bonus or 0.0))
+        lead["sale_rows"] = _inventory_scavenge_sale_rows(sim, actor_eid)
+        if not lead["sale_rows"]:
+            return None
+        return lead
+    if not pos:
+        return None
+
+    sale_rows = _inventory_scavenge_sale_rows(sim, actor_eid)
+    if not sale_rows:
+        return None
+
+    search_radius = radius
+    if search_radius is None:
+        search_radius = _behavior_preference(sim, actor_eid, "scavenge_sale_search_radius", 12)
+    try:
+        search_radius = max(2, int(search_radius))
+    except (TypeError, ValueError):
+        search_radius = 12
+
+    inventory_value = sum(float(row.get("value", 0.0) or 0.0) for row in sale_rows)
+    best = None
+    for row in _nearby_opportunity_rows(sim, pos, radius=search_radius, lead_kind="scavenged_sale", current_tick=int(getattr(sim, "tick", 0) or 0)):
+        target = row.get("target")
+        if not isinstance(target, (tuple, list)) or len(target) < 3:
+            continue
+        distance = _manhattan(pos.x, pos.y, int(target[0]), int(target[1]))
+        archetype = str(row.get("archetype", "") or "").strip().lower()
+        payout_mult = float(_SCAVENGE_SALE_PAYOUT_MULTS.get(archetype, 0.46))
+        score = max(0.0, (inventory_value * payout_mult) + 8.0 - (distance * 1.65))
+        property_id = str(row.get("property_id", "")).strip() or None
+        score += _business_target_reputation_bonus(
+            sim,
+            actor_eid,
+            property_id,
+            purpose="scavenge_sale",
+        )
+        if preferred_property_id and property_id and str(preferred_property_id).strip() == property_id:
+            score += float(max(0.0, preferred_score_bonus or 0.0))
+        candidate = {
+            "property_id": property_id,
+            "property_name": str(row.get("property_name", property_id or "site")).strip() or "site",
+            "archetype": archetype,
+            "target": (int(target[0]), int(target[1]), int(target[2])),
+            "distance": int(distance),
+            "score": float(score),
+            "inventory_value": float(inventory_value),
+            "sale_rows": sale_rows,
+            "covert_referral": bool(
+                preferred_property_id
+                and property_id
+                and str(preferred_property_id).strip() == property_id
+            ),
+            "confidence": 0.68,
+            "verification_required": True,
+            "service_id": "trade_sell",
+            "opportunity_tag": "scavenged_sale",
+        }
+        if best is None or float(candidate["score"]) > float(best["score"]):
+            best = candidate
+    if best is not None:
+        _remember_opportunity_lead(
+            sim,
+            actor_eid,
+            "scavenged_sale",
+            best,
+            source_kind="surface_snapshot",
+            stale_after_ticks=120,
+            expires_ticks=420,
+        )
+    return best
+
+
+def _find_scavenged_sale_target_exact(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):
     if not pos:
         return None
 
@@ -2540,7 +3135,7 @@ def _find_scavenged_sale_target(sim, actor_eid, pos, *, radius=None, preferred_p
         fx, fy, fz = focus
         if int(fz) != int(pos.z):
             continue
-        access = _evaluate_property_access(
+        access = _cached_behavior_property_access(
             sim,
             actor_eid,
             prop,
@@ -2593,6 +3188,7 @@ def _sell_scavenged_inventory_at_actor(sim, actor_eid, pos=None, *, preferred_pr
     if not inventory:
         return None
 
+    current_lead = _best_opportunity_lead(sim, actor_eid, "scavenged_sale")
     prop = None
     best_distance = None
     for candidate in sim.properties_in_radius(pos.x, pos.y, pos.z, r=2):
@@ -2619,6 +3215,15 @@ def _sell_scavenged_inventory_at_actor(sim, actor_eid, pos=None, *, preferred_pr
             prop = candidate
             best_distance = distance
     if not isinstance(prop, dict):
+        if current_lead is not None:
+            _mark_opportunity_failure(
+                sim,
+                actor_eid,
+                "scavenged_sale",
+                lead=current_lead,
+                cooldown_ticks=180,
+                reason="sale_site_missing",
+            )
         return None
 
     archetype = _behavior_token(((prop.get("metadata") or {}) if isinstance(prop, dict) else {}).get("archetype"))
@@ -2649,6 +3254,15 @@ def _sell_scavenged_inventory_at_actor(sim, actor_eid, pos=None, *, preferred_pr
         })
 
     if not sold_rows:
+        if current_lead is not None:
+            _mark_opportunity_failure(
+                sim,
+                actor_eid,
+                "scavenged_sale",
+                lead=current_lead,
+                cooldown_ticks=120,
+                reason="nothing_to_sell",
+            )
         return None
 
     if credits_total > 0:
@@ -2677,6 +3291,29 @@ def _sell_scavenged_inventory_at_actor(sim, actor_eid, pos=None, *, preferred_pr
         y=int(pos.y),
         z=int(pos.z),
     ))
+    _remember_opportunity_lead(
+        sim,
+        actor_eid,
+        "scavenged_sale",
+        {
+            "property_id": str(prop.get("id", "")).strip() or None,
+            "property_name": str(prop.get("name", prop.get("id", "site"))).strip() or "site",
+            "target": tuple(_property_focus_position(prop) or (int(pos.x), int(pos.y), int(pos.z))),
+            "archetype": archetype,
+            "service_id": "trade_sell",
+            "opportunity_tag": "scavenged_sale",
+            "confidence": 0.8,
+        },
+        source_kind="verified_arrival",
+        stale_after_ticks=120,
+        expires_ticks=540,
+    )
+    _note_opportunity_success(
+        sim,
+        actor_eid,
+        "scavenged_sale",
+        lead=current_lead or {"property_id": str(prop.get("id", "")).strip() or None},
+    )
     return {
         "property_id": str(prop.get("id", "")).strip() or None,
         "property_name": str(prop.get("name", prop.get("id", "site"))).strip() or "site",

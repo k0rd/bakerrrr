@@ -5257,12 +5257,13 @@ def refresh_actor_branch_briefing(sim, actor_eid, prop=None, reason=""):
     actor_eid = _safe_int(actor_eid, default=0)
     if actor_eid <= 0:
         return ()
+    memberships = actor_org_memberships(sim, actor_eid, active_only=True)
     props = []
     if isinstance(prop, dict):
         props.append(prop)
     else:
         seen_property_ids = set()
-        for membership in actor_org_memberships(sim, actor_eid, active_only=True):
+        for membership in memberships:
             property_id = _text(membership.get("site_property_id"))
             if not property_id or property_id in seen_property_ids:
                 continue
@@ -5284,9 +5285,18 @@ def refresh_actor_branch_briefing(sim, actor_eid, prop=None, reason=""):
             packets.pop(packet_key, None)
         return ()
 
+    if not memberships:
+        stale_keys = [
+            packet_key
+            for packet_key, row in packets.items()
+            if _safe_int((row or {}).get("actor_eid"), default=0) == actor_eid
+        ]
+        for packet_key in stale_keys:
+            packets.pop(packet_key, None)
+        return ()
+
     built_keys = set()
     built_packets = []
-    memberships = actor_org_memberships(sim, actor_eid, active_only=True)
     for current_prop in props:
         property_id = _text(current_prop.get("id"))
         building_id = _text(_property_metadata(current_prop).get("building_id")) or _text(_property_metadata(current_prop).get("local_building_id"))
@@ -5530,8 +5540,7 @@ def actor_branch_briefing_packet(sim, actor_eid, prop=None, current_tick=None):
     if not packets:
         packets = refresh_actor_branch_briefing(sim, actor_eid, prop=prop, reason="query")
     if not packets:
-        query_cache.pop(cache_key, None)
-        return {
+        empty_packet = {
             "actor_eid": _safe_int(actor_eid, default=0) or None,
             "property_id": _text((prop or {}).get("id")) if isinstance(prop, dict) else None,
             "building_id": _text(_property_metadata(prop).get("building_id")) if isinstance(prop, dict) else None,
@@ -5549,6 +5558,11 @@ def actor_branch_briefing_packet(sim, actor_eid, prop=None, current_tick=None):
             "source_update_tick": 0,
             "branch_packets": (),
         }
+        query_cache[cache_key] = {
+            "packet_tokens": (),
+            "packet": empty_packet,
+        }
+        return empty_packet
     packet_tokens = _briefing_packets_token(packets)
     cached = query_cache.get(cache_key)
     if isinstance(cached, dict) and cached.get("packet_tokens") == packet_tokens:
@@ -5824,31 +5838,32 @@ def _actor_has_corporate_lineage_grace(sim, actor_eid, corporate_org_eids):
     return False
 
 
-def local_workplace_org_posture(sim, prop, *, actor_eid=None, current_tick=None):
+def _local_workplace_org_posture_base(sim, prop, *, current_tick=None):
     if not isinstance(prop, dict):
         return {
             "active": False,
             "dominant_phase": "",
             "dominant_label": "",
             "scene_biases": {},
-            "screening_grace": False,
             "service_softness_bonus": 0.0,
             "staffing_relief_bonus": 0.0,
+            "staffing_pressure": 0.0,
             "note_texts": (),
             "note_text": "",
             "reason_tags": (),
             "open_roles": (),
+            "corporate_rows": (),
+            "collective_rows": (),
+            "relation_rows": (),
+            "corporate_org_eids": (),
+            "collective_org_eids": (),
+            "dominant_score": 0.0,
         }
 
     tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
-    actor_eid = _safe_int(actor_eid, default=0)
     cache_state = _organization_runtime_cache_state(sim)
     cache = cache_state.get("workplace_posture", {})
-    cache_key = _organization_runtime_property_cache_key(
-        prop,
-        actor_eid=actor_eid,
-        current_tick=tick,
-    )
+    cache_key = _organization_runtime_property_cache_key(prop, current_tick=tick)
     cached = cache.get(cache_key)
     if isinstance(cached, dict):
         return cached
@@ -5958,11 +5973,6 @@ def local_workplace_org_posture(sim, prop, *, actor_eid=None, current_tick=None)
             }
         )
     )
-    screening_grace = bool(corporate_rows) and dominant_score >= 0.55 and _actor_has_corporate_lineage_grace(
-        sim,
-        actor_eid,
-        corporate_org_eids,
-    )
 
     corporate_notes = list(_practice_bundle_notes(corporate_rows, limit=2))
     collective_notes = list(_practice_bundle_notes(collective_rows, limit=2))
@@ -5971,9 +5981,7 @@ def local_workplace_org_posture(sim, prop, *, actor_eid=None, current_tick=None)
         for row in relation_rows
         if _text(row.get("note"))
     ]
-    if screening_grace:
-        corporate_notes.append("Corporate branch staff can clear the front desk with less friction here.")
-    elif corporate_rows and scene_biases.get("owner_screening", 0.0) >= 0.45:
+    if corporate_rows and scene_biases.get("owner_screening", 0.0) >= 0.45:
         corporate_notes.append("The front is running tighter screening and manifest habits than usual.")
     if collective_rows and staffing_relief_bonus > 0.0:
         collective_notes.append("Collective backing is helping keep the floor together under staffing strain.")
@@ -6008,7 +6016,6 @@ def local_workplace_org_posture(sim, prop, *, actor_eid=None, current_tick=None)
                 }
             )
         ),
-        "screening_grace": bool(screening_grace),
         "service_softness_bonus": float(service_softness_bonus),
         "staffing_relief_bonus": float(staffing_relief_bonus),
         "staffing_pressure": float(staffing_pressure),
@@ -6021,6 +6028,71 @@ def local_workplace_org_posture(sim, prop, *, actor_eid=None, current_tick=None)
         "note_texts": note_texts,
         "note_text": "; ".join(note_texts),
     }
+    if cache_key is not None:
+        cache[cache_key] = result
+    return result
+
+
+def local_workplace_org_posture(sim, prop, *, actor_eid=None, current_tick=None):
+    if not isinstance(prop, dict):
+        return {
+            "active": False,
+            "dominant_phase": "",
+            "dominant_label": "",
+            "scene_biases": {},
+            "screening_grace": False,
+            "service_softness_bonus": 0.0,
+            "staffing_relief_bonus": 0.0,
+            "staffing_pressure": 0.0,
+            "note_texts": (),
+            "note_text": "",
+            "reason_tags": (),
+            "open_roles": (),
+            "corporate_rows": (),
+            "collective_rows": (),
+            "relation_rows": (),
+            "corporate_org_eids": (),
+            "collective_org_eids": (),
+            "dominant_score": 0.0,
+        }
+
+    tick = _safe_int(getattr(sim, "tick", 0) if current_tick is None else current_tick, default=0)
+    actor_eid = _safe_int(actor_eid, default=0)
+    cache_state = _organization_runtime_cache_state(sim)
+    cache = cache_state.get("workplace_posture", {})
+    cache_key = _organization_runtime_property_cache_key(
+        prop,
+        actor_eid=actor_eid,
+        current_tick=tick,
+    )
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        return cached
+
+    base = _local_workplace_org_posture_base(sim, prop, current_tick=tick)
+    screening_grace = bool(base.get("corporate_rows")) and actor_eid > 0 and float(base.get("dominant_score", 0.0) or 0.0) >= 0.55 and _actor_has_corporate_lineage_grace(
+        sim,
+        actor_eid,
+        base.get("corporate_org_eids", ()),
+    )
+    base_note_texts = tuple(base.get("note_texts", ()) or ())
+    if screening_grace:
+        base_note_texts = tuple(
+            note
+            for note in base_note_texts
+            if note != "The front is running tighter screening and manifest habits than usual."
+        )
+        note_texts = _briefing_note_texts(
+            ("Corporate branch staff can clear the front desk with less friction here.",),
+            base_note_texts,
+        )
+    else:
+        note_texts = base_note_texts
+
+    result = dict(base)
+    result["screening_grace"] = bool(screening_grace)
+    result["note_texts"] = tuple(note_texts)
+    result["note_text"] = "; ".join(note_texts)
     if cache_key is not None:
         cache[cache_key] = result
     return result

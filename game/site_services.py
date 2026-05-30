@@ -55,6 +55,9 @@ from game.system_support.building_repair_runtime import (
     property_damage_summary as _property_damage_summary,
     repair_building_damage as _repair_building_damage,
 )
+from game.system_support.opportunity_knowledge_runtime import (
+    rehydrate_opportunity_knowledge as _rehydrate_opportunity_knowledge,
+)
 from game.system_support.player_feedback import _log_player_feedback
 from game.vehicles import vehicle_metadata
 
@@ -434,6 +437,7 @@ class SiteServiceSystem(System):
             return 0
 
         prop_name = prop.get("name", prop.get("id", "site"))
+        pos = self.sim.ecs.get(Position).get(eid)
         advanced_ticks = int(self.sim.advance_time(
             ticks,
             reason="site_service",
@@ -452,6 +456,25 @@ class SiteServiceSystem(System):
                     eid=target_eid,
                     status=status,
                 ))
+        center = None
+        if pos is not None:
+            center = (int(pos.x), int(pos.y), int(pos.z))
+        elif isinstance(prop, dict):
+            center = (
+                int(prop.get("x", 0) or 0),
+                int(prop.get("y", 0) or 0),
+                int(prop.get("z", 0) or 0),
+            )
+        if center is not None:
+            _rehydrate_opportunity_knowledge(
+                self.sim,
+                center=center,
+                radius=20,
+                search_radius=10,
+                current_tick=int(getattr(self.sim, "tick", 0)),
+                reason=f"service_{service}",
+                force_routine_rethink=True,
+            )
         return advanced_ticks
 
     def _choose_vending_item(self, eid, prop):

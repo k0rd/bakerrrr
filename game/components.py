@@ -718,6 +718,22 @@ class NPCWill:
         self.last_tick = -1
 
 
+class NPCOpportunityKnowledge:
+    def __init__(
+        self,
+        leads_by_kind=None,
+        lead_cooldowns=None,
+        active_targets=None,
+        failed_target_keys=None,
+        last_refresh_tick_by_kind=None,
+    ):
+        self.leads_by_kind = dict(leads_by_kind or {})
+        self.lead_cooldowns = dict(lead_cooldowns or {})
+        self.active_targets = dict(active_targets or {})
+        self.failed_target_keys = dict(failed_target_keys or {})
+        self.last_refresh_tick_by_kind = dict(last_refresh_tick_by_kind or {})
+
+
 class BehaviorProfile:
     def __init__(self, behaviors=None, preferences=None, tags=None):
         self.behaviors = {}
@@ -1518,6 +1534,11 @@ class NPCSettlement:
         drift_preferred=False,
         story_id="",
         life_goal="",
+        life_review_stage="",
+        life_review_candidates=None,
+        life_review_cursor=0,
+        life_review_next_tick=0,
+        life_review_failures=0,
     ):
         self.arrived_tick = int(arrived_tick or 0)
         self.origin = str(origin or "").strip().lower()
@@ -1534,6 +1555,11 @@ class NPCSettlement:
         self.drift_preferred = bool(drift_preferred)
         self.story_id = str(story_id or "").strip()
         self.life_goal = str(life_goal or "").strip().lower()
+        self.life_review_stage = str(life_review_stage or "").strip().lower()
+        self.life_review_candidates = list(life_review_candidates or [])
+        self.life_review_cursor = int(life_review_cursor or 0)
+        self.life_review_next_tick = int(life_review_next_tick or 0)
+        self.life_review_failures = int(life_review_failures or 0)
 
 
 class WildlifeBehavior:

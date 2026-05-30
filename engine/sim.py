@@ -362,6 +362,11 @@ class Simulation:
         if not state or tile is None:
             return False
 
+        structure = self.structure_at(int(x), int(y), int(z))
+        property_id = str((state or {}).get("property_id", "") or "").strip()
+        if not isinstance(structure, dict) and not (property_id and property_id in getattr(self, "properties", {})):
+            return False
+
         kind = str(state.get("kind", "door") or "door").strip().lower() or "door"
         if kind not in {"door", "side_door", "service_door", "employee_door"}:
             return False
@@ -2049,9 +2054,14 @@ class Simulation:
 
     def ensure_loaded_chunk_terrain(self):
         changed = False
+        changed_chunks = []
         for cx, cy in self.world.loaded_chunks.keys():
             if self.ensure_chunk_terrain(cx, cy):
                 changed = True
+                changed_chunks.append((int(cx), int(cy)))
+        if changed_chunks:
+            for chunk in changed_chunks:
+                self.reapply_door_states(chunk=chunk)
         return changed
 
     def register_property(

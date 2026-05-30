@@ -122,6 +122,9 @@ from game.system_support.settlement_runtime import (
     _property_chunk_key,
     _track_entity_in_chunk_population,
 )
+from game.system_support.opportunity_knowledge_runtime import (
+    rehydrate_opportunity_knowledge as _rehydrate_opportunity_knowledge,
+)
 from game.system_support.interaction_ordering import (
     _direction_step,
     _interaction_target_order_key,
@@ -561,7 +564,35 @@ class CriminalJusticeSystem(System):
                     eid=target_eid,
                     status=status,
                 ))
+        self._rehydrate_local_opportunity_knowledge(
+            source_prop=self.sim.properties.get(property_id) if property_id else None,
+            reason="justice_booking",
+            force_routine_rethink=True,
+        )
         return advanced_ticks
+
+    def _rehydrate_local_opportunity_knowledge(self, *, source_prop=None, reason="dialog", force_routine_rethink=False):
+        player_pos = self._position_for(self.player_eid)
+        center = None
+        if player_pos is not None:
+            center = (int(player_pos.x), int(player_pos.y), int(player_pos.z))
+        elif isinstance(source_prop, dict):
+            center = (
+                int(source_prop.get("x", 0) or 0),
+                int(source_prop.get("y", 0) or 0),
+                int(source_prop.get("z", 0) or 0),
+            )
+        if center is None:
+            return None
+        return _rehydrate_opportunity_knowledge(
+            self.sim,
+            center=center,
+            radius=20,
+            search_radius=10,
+            current_tick=int(getattr(self.sim, "tick", 0)),
+            reason=reason,
+            force_routine_rethink=force_routine_rethink,
+        )
 
     def _actor_is_enforcer(self, eid):
         justices = self.sim.ecs.get(JusticeProfile)
@@ -777,6 +808,10 @@ class CriminalJusticeSystem(System):
         if not cleaned:
             cleaned = ["Nothing is on file right now."]
         self.sim.set_time_paused(True, reason="dialog")
+        self._rehydrate_local_opportunity_knowledge(
+            source_prop=self.sim.properties.get(property_id) if property_id else None,
+            reason="justice_dialog",
+        )
         state.update({
             "open": True,
             "kind": "service_menu",
@@ -1384,6 +1419,10 @@ class CriminalJusticeSystem(System):
             )
         state = self._dialog_ui_state()
         self.sim.set_time_paused(True, reason="dialog")
+        self._rehydrate_local_opportunity_knowledge(
+            source_prop=source_prop,
+            reason="justice_questioning",
+        )
         state.update({
             "open": True,
             "kind": self.QUESTIONING_DIALOG_KIND,
@@ -1653,6 +1692,10 @@ class CriminalJusticeSystem(System):
 
         state = self._dialog_ui_state()
         self.sim.set_time_paused(True, reason="dialog")
+        self._rehydrate_local_opportunity_knowledge(
+            source_prop=source_prop,
+            reason="justice_surrender",
+        )
         state.update({
             "open": True,
             "kind": self.SURRENDER_DIALOG_KIND,

@@ -5259,10 +5259,19 @@ class BusinessPulseAftermathSystem(System):
 
 
 class BusinessPulseSceneSystem(System):
+    SCENE_SPEC_REFRESH_INTERVAL = 4
+
     def __init__(self, sim, player_eid):
         super().__init__(sim)
         self.player_eid = player_eid
         self.runs_without_turn = True
+        self._scene_spec_cache = {
+            "chunk": None,
+            "z": None,
+            "hour": None,
+            "tick": -10_000,
+            "specs": (),
+        }
 
     def _active_chunk_coord(self):
         coord = getattr(self.sim, "active_chunk_coord", None)
@@ -5464,6 +5473,49 @@ class BusinessPulseSceneSystem(System):
             selected.append(candidate)
             regular_selected += 1
         return selected
+
+    def _desired_scene_specs(self, active_chunk, player_pos, active):
+        cache = self._scene_spec_cache if isinstance(getattr(self, "_scene_spec_cache", None), dict) else {}
+        try:
+            cache_z = int(cache.get("z", -9999))
+        except (TypeError, ValueError):
+            cache_z = -9999
+        try:
+            player_z = int(getattr(player_pos, "z", 0))
+        except (TypeError, ValueError):
+            player_z = 0
+        try:
+            current_hour = int(_world_hour(self.sim)) % 24
+        except (TypeError, ValueError):
+            current_hour = 0
+        try:
+            cached_tick = int(cache.get("tick", -10_000))
+        except (TypeError, ValueError):
+            cached_tick = -10_000
+        same_chunk = cache.get("chunk") == active_chunk
+        same_z = cache_z == player_z
+        same_hour = cache.get("hour") == current_hour
+        recent_enough = (int(getattr(self.sim, "tick", 0)) - cached_tick) < int(self.SCENE_SPEC_REFRESH_INTERVAL)
+        cached_specs = cache.get("specs")
+        if (
+            same_chunk
+            and same_z
+            and same_hour
+            and recent_enough
+            and bool(active)
+            and isinstance(cached_specs, (list, tuple))
+        ):
+            return list(cached_specs)
+
+        specs = list(self._candidate_scene_specs())
+        self._scene_spec_cache = {
+            "chunk": active_chunk,
+            "z": player_z,
+            "hour": current_hour,
+            "tick": int(getattr(self.sim, "tick", 0)),
+            "specs": tuple(specs),
+        }
+        return specs
 
     def _register_scene_fixture(self, scene, pos, *, name, fixture_type, glyph, color="building_roof_storefront", extra_metadata=None):
         if not isinstance(pos, (tuple, list)) or len(pos) < 3:
@@ -6616,7 +6668,7 @@ class BusinessPulseSceneSystem(System):
             _prune_business_event_seeds(self.sim, active_scene_ids=())
             return
 
-        desired_specs = self._candidate_scene_specs()
+        desired_specs = self._desired_scene_specs(active_chunk, player_pos, active)
         desired_ids = {spec["scene_id"] for spec in desired_specs}
 
         for scene_id in list(active.keys()):

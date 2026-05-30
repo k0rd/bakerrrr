@@ -66,6 +66,21 @@ def _clamp(value, low=0.0, high=1.0):
     return max(low, min(high, value))
 
 
+def _criminal_drive_runtime_cache(sim, *, current_tick=None):
+    if current_tick is None:
+        current_tick = getattr(sim, "tick", 0)
+    tick = _safe_int(current_tick, default=0)
+    state = getattr(sim, "criminal_drive_runtime_cache", None)
+    if not isinstance(state, dict) or _safe_int(state.get("tick"), default=-1) != tick:
+        state = {
+            "tick": tick,
+            "nearby_buildings": {},
+            "property_terms": {},
+        }
+        sim.criminal_drive_runtime_cache = state
+    return state
+
+
 def criminal_drive_state(sim, actor_eid, *, create=False):
     actor_eid = _safe_int(actor_eid, default=0)
     if actor_eid <= 0:
@@ -222,6 +237,61 @@ def _actor_primary_org_site_ids(sim, actor_eid):
     return property_ids
 
 
+def _nearby_building_properties(sim, x, y, z, *, radius, current_tick=None):
+    cache = _criminal_drive_runtime_cache(sim, current_tick=current_tick)
+    try:
+        chunk = sim.chunk_coords(int(x), int(y))
+    except (TypeError, ValueError):
+        chunk = None
+    key = (chunk, _safe_int(z, default=0), _safe_int(radius, default=0))
+    cached = cache.get("nearby_buildings", {}).get(key)
+    if isinstance(cached, tuple):
+        return cached
+
+    rows = []
+    seen = set()
+    chunk_records = getattr(sim, "chunk_property_records", {})
+    if chunk is not None and isinstance(chunk_records, dict) and chunk_records:
+        chunk_radius = max(0, int((_safe_int(radius, default=0) + max(1, int(getattr(sim, "chunk_size", 16) or 16)) - 1) // max(1, int(getattr(sim, "chunk_size", 16) or 16))))
+        for cx in range(int(chunk[0]) - chunk_radius, int(chunk[0]) + chunk_radius + 1):
+            for cy in range(int(chunk[1]) - chunk_radius, int(chunk[1]) + chunk_radius + 1):
+                for record in tuple(chunk_records.get((cx, cy), ()) or ()):
+                    if not isinstance(record, dict):
+                        continue
+                    property_id = _text(record.get("id"))
+                    if not property_id or property_id in seen:
+                        continue
+                    prop = sim.properties.get(property_id)
+                    if not isinstance(prop, dict):
+                        continue
+                    if _text(prop.get("kind")).lower() != "building":
+                        continue
+                    try:
+                        if _safe_int(prop.get("z"), default=0) != _safe_int(z, default=0):
+                            continue
+                    except Exception:
+                        continue
+                    seen.add(property_id)
+                    rows.append(prop)
+    if not rows:
+        for prop in sim.properties.values():
+            if not isinstance(prop, dict):
+                continue
+            if _text(prop.get("kind")).lower() != "building":
+                continue
+            property_id = _text(prop.get("id"))
+            if not property_id or property_id in seen:
+                continue
+            if _safe_int(prop.get("z"), default=0) != _safe_int(z, default=0):
+                continue
+            seen.add(property_id)
+            rows.append(prop)
+
+    rows = tuple(sorted(rows, key=lambda prop: _text(prop.get("id")).lower()))
+    cache.setdefault("nearby_buildings", {})[key] = rows
+    return rows
+
+
 def _ground_item_base_value(ground, *, sim=None, prop=None):
     if not isinstance(ground, dict):
         return 0.0
@@ -340,14 +410,55 @@ def _property_covert_fit(prop):
     return 0.0
 
 
+def _shared_crime_property_terms(sim, prop, *, current_tick=None):
+    if not isinstance(prop, dict):
+        return None
+    property_id = _text(prop.get("id"))
+    if not property_id:
+        return None
+    cache = _criminal_drive_runtime_cache(sim, current_tick=current_tick)
+    terms_cache = cache.setdefault("property_terms", {})
+    cached = terms_cache.get(property_id)
+    if isinstance(cached, dict):
+        return cached
+
+    focus = _property_focus_position(prop)
+    if not focus:
+        terms = {"property_id": property_id, "focus": None}
+        terms_cache[property_id] = terms
+        return terms
+
+    ground_items = _ground_items_for_property(sim, prop)
+    visible_value = sum(_ground_item_base_value(row, sim=sim, prop=prop) for row in ground_items[:4])
+    valuable_item = ground_items[0] if ground_items else None
+    instability = organization_instability_profile(sim, prop=prop, ensure=True)
+    terms = {
+        "property_id": property_id,
+        "focus": (int(focus[0]), int(focus[1]), int(focus[2])),
+        "archetype": _text(_property_metadata(prop).get("archetype")).lower(),
+        "ground_items": ground_items,
+        "visible_value": float(visible_value),
+        "valuable_item": valuable_item if isinstance(valuable_item, dict) else None,
+        "guard_count": int(_property_guard_count(sim, prop)),
+        "camera_count": int(_property_camera_presence(prop)),
+        "covert_fit": float(_property_covert_fit(prop)),
+        "underrepresented": bool((instability or {}).get("underrepresented")),
+    }
+    terms_cache[property_id] = terms
+    return terms
+
+
 def crime_target_profile(sim, actor_eid, prop, *, plan_kind="petty_theft", current_tick=None):
     if actor_eid is None or not isinstance(prop, dict):
         return None
     property_id = _text(prop.get("id"))
     if not property_id:
         return None
+    shared_terms = _shared_crime_property_terms(sim, prop, current_tick=current_tick)
+    if not isinstance(shared_terms, dict):
+        return None
     metadata = _property_metadata(prop)
-    archetype = _text(metadata.get("archetype")).lower()
+    archetype = _text(shared_terms.get("archetype") or metadata.get("archetype")).lower()
     if archetype in TARGET_EXCLUDED_ARCHETYPES:
         return None
 
@@ -357,21 +468,22 @@ def crime_target_profile(sim, actor_eid, prop, *, plan_kind="petty_theft", curre
     if property_id in _actor_primary_org_site_ids(sim, actor_eid) and _text(plan_kind).lower() not in {"covert_sale", "fence_run"}:
         return None
 
-    focus = _property_focus_position(prop)
+    focus = shared_terms.get("focus")
     if not focus:
+        return None
+    ground_items = tuple(shared_terms.get("ground_items", ()) or ())
+    if _text(plan_kind).lower() in {"petty_theft", "burglary"} and not ground_items:
         return None
     fx, fy, fz = focus
     if current_tick is None:
         current_tick = getattr(sim, "tick", 0)
     access = evaluate_property_access(sim, actor_eid, prop, x=fx, y=fy, z=fz)
-    ground_items = _ground_items_for_property(sim, prop)
-    visible_value = sum(_ground_item_base_value(row, sim=sim, prop=prop) for row in ground_items[:4])
-    valuable_item = ground_items[0] if ground_items else None
-    guard_count = _property_guard_count(sim, prop)
-    camera_count = _property_camera_presence(prop)
-    covert_fit = _property_covert_fit(prop)
-    instability = organization_instability_profile(sim, prop=prop, ensure=True)
-    underrepresented = bool((instability or {}).get("underrepresented"))
+    visible_value = float(shared_terms.get("visible_value", 0.0) or 0.0)
+    valuable_item = shared_terms.get("valuable_item") if isinstance(shared_terms.get("valuable_item"), dict) else None
+    guard_count = _safe_int(shared_terms.get("guard_count"), default=0)
+    camera_count = _safe_int(shared_terms.get("camera_count"), default=0)
+    covert_fit = _safe_float(shared_terms.get("covert_fit"), default=0.0)
+    underrepresented = bool(shared_terms.get("underrepresented"))
 
     currently_open = bool(getattr(access, "currently_open", False))
     public_facing = bool(getattr(access, "public_facing", False))
@@ -447,15 +559,14 @@ def choose_crime_target(sim, actor_eid, *, plan_kind="petty_theft", radius=CRIME
     if pos is None:
         return None
     rows = []
-    for prop in sim.properties.values():
-        if int(prop.get("z", 0) or 0) != int(pos.z):
-            continue
-        focus = _property_focus_position(prop)
+    current_tick = getattr(sim, "tick", 0)
+    for prop in _nearby_building_properties(sim, pos.x, pos.y, pos.z, radius=radius, current_tick=current_tick):
+        focus = _shared_crime_property_terms(sim, prop, current_tick=current_tick).get("focus")
         if not focus:
             continue
         if _manhattan(int(pos.x), int(pos.y), int(focus[0]), int(focus[1])) > int(radius):
             continue
-        profile = crime_target_profile(sim, actor_eid, prop, plan_kind=plan_kind)
+        profile = crime_target_profile(sim, actor_eid, prop, plan_kind=plan_kind, current_tick=current_tick)
         if not isinstance(profile, dict):
             continue
         distance = _manhattan(int(pos.x), int(pos.y), int(profile.get("x", focus[0])), int(profile.get("y", focus[1])))
@@ -484,8 +595,9 @@ def criminal_affiliation_targets(sim, actor_eid, *, radius=AFFILIATION_RADIUS):
     }
     rows = []
     seen = set()
-    for prop in sim.properties.values():
-        focus = _property_focus_position(prop)
+    current_tick = getattr(sim, "tick", 0)
+    for prop in _nearby_building_properties(sim, pos.x, pos.y, pos.z, radius=radius, current_tick=current_tick):
+        focus = _shared_crime_property_terms(sim, prop, current_tick=current_tick).get("focus")
         if not focus or int(focus[2]) != int(pos.z):
             continue
         distance = _manhattan(int(pos.x), int(pos.y), int(focus[0]), int(focus[1]))
@@ -767,8 +879,17 @@ def update_criminal_drive_state(sim, actor_eid, *, current_tick=None):
     affiliation_base = _actor_behavior_value(sim, actor_eid, BEHAVIOR_SEEK_CRIMINAL_AFFILIATION, 0.0)
 
     active_plan = active_plan_for_actor(sim, actor_eid, current_tick=current_tick)
-    opportunistic_target = choose_crime_target(sim, actor_eid, plan_kind="petty_theft")
-    affiliation_target = criminal_affiliation_targets(sim, actor_eid)
+    should_scan_targets = bool(active_plan) or bool(criminal_rows)
+    should_scan_targets = should_scan_targets or float(pressure) >= 0.32 or float(affiliation_interest) >= 0.34
+    should_scan_targets = should_scan_targets or float(opportunistic_base) >= 0.18
+    should_scan_targets = should_scan_targets or float(planned_base) >= 0.18
+    should_scan_targets = should_scan_targets or float(affiliation_base) >= 0.18
+
+    opportunistic_target = None
+    affiliation_target = ()
+    if should_scan_targets:
+        opportunistic_target = choose_crime_target(sim, actor_eid, plan_kind="petty_theft")
+        affiliation_target = criminal_affiliation_targets(sim, actor_eid)
     state.pressure = float(pressure)
     state.confidence = float(confidence)
     state.affiliation_interest = float(affiliation_interest)

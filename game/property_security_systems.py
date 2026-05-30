@@ -154,6 +154,10 @@ from game.system_support.interaction_ordering import (
     _manhattan,
     _normalized_direction,
 )
+from game.system_support.opportunity_knowledge_runtime import (
+    property_surface_snapshot as _property_surface_snapshot,
+    remember_opportunity_lead as _remember_opportunity_lead,
+)
 from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
     ACTION_OFFENSE_CONTEXT_BONUS,
@@ -363,34 +367,42 @@ class PropertyAwarenessSystem(System):
             nearby = self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=2)
 
             for prop in nearby:
-                access = _evaluate_property_access(
-                    self.sim,
-                    eid,
-                    prop,
-                    x=pos.x,
-                    y=pos.y,
-                    z=pos.z,
-                )
+                surface = _property_surface_snapshot(self.sim, prop, current_tick=self.sim.tick)
+                if not isinstance(surface, dict):
+                    continue
                 existing = knowledge.known.get(prop["id"]) if isinstance(knowledge.known, dict) else None
                 try:
                     prior_confidence = float((existing or {}).get("confidence", 0.0) or 0.0)
                 except (TypeError, ValueError):
                     prior_confidence = 0.0
                 confidence = 0.35
-                if access.standing_reason == "owner":
+                owner_eid = prop.get("owner_eid")
+                owner_tag = str(prop.get("owner_tag", "") or "").strip().lower()
+                focus = surface.get("target")
+                inside_bounds = bool(
+                    isinstance(focus, (tuple, list))
+                    and len(focus) >= 3
+                    and int(focus[2]) == int(pos.z)
+                    and _manhattan(int(pos.x), int(pos.y), int(focus[0]), int(focus[1])) <= 1
+                )
+                if owner_eid == eid:
                     confidence = 1.0
-                elif access.standing_reason in {"resident", "employee"}:
-                    confidence = max(confidence, 0.92)
-                elif access.standing >= 0.55:
-                    confidence = max(confidence, 0.55 + (access.standing * 0.3))
-                elif eid == getattr(self.sim, "player_eid", None) and bool(access.inside_bounds):
+                elif owner_tag in {"player", "npc"}:
+                    confidence = max(confidence, 0.7)
+                elif bool(surface.get("public_hint")):
+                    confidence = max(confidence, 0.52)
+                elif bool(surface.get("storefront_hint")):
+                    confidence = max(confidence, 0.46)
+                elif eid == getattr(self.sim, "player_eid", None) and inside_bounds:
                     confidence = max(confidence, 0.68)
+                if inside_bounds:
+                    confidence = max(confidence, 0.6)
 
                 anchored = bool(
                     eid == getattr(self.sim, "player_eid", None)
                     and (
-                        access.standing_reason == "owner"
-                        or bool(access.inside_bounds)
+                        owner_eid == eid
+                        or inside_bounds
                     )
                 )
                 knowledge.remember(
@@ -402,10 +414,32 @@ class PropertyAwarenessSystem(System):
                     anchored=anchored,
                     anchor_kind=(
                         "owned"
-                        if access.standing_reason == "owner"
+                        if owner_eid == eid
                         else "presence"
                     ) if anchored else None,
                 )
+                surface_tags = tuple(surface.get("opportunity_tags", ()) or ())
+                for lead_kind in surface_tags:
+                    if lead_kind not in {"lodging", "medical", "safe_spot", "scavenged_sale", "local_housing", "local_workplace"}:
+                        continue
+                    _remember_opportunity_lead(
+                        self.sim,
+                        eid,
+                        lead_kind,
+                        {
+                            "property_id": surface.get("property_id"),
+                            "property_name": surface.get("property_name"),
+                            "target": surface.get("target"),
+                            "chunk": surface.get("chunk"),
+                            "service_id": next(iter(surface.get("services", ()) or ()), None),
+                            "opportunity_tag": lead_kind,
+                            "confidence": min(0.95, confidence),
+                            "verification_required": True,
+                        },
+                        source_kind="property_awareness",
+                        stale_after_ticks=90,
+                        expires_ticks=360,
+                    )
                 updated = knowledge.known.get(prop["id"]) if isinstance(knowledge.known, dict) else None
                 try:
                     new_confidence = float((updated or {}).get("confidence", prior_confidence) or prior_confidence)

@@ -503,6 +503,11 @@ def _build_demo_map(sim, chunk):
 
 
 def _ensure_walkable(sim, x, y, z, glyph="."):
+    if hasattr(sim, "door_state_at") and hasattr(sim, "apply_door_state"):
+        state = sim.door_state_at(x, y, z)
+        if isinstance(state, dict):
+            sim.apply_door_state(x, y, z)
+            return
     existing = sim.tilemap.tile_at(x, y, z)
     if existing and existing.walkable:
         return
@@ -2029,6 +2034,8 @@ def _run_new_game(view, character_name):
     sim.stream_world(player_pos[0], player_pos[1])
     sim.ensure_loaded_chunk_terrain()
     seed_run_opportunities(sim, player_eid=player, rng=run_rng)
+    if hasattr(sim, "reapply_door_states"):
+        sim.reapply_door_states()
     _register_runtime_systems(sim, view, player)
 
     sim.log.add("Booted city sandbox. The district reacts to what you do.")

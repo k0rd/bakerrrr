@@ -77,6 +77,9 @@ from game.service_runtime import (
     _vehicle_sale_stats_text,
     _site_service_seed_token,
 )
+from game.system_support.opportunity_knowledge_runtime import (
+    rehydrate_opportunity_knowledge as _rehydrate_opportunity_knowledge,
+)
 from engine.events import Event
 from game.items import (
     ITEM_CATALOG,
@@ -8537,6 +8540,23 @@ class NPCInteractionSystem(System):
             if formatted and formatted not in transcript:
                 transcript.append(formatted)
         self.sim.set_time_paused(True, reason="dialog")
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        center = None
+        if player_pos is not None:
+            center = (int(player_pos.x), int(player_pos.y), int(player_pos.z))
+        else:
+            npc_pos = self.sim.ecs.get(Position).get(context["npc_eid"])
+            if npc_pos is not None:
+                center = (int(npc_pos.x), int(npc_pos.y), int(npc_pos.z))
+        if center is not None:
+            _rehydrate_opportunity_knowledge(
+                self.sim,
+                center=center,
+                radius=18,
+                search_radius=10,
+                current_tick=int(getattr(self.sim, "tick", 0)),
+                reason="dialog_open",
+            )
         state.update({
             "open": True,
             "kind": "conversation",

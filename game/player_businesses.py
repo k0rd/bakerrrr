@@ -228,6 +228,35 @@ def _int_or(value, default=0):
         return int(default)
 
 
+def _player_business_runtime_cache(sim):
+    if sim is None:
+        return None
+    current_tick = _int_or(getattr(sim, "tick", 0), default=0)
+    state = getattr(sim, "_player_business_runtime_cache", None)
+    if not isinstance(state, dict) or _int_or(state.get("tick"), default=-1) != current_tick:
+        state = {
+            "tick": current_tick,
+            "summary": {},
+            "status": {},
+            "open_roles": {},
+        }
+        sim._player_business_runtime_cache = state
+    else:
+        state.setdefault("summary", {})
+        state.setdefault("status", {})
+        state.setdefault("open_roles", {})
+    return state
+
+
+def _player_business_cache_key(prop):
+    if not isinstance(prop, dict):
+        return ""
+    property_id = _text(prop.get("id"))
+    if property_id:
+        return property_id
+    return f"prop-object:{id(prop)}"
+
+
 def _clamp(value, minimum, maximum):
     lower = float(minimum)
     upper = float(maximum)
@@ -1596,6 +1625,13 @@ def player_business_work_practice_awards(prop, role, *, limit=3):
 
 
 def player_business_summary(sim, prop):
+    cache_state = _player_business_runtime_cache(sim)
+    cache_key = _player_business_cache_key(prop)
+    if cache_state is not None and cache_key:
+        cached = cache_state.get("summary", {}).get(cache_key)
+        if isinstance(cached, dict):
+            return dict(cached)
+
     state = player_business_state(prop, create=True)
     if state is None:
         return None
@@ -1642,7 +1678,7 @@ def player_business_summary(sim, prop):
             if reputation_note:
                 note = reputation_note
 
-    return {
+    summary = {
         "property_id": prop.get("id"),
         "business_name": _text(_property_metadata(prop).get("business_name")) or _text(prop.get("name")) or "Business",
         "account_balance": balance,
@@ -1676,9 +1712,19 @@ def player_business_summary(sim, prop):
         "last_scene_nuisance_tick": None if state.get("last_scene_nuisance_tick") is None else _int_or(state.get("last_scene_nuisance_tick"), default=0),
         "note": note,
     }
+    if cache_state is not None and cache_key:
+        cache_state.setdefault("summary", {})[cache_key] = dict(summary)
+    return summary
 
 
 def player_business_status_snapshot(sim, prop):
+    cache_state = _player_business_runtime_cache(sim)
+    cache_key = _player_business_cache_key(prop)
+    if cache_state is not None and cache_key:
+        cached = cache_state.get("status", {}).get(cache_key)
+        if isinstance(cached, dict):
+            return dict(cached)
+
     summary = player_business_summary(sim, prop)
     if not isinstance(summary, dict):
         return None
@@ -1737,6 +1783,8 @@ def player_business_status_snapshot(sim, prop):
         "unpaid_wages": _int_or(last_summary.get("unpaid_wages"), default=0),
         "unpaid_upkeep": _int_or(last_summary.get("unpaid_upkeep"), default=0),
     })
+    if cache_state is not None and cache_key:
+        cache_state.setdefault("status", {})[cache_key] = dict(snapshot)
     return snapshot
 
 
@@ -1843,6 +1891,13 @@ def actor_player_business_employment(sim, actor_eid, owner_eid=None):
 
 
 def player_business_open_roles(sim, prop):
+    cache_state = _player_business_runtime_cache(sim)
+    cache_key = _player_business_cache_key(prop)
+    if cache_state is not None and cache_key:
+        cached = cache_state.get("open_roles", {}).get(cache_key)
+        if isinstance(cached, tuple):
+            return cached
+
     summary = player_business_summary(sim, prop)
     if not isinstance(summary, dict):
         return ()
@@ -1854,7 +1909,10 @@ def player_business_open_roles(sim, prop):
         open_roles.append("manager")
     if staff_total < required_staff:
         open_roles.append("staff")
-    return tuple(open_roles)
+    result = tuple(open_roles)
+    if cache_state is not None and cache_key:
+        cache_state.setdefault("open_roles", {})[cache_key] = result
+    return result
 
 
 def player_business_open_role(sim, prop):

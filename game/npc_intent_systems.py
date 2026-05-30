@@ -3,6 +3,7 @@
 import random
 from engine.events import Event
 from engine.systems import System
+from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.checks import (
     crime_read_summary as _crime_read_summary,
     crime_sensitivity as _crime_sensitivity,
@@ -33,6 +34,7 @@ from game.components import (
     MovementThrottle,
     NPCMemory,
     NPCNeeds,
+    NPCOpportunityKnowledge,
     NPCRoutine,
     NPCSettlement,
     NPCSocial,
@@ -169,6 +171,17 @@ from game.system_support.interaction_ordering import (
     _manhattan,
     _normalized_direction,
 )
+from game.system_support.opportunity_knowledge_runtime import (
+    active_target as _active_opportunity_target,
+    clear_active_target as _clear_opportunity_active_target,
+    clear_will_rethink as _clear_will_rethink,
+    invalidate_active_target_path as _invalidate_opportunity_active_target_path,
+    next_active_target_step as _next_opportunity_active_target_step,
+    remember_active_target as _remember_opportunity_active_target,
+    remember_opportunity_lead as _remember_opportunity_lead,
+    schedule_will_rethink as _schedule_will_rethink,
+    will_rethink_due as _will_rethink_due,
+)
 from game.system_support.access_runtime import _attempt_locked_property_entry_with_sim
 from game.system_support.criminal_drive_runtime import (
     active_plan_for_actor,
@@ -232,16 +245,26 @@ from game.system_support.status_runtime import (
     _status_multiplier,
     _status_tick_step,
 )
-def _facade():
-    from game import systems as facade
+_FACADE_MODULE = None
+_WILDLIFE_MODULE = None
 
-    return facade
+
+def _facade():
+    global _FACADE_MODULE
+    if _FACADE_MODULE is None:
+        from game import systems as facade
+
+        _FACADE_MODULE = facade
+    return _FACADE_MODULE
 
 
 def _wildlife_module():
-    from game import systems_wildlife as wildlife
+    global _WILDLIFE_MODULE
+    if _WILDLIFE_MODULE is None:
+        from game import systems_wildlife as wildlife
 
-    return wildlife
+        _WILDLIFE_MODULE = wildlife
+    return _WILDLIFE_MODULE
 
 
 QUIET_NOISE_CAUSES = {
@@ -262,6 +285,72 @@ QUIET_NOISE_CAUSES = {
     "zoom_overworld",
     "zoom_city_enter",
 }
+
+_WILL_COASTING_STATES = frozenset({
+    "selling_scavenged",
+    "seeking_medical_aid",
+    "seeking_safe_spot",
+    "seeking_shelter",
+    "patrolling",
+    "working",
+    "lounging",
+    "socializing",
+    "resting",
+})
+
+_WILL_COASTING_TICKS = {
+    "selling_scavenged": 48,
+    "seeking_medical_aid": 42,
+    "seeking_safe_spot": 56,
+    "seeking_shelter": 56,
+    "patrolling": 120,
+    "working": 120,
+    "lounging": 150,
+    "socializing": 96,
+    "resting": 180,
+}
+
+_WILL_PLAYER_PROXIMITY_RADIUS = 4
+
+
+def _routine_will_hold_ticks(state):
+    return int(max(0, _WILL_COASTING_TICKS.get(str(state or "").strip().lower(), 0)))
+
+
+def _should_skip_live_will_update(sim, eid, ai, will, needs, pos, *, player_pos=None, suppression=None):
+    if ai is None or will is None or needs is None or pos is None:
+        return False
+    state = str(getattr(ai, "state", "") or "").strip().lower()
+    if str(getattr(ai, "role", "") or "").strip().lower() == "wildlife":
+        return False
+    if suppression is not None and bool(getattr(suppression, "surrendered", False)):
+        return False
+    if state not in _WILL_COASTING_STATES:
+        return False
+    if getattr(ai, "target", None) is None or getattr(ai, "target_eid", None) is not None:
+        return False
+    critical = getattr(needs, "critical", None)
+    if critical:
+        return False
+    if float(getattr(needs, "energy", 100.0) or 100.0) <= 18.0:
+        return False
+    if float(getattr(needs, "safety", 100.0) or 100.0) <= 18.0:
+        return False
+    if player_pos is not None and int(getattr(player_pos, "z", 0) or 0) == int(getattr(pos, "z", 0) or 0):
+        if (
+            _manhattan(int(pos.x), int(pos.y), int(player_pos.x), int(player_pos.y)) <= _WILL_PLAYER_PROXIMITY_RADIUS
+            and _has_line_of_sight(
+                sim,
+                int(pos.x),
+                int(pos.y),
+                int(pos.z),
+                int(player_pos.x),
+                int(player_pos.y),
+                int(player_pos.z),
+            )
+        ):
+            return False
+    return not _will_rethink_due(sim, eid, current_tick=getattr(sim, "tick", 0))
 
 def _emit_move_access_events(*args, **kwargs):
     return _facade()._emit_move_access_events(*args, **kwargs)
@@ -796,6 +885,27 @@ def _find_tipped_safe_spot_target(sim, actor_eid, pos, tip_data):
     property_id = str(tip_data.get("property_id", "") or "").strip()
     if not property_id:
         return None
+    prop = sim.properties.get(property_id)
+    focus = _property_focus_position(prop) if isinstance(prop, dict) else None
+    if isinstance(focus, (tuple, list)) and len(focus) >= 3:
+        _remember_opportunity_lead(
+            sim,
+            actor_eid,
+            "safe_spot",
+            {
+                "property_id": property_id,
+                "property_name": str((prop or {}).get("name", property_id)).strip() or property_id,
+                "target": (int(focus[0]), int(focus[1]), int(focus[2])),
+                "chunk": sim.chunk_coords(int(focus[0]), int(focus[1])) if hasattr(sim, "chunk_coords") else None,
+                "confidence": 0.72,
+                "service_id": "tip",
+                "opportunity_tag": "safe_spot",
+                "verification_required": True,
+            },
+            source_kind="behavior_tip",
+            stale_after_ticks=180,
+            expires_ticks=540,
+        )
     target = _find_safe_spot_target(
         sim,
         actor_eid,
@@ -1192,6 +1302,17 @@ class NPCNeedsSystem(System):
 class NPCWillSystem(System):
 
     def _set_intent(self, eid, ai, will, intent, score, target=None, target_eid=None):
+        active_target_states = {
+            "selling_scavenged": "scavenged_sale",
+            "seeking_medical_aid": "medical",
+            "seeking_safe_spot": "safe_spot",
+            "seeking_shelter": "lodging",
+            "patrolling": "routine",
+            "working": "routine",
+            "lounging": "routine",
+            "socializing": "routine",
+            "resting": "routine",
+        }
         if _entity_is_downed(self.sim, eid):
             _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
             return
@@ -1202,6 +1323,25 @@ class NPCWillSystem(System):
             will.target = target
             will.target_eid = target_eid
             will.last_tick = self.sim.tick
+            if intent in active_target_states and isinstance(target, (tuple, list)):
+                _remember_opportunity_active_target(
+                    self.sim,
+                    eid,
+                    intent,
+                    target,
+                    lead_kind=active_target_states.get(intent),
+                    timeout_ticks=180,
+                )
+                hold_ticks = _routine_will_hold_ticks(intent)
+                if hold_ticks > 0:
+                    _schedule_will_rethink(
+                        self.sim,
+                        eid,
+                        current_tick=self.sim.tick,
+                        delay_ticks=hold_ticks,
+                    )
+            else:
+                _clear_will_rethink(self.sim, eid)
             return
 
         ai.state = intent
@@ -1213,6 +1353,31 @@ class NPCWillSystem(System):
         will.target = target
         will.target_eid = target_eid
         will.last_tick = self.sim.tick
+
+        if previous[0] != intent and previous[0]:
+            _clear_opportunity_active_target(self.sim, eid, previous[0])
+        if intent in active_target_states and isinstance(target, (tuple, list)):
+            _remember_opportunity_active_target(
+                self.sim,
+                eid,
+                intent,
+                target,
+                lead_kind=active_target_states.get(intent),
+                timeout_ticks=180,
+            )
+            hold_ticks = _routine_will_hold_ticks(intent)
+            if hold_ticks > 0:
+                _schedule_will_rethink(
+                    self.sim,
+                    eid,
+                    current_tick=self.sim.tick,
+                    delay_ticks=hold_ticks,
+                )
+        elif intent == "idle":
+            _clear_opportunity_active_target(self.sim, eid)
+            _clear_will_rethink(self.sim, eid)
+        else:
+            _clear_will_rethink(self.sim, eid)
 
         self.sim.emit(Event(
             "npc_intent_changed",
@@ -1289,8 +1454,20 @@ class NPCWillSystem(System):
             if not needs or not will:
                 continue
 
-            routine = routines.get(eid)
             suppression = self.sim.ecs.get(SuppressionState).get(eid)
+            if _should_skip_live_will_update(
+                self.sim,
+                eid,
+                ai,
+                will,
+                needs,
+                pos,
+                player_pos=player_pos,
+                suppression=suppression,
+            ):
+                continue
+
+            routine = routines.get(eid)
             if suppression and suppression.surrendered:
                 peaceful_rec = _active_contractor_record(
                     self.sim,
@@ -1837,6 +2014,31 @@ class NPCWillSystem(System):
             hidden_clinic_tip_data = hidden_clinic_tip.get("data", {}) if isinstance(hidden_clinic_tip, dict) else {}
             hidden_clinic_tip_strength = float(hidden_clinic_tip.get("strength", 0.0) or 0.0) if isinstance(hidden_clinic_tip, dict) else 0.0
             hidden_clinic_property_id = str(hidden_clinic_tip_data.get("property_id", "") or "").strip() if isinstance(hidden_clinic_tip_data, dict) else ""
+            for property_id, lead_kind, service_id in (
+                (medical_tip_property_id, "medical", "medical"),
+                (hidden_clinic_property_id, "medical", "medical"),
+            ):
+                prop = self.sim.properties.get(property_id) if property_id else None
+                focus = _property_focus_position(prop) if isinstance(prop, dict) else None
+                if isinstance(focus, (tuple, list)) and len(focus) >= 3:
+                    _remember_opportunity_lead(
+                        self.sim,
+                        eid,
+                        lead_kind,
+                        {
+                            "property_id": property_id,
+                            "property_name": str(prop.get("name", property_id)).strip() or property_id,
+                            "target": (int(focus[0]), int(focus[1]), int(focus[2])),
+                            "chunk": self.sim.chunk_coords(int(focus[0]), int(focus[1])) if hasattr(self.sim, "chunk_coords") else None,
+                            "confidence": 0.72,
+                            "service_id": service_id,
+                            "opportunity_tag": lead_kind,
+                            "verification_required": True,
+                        },
+                        source_kind="behavior_tip",
+                        stale_after_ticks=180,
+                        expires_ticks=540,
+                    )
             if seek_medical_aid >= 0.08 or medical_tip is not None or hidden_clinic_tip is not None:
                 medical_target = _find_medical_aid_target(
                     self.sim,
@@ -1893,6 +2095,27 @@ class NPCWillSystem(System):
             shelter_tip_data = shelter_tip.get("data", {}) if isinstance(shelter_tip, dict) else {}
             shelter_tip_strength = float(shelter_tip.get("strength", 0.0) or 0.0) if isinstance(shelter_tip, dict) else 0.0
             shelter_tip_property_id = str(shelter_tip_data.get("property_id", "") or "").strip() if isinstance(shelter_tip_data, dict) else ""
+            shelter_prop = self.sim.properties.get(shelter_tip_property_id) if shelter_tip_property_id else None
+            shelter_focus = _property_focus_position(shelter_prop) if isinstance(shelter_prop, dict) else None
+            if isinstance(shelter_focus, (tuple, list)) and len(shelter_focus) >= 3:
+                _remember_opportunity_lead(
+                    self.sim,
+                    eid,
+                    "lodging",
+                    {
+                        "property_id": shelter_tip_property_id,
+                        "property_name": str(shelter_prop.get("name", shelter_tip_property_id)).strip() or shelter_tip_property_id,
+                        "target": (int(shelter_focus[0]), int(shelter_focus[1]), int(shelter_focus[2])),
+                        "chunk": self.sim.chunk_coords(int(shelter_focus[0]), int(shelter_focus[1])) if hasattr(self.sim, "chunk_coords") else None,
+                        "confidence": 0.7,
+                        "service_id": "shelter",
+                        "opportunity_tag": "lodging",
+                        "verification_required": True,
+                    },
+                    source_kind="behavior_tip",
+                    stale_after_ticks=180,
+                    expires_ticks=540,
+                )
             if seek_shelter >= 0.08 or shelter_tip is not None:
                 shelter_target = _find_lodging_target(
                     self.sim,
@@ -2012,6 +2235,27 @@ class NPCWillSystem(System):
             hidden_trade_tip_data = hidden_trade_tip.get("data", {}) if isinstance(hidden_trade_tip, dict) else {}
             hidden_trade_tip_strength = float(hidden_trade_tip.get("strength", 0.0) or 0.0) if isinstance(hidden_trade_tip, dict) else 0.0
             hidden_trade_property_id = str(hidden_trade_tip_data.get("property_id", "") or "").strip() if isinstance(hidden_trade_tip_data, dict) else ""
+            hidden_trade_prop = self.sim.properties.get(hidden_trade_property_id) if hidden_trade_property_id else None
+            hidden_trade_focus = _property_focus_position(hidden_trade_prop) if isinstance(hidden_trade_prop, dict) else None
+            if isinstance(hidden_trade_focus, (tuple, list)) and len(hidden_trade_focus) >= 3:
+                _remember_opportunity_lead(
+                    self.sim,
+                    eid,
+                    "scavenged_sale",
+                    {
+                        "property_id": hidden_trade_property_id,
+                        "property_name": str(hidden_trade_prop.get("name", hidden_trade_property_id)).strip() or hidden_trade_property_id,
+                        "target": (int(hidden_trade_focus[0]), int(hidden_trade_focus[1]), int(hidden_trade_focus[2])),
+                        "chunk": self.sim.chunk_coords(int(hidden_trade_focus[0]), int(hidden_trade_focus[1])) if hasattr(self.sim, "chunk_coords") else None,
+                        "confidence": 0.74,
+                        "service_id": "trade_sell",
+                        "opportunity_tag": "scavenged_sale",
+                        "verification_required": True,
+                    },
+                    source_kind="behavior_tip",
+                    stale_after_ticks=180,
+                    expires_ticks=540,
+                )
             if collect_ground_credits >= 0.05:
                 scavenging_target = _find_ground_credit_target(self.sim, eid, pos)
                 if scavenging_target:
@@ -2719,14 +2963,6 @@ class NPCInvestigateSystem(System):
             if not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
                 continue
 
-            memory = memories.get(eid)
-            hidden_trade_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_HIDDEN_TRADE, now=self.sim.tick)
-            hidden_trade_tip_data = hidden_trade_tip.get("data", {}) if isinstance(hidden_trade_tip, dict) else {}
-            hidden_trade_property_id = str(hidden_trade_tip_data.get("property_id", "") or "").strip() if isinstance(hidden_trade_tip_data, dict) else ""
-            hidden_clinic_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_HIDDEN_CLINIC, now=self.sim.tick)
-            hidden_clinic_tip_data = hidden_clinic_tip.get("data", {}) if isinstance(hidden_clinic_tip, dict) else {}
-            hidden_clinic_property_id = str(hidden_clinic_tip_data.get("property_id", "") or "").strip() if isinstance(hidden_clinic_tip_data, dict) else ""
-
             throttle = move_throttles.get(eid)
             status_speed_mult = _entity_status_move_speed_multiplier(self.sim, eid)
 
@@ -2922,6 +3158,10 @@ class NPCInvestigateSystem(System):
                 if ai.state == "scavenging":
                     _collect_ground_items_at_actor(self.sim, eid, pos)
                 if ai.state == "selling_scavenged":
+                    memory = memories.get(eid)
+                    hidden_trade_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_HIDDEN_TRADE, now=self.sim.tick)
+                    hidden_trade_tip_data = hidden_trade_tip.get("data", {}) if isinstance(hidden_trade_tip, dict) else {}
+                    hidden_trade_property_id = str(hidden_trade_tip_data.get("property_id", "") or "").strip() if isinstance(hidden_trade_tip_data, dict) else ""
                     _sell_scavenged_inventory_at_actor(
                         self.sim,
                         eid,
@@ -2959,6 +3199,10 @@ class NPCInvestigateSystem(System):
                             eid,
                         )
                 if ai.state == "seeking_medical_aid":
+                    memory = memories.get(eid)
+                    hidden_clinic_tip = _recent_behavior_tip(memory, BEHAVIOR_TIP_HIDDEN_CLINIC, now=self.sim.tick)
+                    hidden_clinic_tip_data = hidden_clinic_tip.get("data", {}) if isinstance(hidden_clinic_tip, dict) else {}
+                    hidden_clinic_property_id = str(hidden_clinic_tip_data.get("property_id", "") or "").strip() if isinstance(hidden_clinic_tip_data, dict) else ""
                     _receive_medical_aid_at_actor(
                         self.sim,
                         eid,
@@ -3014,6 +3258,7 @@ class NPCInvestigateSystem(System):
                             source_eid=eid,
                         ))
                 if ai.state == "seeking_safety":
+                    memory = memories.get(eid)
                     live_threat = _npc_live_threat_context(
                         self.sim,
                         eid,
@@ -3034,8 +3279,10 @@ class NPCInvestigateSystem(System):
                         ai.target_eid = None
                 elif ai.state in {"working", "lounging", "socializing"}:
                     # Arrived at roam tile; clear target so will system picks a new one.
+                    _clear_opportunity_active_target(self.sim, eid, ai.state)
                     ai.target = None
                 elif ai.state not in {"protecting", "resting", "following", "holding"}:
+                    _clear_opportunity_active_target(self.sim, eid, ai.state)
                     ai.state = "idle"
                     ai.target = None
                     ai.target_eid = None
@@ -3305,15 +3552,38 @@ class NPCInvestigateSystem(System):
                     self.next_move_tick[eid] = self.sim.tick + 1
                 continue
 
-            step = _path_next_step(
-                self.sim,
-                eid=eid,
-                sx=pos.x,
-                sy=pos.y,
-                tx=tx,
-                ty=ty,
-                z=pos.z,
-            )
+            routine_path_state = ai.state in {
+                "selling_scavenged",
+                "seeking_medical_aid",
+                "seeking_safe_spot",
+                "seeking_shelter",
+                "patrolling",
+                "working",
+                "lounging",
+                "socializing",
+                "resting",
+            }
+            step = None
+            if routine_path_state:
+                step = _next_opportunity_active_target_step(
+                    self.sim,
+                    eid,
+                    ai.state,
+                    pos,
+                    (tx, ty, tz),
+                    max_nodes=256,
+                )
+            if step is None:
+                step = _path_next_step(
+                    self.sim,
+                    eid=eid,
+                    sx=pos.x,
+                    sy=pos.y,
+                    tx=tx,
+                    ty=ty,
+                    z=pos.z,
+                    max_nodes=192 if routine_path_state else 512,
+                )
 
             if not step and _manhattan(pos.x, pos.y, tx, ty) <= 1:
                 direct_reason = _closed_door_move_block_reason(
@@ -3393,6 +3663,8 @@ class NPCInvestigateSystem(System):
 
             cooldown = hold_cooldown
             if not moved:
+                if routine_path_state:
+                    _invalidate_opportunity_active_target_path(self.sim, eid, ai.state)
                 knock_handled = False
                 if step and str(blocked_reason or "").strip().lower() in {"locked_property", "closed_property", "door_access_denied"}:
                     if ai.state == "committing_property_crime":

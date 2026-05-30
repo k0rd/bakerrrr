@@ -249,6 +249,11 @@ class WorldStreamingSystem(System):
             self.sim.chunk_saved_states = {}
 
     def _ensure_property_anchor(self, x, y, z=0):
+        if hasattr(self.sim, "door_state_at") and hasattr(self.sim, "apply_door_state"):
+            state = self.sim.door_state_at(x, y, z)
+            if isinstance(state, dict):
+                self.sim.apply_door_state(x, y, z)
+                return
         tile = self.sim.tilemap.tile_at(x, y, z)
         if tile and tile.walkable:
             return

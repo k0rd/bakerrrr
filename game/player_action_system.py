@@ -40,6 +40,9 @@ from game.property_keys import (
     property_lock_state,
 )
 from game.system_support.awareness_runtime import observation_payload_for_position
+from game.system_support.opportunity_knowledge_runtime import (
+    rehydrate_opportunity_knowledge as _rehydrate_opportunity_knowledge,
+)
 from game.property_runtime import (
     controller_access_requirement_text as _controller_access_requirement_text,
     controller_holder_for_actor as _controller_holder_for_actor,
@@ -940,6 +943,21 @@ class PlayerActionSystem(System):
         state.setdefault("backup_cursor_pending_topic", "")
         return state
 
+    def _rehydrate_dialog_pause(self, eid=None):
+        if eid is None:
+            eid = self.player_eid
+        pos = self.sim.ecs.get(Position).get(eid)
+        if pos is None:
+            return None
+        return _rehydrate_opportunity_knowledge(
+            self.sim,
+            center=(int(pos.x), int(pos.y), int(pos.z)),
+            radius=18,
+            search_radius=10,
+            current_tick=int(getattr(self.sim, "tick", 0)),
+            reason="dialog_pause",
+        )
+
     def _finance_service_label(self, service):
         return str(service or "").strip().replace("_", " ") or "service"
 
@@ -984,6 +1002,7 @@ class PlayerActionSystem(System):
         if not transcript:
             transcript = ["No sale details are available right now."]
         self.sim.set_time_paused(True, reason="dialog")
+        self._rehydrate_dialog_pause(eid=self.player_eid)
         state.update({
             "open": True,
             "kind": "service_menu",
@@ -1030,6 +1049,7 @@ class PlayerActionSystem(System):
 
         state = self._dialog_ui_state()
         self.sim.set_time_paused(True, reason="dialog")
+        self._rehydrate_dialog_pause(eid=self.player_eid)
         state.update({
             "open": True,
             "kind": "service_menu",

@@ -16,6 +16,12 @@ from game.system_support.settlement_runtime import (
     _property_chunk_key,
     _track_entity_in_chunk_population,
 )
+from game.system_support.opportunity_knowledge_runtime import (
+    mark_opportunity_failure as _mark_opportunity_failure,
+    npc_opportunity_knowledge as _npc_opportunity_knowledge,
+    opportunity_snapshot_for_chunk as _opportunity_snapshot_for_chunk,
+    remember_opportunity_lead as _remember_opportunity_lead,
+)
 
 AI = _systems.AI
 CreatureIdentity = _systems.CreatureIdentity
@@ -86,6 +92,7 @@ _NPC_LIFE_REMOTE_TRANSIT_REQUIRED_DISTANCE = 2
 _NPC_LIFE_SETTLEMENT_TRANSIT_RADIUS = 2
 _NPC_LIFE_HOUSEHOLD_BOND_MIN = 0.72
 _NPC_LIFE_HOUSEHOLD_SPLIT_SCALE = 0.55
+_NPC_LIFE_STAGE_REVIEW_TICKS = 180
 _NPC_SETTLEMENT_BACKFILL_INTERVAL_TICKS = 300
 _NPC_SETTLEMENT_MAX_BACKFILL_PER_UPDATE = 12
 _NPC_SETTLEMENT_MAX_LIFE_UPDATES_PER_UPDATE = 8
@@ -1351,79 +1358,23 @@ class NPCSettlementSystem(System):
         for chunk in self._bond_destination_chunks(social):
             if chunk in seen:
                 continue
-            descriptor = self.sim.world.overworld_descriptor(chunk[0], chunk[1])
-            district = self.sim.world.get_chunk(chunk[0], chunk[1]).get("district", {})
-            area_type = str((district or {}).get("area_type", (descriptor or {}).get("area_type", "city")) or "").strip().lower()
+            snapshot = _opportunity_snapshot_for_chunk(self.sim, chunk, current_tick=int(getattr(self.sim, "tick", 0) or 0))
+            area_type = str((snapshot or {}).get("area_type", "city") or "city").strip().lower()
             if area_type != "city":
                 continue
             seen.add(chunk)
             candidates.append(chunk)
-        prospect_chunks = []
-        for prop in tuple(getattr(self.sim, "properties", {}).values()):
-            chunk = _property_chunk_key(self.sim, prop)
-            if chunk is None or chunk in seen:
-                continue
-            if max(abs(int(chunk[0]) - current_chunk[0]), abs(int(chunk[1]) - current_chunk[1])) > _NPC_LIFE_REMOTE_SEARCH_RADIUS:
-                continue
-            descriptor = self.sim.world.overworld_descriptor(int(chunk[0]), int(chunk[1]))
-            if not _newcomer_home_kind(prop) and _newcomer_work_capacity(self.sim, prop) <= 0:
-                continue
-            district = self.sim.world.get_chunk(int(chunk[0]), int(chunk[1])).get("district", {})
-            area_type = str((district or {}).get("area_type", (descriptor or {}).get("area_type", "city")) or "").strip().lower()
-            if area_type != "city":
-                continue
-            try:
-                wealth = int(district.get("wealth", 5))
-            except (TypeError, ValueError):
-                wealth = 5
-            try:
-                security = int(district.get("security_level", 5))
-            except (TypeError, ValueError):
-                security = 5
-            try:
-                crime = int(district.get("crime_rate", 5))
-            except (TypeError, ValueError):
-                crime = 5
-            score = (wealth * 0.24) + (security * 0.5) - (crime * 0.32)
-            if _newcomer_home_kind(prop):
-                score += 0.8
-            if _newcomer_work_capacity(self.sim, prop) > 0:
-                score += 0.6
-            prospect_chunks.append((float(score), (int(chunk[0]), int(chunk[1]))))
-        prospect_chunks.sort(key=lambda row: (row[0], -abs(row[1][0] - current_chunk[0]), -abs(row[1][1] - current_chunk[1])), reverse=True)
-        for _score, chunk in prospect_chunks:
-            if chunk in seen:
-                continue
-            seen.add(chunk)
-            candidates.append(chunk)
-            if len(candidates) >= (1 + _NPC_LIFE_REMOTE_CANDIDATE_LIMIT):
-                return candidates
         coarse = []
         for qy in range(current_chunk[1] - _NPC_LIFE_REMOTE_SEARCH_RADIUS, current_chunk[1] + _NPC_LIFE_REMOTE_SEARCH_RADIUS + 1):
             for qx in range(current_chunk[0] - _NPC_LIFE_REMOTE_SEARCH_RADIUS, current_chunk[0] + _NPC_LIFE_REMOTE_SEARCH_RADIUS + 1):
                 chunk = (int(qx), int(qy))
                 if chunk in seen:
                     continue
-                descriptor = self.sim.world.overworld_descriptor(chunk[0], chunk[1])
-                district = self.sim.world.get_chunk(chunk[0], chunk[1]).get("district", {})
-                area_type = str((district or {}).get("area_type", (descriptor or {}).get("area_type", "city")) or "").strip().lower()
+                snapshot = _opportunity_snapshot_for_chunk(self.sim, chunk, current_tick=int(getattr(self.sim, "tick", 0) or 0))
+                area_type = str((snapshot or {}).get("area_type", "city") or "city").strip().lower()
                 if area_type != "city":
                     continue
-                try:
-                    wealth = int(district.get("wealth", 5))
-                except (TypeError, ValueError):
-                    wealth = 5
-                try:
-                    security = int(district.get("security_level", 5))
-                except (TypeError, ValueError):
-                    security = 5
-                try:
-                    crime = int(district.get("crime_rate", 5))
-                except (TypeError, ValueError):
-                    crime = 5
-                coarse_score = (wealth * 0.28) + (security * 0.48) - (crime * 0.34)
-                if str((descriptor or {}).get("path", "") or "").strip().lower() in {"road", "freeway"}:
-                    coarse_score += 0.3
+                coarse_score = float((snapshot or {}).get("score", 0.0) or 0.0)
                 coarse.append((float(coarse_score), chunk))
         coarse.sort(key=lambda row: (row[0], -abs(row[1][0] - current_chunk[0]), -abs(row[1][1] - current_chunk[1])), reverse=True)
         for _score, chunk in coarse:
@@ -1434,6 +1385,197 @@ class NPCSettlementSystem(System):
             if len(candidates) >= (1 + _NPC_LIFE_REMOTE_CANDIDATE_LIMIT):
                 break
         return candidates
+
+    def _clear_life_review_plan(self, newcomer):
+        newcomer.life_review_stage = ""
+        newcomer.life_review_candidates = []
+        newcomer.life_review_cursor = 0
+        newcomer.life_review_next_tick = 0
+
+    def _seed_remote_life_prospects(self, eid, newcomer, current_chunk, *, social=None):
+        rows = []
+        for chunk in self._candidate_life_chunks(eid, current_chunk, social=social):
+            if chunk == current_chunk:
+                continue
+            snapshot = _opportunity_snapshot_for_chunk(self.sim, chunk, current_tick=int(getattr(self.sim, "tick", 0) or 0))
+            if not isinstance(snapshot, dict):
+                continue
+            rows.append({
+                "chunk": (int(chunk[0]), int(chunk[1])),
+                "score": float(snapshot.get("score", 0.0) or 0.0),
+                "security": int(snapshot.get("security", 5) or 5),
+                "crime": int(snapshot.get("crime", 5) or 5),
+                "wealth": int(snapshot.get("wealth", 5) or 5),
+            })
+        rows.sort(
+            key=lambda row: (
+                float(row.get("score", 0.0) or 0.0),
+                -abs(int(row["chunk"][0]) - int(current_chunk[0])),
+                -abs(int(row["chunk"][1]) - int(current_chunk[1])),
+            ),
+            reverse=True,
+        )
+        newcomer.life_review_stage = "candidate_verification" if rows else ""
+        newcomer.life_review_candidates = rows[: max(1, int(_NPC_LIFE_REMOTE_CANDIDATE_LIMIT))]
+        newcomer.life_review_cursor = 0
+        newcomer.life_review_next_tick = int(getattr(self.sim, "tick", 0) or 0) + _NPC_LIFE_STAGE_REVIEW_TICKS
+        return list(newcomer.life_review_candidates)
+
+    def _verify_remote_life_candidate(
+        self,
+        eid,
+        newcomer,
+        current_chunk,
+        *,
+        current_score,
+        occupation=None,
+        social=None,
+        household=None,
+        household_eids=(),
+        household_can_relocate=False,
+        portable_household_support=0.0,
+    ):
+        candidates = list(getattr(newcomer, "life_review_candidates", []) or [])
+        cursor = int(getattr(newcomer, "life_review_cursor", 0) or 0)
+        if cursor >= len(candidates):
+            self._clear_life_review_plan(newcomer)
+            return False
+        row = candidates[cursor] if cursor < len(candidates) else None
+        if not isinstance(row, dict):
+            newcomer.life_review_cursor = cursor + 1
+            newcomer.life_review_next_tick = int(getattr(self.sim, "tick", 0) or 0) + _NPC_LIFE_STAGE_REVIEW_TICKS
+            return False
+        chunk = row.get("chunk")
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            newcomer.life_review_cursor = cursor + 1
+            newcomer.life_review_next_tick = int(getattr(self.sim, "tick", 0) or 0) + _NPC_LIFE_STAGE_REVIEW_TICKS
+            return False
+        chunk = (int(chunk[0]), int(chunk[1]))
+        if not self._chunk_loaded(chunk):
+            materialized = True
+        else:
+            materialized = False
+        if not self._ensure_chunk_props_available(chunk):
+            newcomer.life_review_cursor = cursor + 1
+            newcomer.life_review_next_tick = int(getattr(self.sim, "tick", 0) or 0) + _NPC_LIFE_STAGE_REVIEW_TICKS
+            _mark_opportunity_failure(
+                self.sim,
+                eid,
+                "remote_settlement_prospect",
+                lead={"target": chunk, "chunk": chunk, "opportunity_tag": "remote_settlement_prospect"},
+                cooldown_ticks=_NPC_LIFE_REVIEW_TICKS,
+                reason="remote_chunk_unavailable",
+            )
+            return False
+        transit_link = self._transit_link_profile(current_chunk, chunk)
+        if bool(transit_link.get("required")) and not bool(transit_link.get("connected")):
+            newcomer.life_review_cursor = cursor + 1
+            newcomer.life_review_next_tick = int(getattr(self.sim, "tick", 0) or 0) + _NPC_LIFE_STAGE_REVIEW_TICKS
+            if materialized:
+                unload_chunk_state(self.sim, chunk)
+            return False
+        household_move = False
+        if household_can_relocate:
+            group_home_prop, group_home_kind, _group_home_score = self._candidate_home_in_chunk(
+                chunk,
+                required_capacity=len(tuple(household_eids or ()) or ()),
+                moving_eids=household_eids,
+            )
+            if group_home_prop is not None:
+                home_prop = group_home_prop
+                remote_home_kind = group_home_kind
+                household_move = True
+            else:
+                home_prop, remote_home_kind, _remote_home_score = self._candidate_home_in_chunk(chunk)
+        else:
+            home_prop, remote_home_kind, _remote_home_score = self._candidate_home_in_chunk(chunk)
+        work_prop, _remote_work_score = self._candidate_workplace_in_chunk(chunk, occupation=occupation)
+        if home_prop is None or work_prop is None:
+            newcomer.life_review_cursor = cursor + 1
+            newcomer.life_review_next_tick = int(getattr(self.sim, "tick", 0) or 0) + _NPC_LIFE_STAGE_REVIEW_TICKS
+            if materialized:
+                unload_chunk_state(self.sim, chunk)
+            return False
+        candidate_score = self._life_score(
+            eid,
+            newcomer,
+            home_prop=home_prop,
+            work_prop=work_prop,
+            target_chunk=chunk,
+        ) - self._remote_move_cost(eid, newcomer, current_chunk, chunk)
+        candidate_score += float(transit_link.get("score_bonus", 0.0) or 0.0)
+        if household_move:
+            candidate_score += portable_household_support
+        if float(candidate_score) < (float(current_score) + _NPC_LIFE_REMOTE_MOVE_DELTA):
+            newcomer.life_review_cursor = cursor + 1
+            newcomer.life_review_next_tick = int(getattr(self.sim, "tick", 0) or 0) + _NPC_LIFE_STAGE_REVIEW_TICKS
+            if materialized:
+                unload_chunk_state(self.sim, chunk)
+            return False
+        support_delta = self._social_support_score(eid, chunk, social=social) - self._social_support_score(eid, current_chunk, social=social)
+        if support_delta > 0.7:
+            newcomer.life_goal = "relocating_for_family"
+        elif int(row.get("security", 5) or 5) <= 3 or int(row.get("crime", 5) or 5) >= 7:
+            newcomer.life_goal = "relocating_for_safety"
+        else:
+            newcomer.life_goal = "relocating_for_work"
+        relocated = False
+        if bool(household_move):
+            relocated = self._relocate_household_to_chunk(
+                eid,
+                newcomer,
+                chunk,
+                home_prop,
+                remote_home_kind,
+                work_prop,
+                household,
+            )
+        if not relocated:
+            relocated = self._relocate_actor_to_chunk(
+                eid,
+                newcomer,
+                current_chunk,
+                chunk,
+                home_prop,
+                remote_home_kind,
+                work_prop,
+            )
+        if materialized and not relocated:
+            unload_chunk_state(self.sim, chunk)
+        if relocated:
+            newcomer.last_move_tick = int(getattr(self.sim, "tick", 0) or 0)
+            newcomer.last_life_tick = int(getattr(self.sim, "tick", 0) or 0)
+            newcomer.life_goal = "holding_steady"
+            newcomer.life_review_failures = 0
+            self._clear_life_review_plan(newcomer)
+            _remember_opportunity_lead(
+                self.sim,
+                eid,
+                "remote_settlement_prospect",
+                {
+                    "chunk": chunk,
+                    "target": chunk,
+                    "opportunity_tag": "remote_settlement_prospect",
+                    "confidence": 0.82,
+                    "score": float(candidate_score),
+                },
+                source_kind="verified_settlement_move",
+                stale_after_ticks=_NPC_LIFE_REVIEW_TICKS,
+                expires_ticks=_NPC_LIFE_MOVE_COOLDOWN_TICKS,
+            )
+            return True
+        newcomer.life_review_cursor = cursor + 1
+        newcomer.life_review_next_tick = int(getattr(self.sim, "tick", 0) or 0) + _NPC_LIFE_STAGE_REVIEW_TICKS
+        newcomer.life_review_failures = int(getattr(newcomer, "life_review_failures", 0) or 0) + 1
+        _mark_opportunity_failure(
+            self.sim,
+            eid,
+            "remote_settlement_prospect",
+            lead={"chunk": chunk, "target": chunk, "opportunity_tag": "remote_settlement_prospect"},
+            cooldown_ticks=_NPC_LIFE_REVIEW_TICKS,
+            reason="remote_verification_failed",
+        )
+        return False
 
     def _ensure_actor_settlement(self, eid):
         newcomer = self.sim.ecs.get(NPCSettlement).get(eid)
@@ -1471,6 +1613,16 @@ class NPCSettlementSystem(System):
                 newcomer.last_move_tick = int(getattr(self.sim, "tick", 0)) - _NPC_LIFE_MOVE_COOLDOWN_TICKS
             if not hasattr(newcomer, "life_goal"):
                 newcomer.life_goal = "holding_steady"
+            if not hasattr(newcomer, "life_review_stage"):
+                newcomer.life_review_stage = ""
+            if not hasattr(newcomer, "life_review_candidates"):
+                newcomer.life_review_candidates = []
+            if not hasattr(newcomer, "life_review_cursor"):
+                newcomer.life_review_cursor = 0
+            if not hasattr(newcomer, "life_review_next_tick"):
+                newcomer.life_review_next_tick = 0
+            if not hasattr(newcomer, "life_review_failures"):
+                newcomer.life_review_failures = 0
             if not str(getattr(newcomer, "origin", "") or "").strip():
                 newcomer.origin = self._settlement_label(chunk)
         self._refresh_status(eid, newcomer)
@@ -1681,7 +1833,11 @@ class NPCSettlementSystem(System):
         if pos is None or self._player_near_actor(pos):
             return
         current_tick = int(getattr(self.sim, "tick", 0))
-        if current_tick - int(getattr(newcomer, "last_life_tick", 0) or 0) < _NPC_LIFE_REVIEW_TICKS:
+        active_stage = str(getattr(newcomer, "life_review_stage", "") or "").strip().lower()
+        if active_stage:
+            if current_tick < int(getattr(newcomer, "life_review_next_tick", 0) or 0):
+                return
+        elif current_tick - int(getattr(newcomer, "last_life_tick", 0) or 0) < _NPC_LIFE_REVIEW_TICKS:
             return
         newcomer.last_life_tick = current_tick
         occupation = self.sim.ecs.get(Occupation).get(eid)
@@ -1785,105 +1941,64 @@ class NPCSettlementSystem(System):
         )
         if not remote_trigger:
             newcomer.life_goal = "holding_steady"
+            self._clear_life_review_plan(newcomer)
             return
         if current_tick - int(getattr(newcomer, "last_move_tick", 0) or 0) < _NPC_LIFE_MOVE_COOLDOWN_TICKS:
             newcomer.life_goal = "holding_steady"
+            self._clear_life_review_plan(newcomer)
             return
-        best = None
-        materialized = set()
-        for chunk in self._candidate_life_chunks(eid, current_chunk, social=social):
-            if chunk == current_chunk:
-                continue
-            if not self._chunk_loaded(chunk):
-                materialized.add((int(chunk[0]), int(chunk[1])))
-            if not self._ensure_chunk_props_available(chunk):
-                continue
-            transit_link = self._transit_link_profile(current_chunk, chunk)
-            if bool(transit_link.get("required")) and not bool(transit_link.get("connected")):
-                continue
-            household_move = False
-            if household_can_relocate:
-                group_home_prop, group_home_kind, _group_home_score = self._candidate_home_in_chunk(
-                    chunk,
-                    required_capacity=len(household_eids),
-                    moving_eids=household_eids,
-                )
-                if group_home_prop is not None:
-                    home_prop = group_home_prop
-                    remote_home_kind = group_home_kind
-                    household_move = True
+        if str(getattr(newcomer, "life_review_stage", "") or "").strip().lower() != "candidate_verification":
+            prospects = self._seed_remote_life_prospects(eid, newcomer, current_chunk, social=social)
+            if not prospects:
+                if security <= 3 or crime >= 7:
+                    newcomer.life_goal = "seeking_safer_ground"
+                elif str(getattr(newcomer, "employment_status", "") or "").strip().lower() != "employed":
+                    newcomer.life_goal = "seeking_work"
                 else:
-                    home_prop, remote_home_kind, _remote_home_score = self._candidate_home_in_chunk(chunk)
-            else:
-                home_prop, remote_home_kind, _remote_home_score = self._candidate_home_in_chunk(chunk)
-            work_prop, _remote_work_score = self._candidate_workplace_in_chunk(chunk, occupation=occupation)
-            if home_prop is None or work_prop is None:
-                continue
-            candidate_score = self._life_score(
-                eid,
-                newcomer,
-                home_prop=home_prop,
-                work_prop=work_prop,
-                target_chunk=chunk,
-            ) - self._remote_move_cost(eid, newcomer, current_chunk, chunk)
-            candidate_score += float(transit_link.get("score_bonus", 0.0) or 0.0)
-            if household_move:
-                candidate_score += portable_household_support
-            if best is None or candidate_score > best["score"]:
-                best = {
-                    "chunk": (int(chunk[0]), int(chunk[1])),
-                    "home_prop": home_prop,
-                    "home_kind": remote_home_kind,
-                    "work_prop": work_prop,
-                    "score": float(candidate_score),
-                    "household_move": bool(household_move),
-                    "transit_service": str(transit_link.get("service", "") or "").strip().lower(),
-                }
-        for chunk in tuple(materialized):
-            if best is not None and chunk == best["chunk"]:
-                continue
-            unload_chunk_state(self.sim, chunk)
-        if best is None or float(best["score"]) < (float(current_score) + _NPC_LIFE_REMOTE_MOVE_DELTA):
-            if security <= 3 or crime >= 7:
-                newcomer.life_goal = "seeking_safer_ground"
-            elif str(getattr(newcomer, "employment_status", "") or "").strip().lower() != "employed":
-                newcomer.life_goal = "seeking_work"
-            else:
-                newcomer.life_goal = "holding_steady"
+                    newcomer.life_goal = "holding_steady"
+                newcomer.life_review_failures = int(getattr(newcomer, "life_review_failures", 0) or 0) + 1
+                return
+            newcomer.life_goal = "prospecting_other_blocks"
+            for row in prospects:
+                _remember_opportunity_lead(
+                    self.sim,
+                    eid,
+                    "remote_settlement_prospect",
+                    {
+                        "chunk": row.get("chunk"),
+                        "target": row.get("chunk"),
+                        "opportunity_tag": "remote_settlement_prospect",
+                        "confidence": 0.42,
+                        "score": float(row.get("score", 0.0) or 0.0),
+                    },
+                    source_kind="settlement_shortlist",
+                    stale_after_ticks=_NPC_LIFE_REVIEW_TICKS,
+                    expires_ticks=_NPC_LIFE_MOVE_COOLDOWN_TICKS,
+                )
             return
-        target_chunk = best["chunk"]
-        support_delta = self._social_support_score(eid, target_chunk, social=social) - self._social_support_score(eid, current_chunk, social=social)
-        if support_delta > 0.7:
-            newcomer.life_goal = "relocating_for_family"
-        elif security <= 3 or crime >= 7:
-            newcomer.life_goal = "relocating_for_safety"
-        else:
-            newcomer.life_goal = "relocating_for_work"
-        relocated = False
-        if bool(best.get("household_move")):
-            relocated = self._relocate_household_to_chunk(
-                eid,
-                newcomer,
-                target_chunk,
-                best["home_prop"],
-                best["home_kind"],
-                best["work_prop"],
-                household,
-            )
+        relocated = self._verify_remote_life_candidate(
+            eid,
+            newcomer,
+            current_chunk,
+            current_score=current_score,
+            occupation=occupation,
+            social=social,
+            household=household,
+            household_eids=household_eids,
+            household_can_relocate=household_can_relocate,
+            portable_household_support=portable_household_support,
+        )
         if not relocated:
-            relocated = self._relocate_actor_to_chunk(
-                eid,
-                newcomer,
-                current_chunk,
-                target_chunk,
-                best["home_prop"],
-                best["home_kind"],
-                best["work_prop"],
-            )
-        if relocated:
-            newcomer.last_move_tick = current_tick
-            newcomer.last_life_tick = current_tick
-            newcomer.life_goal = "holding_steady"
+            if not list(getattr(newcomer, "life_review_candidates", []) or ()) or int(getattr(newcomer, "life_review_cursor", 0) or 0) >= len(list(getattr(newcomer, "life_review_candidates", []) or ())):
+                self._clear_life_review_plan(newcomer)
+                if security <= 3 or crime >= 7 or int(getattr(newcomer, "life_review_failures", 0) or 0) >= 2:
+                    newcomer.life_goal = "seeking_safer_ground"
+                elif str(getattr(newcomer, "employment_status", "") or "").strip().lower() != "employed":
+                    newcomer.life_goal = "seeking_work"
+                else:
+                    newcomer.life_goal = "holding_steady"
+            else:
+                newcomer.life_goal = "prospecting_other_blocks"
 
     def _active_chunk_coord(self):
         coord = getattr(self.sim, "active_chunk_coord", None)
