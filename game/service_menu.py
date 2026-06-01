@@ -36,6 +36,7 @@ from game.property_runtime import (
     finance_services_for_property as _finance_services_for_property,
     property_infrastructure_role as _property_infrastructure_role,
     property_is_storefront as _property_is_storefront,
+    resolve_property_record as _resolve_property_record,
     site_services_for_property as _site_services_for_property,
 )
 from game.service_runtime import (
@@ -192,7 +193,7 @@ class ServiceMenuSystem(System):
     def _pending_property_name(self, fallback="Service"):
         pending = self.pending_service_result if isinstance(self.pending_service_result, dict) else {}
         property_id = pending.get("property_id")
-        prop = self.sim.properties.get(property_id) if property_id is not None else None
+        prop = _resolve_property_record(self.sim, property_id) if property_id is not None else None
         if isinstance(prop, dict):
             name = str(prop.get("name", prop.get("id", fallback))).strip()
             if name:
@@ -1894,7 +1895,8 @@ class ServiceMenuSystem(System):
         role_fit = dict(snapshot.get("role_fit", {})) if isinstance(snapshot.get("role_fit"), dict) else {}
 
         lines = [
-            f"{business_name}: account {_credit_amount_label(account_balance)}.",
+            f"{business_name}.",
+            f"Account: {_credit_amount_label(account_balance)}.",
             f"Staffing: {staff_total}/{required_staff} total | managers {manager_count} | staff {staff_count}.",
         ]
         for role_name, fit in (("Manager", role_fit.get("manager")), ("Staff", role_fit.get("staff"))):
@@ -3381,6 +3383,9 @@ class ServiceMenuSystem(System):
             return
         if bool(event.data.get("handled")):
             return
+        interaction_mode = str(event.data.get("interaction_mode", "") or "").strip().lower()
+        if interaction_mode and interaction_mode != "service":
+            return
 
         prop = self.sim.properties.get(event.data.get("property_id"))
         if not isinstance(prop, dict):
@@ -4020,7 +4025,7 @@ class ServiceMenuSystem(System):
             if not business_property_id:
                 self._present_service_result("Business status", ["That business status option is invalid."])
                 return
-            business_prop = self.sim.properties.get(business_property_id)
+            business_prop = _resolve_property_record(self.sim, business_property_id)
             if not isinstance(business_prop, dict):
                 title, lines = self._stale_service_option_lines(option_id)
                 self._present_service_result(title, lines)
@@ -4043,7 +4048,7 @@ class ServiceMenuSystem(System):
             if not business_property_id:
                 self._present_service_result("Business policy", ["That business policy option is invalid."])
                 return
-            business_prop = self.sim.properties.get(business_property_id)
+            business_prop = _resolve_property_record(self.sim, business_property_id)
             if not isinstance(business_prop, dict):
                 title, lines = self._stale_service_option_lines(option_id)
                 self._present_service_result(title, lines)
@@ -4066,7 +4071,7 @@ class ServiceMenuSystem(System):
             if not business_property_id:
                 self._present_service_result("Business hours", ["That business hours option is invalid."])
                 return
-            business_prop = self.sim.properties.get(business_property_id)
+            business_prop = _resolve_property_record(self.sim, business_property_id)
             if not isinstance(business_prop, dict):
                 title, lines = self._stale_service_option_lines(option_id)
                 self._present_service_result(title, lines)
@@ -4089,7 +4094,7 @@ class ServiceMenuSystem(System):
             if not business_property_id:
                 self._present_service_result("Business markup", ["That business markup option is invalid."])
                 return
-            business_prop = self.sim.properties.get(business_property_id)
+            business_prop = _resolve_property_record(self.sim, business_property_id)
             if not isinstance(business_prop, dict):
                 title, lines = self._stale_service_option_lines(option_id)
                 self._present_service_result(title, lines)

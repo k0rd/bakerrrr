@@ -4920,13 +4920,16 @@ class NPCInteractionSystem(System):
             "member_count": len(members),
         }
 
-    def _dialogue_context(self, npc_eid, *, bond=None):
+    def _dialogue_context(self, npc_eid, *, bond=None, allow_distant=False):
         positions = self.sim.ecs.get(Position)
         npc_pos = positions.get(npc_eid)
         player_pos = positions.get(self.player_eid)
         if not npc_pos or not player_pos or npc_pos.z != player_pos.z:
             return None
-        if _manhattan(player_pos.x, player_pos.y, npc_pos.x, npc_pos.y) > 1:
+        dx = abs(int(player_pos.x) - int(npc_pos.x))
+        dy = abs(int(player_pos.y) - int(npc_pos.y))
+        max_range = 2 if allow_distant else 1
+        if max(dx, dy) > max_range:
             return None
         if _entity_is_downed(self.sim, npc_eid):
             return None
@@ -10020,11 +10023,11 @@ class NPCInteractionSystem(System):
                 lines.append(self._social_need_line(context.get("npc_needs"), context.get("bond")))
         self.sim.emit(Event("npc_interacted", eid=self.player_eid, npc_eid=npc_eid, lines=lines[:4], guarded=bool(context.get("guarded"))))
 
-    def _start_dialogue_with_npc(self, npc_eid, *, prompt_lines=(), highlight_topic_ids=()):
+    def _start_dialogue_with_npc(self, npc_eid, *, prompt_lines=(), highlight_topic_ids=(), allow_distant=False):
         if npc_eid is None:
             return False
         self._remember_opportunity_npc_interaction(npc_eid)
-        context = self._dialogue_context(npc_eid)
+        context = self._dialogue_context(npc_eid, allow_distant=allow_distant)
         if not context:
             return False
         fresh = not self._recently_interacted(npc_eid)
@@ -10045,7 +10048,7 @@ class NPCInteractionSystem(System):
                 player_needs.social = _clamp(player_needs.social + social_gain)
             if context.get("npc_needs"):
                 context["npc_needs"].social = _clamp(context["npc_needs"].social + max(0.25, social_gain * 0.45))
-        context = self._dialogue_context(npc_eid, bond=bond)
+        context = self._dialogue_context(npc_eid, bond=bond, allow_distant=allow_distant)
         if not context:
             return False
         if not context.get("human"):
@@ -10070,7 +10073,10 @@ class NPCInteractionSystem(System):
     def on_npc_interact(self, event):
         if event.data.get("eid") != self.player_eid:
             return
-        self._start_dialogue_with_npc(event.data.get("npc_eid"))
+        self._start_dialogue_with_npc(
+            event.data.get("npc_eid"),
+            allow_distant=bool(event.data.get("allow_distant")),
+        )
 
     def on_npc_dialogue_request(self, event):
         if event.data.get("eid") != self.player_eid:

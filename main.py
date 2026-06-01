@@ -2137,7 +2137,7 @@ def _run_new_game(view, character_name):
         "Overworld legend: in-vehicle macro-grid with district or terrain center icons, route bands for travel lines, and marker badges for your notes. Bright chunks are currently loaded, dim chunks are distant."
     )
     sim.log.add("Overworld POIs: stronger frontier/wilderness/coastal chunks can replace the center glyph with a site initial.")
-    sim.log.add("Finance: use B near banks/ATMs to open banking transfers, and N near banks or insurers to buy/renew policies. Bank balances do not accrue passive interest.")
+    sim.log.add("Finance: stand on a bank, ATM, or insurer tile and press . to use the service surface. Bank balances do not accrue passive interest.")
     sim.log.add("Combat overlay is exposure-aware: nearby danger can trigger action-driven turn mode.")
     final_rules = sim.world_traits.get("rules", {}) if isinstance(sim.world_traits, dict) else {}
     sim.log.add(

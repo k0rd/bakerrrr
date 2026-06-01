@@ -1978,7 +1978,14 @@ class EventLogSystem(System):
     def on_interact_empty(self, event):
         if event.data.get("eid") != self.player_eid:
             return
-        self.sim.log.add("No one and nothing nearby to interact with.")
+        interaction_mode = str(event.data.get("interaction_mode", "") or "").strip().lower()
+        if interaction_mode == "talk":
+            self.sim.log.add("No one close enough to talk to.")
+            return
+        if interaction_mode == "service":
+            self.sim.log.add("No service is available here.")
+            return
+        self.sim.log.add("Nothing nearby responds to that interaction.")
 
     def on_access_panel_used(self, event):
         if event.data.get("eid") != self.player_eid:

@@ -373,6 +373,20 @@ class SiteServiceSystem(System):
                 return True
         return False
 
+    def _allows_physical_service_interact(self, prop):
+        if not isinstance(prop, dict):
+            return False
+        metadata = _property_metadata(prop)
+        fixture_type = str(metadata.get("fixture_type", "") or "").strip().lower()
+        if fixture_type not in {"underpass_stairs", "street_stairwell", "underpass_stairwell"}:
+            return False
+        services = {
+            str(service).strip().lower()
+            for service in tuple(_site_services_for_property(prop) or ())
+            if str(service).strip()
+        }
+        return UNDERGROUND_ACCESS_SERVICE in services
+
     def _inventory_item_count(self, eid, item_id):
         inventory = self._inventory_for(eid)
         if not inventory:
@@ -2487,8 +2501,12 @@ class SiteServiceSystem(System):
             return
         if bool(event.data.get("handled")):
             return
-
+        interaction_mode = str(event.data.get("interaction_mode", "") or "").strip().lower()
         prop = self.sim.properties.get(event.data.get("property_id"))
+        if interaction_mode and interaction_mode != "service":
+            if interaction_mode != "physical" or not self._allows_physical_service_interact(prop):
+                return
+
         if not prop:
             return
 

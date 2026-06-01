@@ -47,6 +47,29 @@ def property_metadata(prop):
     return metadata if isinstance(metadata, dict) else {}
 
 
+def resolve_property_record(sim, property_id, *, include_saved=True):
+    if sim is None:
+        return None
+    clean_id = str(property_id or "").strip()
+    if not clean_id:
+        return None
+    prop = getattr(sim, "properties", {}).get(clean_id)
+    if isinstance(prop, dict):
+        return prop
+    if not include_saved:
+        return None
+    for snapshot in tuple(getattr(sim, "chunk_saved_states", {}).values()):
+        if not isinstance(snapshot, dict):
+            continue
+        props = snapshot.get("properties")
+        if not isinstance(props, dict):
+            continue
+        prop = props.get(clean_id)
+        if isinstance(prop, dict):
+            return prop
+    return None
+
+
 def property_is_vehicle(prop):
     if not isinstance(prop, dict):
         return False

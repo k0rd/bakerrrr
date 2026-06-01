@@ -2381,6 +2381,9 @@ class TradeSystem(System):
             return
         if bool(event.data.get("handled")):
             return
+        interaction_mode = str(event.data.get("interaction_mode", "") or "").strip().lower()
+        if interaction_mode and interaction_mode != "service":
+            return
 
         prop = self.sim.properties.get(event.data.get("property_id"))
         if not self._is_storefront(prop):

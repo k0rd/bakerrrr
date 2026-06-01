@@ -37,6 +37,7 @@ from game.property_runtime import (
     property_covering as _property_covering,
     property_distance as _property_distance,
     property_focus_position as _property_focus_position,
+    resolve_property_record as _resolve_property_record,
 )
 from game.skills import actor_skill as _actor_skill
 from game.system_support.ai_intent_runtime import _sync_ai_intent
@@ -482,6 +483,10 @@ def _player_business_chunk(sim, prop):
         return tuple(int(bit) for bit in sim.chunk_coords(int(prop.get("x", 0) or 0), int(prop.get("y", 0) or 0)))
     except (TypeError, ValueError):
         return None
+
+
+def _resolve_owned_property(sim, property_id):
+    return _resolve_property_record(sim, _text(property_id))
 
 
 def _player_business_warning_actor_role(sim, eid, prop):
@@ -1873,7 +1878,7 @@ def player_owned_businesses_for_actor(sim, eid, pos=None):
     candidates = []
     seen = set()
     for property_id in sorted(getattr(assets, "owned_property_ids", ()) or ()):
-        prop = sim.properties.get(property_id)
+        prop = _resolve_owned_property(sim, property_id)
         if not property_supports_player_business(prop):
             continue
         prop_id = _text(prop.get("id", property_id))
@@ -1921,7 +1926,7 @@ def actor_player_business_employment(sim, actor_eid, owner_eid=None):
     if not isinstance(workplace, dict):
         return None
     property_id = _text(workplace.get("property_id"))
-    prop = sim.properties.get(property_id) if property_id else None
+    prop = _resolve_owned_property(sim, property_id) if property_id else None
     if not property_supports_player_business(prop):
         return None
     if owner_eid is not None and not _property_owned_by_actor(sim, owner_eid, prop):
@@ -1972,7 +1977,7 @@ def player_business_staffing_targets(sim, owner_eid):
 
     targets = []
     for property_id in sorted(getattr(assets, "owned_property_ids", ()) or ()):
-        prop = sim.properties.get(property_id)
+        prop = _resolve_owned_property(sim, property_id)
         if not property_supports_player_business(prop):
             continue
         summary = player_business_summary(sim, prop)
@@ -2680,7 +2685,7 @@ class PlayerBusinessSystem(System):
 
         hour_counter = _absolute_hour(self.sim)
         for property_id in sorted(getattr(assets, "owned_property_ids", ()) or ()):
-            prop = self.sim.properties.get(property_id)
+            prop = _resolve_owned_property(self.sim, property_id)
             if not property_supports_player_business(prop):
                 continue
 

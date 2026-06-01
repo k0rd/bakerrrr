@@ -679,6 +679,9 @@ class PropertySystem(System):
         eid = event.data.get("eid")
         if eid != self.player_eid:
             return
+        interaction_mode = str(event.data.get("interaction_mode", "") or "").strip().lower()
+        if interaction_mode == "service":
+            return
         prop = self.sim.properties.get(event.data.get("property_id"))
         if _property_infrastructure_role(prop) != "access_panel":
             return

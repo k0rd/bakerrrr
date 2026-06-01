@@ -695,8 +695,8 @@ class RenderSystem(System):
             "? or Esc closes this panel.",
             "",
             f"World seed: {self.sim.seed}",
-            "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with . space or 5.",
-            "Observe: t interact/use/talk, Shift+T force interact in last move direction, Shift+E lock or unlock a nearby door, x scan, X or ; look cursor. Vehicle interact enters or exits overworld.",
+            "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with space or 5.",
+            "Observe: / talks, ' physically interacts, . uses the service on your tile, ; locks or unlocks a nearby door, x opens the look cursor, and X opens the map. Vehicle interact enters or exits overworld.",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
             "Ingress: Shift+J door breach, Shift+W window entry, Shift+K wall breach.",
             'Features: + closed door, \' open door, " window, / breach opening, > higher stairs, < lower stairs, : stair landing, E elevator.',
@@ -704,18 +704,18 @@ class RenderSystem(System):
             "Local terrain: = road, : trail, , brush, ^ rock, ~ water, _ shore flats.",
             "Remote sites: relay/lookout/survey sites provide intel; camps and huts can offer shelter.",
             f"Aim/Combat: {aim_open}, move cursor, F cycle target, {aim_confirm}, C cover, v cover hop, Shift+S sneak, V cycle weapon.",
-            "Items: I inventory, G pick up nearby, U use/equip/stow, R drop.",
+            "Items: I inventory, , picks up nearby items, U use/equip/stow, R drop.",
             "Visual classes: vehicles use '&' symbol colors only; properties use letters; items are bright symbols; humans use colored @ symbols and wildlife uses taxonomy letters.",
             "Progress: O operations report, Y known locations and owned vehicles, L event log history.",
             "Log modal: T cycles filters; H sets the current modal filter as the live HUD filter.",
             "Debug: D live telemetry for lighting, stealth, pressure, property access, and objective state.",
-            "Services: M trade panel, B bank, N insurance, P buy property.",
+            "Services: . uses the service on your tile, including banking, insurance, terminals, transit, and storefront counters. P buy property.",
             "Character: + opens the character sheet. Tab or Left/Right switch pages.",
         ]
         if zoom_mode == "overworld":
             if view_only:
-                lines.append("Map view: move to browse chunks, X or ; inspect with a cursor, Enter or x inspect the selected chunk, and t return on-foot.")
-                lines.append("Map tools: Shift+Z opens the map, M adds a marker here, l lists markers, N jumps to the nearest marker, O ops, Y locations, L log.")
+                lines.append("Map view: move to browse chunks, Enter or x inspect the selected chunk, and t return on-foot.")
+                lines.append("Map tools: X opens the map from on foot, M adds a marker here, l lists markers, N jumps to the nearest marker, O ops, Y locations, L log.")
             else:
                 lines.append("In-vehicle map: move travels chunks, G drives to the last marker, M adds a marker, l lists markers, N jumps to the nearest marker, and t exits on-foot.")
             lines.append("Overworld POIs: stronger non-city chunks can replace the center glyph with a site initial.")
@@ -1954,15 +1954,15 @@ class RenderSystem(System):
         if look_ui.get("active"):
             if look_purpose == "aim":
                 if _entity_uses_melee_aim(self.sim, self.player_eid):
-                    controls = "Aim (Melee): reticle adjacent-only, F cycle target, Enter strike, X/T inspect, Esc close, ? help"
+                    controls = "Aim (Melee): reticle adjacent-only, F cycle target, Enter strike, x inspect, Esc close, ? help"
                 else:
-                    controls = "Aim: move cursor, F cycle target, Enter fire, X/T inspect, Esc close, ? help"
+                    controls = "Aim: move cursor, F cycle target, Enter fire, x inspect, Esc close, ? help"
             elif look_purpose == "interact":
-                controls = "Interact: choose adjacent tile, T/Enter confirm, E lock, X inspect, Esc fallback, ; close, ? help"
+                controls = "Interact: choose adjacent tile, '/Enter confirm, ; lock, x inspect, Esc fallback, ? help"
             elif look_purpose == "backup_order":
-                controls = "Order Mark: move cursor, E/Enter mark, X/T inspect, Esc cancel, ? help"
+                controls = "Order Mark: move cursor, E/Enter mark, x inspect, Esc cancel, ? help"
             else:
-                controls = "Look: move cursor, X/T inspect, Esc close, ? help"
+                controls = "Look: move cursor, Enter/x inspect, Esc close, ? help"
         elif inventory_ui.get("open"):
             if inventory_panel_kind == "container":
                 controls = (
@@ -2008,11 +2008,11 @@ class RenderSystem(System):
             controls = f"Combat: move or act, {_aim_open_label(self.sim, self.player_eid)}, C cover, v hop, Shift+S sneak, ? help, Q quit"
         elif zoom_mode == "overworld":
             if bool(getattr(self.sim, "overworld_view_only_by_eid", {}).get(int(self.player_eid), False)):
-                controls = "Map: move browse chunks, X/; inspect cursor, Enter/x inspect selected chunk, M/l/N markers, + sheet, t return on-foot, ? help"
+                controls = "Map: move browse chunks, Enter/x inspect selected chunk, M/l/N markers, + sheet, t return on-foot, ? help"
             else:
                 controls = "In-vehicle: move, G drive marker, M/l/N markers, O ops, Y locations, L log, + sheet, t exit on-foot, center icons UPPER=loaded lower=distant, ? help"
         else:
-            controls = f"Move: arrows/WASD/HJKL/QEZC, {_aim_open_label(self.sim, self.player_eid)}, t interact, Shift+Z map, + sheet, Shift+E lock door, Shift+J breach door, O ops, Y locations, L log, D debug, M trade, or ? for help"
+            controls = f"Move: arrows/WASD/HJKL/QEZC, {_aim_open_label(self.sim, self.player_eid)}, / talk, . service, ' interact, , pickup, ; lock door, X map, + sheet, Shift+J breach door, O ops, Y locations, L log, D debug, or ? for help"
 
         mode_line = _mode_line(
             mode_state=player_modes,

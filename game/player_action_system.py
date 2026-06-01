@@ -2,6 +2,7 @@
 
 from engine.events import Event
 from engine.systems import System
+from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.components import (
     AI,
     CoverState,
@@ -449,6 +450,60 @@ class PlayerActionSystem(System):
 
         candidates.sort(key=lambda row: row[0])
         return candidates[0][1]
+
+    def _talk_npc_for_player_action(self, eid, pos):
+        positions = self.sim.ecs.get(Position)
+        ais = self.sim.ecs.get(AI)
+        players = self.sim.ecs.get(PlayerControlled)
+        identities = self.sim.ecs.get(CreatureIdentity)
+        occupations = self.sim.ecs.get(Occupation)
+
+        def _collect(max_range):
+            candidates = []
+            for other_eid, other_pos in positions.items():
+                if other_eid == eid:
+                    continue
+                if players.get(other_eid):
+                    continue
+                if not ais.get(other_eid):
+                    continue
+                if other_pos.z != pos.z:
+                    continue
+                dx = int(other_pos.x) - int(pos.x)
+                dy = int(other_pos.y) - int(pos.y)
+                chebyshev = max(abs(dx), abs(dy))
+                if chebyshev <= 0 or chebyshev > max_range:
+                    continue
+                if not _has_line_of_sight(
+                    self.sim,
+                    int(pos.x),
+                    int(pos.y),
+                    int(pos.z),
+                    int(other_pos.x),
+                    int(other_pos.y),
+                    int(other_pos.z),
+                ):
+                    continue
+                identity = identities.get(other_eid)
+                humanish = int(bool(identity and identity.taxonomy_class == "hominid"))
+                has_job = int(bool(occupations.get(other_eid)))
+                sort_key = _interaction_target_order_key(
+                    pos.x,
+                    pos.y,
+                    other_pos.x,
+                    other_pos.y,
+                    stable_tiebreaker=(chebyshev, -humanish, -has_job, other_eid),
+                )
+                candidates.append((sort_key, other_eid))
+            if not candidates:
+                return None
+            candidates.sort(key=lambda row: row[0])
+            return candidates[0][1]
+
+        target = _collect(1)
+        if target is not None:
+            return target
+        return _collect(2)
 
     def _is_protected_property(self, prop):
         if not prop:
@@ -1290,6 +1345,15 @@ class PlayerActionSystem(System):
 
         if action == "examine_cursor":
             self._handle_cursor_examine(eid=eid, pos=pos, event=event)
+            return
+
+        if action == "talk":
+            if self.property_actions.handle_talk_action(eid, pos):
+                self.sim.turn_advance_requested = True
+            return
+
+        if action == "service_interact":
+            self.property_actions.handle_service_interact_action(eid, pos)
             return
 
         if action == "interact":

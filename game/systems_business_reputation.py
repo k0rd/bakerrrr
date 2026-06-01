@@ -10,6 +10,7 @@ from game.incident_runtime import incident_record
 from game.property_runtime import (
     finance_services_for_property as _finance_services_for_property,
     property_is_storefront as _property_is_storefront,
+    resolve_property_record as _resolve_property_record,
     site_services_for_property as _site_services_for_property,
 )
 from game.system_support.actor_runtime import _detail_tick_allowed
@@ -276,7 +277,7 @@ def remember_hidden_social_site_for_actor(sim, eid, property_id, *, source_eid=N
     property_key = _text(property_id)
     if sim is None or eid is None or not property_key:
         return False
-    prop = sim.properties.get(property_key)
+    prop = _resolve_property_record(sim, property_key)
     if not isinstance(prop, dict) or social_secret_site_trust_gate(prop) <= 0.0:
         return False
     try:
@@ -406,7 +407,7 @@ def business_record_reputation_scope_profile(sim, property_id, record):
     property_key = _text(property_id)
     if sim is None or not property_key or not isinstance(record, dict):
         return {"key": "", "label": "", "radius": 0, "score": 0.0}
-    prop = sim.properties.get(property_key)
+    prop = _resolve_property_record(sim, property_key)
     if not property_supports_business_reputation(prop):
         return {"key": "", "label": "", "radius": 0, "score": 0.0}
     depth = max(0, int(record.get("propagation_depth", 0) or 0))
@@ -567,7 +568,7 @@ def _property_business_community_signal(sim, property_id):
     if isinstance(cached, dict):
         return dict(cached)
 
-    prop = sim.properties.get(property_key)
+    prop = _resolve_property_record(sim, property_key)
     if not property_supports_business_reputation(prop):
         cache[property_key] = dict(base)
         return dict(base)
@@ -654,7 +655,7 @@ def _property_business_community_ripple(sim, property_id):
     if isinstance(cached, dict):
         return dict(cached)
 
-    prop = sim.properties.get(property_key)
+    prop = _resolve_property_record(sim, property_key)
     point = _property_point(prop)
     if not property_supports_business_reputation(prop) or point is None:
         cache[property_key] = dict(base)
@@ -816,7 +817,7 @@ def property_business_reputation_snapshot(sim, property_id):
     ):
         snapshot["reputation_state"] = "troubled"
 
-    scope = _snapshot_business_scope_profile(sim, sim.properties.get(property_key), snapshot)
+    scope = _snapshot_business_scope_profile(sim, _resolve_property_record(sim, property_key), snapshot)
     snapshot["reputation_scope_key"] = str(scope.get("key", "")).strip().lower()
     snapshot["reputation_scope_label"] = str(scope.get("label", "")).strip()
     snapshot["reputation_scope_radius"] = max(0, int(scope.get("radius", 0) or 0))
@@ -830,7 +831,7 @@ def property_business_reputation_scope_profile(sim, property_id):
     property_key = _text(property_id)
     if sim is None or not property_key:
         return {"key": "", "label": "", "radius": 0, "score": 0.0}
-    prop = sim.properties.get(property_key)
+    prop = _resolve_property_record(sim, property_key)
     if not property_supports_business_reputation(prop):
         return {"key": "", "label": "", "radius": 0, "score": 0.0}
     snapshot = property_business_reputation_snapshot(sim, property_key)
@@ -849,7 +850,7 @@ def property_business_reputation_designations(sim, property_id):
     property_key = _text(property_id)
     if sim is None or not property_key:
         return ()
-    prop = sim.properties.get(property_key)
+    prop = _resolve_property_record(sim, property_key)
     if not property_supports_business_reputation(prop):
         return ()
 
@@ -1045,7 +1046,7 @@ class BusinessReputationSystem(System):
         tags=(),
         incident_id=None,
     ):
-        prop = self.sim.properties.get(_text(property_id))
+        prop = _resolve_property_record(self.sim, _text(property_id))
         if not property_supports_business_reputation(prop):
             return None
         knowledge = self._knowledge_for(eid, create=True)
@@ -1182,7 +1183,7 @@ class BusinessReputationSystem(System):
         property_id = _text(event.data.get("property_id"))
         if not property_id:
             return
-        prop = self.sim.properties.get(property_id)
+        prop = _resolve_property_record(self.sim, property_id)
         if not property_supports_business_reputation(prop):
             return
         gate = social_secret_site_trust_gate(prop)
@@ -1219,7 +1220,7 @@ class BusinessReputationSystem(System):
         property_id = _text(incident.get("property_id"))
         if not property_id:
             return
-        prop = self.sim.properties.get(property_id)
+        prop = _resolve_property_record(self.sim, property_id)
         if not property_supports_business_reputation(prop):
             return
 
@@ -1356,7 +1357,7 @@ class BusinessReputationSystem(System):
                     continue
                 if _manhattan(source_pos.x, source_pos.y, target_pos.x, target_pos.y) > 6:
                     continue
-                prop = self.sim.properties.get(property_id)
+                prop = _resolve_property_record(self.sim, property_id)
                 prop_point = _property_point(prop)
                 if prop_point is None:
                     continue

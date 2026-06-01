@@ -18,6 +18,11 @@ from game.property_doors import (
     _set_property_locked_override,
 )
 from game.property_access import property_access_controller as _property_access_controller
+from game.property_access import (
+    finance_services_for_property as _finance_services_for_property,
+    property_is_storefront as _property_is_storefront,
+    site_services_for_property as _site_services_for_property,
+)
 from game.property_keys import property_lock_state
 from game.property_runtime import (
     controller_access_requirement_text as _controller_access_requirement_text,
@@ -191,6 +196,76 @@ class PropertyActionRuntime:
             if focus and _manhattan(pos.x, pos.y, focus[0], focus[1]) <= 1:
                 return prop
         return None
+
+    def _emit_property_interact(self, eid, prop, *, interaction_mode=None, **extra):
+        payload = {
+            "eid": eid,
+            "property_id": prop["id"],
+            "x": prop["x"],
+            "y": prop["y"],
+            "z": prop["z"],
+        }
+        if interaction_mode:
+            payload["interaction_mode"] = str(interaction_mode).strip().lower()
+        if isinstance(extra, dict):
+            payload.update(extra)
+        self.sim.emit(Event("property_interact", **payload))
+
+    def _emit_interact_empty(self, eid, pos, *, interaction_mode=None):
+        payload = {
+            "eid": eid,
+            "x": pos.x,
+            "y": pos.y,
+            "z": pos.z,
+        }
+        if interaction_mode:
+            payload["interaction_mode"] = str(interaction_mode).strip().lower()
+        self.sim.emit(Event("interact_empty", **payload))
+
+    def _property_supports_services(self, prop):
+        if not isinstance(prop, dict):
+            return False
+        if _property_infrastructure_role(prop) == "service_terminal":
+            return True
+        if _property_is_storefront(prop):
+            return True
+        if _finance_services_for_property(prop):
+            return True
+        if _site_services_for_property(prop):
+            return True
+        services = [
+            str(service).strip().lower()
+            for service in list(prop.get("services", ()) or ())
+            if str(service).strip()
+        ]
+        return bool(services)
+
+    def same_space_service_property(self, pos):
+        candidates = []
+        seen = set()
+        for candidate in (
+            self.sim.property_at(pos.x, pos.y, pos.z),
+            _property_covering(self.sim, pos.x, pos.y, pos.z),
+        ):
+            if not isinstance(candidate, dict):
+                continue
+            prop_id = str(candidate.get("id", "")).strip()
+            if not prop_id or prop_id in seen:
+                continue
+            seen.add(prop_id)
+            if not self._property_supports_services(candidate):
+                continue
+            candidates.append(candidate)
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda prop: (
+                0 if _property_infrastructure_role(prop) == "service_terminal" else 1,
+                0 if int(prop.get("x", pos.x)) == int(pos.x) and int(prop.get("y", pos.y)) == int(pos.y) else 1,
+                str(prop.get("id", "")),
+            )
+        )
+        return candidates[0]
 
     def hard_traversal_property_at(self, pos):
         if pos is None:
@@ -438,14 +513,19 @@ class PropertyActionRuntime:
         )
         return True
 
-    def _emit_npc_interact(self, eid, npc_eid, pos):
+    def _emit_npc_interact(self, eid, npc_eid, pos, **extra):
+        payload = {
+            "eid": eid,
+            "npc_eid": npc_eid,
+            "x": pos.x,
+            "y": pos.y,
+            "z": pos.z,
+        }
+        if isinstance(extra, dict):
+            payload.update(extra)
         self.sim.emit(Event(
             "npc_interact",
-            eid=eid,
-            npc_eid=npc_eid,
-            x=pos.x,
-            y=pos.y,
-            z=pos.z,
+            **payload,
         ))
 
     def _door_candidate_for_player(self, eid, pos, *, preferred_dir=None):
@@ -482,17 +562,6 @@ class PropertyActionRuntime:
         if self._door_candidate_matches_direction(candidate, pos, preferred_dir) and not self._door_candidate_is_open(candidate):
             return self.handle_door_interaction(eid, pos)
 
-        npc_eid = self.action_system._npc_for_player_action(
-            eid,
-            pos,
-            radius=1,
-            preferred_dir=preferred_dir,
-            exact_direction=True,
-        )
-        if npc_eid is not None:
-            self._emit_npc_interact(eid, npc_eid, pos)
-            return True
-
         vehicle_prop = self.action_system._vehicle_for_player_action(
             eid=eid,
             pos=pos,
@@ -516,31 +585,11 @@ class PropertyActionRuntime:
             return False
 
         self.remember_player_property_discovery(eid, prop, discovery_mode="interact")
-        self.sim.emit(Event(
-            "property_interact",
-            eid=eid,
-            property_id=prop["id"],
-            x=prop["x"],
-            y=prop["y"],
-            z=prop["z"],
-        ))
+        self._emit_property_interact(eid, prop, interaction_mode="physical")
         return True
 
     def handle_interact_action(self, eid, pos, *, force_direction=False):
         if force_direction and self._force_interact_in_last_direction(eid, pos):
-            return
-
-        prop = self.hard_traversal_property_at(pos)
-        if prop:
-            self.remember_player_property_discovery(eid, prop, discovery_mode="interact")
-            self.sim.emit(Event(
-                "property_interact",
-                eid=eid,
-                property_id=prop["id"],
-                x=prop["x"],
-                y=prop["y"],
-                z=prop["z"],
-            ))
             return
 
         preferred_dir = self.action_system._player_interact_direction(eid, pos)
@@ -550,15 +599,6 @@ class PropertyActionRuntime:
             pos,
             preferred_dir=preferred_dir,
         )
-        npc_eid = None if prop else self.action_system._npc_for_player_action(
-            eid,
-            pos,
-            radius=1,
-            preferred_dir=preferred_dir,
-        )
-        if npc_eid is not None:
-            self._emit_npc_interact(eid, npc_eid, pos)
-            return
 
         if door_candidate and not self._door_candidate_is_open(door_candidate) and self.handle_door_interaction(eid, pos):
             return
@@ -582,18 +622,28 @@ class PropertyActionRuntime:
         if not prop:
             prop = self.property_for_player_action(pos, radius=1, actor_eid=eid)
         if not prop:
-            self.sim.emit(Event("interact_empty", eid=eid, x=pos.x, y=pos.y, z=pos.z))
+            self._emit_interact_empty(eid, pos, interaction_mode="physical")
             return
 
         self.remember_player_property_discovery(eid, prop, discovery_mode="interact")
-        self.sim.emit(Event(
-            "property_interact",
-            eid=eid,
-            property_id=prop["id"],
-            x=prop["x"],
-            y=prop["y"],
-            z=prop["z"],
-        ))
+        self._emit_property_interact(eid, prop, interaction_mode="physical")
+
+    def handle_service_interact_action(self, eid, pos):
+        prop = self.same_space_service_property(pos)
+        if not isinstance(prop, dict):
+            self._emit_interact_empty(eid, pos, interaction_mode="service")
+            return False
+        self.remember_player_property_discovery(eid, prop, discovery_mode="interact")
+        self._emit_property_interact(eid, prop, interaction_mode="service")
+        return True
+
+    def handle_talk_action(self, eid, pos):
+        npc_eid = self.action_system._talk_npc_for_player_action(eid, pos)
+        if npc_eid is None:
+            self._emit_interact_empty(eid, pos, interaction_mode="talk")
+            return False
+        self._emit_npc_interact(eid, npc_eid, pos, allow_distant=True)
+        return True
 
     def handle_purchase(self, eid, pos, *, target_property_id=None):
         context = self.purchase_context(eid, pos, target_property_id=target_property_id)

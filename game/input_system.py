@@ -269,7 +269,7 @@ class InputSystem(System):
             key_code = getattr(curses, key_name, None)
             if key_code is not None:
                 self.movement_keys[key_code] = delta
-        self.wait_keys = {ord("."), ord(" "), ord("5")}
+        self.wait_keys = {ord(" "), ord("5")}
         for wait_key_name in ("KEY_B2", "KEY_CENTER"):
             key_code = getattr(curses, wait_key_name, None)
             if key_code is not None:
@@ -2302,11 +2302,11 @@ class InputSystem(System):
             mode = zoom_mode
             self._emit_cursor_examine(announce=False)
 
-        if key in (ord("?"), ord("/")):
+        if key == ord("?"):
             self._help_state()["open"] = True
             return True
 
-        if key in (27, ord(";"), ord("Q")):
+        if key in (27, ord("Q")):
             if purpose == "backup_order":
                 dialog_state = self._dialog_state()
                 dialog_state["backup_cursor_pending_topic"] = ""
@@ -2367,21 +2367,21 @@ class InputSystem(System):
             if key in ENTER_KEYS:
                 self._emit_aimed_fire()
                 return True
-            if key in (ord("t"), ord("x"), ord("X")):
+            if key == ord("x"):
                 self._emit_cursor_examine(announce=True)
                 return True
             return True
 
         if purpose == "interact":
-            if key == ord("E"):
+            if key == ord(";"):
                 self._emit_turn_action("toggle_door_lock")
                 self._deactivate_look_mode()
                 return True
-            if key in ENTER_KEYS or key in (ord("t"), ord("T")):
+            if key in ENTER_KEYS or key == ord("'"):
                 self._emit_turn_action("interact", force_direction=True)
                 self._deactivate_look_mode()
                 return True
-            if key in (ord("x"), ord("X")):
+            if key == ord("x"):
                 self._emit_cursor_examine(announce=True)
                 return True
             return True
@@ -2390,12 +2390,12 @@ class InputSystem(System):
             if key in ENTER_KEYS or key in (ord("e"), ord("E")):
                 self._commit_dialog_backup_mark()
                 return True
-            if key in (ord("t"), ord("T"), ord("x"), ord("X")):
+            if key == ord("x"):
                 self._emit_cursor_examine(announce=True)
                 return True
             return True
 
-        if key in ENTER_KEYS or key in (ord("t"), ord("x"), ord("X")):
+        if key in ENTER_KEYS or key == ord("x"):
             self._emit_cursor_examine(announce=True)
             return True
 
@@ -3436,11 +3436,11 @@ class InputSystem(System):
             self._stop_auto_drive(reason="interrupted", announce=True)
 
         if help_state.get("open"):
-            if key in ENTER_KEYS or key in (27, ord("?"), ord("/"), ord("q"), ord("Q")):
+            if key in ENTER_KEYS or key in (27, ord("?"), ord("q"), ord("Q")):
                 help_state["open"] = False
             return
 
-        if key in (ord("?"), ord("/")) and not look_state.get("active"):
+        if key == ord("?") and not look_state.get("active"):
             help_state["open"] = True
             return
 
@@ -3480,10 +3480,6 @@ class InputSystem(System):
             self._refresh_character_ui(reset_scroll=True)
             return
 
-        if key in (ord("m"), ord("M")) and not state["open"] and not trade_state.get("open") and zoom_mode != "overworld":
-            self.sim.emit(Event("trade_panel_open_request", eid=self.player_eid, mode="buy", automated_only=True))
-            return
-
         if key in (ord("o"), ord("O")) and not state["open"] and not trade_state.get("open"):
             self._refresh_report_ui(reset_scroll=True)
             return
@@ -3492,7 +3488,7 @@ class InputSystem(System):
             self._refresh_known_locations_ui(reset_scroll=True)
             return
 
-        if key == ord("Z") and not state["open"] and not trade_state.get("open") and zoom_mode != "overworld":
+        if key == ord("X") and not state["open"] and not trade_state.get("open") and zoom_mode != "overworld":
             self._emit_player_action("zoom_overworld", consume_turn=False)
             return
 
@@ -3516,7 +3512,7 @@ class InputSystem(System):
             if key not in (ord("q"), ord("Q")):
                 return
 
-        if key in (ord("X"), ord(";")):
+        if key == ord("x") and zoom_mode != "overworld":
             self._activate_look_mode(zoom_mode=zoom_mode, purpose="inspect")
             return
 
@@ -3595,16 +3591,21 @@ class InputSystem(System):
             self._emit_turn_action("toggle_sneak")
             return
 
-        if key == ord("E"):
+        if key == ord(";"):
             self._emit_turn_action("toggle_door_lock")
             return
 
-        if key == ord("t"):
-            self._activate_adjacent_interact_helper(zoom_mode)
+        if key == ord("/"):
+            self._emit_player_action("talk", consume_turn=False)
             return
 
-        if key == ord("T"):
-            self._emit_turn_action("interact", force_direction=True)
+        if key == ord("."):
+            self._emit_player_action("service_interact", consume_turn=False)
+            return
+
+        if key == ord("'"):
+            if not self._activate_adjacent_interact_helper(zoom_mode):
+                self._emit_turn_action("interact")
             return
 
         if key == ord("J"):
@@ -3619,7 +3620,7 @@ class InputSystem(System):
             self._emit_turn_action("forced_breach")
             return
 
-        if key in (ord("g"), ord("G")):
+        if key == ord(","):
             self._emit_turn_action("pickup_item")
             return
 
@@ -3631,20 +3632,8 @@ class InputSystem(System):
             self._emit_turn_action("use_item")
             return
 
-        if key == ord("x"):
-            self._emit_turn_action("scan")
-            return
-
         if key in (ord("p"), ord("P")):
             self._emit_turn_action("purchase_property")
-            return
-
-        if key in (ord("b"), ord("B")):
-            self._emit_player_action("banking", consume_turn=False)
-            return
-
-        if key in (ord("n"), ord("N")):
-            self._emit_turn_action("insurance")
             return
 
         if key == ord("v"):

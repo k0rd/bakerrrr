@@ -16,6 +16,7 @@ from game.property_runtime import (
     property_distance as _property_distance,
     property_infrastructure_role as _property_infrastructure_role,
     property_is_storefront as _property_is_storefront,
+    resolve_property_record as _resolve_property_record,
 )
 from game.run_pressure import pressure_snapshot as _pressure_snapshot
 from game.skills import insurance_skill_terms as _insurance_skill_terms
@@ -475,7 +476,7 @@ class FinanceSystem(System):
         if account_kind == "business":
             business_prop = None
             if business_property_id:
-                business_prop = self.sim.properties.get(business_property_id)
+                business_prop = _resolve_property_record(self.sim, business_property_id)
             if not _property_supports_player_business(business_prop):
                 pos = self._position_for(eid)
                 owned_businesses = _player_owned_businesses_for_actor(self.sim, eid, pos=pos)
@@ -1021,6 +1022,9 @@ class FinanceSystem(System):
         if eid != self.player_eid:
             return
         if bool(event.data.get("handled")):
+            return
+        interaction_mode = str(event.data.get("interaction_mode", "") or "").strip().lower()
+        if interaction_mode and interaction_mode != "service":
             return
 
         prop = self.sim.properties.get(event.data.get("property_id"))
