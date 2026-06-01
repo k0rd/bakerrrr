@@ -65,6 +65,7 @@ from game.components import (
     WeaponLoadout,
     WeaponUseProfile,
 )
+from game.run_echoes import maybe_seed_run_echo_for_chunk
 from game.final_operation import (
     active_final_operation_target_property_id,
     ensure_final_operation_unlocked,
@@ -957,6 +958,7 @@ class WorldStreamingSystem(System):
 
         self.sim.chunk_property_records[key] = records
         maybe_seed_bones_for_chunk(self.sim, chunk)
+        maybe_seed_run_echo_for_chunk(self.sim, chunk)
 
     def _ensure_chunk_population(self, cx, cy):
         key = (int(cx), int(cy))
@@ -4052,7 +4054,7 @@ class FinalOperationSystem(System):
         self.sim.events.subscribe("item_picked_up", self.on_item_picked_up)
 
     def _conclude_run(self, *, outcome, reason, objective_title, summary_lines):
-        archive_failed_run_bones(
+        bones_record = archive_failed_run_bones(
             self.sim,
             self.player_eid,
             outcome=outcome,
@@ -4074,6 +4076,8 @@ class FinalOperationSystem(System):
         run_end["summary_lines"] = [str(line).strip() for line in (summary_lines or ()) if str(line).strip()]
         run_end["tick"] = int(getattr(self.sim, "tick", 0))
         run_end["show_post_curses"] = True
+        run_end["bones_archived"] = bool(isinstance(bones_record, dict))
+        run_end["bones_record_id"] = str((bones_record or {}).get("record_id", "")).strip() if isinstance(bones_record, dict) else ""
 
         self.sim.emit(Event(
             "run_concluded",

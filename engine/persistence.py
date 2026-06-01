@@ -34,6 +34,7 @@ def _inventory_item_instance_ids_from_sim(sim):
 SAVE_VERSION = 1
 SAVE_DIR = Path(__file__).resolve().parents[1] / "saves"
 BONES_ARCHIVE_PATH = SAVE_DIR / "bones.json"
+RUN_ECHOES_ARCHIVE_PATH = SAVE_DIR / "run_echoes.json"
 _EXCLUDED_SIM_STATE_KEYS = {
     "events",
     "systems",
@@ -187,9 +188,7 @@ def _json_safe(value):
     return str(value)
 
 
-def load_bones_archive(archive_path=BONES_ARCHIVE_PATH):
-    if archive_path is None:
-        archive_path = BONES_ARCHIVE_PATH
+def _load_record_archive(archive_path):
     path = Path(archive_path)
     if not path.exists():
         return []
@@ -205,9 +204,7 @@ def load_bones_archive(archive_path=BONES_ARCHIVE_PATH):
     return [entry for entry in payload if isinstance(entry, dict)]
 
 
-def save_bones_archive(records, archive_path=BONES_ARCHIVE_PATH, max_records=64):
-    if archive_path is None:
-        archive_path = BONES_ARCHIVE_PATH
+def _save_record_archive(records, *, archive_path, max_records=64):
     path = Path(archive_path)
     clean_records = [_json_safe(entry) for entry in records if isinstance(entry, dict)]
     if max_records is not None and int(max_records) > 0:
@@ -223,21 +220,55 @@ def save_bones_archive(records, archive_path=BONES_ARCHIVE_PATH, max_records=64)
     return path
 
 
-def append_bones_record(record, archive_path=BONES_ARCHIVE_PATH, max_records=64):
+def _append_record_archive(record, *, archive_path, max_records=64, id_key="record_id"):
     if not isinstance(record, dict):
         return None
-    if archive_path is None:
-        archive_path = BONES_ARCHIVE_PATH
-    records = load_bones_archive(archive_path=archive_path)
-    record_id = str(record.get("record_id", "") or "").strip()
+    records = _load_record_archive(archive_path)
+    record_id = str(record.get(str(id_key or "record_id"), "") or "").strip()
     if record_id:
         records = [
             entry
             for entry in records
-            if str(entry.get("record_id", "") or "").strip() != record_id
+            if str(entry.get(str(id_key or "record_id"), "") or "").strip() != record_id
         ]
     records.append(record)
-    return save_bones_archive(records, archive_path=archive_path, max_records=max_records)
+    return _save_record_archive(records, archive_path=archive_path, max_records=max_records)
+
+
+def load_bones_archive(archive_path=BONES_ARCHIVE_PATH):
+    if archive_path is None:
+        archive_path = BONES_ARCHIVE_PATH
+    return _load_record_archive(archive_path)
+
+
+def load_run_echoes_archive(archive_path=RUN_ECHOES_ARCHIVE_PATH):
+    if archive_path is None:
+        archive_path = RUN_ECHOES_ARCHIVE_PATH
+    return _load_record_archive(archive_path)
+
+
+def save_bones_archive(records, archive_path=BONES_ARCHIVE_PATH, max_records=64):
+    if archive_path is None:
+        archive_path = BONES_ARCHIVE_PATH
+    return _save_record_archive(records, archive_path=archive_path, max_records=max_records)
+
+
+def save_run_echoes_archive(records, archive_path=RUN_ECHOES_ARCHIVE_PATH, max_records=64):
+    if archive_path is None:
+        archive_path = RUN_ECHOES_ARCHIVE_PATH
+    return _save_record_archive(records, archive_path=archive_path, max_records=max_records)
+
+
+def append_bones_record(record, archive_path=BONES_ARCHIVE_PATH, max_records=64):
+    if archive_path is None:
+        archive_path = BONES_ARCHIVE_PATH
+    return _append_record_archive(record, archive_path=archive_path, max_records=max_records, id_key="record_id")
+
+
+def append_run_echo_record(record, archive_path=RUN_ECHOES_ARCHIVE_PATH, max_records=64):
+    if archive_path is None:
+        archive_path = RUN_ECHOES_ARCHIVE_PATH
+    return _append_record_archive(record, archive_path=archive_path, max_records=max_records, id_key="echo_id")
 
 
 def _chunk_key(value):

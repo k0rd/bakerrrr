@@ -31,6 +31,7 @@ from game.items import ITEM_CATALOG
 from game.justice_runtime import justice_summary_rows
 from game.organization_reputation import top_organization_snapshots
 from game.property_runtime import property_covering as _property_covering
+from game.run_echoes import archive_run_echoes
 from game.run_pressure import pressure_snapshot
 from game.system_support.entity_naming import _entity_display_name
 from game.weapons import weapon_by_id
@@ -539,6 +540,18 @@ class RunEpilogueLedgerSystem(System):
         lines = self.build_summary_lines(outcome=str(event.data.get("outcome", "") or ""))
         if not lines:
             return
+        echo_result = archive_run_echoes(
+            self.sim,
+            self.player_eid,
+            outcome=str(event.data.get("outcome", "") or ""),
+            reason=str(event.data.get("reason", "") or ""),
+            objective_title=str(event.data.get("objective_title", "") or ""),
+            summary_lines=tuple(event.data.get("summary_lines", ()) or ()),
+        )
+        echo_lines = list((echo_result or {}).get("lines", ()) or ())
+        echo_records = list((echo_result or {}).get("records", ()) or ())
+        if echo_lines:
+            lines = list(lines) + echo_lines
         traits = getattr(self.sim, "world_traits", None)
         if not isinstance(traits, dict):
             self.sim.world_traits = {}
@@ -550,6 +563,8 @@ class RunEpilogueLedgerSystem(System):
         existing = [str(line).strip() for line in run_end.get("summary_lines", ()) if str(line).strip()]
         run_end["summary_lines"] = existing + lines
         run_end["epilogue_lines"] = list(lines)
+        run_end["echo_lines"] = list(echo_lines)
+        run_end["echo_records"] = list(echo_records)
         self._record("run_epilogue_rendered", "The run epilogue was rendered.", event, weight=0.0)
 
     # ------------------------------------------------------------------

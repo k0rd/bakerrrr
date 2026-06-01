@@ -118,6 +118,7 @@ from game.opportunities import (
     seed_run_opportunities,
     stage_active_opportunities,
 )
+from game.run_echoes import strongest_active_run_echo_for_chunk
 from engine.systems import System
 from game.skills import (
     access_prep_skill_terms as _access_prep_skill_terms,
@@ -5154,6 +5155,23 @@ class NPCInteractionSystem(System):
         local_source = ""
         detail_line = ""
         detail_label = "Tell me more."
+        active_run_echo = self._active_run_echo_for_dialogue_context(npc_pos, current_prop=current_prop)
+        run_echo_line = self._run_echo_local_line(
+            active_run_echo,
+            role_id=role_id,
+            guarded=guarded,
+            owner_place_name=owner_place_name,
+            workplace_name=str(workplace_prop.get("name", workplace_prop.get("id", "place"))).strip() if workplace_prop else "",
+            home_name=str(home_prop.get("name", home_prop.get("id", "home"))).strip() if home_prop else "",
+        )
+        run_echo_history_line = self._run_echo_history_line(
+            active_run_echo,
+            role_id=role_id,
+            guarded=guarded,
+            owner_place_name=owner_place_name,
+            workplace_name=str(workplace_prop.get("name", workplace_prop.get("id", "place"))).strip() if workplace_prop else "",
+            home_name=str(home_prop.get("name", home_prop.get("id", "home"))).strip() if home_prop else "",
+        )
         scene_local_line = str((scene_note or {}).get("local_line", "") or "").strip() if isinstance(scene_note, dict) else ""
         scene_detail_line = str((scene_note or {}).get("detail_line", "") or "").strip() if isinstance(scene_note, dict) else ""
         if scene_local_line or scene_detail_line:
@@ -5167,6 +5185,10 @@ class NPCInteractionSystem(System):
             local_source = "opportunity"
             detail_line = opportunity_detail or opportunity_summary
             detail_label = "Any specifics on that?"
+        elif run_echo_line:
+            local_source = "run_echo"
+            detail_line = run_echo_line
+            detail_label = "What do people remember?"
         elif other_name:
             local_source = "other"
             detail_line = f"Try {other_name}. They hear more than I do."
@@ -5351,6 +5373,9 @@ class NPCInteractionSystem(System):
             "other_name": other_name,
             "other_relation": other_relation,
             "rumor_line": rumor_line,
+            "active_run_echo": dict(active_run_echo) if isinstance(active_run_echo, dict) else {},
+            "run_echo_line": run_echo_line,
+            "run_echo_history_line": run_echo_history_line,
             "objective_id": str((objective_eval or {}).get("id", "")).strip().lower(),
             "objective_title": objective_title,
             "objective_next_step": objective_next_step,
@@ -5463,6 +5488,83 @@ class NPCInteractionSystem(System):
         context["dialogue_shape"] = _build_dialogue_shape(self.sim, npc_eid, context=context)
         return context
 
+    def _active_run_echo_for_dialogue_context(self, npc_pos, *, current_prop=None):
+        chunk_key = None
+        if isinstance(current_prop, dict):
+            try:
+                chunk_key = self.sim.chunk_coords(int(current_prop.get("x", 0)), int(current_prop.get("y", 0)))
+            except Exception:
+                chunk_key = None
+        if chunk_key is None and npc_pos is not None:
+            try:
+                chunk_key = self.sim.chunk_coords(int(npc_pos.x), int(npc_pos.y))
+            except Exception:
+                chunk_key = None
+        if chunk_key is None:
+            return None
+        return strongest_active_run_echo_for_chunk(self.sim, chunk_key)
+
+    def _run_echo_case_label(self, echo):
+        if not isinstance(echo, dict):
+            return ""
+        for key in ("property_name", "subject_name", "victim_name", "summary"):
+            value = str(echo.get(key, "") or "").strip()
+            if value:
+                return value
+        return "that old case"
+
+    def _run_echo_local_line(
+        self,
+        echo,
+        *,
+        role_id="",
+        guarded=False,
+        owner_place_name="",
+        workplace_name="",
+        home_name="",
+    ):
+        if not isinstance(echo, dict):
+            return ""
+        rumor_text = str(echo.get("rumor_text", "") or "").strip()
+        summary = str(echo.get("summary", "") or "").strip()
+        case_label = self._run_echo_case_label(echo)
+        role_id = str(role_id or "").strip().lower()
+        if guarded or role_id in {"guard", "scout", "cop", "peace_officer", "security"}:
+            place_name = str(owner_place_name or workplace_name or "the block").strip()
+            return f"{rumor_text or summary} Since then people around {place_name} read strangers a little harder."
+        if workplace_name:
+            return f"{rumor_text or summary} It still comes up around {workplace_name}."
+        if home_name:
+            return f"{rumor_text or summary} People around {home_name} still bring it up."
+        if rumor_text:
+            return rumor_text
+        if summary:
+            return summary
+        return f"People here still bring up {case_label}."
+
+    def _run_echo_history_line(
+        self,
+        echo,
+        *,
+        role_id="",
+        guarded=False,
+        owner_place_name="",
+        workplace_name="",
+        home_name="",
+    ):
+        if not isinstance(echo, dict):
+            return ""
+        case_label = self._run_echo_case_label(echo)
+        role_id = str(role_id or "").strip().lower()
+        if guarded or role_id in {"guard", "scout", "cop", "peace_officer", "security"}:
+            place_name = str(owner_place_name or workplace_name or "this block").strip()
+            return f"I was around when {case_label} made {place_name} feel tighter."
+        if workplace_name:
+            return f"I have been here long enough to remember when people at {workplace_name} started talking about {case_label} like a warning."
+        if home_name:
+            return f"I have been here long enough to remember when {case_label} started sticking to {home_name}."
+        return f"I have been here long enough to remember when {case_label} started sticking to the block."
+
     def _history_summary(self, context):
         if context.get("is_rival_operator"):
             hustle = str(context.get("rival_hustle", "")).strip().lower()
@@ -5491,19 +5593,25 @@ class NPCInteractionSystem(System):
         workplace_name = str(context.get("workplace_name", "")).strip()
         home_name = str(context.get("home_name", "")).strip()
         other_name = str(context.get("other_name", "")).strip()
+        run_echo_history_line = str(context.get("run_echo_history_line", "")).strip()
+        base_line = ""
         if context.get("guarded") and owner_place_name:
-            return f"I have been around {owner_place_name} long enough to know who belongs near it."
-        if workplace_name and home_name and workplace_name.lower() != home_name.lower():
-            return f"Long enough that {workplace_name} is work and {home_name} is home."
-        if home_name:
-            return f"Long enough that {home_name} feels like home."
-        if workplace_name:
-            return f"Long enough that {workplace_name} stopped feeling new."
-        if owner_place_name:
-            return f"Long enough to know the rhythm around {owner_place_name}."
-        if other_name:
-            return f"Long enough to know {other_name} and a few other faces."
-        return "Long enough to recognize the regulars."
+            base_line = f"I have been around {owner_place_name} long enough to know who belongs near it."
+        elif workplace_name and home_name and workplace_name.lower() != home_name.lower():
+            base_line = f"Long enough that {workplace_name} is work and {home_name} is home."
+        elif home_name:
+            base_line = f"Long enough that {home_name} feels like home."
+        elif workplace_name:
+            base_line = f"Long enough that {workplace_name} stopped feeling new."
+        elif owner_place_name:
+            base_line = f"Long enough to know the rhythm around {owner_place_name}."
+        elif other_name:
+            base_line = f"Long enough to know {other_name} and a few other faces."
+        else:
+            base_line = "Long enough to recognize the regulars."
+        if run_echo_history_line:
+            return f"{base_line} {run_echo_history_line}"
+        return base_line
 
     def _routine_summary(self, context, *, quality=None):
         quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "routine")

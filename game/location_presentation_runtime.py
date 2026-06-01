@@ -235,6 +235,8 @@ def _infrastructure_role_label(role):
     return {
         "access_panel": "access panel",
         "bones_stash": "stash",
+        "run_echo_notice": "notice",
+        "run_echo_stash": "stash",
         "security_post": "security post",
         "service_terminal": "service terminal",
     }.get(role_key, role_key.replace("_", " "))

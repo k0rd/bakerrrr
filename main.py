@@ -74,6 +74,7 @@ from game.organizations import (
 )
 from game.population import human_max_hp_for_role, seed_chunk_items, seed_npc_finance, spawn_chunk_npcs
 from game.player_businesses import PlayerBusinessSystem
+from game.run_echoes import maybe_seed_run_echo_for_chunk, prime_run_echoes_runtime
 from game.systems_incidents import IncidentKnowledgeSystem
 from game.systems_business_reputation import BusinessReputationSystem
 from game.vehicles import (
@@ -1134,6 +1135,7 @@ def _run_new_game(view, character_name):
         "final_op_downed_fails_run": bool(final_op_downed_fails_run),
     }
     prime_bones_runtime(sim)
+    prime_run_echoes_runtime(sim)
     run_nonce = random.SystemRandom().randrange(1, 1_000_000_000)
     run_rng = random.Random(run_nonce)
     start_chunk_cx, start_chunk_cy = _pick_playtest_start_chunk(sim, run_rng)
@@ -1147,6 +1149,7 @@ def _run_new_game(view, character_name):
     sim.chunk_property_records[(sim.active_chunk["cx"], sim.active_chunk["cy"])] = list(property_records)
     world_item_count = _seed_world_items(sim, property_records)
     maybe_seed_bones_for_chunk(sim, sim.active_chunk)
+    maybe_seed_run_echo_for_chunk(sim, sim.active_chunk)
     sim.world_traits["local_economy"] = chunk_economy_profile(sim, sim.active_chunk)
     sim.world_traits["playtest_start"] = {
         "nonce": run_nonce,
@@ -2157,6 +2160,7 @@ def _run_loaded_game(view, character_name):
     sim = load_character_run(character_name, delete_on_load=False)
     sim.character_name = normalize_character_name(character_name) or getattr(sim, "character_name", None)
     prime_bones_runtime(sim)
+    prime_run_echoes_runtime(sim)
     if not isinstance(getattr(sim, "world_traits", None), dict):
         sim.world_traits = {}
     if sim.character_name:

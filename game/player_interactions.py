@@ -417,7 +417,9 @@ class PlayerInteractionRuntime:
     def container_panel_note(self, prop, *, container_kind=None):
         container_kind = str(container_kind or "container").strip().lower() or "container"
         if container_kind == "cache":
-            return self.cache_panel_mission_note(prop)
+            note = self.cache_panel_mission_note(prop)
+            if note:
+                return note
         if container_kind == "bones":
             metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), dict) else {}
             note = str(metadata.get("bones_note", "") or "").strip()
@@ -445,6 +447,16 @@ class PlayerInteractionRuntime:
             pos,
             "cache_target",
             "bones_stash",
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
+
+    def nearest_run_echo_fixture(self, eid, pos, *, preferred_dir=None, exact_direction=False):
+        return self._nearest_fixture_by_role(
+            eid,
+            pos,
+            "run_echo_notice",
+            "run_echo_stash",
             preferred_dir=preferred_dir,
             exact_direction=exact_direction,
         )
@@ -513,6 +525,24 @@ class PlayerInteractionRuntime:
     def player_interact_business_scene_cache(self, eid, pos, prop):
         metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), dict) else {}
         container_kind = str(metadata.get("container_kind", "scene") or "scene").strip().lower() or "scene"
+        container_label = str(
+            metadata.get("container_label", self.container_label(container_kind)) or self.container_label(container_kind)
+        ).strip() or self.container_label(container_kind)
+        self.open_property_container_ui(
+            eid,
+            prop,
+            container_kind=container_kind,
+            container_label=container_label,
+        )
+
+    def player_interact_run_echo(self, eid, pos, prop):
+        del pos
+        metadata = prop.get("metadata") if isinstance((prop or {}).get("metadata"), dict) else {}
+        infrastructure_role = _property_infrastructure_role(prop)
+        if infrastructure_role == "run_echo_stash":
+            container_kind = str(metadata.get("container_kind", "cache") or "cache").strip().lower() or "cache"
+        else:
+            container_kind = str(metadata.get("container_kind", "container") or "container").strip().lower() or "container"
         container_label = str(
             metadata.get("container_label", self.container_label(container_kind)) or self.container_label(container_kind)
         ).strip() or self.container_label(container_kind)
@@ -859,6 +889,15 @@ class PlayerInteractionRuntime:
         )
         if business_scene_cache is not None:
             self.player_interact_business_scene_cache(eid, pos, business_scene_cache)
+            return
+        run_echo_fixture = self.nearest_run_echo_fixture(
+            eid,
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
+        if run_echo_fixture is not None:
+            self.player_interact_run_echo(eid, pos, run_echo_fixture)
             return
         cache_prop = self.nearest_cache_fixture(
             eid,

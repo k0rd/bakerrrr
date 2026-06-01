@@ -14,6 +14,7 @@ from game.components import (
 from game.incident_runtime import incident_records
 from game.items import ITEM_CATALOG, ITEM_QUALITY_TIERS, item_condition_profile, normalize_item_quality
 from game.org_names import generate_organization_name
+from game.run_echoes import incident_echo_caution_for_property
 
 
 RESIDENTIAL_ARCHETYPES = {
@@ -6285,6 +6286,7 @@ def local_protective_pressure_snapshot(sim, prop, *, current_tick=None):
         ) >= tick - PROTECTIVE_PRESSURE_RESPONSE_TICKS
     )
     response_rows = _recent_protective_history_rows(sim, prop, current_tick=tick)
+    echo_caution = incident_echo_caution_for_property(sim, prop)
     watchfulness = 0
     for row in watch_rows:
         action = _text(row.get("action")).lower()
@@ -6310,9 +6312,10 @@ def local_protective_pressure_snapshot(sim, prop, *, current_tick=None):
         + (dispatch_count * 5)
         + (len(response_rows) * 4),
     )
+    echo_watchfulness_bonus = _safe_int(echo_caution.get("watchfulness_bonus"), default=0)
     watchfulness = max(
         watchfulness,
-        min(100, watchfulness + watchfulness_bonus + official_pressure),
+        min(100, watchfulness + watchfulness_bonus + official_pressure + echo_watchfulness_bonus),
     )
     readiness_tier = int(
         max(
@@ -6364,6 +6367,9 @@ def local_protective_pressure_snapshot(sim, prop, *, current_tick=None):
         reason_tags.append("official_incidents")
     if response_rows:
         reason_tags.append("recent_response")
+    if bool(echo_caution.get("active")):
+        reason_tags.append("incident_echo")
+        note_texts = _briefing_note_texts(note_texts, tuple(echo_caution.get("note_texts", ()) or ()))
     merged_notes = _briefing_note_texts(note_texts)
     result = {
         "active": bool(state_key),
@@ -6384,6 +6390,7 @@ def local_protective_pressure_snapshot(sim, prop, *, current_tick=None):
         "report_conversion_bonus": float(report_conversion_bonus),
         "dispatch_bonus": float(dispatch_bonus),
         "response_followthrough_bonus": float(followthrough_bonus),
+        "incident_echo_count": _safe_int(echo_caution.get("incident_echo_count"), default=0),
         "reason_tags": tuple(reason_tags),
         "note_texts": merged_notes,
         "note_text": "; ".join(merged_notes),
