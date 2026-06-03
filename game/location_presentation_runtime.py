@@ -62,7 +62,10 @@ from game.property_runtime import (
     viewer_property_credential_status as _viewer_property_credential_status,
     viewer_revealed_building_id as _viewer_revealed_building_id,
 )
-from game.report_runtime import build_known_locations_report as _report_runtime_build_known_locations_report
+from game.report_runtime import (
+    build_known_locations_report as _report_runtime_build_known_locations_report,
+    build_known_people_report as _report_runtime_build_known_people_report,
+)
 from game.semantic_catalog import get_runtime_semantic_catalog
 from game.service_runtime import _int_or_default, _storefront_service_profile
 from game.skills import access_prep_skill_terms as _access_prep_skill_terms
@@ -397,6 +400,14 @@ def _build_known_locations_report(sim, player_eid, limit=None, include_hidden=Fa
         infrastructure_role_label_fn=_infrastructure_role_label,
         storefront_illegal_goods_signal_fn=_storefront_illegal_goods_signal,
         property_legend_line_fn=_property_legend_line,
+    )
+
+
+def _build_known_people_report(sim, player_eid, limit=None):
+    return _report_runtime_build_known_people_report(
+        sim,
+        player_eid,
+        limit=limit,
     )
 
 

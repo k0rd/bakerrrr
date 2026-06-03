@@ -305,6 +305,8 @@ from game.ui_text_runtime import (
     _hud_log_lines,
     _known_location_detail_lines,
     _known_location_list_line,
+    _known_person_detail_lines,
+    _known_person_list_line,
     _line_segments,
     _line_text,
     _line_with_prefix,
@@ -2856,6 +2858,8 @@ class RenderSystem(System):
                 line_text_fn=_line_text,
                 known_location_list_line_fn=_known_location_list_line,
                 known_location_detail_lines_fn=_known_location_detail_lines,
+                known_person_list_line_fn=_known_person_list_line,
+                known_person_detail_lines_fn=_known_person_detail_lines,
             )
         elif log_ui.get("open"):
             panel_w = min(max(56, screen_w - 4), screen_w)

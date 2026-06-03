@@ -9,12 +9,30 @@ from __future__ import annotations
 
 import random
 
-from game.components import AI, CreatureIdentity, IncidentKnowledge, Position
+from game.components import AI, CreatureIdentity, IncidentKnowledge, NPCMemory, NPCNeeds, NPCSocial, NPCTraits, Occupation, Position
+from game.human_identity import is_human_identity, normalize_gender_identity, pronoun_format_slots
 from game.incident_runtime import incident_record
 
 
 _AUTHORITY_ROLES = {"guard", "security", "officer", "police", "deputy", "marshal"}
 _SERVICE_ROLES = {"clerk", "cashier", "merchant", "shopkeeper", "manager", "worker"}
+_RAPPORT_REACTION_TOPICS = {"rapport", "check_in", "day_feel", "job_feel", "roots", "off_shift", "care_about", "read_player"}
+_MISSTEP_REACTION_TOPICS = {"pry", "insult", "weird"}
+_SOCIAL_ACCESS_REACTION_TOPICS = {"contacts", "introduction", "vouch"}
+_DEEP_REACTION_TOPICS = {"care_about", "read_player"}
+_REFLECTIVE_REACTION_TOPICS = {"job_feel", "roots"}
+_LIGHT_REACTION_TOPICS = {"rapport", "check_in", "day_feel", "off_shift"}
+_TRIVIAL_RELATIONSHIP_EPISODES = {"met_directly", "introduced_to_me"}
+_POSITIVE_RELATIONSHIP_EPISODES = {
+    "opened_up_about_work",
+    "opened_up_about_roots",
+    "opened_up_personally",
+    "told_me_how_they_see_me",
+    "offered_contact",
+    "offered_introduction",
+    "offered_vouch",
+}
+_NEGATIVE_RELATIONSHIP_EPISODES = {"warned_me_off", "i_pushed_too_far", "i_insulted_them"}
 
 
 def _text(value, default=""):
@@ -34,6 +52,14 @@ def _int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _clamp01(value):
+    return max(0.0, min(1.0, _float(value, 0.0)))
+
+
+def _seeded_unit(seed_text):
+    return random.Random(str(seed_text or "0")).random()
 
 
 def _entity_name(sim, eid, *, fallback="someone"):
@@ -98,6 +124,25 @@ def _incident_label(record, incident):
     if kind == "action_offense" or "violence" in tags or "assault" in tags:
         return "violence"
     return kind.replace("_", " ") if kind else category.replace("_", " ") if category else "trouble"
+
+
+def _rapport_chunk_profile(sim, npc_eid, context):
+    context = context if isinstance(context, dict) else {}
+    area_type = _text(context.get("area_type", "")).lower()
+    district_type = _text(context.get("district_type", "")).lower()
+    if area_type and district_type:
+        return area_type, district_type
+    pos = sim.ecs.get(Position).get(npc_eid) if sim is not None else None
+    if pos is not None and hasattr(sim, "world") and hasattr(sim, "chunk_coords"):
+        try:
+            chunk = sim.world.get_chunk(*sim.chunk_coords(int(pos.x), int(pos.y)))
+        except Exception:
+            chunk = {}
+        district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+        if isinstance(district, dict):
+            area_type = area_type or _text(district.get("area_type", "city")).lower() or "city"
+            district_type = district_type or _text(district.get("district_type", "unknown")).lower() or "unknown"
+    return area_type or "city", district_type or "unknown"
 
 
 def _best_incident_context(sim, npc_eid):
@@ -220,6 +265,548 @@ def build_dialogue_shape(sim, npc_eid, *, context=None):
         rng.shuffle(shape["opening_lines"])
     shape["opening_lines"] = tuple(line for line in shape["opening_lines"] if _text(line))[:2]
     return shape
+
+
+def build_rapport_shape(sim, npc_eid, *, context=None):
+    """Return a lightweight deterministic conversational-style profile."""
+    context = dict(context or {})
+    identity = sim.ecs.get(CreatureIdentity).get(npc_eid)
+    if not is_human_identity(identity):
+        return {}
+
+    ai = context.get("ai") or sim.ecs.get(AI).get(npc_eid)
+    occupation = context.get("occupation") or sim.ecs.get(Occupation).get(npc_eid)
+    needs = context.get("npc_needs") or sim.ecs.get(NPCNeeds).get(npc_eid)
+    traits = context.get("npc_traits") or sim.ecs.get(NPCTraits).get(npc_eid) or NPCTraits()
+    role_id = _text(getattr(ai, "role", context.get("role_id", "local"))).lower() or "local"
+    career_text = _text(getattr(occupation, "career", context.get("career_text", ""))).lower()
+    gender_identity = normalize_gender_identity(getattr(identity, "gender_identity", ""), default="nonbinary")
+    area_type, district_type = _rapport_chunk_profile(sim, npc_eid, context)
+    seed_base = (
+        f"{getattr(sim, 'seed', 0)}:rapport:{npc_eid}:{gender_identity}:"
+        f"{role_id}:{career_text}:{area_type}:{district_type}"
+    )
+
+    empathy = _clamp01(getattr(traits, "empathy", 0.5))
+    discipline = _clamp01(getattr(traits, "discipline", 0.5))
+    bravery = _clamp01(getattr(traits, "bravery", 0.5))
+    social_need = _float(getattr(needs, "social", 55.0), 55.0)
+    energy_need = _float(getattr(needs, "energy", 60.0), 60.0)
+    safety_need = _float(getattr(needs, "safety", 70.0), 70.0)
+    social_hunger = _clamp01((52.0 - social_need) / 52.0)
+    fatigue = _clamp01((46.0 - energy_need) / 46.0)
+    safety_stress = _clamp01((54.0 - safety_need) / 54.0)
+    guarded = bool(context.get("guarded"))
+    pressure_tier = _text(context.get("pressure_tier", "low")).lower() or "low"
+    pressure_penalty = {
+        "low": 0.0,
+        "medium": 0.06,
+        "high": 0.14,
+    }.get(pressure_tier, 0.0)
+
+    role_pride_bonus = 0.0
+    if role_id in {"guard", "security", "officer", "manager"}:
+        role_pride_bonus += 0.1
+    elif role_id in {"worker", "merchant", "clerk", "shopkeeper"}:
+        role_pride_bonus += 0.06
+
+    local_bonus = 0.0
+    if role_id in {"resident", "neighbor"}:
+        local_bonus += 0.16
+    if context.get("home_name"):
+        local_bonus += 0.12
+    if context.get("workplace_name"):
+        local_bonus += 0.08
+
+    chattiness = _clamp01(
+        0.16
+        + (_seeded_unit(f"{seed_base}:chat") * 0.56)
+        + (empathy * 0.16)
+        - (discipline * 0.08)
+        + (social_hunger * 0.18)
+        - (0.11 if guarded else 0.0)
+        - pressure_penalty
+    )
+    privacy = _clamp01(
+        0.18
+        + (_seeded_unit(f"{seed_base}:privacy") * 0.58)
+        + (discipline * 0.12)
+        + (safety_stress * 0.18)
+        + (0.14 if guarded else 0.0)
+        - (social_hunger * 0.08)
+    )
+    profession_pride = _clamp01(
+        0.14
+        + (_seeded_unit(f"{seed_base}:pride") * 0.56)
+        + role_pride_bonus
+        + (discipline * 0.14)
+        + (0.08 if career_text else 0.0)
+        - (fatigue * 0.08)
+    )
+    local_attachment = _clamp01(
+        0.12
+        + (_seeded_unit(f"{seed_base}:local") * 0.54)
+        + local_bonus
+        - (0.06 if district_type in {"tourist", "transit"} else 0.0)
+    )
+    playfulness = _clamp01(
+        0.08
+        + (_seeded_unit(f"{seed_base}:play") * 0.58)
+        + (empathy * 0.12)
+        - (discipline * 0.08)
+        - (fatigue * 0.1)
+        - (safety_stress * 0.1)
+        - pressure_penalty
+    )
+
+    mood_score = _clamp01(
+        0.28
+        + (_seeded_unit(f"{seed_base}:mood") * 0.34)
+        + (social_hunger * 0.1)
+        - (fatigue * 0.16)
+        - (safety_stress * 0.16)
+        - pressure_penalty
+        + (empathy * 0.06)
+    )
+    if mood_score < 0.24:
+        day_mood = "frayed"
+    elif mood_score < 0.42:
+        day_mood = "tired"
+    elif mood_score < 0.62:
+        day_mood = "steady"
+    elif mood_score < 0.78:
+        day_mood = "light"
+    else:
+        day_mood = "warm"
+
+    work_score = _clamp01(
+        0.22
+        + (_seeded_unit(f"{seed_base}:work") * 0.34)
+        + (profession_pride * 0.26)
+        + (discipline * 0.08)
+        - (fatigue * 0.1)
+    )
+    if not career_text:
+        work_attitude = "improvised"
+    elif work_score >= 0.76:
+        work_attitude = "proud"
+    elif discipline >= 0.64 and role_id in {"guard", "security", "officer", "manager"}:
+        work_attitude = "duty_bound"
+    elif work_score >= 0.56:
+        work_attitude = "practical"
+    elif fatigue >= 0.52 or day_mood in {"tired", "frayed"}:
+        work_attitude = "worn"
+    elif playfulness >= 0.62 and local_attachment < 0.44:
+        work_attitude = "restless"
+    else:
+        work_attitude = "stuck"
+
+    return {
+        "chattiness": chattiness,
+        "privacy": privacy,
+        "profession_pride": profession_pride,
+        "local_attachment": local_attachment,
+        "playfulness": playfulness,
+        "day_mood": day_mood,
+        "work_attitude": work_attitude,
+    }
+
+
+def relationship_read_profile(sim, player_eid, person_eid, entry=None):
+    """Return the truthful player-facing relationship read for a known person."""
+    entry = entry if isinstance(entry, dict) else {}
+    if not bool(entry.get("met_directly", False)):
+        return {
+            "summary": "<unknown>",
+            "detail": "<unknown>",
+            "read_key": "unknown",
+            "evidence": 0.0,
+            "relation_kind": str(entry.get("relation_kind", "") or "").strip().lower() or "contact",
+            "trust": 0.0,
+            "closeness": 0.0,
+            "protectiveness": 0.0,
+        }
+
+    contact_standing = _clamp01(entry.get("standing", 0.0))
+    relation_kind = str(entry.get("relation_kind", "") or "").strip().lower() or "contact"
+    trust = closeness = protectiveness = 0.0
+
+    social = sim.ecs.get(NPCSocial).get(person_eid) if person_eid is not None else None
+    bond = social.bonds.get(player_eid) if social and isinstance(getattr(social, "bonds", None), dict) else None
+    if isinstance(bond, dict):
+        trust = _clamp01(bond.get("trust", 0.0))
+        closeness = _clamp01(bond.get("closeness", 0.0))
+        protectiveness = _clamp01(bond.get("protectiveness", 0.0))
+        relation_kind = str(bond.get("kind", "") or relation_kind).strip().lower() or relation_kind
+
+    base_score = max(contact_standing, (trust * 0.55) + (closeness * 0.35) + (protectiveness * 0.10))
+    positive_score = contact_standing
+    negative_score = 0.0
+    recent_offense = None
+
+    memory = sim.ecs.get(NPCMemory).get(person_eid) if person_eid is not None else None
+    if memory and getattr(memory, "entries", None):
+        for record in tuple(memory.entries or ()):
+            if not isinstance(record, dict):
+                continue
+            age = _int(getattr(sim, "tick", 0), 0) - _int(record.get("tick"), 0)
+            kind = _text(record.get("kind", "")).lower()
+            data = record.get("data", {}) if isinstance(record.get("data"), dict) else {}
+            strength = _clamp01(record.get("strength", 0.0))
+            if kind == "offense" and data.get("offender_eid") == player_eid and age <= 220:
+                if recent_offense is None or strength > _clamp01(recent_offense.get("strength", 0.0)):
+                    recent_offense = record
+                negative_score = max(negative_score, max(0.38, strength * 0.9))
+            elif kind == "threat" and data.get("source_eid") == player_eid and age <= 220:
+                negative_score = max(negative_score, max(0.42, strength * 0.95))
+            elif kind == "actor_reputation" and _int(data.get("actor_eid"), -1) == _int(player_eid, -1) and age <= 220:
+                approval = max(-1.0, min(1.0, _float(data.get("approval", 0.0))))
+                score = abs(approval) * max(0.08, strength)
+                if approval >= 0.18:
+                    positive_score = max(positive_score, score)
+                elif approval <= -0.18:
+                    negative_score = max(negative_score, score)
+            elif kind == "player_reputation" and _int(data.get("player_eid"), -1) == _int(player_eid, -1) and age <= 320:
+                approval = max(-1.0, min(1.0, _float(data.get("approval", 0.0), 1.0)))
+                score = max(0.12, strength * 0.82)
+                if approval >= 0.0:
+                    positive_score = max(positive_score, score)
+
+    evidence = max(base_score, positive_score, negative_score)
+    result = {
+        "summary": "<unknown>",
+        "detail": "<unknown>",
+        "read_key": "unknown",
+        "evidence": evidence,
+        "relation_kind": relation_kind,
+        "trust": trust,
+        "closeness": closeness,
+        "protectiveness": protectiveness,
+    }
+    if evidence < 0.36:
+        return result
+
+    if negative_score >= max(0.42, positive_score + 0.08):
+        if negative_score >= 0.62 or (recent_offense and _clamp01(recent_offense.get("strength", 0.0)) >= 0.34):
+            result.update({
+                "summary": "do not trust you",
+                "detail": "You get the sense they do not trust you.",
+                "read_key": "distrust",
+            })
+            return result
+        result.update({
+            "summary": "on edge around you",
+            "detail": "They seem on edge around you.",
+            "read_key": "wary",
+        })
+        return result
+
+    if max(base_score, positive_score) >= 0.62:
+        if relation_kind == "family":
+            result.update({"summary": "family", "detail": "You think they see you as family.", "read_key": "family"})
+            return result
+        if relation_kind == "partner":
+            result.update({"summary": "partner", "detail": "You think they see you as a partner.", "read_key": "partner"})
+            return result
+        if relation_kind == "friend":
+            result.update({"summary": "friend", "detail": "You think they see you as a friend.", "read_key": "friend"})
+            return result
+        if relation_kind == "coworker":
+            result.update({
+                "summary": "trusted coworker",
+                "detail": "You think they see you as a coworker they trust.",
+                "read_key": "trusted_coworker",
+            })
+            return result
+        if relation_kind in {"neighbor", "contact", "local"}:
+            result.update({
+                "summary": "trusted local",
+                "detail": "You think they see you as a familiar, trusted local.",
+                "read_key": "trusted_local",
+            })
+            return result
+
+    if protectiveness >= 0.52:
+        result.update({"summary": "protective", "detail": "They seem protective of you.", "read_key": "protective"})
+        return result
+    if trust >= 0.48 or positive_score >= 0.48:
+        result.update({"summary": "seems to trust you", "detail": "They seem to trust you.", "read_key": "trust"})
+        return result
+    result.update({
+        "summary": "comfortable around you",
+        "detail": "They seem comfortable around you.",
+        "read_key": "comfortable",
+    })
+    return result
+
+
+def relationship_episode_records(entry, *, include_trivial=False, limit=None):
+    entry = entry if isinstance(entry, dict) else {}
+    cleaned = []
+    for raw in tuple(entry.get("episodes", ()) or ()):
+        if not isinstance(raw, dict):
+            continue
+        kind = _text(raw.get("kind", "")).lower()
+        summary = _text(raw.get("summary", ""))
+        if not kind or not summary:
+            continue
+        if not include_trivial and kind in _TRIVIAL_RELATIONSHIP_EPISODES:
+            continue
+        valence = _text(raw.get("valence", "neutral")).lower() or "neutral"
+        if valence not in {"positive", "negative", "neutral"}:
+            valence = "neutral"
+        cleaned.append({
+            "kind": kind,
+            "tick": _int(raw.get("tick"), 0),
+            "valence": valence,
+            "summary": summary,
+            "property_id": _text(raw.get("property_id", "")),
+            "other_person_eid": raw.get("other_person_eid"),
+            "source_topic": _text(raw.get("source_topic", "")).lower(),
+        })
+    cleaned.sort(key=lambda record: int(record.get("tick", 0) or 0), reverse=True)
+    if limit is not None:
+        cleaned = cleaned[: max(1, int(limit))]
+    return tuple(cleaned)
+
+
+def relationship_anchor_episode(entry, *, tone="neutral", include_trivial=False):
+    records = list(relationship_episode_records(entry, include_trivial=include_trivial))
+    if not records:
+        return None
+    tone = _text(tone, "neutral").lower() or "neutral"
+    prefer_negative = tone in {"wary", "guarded"}
+
+    def _episode_score(record):
+        kind = _text(record.get("kind", "")).lower()
+        valence = _text(record.get("valence", "neutral")).lower() or "neutral"
+        tick = _int(record.get("tick"), 0)
+        score = float(tick) / 100000.0
+        if prefer_negative:
+            if valence == "negative":
+                score += 4.0
+            elif valence == "positive":
+                score -= 0.8
+        else:
+            if valence == "positive":
+                score += 4.0
+            elif valence == "negative":
+                score -= 0.2
+        if kind in {"told_me_how_they_see_me", "opened_up_personally", "offered_vouch"}:
+            score += 1.6
+        elif kind in {"offered_introduction", "offered_contact", "opened_up_about_roots", "opened_up_about_work"}:
+            score += 1.1
+        elif kind in _NEGATIVE_RELATIONSHIP_EPISODES:
+            score += 1.2 if prefer_negative else 0.3
+        return score
+
+    records.sort(key=_episode_score, reverse=True)
+    return dict(records[0]) if records else None
+
+
+def _social_reaction_scope(topic_id):
+    topic_id = _text(topic_id).lower()
+    if topic_id in _RAPPORT_REACTION_TOPICS:
+        return "rapport"
+    if topic_id in _MISSTEP_REACTION_TOPICS:
+        return "misstep"
+    if topic_id in _SOCIAL_ACCESS_REACTION_TOPICS:
+        return "social_access"
+    return ""
+
+
+def _social_reaction_outcome_key(outcome):
+    outcome = _text(outcome).lower()
+    if outcome in {"warm", "open", "reserved", "rebuff"}:
+        return outcome
+    if outcome == "soft":
+        return "open"
+    if outcome == "wary":
+        return "reserved"
+    if outcome in {"fail", "aggravated", "hard_no"}:
+        return "rebuff"
+    return ""
+
+
+def _social_reaction_allowed(topic_id, outcome_key, context, rapport_shape):
+    topic_id = _text(topic_id).lower()
+    if not _social_reaction_scope(topic_id):
+        return False
+    if topic_id == "weird" and outcome_key == "reserved":
+        return False
+
+    if outcome_key in {"warm", "rebuff"}:
+        return True
+
+    context = context if isinstance(context, dict) else {}
+    rapport_shape = rapport_shape if isinstance(rapport_shape, dict) else {}
+    social_standing = _clamp01(context.get("social_standing", 0.0))
+    privacy = _clamp01(rapport_shape.get("privacy", 0.0))
+    chattiness = _clamp01(rapport_shape.get("chattiness", 0.0))
+    playfulness = _clamp01(rapport_shape.get("playfulness", 0.0))
+    tone = _text(context.get("tone", "neutral")).lower() or "neutral"
+    pressure_tier = _text(context.get("pressure_tier", "low")).lower() or "low"
+
+    if outcome_key == "open":
+        if topic_id in _DEEP_REACTION_TOPICS:
+            return True
+        if topic_id == "weird":
+            return playfulness >= 0.68 or social_standing >= 0.64
+        if topic_id in _SOCIAL_ACCESS_REACTION_TOPICS:
+            return social_standing >= 0.46 or chattiness >= 0.58
+        return social_standing >= 0.54 or _text(rapport_shape.get("day_mood", "")).lower() in {"light", "warm"}
+
+    if outcome_key == "reserved":
+        if topic_id in _DEEP_REACTION_TOPICS or topic_id in {"pry", "insult"}:
+            return True
+        return privacy >= 0.62 or tone in {"wary", "guarded"} or pressure_tier == "high"
+
+    return False
+
+
+def _social_reaction_candidates(topic_id, outcome_key, rapport_shape, context):
+    topic_id = _text(topic_id).lower()
+    context = context if isinstance(context, dict) else {}
+    rapport_shape = rapport_shape if isinstance(rapport_shape, dict) else {}
+    playfulness = _clamp01(rapport_shape.get("playfulness", 0.0))
+    privacy = _clamp01(rapport_shape.get("privacy", 0.0))
+    chattiness = _clamp01(rapport_shape.get("chattiness", 0.0))
+    day_mood = _text(rapport_shape.get("day_mood", "")).lower()
+    pressure_tier = _text(context.get("pressure_tier", "low")).lower() or "low"
+    tone = _text(context.get("tone", "neutral")).lower() or "neutral"
+
+    if outcome_key == "warm":
+        candidates = [
+            "{npc_subject_cap} smiles at you.",
+            "{npc_subject_cap} relaxes a little.",
+            "{npc_possessive_adj_cap} eyes brighten.",
+            "{npc_subject_cap} {npc_be} already half smiling.",
+        ]
+    elif outcome_key == "open":
+        candidates = [
+            "{npc_subject_cap} tilts {npc_possessive_adj} head.",
+            "{npc_subject_cap} considers that for a moment.",
+            "{npc_subject_cap} nods once.",
+            "{npc_subject_cap} {npc_be} thoughtful about the answer.",
+        ]
+    elif outcome_key == "reserved":
+        candidates = [
+            "{npc_subject_cap} keeps {npc_possessive_adj} expression even.",
+            "{npc_subject_cap} glances aside for a moment.",
+            "{npc_subject_cap} folds {npc_possessive_adj} arms loosely.",
+            "{npc_subject_cap} {npc_be} careful with the answer.",
+        ]
+    elif outcome_key == "rebuff":
+        candidates = [
+            "{npc_possessive_adj_cap} expression tightens.",
+            "{npc_subject_cap} narrows {npc_possessive_adj} eyes.",
+            "{npc_subject_cap} goes still.",
+            "{npc_subject_cap} {npc_be} done softening the point.",
+        ]
+    else:
+        return ()
+
+    if topic_id in _REFLECTIVE_REACTION_TOPICS and outcome_key in {"warm", "open", "reserved"}:
+        candidates.extend((
+            "{npc_subject_cap} pauses, weighing the question.",
+            "{npc_subject_cap} looks off for a second, thinking.",
+        ))
+    if topic_id in _DEEP_REACTION_TOPICS:
+        if outcome_key in {"warm", "open"}:
+            candidates.extend((
+                "{npc_subject_cap} hesitates, then meets your eyes.",
+                "{npc_subject_cap} holds your gaze for a moment.",
+            ))
+        else:
+            candidates.extend((
+                "{npc_subject_cap} looks away before answering.",
+                "{npc_subject_cap} takes a beat before answering.",
+            ))
+    if topic_id in _LIGHT_REACTION_TOPICS and outcome_key in {"warm", "open"}:
+        candidates.extend((
+            "{npc_subject_cap} loosens up a little.",
+            "{npc_subject_cap} seems easier for a moment.",
+        ))
+    if topic_id in _SOCIAL_ACCESS_REACTION_TOPICS:
+        if outcome_key in {"warm", "open"}:
+            candidates.extend((
+                "{npc_subject_cap} seems to weigh the risk for a moment.",
+                "{npc_subject_cap} glances around before answering.",
+            ))
+        else:
+            candidates.extend((
+                "{npc_subject_cap} checks the room before answering.",
+                "{npc_subject_cap} keeps the answer tight.",
+            ))
+    if topic_id == "weird":
+        if outcome_key == "open":
+            candidates.append("{npc_subject_cap} lets out a quiet laugh.")
+        elif outcome_key == "rebuff":
+            candidates.append("{npc_subject_cap} looks at you like the question curdled on contact.")
+
+    if playfulness >= 0.68 and outcome_key in {"warm", "open"}:
+        candidates.append("{npc_subject_cap} lets out a quiet laugh.")
+    if day_mood in {"warm", "light"} and outcome_key == "warm":
+        candidates.append("{npc_subject_cap} {npc_have} a little spark in {npc_possessive_adj} eyes.")
+    if privacy >= 0.7 and topic_id in _DEEP_REACTION_TOPICS and outcome_key in {"reserved", "rebuff"}:
+        candidates.extend((
+            "{npc_subject_cap} closes {npc_possessive_adj} posture off a little.",
+            "{npc_subject_cap} answers without really opening up.",
+        ))
+    if chattiness <= 0.32 and outcome_key in {"reserved", "rebuff"}:
+        candidates.append("{npc_subject_cap} keeps the answer clipped.")
+    if pressure_tier == "high" and outcome_key in {"reserved", "rebuff"}:
+        candidates.append("{npc_subject_cap} looks like {npc_subject} would rather end the subject there.")
+    if tone == "friendly" and outcome_key == "warm":
+        candidates.append("{npc_subject_cap} meets your eyes with an easy look.")
+
+    ordered = []
+    seen = set()
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return tuple(ordered)
+
+
+def social_reaction_narration(sim, npc_eid, *, topic_id="", outcome="", ask_count=1, context=None, rapport_shape=None):
+    """Return one short narration beat for a socially meaningful reply."""
+    if sim is None or npc_eid is None:
+        return ""
+    identity = sim.ecs.get(CreatureIdentity).get(npc_eid)
+    if not is_human_identity(identity):
+        return ""
+
+    topic_id = _text(topic_id).lower()
+    outcome_key = _social_reaction_outcome_key(outcome)
+    context = dict(context or {})
+    rapport_shape = rapport_shape if isinstance(rapport_shape, dict) else context.get("rapport_shape")
+    if not isinstance(rapport_shape, dict):
+        rapport_shape = build_rapport_shape(sim, npc_eid, context=context)
+    if not _social_reaction_allowed(topic_id, outcome_key, context, rapport_shape):
+        return ""
+
+    personal_name = _text(getattr(identity, "personal_name", ""))
+    slots = pronoun_format_slots(
+        identity,
+        prefix="npc",
+        default="they",
+        personal_name=personal_name,
+        seed_token=f"{getattr(sim, 'seed', 0)}:dialogue-pronouns:{npc_eid}:{topic_id}",
+    )
+    candidates = _social_reaction_candidates(topic_id, outcome_key, rapport_shape, context)
+    if not candidates:
+        return ""
+
+    opened_count = _int(context.get("opened_count", 0), 0)
+    seed_text = (
+        f"{getattr(sim, 'seed', 0)}:dialogue-reaction:{npc_eid}:{topic_id}:{outcome_key}:"
+        f"{_int(ask_count, 1)}:{opened_count}:{_text(rapport_shape.get('day_mood', ''))}:"
+        f"{_text(rapport_shape.get('work_attitude', ''))}:{_text(context.get('tone', 'neutral'))}:"
+        f"{_text(context.get('pressure_tier', 'low'))}"
+    )
+    line = random.Random(seed_text).choice(tuple(candidates)).format(**slots)
+    return _text(line)
 
 
 def shaped_opening_lines(context, *, limit=1):

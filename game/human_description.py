@@ -2,7 +2,11 @@
 
 import random
 
-from game.human_identity import is_human_identity, seed_human_identity_profile
+from game.human_identity import (
+    is_human_identity,
+    pronoun_format_slots,
+    seed_human_identity_profile,
+)
 
 
 _STYLE_WEIGHTS = {
@@ -438,18 +442,32 @@ def human_conversation_description(seed, *, eid=None, identity=None, personal_na
         return ""
 
     rng = random.Random(f"{profile['seed_token']}:conversation")
+    slots = pronoun_format_slots(
+        str(getattr(identity, "pronoun_set", "") or "").strip().lower() or profile["gender_identity"],
+        prefix="person",
+        personal_name=personal_name,
+        seed_token=profile["seed_token"],
+    )
+    identity_noun = {
+        "woman": "woman",
+        "man": "man",
+        "nonbinary": "person",
+    }.get(str(profile.get("gender_identity", "") or "").strip().lower(), "person")
     first_tail = _join_with_and((profile["hair_phrase"], profile["standout_phrase"]))
-    second_bits = [profile["palette_phrase"], profile["condition_phrase"]]
-    if rng.random() < 0.72:
-        second_bits.append(profile["accessory_phrase"])
-    second_tail = _join_with_and(second_bits[:3])
+    demeanor_tail = ""
+    if rng.random() < 0.54:
+        demeanor_tail = f", and the whole look feels {profile['demeanor_phrase']}"
+    elif rng.random() < 0.24:
+        demeanor_tail = f", with {profile['accessory_phrase']} finishing the look"
     sentences = [
-        f"{_capitalize(profile['stature_phrase'])}, with {first_tail}.",
-        f"{_capitalize(profile['attire_phrase'])}, {second_tail}.",
+        f"You see a {identity_noun} here.",
+        f"{slots['person_subject_cap']} {slots['person_be']} {profile['stature_phrase']} and {slots['person_have']} {first_tail}.",
+        (
+            f"{slots['person_possessive_adj_cap']} {profile['eye_color']} eyes and "
+            f"{profile['complexion_phrase']} stand out against {profile['attire_phrase']}"
+            f"{demeanor_tail}."
+        ),
     ]
-    if rng.random() < 0.46:
-        extra = profile["grooming_sentence"] if rng.random() < 0.58 else f"The overall impression is {profile['demeanor_phrase']}."
-        sentences.append(str(extra).strip())
     return " ".join(sentence for sentence in sentences[:3] if str(sentence).strip())
 
 

@@ -12,8 +12,16 @@ TOPIC_FAMILIES = {
     # Identity / social read
     "name": "identity",
     "history": "identity",
+    "roots": "rapport",
     "job": "identity",
+    "job_feel": "rapport",
     "routine": "identity",
+    "rapport": "rapport",
+    "check_in": "rapport",
+    "day_feel": "rapport",
+    "off_shift": "rapport",
+    "care_about": "rapport",
+    "read_player": "rapport",
     # Workplace / organization
     "workplace": "workplace",
     "organization": "workplace",

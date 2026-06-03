@@ -207,7 +207,17 @@ class PygameView:
                 self.surface.fill(stripe_color, (0, row, self.width_cells * self.cell_px, self.cell_px))
 
             panel_w = min(max(36, self.width_cells - 10), self.width_cells)
-            panel_h = min(max(12, 16), self.height_cells)
+            content_pixel_w = max(self.cell_px * 4, (panel_w - 4) * self.cell_px)
+            subtitle_lines = self._wrap_text_to_pixel_width(subtitle, subtitle_font, content_pixel_w, max_lines=2)
+            prompt_lines = self._wrap_text_to_pixel_width(prompt, self._ui_font, content_pixel_w, max_lines=2)
+            detail_lines = self._wrap_text_to_pixel_width(detail, self._ui_font, content_pixel_w, max_lines=3)
+            title_rows = max(1, (title_font.get_height() + self.cell_px - 1) // self.cell_px) if banner else 0
+            subtitle_line_rows = max(1, (max(self.cell_px, subtitle_font.get_height()) + self.cell_px - 1) // self.cell_px)
+            subtitle_rows = len(subtitle_lines) * subtitle_line_rows
+            header_rows = title_rows + subtitle_rows
+            status_reserve = 2 if status_callback else 0
+            required_panel_h = 7 + header_rows + len(prompt_lines) + len(detail_lines) + status_reserve + (1 if header_rows else 0)
+            panel_h = min(max(16, required_panel_h), self.height_cells)
             panel_x = max(0, (self.width_cells - panel_w) // 2)
             panel_y = max(0, (self.height_cells - panel_h) // 2)
             panel_px = panel_x * self.cell_px
@@ -230,23 +240,27 @@ class PygameView:
                 self.draw_text(panel_x, panel_y + row, mid, color="human")
             self.draw_text(panel_x, panel_y + panel_h - 1, bot, color="human")
 
-            inner_w = max(1, panel_w - 4)
             text_px = panel_px + (self.cell_px * 2)
             text_py = panel_py + self.cell_px
             if banner:
                 banner_surface = title_font.render(banner, True, self._color_value("objective"))
                 self.surface.blit(banner_surface, (text_px, text_py))
             if subtitle:
-                subtitle_surface = subtitle_font.render(subtitle[: max(1, inner_w * 2)], True, self._color_value("default"))
                 subtitle_y = text_py + max(self.cell_px, title_font.get_height())
-                self.surface.blit(subtitle_surface, (text_px, subtitle_y))
+                for idx, line in enumerate(subtitle_lines):
+                    subtitle_surface = subtitle_font.render(line, True, self._color_value("default"))
+                    self.surface.blit(subtitle_surface, (text_px, subtitle_y + (idx * max(self.cell_px, subtitle_font.get_height()))))
 
-            prompt_y = panel_y + 4
-            self.draw_text(panel_x + 2, prompt_y, prompt[:inner_w], color="objective")
-            if detail:
-                self.draw_text(panel_x + 2, prompt_y + 1, detail[:inner_w], color="default")
+            prompt_y = panel_y + 1 + header_rows + (1 if header_rows else 0)
+            current_y = prompt_y
+            for line in prompt_lines:
+                self.draw_text(panel_x + 2, current_y, line, color="objective")
+                current_y += 1
+            for line in detail_lines:
+                self.draw_text(panel_x + 2, current_y, line, color="default")
+                current_y += 1
 
-            field_y = prompt_y + 3
+            field_y = current_y + 1
             field_rect = self.pygame.Rect(
                 panel_px + (self.cell_px * 2),
                 panel_py + (field_y * self.cell_px) - panel_py,
@@ -258,18 +272,22 @@ class PygameView:
             self.pygame.draw.rect(self.surface, self._color_value("building_edge"), field_rect, width=1)
 
             field_text = text
-            if cursor_visible and len(field_text) < inner_w:
+            if cursor_visible and len(field_text) < max(1, int(max_length)):
                 field_text += "_"
-            self.draw_text(panel_x + 2, field_y, field_text[:inner_w], color="player")
+            field_text = self._fit_text_to_pixel_width(field_text, self._ui_font, max(0, content_pixel_w - 4))
+            self.draw_text(panel_x + 2, field_y, field_text, color="player")
 
             status_rows = _status_lines(text)
             for idx, row in enumerate(status_rows[:2]):
-                self.draw_text(panel_x + 2, field_y + 2 + idx, row["text"][:inner_w], color=row.get("color") or "scout")
+                status_text = self._fit_text_to_pixel_width(row["text"], self._ui_font, content_pixel_w)
+                self.draw_text(panel_x + 2, field_y + 2 + idx, status_text, color=row.get("color") or "scout")
 
             footer = "Enter confirm  Esc cancel"
-            self.draw_text(panel_x + 2, panel_y + panel_h - 2, footer[:inner_w], color="scout")
+            footer = self._fit_text_to_pixel_width(footer, self._ui_font, content_pixel_w)
+            self.draw_text(panel_x + 2, panel_y + panel_h - 2, footer, color="scout")
             if error_text:
-                self.draw_text(panel_x + 2, panel_y + panel_h - 3, error_text[:inner_w], color="feature_breach")
+                error_text_row = self._fit_text_to_pixel_width(error_text, self._ui_font, content_pixel_w)
+                self.draw_text(panel_x + 2, panel_y + panel_h - 3, error_text_row, color="feature_breach")
 
             self.refresh()
 
@@ -353,7 +371,17 @@ class PygameView:
                 self.surface.fill(stripe_color, (0, row_y, self.width_cells * self.cell_px, self.cell_px))
 
             panel_w = min(max(44, self.width_cells - 10), self.width_cells)
-            panel_h = min(max(14, 18), self.height_cells)
+            content_pixel_w = max(self.cell_px * 4, (panel_w - 4) * self.cell_px)
+            subtitle_lines = self._wrap_text_to_pixel_width(subtitle, subtitle_font, content_pixel_w, max_lines=2)
+            prompt_lines = self._wrap_text_to_pixel_width(prompt, self._ui_font, content_pixel_w, max_lines=2)
+            detail_lines = self._wrap_text_to_pixel_width(detail, self._ui_font, content_pixel_w, max_lines=3)
+            title_rows = max(1, (title_font.get_height() + self.cell_px - 1) // self.cell_px) if banner else 0
+            subtitle_line_rows = max(1, (max(self.cell_px, subtitle_font.get_height()) + self.cell_px - 1) // self.cell_px)
+            subtitle_rows = len(subtitle_lines) * subtitle_line_rows
+            header_rows = title_rows + subtitle_rows
+            topic_rows = len(prompt_lines) + len(detail_lines)
+            required_panel_h = 5 + header_rows + topic_rows + len(rows) + (1 if header_rows else 0) + (1 if topic_rows else 0)
+            panel_h = min(max(18, required_panel_h), self.height_cells)
             panel_x = max(0, (self.width_cells - panel_w) // 2)
             panel_y = max(0, (self.height_cells - panel_h) // 2)
             panel_px = panel_x * self.cell_px
@@ -381,23 +409,27 @@ class PygameView:
                 self.draw_text(panel_x, panel_y + row, mid, color="human")
             self.draw_text(panel_x, panel_y + panel_h - 1, bot, color="human")
 
-            inner_w = max(1, panel_w - 4)
             text_px = panel_px + (self.cell_px * 2)
             text_py = panel_py + self.cell_px
             if banner:
                 banner_surface = title_font.render(banner, True, self._color_value("objective"))
                 self.surface.blit(banner_surface, (text_px, text_py))
             if subtitle:
-                subtitle_surface = subtitle_font.render(subtitle[: max(1, inner_w * 2)], True, self._color_value("default"))
                 subtitle_y = text_py + max(self.cell_px, title_font.get_height())
-                self.surface.blit(subtitle_surface, (text_px, subtitle_y))
+                for idx, line in enumerate(subtitle_lines):
+                    subtitle_surface = subtitle_font.render(line, True, self._color_value("default"))
+                    self.surface.blit(subtitle_surface, (text_px, subtitle_y + (idx * max(self.cell_px, subtitle_font.get_height()))))
 
-            prompt_y = panel_y + 4
-            self.draw_text(panel_x + 2, prompt_y, prompt[:inner_w], color="objective")
-            if detail:
-                self.draw_text(panel_x + 2, prompt_y + 1, detail[:inner_w], color="default")
+            prompt_y = panel_y + 1 + header_rows + (1 if header_rows else 0)
+            current_y = prompt_y
+            for line in prompt_lines:
+                self.draw_text(panel_x + 2, current_y, line, color="objective")
+                current_y += 1
+            for line in detail_lines:
+                self.draw_text(panel_x + 2, current_y, line, color="default")
+                current_y += 1
 
-            option_y = prompt_y + 3
+            option_y = current_y + (1 if current_y > prompt_y else 0)
             for idx, row in enumerate(rows):
                 label = f"{idx + 1}. {row['label']}"
                 description = row["description"]
@@ -406,10 +438,12 @@ class PygameView:
                 if description:
                     line = f"{line} - {description}"
                 color = "player" if idx == selected else "human"
-                self.draw_text(panel_x + 2, option_y + idx, line[:inner_w], color=color)
+                line = self._fit_text_to_pixel_width(line, self._ui_font, content_pixel_w)
+                self.draw_text(panel_x + 2, option_y + idx, line, color=color)
 
             footer = "Arrows move  1-3 choose  Enter confirm  Esc cancel"
-            self.draw_text(panel_x + 2, panel_y + panel_h - 2, footer[:inner_w], color="scout")
+            footer = self._fit_text_to_pixel_width(footer, self._ui_font, content_pixel_w)
+            self.draw_text(panel_x + 2, panel_y + panel_h - 2, footer, color="scout")
             self.refresh()
 
             for event in self.pygame.event.get():
@@ -4014,6 +4048,49 @@ class PygameView:
             else:
                 high = mid - 1
         return text[:low]
+
+    def _wrap_text_to_pixel_width(self, text, font, max_pixel_width, *, max_lines=None):
+        text = str(text or "").strip()
+        max_pixel_width = max(0, int(max_pixel_width))
+        if not text or max_pixel_width <= 0:
+            return ()
+
+        wrapped = []
+        for raw_line in text.splitlines() or [""]:
+            line = str(raw_line).strip()
+            if not line:
+                wrapped.append("")
+                continue
+            remaining = line
+            while remaining:
+                if font.size(remaining)[0] <= max_pixel_width:
+                    wrapped.append(remaining)
+                    break
+                words = remaining.split()
+                candidate = ""
+                consumed_words = 0
+                for idx, word in enumerate(words):
+                    proposed = word if not candidate else f"{candidate} {word}"
+                    if font.size(proposed)[0] <= max_pixel_width:
+                        candidate = proposed
+                        consumed_words = idx + 1
+                    else:
+                        break
+                if candidate:
+                    wrapped.append(candidate)
+                    remaining = " ".join(words[consumed_words:]).strip()
+                    continue
+                candidate = self._fit_text_to_pixel_width(remaining, font, max_pixel_width).rstrip()
+                if not candidate:
+                    break
+                wrapped.append(candidate)
+                remaining = remaining[len(candidate):].lstrip()
+            if max_lines is not None and len(wrapped) >= max_lines:
+                return tuple(wrapped[:max(1, int(max_lines))])
+
+        if max_lines is not None:
+            return tuple(wrapped[:max(1, int(max_lines))])
+        return tuple(wrapped)
 
     def _clip_draw_position(self, x, y):
         x = int(x)

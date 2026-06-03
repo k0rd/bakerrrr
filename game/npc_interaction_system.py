@@ -154,6 +154,11 @@ from game.run_pressure import (
 )
 from game.dialogue_shape import (
     build_dialogue_shape as _build_dialogue_shape,
+    build_rapport_shape as _build_rapport_shape,
+    relationship_anchor_episode as _relationship_anchor_episode,
+    relationship_episode_records as _relationship_episode_records,
+    relationship_read_profile as _relationship_read_profile,
+    social_reaction_narration as _social_reaction_narration,
     shaped_concern_line as _shaped_concern_line,
     shaped_local_line as _shaped_local_line,
     shaped_opening_lines as _shaped_opening_lines,
@@ -370,6 +375,8 @@ class NPCInteractionSystem(System):
     ROOT_TOPICS = {
         "name",
         "job",
+        "rapport",
+        "check_in",
         "local",
         "opportunities",
         "attention",
@@ -628,10 +635,13 @@ class NPCInteractionSystem(System):
             self.payoff_cooldown_ticks = {}
         if not hasattr(self, "fence_cooldown_ticks"):
             self.fence_cooldown_ticks = {}
+        if not isinstance(getattr(self.sim, "npc_dialogue_cooldowns", None), dict):
+            self.sim.npc_dialogue_cooldowns = {}
         self.sim.events.subscribe("npc_interact", self.on_npc_interact)
         self.sim.events.subscribe("npc_dialogue_request", self.on_npc_dialogue_request)
         self.sim.events.subscribe("dialog_topic_request", self.on_dialog_topic_request)
         self.sim.events.subscribe("dialog_close_request", self.on_dialog_close_request)
+        self.sim.events.subscribe("npc_warn_property", self.on_npc_warn_property)
         self.sim.events.subscribe("contractor_hired", self.on_contractor_hired)
         self.sim.events.subscribe("entity_moved", self.on_entity_moved)
         self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
@@ -845,6 +855,24 @@ class NPCInteractionSystem(System):
             return None
         bond["trust"] = max(0.0, min(0.98, float(bond.get("trust", 0.0)) + float(trust_delta)))
         bond["closeness"] = max(0.0, min(0.98, float(bond.get("closeness", 0.0)) + float(closeness_delta)))
+        self._promote_dialogue_bond_if_ready(bond)
+        return bond
+
+    def _promote_dialogue_bond_if_ready(self, bond):
+        if not isinstance(bond, dict):
+            return bond
+        kind = str(bond.get("kind", "") or "").strip().lower() or "neighbor"
+        if kind not in {"neighbor", "coworker", "contact", "local"}:
+            return bond
+        trust = float(bond.get("trust", 0.0) or 0.0)
+        closeness = float(bond.get("closeness", 0.0) or 0.0)
+        if trust < 0.62 or closeness < 0.58:
+            return bond
+        bond["kind"] = "friend"
+        bond["protectiveness"] = max(
+            float(bond.get("protectiveness", 0.18) or 0.18),
+            NPCSocial.DEFAULT_PROTECT.get("friend", 0.7),
+        )
         return bond
 
     def _recently_interacted(self, npc_eid):
@@ -854,6 +882,18 @@ class NPCInteractionSystem(System):
 
     def _mark_interacted(self, npc_eid):
         self.last_interaction_tick[(self.player_eid, int(npc_eid))] = self.sim.tick
+
+    def _npc_dialogue_cooldown_map(self):
+        cooldowns = getattr(self.sim, "npc_dialogue_cooldowns", None)
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
+            self.sim.npc_dialogue_cooldowns = cooldowns
+        return cooldowns
+
+    def _set_dialogue_cooldown(self, npc_eid, duration):
+        if npc_eid is None:
+            return
+        self._npc_dialogue_cooldown_map()[int(npc_eid)] = int(self.sim.tick) + max(0, int(duration or 0))
 
     def _state_text(self, ai):
         if not ai:
@@ -1266,6 +1306,24 @@ class NPCInteractionSystem(System):
         }
         return bool(entry.get("introduced", False)) or "known_name" in benefits
 
+    def _person_identity_snapshot(self, person_eid, *, identity=None):
+        if person_eid is None:
+            return None
+        if identity is None:
+            identity = self.sim.ecs.get(CreatureIdentity).get(person_eid)
+        if identity is None:
+            return None
+        snapshot = {
+            "personal_name": str(getattr(identity, "personal_name", "") or "").strip(),
+            "common_name": str(getattr(identity, "common_name", "") or "").strip(),
+            "gender_identity": str(getattr(identity, "gender_identity", "") or "").strip().lower(),
+            "creature_type": str(getattr(identity, "creature_type", "") or "").strip().lower(),
+            "taxonomy_class": str(getattr(identity, "taxonomy_class", "") or "").strip().lower(),
+        }
+        if not any(snapshot.values()):
+            return None
+        return snapshot
+
     def _remember_player_person_contact(
         self,
         person_eid,
@@ -1275,6 +1333,7 @@ class NPCInteractionSystem(System):
         standing,
         property_id=None,
         introduced=False,
+        met_directly=None,
         benefits=(),
     ):
         if person_eid is None:
@@ -1288,8 +1347,25 @@ class NPCInteractionSystem(System):
         prior_relation = str(existing.get("relation_kind", "") or "").strip().lower() if existing else ""
         prior_property = existing.get("property_id") if existing else None
         prior_intro = bool(existing.get("introduced", False)) if existing else False
+        prior_met = bool(existing.get("met_directly", False)) if existing else False
         prior_benefits = set(existing.get("benefits", ())) if existing else set()
+        prior_snapshot = existing.get("identity_snapshot") if existing else None
         next_benefits = {str(bit).strip().lower() for bit in benefits if str(bit).strip()}
+        snapshot = self._person_identity_snapshot(person_eid)
+        effective_source = prior_source if source_eid is None else source_eid
+        effective_relation = prior_relation if relation_kind is None else (str(relation_kind or "").strip().lower())
+        effective_property = prior_property if property_id is None else property_id
+        effective_intro = prior_intro or bool(introduced)
+        effective_met = prior_met if met_directly is None else bool(met_directly)
+        effective_benefits = set(prior_benefits)
+        effective_benefits.update(next_benefits)
+        effective_snapshot = prior_snapshot if snapshot is None else snapshot
+        first_met_tick = existing.get("first_met_tick") if existing else None
+        last_met_tick = existing.get("last_met_tick") if existing else None
+        if met_directly:
+            if first_met_tick is None:
+                first_met_tick = int(self.sim.tick)
+            last_met_tick = int(self.sim.tick)
         ledger.remember_person(
             person_eid,
             source_eid=source_eid,
@@ -1299,6 +1375,10 @@ class NPCInteractionSystem(System):
             property_id=property_id,
             benefits=next_benefits,
             introduced=introduced,
+            met_directly=met_directly,
+            first_met_tick=first_met_tick,
+            last_met_tick=last_met_tick,
+            identity_snapshot=snapshot,
         )
         if property_id:
             prop = self.sim.properties.get(str(property_id))
@@ -1310,13 +1390,118 @@ class NPCInteractionSystem(System):
                 )
         return (
             existing is None
-            or prior_source != source_eid
-            or prior_relation != str(relation_kind or "").strip().lower()
-            or prior_property != property_id
-            or prior_intro != bool(introduced)
-            or next_benefits != prior_benefits
+            or prior_source != effective_source
+            or prior_relation != effective_relation
+            or prior_property != effective_property
+            or prior_intro != effective_intro
+            or prior_met != effective_met
+            or effective_benefits != prior_benefits
+            or prior_snapshot != effective_snapshot
             or (prior_standing < 0.66 <= float(standing))
         )
+
+    def _remember_direct_human_meeting(self, context):
+        if not isinstance(context, dict):
+            return False
+        npc_eid = context.get("npc_eid")
+        identity = context.get("identity")
+        if npc_eid is None or not is_human_identity(identity):
+            return False
+        existing = self._player_person_contact_entry(npc_eid) or {}
+        bond = context.get("bond") or self._bond_snapshot(npc_eid) or {}
+        relation_kind = None
+        if not existing:
+            relation_kind = str(bond.get("kind", "") or "contact").strip().lower() or "contact"
+        standing = max(0.18, min(0.24, float(context.get("contact_standing", 0.0) or 0.0)))
+        prop = (
+            context.get("current_prop")
+            or context.get("workplace_prop")
+            or context.get("owned_prop")
+            or context.get("home_prop")
+        )
+        property_id = str(prop.get("id", "") or "").strip() if isinstance(prop, dict) else None
+        changed = self._remember_player_person_contact(
+            npc_eid,
+            source_eid=None,
+            relation_kind=relation_kind,
+            standing=standing,
+            property_id=property_id or None,
+            introduced=False,
+            met_directly=True,
+            benefits={"known_name"},
+        )
+        self._remember_player_relationship_episode(
+            npc_eid,
+            kind="met_directly",
+            valence="neutral",
+            summary="You have spoken directly.",
+            property_id=property_id or None,
+            source_topic="greet",
+            relation_kind=relation_kind or "contact",
+            standing=standing,
+            met_directly=True,
+            benefits={"known_name"},
+        )
+        return changed
+
+    def _remember_player_relationship_episode(
+        self,
+        person_eid,
+        *,
+        kind,
+        valence="neutral",
+        summary="",
+        property_id=None,
+        other_person_eid=None,
+        source_topic=None,
+        source_eid=None,
+        relation_kind=None,
+        standing=0.0,
+        introduced=False,
+        met_directly=None,
+        benefits=(),
+    ):
+        if person_eid is None:
+            return False
+        self._remember_player_person_contact(
+            person_eid,
+            source_eid=source_eid,
+            relation_kind=relation_kind,
+            standing=standing,
+            property_id=property_id,
+            introduced=introduced,
+            met_directly=met_directly,
+            benefits=benefits,
+        )
+        ledger = self.sim.ecs.get(ContactLedger).get(self.player_eid)
+        if ledger is None:
+            return False
+        return ledger.remember_person_episode(
+            person_eid,
+            kind=kind,
+            tick=self.sim.tick,
+            valence=valence,
+            summary=summary,
+            property_id=property_id,
+            other_person_eid=other_person_eid,
+            source_topic=source_topic,
+        )
+
+    def _player_relationship_anchor(self, person_eid, *, entry=None, tone="neutral"):
+        if person_eid is None:
+            return None
+        entry = entry if isinstance(entry, dict) else self._player_person_contact_entry(person_eid)
+        if not isinstance(entry, dict):
+            return None
+        return _relationship_anchor_episode(entry, tone=tone)
+
+    def _player_relationship_history(self, person_eid, *, entry=None, include_trivial=False, limit=None):
+        if person_eid is None:
+            return ()
+        entry = entry if isinstance(entry, dict) else self._player_person_contact_entry(person_eid)
+        if not isinstance(entry, dict):
+            return ()
+        return tuple(_relationship_episode_records(entry, include_trivial=include_trivial, limit=limit))
 
     def _remember_revealed_social_lead_names(self, context, response):
         if not isinstance(context, dict) or not isinstance(response, dict):
@@ -3114,12 +3299,7 @@ class NPCInteractionSystem(System):
         goodwill_mult = max(0.2, float(_pressure_effects(self.sim).get("goodwill_mult", 1.0)))
         bond["closeness"] = min(0.95, float(bond.get("closeness", 0.0)) + (closeness_gain * goodwill_mult))
         bond["trust"] = min(0.95, float(bond.get("trust", 0.0)) + (trust_gain * goodwill_mult))
-        if bond.get("kind") == "neighbor" and bond["closeness"] >= 0.58 and bond["trust"] >= 0.6:
-            bond["kind"] = "friend"
-            bond["protectiveness"] = max(
-                float(bond.get("protectiveness", 0.18)),
-                NPCSocial.DEFAULT_PROTECT.get("friend", 0.7),
-            )
+        self._promote_dialogue_bond_if_ready(bond)
         return bond
 
     def _memory_line(self, memory, player_profile):
@@ -5032,6 +5212,7 @@ class NPCInteractionSystem(System):
                     owned_prop = prop
                     break
         dialogue_memory = self._dialogue_memory(npc_eid)
+        opened_count = max(0, int(dialogue_memory.get("opened_count", 0) or 0))
         current_prop = _property_covering(self.sim, player_pos.x, player_pos.y, player_pos.z)
         if current_prop is None:
             current_prop = _property_for_action(self.sim, player_pos, radius=1)
@@ -5060,6 +5241,7 @@ class NPCInteractionSystem(System):
         bond = bond if bond is not None else self._bond_snapshot(npc_eid)
         rapport = self._conversation_rapport()
         intro_entry = self._player_person_contact_entry(npc_eid)
+        met_directly = bool((intro_entry or {}).get("met_directly", False))
         intro_standing = float((intro_entry or {}).get("standing", 0.0))
         trust = float((bond or {}).get("trust", 0.0))
         closeness = float((bond or {}).get("closeness", 0.0))
@@ -5384,6 +5566,7 @@ class NPCInteractionSystem(System):
             "contact_standing": contact_standing,
             "intro_standing": intro_standing,
             "social_standing": social_standing,
+            "opened_count": opened_count,
             "door_answering": door_answering,
             "door_answer_mood": door_answer_mood,
             "door_answer_role": str(getattr(door_wait_state, "answer_role", "") or "").strip().lower() if door_answering else "",
@@ -5436,6 +5619,7 @@ class NPCInteractionSystem(System):
             ),
             "social_lead_relation": str(primary_social_lead.get("relation_text", "")).strip() if primary_social_lead else "",
             "intro_entry": intro_entry,
+            "met_directly": met_directly,
             "intro_source_name": intro_source_name,
             "other_eid": other_eid,
             "other_name": other_name,
@@ -5510,6 +5694,15 @@ class NPCInteractionSystem(System):
             ).strip(),
         }
         context = self._apply_rival_dialogue_context(context)
+        person_entry = self._player_person_contact_entry(npc_eid)
+        relationship_history = self._player_relationship_history(npc_eid, entry=person_entry, limit=3)
+        relationship_anchor = self._player_relationship_anchor(npc_eid, entry=person_entry, tone=tone)
+        context.update({
+            "person_entry": person_entry if isinstance(person_entry, dict) else None,
+            "relationship_history": relationship_history,
+            "relationship_has_nontrivial_history": bool(relationship_history),
+            "relationship_anchor_episode": dict(relationship_anchor) if isinstance(relationship_anchor, dict) else None,
+        })
         context["side_job_offer"] = self._side_job_for_npc(npc_eid)
         context["side_job_available"] = bool(context["side_job_offer"] or self._build_side_job_offer(context))
         context["pressure_role"] = self._dialogue_pressure_role(context)
@@ -5555,6 +5748,7 @@ class NPCInteractionSystem(System):
             "player_business_hire_staff_fit_hint": str((hire_staff_preview or {}).get("topic_hint", "")).strip(),
         })
         context["dialogue_shape"] = _build_dialogue_shape(self.sim, npc_eid, context=context)
+        context["rapport_shape"] = _build_rapport_shape(self.sim, npc_eid, context=context)
         return context
 
     def _active_run_echo_for_dialogue_context(self, npc_pos, *, current_prop=None):
@@ -5984,6 +6178,517 @@ class NPCInteractionSystem(System):
         if extra > 0:
             sentences.append(f"There are {extra} more names behind them, but those are the ones I would start with.")
         return " ".join(sentences)
+
+    def _rapport_place_name(self, context):
+        for key in ("workplace_name", "owner_place_name", "home_name"):
+            value = str(context.get(key, "")).strip()
+            if value:
+                return value
+        return "this part of town"
+
+    def _rapport_day_note(self, context):
+        shape = context.get("rapport_shape") if isinstance(context.get("rapport_shape"), dict) else {}
+        mood = str(shape.get("day_mood", "steady") or "steady").strip().lower() or "steady"
+        place = self._rapport_place_name(context)
+        if mood == "frayed":
+            return f"{place} has been running sharp enough to get under the skin."
+        if mood == "tired":
+            return "Long enough that I can feel it in my shoulders."
+        if mood == "light":
+            return "Lighter than most, for once."
+        if mood == "warm":
+            return "Better than I expected, honestly."
+        return "Busy, but clean enough to stay ahead of it."
+
+    def _rapport_job_note(self, context):
+        shape = context.get("rapport_shape") if isinstance(context.get("rapport_shape"), dict) else {}
+        attitude = str(shape.get("work_attitude", "practical") or "practical").strip().lower() or "practical"
+        career_text = str(context.get("career_text", "")).strip() or "work"
+        if attitude == "proud":
+            return f"I take the {career_text} work seriously, even when it tries my patience."
+        if attitude == "duty_bound":
+            return f"Somebody has to hold the line on {career_text} work, so I do."
+        if attitude == "worn":
+            return f"It keeps me moving, but {career_text} work can take more out of a person than it gives back."
+        if attitude == "restless":
+            return f"I can do the {career_text} work, though I do not always want my whole life to calcify around it."
+        if attitude == "stuck":
+            return f"It pays, and some days that is the kindest thing I can say about {career_text} work."
+        if attitude == "improvised":
+            return "It changes day to day, and I make my peace with that."
+        return f"It is {career_text} work. I do it well and I go home when I can."
+
+    def _rapport_roots_note(self, context):
+        shape = context.get("rapport_shape") if isinstance(context.get("rapport_shape"), dict) else {}
+        attachment = float(shape.get("local_attachment", 0.5) or 0.5)
+        home_name = str(context.get("home_name", "")).strip()
+        workplace_name = str(context.get("workplace_name", "")).strip()
+        if attachment >= 0.72 and home_name:
+            return f"{home_name} is part of it. You stay somewhere long enough and it starts staking a claim back."
+        if attachment >= 0.58 and workplace_name and home_name and workplace_name.lower() != home_name.lower():
+            return f"Somewhere between {workplace_name} and {home_name}, this place stopped feeling temporary."
+        if attachment <= 0.3:
+            return "Maybe I just never found the right moment to pull loose."
+        if workplace_name:
+            return f"Work, habit, and a few faces around {workplace_name}. That is usually how roots sneak up on you."
+        return "People, habit, and the fact that leaving is easier in theory than in practice."
+
+    def _rapport_off_shift_note(self, context):
+        shape = context.get("rapport_shape") if isinstance(context.get("rapport_shape"), dict) else {}
+        playfulness = float(shape.get("playfulness", 0.5) or 0.5)
+        home_name = str(context.get("home_name", "")).strip()
+        workplace_name = str(context.get("workplace_name", "")).strip()
+        if playfulness >= 0.66:
+            return "I walk, eat something decent, and try to remember the day belongs to me for an hour."
+        if home_name:
+            return f"I usually head back toward {home_name} and let the noise burn off."
+        if workplace_name:
+            return f"I get clear of {workplace_name} long enough to hear myself think again."
+        return "I keep it quiet if I can and let the day peel off on its own."
+
+    def _rapport_care_note(self, context):
+        shape = context.get("rapport_shape") if isinstance(context.get("rapport_shape"), dict) else {}
+        pride = float(shape.get("profession_pride", 0.5) or 0.5)
+        attachment = float(shape.get("local_attachment", 0.5) or 0.5)
+        if pride >= 0.68 and attachment >= 0.6:
+            return "I care about doing the work right and not leaving the people around me to eat the cost of sloppy hands."
+        if attachment >= 0.68:
+            return "I care whether the people around here get to breathe easy, even when nobody is paying me to care."
+        if pride >= 0.68:
+            return "I care about the work landing clean and my name meaning something decent at the end of it."
+        return "A few people, a little quiet, and getting through the week with my name still feeling like mine."
+
+    def _relationship_anchor_episode_for_context(self, context):
+        anchor = context.get("relationship_anchor_episode") if isinstance(context, dict) else None
+        return anchor if isinstance(anchor, dict) else None
+
+    def _relationship_anchor_opening_line(self, context):
+        anchor = self._relationship_anchor_episode_for_context(context)
+        if not anchor:
+            return ""
+        kind = str(anchor.get("kind", "") or "").strip().lower()
+        tone = str(context.get("tone", "neutral") or "neutral").strip().lower() or "neutral"
+        if kind == "warned_me_off":
+            return "We have had this talk before. Keep it cleaner this time."
+        if kind == "i_pushed_too_far":
+            return "Last time you pushed too far. Do not make me drag us back there."
+        if kind == "i_insulted_them":
+            return "Last time you took a cheap shot. I have not misplaced that."
+        if kind == "offered_vouch":
+            return "You handled yourself well enough that I still remember offering my name beside yours."
+        if kind == "offered_introduction":
+            return "Good to see you again. Last time I offered to put you in touch with someone useful."
+        if kind == "offered_contact":
+            return "Good to see you again. I still remember pointing you toward a useful name."
+        if kind == "opened_up_personally":
+            return "Good to see you again. Last time you asked something real and I answered it."
+        if kind == "told_me_how_they_see_me":
+            return "Good to see you again. I was plain with you last time, and that still counts for something."
+        if kind in {"opened_up_about_work", "opened_up_about_roots"}:
+            return "Good to see you again. I remember where we left the last real conversation."
+        return ""
+
+    def _relationship_anchor_check_in_note(self, context):
+        anchor = self._relationship_anchor_episode_for_context(context)
+        if not anchor:
+            return "Same city, same weather in the bones. I am still here."
+        kind = str(anchor.get("kind", "") or "").strip().lower()
+        if kind == "opened_up_about_work":
+            return "Better than when we last talked about work, or at least steadier."
+        if kind == "opened_up_about_roots":
+            return "About the same. The place still has its hooks in me."
+        if kind == "opened_up_personally":
+            return "A little steadier than last time, which is enough to call a win."
+        if kind == "told_me_how_they_see_me":
+            return "About the same, maybe clearer around the edges than I was last time."
+        if kind == "offered_contact":
+            return "I have been all right. Still trying to point my attention where it helps."
+        if kind == "offered_introduction":
+            return "Not bad. Still trying to keep the useful lines between people from snapping."
+        if kind == "offered_vouch":
+            return "Holding together. I do not offer my name lightly, so I still think about who earns it."
+        if kind == "warned_me_off":
+            return "Quieter than the last time we crossed paths, which suits me."
+        if kind == "i_pushed_too_far":
+            return "Better than the last conversation ended, and I would like to keep it that way."
+        if kind == "i_insulted_them":
+            return "Steadier than the mood you caught me in last time."
+        return "Still upright. That counts."
+
+    def _relationship_anchor_social_preface(self, context, topic_id, *, outcome=""):
+        anchor = self._relationship_anchor_episode_for_context(context)
+        if not anchor:
+            return ""
+        topic_id = str(topic_id or "").strip().lower()
+        outcome = str(outcome or "").strip().lower()
+        if outcome not in {"open", "warm", "reserved", "rebuff"}:
+            outcome = ""
+        kind = str(anchor.get("kind", "") or "").strip().lower()
+        if kind in {"warned_me_off", "i_pushed_too_far", "i_insulted_them"}:
+            if topic_id in {"read_player", "care_about"}:
+                return "We are not talking on a blank slate."
+            if topic_id in {"contacts", "introduction", "vouch"} and outcome in {"reserved", "rebuff"}:
+                return "After last time, I am keeping this measured."
+            return ""
+        if topic_id == "read_player" and kind == "told_me_how_they_see_me":
+            return "I was already plain with you once."
+        if topic_id == "care_about" and kind in {"opened_up_personally", "opened_up_about_roots", "opened_up_about_work"}:
+            return "You have asked me real questions before."
+        if topic_id == "contacts" and kind in {"offered_contact", "offered_introduction"}:
+            return "You have heard me point toward useful people before."
+        if topic_id == "introduction" and kind == "offered_introduction":
+            return "This is not the first time I have been willing to make that bridge."
+        if topic_id == "vouch" and kind == "offered_vouch":
+            return "You already know I do not put my name next to just anyone."
+        return ""
+
+    def _rapport_relationship_notes(self, context):
+        npc_eid = context.get("npc_eid")
+        entry = self._player_person_contact_entry(npc_eid) if npc_eid is not None else None
+        profile = _relationship_read_profile(self.sim, self.player_eid, npc_eid, entry)
+        anchor_preface = self._relationship_anchor_social_preface(context, "read_player", outcome="open")
+        read_key = str(profile.get("read_key", "unknown") or "unknown").strip().lower() or "unknown"
+        note_map = {
+            "family": "I think of you as family.",
+            "partner": "You read like a partner to me, plain and simple.",
+            "friend": "You read like a friend.",
+            "trusted_coworker": "You read like somebody I could work beside and trust.",
+            "trusted_local": "You read like a familiar local I can trust.",
+            "protective": "I catch myself looking out for you.",
+            "trust": "I trust you more than I expected to.",
+            "comfortable": "You do not put me on edge, and that counts.",
+            "wary": "You make me keep one hand on the rail.",
+            "distrust": "I do not trust you.",
+            "unknown": "I am still working that out.",
+        }
+        warm_map = {
+            "family": "I think of you as family, and I do not say that lightly.",
+            "partner": "You read like a real partner to me, not just somebody passing through.",
+            "friend": "You read like a friend to me, and that is not a cheap word.",
+            "trusted_coworker": "You read like someone I could trust beside me when the floor goes bad.",
+            "trusted_local": "You read like one of ours, in the good sense.",
+            "protective": "I catch myself looking out for you before I even mean to.",
+            "trust": "I trust you more than I expected to, which is not nothing.",
+            "comfortable": "You do not put me on edge, and that goes farther than you might think.",
+            "wary": "You still make me watch myself around you.",
+            "distrust": "I do not trust you, and I would rather be plain than pretty about it.",
+            "unknown": "I have a read on you, but it is still more outline than person.",
+        }
+        base_note = note_map.get(read_key, note_map["unknown"])
+        warm_note = warm_map.get(read_key, warm_map["unknown"])
+        if anchor_preface:
+            base_note = f"{anchor_preface} {base_note}"
+            warm_note = f"{anchor_preface} {warm_note}"
+        return {
+            "profile": profile,
+            "note": base_note,
+            "warm_note": warm_note,
+        }
+
+    def _rapport_render_context(self, context):
+        rendered = dict(context or {})
+        relationship = self._rapport_relationship_notes(context)
+        extras = {
+            "rapport_place": self._rapport_place_name(context),
+            "rapport_day_note": self._rapport_day_note(context),
+            "rapport_job_note": self._rapport_job_note(context),
+            "rapport_roots_note": self._rapport_roots_note(context),
+            "rapport_off_shift_note": self._rapport_off_shift_note(context),
+            "rapport_care_note": self._rapport_care_note(context),
+            "rapport_check_in_note": self._relationship_anchor_check_in_note(context),
+            "rapport_read_note": relationship["note"],
+            "rapport_read_warm_note": relationship["warm_note"],
+        }
+        for key, value in tuple(extras.items()):
+            text = str(value or "").strip()
+            rendered[key] = text
+            rendered[f"{key}_lc"] = _dialogue_lower_start(text)
+        rendered["rapport_relationship_profile"] = relationship["profile"]
+        return rendered
+
+    def _rapport_topic_available(self, context, topic_id):
+        topic_id = str(topic_id or "").strip().lower()
+        if not bool(context.get("human", True)) or bool(context.get("guarded")):
+            return False
+        if topic_id == "rapport":
+            return not bool(context.get("door_answering"))
+        if topic_id == "check_in":
+            return (
+                bool(context.get("met_directly"))
+                and bool(context.get("relationship_has_nontrivial_history"))
+                and str(context.get("pressure_tier", "low")).strip().lower() != "high"
+            )
+        if topic_id == "job_feel":
+            return bool(str(context.get("career_text", "")).strip())
+        if topic_id == "roots":
+            return bool(self._history_summary(context))
+        if topic_id == "off_shift":
+            return bool(self._rapport_off_shift_note(context))
+        if topic_id == "care_about":
+            return (
+                float(context.get("social_standing", 0.0) or 0.0) >= 0.46
+                and int(context.get("opened_count", 0) or 0) >= 2
+                and str(context.get("pressure_tier", "low")).strip().lower() != "high"
+            )
+        if topic_id == "read_player":
+            return (
+                float(context.get("social_standing", 0.0) or 0.0) >= 0.58
+                and bool(context.get("met_directly"))
+                and int(context.get("opened_count", 0) or 0) >= 2
+            )
+        return True
+
+    def _rapport_topic_outcome(self, context, topic_id, *, ask_count=1):
+        shape = context.get("rapport_shape") if isinstance(context.get("rapport_shape"), dict) else {}
+        chattiness = float(shape.get("chattiness", 0.5) or 0.5)
+        privacy = float(shape.get("privacy", 0.5) or 0.5)
+        pride = float(shape.get("profession_pride", 0.5) or 0.5)
+        attachment = float(shape.get("local_attachment", 0.5) or 0.5)
+        playfulness = float(shape.get("playfulness", 0.5) or 0.5)
+        mood = str(shape.get("day_mood", "steady") or "steady").strip().lower() or "steady"
+        attitude = str(shape.get("work_attitude", "practical") or "practical").strip().lower() or "practical"
+
+        bond = context.get("bond") if isinstance(context.get("bond"), dict) else self._bond_snapshot(context.get("npc_eid")) or {}
+        trust = float(bond.get("trust", 0.0) or 0.0)
+        closeness = float(bond.get("closeness", 0.0) or 0.0)
+        standing = float(context.get("social_standing", 0.0) or 0.0)
+        tone = str(context.get("tone", "neutral") or "neutral").strip().lower() or "neutral"
+        pressure_tier = str(context.get("pressure_tier", "low") or "low").strip().lower() or "low"
+        pressure_penalty = {"low": 0.0, "medium": 0.06, "high": 0.14}.get(pressure_tier, 0.0)
+
+        needs = context.get("npc_needs") or NPCNeeds()
+        social_hunger = max(0.0, min(1.0, (52.0 - float(getattr(needs, "social", 55.0) or 55.0)) / 52.0))
+        fatigue = max(0.0, min(1.0, (46.0 - float(getattr(needs, "energy", 60.0) or 60.0)) / 46.0))
+        safety_stress = max(0.0, min(1.0, (54.0 - float(getattr(needs, "safety", 70.0) or 70.0)) / 54.0))
+
+        if topic_id == "check_in" and not self._rapport_topic_available(context, topic_id):
+            return "rebuff"
+        if topic_id == "care_about" and not self._rapport_topic_available(context, topic_id):
+            return "rebuff"
+        if topic_id == "read_player" and not self._rapport_topic_available(context, topic_id):
+            return "rebuff"
+
+        mood_bonus = {
+            "frayed": -0.07,
+            "tired": -0.04,
+            "steady": 0.0,
+            "light": 0.04,
+            "warm": 0.08,
+        }.get(mood, 0.0)
+        attitude_bonus = {
+            "proud": 0.08,
+            "duty_bound": 0.06,
+            "practical": 0.02,
+            "restless": -0.01,
+            "stuck": -0.03,
+            "worn": -0.05,
+            "improvised": 0.0,
+        }.get(attitude, 0.0)
+
+        if topic_id in {"rapport", "day_feel", "off_shift"}:
+            score = 0.22 + (chattiness * 0.3) + (playfulness * 0.14) + (social_hunger * 0.14) + (standing * 0.14)
+            score += mood_bonus - (privacy * 0.1) - (fatigue * 0.08) - (safety_stress * 0.1)
+        elif topic_id == "check_in":
+            anchor = self._relationship_anchor_episode_for_context(context) or {}
+            valence = str(anchor.get("valence", "neutral") or "neutral").strip().lower() or "neutral"
+            score = 0.24 + (chattiness * 0.18) + (trust * 0.18) + (closeness * 0.14) + (social_hunger * 0.12)
+            score += mood_bonus - (privacy * 0.08) - (fatigue * 0.08) - (safety_stress * 0.08)
+            if valence == "positive":
+                score += 0.08
+            elif valence == "negative":
+                score -= 0.08
+        elif topic_id == "job_feel":
+            score = 0.2 + (pride * 0.34) + (standing * 0.16) + (trust * 0.12)
+            score += attitude_bonus - (privacy * 0.08) - (fatigue * 0.08)
+        elif topic_id == "roots":
+            score = 0.18 + (attachment * 0.3) + (standing * 0.18) + (trust * 0.14)
+            score -= (privacy * 0.16) + (safety_stress * 0.06)
+        elif topic_id == "care_about":
+            score = 0.08 + (standing * 0.26) + (trust * 0.24) + (closeness * 0.12) + (attachment * 0.08) + (pride * 0.08)
+            score -= (privacy * 0.26) + (safety_stress * 0.08)
+        elif topic_id == "read_player":
+            relationship = self._rapport_relationship_notes(context)
+            read_key = str((relationship.get("profile") or {}).get("read_key", "unknown") or "unknown").strip().lower()
+            score = 0.16 + (standing * 0.22) + (trust * 0.18) + (closeness * 0.16) - (privacy * 0.14)
+            if read_key in {"friend", "family", "partner", "trusted_coworker", "trusted_local", "protective"}:
+                score += 0.08
+            elif read_key in {"wary", "distrust"}:
+                score -= 0.06
+        else:
+            score = 0.28
+
+        if tone == "friendly":
+            score += 0.05
+        elif tone == "wary":
+            score -= 0.1
+        score -= pressure_penalty
+        score -= max(0, int(ask_count) - 1) * (0.04 if topic_id in {"care_about", "read_player"} else 0.025)
+        score = max(0.0, min(1.0, score))
+
+        warm_threshold = 0.7 if topic_id in {"care_about", "read_player"} else 0.64
+        open_threshold = 0.5 if topic_id in {"care_about", "read_player"} else 0.42
+        reserved_threshold = 0.32 if topic_id in {"care_about", "read_player"} else 0.24
+
+        if topic_id == "read_player":
+            read_key = str(self._rapport_relationship_notes(context).get("profile", {}).get("read_key", "unknown") or "unknown").strip().lower()
+            if read_key in {"wary", "distrust", "unknown"}:
+                warm_threshold = 1.1
+
+        if score >= warm_threshold:
+            return "warm"
+        if score >= open_threshold:
+            return "open"
+        if score >= reserved_threshold:
+            return "reserved"
+        return "rebuff"
+
+    def _remember_bonding_dialogue_memory(self, npc_eid, *, approval=0.0, strength=0.0):
+        memory = self.sim.ecs.get(NPCMemory).get(npc_eid)
+        if memory is None or abs(float(approval)) < 0.01 or float(strength) <= 0.0:
+            return
+        strength = max(0.08, min(0.4, float(strength)))
+        approval = max(-1.0, min(1.0, float(approval)))
+        memory.remember(
+            self.sim.tick,
+            kind="actor_reputation",
+            strength=strength,
+            actor_eid=self.player_eid,
+            approval=approval,
+            via="bonding_dialogue",
+        )
+        if approval > 0.0:
+            memory.remember(
+                self.sim.tick,
+                kind="player_reputation",
+                strength=max(0.1, strength * 0.82),
+                player_eid=self.player_eid,
+                approval=approval,
+                via="bonding_dialogue",
+            )
+
+    def _rapport_bond_delta(self, topic_id, outcome):
+        topic_id = str(topic_id or "").strip().lower()
+        outcome = str(outcome or "").strip().lower()
+        deeper = topic_id in {"care_about", "read_player"}
+        if outcome == "open":
+            return (0.012, 0.02) if deeper else (0.008, 0.015)
+        if outcome == "warm":
+            return (0.02, 0.03) if deeper else (0.014, 0.024)
+        if outcome == "rebuff":
+            return (-0.015, -0.008) if deeper else (-0.01, 0.0)
+        return (0.0, 0.0)
+
+    def _dialogue_rapport_reaction_line(self, context, topic_id, *, ask_count=1, outcome="reserved"):
+        rendered_context = self._rapport_render_context(context)
+        fallback_order = {
+            "warm": ("warm", "open", "reserved"),
+            "open": ("open", "reserved"),
+            "reserved": ("reserved",),
+            "rebuff": ("rebuff", "reserved"),
+        }.get(str(outcome or "reserved").strip().lower(), ("reserved",))
+        for candidate in fallback_order:
+            line = _dialogue_topic_player_reaction_line(
+                topic_id,
+                seed=self.sim.seed,
+                npc_eid=context.get("npc_eid"),
+                count=ask_count,
+                outcome=candidate,
+                context=rendered_context,
+            )
+            if str(line or "").strip():
+                return line
+        return ""
+
+    def _resolve_rapport_topic(self, context, topic_id, *, ask_count=1):
+        topic_id = str(topic_id or "").strip().lower()
+        outcome = self._rapport_topic_outcome(context, topic_id, ask_count=ask_count)
+        line = self._dialogue_rapport_reaction_line(
+            context,
+            topic_id,
+            ask_count=ask_count,
+            outcome=outcome,
+        )
+        trust_delta, closeness_delta = self._rapport_bond_delta(topic_id, outcome)
+        if outcome in {"open", "warm", "rebuff"}:
+            self._shift_dialogue_bond(
+                context["npc_eid"],
+                trust_delta=trust_delta,
+                closeness_delta=closeness_delta,
+                guarded=False,
+            )
+        if outcome == "warm":
+            self._remember_bonding_dialogue_memory(
+                context["npc_eid"],
+                approval=0.22 if topic_id in {"care_about", "read_player"} else 0.16,
+                strength=0.22 if topic_id in {"care_about", "read_player"} else 0.16,
+            )
+        elif outcome == "rebuff":
+            self._remember_bonding_dialogue_memory(
+                context["npc_eid"],
+                approval=-0.18 if topic_id in {"care_about", "read_player"} else -0.1,
+                strength=0.16 if topic_id in {"care_about", "read_player"} else 0.1,
+            )
+
+        close_dialog = False
+        if outcome == "rebuff" and topic_id in {"care_about", "read_player"} and ask_count >= 2:
+            close_dialog = True
+            self._emit_dialogue_offended(
+                context["npc_eid"],
+                context_id=f"dialogue_{topic_id}",
+                perceived=0.34,
+                offense_score=10,
+            )
+        elif outcome == "rebuff" and topic_id in {"care_about", "read_player"}:
+            self._emit_dialogue_offended(
+                context["npc_eid"],
+                context_id=f"dialogue_{topic_id}",
+                perceived=0.18,
+                offense_score=6,
+            )
+
+        if not line:
+            if outcome == "rebuff":
+                line = "That is more personal than I want to go right now."
+            elif outcome == "warm":
+                line = "You asked that in a way I can answer honestly."
+            elif outcome == "open":
+                line = "Fair question."
+            else:
+                line = "Maybe another time."
+        preface = self._relationship_anchor_social_preface(context, topic_id, outcome=outcome)
+        npc_lines = [text for text in (preface, line) if str(text or "").strip()]
+
+        if outcome in {"open", "warm"}:
+            property_id = ""
+            current_prop = context.get("current_prop")
+            if isinstance(current_prop, dict):
+                property_id = str(current_prop.get("id", "") or "").strip()
+            episode_map = {
+                "job_feel": ("opened_up_about_work", "positive", "They opened up a little about how the work sits with them."),
+                "roots": ("opened_up_about_roots", "positive", "They spoke a little about what keeps them here."),
+                "care_about": ("opened_up_personally", "positive", "They opened up about what matters to them."),
+                "read_player": ("told_me_how_they_see_me", "positive", "They told you how they seem to read you."),
+            }
+            episode_bits = episode_map.get(topic_id)
+            if episode_bits:
+                self._remember_player_relationship_episode(
+                    context["npc_eid"],
+                    kind=episode_bits[0],
+                    valence=episode_bits[1],
+                    summary=episode_bits[2],
+                    property_id=property_id or None,
+                    source_topic=topic_id,
+                    relation_kind=(context.get("bond") or {}).get("kind"),
+                    standing=float(context.get("contact_standing", 0.0) or 0.0),
+                    met_directly=True,
+                    benefits={"known_name"},
+                )
+
+        return {
+            "npc_lines": npc_lines,
+            "close": bool(close_dialog),
+            "social_outcome": outcome,
+        }
 
     def _introduction_target(self, context):
         leads = list(context.get("social_leads", ()) or ())
@@ -8285,10 +8990,35 @@ class NPCInteractionSystem(System):
             perceived=perceived,
             offense_score=offense_score,
         )
+        if tactic == "pry" and outcome in {"wary", "fail"}:
+            self._remember_player_relationship_episode(
+                npc_eid,
+                kind="i_pushed_too_far",
+                valence="negative",
+                summary="You pushed too far and they closed up.",
+                source_topic=tactic,
+                relation_kind=(context.get("bond") or {}).get("kind"),
+                standing=float(context.get("contact_standing", 0.0) or 0.0),
+                met_directly=bool(context.get("met_directly")),
+                benefits={"known_name"} if self._player_knows_person_name(npc_eid) else (),
+            )
+        elif tactic == "insult" and outcome in {"wary", "fail"}:
+            self._remember_player_relationship_episode(
+                npc_eid,
+                kind="i_insulted_them",
+                valence="negative",
+                summary="You insulted them and it landed badly.",
+                source_topic=tactic,
+                relation_kind=(context.get("bond") or {}).get("kind"),
+                standing=float(context.get("contact_standing", 0.0) or 0.0),
+                met_directly=bool(context.get("met_directly")),
+                benefits={"known_name"} if self._player_knows_person_name(npc_eid) else (),
+            )
         return {
             "npc_lines": [line],
             "close": bool(close_dialog),
             "social_misstep": tactic,
+            "social_outcome": outcome,
         }
 
     def _say(self, bank_id, context, *, topic_id="", count=0, salt="", **slots):
@@ -8481,6 +9211,23 @@ class NPCInteractionSystem(System):
     def _dialogue_narration_line(self, text):
         return str(text or "").strip()
 
+    def _dialogue_social_reaction_line(self, context, topic_id, *, ask_count=1, outcome=""):
+        npc_eid = context.get("npc_eid") if isinstance(context, dict) else None
+        if npc_eid is None:
+            return ""
+        reaction_context = dict(context or {})
+        reaction_context["opened_count"] = int(self._dialogue_memory(npc_eid).get("opened_count", 0))
+        line = _social_reaction_narration(
+            self.sim,
+            npc_eid,
+            topic_id=topic_id,
+            outcome=outcome,
+            ask_count=ask_count,
+            context=reaction_context,
+            rapport_shape=reaction_context.get("rapport_shape"),
+        )
+        return self._dialogue_narration_line(line)
+
     def _dialogue_human_narration_line(self, context):
         identity = context.get("identity")
         if not is_human_identity(identity):
@@ -8610,6 +9357,9 @@ class NPCInteractionSystem(System):
             elif context.get("recent_offense"):
                 action = str(context["recent_offense"].get("data", {}).get("action", "trouble")).replace("_", " ").strip() or "trouble"
                 lines.append(self._dialogue_npc_line(context["npc_name"], f"I still remember your {action}."))
+            anchor_line = self._relationship_anchor_opening_line(context)
+            if anchor_line:
+                lines.append(self._dialogue_npc_line(context["npc_name"], anchor_line))
             return self._dialogue_opening_lines_with_narration(context, lines)
         if context.get("intro_source_name") and open_count <= 1:
             bank_id = "greet_introduced"
@@ -8628,6 +9378,9 @@ class NPCInteractionSystem(System):
             intro_source_name=context.get("intro_source_name", "someone"),
         )
         lines = [self._dialogue_npc_line(context["npc_name"], first)]
+        anchor_line = self._relationship_anchor_opening_line(context)
+        if anchor_line:
+            lines.append(self._dialogue_npc_line(context["npc_name"], anchor_line))
         for shaped_line in _shaped_opening_lines(context, limit=1):
             formatted = self._dialogue_npc_line(context["npc_name"], shaped_line)
             if formatted and formatted not in lines:
@@ -8680,6 +9433,8 @@ class NPCInteractionSystem(System):
             ):
                 continue
             if topic_id in {"street_buy_accept", "street_buy_decline"} and not context.get("street_buy_offer_pending"):
+                continue
+            if topic_id in {"rapport", "check_in", "day_feel", "job_feel", "roots", "off_shift", "care_about", "read_player"} and not self._rapport_topic_available(context, topic_id):
                 continue
             if topic_id == "routine" and not self._routine_summary(context):
                 continue
@@ -8966,6 +9721,20 @@ class NPCInteractionSystem(System):
                 introduced=True,
                 benefits=("known_name",),
             ))
+        self._remember_player_relationship_episode(
+            lead.get("eid"),
+            kind="introduced_to_me",
+            valence="neutral",
+            summary=f"You were introduced to {lead.get('name', 'someone')} by {context['npc_name']}.",
+            property_id=lead.get("property_id"),
+            other_person_eid=context["npc_eid"],
+            source_topic="introduction",
+            source_eid=context["npc_eid"],
+            relation_kind=lead.get("relation_kind"),
+            standing=standing,
+            introduced=True,
+            benefits={"known_name"},
+        )
 
         return {
             "lead": lead,
@@ -8976,12 +9745,21 @@ class NPCInteractionSystem(System):
 
     def _dialogue_contact_response(self, context, *, vouch=False):
         topic_id = "vouch" if vouch else "contacts"
+        ask_count = self._dialogue_topic_count(context["npc_eid"], topic_id)
+        standing = float(context.get("contact_standing", 0.0) or 0.0)
+        preface = self._relationship_anchor_social_preface(context, topic_id, outcome="open")
         if context.get("guarded"):
             bank_id = "contacts_hard_no"
-            return self._say(bank_id, context, topic_id=topic_id, count=self._dialogue_topic_count(context["npc_eid"], topic_id), npc_name=context["npc_name"])
+            return {
+                "line": self._say(bank_id, context, topic_id=topic_id, count=ask_count, npc_name=context["npc_name"]),
+                "social_outcome": "rebuff",
+            }
         if self._pressure_contact_blocked(context, "vouch" if vouch else "contact"):
             bank_id = self._pressure_contact_bank("vouch_caution_no" if vouch else "contacts_caution_no", context)
-            return self._say(bank_id, context, topic_id=topic_id, count=self._dialogue_topic_count(context["npc_eid"], topic_id), npc_name=context["npc_name"])
+            return {
+                "line": self._say(bank_id, context, topic_id=topic_id, count=ask_count, npc_name=context["npc_name"]),
+                "social_outcome": "reserved",
+            }
         offer = self._offer_contact(
             npc_eid=context["npc_eid"],
             workplace_prop=context.get("workplace_prop"),
@@ -8995,35 +9773,64 @@ class NPCInteractionSystem(System):
             if vouch:
                 if self._pressure_offer_is_cautious(context, "vouch"):
                     bank_id = self._pressure_contact_bank("vouch_offer_caution", context)
+                    outcome = "reserved"
                 else:
-                    bank_id = "vouch_offer" if self._dialogue_topic_count(context["npc_eid"], "vouch") <= 1 else "vouch_repeat"
+                    bank_id = "vouch_offer" if ask_count <= 1 else "vouch_repeat"
+                    outcome = "warm" if standing >= 0.62 else "open"
             else:
                 if self._pressure_offer_is_cautious(context, "contact"):
                     bank_id = self._pressure_contact_bank("contacts_offer_caution", context)
+                    outcome = "reserved"
                 else:
-                    bank_id = "contacts_offer" if self._dialogue_topic_count(context["npc_eid"], "contacts") <= 1 else "contacts_repeat"
-            return self._say(bank_id, context, topic_id=topic_id, count=self._dialogue_topic_count(context["npc_eid"], topic_id), npc_name=context["npc_name"], contact_place=prop_name)
+                    bank_id = "contacts_offer" if ask_count <= 1 else "contacts_repeat"
+                    outcome = "warm" if standing >= 0.64 else "open"
+            return {
+                "line": self._say(
+                    bank_id,
+                    context,
+                    topic_id=topic_id,
+                    count=ask_count,
+                    npc_name=context["npc_name"],
+                    contact_place=prop_name,
+                ),
+                "social_outcome": outcome,
+                "preface": preface,
+                "episode_kind": "offered_vouch" if vouch else "offered_contact",
+                "episode_summary": "They offered to vouch for you." if vouch else "They pointed you toward a useful contact.",
+            }
         if not vouch:
             target = self._introduction_target(context)
             if target:
                 if self._pressure_contact_blocked(context, "introduction"):
-                    return self._say("contacts_caution_no", context, topic_id=topic_id, count=self._dialogue_topic_count(context["npc_eid"], topic_id), npc_name=context["npc_name"])
-                bank_id = "contacts_person_hint" if self._dialogue_topic_count(context["npc_eid"], "contacts") <= 1 else "contacts_person_repeat"
-                return self._say(
-                    bank_id,
-                    context,
-                    topic_id=topic_id,
-                    count=self._dialogue_topic_count(context["npc_eid"], topic_id),
-                    contact_name=target.get("name", "someone"),
-                    contact_context=self._introduction_context_text(target),
-                    **self._human_pronoun_slots(
-                        eid=target.get("eid"),
-                        personal_name=target.get("name", "someone"),
-                        prefix="contact",
+                    return {
+                        "line": self._say("contacts_caution_no", context, topic_id=topic_id, count=ask_count, npc_name=context["npc_name"]),
+                        "social_outcome": "reserved",
+                    }
+                bank_id = "contacts_person_hint" if ask_count <= 1 else "contacts_person_repeat"
+                return {
+                    "line": self._say(
+                        bank_id,
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                        contact_name=target.get("name", "someone"),
+                        contact_context=self._introduction_context_text(target),
+                        **self._human_pronoun_slots(
+                            eid=target.get("eid"),
+                            personal_name=target.get("name", "someone"),
+                            prefix="contact",
+                        ),
                     ),
-                )
+                    "social_outcome": "warm" if standing >= 0.62 else "open",
+                    "preface": preface,
+                    "episode_kind": "offered_contact",
+                    "episode_summary": "They pointed you toward someone useful to know.",
+                }
         bank_id = "vouch_soft_no" if vouch else "contacts_soft_no"
-        return self._say(bank_id, context, topic_id=topic_id, count=self._dialogue_topic_count(context["npc_eid"], topic_id), npc_name=context["npc_name"])
+        return {
+            "line": self._say(bank_id, context, topic_id=topic_id, count=ask_count, npc_name=context["npc_name"]),
+            "social_outcome": "reserved",
+        }
 
     def _resolve_dialog_topic(self, context, topic_id):
         topic_id = str(topic_id or "").strip().lower()
@@ -9050,11 +9857,15 @@ class NPCInteractionSystem(System):
                     )
                 ]
             }
+        if topic_id == "roots":
+            return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
         if topic_id == "job":
             if context.get("career_text"):
                 bank_id = "job_first" if ask_count <= 1 else "job_repeat"
                 return {"npc_lines": [self._say(bank_id, context, topic_id=topic_id, count=ask_count, career_text=context["career_text"])]}
             return {"npc_lines": [self._say("job_none", context, topic_id=topic_id, count=ask_count)]}
+        if topic_id == "job_feel":
+            return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
         if topic_id == "routine":
             quality = self._dialogue_pressure_intel_quality(context, topic_id)
             summary = self._routine_summary(context, quality=quality)
@@ -9072,6 +9883,18 @@ class NPCInteractionSystem(System):
             if prep_detail:
                 lines.append(prep_detail)
             return {"npc_lines": lines}
+        if topic_id == "rapport":
+            return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
+        if topic_id == "check_in":
+            return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
+        if topic_id == "day_feel":
+            return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
+        if topic_id == "off_shift":
+            return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
+        if topic_id == "care_about":
+            return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
+        if topic_id == "read_player":
+            return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
         if topic_id == "workplace":
             workplace_prop = context.get("workplace_prop")
             if workplace_prop:
@@ -9233,28 +10056,55 @@ class NPCInteractionSystem(System):
                 lead = offer.get("lead") or {}
                 if self._pressure_offer_is_cautious(context, "introduction"):
                     bank_id = "introduction_offer_caution"
+                    social_outcome = "reserved"
                 else:
                     bank_id = "introduction_offer" if ask_count <= 1 else "introduction_repeat"
+                    social_outcome = "warm" if float(offer.get("standing", 0.0) or 0.0) >= 0.62 else "open"
+                self._remember_player_relationship_episode(
+                    npc_eid,
+                    kind="offered_introduction",
+                    valence="positive",
+                    summary=f"They offered to introduce you to {lead.get('name', 'someone')}.",
+                    property_id=str(lead.get("property_id", "") or "").strip() or None,
+                    other_person_eid=lead.get("eid"),
+                    source_topic=topic_id,
+                    relation_kind=(context.get("bond") or {}).get("kind"),
+                    standing=float(offer.get("standing", 0.0) or 0.0),
+                    met_directly=True,
+                    benefits={"known_name"},
+                )
                 return {
                     "npc_lines": [
-                        self._say(
-                            bank_id,
-                            context,
-                            topic_id=topic_id,
-                            count=ask_count,
-                            contact_name=lead.get("name", "someone"),
-                            contact_context=offer.get("contact_context", "someone worth meeting"),
-                            **self._human_pronoun_slots(
-                                eid=lead.get("eid"),
-                                personal_name=lead.get("name", "someone"),
-                                prefix="contact",
+                        text
+                        for text in (
+                            self._relationship_anchor_social_preface(context, topic_id, outcome=social_outcome),
+                            self._say(
+                                bank_id,
+                                context,
+                                topic_id=topic_id,
+                                count=ask_count,
+                                contact_name=lead.get("name", "someone"),
+                                contact_context=offer.get("contact_context", "someone worth meeting"),
+                                **self._human_pronoun_slots(
+                                    eid=lead.get("eid"),
+                                    personal_name=lead.get("name", "someone"),
+                                    prefix="contact",
+                                ),
                             ),
                         )
-                    ]
+                        if str(text or "").strip()
+                    ],
+                    "social_outcome": social_outcome,
                 }
             if self._pressure_contact_blocked(context, "introduction"):
-                return {"npc_lines": [self._say("introduction_caution_no", context, topic_id=topic_id, count=ask_count)]}
-            return {"npc_lines": [self._say("introduction_soft_no", context, topic_id=topic_id, count=ask_count)]}
+                return {
+                    "npc_lines": [self._say("introduction_caution_no", context, topic_id=topic_id, count=ask_count)],
+                    "social_outcome": "reserved",
+                }
+            return {
+                "npc_lines": [self._say("introduction_soft_no", context, topic_id=topic_id, count=ask_count)],
+                "social_outcome": "reserved",
+            }
         if topic_id == "services":
             if context.get("service_summary"):
                 return {"npc_lines": [self._say("services", context, topic_id=topic_id, count=ask_count, service_summary=context["service_summary"], service_summary_cap=context["service_summary_cap"])]}
@@ -9674,9 +10524,61 @@ class NPCInteractionSystem(System):
         if topic_id in self.MISSTEP_TOPICS:
             return self._resolve_social_misstep(context, topic_id, ask_count=ask_count)
         if topic_id == "contacts":
-            return {"npc_lines": [self._dialogue_contact_response(context, vouch=False)]}
+            contact_response = self._dialogue_contact_response(context, vouch=False)
+            if contact_response.get("episode_kind") and contact_response.get("social_outcome") in {"open", "warm", "reserved"}:
+                place = context.get("workplace_prop") or context.get("owned_prop") or context.get("current_prop")
+                property_id = str(place.get("id", "") or "").strip() if isinstance(place, dict) else ""
+                self._remember_player_relationship_episode(
+                    npc_eid,
+                    kind=contact_response.get("episode_kind"),
+                    valence="positive",
+                    summary=str(contact_response.get("episode_summary", "")).strip(),
+                    property_id=property_id or None,
+                    source_topic=topic_id,
+                    relation_kind=(context.get("bond") or {}).get("kind"),
+                    standing=float(context.get("contact_standing", 0.0) or 0.0),
+                    met_directly=True,
+                    benefits={"known_name"},
+                )
+            return {
+                "npc_lines": [
+                    text
+                    for text in (
+                        contact_response.get("preface", ""),
+                        contact_response.get("line", ""),
+                    )
+                    if str(text or "").strip()
+                ],
+                "social_outcome": contact_response.get("social_outcome", ""),
+            }
         if topic_id == "vouch":
-            return {"npc_lines": [self._dialogue_contact_response(context, vouch=True)]}
+            contact_response = self._dialogue_contact_response(context, vouch=True)
+            if contact_response.get("episode_kind") and contact_response.get("social_outcome") in {"open", "warm", "reserved"}:
+                place = context.get("workplace_prop") or context.get("owned_prop") or context.get("current_prop")
+                property_id = str(place.get("id", "") or "").strip() if isinstance(place, dict) else ""
+                self._remember_player_relationship_episode(
+                    npc_eid,
+                    kind=contact_response.get("episode_kind"),
+                    valence="positive",
+                    summary=str(contact_response.get("episode_summary", "")).strip(),
+                    property_id=property_id or None,
+                    source_topic=topic_id,
+                    relation_kind=(context.get("bond") or {}).get("kind"),
+                    standing=float(context.get("contact_standing", 0.0) or 0.0),
+                    met_directly=True,
+                    benefits={"known_name"},
+                )
+            return {
+                "npc_lines": [
+                    text
+                    for text in (
+                        contact_response.get("preface", ""),
+                        contact_response.get("line", ""),
+                    )
+                    if str(text or "").strip()
+                ],
+                "social_outcome": contact_response.get("social_outcome", ""),
+            }
         if topic_id == "trade":
             if context.get("trade_context"):
                 bank_id = self._pressure_contact_bank("trade_yes_caution", context) if self._pressure_offer_is_cautious(context, "trade") else "trade_yes"
@@ -10274,12 +11176,13 @@ class NPCInteractionSystem(System):
         state = self._dialog_ui_state()
         transcript = list(state.get("transcript", ()) or ())
         player_line = str(player_line_override or "").strip()
+        ask_count = self._dialogue_topic_count(context.get("npc_eid"), topic_id)
         if not player_line:
             player_line = _dialogue_topic_player_line(
                 topic_id,
                 seed=getattr(self.sim, "seed", 0),
                 npc_eid=context.get("npc_eid"),
-                count=self._dialogue_topic_count(context.get("npc_eid"), topic_id),
+                count=ask_count,
                 context=context,
                 previous_topic_id=previous_topic_id,
                 total_asked=self._dialogue_total_topics_asked(context.get("npc_eid")),
@@ -10287,6 +11190,16 @@ class NPCInteractionSystem(System):
         transcript.append(
             self._dialogue_player_line(player_line)
         )
+        social_outcome = str(response.get("social_outcome", "") or "").strip().lower()
+        if social_outcome:
+            narration = self._dialogue_social_reaction_line(
+                context,
+                str(response.get("social_reaction_topic_id", topic_id) or topic_id),
+                ask_count=ask_count,
+                outcome=social_outcome,
+            )
+            if narration:
+                transcript.append(narration)
         for line in response.get("npc_lines", ()) or ():
             formatted = self._dialogue_npc_line(context["npc_name"], line)
             if formatted:
@@ -10347,6 +11260,7 @@ class NPCInteractionSystem(System):
         )
         if fresh:
             self._mark_interacted(npc_eid)
+        self._set_dialogue_cooldown(npc_eid, 120)
         player_needs = self.sim.ecs.get(NPCNeeds).get(self.player_eid)
         if fresh and not context.get("guarded"):
             rapport = self._conversation_rapport()
@@ -10361,6 +11275,7 @@ class NPCInteractionSystem(System):
         if not context.get("human"):
             self._emit_simple_npc_interaction(context)
             return False
+        self._remember_direct_human_meeting(context)
         self._open_dialogue(
             context,
             prompt_lines=prompt_lines,
@@ -10412,6 +11327,121 @@ class NPCInteractionSystem(System):
             prompt_lines=prompt_lines,
             highlight_topic_ids=highlight_topic_ids,
         )
+
+    def on_npc_warn_property(self, event):
+        if event.data.get("offender_eid") != self.player_eid:
+            return
+        npc_eid = event.data.get("npc_eid")
+        identity = self.sim.ecs.get(CreatureIdentity).get(npc_eid) if npc_eid is not None else None
+        if npc_eid is None or not is_human_identity(identity):
+            return
+        bond = self._bond_snapshot(npc_eid) or {}
+        prop = self.sim.properties.get(str(event.data.get("property_id", "") or "").strip())
+        property_id = str((prop or {}).get("id", "") or "").strip() if isinstance(prop, dict) else ""
+        property_name = str((prop or {}).get("name", property_id or "the place")).strip() if isinstance(prop, dict) else "the place"
+        standing = max(0.08, float(self._contact_standing(bond, 0.0) or 0.0) * 0.4)
+        self._remember_player_relationship_episode(
+            npc_eid,
+            kind="warned_me_off",
+            valence="negative",
+            summary=f"They warned you away from {property_name}.",
+            property_id=property_id or None,
+            source_topic="warn_property",
+            relation_kind=str(bond.get("kind", "") or "local").strip().lower() or "local",
+            standing=standing,
+            met_directly=False,
+        )
+
+    def _relationship_dialogue_request(self, context):
+        if not isinstance(context, dict):
+            return None
+        if not bool(context.get("human")) or bool(context.get("door_answering")) or bool(context.get("peaceful_orders_only")):
+            return None
+        if bool(context.get("guarded")):
+            return None
+        pressure_tier = str(context.get("pressure_tier", "low") or "low").strip().lower() or "low"
+        if pressure_tier == "high":
+            return None
+        tone = str(context.get("tone", "neutral") or "neutral").strip().lower() or "neutral"
+        bond = context.get("bond") or self._bond_snapshot(context.get("npc_eid")) or {}
+        trust = float(bond.get("trust", 0.0) or 0.0)
+        closeness = float(bond.get("closeness", 0.0) or 0.0)
+        standing = float(context.get("contact_standing", 0.0) or 0.0)
+        anchor = self._relationship_anchor_episode_for_context(context) or {}
+        anchor_kind = str(anchor.get("kind", "") or "").strip().lower()
+        anchor_valence = str(anchor.get("valence", "neutral") or "neutral").strip().lower() or "neutral"
+
+        if self._rapport_topic_available(context, "check_in") and anchor_valence == "negative" and tone in {"wary", "neutral"}:
+            prompt = "We should keep last time in mind if we are talking again."
+            return {"prompt_lines": (prompt,), "highlight_topic_ids": ("check_in",), "score": 0.62}
+        if self._rapport_topic_available(context, "check_in") and (tone == "friendly" or trust >= 0.44 or closeness >= 0.4):
+            prompt = "Good to see you again. We can pick up where we left it."
+            if anchor_kind == "offered_vouch":
+                prompt = "Good to see you again. If you want to pick that thread back up, ask."
+            return {"prompt_lines": (prompt,), "highlight_topic_ids": ("check_in",), "score": 0.76 + (trust * 0.08) + (closeness * 0.05)}
+        if context.get("social_leads") and standing >= 0.5:
+            prompt = "If you still need a useful name around here, ask."
+            return {"prompt_lines": (prompt,), "highlight_topic_ids": ("contacts",), "score": 0.58 + (standing * 0.06)}
+        if context.get("run_objective_visible") or context.get("opportunity_summary"):
+            prompt = "If you are still looking for a line, I might have one."
+            return {"prompt_lines": (prompt,), "highlight_topic_ids": ("opportunities",), "score": 0.5 + (trust * 0.04)}
+        return None
+
+    def _tick_relationship_dialogue_requests(self):
+        state = self._dialog_ui_state()
+        if state.get("open") or self.player_eid is None:
+            return
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if not player_pos:
+            return
+        positions = self.sim.ecs.get(Position)
+        cooldowns = self._npc_dialogue_cooldown_map()
+        best = None
+        for npc_eid, ai in self.sim.ecs.get(AI).items():
+            if npc_eid == self.player_eid or ai is None:
+                continue
+            if int(cooldowns.get(int(npc_eid), 0) or 0) > int(self.sim.tick):
+                continue
+            if self._recently_interacted(npc_eid):
+                continue
+            pos = positions.get(npc_eid)
+            if not pos or int(pos.z) != int(player_pos.z):
+                continue
+            distance = _manhattan(pos.x, pos.y, player_pos.x, player_pos.y)
+            if distance > 4:
+                continue
+            if str(getattr(ai, "state", "") or "").strip().lower() in THREAT_STATES:
+                continue
+            if getattr(ai, "target_eid", None) == self.player_eid:
+                continue
+            context = self._dialogue_context(npc_eid, allow_distant=True)
+            if not context:
+                continue
+            request = self._relationship_dialogue_request(context)
+            if not isinstance(request, dict):
+                continue
+            score = float(request.get("score", 0.0) or 0.0) - (distance * 0.05)
+            if score <= 0.0:
+                continue
+            roll = random.Random(
+                f"{self.sim.seed}:relationship-dialogue-request:{npc_eid}:{self.sim.tick // 30}:{distance}:{request.get('highlight_topic_ids', ())}"
+            ).random()
+            chance = max(0.0, min(0.74, score))
+            if roll > chance:
+                continue
+            if best is None or score > best[0]:
+                best = (score, int(npc_eid), request)
+        if best is None:
+            return
+        _score, npc_eid, request = best
+        self._set_dialogue_cooldown(npc_eid, 240)
+        self.sim.emit(Event(
+            "npc_dialogue_request",
+            eid=self.player_eid,
+            npc_eid=npc_eid,
+            prompt_lines=tuple(request.get("prompt_lines", ()) or ()),
+            highlight_topic_ids=tuple(request.get("highlight_topic_ids", ()) or ()),
+        ))
 
     def on_dialog_topic_request(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -10646,6 +11676,7 @@ class NPCInteractionSystem(System):
         tick = self.sim.tick
         if tick % self.CONTRACTOR_TICK_INTERVAL != 0:
             return
+        self._tick_relationship_dialogue_requests()
         self._tick_contractors()
 
     def _tick_contractors(self):

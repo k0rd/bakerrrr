@@ -544,6 +544,56 @@ def _known_location_list_line(row, *, ordinal=1, selected=False):
     return _rich_line(segments, text=f"{'>' if selected else ' '}{max(1, int(ordinal)):02d} {_line_text(base_line)} | {confidence}%{' | rep ' + ''.join(str(designation.get('symbol', '')).strip()[:2] for designation in designations[:3]) if designations else ''}")
 
 
+def _known_person_detail_lines(row):
+    row = row if isinstance(row, dict) else {}
+    name = str(row.get("name", "<unknown>")).strip() or "<unknown>"
+    appearance = str(row.get("appearance_description", "<unknown>")).strip() or "<unknown>"
+    relationship = str(row.get("relationship_detail", "<unknown>")).strip() or "<unknown>"
+    connection = str(row.get("connection_text", "<unknown>")).strip() or "<unknown>"
+    history_lines = tuple(row.get("history_lines", ()) or ())
+
+    lines = [name]
+    lines.append(f"Appearance: {appearance}")
+    lines.append(f"How they seem to feel about you: {relationship}")
+    lines.append(f"Connection: {connection}")
+    lines.append("Shared history:")
+    for history in history_lines or ("<unknown>",):
+        bullet = _bullet_display_line(history, bullet="-", bullet_color="building_edge")
+        if bullet:
+            lines.append(bullet)
+    for fact in row.get("fact_lines", ()):
+        bullet = _bullet_display_line(fact, bullet="-", bullet_color="building_edge")
+        if bullet:
+            lines.append(bullet)
+    return lines
+
+
+def _known_person_list_line(row, *, ordinal=1, selected=False):
+    row = row if isinstance(row, dict) else {}
+    name = str(row.get("name", "<unknown>")).strip() or "<unknown>"
+    appearance = str(row.get("appearance_summary", "<unknown>")).strip() or "<unknown>"
+    relationship = str(row.get("relationship_summary", "<unknown>")).strip() or "<unknown>"
+    marker_color = "player" if selected else "building_edge"
+    marker_attrs = getattr(curses, "A_BOLD", 0) if selected else 0
+    name_color = "human" if name != "<unknown>" else "building_edge"
+    appearance_color = "property_asset" if appearance != "<unknown>" else "building_edge"
+    relationship_color = "property_service" if relationship not in {"<unknown>", "do not trust you", "on edge around you"} else (
+        "projectile" if relationship in {"do not trust you", "on edge around you"} else "building_edge"
+    )
+
+    segments = [
+        _segment(">" if selected else " ", color=marker_color, attrs=marker_attrs),
+        _segment(f"{max(1, int(ordinal)):02d} ", color="building_edge", attrs=marker_attrs),
+        _segment(name, color=name_color, attrs=marker_attrs),
+        _segment(" | ", color="building_edge"),
+        _segment(appearance, color=appearance_color),
+        _segment(" | ", color="building_edge"),
+        _segment(relationship, color=relationship_color),
+    ]
+    plain = f"{'>' if selected else ' '}{max(1, int(ordinal)):02d} {name} | {appearance} | {relationship}"
+    return _rich_line(segments, text=plain)
+
+
 def _wrap_text_lines(text, width):
     width = max(1, int(width))
     raw = _line_text(text)

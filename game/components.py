@@ -1963,6 +1963,9 @@ class PropertyKnowledge:
 
 
 class ContactLedger:
+    PERSON_EPISODE_LIMIT = 12
+    PERSON_EPISODE_DEDUPE_WINDOW = 14400
+
     def __init__(self):
         self.by_property = {}
         self.by_person = {}
@@ -1984,6 +1987,139 @@ class ContactLedger:
         except (TypeError, ValueError):
             key = person_eid
         return self.by_person.get(key)
+
+    def _normalize_person_episode(self, episode):
+        if not isinstance(episode, dict):
+            return None
+        kind = str(episode.get("kind", "") or "").strip().lower()
+        summary = str(episode.get("summary", "") or "").strip()
+        if not kind or not summary:
+            return None
+        valence = str(episode.get("valence", "neutral") or "neutral").strip().lower() or "neutral"
+        if valence not in {"positive", "negative", "neutral"}:
+            valence = "neutral"
+        try:
+            tick = int(episode.get("tick", 0) or 0)
+        except (TypeError, ValueError):
+            tick = 0
+        normalized = {
+            "kind": kind,
+            "tick": tick,
+            "valence": valence,
+            "summary": summary,
+        }
+        property_id = str(episode.get("property_id", "") or "").strip()
+        if property_id:
+            normalized["property_id"] = property_id
+        other_person_eid = episode.get("other_person_eid")
+        if other_person_eid is not None:
+            try:
+                normalized["other_person_eid"] = int(other_person_eid)
+            except (TypeError, ValueError):
+                normalized["other_person_eid"] = other_person_eid
+        source_topic = str(episode.get("source_topic", "") or "").strip().lower()
+        if source_topic:
+            normalized["source_topic"] = source_topic
+        return normalized
+
+    def _normalize_person_episodes(self, episodes, *, limit=None):
+        cleaned = []
+        seen = set()
+        for raw in tuple(episodes or ()):
+            episode = self._normalize_person_episode(raw)
+            if not episode:
+                continue
+            key = (
+                episode.get("kind"),
+                int(episode.get("tick", 0) or 0),
+                episode.get("summary"),
+                episode.get("property_id"),
+                episode.get("other_person_eid"),
+                episode.get("source_topic"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(episode)
+        cleaned.sort(key=lambda record: int(record.get("tick", 0) or 0), reverse=True)
+        max_items = self.PERSON_EPISODE_LIMIT if limit is None else max(1, int(limit))
+        return tuple(cleaned[:max_items])
+
+    def remember_person_episode(
+        self,
+        person_eid,
+        *,
+        kind,
+        tick=0,
+        valence="neutral",
+        summary="",
+        property_id=None,
+        other_person_eid=None,
+        source_topic=None,
+        dedupe_window=None,
+        limit=None,
+    ):
+        self._ensure_maps()
+        try:
+            key = int(person_eid)
+        except (TypeError, ValueError):
+            key = person_eid
+
+        existing = self.by_person.get(key)
+        if not isinstance(existing, dict):
+            existing = {
+                "source_eid": None,
+                "relation_kind": None,
+                "standing": 0.0,
+                "tick": int(tick or 0),
+                "property_id": None,
+                "benefits": (),
+                "introduced": False,
+                "met_directly": False,
+                "first_met_tick": None,
+                "last_met_tick": None,
+                "identity_snapshot": None,
+                "episodes": (),
+            }
+        records = list(self._normalize_person_episodes(existing.get("episodes", ()), limit=limit))
+        candidate = self._normalize_person_episode({
+            "kind": kind,
+            "tick": tick,
+            "valence": valence,
+            "summary": summary,
+            "property_id": property_id,
+            "other_person_eid": other_person_eid,
+            "source_topic": source_topic,
+        })
+        if not candidate:
+            self.by_person[key] = existing
+            return False
+
+        window = self.PERSON_EPISODE_DEDUPE_WINDOW if dedupe_window is None else max(0, int(dedupe_window))
+        replaced = False
+        for idx, record in enumerate(list(records)):
+            if str(record.get("kind", "") or "").strip().lower() != candidate["kind"]:
+                continue
+            if str(record.get("property_id", "") or "").strip() != str(candidate.get("property_id", "") or "").strip():
+                continue
+            if record.get("other_person_eid") != candidate.get("other_person_eid"):
+                continue
+            if abs(int(candidate.get("tick", 0) or 0) - int(record.get("tick", 0) or 0)) > window:
+                continue
+            if int(candidate.get("tick", 0) or 0) >= int(record.get("tick", 0) or 0):
+                records[idx] = candidate
+            else:
+                candidate = record
+            replaced = True
+            break
+        if not replaced:
+            records.append(candidate)
+
+        existing = dict(existing)
+        existing["tick"] = max(int(existing.get("tick", 0) or 0), int(candidate.get("tick", 0) or 0))
+        existing["episodes"] = self._normalize_person_episodes(records, limit=limit)
+        self.by_person[key] = existing
+        return True
 
     def remember(
         self,
@@ -2026,6 +2162,11 @@ class ContactLedger:
         property_id=None,
         benefits=None,
         introduced=False,
+        met_directly=None,
+        first_met_tick=None,
+        last_met_tick=None,
+        identity_snapshot=None,
+        episodes=None,
     ):
         self._ensure_maps()
         try:
@@ -2036,6 +2177,11 @@ class ContactLedger:
         existing = self.by_person.get(key)
         merged_benefits = set()
         introduced = bool(introduced)
+        met_directly = None if met_directly is None else bool(met_directly)
+        first_met_tick = None if first_met_tick is None else int(first_met_tick)
+        last_met_tick = None if last_met_tick is None else int(last_met_tick)
+        snapshot = dict(identity_snapshot) if isinstance(identity_snapshot, dict) else None
+        normalized_episodes = self._normalize_person_episodes(episodes) if episodes is not None else None
         if existing:
             merged_benefits.update(existing.get("benefits", ()))
             standing = max(float(existing.get("standing", 0.0)), float(standing))
@@ -2046,9 +2192,28 @@ class ContactLedger:
                 relation_kind = existing.get("relation_kind")
             if property_id is None:
                 property_id = existing.get("property_id")
+            if met_directly is None:
+                met_directly = existing.get("met_directly")
+            if first_met_tick is None:
+                first_met_tick = existing.get("first_met_tick")
+            if last_met_tick is None:
+                last_met_tick = existing.get("last_met_tick")
+            if snapshot is None:
+                snapshot = existing.get("identity_snapshot")
+            if normalized_episodes is None:
+                normalized_episodes = self._normalize_person_episodes(existing.get("episodes", ()))
+
+        if normalized_episodes is None:
+            normalized_episodes = ()
 
         if benefits:
             merged_benefits.update(str(bit).strip().lower() for bit in benefits if str(bit).strip())
+
+        if met_directly:
+            if first_met_tick is None:
+                first_met_tick = int(tick)
+            if last_met_tick is None:
+                last_met_tick = int(tick)
 
         self.by_person[key] = {
             "source_eid": source_eid,
@@ -2058,6 +2223,11 @@ class ContactLedger:
             "property_id": property_id,
             "benefits": tuple(sorted(merged_benefits)),
             "introduced": introduced,
+            "met_directly": bool(met_directly),
+            "first_met_tick": first_met_tick,
+            "last_met_tick": last_met_tick,
+            "identity_snapshot": dict(snapshot) if isinstance(snapshot, dict) else None,
+            "episodes": normalized_episodes,
         }
 
 

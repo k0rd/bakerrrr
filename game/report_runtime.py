@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import curses
 
-from game.components import Inventory, PlayerAssets, Position, PropertyKnowledge, VehicleState
+from game.components import ContactLedger, CreatureIdentity, Inventory, NPCMemory, NPCSocial, PlayerAssets, Position, PropertyKnowledge, VehicleState
 from game.debug_overlay import current_or_nearby_property, organization_summary_rows
+from game.dialogue_shape import (
+    relationship_anchor_episode,
+    relationship_episode_records,
+    relationship_read_profile,
+)
+from game.dialogue_runtime import contact_benefit_labels
 from game.final_operation import evaluate_visible_final_operation
+from game.human_description import human_conversation_description, human_look_description_clause
+from game.human_identity import is_human_identity
 from game.justice_runtime import justice_summary_rows
 from game.local_situations import local_situation_report_lines
 from game.objective_progress import (
@@ -46,6 +54,7 @@ from game.service_runtime import (
     _overworld_travel_profile,
     _overworld_travel_tax_text,
 )
+from game.system_support.entity_naming import _entity_display_name
 from game.systems_business_reputation import (
     property_business_reputation_designations,
     property_business_reputation_scope_profile,
@@ -1189,6 +1198,265 @@ def _known_vehicle_report_row(
         "hidden": bool(hidden),
         "summary_bits": summary_bits,
         "fact_lines": fact_lines,
+    }
+
+
+def _person_name_known(entry):
+    entry = entry if isinstance(entry, dict) else {}
+    if bool(entry.get("introduced", False)):
+        return True
+    benefits = {
+        str(bit).strip().lower()
+        for bit in tuple(entry.get("benefits", ()) or ())
+        if str(bit).strip()
+    }
+    return "known_name" in benefits
+
+
+def _person_identity_from_snapshot(snapshot):
+    if not isinstance(snapshot, dict):
+        return None
+    return CreatureIdentity(
+        personal_name=str(snapshot.get("personal_name", "") or "").strip() or None,
+        common_name=str(snapshot.get("common_name", "") or "").strip() or None,
+        gender_identity=str(snapshot.get("gender_identity", "") or "").strip().lower() or None,
+        creature_type=str(snapshot.get("creature_type", "") or "").strip().lower() or "human",
+        taxonomy_class=str(snapshot.get("taxonomy_class", "") or "").strip().lower() or "hominid",
+    )
+
+
+def _known_person_identity(sim, person_eid, entry):
+    identities = sim.ecs.get(CreatureIdentity)
+    identity = identities.get(person_eid) if identities is not None and person_eid is not None else None
+    if identity is not None:
+        return identity
+    return _person_identity_from_snapshot((entry or {}).get("identity_snapshot"))
+
+
+def _known_person_name(sim, player_eid, person_eid, entry, *, identity=None):
+    if not _person_name_known(entry):
+        return "<unknown>"
+    identity = identity or _known_person_identity(sim, person_eid, entry)
+    personal_name = str(getattr(identity, "personal_name", "") or "").strip() if identity is not None else ""
+    if personal_name:
+        return personal_name
+    if person_eid is not None:
+        display = _entity_display_name(sim, person_eid, title_case=True)
+        if display:
+            return display
+    return "<unknown>"
+
+
+def _known_person_loaded_property_name(sim, property_id):
+    property_id = str(property_id or "").strip()
+    if not property_id:
+        return ""
+    prop = sim.properties.get(property_id)
+    if not isinstance(prop, dict):
+        return ""
+    return str(prop.get("name", prop.get("id", "")) or "").strip()
+
+
+def _known_person_source_name(sim, player_eid, source_eid, *, exclude_eid=None):
+    if source_eid is None:
+        return ""
+    try:
+        source_key = int(source_eid)
+    except (TypeError, ValueError):
+        source_key = source_eid
+    if exclude_eid is not None:
+        try:
+            if int(exclude_eid) == int(source_key):
+                return ""
+        except (TypeError, ValueError):
+            if exclude_eid == source_key:
+                return ""
+    ledger = sim.ecs.get(ContactLedger).get(player_eid)
+    entry = ledger.person_entry(source_key) if ledger else None
+    if not _person_name_known(entry):
+        return ""
+    return _known_person_name(sim, player_eid, source_key, entry)
+
+
+def _known_person_relationship_read(sim, player_eid, person_eid, entry):
+    profile = relationship_read_profile(sim, player_eid, person_eid, entry)
+    return str(profile.get("summary", "<unknown>")), str(profile.get("detail", "<unknown>"))
+
+
+def _known_person_connection_text(sim, player_eid, person_eid, entry):
+    entry = entry if isinstance(entry, dict) else {}
+    relation_kind = str(entry.get("relation_kind", "") or "").strip().lower()
+    relation_text = relation_kind.replace("_", " ").strip() if relation_kind and relation_kind != "contact" else ""
+    property_name = _known_person_loaded_property_name(sim, entry.get("property_id"))
+    source_name = _known_person_source_name(sim, player_eid, entry.get("source_eid"), exclude_eid=person_eid)
+
+    if bool(entry.get("introduced", False)):
+        parts = []
+        if source_name:
+            parts.append(f"Introduced by {source_name}")
+        else:
+            parts.append("Introduced")
+        if relation_text:
+            article = "an" if relation_text[:1] in {"a", "e", "i", "o", "u"} else "a"
+            parts.append(f"as {article} {relation_text}")
+        if property_name:
+            prep = "at" if relation_kind in {"coworker", "job_issuer", "owner", "workplace"} else "around"
+            parts.append(f"{prep} {property_name}")
+        return " ".join(parts).strip() + "."
+
+    if bool(entry.get("met_directly", False)):
+        if property_name:
+            return f"You have met them around {property_name}."
+        return "You have spoken directly."
+
+    return "<unknown>"
+
+
+def _known_person_history_lines(entry, *, met_directly=False, introduced=False, limit=3):
+    entry = entry if isinstance(entry, dict) else {}
+    if not met_directly:
+        return ("<unknown>",) if introduced else ()
+    episodes = tuple(relationship_episode_records(entry, include_trivial=False, limit=limit))
+    if episodes:
+        return tuple(str(record.get("summary", "")).strip() for record in episodes if str(record.get("summary", "")).strip())
+    return ("No notable shared history yet.",)
+
+
+def build_known_people_report(sim, player_eid, *, limit=None):
+    ledger = sim.ecs.get(ContactLedger).get(player_eid)
+    by_person = ledger.by_person if ledger and isinstance(getattr(ledger, "by_person", None), dict) else {}
+    rows = []
+
+    for raw_person_eid, raw_entry in by_person.items():
+        entry = raw_entry if isinstance(raw_entry, dict) else {}
+        met_directly = bool(entry.get("met_directly", False))
+        introduced = bool(entry.get("introduced", False))
+        if not met_directly and not introduced:
+            continue
+
+        try:
+            person_eid = int(raw_person_eid)
+        except (TypeError, ValueError):
+            person_eid = raw_person_eid
+
+        identity = _known_person_identity(sim, person_eid, entry)
+        if identity is not None and not is_human_identity(identity):
+            continue
+
+        name = _known_person_name(sim, player_eid, person_eid, entry, identity=identity)
+        appearance_summary = "<unknown>"
+        appearance_description = "<unknown>"
+        if met_directly:
+            personal_name = getattr(identity, "personal_name", "") if identity is not None else (
+                name if name != "<unknown>" else ""
+            )
+            appearance_summary = str(
+                human_look_description_clause(
+                    getattr(sim, "seed", 0),
+                    eid=person_eid,
+                    identity=identity,
+                    personal_name=personal_name,
+                )
+                or ""
+            ).strip() or "<unknown>"
+            appearance_description = str(
+                human_conversation_description(
+                    getattr(sim, "seed", 0),
+                    eid=person_eid,
+                    identity=identity,
+                    personal_name=personal_name,
+                )
+                or ""
+            ).strip() or "<unknown>"
+
+        relationship_summary, relationship_detail = _known_person_relationship_read(
+            sim,
+            player_eid,
+            person_eid,
+            entry,
+        )
+        connection_text = _known_person_connection_text(sim, player_eid, person_eid, entry)
+        history_lines = _known_person_history_lines(entry, met_directly=met_directly, introduced=introduced)
+        anchor_episode = relationship_anchor_episode(entry, tone=str(relationship_summary or "").strip().lower())
+
+        fact_lines = []
+        if introduced and met_directly:
+            fact_lines.append("Introduced before you met in person.")
+        elif introduced:
+            fact_lines.append("Introduced, but not met in person yet.")
+        elif met_directly:
+            fact_lines.append("Spoken to directly.")
+        benefit_labels = contact_benefit_labels(tuple(entry.get("benefits", ()) or ()))
+        if benefit_labels:
+            fact_lines.append("Known for " + ", ".join(benefit_labels) + ".")
+
+        row_tick = _int_or_default(entry.get("last_met_tick"), _int_or_default(entry.get("tick"), 0))
+        row_first_tick = _int_or_default(entry.get("first_met_tick"), _int_or_default(entry.get("tick"), row_tick))
+        rows.append({
+            "person_eid": person_eid,
+            "name": name,
+            "appearance_summary": appearance_summary,
+            "appearance_description": appearance_description,
+            "relationship_summary": relationship_summary,
+            "relationship_detail": relationship_detail,
+            "connection_text": connection_text if connection_text else "<unknown>",
+            "tick": row_tick,
+            "first_tick": row_first_tick,
+            "introduced": introduced,
+            "met_directly": met_directly,
+            "legend_line": name,
+            "fact_lines": tuple(fact_lines),
+            "history_lines": tuple(history_lines),
+            "anchor_episode": dict(anchor_episode) if isinstance(anchor_episode, dict) else None,
+        })
+
+    rows.sort(
+        key=lambda row: (
+            -int(row.get("tick", 0)),
+            str(row.get("name", "<unknown>")).lower(),
+            str(row.get("person_eid", "")).lower(),
+        )
+    )
+    total_count = len(rows)
+    if limit is not None:
+        rows = rows[: max(1, int(limit))]
+
+    lines = [
+        "People you have met in person or been properly introduced to.",
+        "",
+    ]
+    if not rows:
+        lines.extend([
+            "No known people right now.",
+            "Talk to people or get formally introduced to start filling this ledger.",
+        ])
+        return {
+            "title": "Known People",
+            "lines": lines,
+            "rows": [],
+        }
+
+    lines.append(f"{total_count} person{'s' if total_count != 1 else ''} tracked.")
+    lines.append("")
+    for row in rows:
+        lines.append(str(row.get("name", "<unknown>")).strip() or "<unknown>")
+        lines.append(f"Appearance: {row.get('appearance_summary', '<unknown>')}")
+        lines.append(f"How they seem to feel about you: {row.get('relationship_detail', '<unknown>')}")
+        lines.append(f"Connection: {row.get('connection_text', '<unknown>')}")
+        lines.append("Shared history:")
+        for history_line in tuple(row.get("history_lines", ()) or ("<unknown>",)):
+            lines.append(f"- {history_line}")
+        for fact in row.get("fact_lines", ()):
+            lines.append(f"- {fact}")
+        lines.append("")
+
+    if total_count > len(rows):
+        lines.append(f"... and {total_count - len(rows)} more people.")
+
+    return {
+        "title": "Known People",
+        "lines": lines,
+        "rows": rows,
     }
 
 

@@ -15,6 +15,7 @@ def default_report_ui_state():
         "rows": [],
         "selected_index": 0,
         "selected_property_id": None,
+        "selected_person_eid": None,
         "filter_mode": "visible",
     }
 
@@ -34,6 +35,7 @@ def ensure_report_ui_state(sim):
     state.setdefault("rows", [])
     state.setdefault("selected_index", 0)
     state.setdefault("selected_property_id", None)
+    state.setdefault("selected_person_eid", None)
     state.setdefault("filter_mode", "visible")
     return state
 
@@ -155,12 +157,50 @@ def selected_known_location_row(state, *, body_h):
     return None
 
 
+def known_people_list_height(*, body_h):
+    return known_locations_list_height(body_h=body_h)
+
+
+def clamp_known_people_selection(state, *, body_h):
+    rows = list((state or {}).get("rows", ()) or [])
+    if not rows:
+        state["selected_index"] = 0
+        state["selected_person_eid"] = None
+        state["scroll"] = 0
+        return 0
+
+    selected_index = max(0, min(int(state.get("selected_index", 0)), len(rows) - 1))
+    list_h = max(1, min(known_people_list_height(body_h=body_h), len(rows)))
+    max_scroll = max(0, len(rows) - list_h)
+    scroll = max(0, min(int(state.get("scroll", 0)), max_scroll))
+    if selected_index < scroll:
+        scroll = selected_index
+    elif selected_index >= scroll + list_h:
+        scroll = selected_index - list_h + 1
+
+    state["selected_index"] = selected_index
+    state["selected_person_eid"] = rows[selected_index].get("person_eid")
+    state["scroll"] = scroll
+    return selected_index
+
+
+def selected_known_person_row(state, *, body_h):
+    rows = list((state or {}).get("rows", ()) or [])
+    if not rows:
+        return None
+    selected_index = clamp_known_people_selection(state, body_h=body_h)
+    if 0 <= selected_index < len(rows):
+        return rows[selected_index]
+    return None
+
+
 def refresh_report_ui(
     host,
     *,
     reset_scroll=False,
     kind=None,
     build_known_locations_report_fn,
+    build_known_people_report_fn,
     build_progress_report_fn,
     line_text_fn,
     wrap_display_lines_fn,
@@ -169,6 +209,7 @@ def refresh_report_ui(
     previous_scroll = int(state.get("scroll", 0))
     previous_index = int(state.get("selected_index", 0))
     previous_property_id = str(state.get("selected_property_id", "") or "").strip()
+    previous_person_eid = state.get("selected_person_eid")
     next_kind = str(kind or state.get("kind", "progress")).strip().lower() or "progress"
     kind_changed = next_kind != str(state.get("kind", "progress")).strip().lower()
     if next_kind == "known_locations":
@@ -177,6 +218,8 @@ def refresh_report_ui(
             filter_mode = "visible"
         state["filter_mode"] = filter_mode
         report = build_known_locations_report_fn(include_hidden=(filter_mode == "hidden"))
+    elif next_kind == "known_people":
+        report = build_known_people_report_fn()
     else:
         next_kind = "progress"
         report = build_progress_report_fn()
@@ -190,6 +233,7 @@ def refresh_report_ui(
     body_w, body_h = scroll_panel_body_dimensions(host.view, host.sim)
     if next_kind == "known_locations":
         rows = state["rows"]
+        state["selected_person_eid"] = None
         if reset_scroll or kind_changed:
             selected_index = 0
             state["scroll"] = 0
@@ -202,9 +246,25 @@ def refresh_report_ui(
                         break
         state["selected_index"] = selected_index
         clamp_known_locations_selection(state, body_h=body_h)
+    elif next_kind == "known_people":
+        rows = state["rows"]
+        if reset_scroll or kind_changed:
+            selected_index = 0
+            state["scroll"] = 0
+        else:
+            selected_index = max(0, min(previous_index, len(rows) - 1)) if rows else 0
+            if previous_person_eid is not None:
+                for idx, row in enumerate(rows):
+                    if row.get("person_eid") == previous_person_eid:
+                        selected_index = idx
+                        break
+        state["selected_index"] = selected_index
+        state["selected_property_id"] = None
+        clamp_known_people_selection(state, body_h=body_h)
     else:
         state["selected_index"] = 0
         state["selected_property_id"] = None
+        state["selected_person_eid"] = None
         if reset_scroll or kind_changed:
             state["scroll"] = 0
         else:
@@ -284,6 +344,7 @@ def handle_report_input(host, key, *, line_text_fn, wrap_display_lines_fn):
     if not state.get("open"):
         return False
     report_kind = str(state.get("kind", "progress")).strip().lower() or "progress"
+    key_btab = getattr(curses, "KEY_BTAB", None)
 
     if key in (ord("?"), ord("/")):
         host._help_state()["open"] = True
@@ -296,8 +357,17 @@ def handle_report_input(host, key, *, line_text_fn, wrap_display_lines_fn):
             host._refresh_report_ui(reset_scroll=True, kind="progress")
         return True
 
-    if key in (ord("y"), ord("Y")):
+    if report_kind in {"known_locations", "known_people"} and (
+        key == 9 or (key_btab is not None and key == key_btab)
+    ):
         if report_kind == "known_locations":
+            host._refresh_known_people_ui(reset_scroll=True)
+        else:
+            host._refresh_known_locations_ui(reset_scroll=True)
+        return True
+
+    if key in (ord("y"), ord("Y")):
+        if report_kind in {"known_locations", "known_people"}:
             host._close_report_ui()
         else:
             host._refresh_known_locations_ui(reset_scroll=True)
@@ -373,6 +443,39 @@ def handle_report_input(host, key, *, line_text_fn, wrap_display_lines_fn):
         if key_page_down is not None and key == key_page_down:
             state["selected_index"] = int(state.get("selected_index", 0)) + step
             clamp_known_locations_selection(state, body_h=body_h)
+            return True
+        return True
+
+    if report_kind == "known_people":
+        if key in (KEY_UP, ord("k"), ord("K")):
+            state["selected_index"] = int(state.get("selected_index", 0)) - 1
+            clamp_known_people_selection(state, body_h=body_h)
+            return True
+
+        if key in (KEY_DOWN, ord("j"), ord("J")):
+            state["selected_index"] = int(state.get("selected_index", 0)) + 1
+            clamp_known_people_selection(state, body_h=body_h)
+            return True
+
+        if key_home is not None and key == key_home:
+            state["selected_index"] = 0
+            clamp_known_people_selection(state, body_h=body_h)
+            return True
+
+        if key_end is not None and key == key_end:
+            state["selected_index"] = max(0, len(list(state.get("rows", ()) or ())) - 1)
+            clamp_known_people_selection(state, body_h=body_h)
+            return True
+
+        step = max(1, known_people_list_height(body_h=body_h) - 1)
+        if key_page_up is not None and key == key_page_up:
+            state["selected_index"] = int(state.get("selected_index", 0)) - step
+            clamp_known_people_selection(state, body_h=body_h)
+            return True
+
+        if key_page_down is not None and key == key_page_down:
+            state["selected_index"] = int(state.get("selected_index", 0)) + step
+            clamp_known_people_selection(state, body_h=body_h)
             return True
         return True
 
@@ -582,6 +685,8 @@ def draw_report_modal(
     line_text_fn,
     known_location_list_line_fn,
     known_location_detail_lines_fn,
+    known_person_list_line_fn,
+    known_person_detail_lines_fn,
 ):
     panel_x, panel_y, panel_w, panel_h = _centered_scroll_panel_geometry(screen_w, map_h)
     _draw_box(view, panel_x, panel_y, panel_w, panel_h)
@@ -666,7 +771,78 @@ def draw_report_modal(
             footer_bits.append("more below")
         footer = " | ".join(footer_bits) if footer_bits else ""
         action_verb = "restore" if filter_mode == "hidden" else "hide"
-        action_tail = f"Enter inspect | G go | M mark | R {action_verb} | H hidden | Y close | O ops | L log | D debug | ? help"
+        action_tail = f"Enter inspect | G go | M mark | R {action_verb} | H hidden | Tab people | Y close | O ops | L log | D debug | ? help"
+        footer = f"{footer} | {action_tail}" if footer else action_tail
+    elif report_kind == "known_people":
+        rows = list(report_ui.get("rows", ()) or ())
+        selected_index = max(0, min(int(report_ui.get("selected_index", 0)), len(rows) - 1)) if rows else 0
+        report_ui["selected_index"] = selected_index
+        row_count = len(rows)
+        detail_reserve = 8 if rows else 4
+        list_h = max(1, min(max(1, row_count), max(1, body_h - detail_reserve)))
+        max_scroll = max(0, len(rows) - list_h)
+        scroll = max(0, min(int(report_ui.get("scroll", 0)), max_scroll))
+        if rows:
+            if selected_index < scroll:
+                scroll = selected_index
+            elif selected_index >= scroll + list_h:
+                scroll = selected_index - list_h + 1
+        else:
+            scroll = 0
+        report_ui["scroll"] = scroll
+
+        count_label = f"{len(rows)} tracked"
+        view.draw_text(panel_x + 2, panel_y + 2, _clip_text(f"{count_label} | sorted by last contact", panel_w - 4))
+
+        list_y = panel_y + 3
+        visible_rows = rows[scroll: scroll + list_h]
+        for idx, row in enumerate(visible_rows):
+            absolute = scroll + idx
+            entry_line = known_person_list_line_fn(
+                row,
+                ordinal=absolute + 1,
+                selected=(absolute == selected_index),
+            )
+            draw_display_line_fn(
+                panel_x + 1,
+                list_y + idx,
+                clip_display_line_fn(entry_line, panel_w - 2),
+                panel_w - 2,
+            )
+
+        if not rows:
+            view.draw_text(panel_x + 2, list_y, _clip_text("(no known people)", panel_w - 4))
+
+        detail_y = list_y + list_h + 1
+        detail_h = max(1, (panel_y + panel_h - 2) - detail_y)
+        detail_lines = []
+        if rows:
+            row = rows[selected_index]
+            detail_lines.extend(known_person_detail_lines_fn(row))
+        else:
+            detail_lines.append("Nothing selected.")
+            detail_lines.append("Talk to people or get formally introduced to start filling this ledger.")
+
+        display_detail_lines = []
+        for raw in detail_lines:
+            wrapped = wrap_display_lines_fn(raw, panel_w - 4) if line_text_fn(raw).strip() else [""]
+            display_detail_lines.extend(wrapped)
+        visible_detail_lines = display_detail_lines[:detail_h]
+        for idx, line in enumerate(visible_detail_lines):
+            draw_display_line_fn(
+                panel_x + 2,
+                detail_y + idx,
+                clip_display_line_fn(line, panel_w - 4),
+                panel_w - 4,
+            )
+
+        footer_bits = []
+        if scroll > 0:
+            footer_bits.append("more above")
+        if scroll + list_h < len(rows):
+            footer_bits.append("more below")
+        footer = " | ".join(footer_bits) if footer_bits else ""
+        action_tail = "Tab locations | Y close | O ops | L log | D debug | ? help"
         footer = f"{footer} | {action_tail}" if footer else action_tail
     else:
         display_lines = report_display_lines(

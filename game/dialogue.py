@@ -9,8 +9,16 @@ import string
 TOPIC_ORDER = (
     "name",
     "history",
+    "roots",
     "job",
+    "job_feel",
     "routine",
+    "rapport",
+    "check_in",
+    "day_feel",
+    "off_shift",
+    "care_about",
+    "read_player",
     "workplace",
     "organization",
     "supervisor",
@@ -98,15 +106,55 @@ TOPIC_DEFS = {
     "history": {
         "label": "How long have you been around here?",
         "root": False,
+        "unlocks": ("roots",),
+    },
+    "roots": {
+        "label": "What keeps you here?",
+        "root": False,
         "unlocks": (),
     },
     "job": {
         "label": "What do you do?",
         "root": True,
-        "unlocks": ("routine", "workplace", "organization"),
+        "unlocks": ("routine", "job_feel", "workplace", "organization"),
+    },
+    "job_feel": {
+        "label": "How do you feel about the work?",
+        "root": False,
+        "unlocks": (),
     },
     "routine": {
         "label": "What does your day look like?",
+        "root": False,
+        "unlocks": ("day_feel", "off_shift"),
+    },
+    "rapport": {
+        "label": "How's your day going?",
+        "root": True,
+        "unlocks": ("day_feel", "off_shift", "care_about", "read_player"),
+    },
+    "check_in": {
+        "label": "How've you been since last time?",
+        "root": False,
+        "unlocks": (),
+    },
+    "day_feel": {
+        "label": "How's the day treating you?",
+        "root": False,
+        "unlocks": (),
+    },
+    "off_shift": {
+        "label": "What do you do when you're off?",
+        "root": False,
+        "unlocks": (),
+    },
+    "care_about": {
+        "label": "What matters to you, really?",
+        "root": False,
+        "unlocks": (),
+    },
+    "read_player": {
+        "label": "How do you read me?",
         "root": False,
         "unlocks": (),
     },
@@ -553,6 +601,46 @@ PLAYER_TOPIC_BANKS = {
         "So how long have you been on this block?",
         "You local, or did you land here more recently?",
     ),
+    "roots": (
+        {
+            "text": "What keeps you tied to this place?",
+            "npc_reserved": (
+                "Enough ties that I am still here.",
+                "Same reason as most people: one tie, then another.",
+            ),
+            "npc_open": (
+                "{rapport_roots_note}",
+                "Mostly? {rapport_roots_note_lc}",
+            ),
+            "npc_warm": (
+                "{rapport_roots_note} It creeps up on you when a place starts feeling like yours.",
+                "{rapport_roots_note} After a while you stop pretending that does not matter.",
+            ),
+            "npc_rebuff": (
+                "That is personal ground, and we are not there yet.",
+                "You are reaching for roots before we have even settled into a conversation.",
+            ),
+        },
+        {
+            "text": "So why stay here?",
+            "npc_reserved": (
+                "Because I am still here, for one.",
+                "Because leaving is not always the easy half.",
+            ),
+            "npc_open": (
+                "{rapport_roots_note}",
+                "There is a reason I keep circling back. {rapport_roots_note}",
+            ),
+            "npc_warm": (
+                "{rapport_roots_note} Some places get under your skin before you notice.",
+                "{rapport_roots_note} That counts more than I like admitting.",
+            ),
+            "npc_rebuff": (
+                "That is not a first-pass question for me.",
+                "You do not get the whole why-stay story this early.",
+            ),
+        },
+    ),
     "job": (
         "So what do you do around here?",
         "What kind of work do you do?",
@@ -560,12 +648,292 @@ PLAYER_TOPIC_BANKS = {
         "What keeps you busy around here?",
         "What is your corner of this place?",
     ),
+    "job_feel": (
+        {
+            "text": "How do you feel about the work itself?",
+            "npc_reserved": (
+                "It is work. That is enough of a feeling for some days.",
+                "I show up and do it. Some days that is the whole answer.",
+            ),
+            "npc_open": (
+                "{rapport_job_note}",
+                "Honestly? {rapport_job_note_lc}",
+            ),
+            "npc_warm": (
+                "{rapport_job_note} I care more about getting it right than I usually say out loud.",
+                "{rapport_job_note} When it lands clean, that still means something to me.",
+            ),
+            "npc_rebuff": (
+                "That is a more personal angle on the work than I feel like opening right now.",
+                "You are asking for the inside of the job, not just the title. I am not there with you yet.",
+            ),
+        },
+        {
+            "text": "Do you actually like the {career_text} work?",
+            "npc_reserved": (
+                "Like is a generous word for work.",
+                "Some days I respect it. Some days I just finish it.",
+            ),
+            "npc_open": (
+                "{rapport_job_note}",
+                "Depends on the day. {rapport_job_note}",
+            ),
+            "npc_warm": (
+                "{rapport_job_note} It gets under my skin in the good way sometimes.",
+                "{rapport_job_note} There is pride in it, even when I act like there is not.",
+            ),
+            "npc_rebuff": (
+                "That is not a question I give a clean answer to on demand.",
+                "You are asking for how the work sits in me. Not yet.",
+            ),
+        },
+    ),
     "routine": (
         "What does a normal day look like for you?",
         "When are you usually moving through here?",
         "How does your day tend to run?",
         "What rhythm does the work keep you on?",
         "Where would someone usually find you during the day?",
+    ),
+    "rapport": (
+        {
+            "text": "How's your day going?",
+            "npc_reserved": (
+                "{rapport_day_note}",
+                "Same day as anyone else's, mostly. {rapport_day_note}",
+            ),
+            "npc_open": (
+                "{rapport_day_note} Could be worse.",
+                "I have had rougher. {rapport_day_note}",
+            ),
+            "npc_warm": (
+                "{rapport_day_note} Better for the asking, honestly.",
+                "{rapport_day_note} Nice change, somebody asking like they mean it.",
+            ),
+            "npc_rebuff": (
+                "We barely know each other and you are already asking after the day.",
+                "That is a personal sort of question for minute one.",
+            ),
+        },
+        {
+            "text": "Day treating you alright?",
+            "npc_reserved": (
+                "It is moving. That counts.",
+                "{rapport_day_note}",
+            ),
+            "npc_open": (
+                "{rapport_day_note} I am still standing, anyway.",
+                "{rapport_day_note} So I will call it survivable.",
+            ),
+            "npc_warm": (
+                "{rapport_day_note} Feels better once somebody asks straight.",
+                "{rapport_day_note} I can breathe a little easier saying it out loud.",
+            ),
+            "npc_rebuff": (
+                "That is a quick jump into the personal lane.",
+                "Maybe later. I am not handing you my whole day cold.",
+            ),
+        },
+    ),
+    "check_in": (
+        {
+            "text": "How've you been since last time?",
+            "npc_reserved": (
+                "Still moving.",
+                "About the same, mostly.",
+            ),
+            "npc_open": (
+                "{rapport_check_in_note}",
+                "Since last time? {rapport_check_in_note_lc}",
+            ),
+            "npc_warm": (
+                "{rapport_check_in_note} I remember where we left it, anyway.",
+                "{rapport_check_in_note} Feels a little easier picking the thread back up with you.",
+            ),
+            "npc_rebuff": (
+                "We are not close enough for that kind of continuity talk from you right now.",
+                "That sort of check-in lands warmer than where we actually stand.",
+            ),
+        },
+        {
+            "text": "How've things been treating you since we last talked?",
+            "npc_reserved": (
+                "Could be worse.",
+                "Still standing, which is enough of an answer some days.",
+            ),
+            "npc_open": (
+                "{rapport_check_in_note}",
+                "Honestly? {rapport_check_in_note_lc}",
+            ),
+            "npc_warm": (
+                "{rapport_check_in_note} Nice having somebody remember there was a last time.",
+                "{rapport_check_in_note} That kind of question lands differently once there is a little history behind it.",
+            ),
+            "npc_rebuff": (
+                "You are reaching for familiarity faster than I am willing to give it.",
+                "Maybe later. That question assumes more ease between us than I feel right now.",
+            ),
+        },
+    ),
+    "day_feel": (
+        {
+            "text": "What kind of day has it been?",
+            "npc_reserved": (
+                "{rapport_day_note}",
+                "The sort you get through one piece at a time.",
+            ),
+            "npc_open": (
+                "{rapport_day_note} It has had a shape to it, anyway.",
+                "{rapport_day_note} Enough going on to keep me from drifting.",
+            ),
+            "npc_warm": (
+                "{rapport_day_note} Some days feel like they are trying to sand a person down.",
+                "{rapport_day_note} You ask at the right time, I guess.",
+            ),
+            "npc_rebuff": (
+                "That is more of my day than I feel like unpacking for you.",
+                "You are asking after the inside of the day now. I am not opening that much.",
+            ),
+        },
+        {
+            "text": "You sound like the day's been doing something to you.",
+            "npc_reserved": (
+                "It has. I am still here.",
+                "{rapport_day_note}",
+            ),
+            "npc_open": (
+                "{rapport_day_note} Some days sit heavier than others.",
+                "{rapport_day_note} That is about the honest size of it.",
+            ),
+            "npc_warm": (
+                "{rapport_day_note} Hard not to feel it by the end of one like this.",
+                "{rapport_day_note} Sometimes it helps hearing somebody notice.",
+            ),
+            "npc_rebuff": (
+                "You do not know me well enough to pull at that thread yet.",
+                "That is a close read for someone I do not know that well.",
+            ),
+        },
+    ),
+    "off_shift": (
+        {
+            "text": "What do you do when you're off the clock?",
+            "npc_reserved": (
+                "Nothing dramatic. I get clear and keep it moving.",
+                "Usual things. Eat, breathe, let the noise burn off.",
+            ),
+            "npc_open": (
+                "{rapport_off_shift_note}",
+                "Mostly? {rapport_off_shift_note_lc}",
+            ),
+            "npc_warm": (
+                "{rapport_off_shift_note} Everybody needs a little corner of the day back.",
+                "{rapport_off_shift_note} That is how I keep the work from swallowing the rest of me.",
+            ),
+            "npc_rebuff": (
+                "Off-shift life is the part I keep for myself.",
+                "That is private ground, even if you asked it gently.",
+            ),
+        },
+        {
+            "text": "So what does your time actually look like when the work lets go?",
+            "npc_reserved": (
+                "Quiet if I can get it.",
+                "Less interesting than you are hoping, probably.",
+            ),
+            "npc_open": (
+                "{rapport_off_shift_note}",
+                "When the day loosens up, {rapport_off_shift_note_lc}",
+            ),
+            "npc_warm": (
+                "{rapport_off_shift_note} I try to remember I belong to myself for a bit too.",
+                "{rapport_off_shift_note} That is how I come back the next day without grinding my teeth through it.",
+            ),
+            "npc_rebuff": (
+                "That is more off-shift than I hand over lightly.",
+                "You are asking for the life around the work. Not today.",
+            ),
+        },
+    ),
+    "care_about": (
+        {
+            "text": "What matters to you, really?",
+            "npc_reserved": (
+                "Enough to keep me showing up.",
+                "A few things. I keep them close.",
+            ),
+            "npc_open": (
+                "{rapport_care_note}",
+                "Honestly? {rapport_care_note_lc}",
+            ),
+            "npc_warm": (
+                "{rapport_care_note} Once you know that about a person, you can do real damage with it.",
+                "{rapport_care_note} I do not say it out loud to just anyone.",
+            ),
+            "npc_rebuff": (
+                "That is deeper than I want to go with you right now.",
+                "No. That kind of question lands too close if we have not earned it.",
+            ),
+        },
+        {
+            "text": "What are you actually trying to protect in all this?",
+            "npc_reserved": (
+                "The same things anyone tries to protect.",
+                "Enough that I am still here guarding it.",
+            ),
+            "npc_open": (
+                "{rapport_care_note}",
+                "That is the part I try not to lose sight of. {rapport_care_note}",
+            ),
+            "npc_warm": (
+                "{rapport_care_note} Maybe that is the closest thing I have to a straight answer.",
+                "{rapport_care_note} That is the kind of truth people usually earn slowly.",
+            ),
+            "npc_rebuff": (
+                "That question asks for a lot.",
+                "You are reaching right into the part I keep defended.",
+            ),
+        },
+    ),
+    "read_player": (
+        {
+            "text": "How do you read me?",
+            "npc_reserved": (
+                "I am still working that out.",
+                "You are still mostly a live question mark to me.",
+            ),
+            "npc_open": (
+                "{rapport_read_note}",
+                "If you want the honest read, {rapport_read_note_lc}",
+            ),
+            "npc_warm": (
+                "{rapport_read_warm_note}",
+                "{rapport_read_warm_note} That is the truest version I have got.",
+            ),
+            "npc_rebuff": (
+                "That is a deeper question than you are entitled to yet.",
+                "I am not laying my whole read of you on the table right now.",
+            ),
+        },
+        {
+            "text": "What kind of person do I seem like to you?",
+            "npc_reserved": (
+                "Still too early for a neat answer.",
+                "I have an impression, not a verdict.",
+            ),
+            "npc_open": (
+                "{rapport_read_note}",
+                "Near as I can tell, {rapport_read_note_lc}",
+            ),
+            "npc_warm": (
+                "{rapport_read_warm_note}",
+                "{rapport_read_warm_note} I would not say that if I did not mean it.",
+            ),
+            "npc_rebuff": (
+                "No. That is more of my read than I feel like spending right now.",
+                "You are asking for a level of honesty that takes longer than this.",
+            ),
+        },
     ),
     "workplace": (
         "Where do you usually work?",
@@ -1843,17 +2211,17 @@ DIALOGUE_BANKS = {
     ),
     "greet_friendly": (
         "Hey. What is up?",
-        "Sure thing. What do you want to know?",
+        "Sure thing. What is on your mind?",
         "Good to see you. Need anything?",
         "Yeah, talk to me.",
-        "You caught me in a decent mood. What is it?",
-        "Alright, I am here. What do you need?",
+        "You caught me in a decent mood. What are we talking about?",
+        "Alright, I am here. Where do you want to start?",
     ),
     "greet_introduced": (
         "If {intro_source_name} pointed you my way, I can spare a minute.",
         "{intro_source_name} mentioned you. Go on.",
-        "Alright. If {intro_source_name} sent you, talk.",
-        "{intro_source_name} does not send people lightly. What do you need?",
+        "Alright. If {intro_source_name} sent you, let us hear it.",
+        "{intro_source_name} does not send people lightly. What is on your mind?",
         "You came through {intro_source_name}? Then I am listening.",
     ),
     "name_first": (
@@ -1879,8 +2247,8 @@ DIALOGUE_BANKS = {
     ),
     "history": (
         "{history_summary}",
-        "Long story short, {history_summary}",
-        "Around here? {history_summary}",
+        "Long story short? {history_summary}",
+        "Around here? Yeah, {history_summary}",
         "If you want the short version, {history_summary}",
     ),
     "history_none": (
@@ -1893,8 +2261,8 @@ DIALOGUE_BANKS = {
     "job_first": (
         "I work as {career_text}.",
         "Mostly {career_text} work.",
-        "I am on {career_text} duty most days.",
-        "{career_text} work pays the bills.",
+        "Most days I am on {career_text} duty.",
+        "{career_text} work keeps the lights on.",
     ),
     "job_repeat": (
         "Still {career_text}.",
@@ -1912,9 +2280,9 @@ DIALOGUE_BANKS = {
     ),
     "routine": (
         "{routine_summary}",
-        "Most days, {routine_summary}",
+        "Most days? {routine_summary}",
         "Usually, {routine_summary}",
-        "That depends on the day, but {routine_summary}",
+        "Depends on the day, but {routine_summary}",
     ),
     "routine_none": (
         "Nothing steady enough to map out.",
@@ -1987,9 +2355,9 @@ DIALOGUE_BANKS = {
     "people": (
         "{people_summary}",
         "If you are looking for names, {people_summary}",
-        "Start here: {people_summary}",
+        "If you want a place to start, {people_summary}",
         "Names worth keeping? {people_summary}",
-        "If you are building a map of people, {people_summary}",
+        "If you are trying to get a read on people, {people_summary}",
     ),
     "where_place": (
         "{place_location_summary}",
@@ -2337,10 +2705,10 @@ DIALOGUE_BANKS = {
         "If I am giving you mine, I should hear yours.",
     ),
     "initiative_history": (
-        "You new here, or just taking inventory?",
+        "You new here, or just trying to get your bearings?",
         "You asking because you plan to stick around?",
         "That curiosity, or are you trying to place me?",
-        "You counting years, or counting witnesses?",
+        "You counting years, or just trying to hear how people landed here?",
         "Trying to learn the block, or looking for where it cracked?",
     ),
     "initiative_job": (
@@ -2348,7 +2716,7 @@ DIALOGUE_BANKS = {
         "Why the interest?",
         "That just curiosity, or are you headed somewhere with it?",
         "Work talk usually means somebody needs something done.",
-        "You asking what I do, or what I can do for you?",
+        "You asking what I do, or trying to get a feel for me?",
     ),
     "initiative_workplace": (
         "You looking for me there, or just drawing a map?",
@@ -2366,7 +2734,7 @@ DIALOGUE_BANKS = {
     ),
     "initiative_people": (
         "You looking for friends, or leverage?",
-        "You collecting names, or actually looking to meet someone?",
+        "You collecting names, or actually hoping to meet someone?",
         "That you trying to build a circle, or just pull a thread?",
         "Names are not loose change. What are you spending them on?",
         "A person can be a door or a warning. Which are you after?",
@@ -3380,6 +3748,26 @@ def topic_label(topic_id, context=None):
 
     if topic_id == "workplace" and context.get("workplace_here"):
         return "Do you work here?"
+    if topic_id == "rapport":
+        return "How's your day going?"
+    if topic_id == "check_in":
+        return "How've you been since last time?"
+    if topic_id == "day_feel":
+        return "How's the day treating you?"
+    if topic_id == "job_feel" and context.get("career_text"):
+        return f"How do you feel about the {context['career_text']} work?"
+    if topic_id == "job_feel":
+        return "How do you feel about the work?"
+    if topic_id == "roots" and context.get("home_name"):
+        return f"What keeps you tied to {context['home_name']}?"
+    if topic_id == "roots":
+        return "What keeps you here?"
+    if topic_id == "off_shift":
+        return "What do you do when you're off?"
+    if topic_id == "care_about":
+        return "What matters to you, really?"
+    if topic_id == "read_player":
+        return "How do you read me?"
     if topic_id == "street_buy" and context.get("street_buy_hint"):
         return f"I might have some {context['street_buy_hint']}."
     if topic_id == "street_buy_accept" and context.get("street_buy_offer_accept_label"):
@@ -3574,7 +3962,15 @@ def _normalize_player_topic_entry(entry, fallback_text):
     else:
         normalized = {"text": str(entry).strip()}
     normalized["text"] = str(normalized.get("text", "")).strip() or str(fallback_text or "").strip()
-    for key in ("npc_soft", "npc_wary", "npc_fail"):
+    for key in (
+        "npc_soft",
+        "npc_wary",
+        "npc_fail",
+        "npc_reserved",
+        "npc_open",
+        "npc_warm",
+        "npc_rebuff",
+    ):
         value = normalized.get(key, ())
         if isinstance(value, str):
             normalized[key] = (str(value).strip(),) if str(value).strip() else ()
@@ -3625,8 +4021,20 @@ def _render_player_topic_entry(entry, context):
         "npc_soft": (),
         "npc_wary": (),
         "npc_fail": (),
+        "npc_reserved": (),
+        "npc_open": (),
+        "npc_warm": (),
+        "npc_rebuff": (),
     }
-    for key in ("npc_soft", "npc_wary", "npc_fail"):
+    for key in (
+        "npc_soft",
+        "npc_wary",
+        "npc_fail",
+        "npc_reserved",
+        "npc_open",
+        "npc_warm",
+        "npc_rebuff",
+    ):
         rendered[key] = tuple(
             rendered_text
             for raw in tuple(normalized.get(key, ()) or ())
@@ -3735,7 +4143,13 @@ def topic_player_reaction_line(topic_id, *, seed, npc_eid, count=0, outcome="sof
         count=count,
         context=context,
     )
-    outcome_key = f"npc_{str(outcome or 'soft').strip().lower() or 'soft'}"
+    normalized_outcome = str(outcome or "soft").strip().lower() or "soft"
+    outcome_key = {
+        "reserved": "npc_reserved",
+        "open": "npc_open",
+        "warm": "npc_warm",
+        "rebuff": "npc_rebuff",
+    }.get(normalized_outcome, f"npc_{normalized_outcome}")
     options = tuple(prompt.get(outcome_key, ()))
     if not options:
         return ""

@@ -146,6 +146,7 @@ from game.property_runtime import (
 )
 from game.location_presentation_runtime import (
     _build_known_locations_report,
+    _build_known_people_report,
     _item_legend_line,
 )
 from game.service_runtime import _int_or_default
@@ -1075,6 +1076,11 @@ class InputSystem(System):
                 limit=None,
                 include_hidden=include_hidden,
             ),
+            build_known_people_report_fn=lambda: _build_known_people_report(
+                self.sim,
+                self.player_eid,
+                limit=None,
+            ),
             build_progress_report_fn=lambda: _build_progress_report(
                 self.sim,
                 self.player_eid,
@@ -1086,6 +1092,9 @@ class InputSystem(System):
 
     def _refresh_known_locations_ui(self, reset_scroll=False):
         return self._refresh_report_ui(reset_scroll=reset_scroll, kind="known_locations")
+
+    def _refresh_known_people_ui(self, reset_scroll=False):
+        return self._refresh_report_ui(reset_scroll=reset_scroll, kind="known_people")
 
     def _close_report_ui(self):
         _report_debug_ui.close_report_ui(self._report_state())
@@ -1104,6 +1113,13 @@ class InputSystem(System):
     def _selected_known_location_row(self):
         _body_w, body_h = self._scroll_panel_body_dimensions()
         return _report_debug_ui.selected_known_location_row(
+            self._report_state(),
+            body_h=body_h,
+        )
+
+    def _selected_known_person_row(self):
+        _body_w, body_h = self._scroll_panel_body_dimensions()
+        return _report_debug_ui.selected_known_person_row(
             self._report_state(),
             body_h=body_h,
         )
@@ -3360,9 +3376,13 @@ class InputSystem(System):
         state = self._report_state()
         if not bool(state.get("open")):
             return
-        if str(state.get("kind", "progress")).strip().lower() != "known_locations":
+        kind = str(state.get("kind", "progress")).strip().lower() or "progress"
+        if kind == "known_locations":
+            self._refresh_known_locations_ui(reset_scroll=False)
             return
-        self._refresh_known_locations_ui(reset_scroll=False)
+        if kind != "known_people":
+            return
+        self._refresh_known_people_ui(reset_scroll=False)
 
     def update(self):
 
