@@ -40,6 +40,7 @@ from game.components import (
 )
 from game.economy import chunk_economy_profile, pick_career_for_workplace
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot
+from game.human_identity import seed_human_identity_profile
 from game.npc_names import generate_human_personal_name, human_descriptor
 from game.organizations import ensure_property_organization, sync_actor_organization_affiliations
 from game.property_access import property_is_open, property_is_public, property_is_storefront, world_hour
@@ -2230,6 +2231,21 @@ def _spawn_human(
     if isinstance(shift_window, (list, tuple)) and len(shift_window) >= 2:
         shift_start = int(shift_window[0]) % 24
         shift_end = int(shift_window[1]) % 24
+    actor_seed_token = "|".join(
+        str(bit)
+        for bit in (
+            getattr(sim, "seed", 0),
+            personal_name,
+            role,
+            career,
+            workplace_prop.get("id") if isinstance(workplace_prop, dict) else workplace,
+            home_prop.get("id") if isinstance(home_prop, dict) else None,
+            position[0] if isinstance(position, (list, tuple)) and len(position) >= 1 else None,
+            position[1] if isinstance(position, (list, tuple)) and len(position) >= 2 else None,
+            position[2] if isinstance(position, (list, tuple)) and len(position) >= 3 else 0,
+        )
+    )
+    identity_profile = seed_human_identity_profile(actor_seed_token, personal_name)
 
     eid = _spawn(
         sim,
@@ -2241,6 +2257,7 @@ def _spawn_human(
             creature_type="human",
             common_name=human_descriptor(role, career),
             personal_name=personal_name,
+            **identity_profile,
         ),
         AI(role),
         behavior_profile_for_spawn(
@@ -2248,20 +2265,7 @@ def _spawn_human(
             career=career,
             workplace_archetype=_property_archetype(workplace_prop),
             home_archetype=_property_archetype(home_prop),
-            seed_token="|".join(
-                str(bit)
-                for bit in (
-                    getattr(sim, "seed", 0),
-                    personal_name,
-                    role,
-                    career,
-                    workplace_prop.get("id") if isinstance(workplace_prop, dict) else workplace,
-                    home_prop.get("id") if isinstance(home_prop, dict) else None,
-                    position[0] if isinstance(position, (list, tuple)) and len(position) >= 1 else None,
-                    position[1] if isinstance(position, (list, tuple)) and len(position) >= 2 else None,
-                    position[2] if isinstance(position, (list, tuple)) and len(position) >= 3 else 0,
-                )
-            ),
+            seed_token=actor_seed_token,
         ),
         MovementThrottle(
             default_cooldown=2,

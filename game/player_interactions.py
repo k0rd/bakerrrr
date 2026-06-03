@@ -387,21 +387,6 @@ class PlayerInteractionRuntime:
         property_id = str(prop.get("id", "") or "").strip()
         if not property_id:
             return ""
-        for quest in list(getattr(self.sim, "quests", {}).get("active", ()) or ()):
-            if not isinstance(quest, dict):
-                continue
-            objective = quest.get("objective", {}) if isinstance(quest.get("objective"), dict) else {}
-            if str(objective.get("type", "")).strip().lower() != "cache_pickup":
-                continue
-            if str(objective.get("property_id", "") or "").strip() != property_id:
-                continue
-            title = str(quest.get("title", "")).strip()
-            if title:
-                return f"Mission: {title}"
-            item_id = str(objective.get("item_id", "")).strip().lower()
-            if item_id:
-                return f"Mission: retrieve {_item_label(item_id)}"
-            return "Mission: retrieve cache item"
         cache_items = self.container_inventory_entries(property_id, container_kind="cache")
         for entry in cache_items:
             if not isinstance(entry, dict):

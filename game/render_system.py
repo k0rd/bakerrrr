@@ -64,7 +64,7 @@ from game.components import (
 from game.final_operation import (
     active_final_operation_target_property_id,
     ensure_final_operation_unlocked,
-    evaluate_final_operation,
+    evaluate_visible_final_operation,
     mark_final_operation_target_recovered,
     sync_final_operation_runtime,
     try_complete_final_operation,
@@ -206,6 +206,7 @@ from game.system_support.combat_targeting_runtime import (
     _weapon_ammo_type_label,
     _weapon_reserve_ammo,
 )
+from game.system_support.fire_runtime import fire_cell_state, fire_state
 from game.system_support.interaction_ordering import (
     _direction_step,
     _interaction_target_order_key,
@@ -246,6 +247,50 @@ from game.service_runtime import (
     _transit_token_amount_label,
     _vehicle_sale_stats_text,
 )
+
+
+_FIRE_VISUAL_GLYPHS = ("*", "^", "x")
+_SMOKE_VISUAL_GLYPHS = ("~", ",")
+
+
+def _fire_visual_style(sim, x, y, z=0):
+    cell = fire_cell_state(sim, x, y, z)
+    if not isinstance(cell, dict):
+        return None
+    fire_intensity = max(0, int(cell.get("fire_intensity", 0) or 0))
+    smoke_intensity = max(0, int(cell.get("smoke_intensity", 0) or 0))
+    if fire_intensity <= 0 and smoke_intensity <= 0:
+        return None
+    if fire_intensity > 0:
+        glyphs = _FIRE_VISUAL_GLYPHS
+        color = "hazard_fire"
+        semantic_id = "hazard_open_flame"
+        effects = ("blink",)
+        attrs = getattr(curses, "A_BOLD", 0)
+        layer = "ground_overlay"
+        priority = 80
+    else:
+        glyphs = _SMOKE_VISUAL_GLYPHS
+        color = "hazard_smoke"
+        semantic_id = "hazard_smoke"
+        effects = ()
+        attrs = getattr(curses, "A_DIM", 0)
+        layer = "ground_overlay"
+        priority = 70
+    try:
+        tick = int(getattr(sim, "tick", 0) or 0)
+    except (TypeError, ValueError):
+        tick = 0
+    index = abs((int(x) * 7) + (int(y) * 11) + (int(z) * 13) + tick) % len(glyphs)
+    return {
+        "glyph": glyphs[index],
+        "color": color,
+        "semantic_id": semantic_id,
+        "effects": effects,
+        "attrs": attrs,
+        "layer": layer,
+        "priority": priority,
+    }
 from game.location_presentation_runtime import (
     _creature_color_key,
     _entity_render_style,
@@ -273,7 +318,7 @@ from game.ui_text_runtime import (
     _wrap_display_lines,
     _wrap_text_lines,
 )
-from game.run_objectives import evaluate_run_objective
+from game.run_objectives import evaluate_visible_run_objective
 from game.skill_ui import (
     skill_change_reason_label as _skill_change_reason_label,
     skill_debug_lines as _skill_debug_lines,
@@ -1469,6 +1514,34 @@ class RenderSystem(System):
                     attrs=_ambient_attr(wx, wy, active_z),
                 )
 
+            for coord, cell in tuple(fire_state(self.sim).get("cells", {}).items()):
+                if not isinstance(coord, tuple) or len(coord) < 3 or not isinstance(cell, dict):
+                    continue
+                if int(coord[2]) != int(active_z):
+                    continue
+                screen_x = int(coord[0]) - camera_x
+                screen_y = int(coord[1]) - camera_y
+                if not (0 <= screen_x < map_w and 0 <= screen_y < map_h):
+                    continue
+                if self.sim.detail_for_xy(int(coord[0]), int(coord[1])) == "unloaded":
+                    continue
+                if not _is_visible(int(coord[0]), int(coord[1]), active_z):
+                    continue
+                visual = _fire_visual_style(self.sim, int(coord[0]), int(coord[1]), int(coord[2]))
+                if not isinstance(visual, dict):
+                    continue
+                self._draw(
+                    screen_x,
+                    screen_y,
+                    visual.get("glyph", "*"),
+                    color=visual.get("color"),
+                    attrs=int(visual.get("attrs", 0) or 0) | _ambient_attr(int(coord[0]), int(coord[1]), active_z),
+                    semantic_id=visual.get("semantic_id"),
+                    effects=tuple(visual.get("effects", ())),
+                    layer=visual.get("layer"),
+                    priority=visual.get("priority"),
+                )
+
             player_cover_source = _cover_source_render(
                 self.sim,
                 covers.get(self.player_eid),
@@ -1516,6 +1589,9 @@ class RenderSystem(System):
             for _, eid, _pos, render, screen_x, screen_y in sorted(drawables, key=lambda item: (item[0], item[1])):
                 appearance = _entity_render_style(self.sim, eid, player_eid=self.player_eid)
                 if _entity_should_blink_in_combat(self.sim, eid, player_eid=self.player_eid):
+                    appearance = _appearance_with_effect(appearance, "blink")
+                fire_cell = fire_cell_state(self.sim, _pos.x, _pos.y, _pos.z)
+                if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
                     appearance = _appearance_with_effect(appearance, "blink")
                 self._draw_appearance(
                     screen_x,
@@ -1870,11 +1946,11 @@ class RenderSystem(System):
             ])
         economy_lines = _flow_text_chunks(economy_chunks, hud_text_w, max_lines=3)
 
-        objective_eval = evaluate_run_objective(self.sim, self.player_eid)
+        objective_eval = evaluate_visible_run_objective(self.sim, self.player_eid)
         objective_line = ""
         if objective_eval:
             objective_line = str(objective_eval.get("summary_line", "")).strip()
-        final_operation_eval = evaluate_final_operation(self.sim, self.player_eid)
+        final_operation_eval = evaluate_visible_final_operation(self.sim, self.player_eid)
         final_operation_line = ""
         if final_operation_eval:
             final_operation_line = str(final_operation_eval.get("summary_line", "")).strip()

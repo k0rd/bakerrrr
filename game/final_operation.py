@@ -8,7 +8,7 @@ from game.opportunities import opportunity_intel_for_observer
 from game.property_access import property_access_controller, property_apertures
 from game.property_keys import property_credential_item_metadata
 from game.property_runtime import property_access_level, property_entry_position, property_power_cut_active as _property_power_cut_active
-from game.run_objectives import evaluate_run_objective
+from game.run_objectives import evaluate_run_objective, is_run_objective_visible_to_player
 
 SECURE_ROOM_KINDS = {
     "vault",
@@ -1301,6 +1301,12 @@ def evaluate_final_operation(sim, player_eid):
         "summary_line": summary_line,
         "next_step": next_step,
     }
+
+
+def evaluate_visible_final_operation(sim, player_eid):
+    if not is_run_objective_visible_to_player(sim, player_eid):
+        return None
+    return evaluate_final_operation(sim, player_eid)
 
 
 def _summary_lines(sim, player_eid, state):

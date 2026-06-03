@@ -62,6 +62,11 @@ _PHASE_PROFILES = {
         "summary": "emergency care has spilled into the open street",
         "action": "help, lift supplies, question witnesses, or keep moving",
     },
+    "fire_response": {
+        "title": "Fire Response",
+        "summary": "flame and smoke have pushed a live cordon into public view",
+        "action": "read the barrier, question responders, or keep your distance",
+    },
     "delivery_run": {
         "title": "Delivery Handoff",
         "summary": "goods and route chatter are exposed at the curb",

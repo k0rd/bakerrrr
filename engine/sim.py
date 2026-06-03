@@ -11,6 +11,7 @@ from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
 from game.components import Position
 from game.items import prepare_ground_item_stack_metadata
+from game.system_support.fire_runtime import fire_protected_chunks
 
 class Simulation:
 
@@ -56,6 +57,7 @@ class Simulation:
         self.fixture_power_cuts = {}
         self.camera_disabled = {}
         self.contractors = {}
+        self.fire_state = {}
         self.disguise_state = None
         self.structure_cells = {}
         self.next_property_id = 1
@@ -68,14 +70,6 @@ class Simulation:
         self.projectiles = {}
         self.next_projectile_id = 1
         self.stores = {}
-        self.quests = {
-            "available": [],
-            "active": [],
-            "completed": [],
-            "failed": [],
-            "history_templates": [],
-        }
-        self.next_quest_id = 1
         self.turn_based = False
         self.turn_advance_requested = False
         self.zoom_mode = "city"
@@ -132,6 +126,8 @@ class Simulation:
             self.camera_disabled = {}
         if not isinstance(getattr(self, "contractors", None), dict):
             self.contractors = {}
+        if not isinstance(getattr(self, "fire_state", None), dict):
+            self.fire_state = {}
         if not hasattr(self, "disguise_state"):
             self.disguise_state = None
         if not hasattr(self, "equipped_container"):
@@ -478,12 +474,35 @@ class Simulation:
 
     def stream_world(self, focus_x, focus_y):
         cx, cy = self.chunk_coords(focus_x, focus_y)
+        previous_loaded = dict(getattr(self.world, "loaded_chunks", {}) or {})
         report = self.world.stream_chunks(
             cx,
             cy,
             active_radius=self.active_chunk_radius,
             loaded_radius=self.loaded_chunk_radius,
         )
+
+        protected_chunks = set(fire_protected_chunks(self))
+        if protected_chunks and isinstance(report, dict):
+            unloaded = []
+            for raw_chunk in tuple(report.get("unloaded", ()) or ()):
+                try:
+                    chunk = (int(raw_chunk[0]), int(raw_chunk[1]))
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if chunk not in protected_chunks:
+                    unloaded.append(chunk)
+                    continue
+                previous = previous_loaded.get(chunk)
+                if isinstance(previous, dict):
+                    self.world.loaded_chunks[chunk] = dict(previous)
+                else:
+                    detail = "active" if chunk == (cx, cy) else "coarse"
+                    self.world.loaded_chunks[chunk] = {
+                        "chunk": self.world.get_chunk(chunk[0], chunk[1]),
+                        "detail": detail,
+                    }
+            report["unloaded"] = tuple(unloaded)
 
         self.active_chunk_coord = (cx, cy)
         self.active_chunk = self.world.get_chunk(cx, cy)
@@ -2078,13 +2097,6 @@ class Simulation:
                     excluded=frozenset(excluded),
                 )
 
-            obstacle_count = 0
-            for _ in range(obstacle_count):
-                x = rng.randint(ox + 1, ox + size - 2)
-                y = rng.randint(oy + 1, oy + size - 2)
-                tile = self.tilemap.tile_at(x, y, 0)
-                if tile and tile.walkable and tile.glyph == ".":
-                    self.tilemap.set_tile(x, y, Tile(walkable=False, transparent=False, glyph="#"), z=0)
         else:
             self._realize_non_city_chunk(chunk, rng, ox, oy, size)
 

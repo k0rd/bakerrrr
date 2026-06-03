@@ -21,6 +21,48 @@ def _manhattan(a, b):
     return abs(_safe_int(a[0]) - _safe_int(b[0])) + abs(_safe_int(a[1]) - _safe_int(b[1]))
 
 
+def _visibility_state(sim):
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        sim.world_traits = {}
+        traits = sim.world_traits
+    state = traits.get("run_objective_visibility")
+    if not isinstance(state, dict):
+        state = {}
+        traits["run_objective_visibility"] = state
+    state.setdefault("player_visible", True)
+    state.setdefault("revealed_tick", 0 if state.get("player_visible", True) else -1)
+    state.setdefault("source", "default")
+    return state
+
+
+def set_run_objective_visibility(sim, *, visible=True, source=""):
+    state = _visibility_state(sim)
+    state["player_visible"] = bool(visible)
+    if visible:
+        state["revealed_tick"] = _safe_int(getattr(sim, "tick", 0), default=0)
+    else:
+        state["revealed_tick"] = -1
+    state["source"] = str(source or ("startup" if not visible else "reveal")).strip().lower() or (
+        "startup" if not visible else "reveal"
+    )
+    return dict(state)
+
+
+def reveal_run_objective(sim, source=""):
+    state = _visibility_state(sim)
+    if bool(state.get("player_visible", True)):
+        return False
+    set_run_objective_visibility(sim, visible=True, source=source or "live_reveal")
+    return True
+
+
+def is_run_objective_visible_to_player(sim, player_eid=None):
+    del player_eid
+    state = _visibility_state(sim)
+    return bool(state.get("player_visible", True))
+
+
 def _owned_property_cluster_metrics(sim, player_eid):
     owned_ids = set()
     assets = sim.ecs.get(PlayerAssets).get(player_eid) if sim is not None else None
@@ -393,7 +435,13 @@ def evaluate_run_objective(sim, player_eid, objective=None):
     }
 
 
-def seed_run_objective(sim, rng):
+def evaluate_visible_run_objective(sim, player_eid, objective=None):
+    if not is_run_objective_visible_to_player(sim, player_eid=player_eid):
+        return None
+    return evaluate_run_objective(sim, player_eid, objective=objective)
+
+
+def seed_run_objective(sim, rng, *, visible=True):
     if not isinstance(rng, random.Random):
         rng = random.Random(str(rng))
 
@@ -446,4 +494,5 @@ def seed_run_objective(sim, rng):
     if not isinstance(traits, dict):
         sim.world_traits = {}
     sim.world_traits["run_objective"] = objective
+    set_run_objective_visibility(sim, visible=bool(visible), source="seed")
     return objective

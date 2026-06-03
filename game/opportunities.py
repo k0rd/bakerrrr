@@ -909,6 +909,9 @@ def opportunity_intel_for_observer(sim, observer_eid, opportunity_id):
 def _bootstrap_player_opportunity_intel(sim, state, player_eid, origin_chunk=None):
     if player_eid is None:
         return
+    traits = getattr(sim, "world_traits", {}) if sim is not None else {}
+    if isinstance(traits, dict) and not bool(traits.get("bootstrap_player_opportunity_intel", True)):
+        return
     active = [entry for entry in state.get("active", ()) if isinstance(entry, dict)]
     if not active:
         return

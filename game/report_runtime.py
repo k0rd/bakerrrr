@@ -4,7 +4,7 @@ import curses
 
 from game.components import Inventory, PlayerAssets, Position, PropertyKnowledge, VehicleState
 from game.debug_overlay import current_or_nearby_property, organization_summary_rows
-from game.final_operation import evaluate_final_operation
+from game.final_operation import evaluate_visible_final_operation
 from game.justice_runtime import justice_summary_rows
 from game.local_situations import local_situation_report_lines
 from game.objective_progress import (
@@ -39,7 +39,7 @@ from game.property_runtime import (
     vehicle_label,
     vehicle_profile_from_property,
 )
-from game.run_objectives import evaluate_run_objective
+from game.run_objectives import evaluate_visible_run_objective
 from game.run_pressure import pressure_snapshot
 from game.service_runtime import (
     _overworld_identity_profile,
@@ -630,8 +630,8 @@ def _prep_report_lines(sim, player_eid, final_operation_eval):
 
 def build_progress_report(sim, player_eid, opportunity_limit=8):
     refresh_dynamic_opportunities(sim, player_eid)
-    objective_eval = evaluate_run_objective(sim, player_eid)
-    final_operation_eval = evaluate_final_operation(sim, player_eid)
+    objective_eval = evaluate_visible_run_objective(sim, player_eid)
+    final_operation_eval = evaluate_visible_final_operation(sim, player_eid)
     capped_opp_limit = max(3, int(opportunity_limit))
     opportunity_rows = evaluate_opportunity_facts(
         sim,

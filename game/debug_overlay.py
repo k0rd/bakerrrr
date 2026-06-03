@@ -14,6 +14,7 @@ from game.components import (
     VehicleState,
 )
 from game.final_operation import evaluate_final_operation
+from game.human_identity import identity_debug_summary, is_human_identity
 from game.incident_runtime import incident_record
 from game.lighting import lighting_state, update_lighting_state
 from game.opportunities import evaluate_opportunity_facts
@@ -264,6 +265,40 @@ def _nearest_npc_to_player(sim, player_eid, *, max_radius=18):
     return best[1], best[2], best[0]
 
 
+def _identity_debug_lines(sim, npc_eid):
+    identities = sim.ecs.get(CreatureIdentity) if sim is not None else {}
+    identity = identities.get(npc_eid) if identities is not None else None
+    if identity is None:
+        return ()
+    if not is_human_identity(identity):
+        return ("Identity N/A | closest NPC is non-human.",)
+    seed_token = (
+        f"{getattr(sim, 'seed', 0)}|debug_identity|{int(npc_eid)}|"
+        f"{str(getattr(identity, 'personal_name', '') or '').strip()}"
+    )
+    summary = identity_debug_summary(
+        identity,
+        personal_name=getattr(identity, "personal_name", None),
+        seed_token=seed_token,
+    )
+    if not isinstance(summary, dict):
+        return ("Identity unavailable.",)
+    mode = str(summary.get("mode", "stored") or "stored").strip().lower()
+    prefix = "Identity preview" if mode == "preview" else "Identity"
+    assigned = str(summary.get("assigned_sex", "") or "-").strip().lower() or "-"
+    gender_identity = str(summary.get("gender_identity", "") or "-").strip().lower() or "-"
+    pronoun_set = str(summary.get("pronoun_set", "") or "-").strip().lower() or "-"
+    try:
+        score = float(summary.get("name_gender_score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    source = str(summary.get("gender_inference_source", "") or "unknown").strip().lower() or "unknown"
+    return (
+        f"{prefix} | assigned {assigned} | identity {gender_identity} | pronouns {pronoun_set}",
+        f"Name gender score {score:+.2f} | source {source}",
+    )
+
+
 def _knowledge_queue_summary(knowledge, queue_name):
     entries = getattr(knowledge, f"{queue_name}_queue", ()) or ()
     if not entries:
@@ -292,12 +327,14 @@ def _incident_knowledge_lines(sim, player_eid, *, limit=6):
         f"role {role} | state {state} | dist {distance} | "
         f"tile {getattr(npc_pos, 'x', '?')},{getattr(npc_pos, 'y', '?')},{getattr(npc_pos, 'z', '?')}"
     )
+    identity_lines = list(_identity_debug_lines(sim, npc_eid))
     if knowledge is None:
-        return [header, "No IncidentKnowledge component."]
+        return [header, *identity_lines, "No IncidentKnowledge component."]
 
     records = getattr(knowledge, "records", {}) or {}
     lines = [
         header,
+        *identity_lines,
         f"Records {len(records)} | urgent [{_knowledge_queue_summary(knowledge, 'urgent')}] | social [{_knowledge_queue_summary(knowledge, 'social')}]",
     ]
     if not records:

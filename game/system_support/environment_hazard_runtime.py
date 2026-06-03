@@ -4,6 +4,49 @@ from __future__ import annotations
 
 
 ENVIRONMENT_HAZARD_PROFILES = {
+    "open_flame": {
+        "name": "Open Flame",
+        "fixture_type": "fire_hazard",
+        "glyph": "*",
+        "color": "warning",
+        "damage": 2,
+        "damage_kind": "condition",
+        "status": "burning",
+        "duration": 10,
+        "cooldown_ticks": 4,
+        "modifiers": {
+            "move_speed_mult": -0.18,
+            "incoming_damage_mult": 0.1,
+            "safety_tick_delta": -0.22,
+        },
+        "immediate_needs": {
+            "safety": -4.2,
+            "energy": -0.8,
+        },
+        "player_note": "Open flame licks up around your feet.",
+    },
+    "smoke_choke": {
+        "name": "Smoke Choke",
+        "fixture_type": "smoke_hazard",
+        "glyph": "~",
+        "color": "shadow",
+        "damage": 1,
+        "damage_kind": "condition",
+        "status": "smoke_choked",
+        "duration": 12,
+        "cooldown_ticks": 6,
+        "modifiers": {
+            "move_speed_mult": -0.1,
+            "ranged_accuracy_mult": -0.12,
+            "energy_tick_delta": -0.05,
+            "safety_tick_delta": -0.14,
+        },
+        "immediate_needs": {
+            "safety": -2.8,
+            "energy": -1.2,
+        },
+        "player_note": "Smoke catches in your throat and eyes.",
+    },
     "live_wire": {
         "name": "Live Wire",
         "fixture_type": "live_wire_hazard",

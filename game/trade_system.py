@@ -1509,8 +1509,14 @@ class TradeSystem(System):
         refresh_ticks = int(max(30, state.get("refresh_ticks", 180)))
         state["refresh_ticks"] = refresh_ticks
         cycle_index = self.sim.tick // refresh_ticks
+        trade_ui = getattr(self.sim, "trade_ui", None)
+        session_locked = bool(
+            isinstance(trade_ui, dict)
+            and trade_ui.get("open")
+            and str(trade_ui.get("property_id", "") or "").strip() == str(property_id or "").strip()
+        )
 
-        if state.get("cycle_index") != cycle_index:
+        if state.get("cycle_index") != cycle_index and not session_locked:
             self._rebuild_store(state, prop, cycle_index)
 
         return state

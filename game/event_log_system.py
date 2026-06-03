@@ -402,6 +402,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("noise", self.on_noise)
         self.sim.events.subscribe("creature_hazard_triggered", self.on_creature_hazard_triggered)
         self.sim.events.subscribe("environmental_hazard_triggered", self.on_environmental_hazard_triggered)
+        self.sim.events.subscribe("fire_started", self.on_fire_started)
+        self.sim.events.subscribe("fire_contained", self.on_fire_contained)
+        self.sim.events.subscribe("fire_burned_out", self.on_fire_burned_out)
         self.sim.events.subscribe("world_condition_triggered", self.on_world_condition_triggered)
         self.sim.events.subscribe("scan_report", self.on_scan_report)
         self.sim.events.subscribe("look_mode_toggled", self.on_look_mode_toggled)
@@ -490,12 +493,6 @@ class EventLogSystem(System):
         self.sim.events.subscribe("player_business_staff_hired", self.on_player_business_staff_hired)
         self.sim.events.subscribe("player_business_staff_fired", self.on_player_business_staff_fired)
         self.sim.events.subscribe("property_purchase_blocked", self.on_property_purchase_blocked)
-        self.sim.events.subscribe("quest_available", self.on_quest_available)
-        self.sim.events.subscribe("quest_accepted", self.on_quest_accepted)
-        self.sim.events.subscribe("quest_completed", self.on_quest_completed)
-        self.sim.events.subscribe("quest_accept_blocked", self.on_quest_accept_blocked)
-        self.sim.events.subscribe("quest_none_available", self.on_quest_none_available)
-        self.sim.events.subscribe("quest_turn_in_noop", self.on_quest_turn_in_noop)
         self.sim.events.subscribe("trade_bought", self.on_trade_bought)
         self.sim.events.subscribe("trade_buy_blocked", self.on_trade_buy_blocked)
         self.sim.events.subscribe("trade_sold", self.on_trade_sold)
@@ -731,17 +728,6 @@ class EventLogSystem(System):
         if not isinstance(objective_eval, dict):
             return ""
         return str(objective_eval.get("title", "") or "").strip()
-
-    def _quest_reward_text(self, reward):
-        reward = dict(reward or {}) if isinstance(reward, dict) else {}
-        bits = []
-        credits = int(reward.get("credits", 0) or 0)
-        intel = int(reward.get("intel", 0) or 0)
-        if credits > 0:
-            bits.append(f"+{credits}c")
-        if intel > 0:
-            bits.append(f"intel +{intel}")
-        return ", ".join(bits)
 
     def _opportunity_completion_text(self, completion_reason):
         text = str(completion_reason or "").strip()
@@ -1843,6 +1829,27 @@ class EventLogSystem(System):
         hazard_name = str(event.data.get("hazard_name", event.data.get("property_name", "hazard")) or "").strip()
         note = str(event.data.get("hazard_note", "")).strip() or environment_hazard_player_note(profile_id, name=hazard_name)
         self._log(f"Hazard: {note}", channel="status", priority="high")
+
+    def on_fire_started(self, event):
+        place = self._event_place_name(event) or self._event_property_name(event, fallback="the frontage")
+        if event.data.get("source_eid") == self.player_eid:
+            self._log(f"Fire catches at {place}.", channel="combat", priority="critical")
+            return
+        if not self._player_can_perceive_event_position(event):
+            return
+        self._log(f"Fire breaks out at {place}.", channel="world", priority="critical")
+
+    def on_fire_contained(self, event):
+        if not self._player_can_perceive_event_position(event):
+            return
+        place = self._event_place_name(event) or self._event_property_name(event, fallback="the frontage")
+        self._log(f"Fire response holds at {place}.", channel="world", priority="high")
+
+    def on_fire_burned_out(self, event):
+        if not self._player_can_perceive_event_position(event):
+            return
+        place = self._event_place_name(event) or self._event_property_name(event, fallback="the frontage")
+        self._log(f"The fire at {place} burns down to smoke and cleanup.", channel="world", priority="normal")
 
     def on_world_condition_triggered(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -4179,75 +4186,6 @@ class EventLogSystem(System):
             self.sim.log.add(f"Cannot purchase {property_name} because your wallet is not accessible right now.")
         else:
             self.sim.log.add(f"Purchase of {property_name} could not be finalized.")
-
-    def on_quest_available(self, event):
-        quest_id = int(event.data.get("quest_id", 0) or 0)
-        title = str(event.data.get("title", "Quest")).strip() or "Quest"
-        difficulty = max(1, int(event.data.get("difficulty", 1) or 1))
-        label = f"Q{quest_id} {title}" if quest_id > 0 else title
-        self._log(
-            f"Quest posted: {label} (difficulty {difficulty}).",
-            channel="mission",
-            priority="high",
-            dedupe_window=10,
-            dedupe_key=f"quest-available:{quest_id}:{title.lower()}",
-        )
-
-    def on_quest_accepted(self, event):
-        quest_id = int(event.data.get("quest_id", 0) or 0)
-        title = str(event.data.get("title", "Quest")).strip() or "Quest"
-        difficulty = max(1, int(event.data.get("difficulty", 1) or 1))
-        label = f"Q{quest_id} {title}" if quest_id > 0 else title
-        self._log(
-            f"Quest accepted: {label} (difficulty {difficulty}).",
-            channel="mission",
-            priority="high",
-        )
-
-    def on_quest_completed(self, event):
-        quest_id = int(event.data.get("quest_id", 0) or 0)
-        title = str(event.data.get("title", "Quest")).strip() or "Quest"
-        label = f"Q{quest_id} {title}" if quest_id > 0 else title
-        reward_text = self._quest_reward_text(event.data.get("reward", {}))
-        if reward_text:
-            self._log(
-                f"Quest complete: {label}. Reward {reward_text}.",
-                channel="mission",
-                priority="high",
-            )
-            return
-        self._log(
-            f"Quest complete: {label}.",
-            channel="mission",
-            priority="high",
-        )
-
-    def on_quest_accept_blocked(self, event):
-        if event.data.get("eid") != self.player_eid:
-            return
-        reason = str(event.data.get("reason", "") or "").strip().lower()
-        if reason == "max_active":
-            self._log(
-                "Quest board full: finish one of your active quests first.",
-                channel="mission",
-                priority="high",
-            )
-            return
-        self._log("This quest board cannot issue a new contract right now.", channel="mission", priority="high")
-
-    def on_quest_none_available(self, event):
-        if event.data.get("eid") != self.player_eid:
-            return
-        self._log("No quests are available right now.", channel="mission", priority="high")
-
-    def on_quest_turn_in_noop(self, event):
-        if event.data.get("eid") != self.player_eid:
-            return
-        self._log(
-            "No manual turn-in needed. Quest rewards land as soon as the work is done.",
-            channel="mission",
-            priority="high",
-        )
 
     def on_trade_bought(self, event):
         if event.data.get("eid") != self.player_eid:

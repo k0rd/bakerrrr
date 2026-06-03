@@ -115,6 +115,8 @@ class IncidentKnowledgeSystem(System):
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
         self.sim.events.subscribe("camera_scrutiny", self.on_camera_scrutiny)
         self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
+        self.sim.events.subscribe("fire_started", self.on_fire_event)
+        self.sim.events.subscribe("fire_spread", self.on_fire_event)
         self.sim.events.subscribe("rumor_shared", self.on_rumor_shared)
         if not hasattr(self.sim, "incident_stats"):
             self.sim.incident_stats = {
@@ -921,6 +923,33 @@ class IncidentKnowledgeSystem(System):
             confidence=0.96,
             queue=True,
         )
+
+    def on_fire_event(self, event):
+        x = event.data.get("x")
+        y = event.data.get("y")
+        if x is None or y is None:
+            return
+        try:
+            severity = max(24, min(100, int(event.data.get("severity", 40) or 40)))
+        except (TypeError, ValueError):
+            severity = 40
+        building_id = str(event.data.get("building_id", "") or "").strip().lower()
+        property_id = str(event.data.get("property_id", "") or "").strip().lower()
+        merge_subject = building_id or property_id or f"{int(x)}:{int(y)}:{int(event.data.get('z', 0) or 0)}"
+        source_kind = str(event.data.get("source_kind", "") or "").strip().lower()
+        note = f"{source_kind} fire" if source_kind else "structure fire"
+        incident = self._create_incident(
+            event,
+            kind="structure_fire",
+            severity=severity,
+            merge_subject=merge_subject,
+            official_reportable=True,
+            note=note,
+            tags=("fire", "hazard", "disaster"),
+        )
+        observation = self._event_accountability(event)
+        witnesses = tuple(observation.get("accountable_observer_eids", ()))
+        self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
     def on_rumor_shared(self, event):
         incident_id = event.data.get("incident_id")

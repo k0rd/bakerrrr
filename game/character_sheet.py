@@ -3,6 +3,7 @@ from __future__ import annotations
 from game.components import (
     ArmorLoadout,
     CoreStats,
+    CreatureIdentity,
     FinancialProfile,
     Inventory,
     NPCNeeds,
@@ -13,6 +14,8 @@ from game.components import (
     Vitality,
     WeaponLoadout,
 )
+from game.human_description import human_physical_summary
+from game.human_identity import normalize_gender_identity, pronoun_display_text
 from game.run_pressure import pressure_snapshot
 from game.skill_ui import skill_birth_debug_line, skill_change_reason_label
 from game.skills import ALL_SKILL_IDS, actor_skill, profile_neglect_pressure, profile_recent_skill_changes, skill_label
@@ -134,6 +137,7 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     loadout = ecs.get(WeaponLoadout).get(player_eid)
     armor = ecs.get(ArmorLoadout).get(player_eid)
     status_effects = ecs.get(StatusEffects).get(player_eid)
+    identity = ecs.get(CreatureIdentity).get(player_eid)
 
     pressure = pressure_snapshot(sim)
     credits = int(getattr(assets, "credits", 0) or 0)
@@ -190,6 +194,25 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
             f"Needs Energy {float(getattr(needs, 'energy', 0.0)):.0f} | Safety {float(getattr(needs, 'safety', 0.0)):.0f} | Social {float(getattr(needs, 'social', 0.0)):.0f}"
         )
     summary_lines.append(f"Active effects {_active_status_text(status_effects, duration_label_fn=duration_label_fn, sim=sim)}")
+    if identity is not None:
+        gender_identity = normalize_gender_identity(getattr(identity, "gender_identity", None), default="nonbinary")
+        pronoun_text = pronoun_display_text(identity, default="they", personal_name=getattr(identity, "personal_name", ""))
+        appearance_text = human_physical_summary(
+            getattr(sim, "seed", 0),
+            eid=player_eid,
+            identity=identity,
+            personal_name=getattr(identity, "personal_name", ""),
+        )
+        assigned_sex = str(getattr(identity, "assigned_sex", "") or "").strip().lower()
+        summary_lines.extend([
+            "",
+            "IDENTITY",
+            f"Identity {gender_identity} | Pronouns {pronoun_text}",
+        ])
+        if appearance_text:
+            summary_lines.append(appearance_text)
+        if assigned_sex:
+            summary_lines.append(f"Assigned sex {assigned_sex}")
     summary_lines.extend([
         "",
         "RUN",

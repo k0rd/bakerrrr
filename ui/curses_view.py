@@ -1,4 +1,5 @@
 import curses
+import time
 
 from ui.input_keys import ENTER_KEYS
 
@@ -93,6 +94,8 @@ class CursesView:
             _register("feature_door", 186)
             _register("feature_window", 117)
             _register("feature_breach", 203)
+            _register("hazard_fire", 209)
+            _register("hazard_smoke", 245)
             _register("transit", 229)
             _register("property_building", 223)
             _register("property_fixture", 111)
@@ -164,6 +167,8 @@ class CursesView:
             _register("feature_door", curses.COLOR_YELLOW)
             _register("feature_window", curses.COLOR_CYAN)
             _register("feature_breach", curses.COLOR_RED)
+            _register("hazard_fire", curses.COLOR_RED)
+            _register("hazard_smoke", curses.COLOR_WHITE)
             _register("transit", curses.COLOR_YELLOW)
             _register("property_building", curses.COLOR_WHITE)
             _register("property_fixture", curses.COLOR_CYAN)
@@ -438,6 +443,96 @@ class CursesView:
             return
         self._flush_queued_draws()
         self._draw_segments_now(x, y, segments, max_width=max_width, attrs=attrs)
+
+    def prompt_choice(
+        self,
+        prompt,
+        options,
+        *,
+        detail="",
+        title=None,
+        banner="",
+        subtitle="",
+        initial_index=0,
+    ):
+        rows = [
+            {
+                "value": str(row.get("value", "")).strip(),
+                "label": str(row.get("label", row.get("value", ""))).strip(),
+                "description": str(row.get("description", "")).strip(),
+            }
+            for row in tuple(options or ())
+            if isinstance(row, dict) and str(row.get("value", "")).strip()
+        ]
+        if not rows:
+            return None
+
+        selected = max(0, min(int(initial_index), len(rows) - 1))
+        prompt = str(prompt or "")
+        detail = str(detail or "")
+        title = str(title or "").strip()
+        banner = str(banner or "").strip()
+        subtitle = str(subtitle or "").strip()
+
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+        while True:
+            self.clear()
+            width, height = self.size()
+            x = 2
+            y = 1
+            max_width = max(1, width - x - 1)
+
+            def _line(text, *, color="default", attrs=0):
+                nonlocal y
+                if y >= height:
+                    return
+                self.draw_text(x, y, str(text or "")[:max_width], color=color, attrs=attrs)
+                y += 1
+
+            if banner:
+                _line(banner, color="objective", attrs=getattr(curses, "A_BOLD", 0))
+            if title:
+                _line(title, color="human", attrs=getattr(curses, "A_BOLD", 0))
+            if subtitle:
+                _line(subtitle, color="default")
+            y += 1
+            _line(prompt, color="objective", attrs=getattr(curses, "A_BOLD", 0))
+            if detail:
+                _line(detail, color="default")
+            y += 1
+            for idx, row in enumerate(rows):
+                prefix = ">" if idx == selected else " "
+                line = f"{prefix} {idx + 1}. {row['label']}"
+                if row["description"]:
+                    line = f"{line} - {row['description']}"
+                attrs = getattr(curses, "A_REVERSE", 0) if idx == selected else 0
+                _line(line, color="player" if idx == selected else "human", attrs=attrs)
+            y += 1
+            _line("Arrows move | 1-3 choose | Enter confirm | Esc cancel", color="scout")
+            self.refresh()
+
+            key = self.get_key()
+            if key is None:
+                time.sleep(0.01)
+                continue
+            if key in ENTER_KEYS:
+                return rows[selected]["value"]
+            if key == 27:
+                return None
+            if key in (curses.KEY_UP, curses.KEY_LEFT):
+                selected = (selected - 1) % len(rows)
+                continue
+            if key in (curses.KEY_DOWN, curses.KEY_RIGHT):
+                selected = (selected + 1) % len(rows)
+                continue
+            if key in (ord("1"), ord("2"), ord("3")):
+                idx = key - ord("1")
+                if 0 <= idx < len(rows):
+                    return rows[idx]["value"]
 
     def get_key(self):
         key = self.scr.getch()

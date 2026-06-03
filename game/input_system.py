@@ -78,6 +78,7 @@ from game.character_sheet import (
 import game.report_debug_ui as _report_debug_ui
 from game.casino_ui_runtime import ensure_casino_ui_state
 from game.report_runtime import build_progress_report as _build_progress_report
+from game.run_objectives import reveal_run_objective
 from game.dialogue_runtime import (
     _dialog_backup_cursor_payload,
     _dialog_backup_mark_from_state,
@@ -1060,6 +1061,10 @@ class InputSystem(System):
         return _report_debug_ui.scroll_panel_body_dimensions(self.view, self.sim)
 
     def _refresh_report_ui(self, reset_scroll=False, kind=None):
+        report_state = self._report_state()
+        target_kind = str(kind or report_state.get("kind") or "progress").strip().lower() or "progress"
+        if target_kind == "progress":
+            reveal_run_objective(self.sim, source="ops_report")
         return _report_debug_ui.refresh_report_ui(
             self,
             reset_scroll=reset_scroll,
@@ -2552,21 +2557,6 @@ class InputSystem(System):
         property_id = str(prop.get("id", "") or "").strip()
         if not property_id:
             return ""
-        for quest in list(getattr(self.sim, "quests", {}).get("active", ()) or ()):
-            if not isinstance(quest, dict):
-                continue
-            objective = quest.get("objective", {}) if isinstance(quest.get("objective"), dict) else {}
-            if str(objective.get("type", "")).strip().lower() != "cache_pickup":
-                continue
-            if str(objective.get("property_id", "") or "").strip() != property_id:
-                continue
-            title = str(quest.get("title", "")).strip()
-            if title:
-                return f"Mission: {title}"
-            item_id = str(objective.get("item_id", "")).strip().lower()
-            if item_id:
-                return f"Mission: retrieve {_item_label(item_id)}"
-            return "Mission: retrieve cache item"
         cache_items = self._container_inventory_entries(property_id, container_kind="cache")
         for entry in cache_items:
             if not isinstance(entry, dict):

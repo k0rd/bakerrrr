@@ -113,6 +113,10 @@ def award_objective_progress(
     if len(state["history"]) > MAX_HISTORY:
         del state["history"][:-MAX_HISTORY]
 
+    from game.run_objectives import reveal_run_objective
+
+    reveal_run_objective(sim, source=f"objective_progress:{key}")
+
     totals = {
         "reserve_bonus_credits": int(state["reserve_bonus_credits"]),
         "network_marks": int(state["network_marks"]),

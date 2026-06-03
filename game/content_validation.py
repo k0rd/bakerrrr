@@ -19,7 +19,7 @@ BUSINESS_NAMES_PATH = GAME_DIR / "business_names.json"
 FIXTURES_PATH = GAME_DIR / "fixtures.json"
 VEHICLES_PATH = GAME_DIR / "vehicles.json"
 NPC_NAMES_PATH = GAME_DIR / "npc_names.json"
-TILE_MAP_PATH = REPO_ROOT / "assets" / "tiles" / "tile_map.json"
+RENDER_SEMANTICS_PATH = GAME_DIR / "render_semantics.json"
 
 ALLOWED_ITEM_EFFECTS = {"modify_need", "restore_hp", "status", "credits", "add_ammo"}
 ALLOWED_ITEM_NEEDS = {"energy", "safety", "social"}
@@ -1093,7 +1093,7 @@ def _validate_npc_names(path, report):
             )
 
 
-def _validate_tile_map(path, report):
+def _validate_render_semantics(path, report):
     data, source = _load_object_document(path, report, "an object")
     if data is None:
         return
@@ -1144,6 +1144,6 @@ def validate_repo_content():
     _validate_fixtures(FIXTURES_PATH, report)
     _validate_vehicles(VEHICLES_PATH, report)
     _validate_npc_names(NPC_NAMES_PATH, report)
-    _validate_tile_map(TILE_MAP_PATH, report)
+    _validate_render_semantics(RENDER_SEMANTICS_PATH, report)
 
     return report

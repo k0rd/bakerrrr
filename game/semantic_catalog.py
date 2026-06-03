@@ -4,12 +4,8 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from game.json_metadata import wrap_object_document
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_RUNTIME_MAP_PATH = REPO_ROOT / "assets" / "tiles" / "semantic_map.json"
-DEFAULT_TILE_MAP_PATH = REPO_ROOT / "assets" / "tiles" / "tile_map.json"
-DEFAULT_SEMANTIC_MAPPING_PATH = REPO_ROOT / "assets" / "tiles" / "atlas" / "semantic_mapping.json"
+DEFAULT_RENDER_SEMANTICS_PATH = REPO_ROOT / "game" / "render_semantics.json"
 
 RUNTIME_CATEGORIES = (
     "terrain",
@@ -165,42 +161,27 @@ def _derived_semantic_render_profile(
 
 
 def build_runtime_semantic_map(
-    tile_map_path: Path | None = None,
-    semantic_mapping_path: Path | None = None,
+    render_semantics_path: Path | None = None,
 ) -> dict:
-    tile_map = _load_json(Path(tile_map_path) if tile_map_path else DEFAULT_TILE_MAP_PATH)
-    semantic_mapping = _load_json(
-        Path(semantic_mapping_path) if semantic_mapping_path else DEFAULT_SEMANTIC_MAPPING_PATH
-    )
+    render_semantics = _load_json(Path(render_semantics_path) if render_semantics_path else DEFAULT_RENDER_SEMANTICS_PATH)
 
-    render_layers = _normalize_render_layers(tile_map.get("_render_layers", {}))
+    render_layers = _normalize_render_layers(render_semantics.get("_render_layers", {}))
     category_render_defaults = _normalize_category_render_defaults(
-        tile_map.get("_category_render_defaults", {}),
+        render_semantics.get("_category_render_defaults", {}),
         render_layers,
     )
     semantic_render_defaults = _normalize_semantic_render_defaults(
-        tile_map.get("_semantic_render_defaults", {}),
+        render_semantics.get("_semantic_render_defaults", {}),
         render_layers,
     )
 
     categories = {}
     for category_name in RUNTIME_CATEGORIES:
-        category = tile_map.get(category_name)
+        category = render_semantics.get(category_name)
         if isinstance(category, dict):
             categories[category_name] = category
 
-    assignments = semantic_mapping.get("assignments", {}) if isinstance(semantic_mapping, dict) else {}
     semantics = {}
-    for semantic_id, atlas_id in assignments.items():
-        semantic_key = str(semantic_id or "").strip()
-        atlas_key = str(atlas_id or "").strip()
-        if not semantic_key:
-            continue
-        semantics[semantic_key] = {
-            "atlas_id": atlas_key or None,
-            "sources": [],
-        }
-
     for category_name, category in categories.items():
         for source_key, mapping in category.items():
             if str(source_key).startswith("_"):
@@ -221,7 +202,6 @@ def build_runtime_semantic_map(
                 entry = semantics.setdefault(
                     semantic_id,
                     {
-                        "atlas_id": str(assignments.get(semantic_id, "") or "").strip() or None,
                         "sources": [],
                     },
                 )
@@ -245,60 +225,31 @@ def build_runtime_semantic_map(
         if render_profile is not None:
             entry["render"] = render_profile
 
-    return wrap_object_document({
-        "_comment": "Runtime semantic catalog combining render semantics and atlas aliases.",
+    return {
+        "_comment": "Runtime semantic catalog derived from authored procedural render semantics.",
         "sources": {
-            "tile_map": str(Path(tile_map_path) if tile_map_path else DEFAULT_TILE_MAP_PATH),
-            "semantic_mapping": str(
-                Path(semantic_mapping_path) if semantic_mapping_path else DEFAULT_SEMANTIC_MAPPING_PATH
+            "render_semantics": str(
+                Path(render_semantics_path) if render_semantics_path else DEFAULT_RENDER_SEMANTICS_PATH
             ),
         },
-        "color_aliases": tile_map.get("_color_aliases", {}),
-        "asset_color_families": tile_map.get("_asset_color_families", {}),
         "render_layers": render_layers,
         "category_render_defaults": category_render_defaults,
         "semantic_render_defaults": semantic_render_defaults,
         "categories": categories,
         "semantics": semantics,
-    })
-
-
-def write_runtime_semantic_map(
-    output_path: Path | None = None,
-    *,
-    tile_map_path: Path | None = None,
-    semantic_mapping_path: Path | None = None,
-) -> Path:
-    path = Path(output_path) if output_path else DEFAULT_RUNTIME_MAP_PATH
-    data = build_runtime_semantic_map(
-        tile_map_path=tile_map_path,
-        semantic_mapping_path=semantic_mapping_path,
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-    return path
+    }
 
 
 class RuntimeSemanticCatalog:
     def __init__(self, path: Path | None = None, data: dict | None = None):
-        self.path = Path(path) if path else DEFAULT_RUNTIME_MAP_PATH
+        self.path = Path(path) if path else DEFAULT_RENDER_SEMANTICS_PATH
         if data is None:
             if self.path.exists():
-                data = _load_json(self.path)
+                data = build_runtime_semantic_map(render_semantics_path=self.path)
             else:
                 data = build_runtime_semantic_map()
         self.data = data if isinstance(data, dict) else {}
         self.categories = self.data.get("categories", {}) if isinstance(self.data.get("categories"), dict) else {}
-        self.color_aliases = (
-            self.data.get("color_aliases", {}) if isinstance(self.data.get("color_aliases"), dict) else {}
-        )
-        self.asset_color_families = (
-            self.data.get("asset_color_families", {})
-            if isinstance(self.data.get("asset_color_families"), dict)
-            else {}
-        )
         self.render_layers = _normalize_render_layers(self.data.get("render_layers", {}))
         self.category_render_defaults = _normalize_category_render_defaults(
             self.data.get("category_render_defaults", {}),
@@ -309,16 +260,6 @@ class RuntimeSemanticCatalog:
             self.render_layers,
         )
         self.semantics = self.data.get("semantics", {}) if isinstance(self.data.get("semantics"), dict) else {}
-
-    def atlas_id_for_semantic(self, semantic_id):
-        semantic_key = str(semantic_id or "").strip()
-        if not semantic_key:
-            return None
-        entry = self.semantics.get(semantic_key)
-        if not isinstance(entry, dict):
-            return None
-        atlas_id = str(entry.get("atlas_id", "") or "").strip()
-        return atlas_id or None
 
     def render_layer_order(self, layer_name):
         layer_key = str(layer_name or "").strip().lower() or "ground_overlay"
@@ -502,5 +443,5 @@ class RuntimeSemanticCatalog:
 
 @lru_cache(maxsize=4)
 def get_runtime_semantic_catalog(path: str | None = None) -> RuntimeSemanticCatalog:
-    catalog_path = Path(path) if path else DEFAULT_RUNTIME_MAP_PATH
+    catalog_path = Path(path) if path else DEFAULT_RENDER_SEMANTICS_PATH
     return RuntimeSemanticCatalog(path=catalog_path)

@@ -101,6 +101,13 @@ from game.item_semantics import (
     item_requires_identification,
     item_tags,
 )
+from game.human_identity import (
+    conjugate_present,
+    is_human_identity,
+    player_address_term,
+    pronoun_format_slots,
+)
+from game.human_description import human_conversation_description
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
     append_external_opportunity,
@@ -301,14 +308,14 @@ from game.player_businesses import (
 from game.final_operation import (
     active_final_operation_target_property_id,
     ensure_final_operation_unlocked,
-    evaluate_final_operation,
+    evaluate_visible_final_operation,
     mark_final_operation_target_recovered,
     sync_final_operation_runtime,
     try_complete_final_operation,
     try_fail_final_operation,
 )
 from game.npc_judgment import evaluate_opportunity_judgment
-from game.run_objectives import evaluate_run_objective
+from game.run_objectives import evaluate_visible_run_objective, reveal_run_objective
 from game.organizations import (
     ensure_property_organization,
     local_protective_pressure_snapshot,
@@ -3270,6 +3277,46 @@ class NPCInteractionSystem(System):
             return owner_tag.replace("_", " "), "tag"
         return "", ""
 
+    def _human_identity_for_reference(self, *, eid=None, personal_name=""):
+        identities = self.sim.ecs.get(CreatureIdentity)
+        if eid is not None:
+            identity = identities.get(eid)
+            if is_human_identity(identity):
+                return identity
+        name_text = str(personal_name or "").strip().casefold()
+        if not name_text:
+            return None
+        for _, identity in list(identities.items()):
+            if not is_human_identity(identity):
+                continue
+            candidate_name = str(getattr(identity, "personal_name", "") or "").strip().casefold()
+            if candidate_name == name_text:
+                return identity
+        return None
+
+    def _human_reference_seed_token(self, *, eid=None, personal_name=""):
+        if eid is not None:
+            return f"{self.sim.seed}:human-reference:{eid}"
+        return f"{self.sim.seed}:human-reference:{str(personal_name or '').strip()}"
+
+    def _human_pronoun_slots(self, *, eid=None, personal_name="", prefix="person"):
+        identity = self._human_identity_for_reference(eid=eid, personal_name=personal_name)
+        return pronoun_format_slots(
+            identity,
+            prefix=prefix,
+            personal_name=personal_name,
+            seed_token=self._human_reference_seed_token(eid=eid, personal_name=personal_name),
+        )
+
+    def _human_present_verb(self, verb, *, eid=None, personal_name=""):
+        identity = self._human_identity_for_reference(eid=eid, personal_name=personal_name)
+        return conjugate_present(
+            identity,
+            verb,
+            personal_name=personal_name,
+            seed_token=self._human_reference_seed_token(eid=eid, personal_name=personal_name),
+        )
+
     def _service_summary_for(self, prop):
         if not prop:
             return ""
@@ -4905,7 +4952,12 @@ class NPCInteractionSystem(System):
 
         supervisor_name = ""
         supervisor_role = ""
+        supervisor_eid_value = None
         if supervisor_row:
+            try:
+                supervisor_eid_value = int(supervisor_row.get("eid"))
+            except (TypeError, ValueError):
+                supervisor_eid_value = supervisor_row.get("eid")
             supervisor_name = _entity_display_name(self.sim, supervisor_row.get("eid"), title_case=True)
             supervisor_role = str(supervisor_row.get("role", "") or "").strip().lower()
 
@@ -4914,6 +4966,7 @@ class NPCInteractionSystem(System):
             "organization_name": organization_text,
             "organization_kind": organization_kind,
             "organization_role": organization_role,
+            "supervisor_eid": supervisor_eid_value,
             "supervisor_name": supervisor_name,
             "supervisor_role": supervisor_role,
             "coworker_names": tuple(coworker_names),
@@ -5060,7 +5113,9 @@ class NPCInteractionSystem(System):
         primary_social_lead = social_leads[0] if social_leads else None
         other_name = ""
         other_relation = ""
+        other_eid = None
         if primary_social_lead:
+            other_eid = primary_social_lead.get("eid")
             other_name = str(primary_social_lead.get("name", "")).strip()
             other_relation = str(primary_social_lead.get("relation_text", "")).strip() or "contact"
         intro_source_name = ""
@@ -5068,7 +5123,7 @@ class NPCInteractionSystem(System):
             intro_source_name = _entity_display_name(self.sim, intro_entry.get("source_eid"), title_case=True)
         player_profile = self._player_profile()
         rumor_line = self._memory_line(memory, player_profile)
-        objective_eval = evaluate_run_objective(self.sim, self.player_eid)
+        objective_eval = evaluate_visible_run_objective(self.sim, self.player_eid)
         objective_title = str((objective_eval or {}).get("title", "")).strip()
         objective_next_step = str((objective_eval or {}).get("next_step", "")).strip()
         objective_summary_line = str((objective_eval or {}).get("summary_line", "")).strip()
@@ -5116,7 +5171,7 @@ class NPCInteractionSystem(System):
                 })
             objective_focus = tuple(line for line in focus_lines if line)
             objective_focus_rows = tuple(normalized_focus_rows)
-        final_operation_eval = evaluate_final_operation(self.sim, self.player_eid)
+        final_operation_eval = evaluate_visible_final_operation(self.sim, self.player_eid)
         opportunity_rows = self._dialogue_opportunity_rows(limit=3, observer_eid=npc_eid)
         fallout_rows = self._dialogue_fallout_rows(limit=6, observer_eid=npc_eid)
 
@@ -5191,7 +5246,17 @@ class NPCInteractionSystem(System):
             detail_label = "What do people remember?"
         elif other_name:
             local_source = "other"
-            detail_line = f"Try {other_name}. They hear more than I do."
+            other_slots = self._human_pronoun_slots(
+                eid=other_eid,
+                personal_name=other_name,
+                prefix="other",
+            )
+            other_hear = self._human_present_verb(
+                "hear",
+                eid=other_eid,
+                personal_name=other_name,
+            )
+            detail_line = f"Try {other_name}. {other_slots['other_subject_cap']} {other_hear} more than I do."
         trade_context = self._trade_context(npc_eid, workplace_prop, current_prop)
         street_context = {
             "npc_eid": npc_eid,
@@ -5337,6 +5402,7 @@ class NPCInteractionSystem(System):
             "organization_name": organization_name_text,
             "organization_kind": str(organization.get("organization_kind", "")).strip().lower(),
             "organization_role": str(organization.get("organization_role", "")).strip().lower(),
+            "supervisor_eid": organization.get("supervisor_eid"),
             "supervisor_name": str(organization.get("supervisor_name", "")).strip(),
             "supervisor_role": str(organization.get("supervisor_role", "")).strip().lower(),
             "coworker_names": tuple(organization.get("coworker_names", ()) or ()),
@@ -5345,6 +5411,7 @@ class NPCInteractionSystem(System):
             "home_name": str(home_prop.get("name", home_prop.get("id", "home"))).strip() if home_prop else "",
             "workplace_name": str(workplace_prop.get("name", workplace_prop.get("id", "place"))).strip() if workplace_prop else "",
             "workplace_here": workplace_here,
+            "owner_eid": owner_place.get("owner_eid") if isinstance(owner_place, dict) else None,
             "owner_name": owner_name,
             "owner_source": owner_source,
             "service_summary": service_summary,
@@ -5370,6 +5437,7 @@ class NPCInteractionSystem(System):
             "social_lead_relation": str(primary_social_lead.get("relation_text", "")).strip() if primary_social_lead else "",
             "intro_entry": intro_entry,
             "intro_source_name": intro_source_name,
+            "other_eid": other_eid,
             "other_name": other_name,
             "other_relation": other_relation,
             "rumor_line": rumor_line,
@@ -5377,6 +5445,7 @@ class NPCInteractionSystem(System):
             "run_echo_line": run_echo_line,
             "run_echo_history_line": run_echo_history_line,
             "objective_id": str((objective_eval or {}).get("id", "")).strip().lower(),
+            "run_objective_visible": bool(objective_eval),
             "objective_title": objective_title,
             "objective_next_step": objective_next_step,
             "objective_summary_line": objective_summary_line,
@@ -5686,6 +5755,7 @@ class NPCInteractionSystem(System):
         organization_role = str(context.get("organization_role", "")).strip().lower()
         career_text = str(context.get("career_text", "")).strip()
         workplace_name = str(context.get("workplace_name", "")).strip()
+        owner_eid = context.get("owner_eid")
         owner_name = str(context.get("owner_name", "")).strip()
         owner_source = str(context.get("owner_source", "")).strip().lower()
         scene_note = dict(context.get("scene_note", {}) or {})
@@ -5741,8 +5811,13 @@ class NPCInteractionSystem(System):
             return f"{organization_name_text}. That is the outfit I am with."
         if owner_name and workplace_name:
             if owner_source == "owner":
+                owner_slots = self._human_pronoun_slots(
+                    eid=owner_eid,
+                    personal_name=owner_name,
+                    prefix="owner",
+                )
                 if career_text:
-                    return f"{owner_name} owns {workplace_name}. I do {career_text} work for them."
+                    return f"{owner_name} owns {workplace_name}. I do {career_text} work for {owner_slots['owner_object']}."
                 return f"{owner_name} owns {workplace_name}."
             if owner_source == "founder":
                 if career_text:
@@ -5760,6 +5835,7 @@ class NPCInteractionSystem(System):
 
     def _supervisor_summary(self, context):
         organization_role = str(context.get("organization_role", "")).strip().lower()
+        supervisor_eid = context.get("supervisor_eid")
         supervisor_name = str(context.get("supervisor_name", "")).strip()
         supervisor_role = str(context.get("supervisor_role", "")).strip().lower()
         workplace_name = str(context.get("workplace_name", "")).strip()
@@ -5772,8 +5848,13 @@ class NPCInteractionSystem(System):
             return "Nobody above me. It is my call."
         if supervisor_name:
             if supervisor_role == "owner":
+                supervisor_slots = self._human_pronoun_slots(
+                    eid=supervisor_eid,
+                    personal_name=supervisor_name,
+                    prefix="supervisor",
+                )
                 if workplace_name:
-                    return f"{supervisor_name} owns {workplace_name}. Big calls go through them."
+                    return f"{supervisor_name} owns {workplace_name}. Big calls go through {supervisor_slots['supervisor_object']}."
                 return f"{supervisor_name} owns the place."
             if supervisor_role == "manager":
                 if workplace_name:
@@ -5863,6 +5944,16 @@ class NPCInteractionSystem(System):
         career_text = str(lead.get("career_text", "")).strip()
         place_name = str(lead.get("place_name", "")).strip()
         place_role = str(lead.get("place_role", "")).strip().lower()
+        lead_slots = self._human_pronoun_slots(
+            eid=lead.get("eid"),
+            personal_name=name,
+            prefix="lead",
+        )
+        lead_do = self._human_present_verb(
+            "do",
+            eid=lead.get("eid"),
+            personal_name=name,
+        )
 
         if relation_text and career_text and place_name and place_role == "workplace":
             return f"{name} is my {relation_text} and does {career_text} work at {place_name}."
@@ -5871,7 +5962,7 @@ class NPCInteractionSystem(System):
         if relation_text and place_name and place_role == "workplace":
             return f"{name} is my {relation_text} over at {place_name}."
         if relation_text and career_text:
-            return f"{name} is my {relation_text}, and they do {career_text} work."
+            return f"{name} is my {relation_text}, and {lead_slots['lead_subject']} {lead_do} {career_text} work."
         if career_text and place_name and place_role == "workplace":
             return f"{name} does {career_text} work at {place_name}."
         if relation_text:
@@ -6115,7 +6206,9 @@ class NPCInteractionSystem(System):
         place_lc = place_name.lower()
         org_lc = organization_name.lower()
         if contact_name and place_name and tier >= 4:
-            return f"Start by reading {contact_name} at {place_name}; they set the rhythm."
+            contact_slots = self._human_pronoun_slots(personal_name=contact_name, prefix="contact")
+            contact_set = self._human_present_verb("set", personal_name=contact_name)
+            return f"Start by reading {contact_name} at {place_name}; {contact_slots['contact_subject']} {contact_set} the rhythm."
         if contact_role and place_name and tier >= 2:
             return f"Start by reading the {contact_role} at {place_name}; they set the rhythm."
         if organization_name and place_name and org_lc and org_lc != place_lc and tier >= 3:
@@ -7861,7 +7954,18 @@ class NPCInteractionSystem(System):
         if role_id == "drunk":
             return "Usually the kind of trouble you hear before you see."
         if context.get("other_name"):
-            return f"{context['other_name']} stays close to more of the local trouble than they admit."
+            other_name = str(context.get("other_name", "")).strip()
+            other_slots = self._human_pronoun_slots(
+                eid=context.get("other_eid"),
+                personal_name=other_name,
+                prefix="other",
+            )
+            other_admit = self._human_present_verb(
+                "admit",
+                eid=context.get("other_eid"),
+                personal_name=other_name,
+            )
+            return f"{other_name} stays close to more of the local trouble than {other_slots['other_subject']} {other_admit}."
         return "Nothing sharper than the usual nerves."
 
     def _resolve_guard_dialogue(self, context, tactic):
@@ -8374,6 +8478,65 @@ class NPCInteractionSystem(System):
             return ""
         return f'{npc_name}: "{text}"'
 
+    def _dialogue_narration_line(self, text):
+        return str(text or "").strip()
+
+    def _dialogue_human_narration_line(self, context):
+        identity = context.get("identity")
+        if not is_human_identity(identity):
+            return ""
+        return self._dialogue_narration_line(
+            human_conversation_description(
+                getattr(self.sim, "seed", 0),
+                eid=context.get("npc_eid"),
+                identity=identity,
+                personal_name=getattr(identity, "personal_name", ""),
+            )
+        )
+
+    def _player_dialogue_identity(self):
+        if self.sim is None or self.player_eid is None:
+            return None
+        identities = self.sim.ecs.get(CreatureIdentity)
+        return identities.get(self.player_eid) if identities is not None else None
+
+    def _player_dialogue_address_term(self):
+        return str(player_address_term(self._player_dialogue_identity(), default="nonbinary") or "").strip()
+
+    def _authority_player_address_line(self, context, *, open_count=0):
+        player_term = self._player_dialogue_address_term()
+        if not player_term:
+            return ""
+        role_id = str(context.get("role_id", "") or "").strip().lower()
+        workplace_archetype = str(context.get("workplace_archetype", "") or "").strip().lower()
+        owner_place_archetype = str(context.get("owner_place_archetype", "") or "").strip().lower()
+        pressure_role = str(self._dialogue_pressure_role(context) or "").strip().lower()
+        authority_like = (
+            role_id in {"guard", "cop", "peace_officer", "security", "scout"}
+            or pressure_role == "guard"
+            or workplace_archetype in set(self.JUSTICE_LOCATOR_ARCHETYPES)
+            or owner_place_archetype in set(self.JUSTICE_LOCATOR_ARCHETYPES)
+        )
+        if not authority_like:
+            return ""
+        variants = (
+            "Questions first, {player_address}.",
+            "Easy, {player_address}.",
+            "Hold there, {player_address}.",
+            "Keep it clean, {player_address}.",
+        )
+        rng = random.Random(
+            f"{getattr(self.sim, 'seed', 0)}:player-address:{context.get('npc_eid', 0)}:{open_count}:{role_id}:{pressure_role}"
+        )
+        return rng.choice(variants).format(player_address=player_term)
+
+    def _dialogue_opening_lines_with_narration(self, context, lines):
+        resolved = [str(line).strip() for line in tuple(lines or ()) if str(line).strip()]
+        narration = self._dialogue_human_narration_line(context)
+        if narration:
+            return [narration] + [line for line in resolved if line]
+        return resolved
+
     def _door_answer_allowed_topics(self, context):
         if not bool(context.get("door_answering")):
             return set()
@@ -8397,12 +8560,12 @@ class NPCInteractionSystem(System):
         memory = self._dialogue_memory(context["npc_eid"])
         open_count = max(0, int(memory.get("opened_count", 0)))
         if bool(context.get("peaceful_orders_only")):
-            return [
+            return self._dialogue_opening_lines_with_narration(context, [
                 self._dialogue_npc_line(
                     context["npc_name"],
                     "Okay. I dropped it. Just tell me where you want me.",
                 )
-            ]
+            ])
         if bool(context.get("door_answering")):
             mood = str(context.get("door_answer_mood", "neutral") or "neutral").strip().lower() or "neutral"
             if mood == "hostile":
@@ -8428,7 +8591,7 @@ class NPCInteractionSystem(System):
                         f"If you're checking hours, it's {self._dialogue_hours_summary(context)}.",
                     )
                 )
-            return [line for line in lines if line]
+            return self._dialogue_opening_lines_with_narration(context, lines)
         if context.get("guarded"):
             first = self._say(
                 "greet_guarded",
@@ -8438,13 +8601,16 @@ class NPCInteractionSystem(System):
                 npc_name=context["npc_name"],
             )
             lines = [self._dialogue_npc_line(context["npc_name"], first)]
+            address_line = self._authority_player_address_line(context, open_count=open_count)
+            if address_line:
+                lines.append(self._dialogue_npc_line(context["npc_name"], address_line))
             if context.get("trespass_prop"):
                 prop_name = str(context["trespass_prop"].get("name", context["trespass_prop"].get("id", "property"))).strip() or "property"
                 lines.append(self._dialogue_npc_line(context["npc_name"], f"You should not be hanging around {prop_name}."))
             elif context.get("recent_offense"):
                 action = str(context["recent_offense"].get("data", {}).get("action", "trouble")).replace("_", " ").strip() or "trouble"
                 lines.append(self._dialogue_npc_line(context["npc_name"], f"I still remember your {action}."))
-            return [line for line in lines if line]
+            return self._dialogue_opening_lines_with_narration(context, lines)
         if context.get("intro_source_name") and open_count <= 1:
             bank_id = "greet_introduced"
         elif context.get("tone") == "friendly":
@@ -8466,11 +8632,17 @@ class NPCInteractionSystem(System):
             formatted = self._dialogue_npc_line(context["npc_name"], shaped_line)
             if formatted and formatted not in lines:
                 lines.append(formatted)
-        return [line for line in lines if line]
+        return self._dialogue_opening_lines_with_narration(context, lines)
 
     def _available_dialog_topics(self, context):
         available = []
         unlocked = set(self._dialogue_memory(context["npc_eid"])["unlocked_topics"])
+        if bool(context.get("run_objective_visible")) and (
+            str(context.get("final_operation_summary_line", "")).strip()
+            or str(context.get("final_operation_target_property_id", "")).strip()
+            or str(context.get("final_operation_target_entry_detail", "")).strip()
+        ):
+            unlocked.update({"objective", "angle", "risk"})
         door_topics = self._door_answer_allowed_topics(context)
         guarded_only = {"purpose", "apologize", "leave"}
         peaceful_orders_only = bool(context.get("peaceful_orders_only"))
@@ -8844,6 +9016,11 @@ class NPCInteractionSystem(System):
                     count=self._dialogue_topic_count(context["npc_eid"], topic_id),
                     contact_name=target.get("name", "someone"),
                     contact_context=self._introduction_context_text(target),
+                    **self._human_pronoun_slots(
+                        eid=target.get("eid"),
+                        personal_name=target.get("name", "someone"),
+                        prefix="contact",
+                    ),
                 )
         bank_id = "vouch_soft_no" if vouch else "contacts_soft_no"
         return self._say(bank_id, context, topic_id=topic_id, count=self._dialogue_topic_count(context["npc_eid"], topic_id), npc_name=context["npc_name"])
@@ -9067,6 +9244,11 @@ class NPCInteractionSystem(System):
                             count=ask_count,
                             contact_name=lead.get("name", "someone"),
                             contact_context=offer.get("contact_context", "someone worth meeting"),
+                            **self._human_pronoun_slots(
+                                eid=lead.get("eid"),
+                                personal_name=lead.get("name", "someone"),
+                                prefix="contact",
+                            ),
                         )
                     ]
                 }
@@ -9284,7 +9466,23 @@ class NPCInteractionSystem(System):
                 line = self._say("local_opportunity", context, topic_id=topic_id, count=ask_count, opportunity_summary=summary)
                 self.sim.emit(Event("dialogue_opportunity_hint", eid=self.player_eid, npc_eid=npc_eid, summary=summary, detail=detail))
             elif context.get("other_name"):
-                line = self._say("local_other_bond", context, topic_id=topic_id, count=ask_count, other_name=context["other_name"])
+                line = self._say(
+                    "local_other_bond",
+                    context,
+                    topic_id=topic_id,
+                    count=ask_count,
+                    other_name=context["other_name"],
+                    other_hear=self._human_present_verb(
+                        "hear",
+                        eid=context.get("other_eid"),
+                        personal_name=context.get("other_name", ""),
+                    ),
+                    **self._human_pronoun_slots(
+                        eid=context.get("other_eid"),
+                        personal_name=context.get("other_name", ""),
+                        prefix="other",
+                    ),
+                )
             else:
                 line = self._say("local_none", context, topic_id=topic_id, count=ask_count)
             return {"npc_lines": [line]}
@@ -9333,6 +9531,7 @@ class NPCInteractionSystem(System):
             summary = self._opportunity_summary(context, quality=quality)
             bank_id = "opportunities" if summary else "opportunities_none"
             if summary:
+                reveal_run_objective(self.sim, source="dialogue_opportunities")
                 self._learn_dialogue_opportunity(
                     context,
                     source="npc_dialogue_opportunities",

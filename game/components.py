@@ -562,6 +562,11 @@ class CreatureIdentity:
         common_name=None,
         personal_name=None,
         coat_variant=None,
+        assigned_sex=None,
+        gender_identity=None,
+        pronoun_set=None,
+        name_gender_score=None,
+        gender_inference_source=None,
     ):
         self.taxonomy_class = str(taxonomy_class or "other").strip().lower() or "other"
         self.species = str(species or "unknown species").strip().lower() or "unknown species"
@@ -571,6 +576,18 @@ class CreatureIdentity:
         self.coat_variant = (
             str(coat_variant).strip().lower().replace(" ", "_")
             if coat_variant
+            else None
+        )
+        self.assigned_sex = str(assigned_sex).strip().lower() if assigned_sex else None
+        self.gender_identity = str(gender_identity).strip().lower() if gender_identity else None
+        self.pronoun_set = str(pronoun_set).strip().lower() if pronoun_set else None
+        try:
+            self.name_gender_score = None if name_gender_score is None else float(name_gender_score)
+        except (TypeError, ValueError):
+            self.name_gender_score = None
+        self.gender_inference_source = (
+            str(gender_inference_source).strip().lower()
+            if gender_inference_source
             else None
         )
 

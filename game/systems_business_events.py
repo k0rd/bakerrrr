@@ -4413,7 +4413,7 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             pool = [item_id for item_id in ("credstick_chip", "city_pass_token", "transit_daypass", "caff_shot") if item_id in ITEM_CATALOG]
             item_count += 1
             read_only_reason = "You can lift something from the dispatch satchel, but stuffing your own gear into live route paperwork would be a good way to get remembered."
-    elif scene_type == "gathering" and fixture_type in {"meeting_sign", "meeting_marker", "meeting_board", "inspection_packet", "admin_packet", "manifest_clipboard", "trauma_kit", "school_bags", "stoop_cooler", "incident_tape", "memorial_candles", "help_wanted_board", "outreach_table", "crew_call_sheet", "route_welcome_board", "tenant_welcome_box", "mutual_aid_table", "regulars_table", "complaint_board", "watch_board", "easy_marks_sheet"}:
+    elif scene_type == "gathering" and fixture_type in {"meeting_sign", "meeting_marker", "meeting_board", "inspection_packet", "admin_packet", "manifest_clipboard", "trauma_kit", "school_bags", "stoop_cooler", "incident_tape", "memorial_candles", "help_wanted_board", "outreach_table", "crew_call_sheet", "route_welcome_board", "tenant_welcome_box", "mutual_aid_table", "regulars_table", "complaint_board", "watch_board", "easy_marks_sheet", "fire_response_barrier"}:
         org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
         org_name = str((org_snapshot or {}).get("organization_name", "") or "").strip()
         org_label = org_name or prop_name
@@ -4443,6 +4443,8 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             container_label = "Watch Card"
         elif fixture_type == "easy_marks_sheet" or event_phase == "soft_front":
             container_label = "Easy-Marks Sheet"
+        elif fixture_type == "fire_response_barrier" or event_phase == "fire_response":
+            container_label = "Response Barrier"
         elif fixture_type == "regulars_table" or event_phase == "regulars_spill":
             container_label = "Regulars Table"
         elif fixture_type == "complaint_board" or event_phase == "grumbling_front":
@@ -4525,6 +4527,18 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             note = f"Triage kit: the medic is stabilizing someone outside {prop_name}; once that clears, the front still wants {requirement}."
         elif event_phase == "street_triage":
             note = f"Triage kit: the frontage at {prop_name} is serving as a temporary treatment spot while a medic tries to stabilize the injured."
+        elif event_phase == "fire_response":
+            if hours_text and requirement:
+                note = (
+                    f"Response barrier: {prop_name} is still being held against active flame and smoke during {hours_text}. "
+                    f"If the front reopens later, it still wants {requirement}."
+                )
+            elif hours_text:
+                note = f"Response barrier: {prop_name} is still being held against active flame and smoke during {hours_text}, all caution tape, shouted checks, and people trying not to feed the burn."
+            elif requirement:
+                note = f"Response barrier: the frontage at {prop_name} is still under a live fire hold. Once it settles, the front still wants {requirement}."
+            else:
+                note = f"Response barrier: the frontage at {prop_name} is still under a live fire hold, all smoke, shouted checks, and people trying to keep the burn from owning the block."
         elif event_phase == "help_wanted_board" and hours_text and requirement:
             note = f"Help-wanted board: {prop_name} is taking names during {hours_text}, but anyone stepping past the front still needs {requirement}."
         elif event_phase == "help_wanted_board" and hours_text:
@@ -4692,6 +4706,14 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             if category == "medical":
                 item_count += 1
             read_only_reason = "You can lift emergency supplies from the kit, but this treatment cache is not a safe place to stash your own gear."
+        elif event_phase == "fire_response":
+            pool = [
+                item_id
+                for item_id in ("bottled_water", "hydration_salts", "calm_patch", "micro_medkit")
+                if item_id in ITEM_CATALOG
+            ]
+            item_count += 1
+            read_only_reason = "You can pocket something from the response barrier, but turning live fire-response gear into your personal stash would get remembered immediately."
         elif event_phase == "help_wanted_board":
             pool = [item_id for item_id in ("city_pass_token", "caff_shot", "protein_wrap", "focus_inhaler") if item_id in ITEM_CATALOG]
             item_count += 1
@@ -4856,7 +4878,20 @@ def _business_event_seed_scene_actor_note(sim, scene, prop, actor_spec, *, rng):
         org_snapshot = _organization_snapshot(sim, prop=prop, ensure=True)
         org_name = str((org_snapshot or {}).get("organization_name", "") or "").strip()
         org_label = org_name or prop_name
-        if event_phase == "block_watch":
+        if event_phase == "fire_response":
+            if career in {"response_worker", "traffic_guard"} or role == "worker":
+                local_line = f"We are keeping people back from {prop_name} until the fire settles and the smoke stops owning the doorway."
+                detail_line = (
+                    f"The frontage at {prop_name} is still live with flame or smoke, so the block is being held around it"
+                    + (f" during {hours_text}." if hours_text else ".")
+                )
+            else:
+                local_line = f"Nobody here trusts the front of {prop_name} yet; the fire has not really let go."
+                detail_line = (
+                    f"People are keeping back from {prop_name} because the fire is still close enough to feel real"
+                    + (f" during {hours_text}." if hours_text else ".")
+                )
+        elif event_phase == "block_watch":
             if career == "block_regular":
                 local_line = f"We keep watch on {prop_name} because the block has started deciding the place matters."
                 detail_line = (

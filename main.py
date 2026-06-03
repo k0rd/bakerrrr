@@ -77,6 +77,7 @@ from game.player_businesses import PlayerBusinessSystem
 from game.run_echoes import maybe_seed_run_echo_for_chunk, prime_run_echoes_runtime
 from game.systems_incidents import IncidentKnowledgeSystem
 from game.systems_business_reputation import BusinessReputationSystem
+from game.run_bootstrap import bootstrap_normal_run
 from game.vehicles import (
     generate_chunk_vehicle_records,
     roll_vehicle_profile,
@@ -112,6 +113,8 @@ from game.criminal_justice_system import CriminalJusticeSystem
 from game.trade_system import TradeSystem
 from game.combat_systems import NPCItemUseSystem, NPCWeaponSystem, StatusEffectSystem, WeaponSystem
 from game.environment_hazard_system import EnvironmentalHazardSystem
+from game.fire_system import FireSystem
+from game.human_identity import normalize_gender_identity, seed_player_identity_profile
 from game.world_progression_systems import (
     FinalOperationSystem,
     OpportunitySystem,
@@ -144,7 +147,26 @@ from game.systems import (
 )
 from game.weapons import roll_weapon_instance
 from ui.curses_view import CursesView
-from ui.pygame_view import PygameView, atlas_manifest_tile_size
+from ui.pygame_view import PygameView
+
+
+_PLAYER_IDENTITY_OPTIONS = (
+    {
+        "value": "man",
+        "label": "Man",
+        "description": "NPCs use he/him and masculine social address.",
+    },
+    {
+        "value": "woman",
+        "label": "Woman",
+        "description": "NPCs use she/her and feminine social address.",
+    },
+    {
+        "value": "nonbinary",
+        "label": "Nonbinary",
+        "description": "NPCs use they/them with no honorific.",
+    },
+)
 
 
 def _spawn(sim, *components):
@@ -188,8 +210,7 @@ def _env_int(name, default, minimum=None):
 
 
 def _resolve_pygame_tile_px(default=40):
-    atlas_default = atlas_manifest_tile_size(default=default, minimum=8)
-    return _env_int("BAKERRRR_TILE_SIZE_PX", atlas_default, minimum=8)
+    return _env_int("BAKERRRR_TILE_SIZE_PX", default, minimum=8)
 
 
 def _resolve_run_seed(default=None):
@@ -271,6 +292,269 @@ def _prompt_character_name(stdscr):
             return name
 
 
+def _player_identity_default_index(value):
+    normalized = normalize_gender_identity(value, default="nonbinary")
+    for idx, row in enumerate(_PLAYER_IDENTITY_OPTIONS):
+        if str(row.get("value", "")).strip().lower() == normalized:
+            return idx
+    return 2
+
+
+def _prompt_choice_text(prompt, options, *, detail="", initial_index=0):
+    rows = [dict(row) for row in tuple(options or ()) if isinstance(row, dict) and str(row.get("value", "")).strip()]
+    if not rows:
+        return None
+    selected = max(0, min(int(initial_index), len(rows) - 1))
+    while True:
+        print(str(prompt or "").strip())
+        if detail:
+            print(str(detail).strip())
+        for idx, row in enumerate(rows, start=1):
+            marker = "*" if idx - 1 == selected else " "
+            label = str(row.get("label", row.get("value", ""))).strip()
+            description = str(row.get("description", "")).strip()
+            suffix = f" - {description}" if description else ""
+            print(f" {marker} {idx}. {label}{suffix}")
+        try:
+            raw = input("Choose 1-3 (blank cancels): ")
+        except EOFError:
+            return None
+        choice = str(raw or "").strip()
+        if not choice:
+            return None
+        if choice in {"1", "2", "3"}:
+            idx = int(choice) - 1
+            if 0 <= idx < len(rows):
+                return str(rows[idx].get("value", "")).strip().lower()
+        lowered = choice.lower()
+        if lowered in {"man", "woman", "nonbinary", "non-binary", "nb", "neutral"}:
+            normalized = normalize_gender_identity(choice, default="nonbinary")
+            return normalized
+        print("Please choose Man, Woman, or Nonbinary.")
+
+
+def _prompt_choice_curses(
+    stdscr,
+    prompt,
+    options,
+    *,
+    detail="",
+    title="bakerrrr - identity",
+    subtitle="Player identity setup",
+    initial_index=0,
+):
+    rows = [dict(row) for row in tuple(options or ()) if isinstance(row, dict) and str(row.get("value", "")).strip()]
+    if not rows:
+        return None
+    selected = max(0, min(int(initial_index), len(rows) - 1))
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass
+    stdscr.keypad(True)
+    while True:
+        stdscr.erase()
+        height, width = stdscr.getmaxyx()
+        left = max(0, min(width - 1, 2))
+        y = 1
+
+        def _draw_line(line, *, attr=0):
+            nonlocal y
+            if y >= height:
+                return
+            text = str(line or "")[: max(0, width - left - 1)]
+            try:
+                stdscr.addstr(y, left, text, attr)
+            except curses.error:
+                pass
+            y += 1
+
+        if title:
+            _draw_line(title, attr=getattr(curses, "A_BOLD", 0))
+        if subtitle:
+            _draw_line(subtitle)
+        y += 1
+        _draw_line(prompt, attr=getattr(curses, "A_BOLD", 0))
+        if detail:
+            _draw_line(detail)
+        y += 1
+        for idx, row in enumerate(rows, start=1):
+            label = str(row.get("label", row.get("value", ""))).strip()
+            description = str(row.get("description", "")).strip()
+            line = f"{idx}. {label}"
+            if description:
+                line = f"{line} - {description}"
+            attr = getattr(curses, "A_REVERSE", 0) if idx - 1 == selected else 0
+            _draw_line(line, attr=attr)
+        y += 1
+        _draw_line("Arrows move | 1-3 choose | Enter confirm | Esc cancel")
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key in (10, 13, getattr(curses, "KEY_ENTER", -1)):
+            return str(rows[selected].get("value", "")).strip().lower()
+        if key == 27:
+            return None
+        if key in (curses.KEY_UP, curses.KEY_LEFT):
+            selected = (selected - 1) % len(rows)
+            continue
+        if key in (curses.KEY_DOWN, curses.KEY_RIGHT):
+            selected = (selected + 1) % len(rows)
+            continue
+        if key in (ord("1"), ord("2"), ord("3")):
+            idx = key - ord("1")
+            if 0 <= idx < len(rows):
+                return str(rows[idx].get("value", "")).strip().lower()
+
+
+def _prompt_player_gender_identity_text(*, initial_value=None, character_name="", resume=False):
+    prompt = f"Identity for {character_name or 'this run'}:"
+    if resume:
+        detail = "This save predates player identity metadata. Choose how NPCs should address you."
+    else:
+        detail = "Choose the identity NPCs use for pronouns and social address. Assigned sex is rolled separately."
+    return _prompt_choice_text(
+        prompt,
+        _PLAYER_IDENTITY_OPTIONS,
+        detail=detail,
+        initial_index=_player_identity_default_index(initial_value),
+    )
+
+
+def _prompt_player_gender_identity(
+    stdscr,
+    *,
+    initial_value=None,
+    character_name="",
+    resume=False,
+):
+    prompt = f"Identity for {character_name or 'this run'}:"
+    if resume:
+        detail = "This save predates player identity metadata. Choose how NPCs should address you."
+        subtitle = "Resume identity upgrade"
+    else:
+        detail = "Choose the identity NPCs use for pronouns and social address. Assigned sex is rolled separately."
+        subtitle = "Street-level run identity"
+    return _prompt_choice_curses(
+        stdscr,
+        prompt,
+        _PLAYER_IDENTITY_OPTIONS,
+        detail=detail,
+        title="bakerrrr - identity",
+        subtitle=subtitle,
+        initial_index=_player_identity_default_index(initial_value),
+    )
+
+
+def _prompt_player_gender_identity_view(
+    view,
+    *,
+    initial_value=None,
+    character_name="",
+    resume=False,
+):
+    prompt = f"Identity for {character_name or 'this run'}:"
+    if resume:
+        detail = "This save predates player identity metadata. Choose how NPCs should address you."
+        subtitle = "Resume identity upgrade"
+    else:
+        detail = "Choose the identity NPCs use for pronouns and social address. Assigned sex is rolled separately."
+        subtitle = "Street-level run identity"
+    if hasattr(view, "prompt_choice"):
+        return view.prompt_choice(
+            prompt,
+            _PLAYER_IDENTITY_OPTIONS,
+            detail=detail,
+            title="bakerrrr - identity",
+            banner="BAKERRRR",
+            subtitle=subtitle,
+            initial_index=_player_identity_default_index(initial_value),
+        )
+    return _prompt_player_gender_identity_text(
+        initial_value=initial_value,
+        character_name=character_name,
+        resume=resume,
+    )
+
+
+def _player_identity_seed_token(sim):
+    return f"{getattr(sim, 'seed', 0)}:player_identity"
+
+
+def _player_identity_ready(identity):
+    if identity is None:
+        return False
+    assigned_sex = str(getattr(identity, "assigned_sex", "") or "").strip().lower()
+    gender_identity = str(getattr(identity, "gender_identity", "") or "").strip().lower()
+    pronoun_set = str(getattr(identity, "pronoun_set", "") or "").strip().lower()
+    return assigned_sex in {"male", "female"} and gender_identity in {"man", "woman", "nonbinary"} and pronoun_set in {"he", "she", "they"}
+
+
+def _apply_player_identity_choice(sim, player_eid, *, character_name, gender_identity):
+    if sim is None or player_eid is None:
+        return None
+    resolved_name = (
+        normalize_character_name(character_name)
+        or normalize_character_name(getattr(sim, "character_name", None))
+        or "operator"
+    )
+    identities = sim.ecs.get(CreatureIdentity)
+    identity = identities.get(player_eid)
+    if identity is None:
+        identity = CreatureIdentity(
+            taxonomy_class="hominid",
+            species="homo sapiens",
+            creature_type="human",
+            common_name="operator",
+            personal_name=resolved_name,
+        )
+        sim.ecs.add(player_eid, identity)
+    identity.taxonomy_class = "hominid"
+    identity.species = "homo sapiens"
+    identity.creature_type = "human"
+    identity.common_name = str(getattr(identity, "common_name", "") or "operator").strip() or "operator"
+    identity.personal_name = resolved_name
+    profile = seed_player_identity_profile(_player_identity_seed_token(sim), gender_identity)
+    identity.assigned_sex = str(profile.get("assigned_sex", "") or "").strip().lower() or None
+    identity.gender_identity = str(profile.get("gender_identity", "") or "").strip().lower() or None
+    identity.pronoun_set = str(profile.get("pronoun_set", "") or "").strip().lower() or None
+    identity.name_gender_score = None
+    identity.gender_inference_source = None
+    return identity
+
+
+def _ensure_loaded_player_identity(view, sim, character_name):
+    player_eid = getattr(sim, "player_eid", None)
+    if sim is None or player_eid is None:
+        return False
+    identities = sim.ecs.get(CreatureIdentity)
+    identity = identities.get(player_eid)
+    if _player_identity_ready(identity):
+        if identity is not None:
+            identity.taxonomy_class = str(getattr(identity, "taxonomy_class", "") or "hominid").strip().lower() or "hominid"
+            identity.species = str(getattr(identity, "species", "") or "homo sapiens").strip().lower() or "homo sapiens"
+            identity.creature_type = str(getattr(identity, "creature_type", "") or "human").strip().lower() or "human"
+            identity.common_name = str(getattr(identity, "common_name", "") or "operator").strip() or "operator"
+            if not str(getattr(identity, "personal_name", "") or "").strip():
+                identity.personal_name = normalize_character_name(character_name) or "operator"
+        return True
+    selected_identity = _prompt_player_gender_identity_view(
+        view,
+        initial_value=getattr(identity, "gender_identity", None) if identity is not None else None,
+        character_name=character_name,
+        resume=True,
+    )
+    if not selected_identity:
+        return False
+    _apply_player_identity_choice(
+        sim,
+        player_eid,
+        character_name=character_name,
+        gender_identity=selected_identity,
+    )
+    return True
+
+
 def _register_runtime_systems(sim, view, player):
     input_system = InputSystem(sim, view, player)
     cover_system = CoverSystem(sim)
@@ -297,6 +581,7 @@ def _register_runtime_systems(sim, view, player):
     stealth_system = StealthSystem(sim, player)
     creature_hazard_system = CreatureHazardSystem(sim, player)
     environmental_hazard_system = EnvironmentalHazardSystem(sim)
+    fire_system = FireSystem(sim)
 
     property_system = PropertySystem(sim, player)
     player_business_system = PlayerBusinessSystem(sim, player)
@@ -360,6 +645,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(lighting_system)
     sim.register_system(creature_hazard_system)
     sim.register_system(environmental_hazard_system)
+    sim.register_system(fire_system)
 
     sim.register_system(property_system)
     sim.register_system(player_business_system)
@@ -1108,7 +1394,7 @@ def _give_weapon(sim, eid, weapon_id, named_chance=0.2, owner_tag="npc", invento
     return True
 
 
-def _run_new_game(view, character_name):
+def _run_new_game_legacy(view, character_name):
     screen_w, screen_h = view.size()
 
     map_width = max(24, min(96, screen_w))
@@ -2156,6 +2442,113 @@ def _run_new_game(view, character_name):
     return _run_loop(sim, view, character_name)
 
 
+def _run_new_game(view, character_name, gender_identity):
+    screen_w, screen_h = view.size()
+
+    map_width = max(24, min(96, screen_w))
+    map_height = max(14, min(40, screen_h - 10))
+
+    sim = Simulation(
+        seed=_resolve_run_seed(),
+        map_width=map_width,
+        map_height=map_height,
+        max_floors=3,
+        chunk_size=24,
+    )
+    sim.character_name = character_name
+    sim.world_traits["character_name"] = character_name
+    sim.world_traits["clock"] = {
+        "start_hour": 9,
+        "ticks_per_hour": 600,
+    }
+    final_op_downed_fails_run = _env_flag(
+        "BAKERRRR_FINAL_OP_DOWNED_FAILS_RUN",
+        True,
+    )
+    sim.world_traits["rules"] = {
+        "final_op_downed_fails_run": bool(final_op_downed_fails_run),
+    }
+    prime_bones_runtime(sim)
+    prime_run_echoes_runtime(sim)
+    run_nonce = random.SystemRandom().randrange(1, 1_000_000_000)
+    run_rng = random.Random(run_nonce)
+    sim.world_traits["playtest_start"] = {"nonce": run_nonce}
+
+    bootstrap = bootstrap_normal_run(
+        sim,
+        character_name,
+        run_rng,
+        gender_identity=gender_identity,
+    )
+    if hasattr(sim, "reapply_door_states"):
+        sim.reapply_door_states()
+    _register_runtime_systems(sim, view, bootstrap.player_eid)
+
+    sim.log.add("You arrive with a bag, a pulse, and no curated landing.")
+    sim.log.add(f"Character: {character_name}.")
+    sim.log.add(f"World seed: {sim.seed}.")
+    sim.log.add(
+        f"Properties loaded: {len(sim.properties)}. "
+        f"Items seeded: {bootstrap.world_item_count}. "
+        f"Ambient NPCs seeded: {bootstrap.ambient_npc_count}."
+    )
+    sim.log.add(
+        f"Start area: {bootstrap.start_name} ({bootstrap.start_district_type}, chunk "
+        f"{bootstrap.start_chunk[0]},{bootstrap.start_chunk[1]})."
+    )
+    if bootstrap.local_note:
+        if bootstrap.pressure_note:
+            sim.log.add(f"Local economy: {bootstrap.local_note}; {bootstrap.pressure_note}.")
+        else:
+            sim.log.add(f"Local economy: {bootstrap.local_note}.")
+    if bootstrap.street_kit_items:
+        kit_text = ", ".join(
+            f"{item_id.replace('_', ' ')} x{quantity}"
+            for item_id, quantity in bootstrap.street_kit_items
+        )
+        sim.log.add(f"Street kit: {kit_text}.")
+    if bootstrap.starter_vehicle_seeded:
+        sim.log.add("Luck held: there is a starter vehicle in your orbit, and the keys are yours.")
+    else:
+        sim.log.add("No guaranteed ride this time. If you want wheels, earn them or find them.")
+    sim.log.add("No one hands you the run shape for free. Press O when you want to force a sitrep, or learn it from the block first.")
+    sim.log.add("Press O for the operations report and Y for known locations on foot or in-vehicle.")
+    sim.log.add("Known locations lists places you have a real read on, with coords and confident facts.")
+    sim.log.add("Press L to open the scrollable event log if messages roll past; inside it, T cycles filters and H sets the HUD log focus.")
+    sim.log.add("Controls: / talk, . service, ' interact, ; lock, , pickup, x look, X map, and ? help.")
+    sim.log.add("Use ' for physical fixtures and doors, / for people, and . for same-space service surfaces like ATMs or counters.")
+    sim.log.add("HUD modes show active states like SNEAK, COVER, AIM, LOOK, and TURN.")
+    if bootstrap.opening_rumor_text:
+        sim.log.add(f"Street rumor: {bootstrap.opening_rumor_text}")
+    if bootstrap.opening_rumor_topics_text:
+        sim.log.add(f"World rumor topics active: {bootstrap.opening_rumor_topics_text}.")
+    sim.log.add("Movement: arrows/WASD/HJKL or numpad 1-9.")
+    sim.log.add('City legend: + closed door, \' open door, " window, / breach opening, > higher stairs, < lower stairs, : stair landing, E elevator.')
+    sim.log.add("Local terrain: = road, : trail, , brush, ^ rock, ~ water, _ shore flats.")
+    sim.log.add("City legend: uppercase property markers are protected, lowercase are public, and S/s mark service access.")
+    sim.log.add("Infrastructure markers now use typed street symbols (for example l lamp, p pole, h hydrant, u stop, j/t utility hardware).")
+    sim.log.add("City legend: world features use symbols, items are bright symbols, and NPCs are colored letters.")
+    sim.log.add("Remote sites: relay/lookout/survey sites can provide intel; camps and huts can offer shelter.")
+    sim.log.add(
+        "Overworld legend: in-vehicle macro-grid with district or terrain center icons, route bands for travel lines, and marker badges for your notes. Bright chunks are currently loaded, dim chunks are distant."
+    )
+    sim.log.add("Overworld POIs: stronger frontier/wilderness/coastal chunks can replace the center glyph with a site initial.")
+    sim.log.add("Finance: stand on a bank, ATM, or insurer tile and press . to use the service surface. Bank balances do not accrue passive interest.")
+    sim.log.add("Combat overlay is exposure-aware: nearby danger can trigger action-driven turn mode.")
+    final_rules = sim.world_traits.get("rules", {}) if isinstance(sim.world_traits, dict) else {}
+    sim.log.add(
+        "Rule: final-op downed fail is "
+        f"{'ON' if bool(final_rules.get('final_op_downed_fails_run', True)) else 'OFF'} "
+        "(set BAKERRRR_FINAL_OP_DOWNED_FAILS_RUN=0/1)."
+    )
+    if bool(final_rules.get("final_op_downed_fails_run", True)):
+        sim.log.add("Combat is mostly forgiving: being downed costs credits and resets HP, except during final operation where a down can fail the run.")
+    else:
+        sim.log.add("Combat is forgiving: being downed costs credits and resets HP instead of ending the run.")
+
+    return _run_loop(sim, view, character_name)
+
+
 def _run_loaded_game(view, character_name):
     sim = load_character_run(character_name, delete_on_load=False)
     sim.character_name = normalize_character_name(character_name) or getattr(sim, "character_name", None)
@@ -2181,6 +2574,8 @@ def _run_loaded_game(view, character_name):
     player = getattr(sim, "player_eid", None)
     if player is None:
         raise ValueError("save file is missing player entity")
+    if not _ensure_loaded_player_identity(view, sim, sim.character_name or character_name):
+        return None
 
     player_pos = sim.ecs.get(Position).get(player)
     if player_pos:
@@ -2194,22 +2589,44 @@ def _run_loaded_game(view, character_name):
     return _run_loop(sim, view, sim.character_name or character_name)
 
 
-def _run_character_session(view, character_name):
+def _run_character_session(view, character_name, gender_identity=None):
     """Launch either a resumed run or a fresh run for a given view backend."""
     if character_save_exists(character_name):
         return _run_loaded_game(view, character_name)
-    return _run_new_game(view, character_name)
+    resolved_identity = (
+        normalize_gender_identity(gender_identity, default="nonbinary")
+        if str(gender_identity or "").strip()
+        else ""
+    )
+    if not resolved_identity:
+        resolved_identity = _prompt_player_gender_identity_view(
+            view,
+            character_name=character_name,
+            resume=False,
+        )
+        if not resolved_identity:
+            return None
+    return _run_new_game(view, character_name, resolved_identity)
 
 
 def _run_curses(stdscr):
     # Prompt before CursesView sets non-blocking input mode.
     character_name = _prompt_character_name(stdscr)
+    selected_identity = None
+    if not character_save_exists(character_name):
+        selected_identity = _prompt_player_gender_identity(
+            stdscr,
+            character_name=character_name,
+            resume=False,
+        )
+        if not selected_identity:
+            return None
     view = CursesView(stdscr)
-    return _run_character_session(view, character_name)
+    return _run_character_session(view, character_name, selected_identity)
 
 
 def _run_pygame():
-    # Pygame defaults follow the atlas manifest tile size when present.
+    # Pygame uses a fixed procedural default cell size unless overridden by env.
     # Override with BAKERRRR_TILE_SIZE_PX / _GRID_W / _GRID_H if you want a different view.
     grid_w = _env_int("BAKERRRR_TILE_GRID_W", 64, minimum=24)
     grid_h = _env_int("BAKERRRR_TILE_GRID_H", 40, minimum=14)
@@ -2247,8 +2664,17 @@ def _run_pygame():
         )
         if not character_name:
             return None
+        selected_identity = None
+        if not character_save_exists(character_name):
+            selected_identity = _prompt_player_gender_identity_view(
+                view,
+                character_name=character_name,
+                resume=False,
+            )
+            if not selected_identity:
+                return None
         view.pygame.display.set_caption(f"bakerrrr - {character_name}")
-        return _run_character_session(view, character_name)
+        return _run_character_session(view, character_name, selected_identity)
     finally:
         view.close()
 

@@ -182,19 +182,7 @@ class PropertyActionRuntime:
         return new_confidence > prior_confidence + 0.01
 
     def active_interact_property_near(self, pos):
-        for quest in self.sim.quests["active"]:
-            objective = quest.get("objective", {})
-            if objective.get("type") != "interact_property":
-                continue
-
-            property_id = objective.get("property_id")
-            prop = self.sim.properties.get(property_id) if property_id else None
-            if not prop or prop["z"] != pos.z:
-                continue
-
-            focus = _property_focus_position(prop)
-            if focus and _manhattan(pos.x, pos.y, focus[0], focus[1]) <= 1:
-                return prop
+        del pos
         return None
 
     def _emit_property_interact(self, eid, prop, *, interaction_mode=None, **extra):

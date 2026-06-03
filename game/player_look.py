@@ -22,6 +22,8 @@ from game.components import (
 )
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
+from game.human_description import human_look_description_clause
+from game.human_identity import is_human_identity
 from game.local_situations import local_situation_look_text_for_property
 from game.organization_reputation import organization_snapshot as _organization_snapshot
 from game.organizations import organization_name
@@ -242,6 +244,7 @@ class PlayerLookRuntime:
 
             if len(non_player_entities) == 1:
                 target_eid = non_player_entities[0]
+                identity = identities.get(target_eid)
                 ai = self.sim.ecs.get(AI).get(target_eid)
                 occupation = self.sim.ecs.get(Occupation).get(target_eid)
                 routine = self.sim.ecs.get(NPCRoutine).get(target_eid)
@@ -262,6 +265,15 @@ class PlayerLookRuntime:
                     )
                     if condition:
                         detail_bits.append(f"condition:{condition}")
+                    if is_human_identity(identity):
+                        appearance = human_look_description_clause(
+                            getattr(self.sim, "seed", 0),
+                            eid=target_eid,
+                            identity=identity,
+                            personal_name=getattr(identity, "personal_name", ""),
+                        )
+                        if appearance:
+                            detail_bits.append(f"appearance:{appearance}")
                 career_text = self._career_label(occupation)
                 if career_text:
                     detail_bits.append(f"job:{career_text}")
