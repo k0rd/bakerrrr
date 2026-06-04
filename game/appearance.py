@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
+from typing import Mapping, Tuple
 
 from engine.buildings import building_exterior_profile
 from game.components import AI, CreatureIdentity, Render, Vitality
@@ -124,6 +126,92 @@ PROPERTY_ARCHETYPE_DISPLAY = {
     "media_lab": ("O", "building_roof_civic"),
     "data_center": ("O", "building_roof_civic"),
     "server_hub": ("O", "building_roof_civic"),
+}
+
+BUILDING_MATERIAL_COLOR_KEYS: Mapping[str, Tuple[str, str]] = {
+    "gray_a": ("building_edge_gray_a", "building_fill_gray_a"),
+    "gray_b": ("building_edge_gray_b", "building_fill_gray_b"),
+    "gray_c": ("building_edge_gray_c", "building_fill_gray_c"),
+    "brick": ("building_edge_brick", "building_fill_brick"),
+    "plaster": ("building_edge_plaster", "building_fill_plaster"),
+    "painted": ("building_edge_painted", "building_fill_painted"),
+    "dark": ("building_edge_dark", "building_fill_dark"),
+}
+
+_DEFAULT_BUILDING_MATERIAL_WEIGHTS: Tuple[Tuple[str, int], ...] = (
+    ("gray_a", 24),
+    ("gray_b", 24),
+    ("gray_c", 24),
+    ("brick", 12),
+    ("plaster", 8),
+    ("painted", 5),
+    ("dark", 3),
+)
+
+_BUILDING_MATERIAL_WEIGHTS_BY_CLASS: Mapping[str, Tuple[Tuple[str, int], ...]] = {
+    "residential": (
+        ("gray_a", 20),
+        ("gray_b", 21),
+        ("gray_c", 21),
+        ("brick", 18),
+        ("plaster", 12),
+        ("painted", 6),
+        ("dark", 2),
+    ),
+    "storefront": (
+        ("gray_a", 20),
+        ("gray_b", 20),
+        ("gray_c", 22),
+        ("brick", 17),
+        ("plaster", 12),
+        ("painted", 7),
+        ("dark", 2),
+    ),
+    "corporate": (
+        ("gray_a", 30),
+        ("gray_b", 28),
+        ("gray_c", 28),
+        ("brick", 2),
+        ("plaster", 6),
+        ("painted", 4),
+        ("dark", 2),
+    ),
+    "civic": (
+        ("gray_a", 30),
+        ("gray_b", 28),
+        ("gray_c", 28),
+        ("brick", 2),
+        ("plaster", 6),
+        ("painted", 4),
+        ("dark", 2),
+    ),
+    "secure": (
+        ("gray_a", 28),
+        ("gray_b", 28),
+        ("gray_c", 28),
+        ("brick", 2),
+        ("plaster", 2),
+        ("painted", 4),
+        ("dark", 8),
+    ),
+    "industrial": (
+        ("gray_a", 23),
+        ("gray_b", 23),
+        ("gray_c", 24),
+        ("brick", 8),
+        ("plaster", 2),
+        ("painted", 10),
+        ("dark", 10),
+    ),
+    "entertainment": (
+        ("gray_a", 22),
+        ("gray_b", 22),
+        ("gray_c", 22),
+        ("brick", 9),
+        ("plaster", 9),
+        ("painted", 13),
+        ("dark", 3),
+    ),
 }
 
 PROPERTY_FIXTURE_SEMANTICS = {
@@ -646,7 +734,7 @@ def tile_render_snapshot(sim, tile, x, y, z=0, revealed_building_id="", catalog=
     if bool(building_id) and not tile.walkable and glyph == "#":
         base = _semantic_snapshot(
             "#",
-            color="building_edge",
+            color=_building_material_color_key(structure, filled=False),
             semantic_id="wall_building",
             catalog=catalog,
             preferred_categories=("properties", "terrain"),
@@ -656,7 +744,7 @@ def tile_render_snapshot(sim, tile, x, y, z=0, revealed_building_id="", catalog=
     if is_building_floor:
         base = _semantic_snapshot(
             ".",
-            color="building_fill",
+            color=_building_material_color_key(structure, filled=True),
             semantic_id="floor_building_fill",
             catalog=catalog,
             preferred_categories=("properties", "terrain"),
@@ -864,6 +952,47 @@ def _building_roof_style(info):
     profile = building_exterior_profile(info) if isinstance(info, dict) else {}
     style = str(profile.get("roof_style", "") or "").strip()
     return style or "building_roof"
+
+
+def _building_material_style(info):
+    if not isinstance(info, dict):
+        return "gray_a"
+    profile = building_exterior_profile(info)
+    exterior_class = str(profile.get("class", "") or "").strip().lower()
+    archetype = str(profile.get("archetype", "") or info.get("archetype", "") or "").strip().lower()
+    building_id = building_id_from_structure(info) or str(info.get("id", "") or "").strip()
+    name = str(
+        info.get("name", "")
+        or info.get("label", "")
+        or info.get("business_name", "")
+        or info.get("display_name", "")
+        or ""
+    ).strip().lower()
+    seed_token = f"building-material:{building_id}:{archetype}:{name}:{exterior_class}"
+    rng = random.Random(seed_token)
+    weights = _BUILDING_MATERIAL_WEIGHTS_BY_CLASS.get(
+        exterior_class,
+        _DEFAULT_BUILDING_MATERIAL_WEIGHTS,
+    )
+    total = sum(max(0, weight) for _, weight in weights)
+    if total <= 0:
+        return "gray_a"
+    roll = rng.uniform(0, total)
+    cursor = 0.0
+    for material, weight in weights:
+        cursor += max(0, weight)
+        if roll <= cursor:
+            return material
+    return weights[-1][0]
+
+
+def _building_material_color_key(info, *, filled=False):
+    material = _building_material_style(info)
+    edge_key, fill_key = BUILDING_MATERIAL_COLOR_KEYS.get(
+        material,
+        BUILDING_MATERIAL_COLOR_KEYS["gray_a"],
+    )
+    return fill_key if filled else edge_key
 
 
 class AppearanceManager:

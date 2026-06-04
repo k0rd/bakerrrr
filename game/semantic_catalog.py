@@ -340,7 +340,13 @@ class RuntimeSemanticCatalog:
             return ["vehicles"] + [name for name in default_order if name != "vehicles"]
         if key.startswith("feature_"):
             return ["features"] + [name for name in default_order if name != "features"]
-        if key.startswith("terrain_") or key.startswith("floor_") or key in {"building_edge", "building_fill"}:
+        if (
+            key.startswith("terrain_")
+            or key.startswith("floor_")
+            or key in {"building_edge", "building_fill"}
+            or key.startswith("building_edge_")
+            or key.startswith("building_fill_")
+        ):
             return ["terrain"] + [name for name in default_order if name != "terrain"]
         if key.startswith("property_") or key.startswith("building_roof_"):
             return ["properties"] + [name for name in default_order if name != "properties"]

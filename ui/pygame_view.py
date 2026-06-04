@@ -85,8 +85,22 @@ class PygameView:
             "floor_frontier": (180, 150, 100),
             "floor_wilderness": (95, 160, 95),
             "floor_coastal": (110, 180, 210),
-            "building_fill": (110, 110, 110),
-            "building_edge": (150, 150, 150),
+            "building_fill": (112, 112, 112),
+            "building_edge": (154, 154, 154),
+            "building_fill_gray_a": (108, 110, 112),
+            "building_edge_gray_a": (154, 156, 158),
+            "building_fill_gray_b": (123, 126, 128),
+            "building_edge_gray_b": (170, 172, 174),
+            "building_fill_gray_c": (94, 97, 101),
+            "building_edge_gray_c": (138, 142, 146),
+            "building_fill_brick": (137, 70, 58),
+            "building_edge_brick": (187, 104, 86),
+            "building_fill_plaster": (205, 201, 187),
+            "building_edge_plaster": (232, 226, 210),
+            "building_fill_painted": (106, 134, 132),
+            "building_edge_painted": (154, 183, 178),
+            "building_fill_dark": (56, 61, 67),
+            "building_edge_dark": (98, 106, 116),
             "terrain_block": (85, 85, 85),
             "terrain_brush": (120, 180, 120),
             "terrain_rock": (165, 165, 165),
@@ -94,14 +108,14 @@ class PygameView:
             "terrain_salt": (230, 220, 190),
             "terrain_road": (205, 190, 110),
             "terrain_trail": (185, 140, 110),
-            "building_roof": (100, 100, 100),
-            "building_roof_residential": (180, 180, 180),
-            "building_roof_storefront": (185, 155, 95),
-            "building_roof_industrial": (125, 125, 125),
-            "building_roof_corporate": (110, 160, 210),
-            "building_roof_civic": (145, 190, 220),
-            "building_roof_secure": (95, 150, 95),
-            "building_roof_entertainment": (190, 145, 200),
+            "building_roof": (104, 106, 110),
+            "building_roof_residential": (183, 101, 72),
+            "building_roof_storefront": (205, 158, 75),
+            "building_roof_industrial": (116, 138, 132),
+            "building_roof_corporate": (82, 145, 206),
+            "building_roof_civic": (92, 185, 197),
+            "building_roof_secure": (109, 132, 82),
+            "building_roof_entertainment": (204, 86, 170),
             "feature_door": (205, 190, 110),
             "feature_window": (110, 180, 220),
             "feature_breach": (220, 100, 100),
@@ -527,7 +541,13 @@ class PygameView:
             return ["vehicles"] + [name for name in default_order if name != "vehicles"]
         if key.startswith("feature_"):
             return ["features"] + [name for name in default_order if name != "features"]
-        if key.startswith("terrain_") or key.startswith("floor_") or key in {"building_edge", "building_fill"}:
+        if (
+            key.startswith("terrain_")
+            or key.startswith("floor_")
+            or key in {"building_edge", "building_fill"}
+            or key.startswith("building_edge_")
+            or key.startswith("building_fill_")
+        ):
             return ["terrain"] + [name for name in default_order if name != "terrain"]
         if key.startswith("property_") or key.startswith("building_roof_"):
             return ["properties"] + [name for name in default_order if name != "properties"]
@@ -689,6 +709,7 @@ class PygameView:
 
     def _draw_wall_overlay(self, x, y, color=None, attrs=0, *, filled=False):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
+        color_key = str(color or "").strip().lower()
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
         overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
@@ -739,6 +760,67 @@ class PygameView:
                 (rect.right - max(2, self.cell_px // 6), rect.top + max(2, self.cell_px // 4)),
                 max(1, self.cell_px // 22),
             )
+
+        material_line_w = max(1, self.cell_px // 26)
+        light = (
+            min(255, int(frame[0] * 1.16)),
+            min(255, int(frame[1] * 1.16)),
+            min(255, int(frame[2] * 1.16)),
+            108,
+        )
+        dark = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 112)
+        if "brick" in color_key:
+            mortar = (
+                min(255, int(frame[0] * 1.22)),
+                min(255, int(frame[1] * 1.18)),
+                min(255, int(frame[2] * 1.12)),
+                126,
+            )
+            course_step = max(4, self.cell_px // 5)
+            for course_idx, py in enumerate(range(rect.top + course_step, rect.bottom, course_step)):
+                self.pygame.draw.line(overlay, mortar, (rect.left + 1, py), (rect.right - 2, py), material_line_w)
+                joint_step = max(5, self.cell_px // 4)
+                joint_offset = 0 if course_idx % 2 == 0 else joint_step // 2
+                for px in range(rect.left + joint_offset + joint_step, rect.right - 2, joint_step):
+                    self.pygame.draw.line(
+                        overlay,
+                        (mortar[0], mortar[1], mortar[2], 88),
+                        (px, max(rect.top + 2, py - course_step + 2)),
+                        (px, py - 1),
+                        material_line_w,
+                    )
+        elif "plaster" in color_key:
+            self.pygame.draw.rect(overlay, light, rect.inflate(-max(2, self.cell_px // 8), -max(2, self.cell_px // 8)), max(1, self.cell_px // 30))
+            self.pygame.draw.line(
+                overlay,
+                (dark[0], dark[1], dark[2], 54),
+                (rect.left + max(2, self.cell_px // 5), rect.bottom - max(3, self.cell_px // 5)),
+                (rect.right - max(3, self.cell_px // 4), rect.bottom - max(2, self.cell_px // 4)),
+                material_line_w,
+            )
+        elif "dark" in color_key:
+            heavy_w = max(1, self.cell_px // 16)
+            vent_w = max(4, self.cell_px // 3)
+            vent_h = max(2, self.cell_px // 9)
+            vent = self.pygame.Rect(rect.centerx - vent_w // 2, rect.top + max(2, self.cell_px // 5), vent_w, vent_h)
+            self.pygame.draw.line(overlay, dark, (rect.left + 1, rect.centery), (rect.right - 2, rect.centery), heavy_w)
+            self.pygame.draw.rect(overlay, (light[0], light[1], light[2], 78), vent, max(1, material_line_w))
+            for py in (vent.top + 1, vent.centery, vent.bottom - 1):
+                self.pygame.draw.line(overlay, dark, (vent.left + 1, py), (vent.right - 2, py), material_line_w)
+        elif "painted" in color_key:
+            band_w = max(2, self.cell_px // 7)
+            band_x = rect.left + max(2, self.cell_px // 5)
+            self.pygame.draw.rect(
+                overlay,
+                (light[0], light[1], light[2], 64),
+                self.pygame.Rect(band_x, rect.top + 1, band_w, max(1, rect.h - 2)),
+            )
+            self.pygame.draw.line(overlay, dark, (rect.left + 1, rect.bottom - max(2, self.cell_px // 5)), (rect.right - 2, rect.bottom - max(2, self.cell_px // 5)), material_line_w)
+        elif "gray_" in color_key or color_key in {"building_edge", "building_fill"}:
+            tone_x = rect.right - max(3, self.cell_px // 5)
+            tone_y = rect.top + max(2, self.cell_px // 5)
+            self.pygame.draw.line(overlay, light, (rect.left + max(2, self.cell_px // 5), tone_y), (tone_x, tone_y), material_line_w)
+            self.pygame.draw.circle(overlay, dark, (tone_x, rect.bottom - max(3, self.cell_px // 5)), max(1, self.cell_px // 28))
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
@@ -808,6 +890,73 @@ class PygameView:
             (diag_end_x, diag_end_y),
             seam_w,
         )
+
+        if color_key == "building_roof_residential":
+            tile_line = (
+                min(255, int(frame[0] * 1.18)),
+                min(255, int(frame[1] * 1.06)),
+                min(255, int(frame[2] * 0.96)),
+                132,
+            )
+            for py in range(rect.top + max(3, self.cell_px // 5), rect.bottom - 1, max(4, self.cell_px // 5)):
+                self.pygame.draw.line(overlay, tile_line, (rect.left + 2, py), (rect.right - 3, py), seam_w)
+            chimney = self.pygame.Rect(
+                rect.right - max(5, self.cell_px // 4),
+                rect.top + max(2, self.cell_px // 6),
+                max(3, self.cell_px // 7),
+                max(4, self.cell_px // 5),
+            )
+            self.pygame.draw.rect(overlay, (shadow[0], shadow[1], shadow[2], 150), chimney)
+            self.pygame.draw.rect(overlay, tile_line, chimney, max(1, seam_w))
+        elif color_key == "building_roof_storefront":
+            awning_colors = (
+                (244, 214, 132, 156),
+                (196, 82, 72, 148),
+            )
+            stripe_w = max(3, self.cell_px // 6)
+            awning_h = max(3, self.cell_px // 6)
+            awning_y = rect.bottom - awning_h - max(1, self.cell_px // 18)
+            stripe_idx = 0
+            for px in range(rect.left + max(1, seam_w), rect.right - 1, stripe_w):
+                stripe_rect = self.pygame.Rect(px, awning_y, min(stripe_w, rect.right - px - 1), awning_h)
+                self.pygame.draw.rect(overlay, awning_colors[stripe_idx % 2], stripe_rect)
+                stripe_idx += 1
+        elif color_key == "building_roof_industrial":
+            pipe_color = (shadow[0], shadow[1], shadow[2], 160)
+            for px in (rect.left + max(3, self.cell_px // 5), rect.right - max(4, self.cell_px // 4)):
+                self.pygame.draw.line(overlay, pipe_color, (px, rect.top + 2), (px, rect.bottom - 3), max(1, self.cell_px // 20))
+            cap = self.pygame.Rect(rect.left + max(3, self.cell_px // 6), rect.bottom - max(5, self.cell_px // 4), max(5, self.cell_px // 4), max(3, self.cell_px // 7))
+            self.pygame.draw.rect(overlay, (parapet[0], parapet[1], parapet[2], 130), cap)
+            self.pygame.draw.rect(overlay, pipe_color, cap, max(1, seam_w))
+        elif color_key == "building_roof_corporate":
+            glass = (166, 220, 245, 128)
+            pane_w = max(1, self.cell_px // 18)
+            self.pygame.draw.line(overlay, glass, (rect.left + max(3, self.cell_px // 5), rect.top + 2), (rect.left + max(3, self.cell_px // 5), rect.bottom - 3), pane_w)
+            self.pygame.draw.line(overlay, glass, (rect.right - max(3, self.cell_px // 5), rect.top + 2), (rect.right - max(3, self.cell_px // 5), rect.bottom - 3), pane_w)
+            self.pygame.draw.line(overlay, (255, 255, 255, 98), (rect.left + 3, rect.top + 3), (rect.right - 4, rect.top + max(4, self.cell_px // 4)), pane_w)
+        elif color_key == "building_roof_civic":
+            civic_glow = (160, 236, 226, 132)
+            self.pygame.draw.arc(
+                overlay,
+                civic_glow,
+                rect.inflate(-max(3, self.cell_px // 4), -max(3, self.cell_px // 4)),
+                3.14,
+                6.28,
+                max(1, self.cell_px // 18),
+            )
+            self.pygame.draw.line(overlay, civic_glow, (rect.left + 3, rect.centery), (rect.right - 4, rect.centery), max(1, self.cell_px // 22))
+        elif color_key == "building_roof_secure":
+            secure_band = (170, 190, 92, 146)
+            band_y = rect.top + max(3, self.cell_px // 4)
+            self.pygame.draw.line(overlay, secure_band, (rect.left + 3, band_y), (rect.right - 4, band_y), max(2, self.cell_px // 12))
+            shield = [
+                (rect.centerx, rect.top + max(3, self.cell_px // 5)),
+                (rect.centerx + max(3, self.cell_px // 6), rect.centery),
+                (rect.centerx, rect.bottom - max(3, self.cell_px // 5)),
+                (rect.centerx - max(3, self.cell_px // 6), rect.centery),
+            ]
+            self.pygame.draw.polygon(overlay, (shadow[0], shadow[1], shadow[2], 126), shield)
+            self.pygame.draw.polygon(overlay, secure_band, shield, max(1, seam_w))
 
         if color_key == "building_roof_entertainment":
             neon_specs = (
@@ -1185,33 +1334,56 @@ class PygameView:
             self.pygame.draw.polygon(overlay, fill, points)
             self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
         elif kind == "food":
-            bun_h = max(3, self.cell_px // 5)
-            self.pygame.draw.ellipse(
-                overlay,
-                fill,
-                (max(2, self.cell_px // 5), mid_y - bun_h, self.cell_px - max(4, self.cell_px // 2), bun_h + 1),
+            plate = self.pygame.Rect(
+                max(2, self.cell_px // 6),
+                mid_y,
+                self.cell_px - max(4, self.cell_px // 3),
+                max(4, self.cell_px // 4),
             )
+            bowl = self.pygame.Rect(
+                max(3, self.cell_px // 4),
+                mid_y - max(3, self.cell_px // 5),
+                self.cell_px - max(6, self.cell_px // 2),
+                max(5, self.cell_px // 3),
+            )
+            self.pygame.draw.ellipse(overlay, (245, 232, 172, 110), plate)
+            self.pygame.draw.arc(overlay, stroke, bowl, 0.0, 3.14, max(2, stroke_w + 1))
             self.pygame.draw.rect(
                 overlay,
-                (100, 180, 90, 164),
-                (max(2, self.cell_px // 4), mid_y - 1, self.cell_px - max(4, self.cell_px // 2), max(2, self.cell_px // 8)),
+                fill,
+                (bowl.left, bowl.centery - max(1, self.cell_px // 14), bowl.w, max(3, bowl.h // 2)),
+                border_radius=max(2, self.cell_px // 12),
             )
-            self.pygame.draw.ellipse(
-                overlay,
-                stroke,
-                (max(2, self.cell_px // 5), mid_y - bun_h, self.cell_px - max(4, self.cell_px // 2), bun_h + 1),
-                stroke_w,
-            )
+            self.pygame.draw.line(overlay, stroke, (bowl.left, bowl.centery), (bowl.right - 1, bowl.centery), max(1, stroke_w))
+            steam = (245, 244, 224, 112)
+            for px in (mid_x - max(3, self.cell_px // 6), mid_x, mid_x + max(3, self.cell_px // 6)):
+                self.pygame.draw.line(
+                    overlay,
+                    steam,
+                    (px, max(2, self.cell_px // 6)),
+                    (px + max(1, self.cell_px // 16), mid_y - max(3, self.cell_px // 4)),
+                    max(1, self.cell_px // 26),
+                )
         elif kind == "drink":
             bottle_w = max(3, self.cell_px // 4)
             neck_w = max(2, self.cell_px // 8)
             neck_h = max(2, self.cell_px // 6)
-            body_rect = (mid_x - (bottle_w // 2), mid_y - max(2, self.cell_px // 6), bottle_w, max(5, self.cell_px // 3))
-            neck_rect = (mid_x - (neck_w // 2), body_rect[1] - neck_h + 1, neck_w, neck_h)
-            self.pygame.draw.rect(overlay, fill, body_rect)
+            body_rect = self.pygame.Rect(
+                mid_x - (bottle_w // 2),
+                mid_y - max(2, self.cell_px // 6),
+                bottle_w,
+                max(6, self.cell_px // 3),
+            )
+            neck_rect = self.pygame.Rect(mid_x - (neck_w // 2), body_rect.top - neck_h + 1, neck_w, neck_h)
+            cap_rect = self.pygame.Rect(neck_rect.left - 1, max(1, neck_rect.top - max(1, self.cell_px // 18)), neck_rect.w + 2, max(2, self.cell_px // 12))
+            self.pygame.draw.rect(overlay, fill, body_rect, border_radius=max(2, self.cell_px // 12))
             self.pygame.draw.rect(overlay, fill, neck_rect)
-            self.pygame.draw.rect(overlay, stroke, body_rect, stroke_w)
+            self.pygame.draw.rect(overlay, stroke, body_rect, stroke_w, border_radius=max(2, self.cell_px // 12))
             self.pygame.draw.rect(overlay, stroke, neck_rect, stroke_w)
+            self.pygame.draw.rect(overlay, (230, 246, 255, 138), cap_rect, border_radius=max(1, self.cell_px // 20))
+            label = self.pygame.Rect(body_rect.left + 1, body_rect.centery - max(1, self.cell_px // 14), max(1, body_rect.w - 2), max(2, self.cell_px // 8))
+            self.pygame.draw.rect(overlay, (245, 248, 232, 96), label, border_radius=max(1, self.cell_px // 24))
+            self.pygame.draw.line(overlay, (255, 255, 255, 132), (body_rect.left + 2, body_rect.top + 2), (body_rect.left + 2, body_rect.bottom - 3), max(1, self.cell_px // 28))
         elif kind == "access":
             ring_r = max(2, self.cell_px // 8)
             ring_x = max(3, self.cell_px // 3)
@@ -1646,14 +1818,14 @@ class PygameView:
         mid_y = self.cell_px // 2
         inset = max(1, self.cell_px // 8)
         stroke_w = max(1, self.cell_px // 18)
-        fill = (frame[0], frame[1], frame[2], 108)
+        fill = (frame[0], frame[1], frame[2], 132)
         stroke = (
             min(255, int(frame[0] * 1.12)),
             min(255, int(frame[1] * 1.12)),
             min(255, int(frame[2] * 1.12)),
             220,
         )
-        shadow = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 128)
+        shadow = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 152)
         accent = (
             min(255, int(frame[0] * 1.08) + 10),
             min(255, int(frame[1] * 1.02) + 8),
@@ -1663,6 +1835,7 @@ class PygameView:
 
         if kind == "player":
             radius = max(4, (self.cell_px // 2) - inset)
+            self.pygame.draw.circle(overlay, shadow, (mid_x + 1, mid_y + 1), radius)
             self.pygame.draw.circle(overlay, fill, (mid_x, mid_y), radius)
             self.pygame.draw.circle(overlay, stroke, (mid_x, mid_y), radius, stroke_w)
             self.pygame.draw.arc(
@@ -1673,6 +1846,14 @@ class PygameView:
                 2.25,
                 max(1, stroke_w),
             )
+            tick = max(2, self.cell_px // 7)
+            for start, end in (
+                ((mid_x, inset), (mid_x, inset + tick)),
+                ((mid_x, self.cell_px - inset - 1), (mid_x, self.cell_px - inset - 1 - tick)),
+                ((inset, mid_y), (inset + tick, mid_y)),
+                ((self.cell_px - inset - 1, mid_y), (self.cell_px - inset - 1 - tick, mid_y)),
+            ):
+                self.pygame.draw.line(overlay, accent, start, end, max(1, stroke_w))
         elif kind == "guard":
             points = [
                 (mid_x, inset),
@@ -1682,6 +1863,8 @@ class PygameView:
                 (inset + 2, self.cell_px - inset - max(2, self.cell_px // 4)),
                 (inset + 1, inset + max(2, self.cell_px // 4)),
             ]
+            shadow_points = [(px + 1, py + 1) for px, py in points]
+            self.pygame.draw.polygon(overlay, shadow, shadow_points)
             self.pygame.draw.polygon(overlay, fill, points)
             self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
             self.pygame.draw.line(
@@ -1691,6 +1874,20 @@ class PygameView:
                 (mid_x + max(2, self.cell_px // 6), mid_y - max(1, self.cell_px // 8)),
                 max(1, stroke_w),
             )
+            self.pygame.draw.line(
+                overlay,
+                shadow,
+                (mid_x - max(2, self.cell_px // 8), mid_y + max(1, self.cell_px // 5)),
+                (mid_x, mid_y + max(3, self.cell_px // 3)),
+                max(1, stroke_w),
+            )
+            self.pygame.draw.line(
+                overlay,
+                shadow,
+                (mid_x, mid_y + max(3, self.cell_px // 3)),
+                (mid_x + max(2, self.cell_px // 8), mid_y + max(1, self.cell_px // 5)),
+                max(1, stroke_w),
+            )
         elif kind == "scout":
             diamond = [
                 (mid_x, inset),
@@ -1698,6 +1895,7 @@ class PygameView:
                 (mid_x, self.cell_px - inset - 1),
                 (inset, mid_y),
             ]
+            self.pygame.draw.polygon(overlay, shadow, [(px + 1, py + 1) for px, py in diamond])
             self.pygame.draw.polygon(overlay, fill, diamond)
             self.pygame.draw.polygon(overlay, stroke, diamond, stroke_w)
             self.pygame.draw.line(
@@ -1714,6 +1912,7 @@ class PygameView:
                 (mid_x + max(2, self.cell_px // 6), mid_y + max(1, self.cell_px // 6)),
                 max(1, stroke_w),
             )
+            self.pygame.draw.circle(overlay, accent, (mid_x, inset + max(2, self.cell_px // 5)), max(1, self.cell_px // 18))
         else:
             rect = self.pygame.Rect(
                 inset,
@@ -1721,8 +1920,10 @@ class PygameView:
                 max(4, self.cell_px - (inset * 2)),
                 max(4, self.cell_px - (inset * 2)),
             )
+            self.pygame.draw.rect(overlay, shadow, rect.move(1, 1), border_radius=max(2, self.cell_px // 7))
             self.pygame.draw.rect(overlay, fill, rect, border_radius=max(2, self.cell_px // 7))
             self.pygame.draw.rect(overlay, stroke, rect, stroke_w, border_radius=max(2, self.cell_px // 7))
+            self.pygame.draw.circle(overlay, accent, (mid_x, rect.top + max(3, self.cell_px // 5)), max(2, self.cell_px // 8))
             self.pygame.draw.line(
                 overlay,
                 accent,
@@ -2422,6 +2623,14 @@ class PygameView:
                 (self.cell_px // 2, self.cell_px // 2),
                 max(2, radius // 2),
             )
+            self.pygame.draw.arc(
+                overlay,
+                (255, 255, 230, 118),
+                (inset, inset, self.cell_px - inset * 2, self.cell_px - inset * 2),
+                0.15,
+                2.8,
+                max(1, stroke_w),
+            )
         elif kind == "fixture":
             points = [
                 (self.cell_px // 2, inset),
@@ -2431,10 +2640,19 @@ class PygameView:
             ]
             self.pygame.draw.polygon(overlay, fill, points)
             self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
+            self.pygame.draw.line(
+                overlay,
+                (245, 248, 232, 104),
+                (inset + max(2, self.cell_px // 7), self.cell_px // 2),
+                (self.cell_px - inset - max(2, self.cell_px // 7), self.cell_px // 2),
+                max(1, stroke_w),
+            )
         elif kind == "asset":
             rect = self.pygame.Rect(inset, inset, max(4, self.cell_px - (inset * 2)), max(4, self.cell_px - (inset * 2)))
             self.pygame.draw.rect(overlay, fill, rect, border_radius=max(2, self.cell_px // 8))
             self.pygame.draw.rect(overlay, stroke, rect, stroke_w, border_radius=max(2, self.cell_px // 8))
+            stripe = self.pygame.Rect(rect.left + 1, rect.top + max(2, self.cell_px // 5), max(1, rect.w - 2), max(2, self.cell_px // 7))
+            self.pygame.draw.rect(overlay, (245, 248, 232, 82), stripe, border_radius=max(1, self.cell_px // 24))
         else:
             points = [
                 (self.cell_px // 2, inset),
@@ -2445,6 +2663,20 @@ class PygameView:
             ]
             self.pygame.draw.polygon(overlay, fill, points)
             self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
+            sign = self.pygame.Rect(
+                inset + max(1, self.cell_px // 10),
+                self.cell_px // 2 - max(2, self.cell_px // 7),
+                max(5, self.cell_px - (inset * 2) - max(2, self.cell_px // 5)),
+                max(4, self.cell_px // 3),
+            )
+            self.pygame.draw.rect(overlay, (245, 248, 232, 74), sign, border_radius=max(1, self.cell_px // 24))
+            self.pygame.draw.line(
+                overlay,
+                shadow,
+                (sign.left + 1, sign.bottom - 1),
+                (sign.right - 2, sign.bottom - 1),
+                max(1, self.cell_px // 30),
+            )
 
         if kind != "service":
             self.pygame.draw.line(
@@ -3611,10 +3843,20 @@ class PygameView:
         ):
             self._draw_roof_overlay(x, y, color=color, attrs=attrs)
             return "building_roof"
-        if color_key == "building_edge" or (glyph == "#" and color_key.startswith("building_")):
+        if (
+            semantic_key == "wall_building"
+            or color_key == "building_edge"
+            or color_key.startswith("building_edge_")
+            or (glyph == "#" and color_key.startswith("building_"))
+        ):
             self._draw_wall_overlay(x, y, color=color, attrs=attrs, filled=False)
             return "building_edge"
-        if color_key == "building_fill" or (glyph == "=" and color_key.startswith("building_")):
+        if (
+            semantic_key == "floor_building_fill"
+            or color_key == "building_fill"
+            or color_key.startswith("building_fill_")
+            or (glyph in {".", "="} and color_key.startswith("building_fill"))
+        ):
             self._draw_wall_overlay(x, y, color=color, attrs=attrs, filled=True)
             return "building_fill"
         if semantic_key == "stair_up" or (glyph == ">" and color_key == "transit"):
