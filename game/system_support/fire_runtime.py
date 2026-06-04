@@ -167,6 +167,78 @@ def _set_bucket(bucket, key):
     return normalized
 
 
+def _int_bucket(bucket, key):
+    if not isinstance(bucket, dict):
+        return set()
+    try:
+        clean_key = int(key)
+    except (TypeError, ValueError):
+        clean_key = 0
+    values = bucket.get(clean_key)
+    if isinstance(values, set):
+        return values
+    if isinstance(values, (list, tuple)):
+        normalized = {
+            coord
+            for coord in values
+            if isinstance(coord, tuple) and len(coord) >= 3
+        }
+    else:
+        normalized = set()
+    bucket[clean_key] = normalized
+    return normalized
+
+
+def _normalize_advance_due(raw_due):
+    if isinstance(raw_due, dict) and all(
+        isinstance(tick, int)
+        and isinstance(values, set)
+        and all(isinstance(coord, tuple) and len(coord) >= 3 for coord in values)
+        for tick, values in raw_due.items()
+    ):
+        return raw_due
+    due = {}
+    if not isinstance(raw_due, dict):
+        return due
+    for raw_tick, values in tuple(raw_due.items()):
+        try:
+            tick = int(raw_tick)
+        except (TypeError, ValueError):
+            continue
+        bucket = set()
+        for raw_coord in tuple(values or ()):
+            if not isinstance(raw_coord, (tuple, list)) or len(raw_coord) < 3:
+                continue
+            coord = _coord_key(raw_coord[0], raw_coord[1], raw_coord[2])
+            if coord is not None:
+                bucket.add(coord)
+        if bucket:
+            due[tick] = bucket
+    return due
+
+
+def _normalize_advance_tick_by_coord(raw_index):
+    if isinstance(raw_index, dict) and all(
+        isinstance(coord, tuple) and len(coord) >= 3 and isinstance(tick, int)
+        for coord, tick in raw_index.items()
+    ):
+        return raw_index
+    index = {}
+    if not isinstance(raw_index, dict):
+        return index
+    for raw_coord, raw_tick in tuple(raw_index.items()):
+        if not isinstance(raw_coord, (tuple, list)) or len(raw_coord) < 3:
+            continue
+        coord = _coord_key(raw_coord[0], raw_coord[1], raw_coord[2])
+        if coord is None:
+            continue
+        try:
+            index[coord] = int(raw_tick)
+        except (TypeError, ValueError):
+            continue
+    return index
+
+
 def fire_state(sim):
     state = getattr(sim, "fire_state", None)
     if not isinstance(state, dict):
@@ -187,9 +259,12 @@ def fire_state(sim):
         "contact_cooldowns",
         "damage_marks",
         "response_seed_ids",
+        "environmental_candidate_cache",
     ):
         if not isinstance(state.get(name), dict):
             state[name] = {}
+    state["advance_due"] = _normalize_advance_due(state.get("advance_due"))
+    state["advance_tick_by_coord"] = _normalize_advance_tick_by_coord(state.get("advance_tick_by_coord"))
 
     protected = state.get("protected_chunks")
     if not isinstance(protected, set):
@@ -257,6 +332,131 @@ def fire_state(sim):
                 _set_bucket(state["building_index"], building_id).add(coord)
     _sync_protected_chunks(sim, state=state)
     return state
+
+
+def rebuild_fire_advance_due_index(sim, *, advance_interval=5):
+    state = fire_state(sim)
+    try:
+        interval = max(1, int(advance_interval))
+    except (TypeError, ValueError):
+        interval = 5
+    due = {}
+    by_coord = {}
+    active_count = 0
+    for coord, cell in tuple(state.get("cells", {}).items()):
+        if not isinstance(cell, dict):
+            continue
+        if _safe_int(cell.get("fire_intensity"), 0) <= 0 and _safe_int(cell.get("smoke_intensity"), 0) <= 0:
+            continue
+        active_count += 1
+        next_tick = _safe_int(cell.get("last_advanced_tick"), _safe_int(getattr(sim, "tick", 0), 0)) + interval
+        _int_bucket(due, next_tick).add(coord)
+        by_coord[coord] = int(next_tick)
+    state["advance_due"] = due
+    state["advance_tick_by_coord"] = by_coord
+    state["advance_due_signature"] = (active_count, interval)
+    state["advance_due_dirty"] = False
+    return state
+
+
+def ensure_fire_advance_due_index(sim, *, advance_interval=5):
+    state = fire_state(sim)
+    try:
+        interval = max(1, int(advance_interval))
+    except (TypeError, ValueError):
+        interval = 5
+    by_coord = state.get("advance_tick_by_coord", {})
+    due = state.get("advance_due", {})
+    if (
+        bool(state.get("advance_due_dirty"))
+        or state.get("advance_due_signature") is None
+        or not isinstance(by_coord, dict)
+        or not isinstance(due, dict)
+        or (
+            not by_coord
+            and any(
+                isinstance(cell, dict)
+                and (
+                    _safe_int(cell.get("fire_intensity"), 0) > 0
+                    or _safe_int(cell.get("smoke_intensity"), 0) > 0
+                )
+                for cell in tuple(state.get("cells", {}).values())
+            )
+        )
+    ):
+        return rebuild_fire_advance_due_index(sim, advance_interval=interval)
+    return state
+
+
+def schedule_fire_cell_advance(sim, coord, *, due_tick=None, advance_interval=5):
+    key = _coord_key(*(coord or (None, None, None)))
+    if key is None:
+        return None
+    state = fire_state(sim)
+    cell = state.get("cells", {}).get(key)
+    if not isinstance(cell, dict):
+        return None
+    if _safe_int(cell.get("fire_intensity"), 0) <= 0 and _safe_int(cell.get("smoke_intensity"), 0) <= 0:
+        unschedule_fire_cell_advance(sim, key)
+        return None
+    try:
+        interval = max(1, int(advance_interval))
+    except (TypeError, ValueError):
+        interval = 5
+    if due_tick is None:
+        due_tick = _safe_int(cell.get("last_advanced_tick"), _safe_int(getattr(sim, "tick", 0), 0)) + interval
+    due_tick = int(max(0, _safe_int(due_tick, 0)))
+    old_tick = state.setdefault("advance_tick_by_coord", {}).get(key)
+    if old_tick is not None and int(old_tick) != due_tick:
+        old_bucket = _int_bucket(state.setdefault("advance_due", {}), old_tick)
+        old_bucket.discard(key)
+        if not old_bucket:
+            state.setdefault("advance_due", {}).pop(int(old_tick), None)
+    _int_bucket(state.setdefault("advance_due", {}), due_tick).add(key)
+    state.setdefault("advance_tick_by_coord", {})[key] = due_tick
+    active_count = sum(
+        1
+        for cell in tuple(state.get("cells", {}).values())
+        if isinstance(cell, dict)
+        and (
+            _safe_int(cell.get("fire_intensity"), 0) > 0
+            or _safe_int(cell.get("smoke_intensity"), 0) > 0
+        )
+    )
+    state["advance_due_signature"] = (active_count, interval)
+    return due_tick
+
+
+def unschedule_fire_cell_advance(sim, coord):
+    key = _coord_key(*(coord or (None, None, None)))
+    if key is None:
+        return False
+    state = fire_state(sim)
+    old_tick = state.setdefault("advance_tick_by_coord", {}).pop(key, None)
+    if old_tick is None:
+        return False
+    bucket = _int_bucket(state.setdefault("advance_due", {}), old_tick)
+    bucket.discard(key)
+    if not bucket:
+        state.setdefault("advance_due", {}).pop(int(old_tick), None)
+    state["advance_due_dirty"] = True
+    return True
+
+
+def pop_due_fire_cells(sim, *, current_tick=None, advance_interval=5):
+    if current_tick is None:
+        current_tick = _safe_int(getattr(sim, "tick", 0), 0)
+    state = ensure_fire_advance_due_index(sim, advance_interval=advance_interval)
+    due = state.setdefault("advance_due", {})
+    by_coord = state.setdefault("advance_tick_by_coord", {})
+    ready = []
+    for due_tick in sorted(tick for tick in due.keys() if int(tick) <= int(current_tick)):
+        bucket = due.pop(due_tick, set())
+        for coord in tuple(bucket or ()):
+            if by_coord.get(coord) == due_tick:
+                by_coord.pop(coord, None)
+            ready.append(coord)
+    return tuple(ready)
 
 
 def _rebuild_fire_indexes(sim):
@@ -358,6 +558,7 @@ def remove_fire_cell(sim, x, y, z=0):
     cell = state.get("cells", {}).pop(key, None)
     if not isinstance(cell, dict):
         return False
+    unschedule_fire_cell_advance(sim, key)
     _unindex_fire_cell(sim, key, cell)
     state.get("frozen_boundaries", {}).pop(key, None)
     return True
@@ -486,6 +687,9 @@ def upsert_fire_cell(
     burn_budget=None,
     started_tick=None,
     last_advanced_tick=None,
+    sync_protected=True,
+    behavior=None,
+    advance_interval=None,
 ):
     key = _coord_key(x, y, z)
     if key is None:
@@ -493,7 +697,7 @@ def upsert_fire_cell(
     state = fire_state(sim)
     cells = state.get("cells", {})
     existing = cells.get(key)
-    behavior = fire_behavior_for_cell(sim, key[0], key[1], key[2])
+    behavior = dict(behavior or {}) if isinstance(behavior, dict) else fire_behavior_for_cell(sim, key[0], key[1], key[2])
     if not bool(behavior.get("can_ignite")) and fire_intensity > 0:
         return None
 
@@ -525,6 +729,10 @@ def upsert_fire_cell(
         }
         cells[key] = cell
         _index_fire_cell(sim, key, cell)
+        if advance_interval is not None:
+            schedule_fire_cell_advance(sim, key, advance_interval=advance_interval)
+        else:
+            state["advance_due_dirty"] = True
         tracked_property_id = _text(cell.get("property_id"))
         if tracked_property_id:
             if _safe_int(cell.get("fire_intensity"), 0) > 0:
@@ -549,13 +757,18 @@ def upsert_fire_cell(
             _safe_int(existing.get("last_advanced_tick"), last_advanced_tick),
             _safe_int(last_advanced_tick, 0),
         )
+    if advance_interval is not None:
+        schedule_fire_cell_advance(sim, key, advance_interval=advance_interval)
+    elif _safe_int(existing.get("fire_intensity"), 0) > 0 or _safe_int(existing.get("smoke_intensity"), 0) > 0:
+        state["advance_due_dirty"] = True
     tracked_property_id = _text(existing.get("property_id"))
     if tracked_property_id:
         if _safe_int(existing.get("fire_intensity"), 0) > 0:
             state.get("last_active_properties", set()).add(tracked_property_id)
         if _safe_int(existing.get("smoke_intensity"), 0) > 0:
             state.get("last_smoke_properties", set()).add(tracked_property_id)
-    _sync_protected_chunks(sim, state=state)
+    if bool(sync_protected):
+        _sync_protected_chunks(sim, state=state)
     return existing
 
 
@@ -740,7 +953,12 @@ __all__ = [
     "fire_state",
     "mark_chunk_environmental_ignition",
     "note_frozen_fire_boundary",
+    "pop_due_fire_cells",
     "property_fire_summary",
+    "rebuild_fire_advance_due_index",
     "remove_fire_cell",
+    "schedule_fire_cell_advance",
+    "ensure_fire_advance_due_index",
+    "unschedule_fire_cell_advance",
     "upsert_fire_cell",
 ]

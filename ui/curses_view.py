@@ -121,6 +121,14 @@ class CursesView:
             _register("item_illegal", 203)
             _register("projectile", 203)
             _register("objective", 226)
+            _register("human_charcoal", 250)
+            _register("human_olive", 107)
+            _register("human_denim", 110)
+            _register("human_accent", 221)
+            _register("human_monochrome", 255)
+            _register("human_rust", 173)
+            _register("human_slate", 109)
+            _register("human_wine", 175)
             _register("cat_orange", 208)
             _register("cat_black", 238)
             _register("cat_tabby", 180)
@@ -194,6 +202,14 @@ class CursesView:
             _register("item_illegal", curses.COLOR_RED)
             _register("projectile", curses.COLOR_RED)
             _register("objective", curses.COLOR_YELLOW)
+            _register("human_charcoal", curses.COLOR_WHITE)
+            _register("human_olive", curses.COLOR_GREEN)
+            _register("human_denim", curses.COLOR_CYAN)
+            _register("human_accent", curses.COLOR_YELLOW)
+            _register("human_monochrome", curses.COLOR_WHITE)
+            _register("human_rust", curses.COLOR_YELLOW)
+            _register("human_slate", curses.COLOR_BLUE)
+            _register("human_wine", curses.COLOR_MAGENTA)
             _register("cat_orange", curses.COLOR_YELLOW)
             _register("cat_black", curses.COLOR_WHITE)
             _register("cat_tabby", curses.COLOR_YELLOW)
@@ -550,6 +566,9 @@ class CursesView:
                 break
             keys.append(key)
         return keys
+
+    def pump_window(self):
+        return None
 
     def refresh(self):
         self._flush_queued_draws()

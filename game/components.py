@@ -1869,6 +1869,10 @@ class CriminalDriveState:
         self.current_activity_kind = None
         self.current_activity_stage = None
         self.current_activity_summary = None
+        self.target_scan_tick = 0
+        self.target_scan_signature = None
+        self.cached_opportunistic_target = None
+        self.cached_affiliation_targets = ()
 
 
 class PropertyKnowledge:

@@ -161,16 +161,19 @@ _ATTIRE_ROWS = {
     ),
 }
 
-_PALETTE_PHRASES = (
-    "mostly charcoal and black",
-    "all muted browns and olive",
-    "a washed-out mix of gray and denim",
-    "cut through with one bright accent",
-    "all clean monochrome lines",
-    "full of rust, cream, and smoke-dark cloth",
-    "kept to quiet blues and slate",
-    "set off with brass and wine-dark touches",
+# Keep the render buckets deliberately small so the curses frontend stays legible.
+_HUMAN_RENDER_PALETTE_ROWS = (
+    ("mostly charcoal and black", "charcoal and black", "human_charcoal"),
+    ("all muted browns and olive", "brown and olive", "human_olive"),
+    ("a washed-out mix of gray and denim", "gray and denim", "human_denim"),
+    ("cut through with one bright accent", "bright accent", "human_accent"),
+    ("all clean monochrome lines", "clean monochrome", "human_monochrome"),
+    ("full of rust, cream, and smoke-dark cloth", "rust and cream", "human_rust"),
+    ("kept to quiet blues and slate", "blue and slate", "human_slate"),
+    ("set off with brass and wine-dark touches", "brass and wine-dark", "human_wine"),
 )
+
+HUMAN_RENDER_COLOR_KEYS = frozenset(row[2] for row in _HUMAN_RENDER_PALETTE_ROWS)
 
 _CONDITION_PHRASES = (
     "kept surprisingly neat",
@@ -344,7 +347,7 @@ def build_human_description_profile(seed, *, eid=None, identity=None, personal_n
     complexion_phrase = _pick_row(rng, _COMPLEXION_ROWS)
     hair_style_phrase, hair_style_compact = _pick_row(rng, _HAIR_STYLE_ROWS[style_axis])
     attire_phrase, attire_compact = _pick_row(rng, _ATTIRE_ROWS[style_axis])
-    palette_phrase = _pick_row(rng, _PALETTE_PHRASES)
+    palette_phrase, palette_compact, render_color_key = _pick_row(rng, _HUMAN_RENDER_PALETTE_ROWS)
     condition_phrase = _pick_row(rng, _CONDITION_PHRASES)
     accessory_phrase, accessory_compact = _pick_row(rng, _ACCESSORY_ROWS[style_axis])
     standout_phrase, standout_compact = _pick_row(rng, _STANDOUT_ROWS)
@@ -371,6 +374,8 @@ def build_human_description_profile(seed, *, eid=None, identity=None, personal_n
         "attire_phrase": attire_phrase,
         "attire_compact": attire_compact,
         "palette_phrase": palette_phrase,
+        "palette_compact": palette_compact,
+        "render_color_key": render_color_key,
         "condition_phrase": condition_phrase,
         "accessory_phrase": accessory_phrase,
         "accessory_compact": accessory_compact,
@@ -454,6 +459,15 @@ def human_conversation_description(seed, *, eid=None, identity=None, personal_na
         "nonbinary": "person",
     }.get(str(profile.get("gender_identity", "") or "").strip().lower(), "person")
     first_tail = _join_with_and((profile["hair_phrase"], profile["standout_phrase"]))
+    attire_tail = ", ".join(
+        bit
+        for bit in (
+            profile.get("attire_phrase", ""),
+            profile.get("palette_phrase", ""),
+            profile.get("condition_phrase", ""),
+        )
+        if str(bit).strip()
+    )
     demeanor_tail = ""
     if rng.random() < 0.54:
         demeanor_tail = f", and the whole look feels {profile['demeanor_phrase']}"
@@ -464,11 +478,24 @@ def human_conversation_description(seed, *, eid=None, identity=None, personal_na
         f"{slots['person_subject_cap']} {slots['person_be']} {profile['stature_phrase']} and {slots['person_have']} {first_tail}.",
         (
             f"{slots['person_possessive_adj_cap']} {profile['eye_color']} eyes and "
-            f"{profile['complexion_phrase']} stand out against {profile['attire_phrase']}"
+            f"{profile['complexion_phrase']} stand out against {attire_tail}"
             f"{demeanor_tail}."
         ),
     ]
     return " ".join(sentence for sentence in sentences[:3] if str(sentence).strip())
+
+
+def human_render_color_key(seed, *, eid=None, identity=None, personal_name=None):
+    profile = build_human_description_profile(
+        seed,
+        eid=eid,
+        identity=identity,
+        personal_name=personal_name,
+    )
+    if not profile:
+        return None
+    color_key = str(profile.get("render_color_key", "")).strip()
+    return color_key or None
 
 
 def human_look_description_clause(seed, *, eid=None, identity=None, personal_name=None):
@@ -483,6 +510,7 @@ def human_look_description_clause(seed, *, eid=None, identity=None, personal_nam
     bits = (
         profile["stature_compact"],
         profile["attire_compact"],
+        profile.get("palette_compact", ""),
         profile["hair_compact"],
         profile["standout_compact"],
         profile["demeanor_compact"],

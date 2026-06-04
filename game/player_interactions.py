@@ -2,6 +2,7 @@
 
 from engine.events import Event
 
+from game.components import Position
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
 from game.opportunities import _item_label
@@ -571,6 +572,7 @@ class PlayerInteractionRuntime:
         container_name = str((prop or {}).get("name", self.container_label(container_kind).lower())).strip() or self.container_label(container_kind).lower()
         container_items = self.container_inventory_entries(prop_id, container_kind=container_kind)
         inventory = self.action_system._inventory_for(eid)
+        actor_pos = self.sim.ecs.get(Position).get(eid)
         if not inventory:
             return False
         if not container_items:
@@ -644,11 +646,14 @@ class PlayerInteractionRuntime:
                 quantity=quantity,
             ))
         if entitlement and not entitlement.get("lawful_take"):
+            event_x = int(getattr(actor_pos, "x", (prop or {}).get("x", 0)) or 0)
+            event_y = int(getattr(actor_pos, "y", (prop or {}).get("y", 0)) or 0)
+            event_z = int(getattr(actor_pos, "z", (prop or {}).get("z", 0)) or 0)
             theft_observation = observation_payload_for_position(
                 self.sim,
-                int((prop or {}).get("x", 0) or 0),
-                int((prop or {}).get("y", 0) or 0),
-                int((prop or {}).get("z", 0) or 0),
+                event_x,
+                event_y,
+                event_z,
                 exclude_eid=eid,
                 offender_eid=eid,
                 observation_channels=("actor_witness",),
@@ -662,18 +667,18 @@ class PlayerInteractionRuntime:
                 owner_tag=entry.get("owner_tag"),
                 property_id=prop_id,
                 property_name=(prop or {}).get("name"),
-                x=int((prop or {}).get("x", 0) or 0),
-                y=int((prop or {}).get("y", 0) or 0),
-                z=int((prop or {}).get("z", 0) or 0),
+                x=event_x,
+                y=event_y,
+                z=event_z,
                 **theft_observation,
             ))
             self.action_system.item_system._emit_action_offense(
                 eid=eid,
                 action="pickup_item",
                 context="item_theft",
-                x=int((prop or {}).get("x", 0) or 0),
-                y=int((prop or {}).get("y", 0) or 0),
-                z=int((prop or {}).get("z", 0) or 0),
+                x=event_x,
+                y=event_y,
+                z=event_z,
                 property_id=prop_id,
                 **theft_observation,
             )

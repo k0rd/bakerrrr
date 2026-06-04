@@ -448,6 +448,8 @@ class CriminalJusticeSystem(System):
             event,
             offender_eid=offender_eid,
             default_channels=("actor_witness",),
+            use_legacy_witness_fallback=False,
+            allow_position_backfill=False,
         )
 
     def _mark_incident_accounted(self, incident_id, field="justice_accounted"):

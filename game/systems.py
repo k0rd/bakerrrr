@@ -1,4 +1,5 @@
 import curses
+import heapq
 import hashlib
 import itertools
 import json
@@ -2352,13 +2353,19 @@ def _path_next_step(sim, eid, sx, sy, tx, ty, z, max_nodes=512):
     start = (sx, sy)
     goal = (tx, ty)
 
-    queue = deque([start])
     parents = {start: None}
+    costs = {start: 0}
     best = start
     best_score = _grid_distance(sx, sy, tx, ty)
+    counter = 0
+    open_heap = [(best_score, best_score, counter, start)]
 
-    while queue and len(parents) < max_nodes:
-        cx, cy = queue.popleft()
+    while open_heap and len(parents) < max_nodes:
+        _priority, _heuristic, _order, current = heapq.heappop(open_heap)
+        cx, cy = current
+        current_cost = costs.get(current)
+        if current_cost is None:
+            continue
 
         if (cx, cy) == goal:
             best = goal
@@ -2392,13 +2399,20 @@ def _path_next_step(sim, eid, sx, sy, tx, ty, z, max_nodes=512):
             if not step_ok:
                 continue
 
+            new_cost = int(current_cost) + 1
+            old_cost = costs.get(node)
+            if old_cost is not None and old_cost <= new_cost:
+                continue
+
             parents[node] = (cx, cy)
-            queue.append(node)
+            costs[node] = new_cost
 
             score = _grid_distance(nx, ny, tx, ty)
             if score < best_score:
                 best = node
                 best_score = score
+            counter += 1
+            heapq.heappush(open_heap, (new_cost + score, score, counter, node))
 
     if best == start:
         return None

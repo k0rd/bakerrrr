@@ -156,6 +156,15 @@ from game.system_support.actor_runtime import (
     _entity_is_downed,
 )
 from game.system_support.ai_intent_runtime import _sync_ai_intent
+from game.system_support.actor_attention_runtime import (
+    attention_scope_for_actor as _attention_scope_for_actor,
+    clear_actor_attention as _clear_actor_attention,
+    mark_actor_urgent as _mark_actor_urgent,
+    note_attention_resolution as _note_attention_resolution,
+    pop_due_actors as _pop_due_actors,
+    refresh_actor_attention as _refresh_actor_attention,
+    schedule_actor_due as _schedule_actor_due,
+)
 from game.criminal_justice_runtime import _noise_merits_attention
 from game.dialogue_runtime import (
     _active_contractor_record,
@@ -1315,6 +1324,269 @@ class NPCNeedsSystem(System):
 
 class NPCWillSystem(System):
 
+    LIVE_TIMESKIP_URGENT_STATES = {
+        "investigating",
+        "protecting",
+        "following",
+        "holding",
+        "helping_victim",
+        "reporting_incident",
+        "warning",
+        "chasing",
+        "evading_authority",
+        "seeking_safety",
+        "seeking_medical_aid",
+        "seeking_safe_spot",
+        "seeking_shelter",
+        "casing_target",
+        "committing_property_crime",
+        "rendezvousing_crew",
+        "seeking_criminal_affiliation",
+        "soliciting_player",
+    }
+
+    def __init__(self, sim):
+        super().__init__(sim)
+        self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
+        self.sim.events.subscribe("npc_intent_changed", self.on_npc_intent_changed)
+
+    def _live_timeskip_active(self):
+        state = getattr(self.sim, "live_timeskip", None)
+        return isinstance(state, dict) and bool(state.get("active"))
+
+    def on_npc_intent_changed(self, event):
+        data = getattr(event, "data", {}) or {}
+        try:
+            npc_eid = int(data.get("npc_eid"))
+        except (TypeError, ValueError):
+            return
+        intent = str(data.get("intent", "") or "").strip().lower()
+        if intent in self.LIVE_TIMESKIP_URGENT_STATES:
+            _mark_actor_urgent(self.sim, npc_eid, family="will", reason=f"intent:{intent}", ttl_ticks=12)
+            _schedule_actor_due(self.sim, npc_eid, "will", delay_ticks=0, reason=f"intent:{intent}")
+
+    def on_entity_damaged(self, event):
+        source_eid = event.data.get("source_eid")
+        target_eid = event.data.get("target_eid")
+        try:
+            source_eid = int(source_eid)
+            target_eid = int(target_eid)
+            damage = int(event.data.get("damage", 0) or 0)
+        except (TypeError, ValueError):
+            return
+        if damage <= 0 or source_eid == target_eid:
+            return
+        if target_eid == getattr(self.sim, "player_eid", None):
+            return
+
+        ais = self.sim.ecs.get(AI)
+        ai = ais.get(target_eid)
+        if ai is None:
+            return
+        if str(getattr(ai, "role", "") or "").strip().lower() == "wildlife":
+            return
+
+        positions = self.sim.ecs.get(Position)
+        target_pos = positions.get(target_eid)
+        source_pos = positions.get(source_eid)
+        if target_pos is None or source_pos is None or int(target_pos.z) != int(source_pos.z):
+            return
+        vitality = self.sim.ecs.get(Vitality).get(target_eid)
+        if vitality is not None and bool(getattr(vitality, "downed", False)):
+            return
+
+        needs = self.sim.ecs.get(NPCNeeds).get(target_eid)
+        if needs is not None:
+            needs.safety = _clamp(float(getattr(needs, "safety", 100.0) or 100.0) - min(14.0, 4.0 + float(damage)))
+
+        memory = self.sim.ecs.get(NPCMemory).get(target_eid)
+        impact = min(1.0, 0.36 + (float(damage) / 18.0))
+        if memory is not None:
+            memory.remember(
+                tick=int(getattr(self.sim, "tick", 0)),
+                kind="threat",
+                strength=impact,
+                source_eid=source_eid,
+                target_eid=target_eid,
+                x=int(source_pos.x),
+                y=int(source_pos.y),
+                z=int(source_pos.z),
+                damage=damage,
+                damage_kind=str(event.data.get("damage_kind", "harm") or "harm"),
+                via="direct_damage",
+            )
+            memory.remember(
+                tick=int(getattr(self.sim, "tick", 0)),
+                kind="actor_reputation",
+                strength=impact,
+                actor_eid=source_eid,
+                approval=-0.82,
+                target_eid=target_eid,
+                damage=damage,
+                damage_kind=str(event.data.get("damage_kind", "harm") or "harm"),
+                via="direct_damage",
+            )
+
+        will = self.sim.ecs.get(NPCWill).get(target_eid)
+        if will is None:
+            will = NPCWill()
+            self.sim.ecs.add(target_eid, will)
+
+        traits = self.sim.ecs.get(NPCTraits).get(target_eid) or NPCTraits()
+        suppression = self.sim.ecs.get(SuppressionState).get(target_eid)
+        threat_context = _npc_live_threat_context(
+            self.sim,
+            target_eid,
+            target_pos,
+            target_eid=source_eid,
+            memory=memory,
+            needs=needs,
+            traits=traits,
+            vitality=vitality,
+            suppression=suppression,
+            max_steps=5,
+        )
+        metrics = (threat_context or {}).get("metrics", {}) if isinstance(threat_context, dict) else {}
+        retreat_target = (threat_context or {}).get("retreat_target") if isinstance(threat_context, dict) else None
+        retreat_bias = float((metrics or {}).get("retreat_bias", 0.0) or 0.0)
+        assault_bias = float((metrics or {}).get("assault_bias", 0.0) or 0.0)
+
+        if retreat_target and retreat_bias >= max(0.42, assault_bias + 0.08):
+            self._set_intent(
+                target_eid,
+                ai,
+                will,
+                "seeking_safety",
+                min(96.0, 68.0 + (retreat_bias * 26.0) + min(12.0, float(damage))),
+                target=retreat_target,
+                target_eid=source_eid,
+            )
+        else:
+            self._set_intent(
+                target_eid,
+                ai,
+                will,
+                "protecting",
+                min(96.0, 66.0 + (assault_bias * 24.0) + min(14.0, float(damage))),
+                target=(int(source_pos.x), int(source_pos.y), int(source_pos.z)),
+                target_eid=source_eid,
+            )
+        _schedule_will_rethink(self.sim, target_eid, current_tick=getattr(self.sim, "tick", 0), delay_ticks=0)
+        _mark_actor_urgent(self.sim, target_eid, family="will", reason="direct_damage", ttl_ticks=18)
+        _mark_actor_urgent(self.sim, target_eid, family="move", reason="direct_damage", ttl_ticks=18)
+        _schedule_actor_due(self.sim, target_eid, "will", delay_ticks=0, reason="direct_damage")
+        _schedule_actor_due(self.sim, target_eid, "move", delay_ticks=0, reason="direct_damage")
+
+    def _live_timeskip_will_urgent(self, eid, ai, needs, pos, vitality, suppression, *, player_pos=None):
+        if ai is None or needs is None or pos is None:
+            return True
+        if vitality is not None and bool(getattr(vitality, "downed", False)):
+            return True
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+        role = str(getattr(ai, "role", "") or "").strip().lower()
+        if role == "wildlife":
+            return True
+        if suppression is not None and bool(getattr(suppression, "surrendered", False)):
+            return True
+        if state in self.LIVE_TIMESKIP_URGENT_STATES:
+            return True
+        if getattr(ai, "target_eid", None) is not None:
+            return True
+        if getattr(needs, "critical", None):
+            return True
+        if float(getattr(needs, "energy", 100.0) or 100.0) <= 18.0:
+            return True
+        if float(getattr(needs, "safety", 100.0) or 100.0) <= 18.0:
+            return True
+        if player_pos is not None and int(getattr(player_pos, "z", 0) or 0) == int(getattr(pos, "z", 0) or 0):
+            if _manhattan(int(pos.x), int(pos.y), int(player_pos.x), int(player_pos.y)) <= _WILL_PLAYER_PROXIMITY_RADIUS:
+                return _has_line_of_sight(
+                    self.sim,
+                    int(pos.x),
+                    int(pos.y),
+                    int(pos.z),
+                    int(player_pos.x),
+                    int(player_pos.y),
+                    int(player_pos.z),
+                )
+        return False
+
+    def _live_timeskip_will_recheck_delay(self, ai, needs, vitality, suppression):
+        if vitality is not None and bool(getattr(vitality, "downed", False)):
+            return 1
+        if suppression is not None and bool(getattr(suppression, "surrendered", False)):
+            return 4
+        if getattr(needs, "critical", None):
+            return 2
+        if float(getattr(needs, "energy", 100.0) or 100.0) <= 18.0:
+            return 2
+        if float(getattr(needs, "safety", 100.0) or 100.0) <= 18.0:
+            return 2
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+        if state in {"protecting", "seeking_safety", "chasing"}:
+            return 4
+        if state in {"reporting_incident", "helping_victim", "warning"}:
+            return 6
+        if state in {"seeking_medical_aid", "seeking_safe_spot", "seeking_shelter"}:
+            return 10
+        if state in {"casing_target", "committing_property_crime", "rendezvousing_crew", "seeking_criminal_affiliation"}:
+            return 12
+        return 18
+
+    def _attention_will_recheck_delay(self, eid, ai, needs, vitality, suppression, *, scope="compressed", urgent=False):
+        delay = int(self._live_timeskip_will_recheck_delay(ai, needs, vitality, suppression))
+        scope = str(scope or "").strip().lower()
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+        if urgent:
+            return max(1, delay)
+        if scope == "full":
+            return max(2, min(delay, 12))
+        if scope == "warm":
+            if state in {"protecting", "chasing", "seeking_safety", "reporting_incident", "helping_victim", "warning"}:
+                return max(90, delay)
+            return max(240, delay)
+        if scope == "compressed":
+            if state in {"seeking_medical_aid", "seeking_safe_spot", "seeking_shelter"}:
+                return max(120, delay)
+            if state in {"protecting", "chasing", "seeking_safety", "reporting_incident", "helping_victim", "warning"}:
+                return max(120, delay)
+            return max(300, delay)
+        return 300
+
+    def _live_timeskip_will_candidate_ids(
+        self,
+        ais,
+        positions,
+        needs_map,
+        wills,
+        vitalities,
+        suppressions,
+        *,
+        player_pos=None,
+    ):
+        ids = []
+        for eid, ai in tuple(ais.items()):
+            pos = positions.get(eid)
+            needs = needs_map.get(eid)
+            will = wills.get(eid)
+            if pos is None or needs is None or will is None:
+                continue
+            suppression = suppressions.get(eid)
+            vitality = vitalities.get(eid)
+            if self._live_timeskip_will_urgent(eid, ai, needs, pos, vitality, suppression, player_pos=player_pos):
+                if _will_rethink_due(self.sim, eid, current_tick=getattr(self.sim, "tick", 0)):
+                    ids.append(int(eid))
+                    _schedule_will_rethink(
+                        self.sim,
+                        eid,
+                        current_tick=getattr(self.sim, "tick", 0),
+                        delay_ticks=self._live_timeskip_will_recheck_delay(ai, needs, vitality, suppression),
+                    )
+                continue
+            if _will_rethink_due(self.sim, eid, current_tick=getattr(self.sim, "tick", 0)):
+                ids.append(int(eid))
+        return tuple(sorted(set(ids)))
+
     def _set_intent(self, eid, ai, will, intent, score, target=None, target_eid=None):
         active_target_states = {
             "selling_scavenged": "scavenged_sale",
@@ -1438,9 +1710,11 @@ class NPCWillSystem(System):
         justices = self.sim.ecs.get(JusticeProfile)
         identities = self.sim.ecs.get(CreatureIdentity)
         vitalities = self.sim.ecs.get(Vitality)
+        suppressions = self.sim.ecs.get(SuppressionState)
         criminal_drives = self.sim.ecs.get(CriminalDriveState)
         player_eid = getattr(self.sim, "player_eid", None)
         player_pos = positions.get(player_eid)
+        live_timeskip_active = self._live_timeskip_active()
         dialog_state = getattr(self.sim, "dialog_ui", None)
         dialog_open = bool(dialog_state.get("open")) if isinstance(dialog_state, dict) else False
         dialog_cooldowns = getattr(self.sim, "npc_dialogue_cooldowns", None)
@@ -1453,7 +1727,18 @@ class NPCWillSystem(System):
             self.sim.npc_behavior_tip_cooldowns = tip_cooldowns
         pending_behavior_tips = []
 
-        for eid, ai in ais.items():
+        _refresh_actor_attention(self.sim, player_eid=player_eid)
+        if live_timeskip_active:
+            due_eids = _pop_due_actors(self.sim, "will", current_tick=getattr(self.sim, "tick", 0))
+            ai_items = [
+                (eid, ais[eid])
+                for eid in due_eids
+                if eid in ais
+            ]
+        else:
+            ai_items = tuple(ais.items())
+
+        for eid, ai in ai_items:
             pos = positions.get(eid)
             if not pos:
                 continue
@@ -1468,8 +1753,60 @@ class NPCWillSystem(System):
             if not needs or not will:
                 continue
 
-            suppression = self.sim.ecs.get(SuppressionState).get(eid)
-            if _should_skip_live_will_update(
+            suppression = suppressions.get(eid)
+            live_will_urgent = live_timeskip_active and self._live_timeskip_will_urgent(
+                eid,
+                ai,
+                needs,
+                pos,
+                vitalities.get(eid),
+                suppression,
+                player_pos=player_pos,
+            )
+            if live_timeskip_active:
+                scope_info = _attention_scope_for_actor(self.sim, eid, pos=pos, ai=ai)
+                scope = str((scope_info or {}).get("scope", "compressed") or "compressed")
+                recheck_delay = self._attention_will_recheck_delay(
+                    eid,
+                    ai,
+                    needs,
+                    vitalities.get(eid),
+                    suppression,
+                    scope=scope,
+                    urgent=bool(live_will_urgent),
+                )
+                _schedule_will_rethink(
+                    self.sim,
+                    eid,
+                    current_tick=getattr(self.sim, "tick", 0),
+                    delay_ticks=recheck_delay,
+                )
+                _schedule_actor_due(
+                    self.sim,
+                    eid,
+                    "will",
+                    delay_ticks=recheck_delay,
+                    reason=f"{scope}:will_recheck",
+                )
+                if (
+                    not live_will_urgent
+                    and scope == "compressed"
+                    and str(getattr(ai, "state", "") or "").strip().lower()
+                    in {
+                        "idle",
+                        "lounging",
+                        "patrolling",
+                        "resting",
+                        "scavenging",
+                        "seeking_companionship",
+                        "seeking_social",
+                        "selling_scavenged",
+                        "socializing",
+                        "working",
+                    }
+                ):
+                    continue
+            if not live_will_urgent and _should_skip_live_will_update(
                 self.sim,
                 eid,
                 ai,
@@ -2743,6 +3080,13 @@ class NPCWillSystem(System):
                     best_target,
                     best_target_eid,
                 )
+            if live_timeskip_active and best_intent == "idle":
+                _schedule_will_rethink(
+                    self.sim,
+                    eid,
+                    current_tick=self.sim.tick,
+                    delay_ticks=30,
+                )
 
             queued_tips = _plan_behavior_tip_shares(
                 self.sim,
@@ -2829,11 +3173,211 @@ class NPCInvestigateSystem(System):
         "socializing": 3,
         "resting": 4,
     }
+    MOVING_STATES = {
+        "investigating",
+        "protecting",
+        "helping_victim",
+        "reporting_incident",
+        "warning",
+        "chasing",
+        "scavenging",
+        "selling_scavenged",
+        "casing_target",
+        "committing_property_crime",
+        "rendezvousing_crew",
+        "seeking_criminal_affiliation",
+        "evading_authority",
+        "seeking_street_buyer",
+        "seeking_street_appraiser",
+        "soliciting_player",
+        "following",
+        "holding",
+        "seeking_social",
+        "seeking_companionship",
+        "seeking_safety",
+        "seeking_medical_aid",
+        "seeking_safe_spot",
+        "seeking_shelter",
+        "patrolling",
+        "working",
+        "lounging",
+        "socializing",
+        "resting",
+    }
 
     def __init__(self, sim):
         super().__init__(sim)
         self.sim.events.subscribe("noise", self.on_noise)
+        self.sim.events.subscribe("npc_intent_changed", self.on_npc_intent_changed)
         self.next_move_tick = {}
+        self._live_timeskip_stride_phase = 0
+        self._move_due_by_tick = {}
+        self._move_due_membership = {}
+        self._urgent_move_eids = set()
+        self._live_no_path_cache = {}
+
+    def _live_timeskip_active(self):
+        state = getattr(self.sim, "live_timeskip", None)
+        return isinstance(state, dict) and bool(state.get("active"))
+
+    def _normalize_due_tick(self, value):
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
+
+    def _schedule_move_due(self, eid, due_tick):
+        try:
+            eid = int(eid)
+        except (TypeError, ValueError):
+            return None
+        due_tick = self._normalize_due_tick(due_tick)
+        old_tick = self._move_due_membership.get(eid)
+        if old_tick == due_tick:
+            return due_tick
+        if old_tick is not None:
+            old_bucket = self._move_due_by_tick.get(old_tick)
+            if isinstance(old_bucket, set):
+                old_bucket.discard(eid)
+                if not old_bucket:
+                    self._move_due_by_tick.pop(old_tick, None)
+        self._move_due_by_tick.setdefault(due_tick, set()).add(eid)
+        self._move_due_membership[eid] = due_tick
+        delay = max(0, int(due_tick) - int(getattr(self.sim, "tick", 0) or 0))
+        _schedule_actor_due(self.sim, eid, "move", delay_ticks=delay, reason="npc_move")
+        return due_tick
+
+    def _unschedule_move_due(self, eid):
+        try:
+            eid = int(eid)
+        except (TypeError, ValueError):
+            return False
+        old_tick = self._move_due_membership.pop(eid, None)
+        if old_tick is None:
+            return False
+        bucket = self._move_due_by_tick.get(old_tick)
+        if isinstance(bucket, set):
+            bucket.discard(eid)
+            if not bucket:
+                self._move_due_by_tick.pop(old_tick, None)
+        self._urgent_move_eids.discard(eid)
+        self._live_no_path_cache.pop(eid, None)
+        _clear_actor_attention(self.sim, eid, family="move")
+        return True
+
+    def _live_no_path_signature(self, eid, ai, pos, target):
+        if ai is None or pos is None or target is None:
+            return None
+        try:
+            tx, ty, tz = target
+        except (TypeError, ValueError):
+            return None
+        return (
+            str(getattr(ai, "state", "") or "").strip().lower(),
+            int(getattr(pos, "x", 0)),
+            int(getattr(pos, "y", 0)),
+            int(getattr(pos, "z", 0)),
+            int(tx),
+            int(ty),
+            int(tz),
+            getattr(ai, "target_eid", None),
+        )
+
+    def _live_no_path_cached(self, eid, ai, pos, target):
+        if not self._live_timeskip_active():
+            return False
+        signature = self._live_no_path_signature(eid, ai, pos, target)
+        if signature is None:
+            return False
+        cached = self._live_no_path_cache.get(int(eid))
+        if not isinstance(cached, dict):
+            return False
+        if cached.get("signature") != signature:
+            self._live_no_path_cache.pop(int(eid), None)
+            return False
+        return int(getattr(self.sim, "tick", 0) or 0) < int(cached.get("until_tick", 0) or 0)
+
+    def _note_live_no_path(self, eid, ai, pos, target, *, delay_ticks=30):
+        if not self._live_timeskip_active():
+            return
+        signature = self._live_no_path_signature(eid, ai, pos, target)
+        if signature is None:
+            return
+        self._live_no_path_cache[int(eid)] = {
+            "signature": signature,
+            "until_tick": int(getattr(self.sim, "tick", 0) or 0) + int(max(1, delay_ticks)),
+        }
+
+    def _clear_live_no_path(self, eid):
+        try:
+            self._live_no_path_cache.pop(int(eid), None)
+        except (TypeError, ValueError):
+            return
+
+    def _current_next_move_tick(self, eid, throttle):
+        if throttle is not None:
+            return self._normalize_due_tick(getattr(throttle, "next_move_tick", 0))
+        return self._normalize_due_tick(self.next_move_tick.get(eid, 0))
+
+    def _resync_live_move_due(self, ais, positions, move_throttles):
+        if not self._live_timeskip_active():
+            self._move_due_by_tick.clear()
+            self._move_due_membership.clear()
+            self._urgent_move_eids.clear()
+            return
+        for eid, ai in tuple(ais.items()):
+            state = str(getattr(ai, "state", "") or "").strip().lower()
+            if state not in self.MOVING_STATES or positions.get(eid) is None:
+                self._unschedule_move_due(eid)
+                continue
+            if getattr(ai, "target", None) is None and getattr(ai, "target_eid", None) is None:
+                self._unschedule_move_due(eid)
+                continue
+            next_tick = self._current_next_move_tick(eid, move_throttles.get(eid))
+            self._schedule_move_due(eid, next_tick)
+
+    def _pop_due_move_eids(self):
+        tick = self._normalize_due_tick(getattr(self.sim, "tick", 0))
+        ready = set()
+        for due_tick in sorted(raw for raw in self._move_due_by_tick.keys() if int(raw) <= tick):
+            bucket = self._move_due_by_tick.pop(due_tick, set())
+            for eid in tuple(bucket or ()):
+                if self._move_due_membership.get(eid) == due_tick:
+                    self._move_due_membership.pop(eid, None)
+                ready.add(eid)
+        ready.update(_pop_due_actors(self.sim, "move", current_tick=tick))
+        return ready
+
+    def on_npc_intent_changed(self, event):
+        data = getattr(event, "data", {}) or {}
+        npc_eid = data.get("npc_eid")
+        try:
+            npc_eid = int(npc_eid)
+        except (TypeError, ValueError):
+            return
+        intent = str(data.get("intent", "") or "").strip().lower()
+        if intent in self.MOVING_STATES:
+            routine_defer = self._live_timeskip_active() and intent in {
+                "lounging",
+                "patrolling",
+                "resting",
+                "scavenging",
+                "seeking_companionship",
+                "seeking_social",
+                "selling_scavenged",
+                "socializing",
+                "working",
+            }
+            if routine_defer:
+                self._schedule_move_due(npc_eid, int(getattr(self.sim, "tick", 0) or 0) + 120)
+            else:
+                self._urgent_move_eids.add(npc_eid)
+                _mark_actor_urgent(self.sim, npc_eid, family="move", reason=f"intent:{intent}", ttl_ticks=12)
+                if intent in NPCWillSystem.LIVE_TIMESKIP_URGENT_STATES:
+                    _mark_actor_urgent(self.sim, npc_eid, family="will", reason=f"intent:{intent}", ttl_ticks=12)
+                self._schedule_move_due(npc_eid, getattr(self.sim, "tick", 0))
+        else:
+            self._unschedule_move_due(npc_eid)
 
     def on_noise(self, event):
         source_eid = event.data["source_eid"]
@@ -2889,6 +3433,10 @@ class NPCInvestigateSystem(System):
                     target=escape_target,
                     target_eid=None,
                 )
+                self._urgent_move_eids.add(int(eid))
+                _mark_actor_urgent(self.sim, eid, family="move", reason="noise:wildlife", ttl_ticks=12)
+                _mark_actor_urgent(self.sim, eid, family="will", reason="noise:wildlife", ttl_ticks=12)
+                self._schedule_move_due(eid, getattr(self.sim, "tick", 0))
                 continue
 
             if not _noise_merits_attention(self.sim, eid, source_eid, nx, ny, nz, cause):
@@ -2896,6 +3444,10 @@ class NPCInvestigateSystem(System):
 
             ai.state = "investigating"
             ai.target = (nx, ny, nz)
+            self._urgent_move_eids.add(int(eid))
+            _mark_actor_urgent(self.sim, eid, family="move", reason="noise", ttl_ticks=12)
+            _mark_actor_urgent(self.sim, eid, family="will", reason="noise", ttl_ticks=12)
+            self._schedule_move_due(eid, getattr(self.sim, "tick", 0))
 
             self.sim.emit(Event(
                 "npc_investigate",
@@ -2905,6 +3457,188 @@ class NPCInvestigateSystem(System):
                 y=ny,
                 z=nz,
             ))
+
+    def _move_actor_position_direct(self, eid, pos, target):
+        if pos is None or not isinstance(target, (tuple, list)) or len(target) < 3:
+            return False
+        try:
+            nx, ny, nz = int(target[0]), int(target[1]), int(target[2])
+        except (TypeError, ValueError):
+            return False
+        if not self.sim.tilemap.in_bounds(nx, ny):
+            return False
+        self.sim.tilemap.move_entity(
+            eid,
+            oldx=int(pos.x),
+            oldy=int(pos.y),
+            oldz=int(pos.z),
+            newx=nx,
+            newy=ny,
+            newz=nz,
+        )
+        pos.x = nx
+        pos.y = ny
+        pos.z = nz
+        return True
+
+    def _finish_compact_movement(self, eid, ai, kind, *, target=None):
+        ai.state = "idle"
+        ai.target = None
+        ai.target_eid = None
+        if hasattr(ai, "incident_id") and kind in {"reporting_incident", "helping_victim", "warning"}:
+            ai.incident_id = None
+        _clear_opportunity_active_target(self.sim, eid, kind)
+        _clear_actor_attention(self.sim, eid, family="move")
+        _schedule_actor_due(self.sim, eid, "will", delay_ticks=0, reason=f"compact:{kind}")
+        _schedule_will_rethink(self.sim, eid, current_tick=getattr(self.sim, "tick", 0), delay_ticks=0)
+        _note_attention_resolution(self.sim, "compressed", kind, compact=True)
+        self.sim.emit(Event(
+            "npc_compact_movement_resolved",
+            npc_eid=int(eid),
+            resolution=str(kind),
+            x=int(target[0]) if isinstance(target, (tuple, list)) and len(target) >= 1 else None,
+            y=int(target[1]) if isinstance(target, (tuple, list)) and len(target) >= 2 else None,
+            z=int(target[2]) if isinstance(target, (tuple, list)) and len(target) >= 3 else None,
+        ))
+
+    def _compact_resolve_offscreen_movement(
+        self,
+        eid,
+        ai,
+        pos,
+        target,
+        *,
+        memories,
+        needs_map,
+        traits_map,
+        vitalities,
+        suppressions,
+    ):
+        if not self._live_timeskip_active():
+            return False
+        scope_info = _attention_scope_for_actor(self.sim, eid, pos=pos, ai=ai)
+        scope = str((scope_info or {}).get("scope", "") or "").strip().lower()
+        if scope != "compressed":
+            return False
+        if pos is None or not isinstance(target, (tuple, list)) or len(target) < 3:
+            return False
+        try:
+            tx, ty, tz = int(target[0]), int(target[1]), int(target[2])
+        except (TypeError, ValueError):
+            return False
+        if int(pos.z) != tz:
+            return False
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+
+        if state == "seeking_safety":
+            live_threat = _npc_live_threat_context(
+                self.sim,
+                eid,
+                pos,
+                target_eid=ai.target_eid,
+                memory=memories.get(eid),
+                needs=needs_map.get(eid),
+                traits=traits_map.get(eid) or NPCTraits(),
+                vitality=vitalities.get(eid),
+                suppression=suppressions.get(eid),
+                max_steps=5,
+            )
+            if live_threat:
+                return False
+            needs = needs_map.get(eid)
+            if needs:
+                needs.safety = _clamp(float(getattr(needs, "safety", 70.0) or 70.0) + 6.0)
+                if float(getattr(needs, "energy", 100.0) or 100.0) <= 55.0:
+                    needs.energy = _clamp(float(getattr(needs, "energy", 70.0) or 70.0) + 2.0)
+            ai.state = "resting" if needs and float(getattr(needs, "energy", 100.0) or 100.0) <= 62.0 else "idle"
+            ai.target = None
+            ai.target_eid = None
+            _clear_actor_attention(self.sim, eid, family="move")
+            _schedule_actor_due(self.sim, eid, "will", delay_ticks=6, reason="compact:safety_settled")
+            _schedule_will_rethink(self.sim, eid, current_tick=getattr(self.sim, "tick", 0), delay_ticks=6)
+            _note_attention_resolution(self.sim, "compressed", "seeking_safety", compact=True)
+            self.sim.emit(Event(
+                "npc_compact_movement_resolved",
+                npc_eid=int(eid),
+                resolution="seeking_safety",
+                x=int(pos.x),
+                y=int(pos.y),
+                z=int(pos.z),
+            ))
+            return True
+
+        if state in {"reporting_incident", "helping_victim", "warning"}:
+            if not self._move_actor_position_direct(eid, pos, (tx, ty, tz)):
+                return False
+            if state == "reporting_incident":
+                self.sim.emit(Event(
+                    "npc_report_arrived",
+                    npc_eid=eid,
+                    incident_id=getattr(ai, "incident_id", None),
+                    x=tx,
+                    y=ty,
+                    z=tz,
+                    compressed=True,
+                ))
+            elif state == "helping_victim":
+                self.sim.emit(Event(
+                    "npc_help_arrived",
+                    npc_eid=eid,
+                    incident_id=getattr(ai, "incident_id", None),
+                    target_eid=ai.target_eid,
+                    x=tx,
+                    y=ty,
+                    z=tz,
+                    compressed=True,
+                ))
+            else:
+                self.sim.emit(Event(
+                    "npc_warning_arrived",
+                    npc_eid=eid,
+                    incident_id=getattr(ai, "incident_id", None),
+                    x=tx,
+                    y=ty,
+                    z=tz,
+                    compressed=True,
+                ))
+            self._finish_compact_movement(eid, ai, state, target=(tx, ty, tz))
+            return True
+
+        if state in {"seeking_medical_aid", "seeking_safe_spot", "seeking_shelter"}:
+            if not self._move_actor_position_direct(eid, pos, (tx, ty, tz)):
+                return False
+            if state == "seeking_medical_aid":
+                _receive_medical_aid_at_actor(self.sim, eid, pos)
+            elif state == "seeking_safe_spot":
+                _receive_safe_spot_at_actor(self.sim, eid, pos)
+            else:
+                _receive_lodging_at_actor(self.sim, eid, pos)
+            self._finish_compact_movement(eid, ai, state, target=(tx, ty, tz))
+            return True
+
+        return False
+
+    def _defer_compressed_routine_movement(self, eid, ai, pos):
+        if not self._live_timeskip_active() or pos is None:
+            return False
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+        if state not in {
+            "lounging",
+            "patrolling",
+            "resting",
+            "scavenging",
+            "seeking_companionship",
+            "seeking_social",
+            "selling_scavenged",
+            "socializing",
+            "working",
+        }:
+            return False
+        scope_info = _attention_scope_for_actor(self.sim, eid, pos=pos, ai=ai)
+        if str((scope_info or {}).get("scope", "") or "").strip().lower() != "compressed":
+            return False
+        self._schedule_move_due(eid, int(getattr(self.sim, "tick", 0) or 0) + 120)
+        return True
 
     def update(self):
         ais = self.sim.ecs.get(AI)
@@ -2920,7 +3654,15 @@ class NPCInvestigateSystem(System):
         vitalities = self.sim.ecs.get(Vitality)
         suppressions = self.sim.ecs.get(SuppressionState)
         occupations = self.sim.ecs.get(Occupation)
-        global_stride = int(max(1, getattr(self.sim, "npc_move_tick_stride", 1)))
+        live_timeskip = getattr(self.sim, "live_timeskip", None)
+        live_timeskip_active = isinstance(live_timeskip, dict) and bool(live_timeskip.get("active"))
+        global_stride = 1 if live_timeskip_active else int(max(1, getattr(self.sim, "npc_move_tick_stride", 1)))
+        stride_phase_tick = int(getattr(self.sim, "tick", 0))
+        if live_timeskip_active and global_stride > 1:
+            stride_phase_tick = int(self._live_timeskip_stride_phase)
+            self._live_timeskip_stride_phase = (int(self._live_timeskip_stride_phase) + 1) % global_stride
+        elif not live_timeskip_active:
+            self._live_timeskip_stride_phase = 0
         player_eid = getattr(self.sim, "player_eid", None)
         player_pos = positions.get(player_eid)
         dialog_cooldowns = getattr(self.sim, "npc_dialogue_cooldowns", None)
@@ -2928,53 +3670,38 @@ class NPCInvestigateSystem(System):
             dialog_cooldowns = {}
             self.sim.npc_dialogue_cooldowns = dialog_cooldowns
 
-        moving_states = {
-            "investigating",
-            "protecting",
-            "helping_victim",
-            "reporting_incident",
-            "warning",
-            "chasing",
-            "scavenging",
-            "selling_scavenged",
-            "casing_target",
-            "committing_property_crime",
-            "rendezvousing_crew",
-            "seeking_criminal_affiliation",
-            "evading_authority",
-            "seeking_street_buyer",
-            "seeking_street_appraiser",
-            "soliciting_player",
-            "following",
-            "holding",
-            "seeking_social",
-            "seeking_companionship",
-            "seeking_safety",
-            "seeking_medical_aid",
-            "seeking_safe_spot",
-            "seeking_shelter",
-            "patrolling",
-            "working",
-            "lounging",
-            "socializing",
-            "resting",
-        }
+        _refresh_actor_attention(self.sim, player_eid=player_eid)
+        if live_timeskip_active:
+            candidate_eids = self._pop_due_move_eids()
+            candidate_eids.update(self._urgent_move_eids)
+            self._urgent_move_eids.clear()
+            ai_items = [(eid, ais[eid]) for eid in sorted(candidate_eids) if eid in ais]
+        else:
+            ai_items = tuple(ais.items())
 
-        for eid, ai in ais.items():
-            if ai.state not in moving_states:
+        for eid, ai in ai_items:
+            if ai.state not in self.MOVING_STATES:
+                if live_timeskip_active:
+                    self._unschedule_move_due(eid)
                 continue
 
             pos = positions.get(eid)
             if not pos:
+                if live_timeskip_active:
+                    self._unschedule_move_due(eid)
                 continue
             if _entity_is_downed(self.sim, eid):
                 _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+                if live_timeskip_active:
+                    self._unschedule_move_due(eid)
                 continue
 
-            if global_stride > 1 and ((self.sim.tick + eid) % global_stride != 0):
+            if global_stride > 1 and ((stride_phase_tick + eid) % global_stride != 0):
                 continue
 
             if not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
+                if live_timeskip_active:
+                    self._schedule_move_due(eid, int(getattr(self.sim, "tick", 0)) + 1)
                 continue
 
             throttle = move_throttles.get(eid)
@@ -2982,10 +3709,17 @@ class NPCInvestigateSystem(System):
 
             next_move_tick = throttle.next_move_tick if throttle else self.next_move_tick.get(eid, 0)
             if self.sim.tick < next_move_tick:
+                if live_timeskip_active:
+                    self._schedule_move_due(eid, next_move_tick)
                 continue
 
             target = _resolve_ai_target(self.sim, ai)
             if not target:
+                if live_timeskip_active:
+                    self._unschedule_move_due(eid)
+                continue
+
+            if self._defer_compressed_routine_movement(eid, ai, pos):
                 continue
 
             tx, ty, tz = target
@@ -3028,6 +3762,21 @@ class NPCInvestigateSystem(System):
                 ai.state = "idle"
                 ai.target = None
                 ai.target_eid = None
+                if live_timeskip_active:
+                    self._unschedule_move_due(eid)
+                continue
+
+            if self._compact_resolve_offscreen_movement(
+                eid,
+                ai,
+                pos,
+                (tx, ty, tz),
+                memories=memories,
+                needs_map=needs_map,
+                traits_map=traits_map,
+                vitalities=vitalities,
+                suppressions=suppressions,
+            ):
                 continue
 
             hold_cooldown = (
@@ -3300,10 +4049,13 @@ class NPCInvestigateSystem(System):
                     ai.state = "idle"
                     ai.target = None
                     ai.target_eid = None
+                arrival_cooldown = hold_cooldown if ai.state in {"resting", "protecting", "following", "holding", "seeking_safety"} else 1
+                if live_timeskip_active and ai.state == "seeking_safety":
+                    arrival_cooldown = max(int(arrival_cooldown), 6)
                 if throttle:
-                    throttle.next_move_tick = self.sim.tick + 1
+                    throttle.next_move_tick = self.sim.tick + arrival_cooldown
                 else:
-                    self.next_move_tick[eid] = self.sim.tick + 1
+                    self.next_move_tick[eid] = self.sim.tick + arrival_cooldown
                 continue
 
             if ai.state in {"investigating", "seeking_social", "seeking_companionship", "protecting", "reporting_incident", "helping_victim", "warning", "soliciting_player", "seeking_street_buyer", "seeking_street_appraiser"} and _manhattan(pos.x, pos.y, tx, ty) <= 1:
@@ -3316,9 +4068,10 @@ class NPCInvestigateSystem(System):
                         y=pos.y,
                         z=tz,
                     ))
-                    ai.state = "idle"
-                    ai.target = None
-                    ai.target_eid = None
+                    if str(ai.state or "").strip().lower() == "reporting_incident":
+                        ai.state = "idle"
+                        ai.target = None
+                        ai.target_eid = None
                 elif ai.state == "helping_victim":
                     self.sim.emit(Event(
                         "npc_help_arrived",
@@ -3578,7 +4331,8 @@ class NPCInvestigateSystem(System):
                 "resting",
             }
             step = None
-            if routine_path_state:
+            path_suppressed = live_timeskip_active and self._live_no_path_cached(eid, ai, pos, (tx, ty, tz))
+            if routine_path_state and not path_suppressed:
                 step = _next_opportunity_active_target_step(
                     self.sim,
                     eid,
@@ -3587,7 +4341,7 @@ class NPCInvestigateSystem(System):
                     (tx, ty, tz),
                     max_nodes=256,
                 )
-            if step is None:
+            if step is None and not path_suppressed:
                 step = _path_next_step(
                     self.sim,
                     eid=eid,
@@ -3737,10 +4491,34 @@ class NPCInvestigateSystem(System):
                     )
                 if not knock_handled:
                     self.sim.emit(Event("npc_move_blocked", npc_eid=eid, x=pos.x, y=pos.y, z=pos.z))
+                retry_cooldown = 1
+                if live_timeskip_active:
+                    blocked_key = str(blocked_reason or "").strip().lower()
+                    if not step:
+                        if ai.state in {
+                            "seeking_safety",
+                            "evading_authority",
+                            "chasing",
+                            "protecting",
+                            "reporting_incident",
+                            "helping_victim",
+                            "warning",
+                            "seeking_medical_aid",
+                            "seeking_safe_spot",
+                            "seeking_shelter",
+                        }:
+                            retry_cooldown = max(int(hold_cooldown), 6)
+                        elif routine_path_state:
+                            retry_cooldown = max(int(hold_cooldown), 10)
+                        else:
+                            retry_cooldown = max(int(hold_cooldown), 8)
+                        self._note_live_no_path(eid, ai, pos, (tx, ty, tz), delay_ticks=max(retry_cooldown, 30))
+                    elif blocked_key == "active_fire":
+                        retry_cooldown = max(int(hold_cooldown), 6)
                 if throttle:
-                    throttle.next_move_tick = max(throttle.next_move_tick, self.sim.tick + 1)
+                    throttle.next_move_tick = max(throttle.next_move_tick, self.sim.tick + retry_cooldown)
                 else:
-                    self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + 1)
+                    self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + retry_cooldown)
                 continue
 
             profile = noise_profiles.get(eid)
@@ -3780,3 +4558,4 @@ class NPCInvestigateSystem(System):
                 throttle.next_move_tick = self.sim.tick + cooldown
             else:
                 self.next_move_tick[eid] = self.sim.tick + cooldown
+            self._clear_live_no_path(eid)

@@ -577,13 +577,15 @@ class IncidentKnowledgeSystem(System):
             linked_items=linked_rows,
         )
 
-    def _event_accountability(self, event):
+    def _event_accountability(self, event, *, strict=False):
         offender_eid = event.data.get("offender_eid", event.data.get("eid"))
         return event_observation_accountability(
             self.sim,
             event,
             offender_eid=offender_eid,
             default_channels=("actor_witness",),
+            use_legacy_witness_fallback=not bool(strict),
+            allow_position_backfill=not bool(strict),
         )
 
     def _camera_property(self, event):
@@ -686,7 +688,7 @@ class IncidentKnowledgeSystem(System):
             note=note,
             tags=tags,
         )
-        observation = self._event_accountability(event)
+        observation = self._event_accountability(event, strict=True)
         existing_observers = {
             int(observer_eid)
             for observer_eid in tuple(incident.get("observer_eids", ()))
@@ -787,7 +789,7 @@ class IncidentKnowledgeSystem(System):
             return
         if context == "ordinary" and offense_score < self.MIN_ACTION_OFFENSE_SCORE:
             return
-        observation = self._event_accountability(event)
+        observation = self._event_accountability(event, strict=True)
 
         official_reportable = (
             bool(observation.get("has_accountable_observation"))
@@ -814,7 +816,7 @@ class IncidentKnowledgeSystem(System):
         severity = int(event.data.get("severity_score", 0) or 0)
         if severity <= 0:
             return
-        observation = self._event_accountability(event)
+        observation = self._event_accountability(event, strict=True)
         incident = self._create_incident(
             event,
             kind="property_trespass",
@@ -836,7 +838,7 @@ class IncidentKnowledgeSystem(System):
         severity = int(event.data.get("severity_score", 0) or 0)
         if severity <= 0:
             return
-        observation = self._event_accountability(event)
+        observation = self._event_accountability(event, strict=True)
         incident = self._create_incident(
             event,
             kind="property_tamper",
@@ -855,7 +857,7 @@ class IncidentKnowledgeSystem(System):
 
     def on_item_stolen(self, event):
         item_name = str(event.data.get("item_name", event.data.get("item_id", "item")) or "").strip() or "item"
-        observation = self._event_accountability(event)
+        observation = self._event_accountability(event, strict=True)
         incident = self._create_incident(
             event,
             kind="item_stolen",

@@ -54,6 +54,14 @@ class PygameView:
             "default": (240, 240, 240),
             "player": (100, 220, 255),
             "human": (230, 230, 230),
+            "human_charcoal": (198, 200, 208),
+            "human_olive": (166, 181, 118),
+            "human_denim": (146, 171, 208),
+            "human_accent": (228, 196, 118),
+            "human_monochrome": (238, 238, 238),
+            "human_rust": (205, 152, 112),
+            "human_slate": (142, 166, 188),
+            "human_wine": (196, 142, 172),
             "guard": (95, 140, 255),
             "scout": (120, 220, 120),
             "feline": (255, 220, 90),
@@ -4695,6 +4703,9 @@ class PygameView:
         self.key_queue.clear()
         return drained
 
+    def pump_window(self):
+        self.pygame.event.pump()
+
     def held_movement_delta(self):
         self.pygame.event.pump()
         pressed = self.pygame.key.get_pressed()
@@ -4749,6 +4760,7 @@ class PygameView:
 
     def refresh(self):
         self._flush_queued_draws()
+        self.pygame.event.pump()
         self.pygame.display.flip()
 
     def close(self):

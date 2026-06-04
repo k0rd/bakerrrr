@@ -20,6 +20,7 @@ from game.components import AI, IncidentKnowledge, Inventory, NPCWill, NPCRoutin
 from game.incident_runtime import incident_record
 from game.item_semantics import inventory_has_phone
 from game.property_runtime import property_infrastructure_role as _property_infrastructure_role
+from game.system_support.actor_runtime import _entity_is_downed
 from game.system_support.awareness_runtime import observation_payload_from_observers
 
 
@@ -30,8 +31,9 @@ RESPONSE_STATE_BY_CUE = {
     "seek_shelter": "seeking_safety",
     "warn_nearby": "warning",
 }
-REPORT_METHOD_PRIORITY = ("cell_phone", "peace_officer", "alarm", "work_phone", "home_phone", "incident_site")
+REPORT_METHOD_PRIORITY = ("camera_network", "cell_phone", "peace_officer", "alarm", "work_phone", "home_phone")
 DEFAULT_RESPONSE_TTL = 900
+DELAYED_REPORT_METHODS = {"peace_officer", "alarm", "work_phone", "home_phone"}
 
 
 def _int(value, default=0):
@@ -108,6 +110,15 @@ class ObservedIncidentResponseSystem(System):
 
         route = self._select_route(npc_eid, cue_kind, incident, data)
         if not route:
+            if cue_kind == "report_authority":
+                self.sim.observed_response_stats["dropped"] += 1
+                self._clear_actor_cue(npc_eid, incident_id)
+                self.sim.emit(Event(
+                    "observed_response_dropped",
+                    npc_eid=npc_eid,
+                    incident_id=incident_id,
+                    reason="no_report_route",
+                ))
             return
 
         now = int(getattr(self.sim, "tick", 0))
@@ -158,6 +169,20 @@ class ObservedIncidentResponseSystem(System):
             if pos is None:
                 self._drop_cue(npc_eid, cue, reason="actor_missing_position")
                 continue
+            if cue.get("holding_report"):
+                ai = self.sim.ecs.get(AI).get(npc_eid)
+                if _entity_is_downed(self.sim, npc_eid):
+                    self._drop_cue(npc_eid, cue, reason="reporter_downed")
+                    continue
+                if not self._report_hold_is_valid(cue, pos, ai):
+                    self._drop_cue(npc_eid, cue, reason="report_interrupted")
+                    continue
+                if now >= _int(cue.get("report_ready_tick"), now + 1):
+                    self._emit_authority_report(cue, x=pos.x, y=pos.y, z=pos.z)
+                    self._finish_cue(npc_eid, cue)
+                    continue
+                self._apply_report_hold(cue)
+                continue
             if self._cue_is_complete(cue, pos):
                 self._finish_cue(npc_eid, cue)
                 continue
@@ -169,6 +194,13 @@ class ObservedIncidentResponseSystem(System):
         incident_id = _int(data.get("incident_id"), -1)
         cue = self.pending.get(npc_eid)
         if not cue or _int(cue.get("incident_id"), -2) != incident_id:
+            return
+        if self._cue_needs_report_hold(cue):
+            hold_pos = self.sim.ecs.get(Position).get(npc_eid)
+            if hold_pos is None:
+                self._drop_cue(npc_eid, cue, reason="actor_missing_position")
+                return
+            self._begin_report_hold(cue, hold_pos)
             return
         self._emit_authority_report(cue, x=data.get("x"), y=data.get("y"), z=data.get("z"))
         self._finish_cue(npc_eid, cue)
@@ -254,9 +286,6 @@ class ObservedIncidentResponseSystem(System):
         if routine and routine.home:
             return {"method": "home_phone", "target": tuple(routine.home), "target_eid": None}
 
-        target = self._incident_position(incident) or cue_data.get("target")
-        if target:
-            return {"method": "incident_site", "target": tuple(target), "target_eid": None}
         return None
 
     def _cue_is_complete(self, cue, pos):
@@ -380,6 +409,59 @@ class ObservedIncidentResponseSystem(System):
         will.target_eid = target_eid
         will.last_tick = int(getattr(self.sim, "tick", 0))
 
+    def _cue_needs_report_hold(self, cue):
+        return (
+            _key(cue.get("cue_kind")) == "report_authority"
+            and _key(cue.get("method")) in DELAYED_REPORT_METHODS
+        )
+
+    def _report_delay_ticks(self, method):
+        method_key = _key(method)
+        if method_key not in DELAYED_REPORT_METHODS:
+            return 0
+        clock = getattr(self.sim, "world_traits", {}).get("clock", {})
+        ticks_per_hour = _int((clock or {}).get("ticks_per_hour"), 600)
+        return max(1, int(round(float(ticks_per_hour) / 60.0)))
+
+    def _begin_report_hold(self, cue, pos):
+        now = int(getattr(self.sim, "tick", 0))
+        hold_pos = (int(pos.x), int(pos.y), int(pos.z))
+        cue["holding_report"] = True
+        cue["hold_position"] = hold_pos
+        if _int(cue.get("report_ready_tick"), 0) <= now:
+            cue["report_ready_tick"] = now + self._report_delay_ticks(cue.get("method"))
+        self._apply_report_hold(cue)
+
+    def _apply_report_hold(self, cue):
+        npc_eid = _int(cue.get("npc_eid"), -1)
+        ai = self.sim.ecs.get(AI).get(npc_eid)
+        will = self.sim.ecs.get(NPCWill).get(npc_eid)
+        hold_pos = cue.get("hold_position")
+        if not ai or not will or not isinstance(hold_pos, (list, tuple)) or len(hold_pos) < 3:
+            return
+        score = max(45.0, min(98.0, _float(cue.get("urgency"), 0.5) * 100.0))
+        ai.state = "holding"
+        ai.target = tuple(hold_pos)
+        ai.target_eid = None
+        ai.incident_id = cue.get("incident_id")
+        will.intent = "holding"
+        will.score = score
+        will.target = tuple(hold_pos)
+        will.target_eid = None
+        will.last_tick = int(getattr(self.sim, "tick", 0))
+
+    def _report_hold_is_valid(self, cue, pos, ai):
+        if ai is None:
+            return False
+        if _key(getattr(ai, "state", "")) != "holding":
+            return False
+        hold_pos = cue.get("hold_position")
+        if not isinstance(hold_pos, (list, tuple)) or len(hold_pos) < 3:
+            return False
+        if int(pos.z) != _int(hold_pos[2], int(pos.z)):
+            return False
+        return _dist((pos.x, pos.y, pos.z), hold_pos) <= 1
+
     def _emit_authority_report(self, cue, *, x=None, y=None, z=None):
         incident_id = _int(cue.get("incident_id"), -1)
         incident = incident_record(self.sim, incident_id)
@@ -448,13 +530,18 @@ class ObservedIncidentResponseSystem(System):
                 pass
         ai = self.sim.ecs.get(AI).get(npc_eid)
         will = self.sim.ecs.get(NPCWill).get(npc_eid)
-        if ai and _key(getattr(ai, "state", "")) in set(RESPONSE_STATE_BY_CUE.values()):
+        ai_incident_id = _int(getattr(ai, "incident_id", None), -1) if ai else -1
+        clear_holding = bool(ai and _key(getattr(ai, "state", "")) == "holding" and ai_incident_id == _int(incident_id, -2))
+        if ai and (_key(getattr(ai, "state", "")) in set(RESPONSE_STATE_BY_CUE.values()) or clear_holding):
             ai.state = "idle"
             ai.target = None
             ai.target_eid = None
             if hasattr(ai, "incident_id"):
                 ai.incident_id = None
-        if will and _key(getattr(will, "intent", "")) in set(RESPONSE_STATE_BY_CUE.values()):
+        if will and (
+            _key(getattr(will, "intent", "")) in set(RESPONSE_STATE_BY_CUE.values())
+            or (clear_holding and _key(getattr(will, "intent", "")) == "holding")
+        ):
             will.intent = "idle"
             will.target = None
             will.target_eid = None

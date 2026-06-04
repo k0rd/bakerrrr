@@ -2,7 +2,7 @@
 
 from engine.events import Event
 
-from game.components import Collider, Position
+from game.components import AI, Collider, Position
 from game.property_access import (
     evaluate_property_access as _evaluate_property_access,
     property_ingress_context as _property_ingress_context,
@@ -18,6 +18,7 @@ from game.property_runtime import (
     property_aperture_at as _property_aperture_at,
     property_covering as _property_covering,
 )
+from game.system_support.fire_runtime import fire_cell_state
 
 
 def _entity_blocks(sim, moving_eid, x, y, z):
@@ -142,6 +143,12 @@ def _is_traversable_for(sim, moving_eid, x, y, z):
         return False, "out_of_bounds"
     if not sim.tilemap.is_walkable(x, y, z):
         return False, "blocked_tile"
+    if moving_eid != getattr(sim, "player_eid", None):
+        ai = sim.ecs.get(AI).get(moving_eid) if moving_eid is not None else None
+        if ai is not None:
+            fire_cell = fire_cell_state(sim, x, y, z)
+            if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
+                return False, "active_fire"
     blocked, blocker_eid = _entity_blocks(sim, moving_eid, x, y, z)
     if blocked:
         return False, f"blocked_entity:{blocker_eid}"

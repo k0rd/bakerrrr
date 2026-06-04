@@ -49,12 +49,17 @@ from game.service_runtime import (
     _vehicle_sale_quality,
     _vehicle_sale_remove_offer,
 )
-from game.skills import intel_skill_terms as _intel_skill_terms, mobility_service_skill_terms as _mobility_service_skill_terms
+from game.skills import (
+    actor_skill as _actor_skill,
+    intel_skill_terms as _intel_skill_terms,
+    mobility_service_skill_terms as _mobility_service_skill_terms,
+)
 from game.system_support.building_repair_runtime import (
     owned_building_properties as _owned_building_properties,
     property_damage_summary as _property_damage_summary,
     repair_building_damage as _repair_building_damage,
 )
+from game.system_support.combat_targeting_runtime import QUIET_NOISE_CAUSES
 from game.system_support.opportunity_knowledge_runtime import (
     rehydrate_entity_knowledge as _rehydrate_entity_knowledge,
 )
@@ -156,6 +161,55 @@ def _service_rehydrate_lead_kinds(service):
     return ()
 
 
+def _default_live_timeskip_state():
+    return {
+        "active": False,
+        "service": "",
+        "property_id": None,
+        "property_name": "",
+        "started_tick": 0,
+        "target_end_tick": 0,
+        "elapsed_ticks": 0,
+        "total_ticks": 0,
+        "player_anchor": None,
+        "recovery_plan": {"pulse_index": 0, "pulses": ()},
+        "recovery_applied": {
+            "hp_gain": 0,
+            "energy_gain": 0,
+            "safety_gain": 0,
+            "social_gain": 0,
+        },
+        "planned_recovery": {
+            "hp_gain": 0,
+            "energy_gain": 0,
+            "safety_gain": 0,
+            "social_gain": 0,
+        },
+        "completed": False,
+        "interrupted": False,
+        "interruption_reason": "",
+        "wake_cause": "",
+        "wake_source_eid": None,
+        "wake_x": None,
+        "wake_y": None,
+        "wake_z": None,
+        "credits_spent": 0,
+        "cooldown_ticks": 0,
+        "well_rested_ticks": 0,
+        "well_rested_granted": False,
+        "practice_note": "",
+        "result_pending": False,
+    }
+
+
+def _split_total_across_pulses(total, pulse_count):
+    total = max(0, int(total))
+    pulse_count = max(1, int(pulse_count))
+    base = total // pulse_count
+    remainder = total % pulse_count
+    return [base + (1 if idx < remainder else 0) for idx in range(pulse_count)]
+
+
 class SiteServiceSystem(System):
 
     SHELTER_COOLDOWN_TICKS = 180
@@ -184,11 +238,404 @@ class SiteServiceSystem(System):
             }
         if not hasattr(self.sim, "pending_vehicle_deliveries"):
             self.sim.pending_vehicle_deliveries = []
+        if not isinstance(getattr(self.sim, "live_timeskip", None), dict):
+            self.sim.live_timeskip = _default_live_timeskip_state()
+        else:
+            state = _default_live_timeskip_state()
+            state.update(dict(getattr(self.sim, "live_timeskip", {}) or {}))
+            self.sim.live_timeskip = state
         self.sim.events.subscribe("property_interact", self.on_property_interact)
         self.sim.events.subscribe("site_service_request", self.on_site_service_request)
+        self.sim.events.subscribe("site_service_started", self.on_site_service_started)
+        self.sim.events.subscribe("noise", self.on_noise)
+        self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
+        self.sim.events.subscribe("player_killed", self.on_player_killed)
+        self.sim.events.subscribe("actor_detained", self.on_actor_detained)
+        self.sim.events.subscribe("justice_booking_completed", self.on_justice_booking_completed)
 
     def _state(self):
         return _site_service_state(self.sim)
+
+    def _live_timeskip_state(self):
+        state = getattr(self.sim, "live_timeskip", None)
+        if not isinstance(state, dict):
+            state = _default_live_timeskip_state()
+            self.sim.live_timeskip = state
+        else:
+            defaults = _default_live_timeskip_state()
+            for key, value in defaults.items():
+                state.setdefault(key, value if not isinstance(value, dict) else dict(value))
+        return state
+
+    def _reset_live_timeskip_state(self):
+        state = self._live_timeskip_state()
+        state.clear()
+        state.update(_default_live_timeskip_state())
+        return state
+
+    def _current_player_position(self):
+        return self.sim.ecs.get(Position).get(self.player_eid)
+
+    def _live_timeskip_priority(self, reason):
+        reason_key = str(reason or "").strip().lower()
+        priorities = {
+            "player_killed": 100,
+            "justice_booking_completed": 90,
+            "actor_detained": 85,
+            "entity_damaged": 80,
+            "justice_surrender": 70,
+            "justice_questioning": 70,
+            "woken_by_noise": 40,
+        }
+        return int(priorities.get(reason_key, 10))
+
+    def _mark_live_timeskip_interruption(self, reason, *, wake_cause="", wake_source_eid=None, wake_x=None, wake_y=None, wake_z=None):
+        state = self._live_timeskip_state()
+        if not bool(state.get("active")) and not bool(state.get("result_pending")):
+            return False
+        reason_key = str(reason or "").strip().lower() or "interrupted"
+        current_reason = str(state.get("interruption_reason", "") or "").strip().lower()
+        if current_reason and self._live_timeskip_priority(current_reason) > self._live_timeskip_priority(reason_key):
+            return False
+        state["active"] = False
+        state["completed"] = False
+        state["interrupted"] = True
+        state["interruption_reason"] = reason_key
+        state["result_pending"] = True
+        if wake_cause:
+            state["wake_cause"] = str(wake_cause or "").strip().lower()
+        if wake_source_eid is not None:
+            state["wake_source_eid"] = wake_source_eid
+        if wake_x is not None:
+            state["wake_x"] = int(wake_x)
+        if wake_y is not None:
+            state["wake_y"] = int(wake_y)
+        if wake_z is not None:
+            state["wake_z"] = int(wake_z)
+        return True
+
+    def _mark_live_timeskip_complete(self):
+        state = self._live_timeskip_state()
+        if not bool(state.get("active")):
+            return False
+        state["active"] = False
+        state["completed"] = True
+        state["interrupted"] = False
+        state["interruption_reason"] = ""
+        state["result_pending"] = True
+        return True
+
+    def _lodging_recovery_pulses(self, *, total_ticks, hp_gain=0, energy_gain=0, safety_gain=0, social_gain=0):
+        total_ticks = max(1, int(total_ticks))
+        ticks_per_hour = self._ticks_per_hour()
+        pulse_count = max(1, int((total_ticks + ticks_per_hour - 1) // ticks_per_hour))
+        hp_parts = _split_total_across_pulses(hp_gain, pulse_count)
+        energy_parts = _split_total_across_pulses(energy_gain, pulse_count)
+        safety_parts = _split_total_across_pulses(safety_gain, pulse_count)
+        social_parts = _split_total_across_pulses(social_gain, pulse_count)
+        pulses = []
+        for idx in range(pulse_count):
+            pulse_tick = int(getattr(self.sim, "tick", 0)) + int(round((total_ticks * float(idx + 1)) / float(pulse_count)))
+            pulses.append({
+                "at_tick": pulse_tick,
+                "hp_gain": int(hp_parts[idx]),
+                "energy_gain": int(energy_parts[idx]),
+                "safety_gain": int(safety_parts[idx]),
+                "social_gain": int(social_parts[idx]),
+            })
+        return tuple(pulses)
+
+    def _apply_live_timeskip_recovery_pulse(self, pulse):
+        pulse = dict(pulse or {})
+        state = self._live_timeskip_state()
+        needs = self.sim.ecs.get(NPCNeeds).get(self.player_eid)
+        vitality = self.sim.ecs.get(Vitality).get(self.player_eid)
+        applied = state.get("recovery_applied", {})
+        hp_gain = max(0, int(pulse.get("hp_gain", 0) or 0))
+        energy_gain = max(0, int(pulse.get("energy_gain", 0) or 0))
+        safety_gain = max(0, int(pulse.get("safety_gain", 0) or 0))
+        social_gain = max(0, int(pulse.get("social_gain", 0) or 0))
+        if needs:
+            if energy_gain > 0:
+                needs.energy = _clamp(float(needs.energy) + energy_gain)
+            if safety_gain > 0:
+                needs.safety = _clamp(float(needs.safety) + safety_gain)
+            if social_gain > 0:
+                needs.social = _clamp(float(needs.social) + social_gain)
+        if vitality and hp_gain > 0:
+            vitality.hp = min(int(vitality.max_hp), int(vitality.hp) + hp_gain)
+        applied["hp_gain"] = int(applied.get("hp_gain", 0) or 0) + hp_gain
+        applied["energy_gain"] = int(applied.get("energy_gain", 0) or 0) + energy_gain
+        applied["safety_gain"] = int(applied.get("safety_gain", 0) or 0) + safety_gain
+        applied["social_gain"] = int(applied.get("social_gain", 0) or 0) + social_gain
+        state["recovery_applied"] = applied
+
+    def _begin_live_lodging(
+        self,
+        *,
+        eid,
+        prop,
+        service,
+        stay_ticks,
+        cooldown_ticks,
+        hp_gain=0,
+        energy_gain=0,
+        safety_gain=0,
+        social_gain=0,
+        credits_spent=0,
+        practice_note="",
+        well_rested_ticks=0,
+    ):
+        pos = self._current_player_position()
+        focus_x = None
+        focus_y = None
+        if pos is not None:
+            focus_x = int(pos.x)
+            focus_y = int(pos.y)
+        elif isinstance(prop, dict):
+            try:
+                focus_x = int(prop.get("x", 0) or 0)
+                focus_y = int(prop.get("y", 0) or 0)
+            except (TypeError, ValueError):
+                focus_x = None
+                focus_y = None
+        if focus_x is not None and focus_y is not None:
+            self.sim.stream_world(focus_x, focus_y)
+            self.sim.ensure_loaded_chunk_terrain()
+
+        state = self._reset_live_timeskip_state()
+        started_tick = int(getattr(self.sim, "tick", 0))
+        pulses = self._lodging_recovery_pulses(
+            total_ticks=stay_ticks,
+            hp_gain=hp_gain,
+            energy_gain=energy_gain,
+            safety_gain=safety_gain,
+            social_gain=social_gain,
+        )
+        state.update({
+            "active": True,
+            "service": str(service or "").strip().lower(),
+            "property_id": prop.get("id"),
+            "property_name": prop.get("name", prop.get("id", "site")),
+            "started_tick": started_tick,
+            "target_end_tick": started_tick + max(1, int(stay_ticks)),
+            "elapsed_ticks": 0,
+            "total_ticks": max(1, int(stay_ticks)),
+            "player_anchor": (int(pos.x), int(pos.y), int(pos.z)) if pos is not None else None,
+            "recovery_plan": {
+                "pulse_index": 0,
+                "pulses": pulses,
+            },
+            "planned_recovery": {
+                "hp_gain": int(hp_gain),
+                "energy_gain": int(energy_gain),
+                "safety_gain": int(safety_gain),
+                "social_gain": int(social_gain),
+            },
+            "recovery_applied": {
+                "hp_gain": 0,
+                "energy_gain": 0,
+                "safety_gain": 0,
+                "social_gain": 0,
+            },
+            "completed": False,
+            "interrupted": False,
+            "interruption_reason": "",
+            "wake_cause": "",
+            "wake_source_eid": None,
+            "wake_x": None,
+            "wake_y": None,
+            "wake_z": None,
+            "credits_spent": int(credits_spent),
+            "cooldown_ticks": int(cooldown_ticks),
+            "well_rested_ticks": int(well_rested_ticks),
+            "well_rested_granted": False,
+            "practice_note": str(practice_note or "").strip(),
+            "result_pending": False,
+        })
+        self.sim.emit(Event(
+            "site_service_started",
+            eid=eid,
+            property_id=prop.get("id"),
+            property_name=prop.get("name", prop.get("id", "site")),
+            service=service,
+            time_advanced_ticks=int(stay_ticks),
+            live_timeskip=True,
+        ))
+        return state
+
+    def _live_timeskip_blocking_dialog_kind(self):
+        dialog_state = getattr(self.sim, "dialog_ui", None)
+        if not isinstance(dialog_state, dict) or not bool(dialog_state.get("open")):
+            return ""
+        kind = str(dialog_state.get("kind", "") or "").strip().lower()
+        if kind in {"justice_surrender", "justice_questioning"}:
+            return kind
+        return ""
+
+    def on_site_service_started(self, event):
+        # Convenience seam for callers that need to react to live-lodging start.
+        return None
+
+    def on_noise(self, event):
+        state = self._live_timeskip_state()
+        if not bool(state.get("active")):
+            return
+        cause = str(event.data.get("cause", "") or "").strip().lower()
+        if not cause or cause in QUIET_NOISE_CAUSES:
+            return
+        pos = self._current_player_position()
+        if pos is None:
+            return
+        try:
+            nx = int(event.data.get("x"))
+            ny = int(event.data.get("y"))
+            nz = int(event.data.get("z", pos.z))
+            radius = max(1, int(event.data.get("radius", 0) or 0))
+        except (TypeError, ValueError):
+            return
+        if int(pos.z) != nz:
+            return
+        distance = _manhattan(int(pos.x), int(pos.y), nx, ny)
+        if distance > radius:
+            return
+        perception = _actor_skill(self.sim, self.player_eid, "perception")
+        try:
+            perception = float(perception)
+        except (TypeError, ValueError):
+            perception = 5.0
+        cause_bonus = {
+            "fire_weapon": 2.0,
+            "gunshot": 2.0,
+            "window_shot": 2.0,
+            "fire": 1.5,
+            "melee_attack": 0.75,
+        }.get(cause, 0.5)
+        effective_loudness = float(radius) + float(cause_bonus) - float(distance)
+        wake_chance = _clamp(
+            0.10 + (effective_loudness * 0.09) + ((perception - 5.0) * 0.04),
+            0.0,
+            0.95,
+        )
+        seed = (
+            f"{getattr(self.sim, 'seed', 0)}:lodging-wake:{int(getattr(self.sim, 'tick', 0))}:"
+            f"{state.get('service', '')}:{cause}:{nx}:{ny}:{nz}:{radius}"
+        )
+        if random.Random(seed).random() >= float(wake_chance):
+            return
+        self._mark_live_timeskip_interruption(
+            "woken_by_noise",
+            wake_cause=cause,
+            wake_source_eid=event.data.get("source_eid"),
+            wake_x=nx,
+            wake_y=ny,
+            wake_z=nz,
+        )
+
+    def on_entity_damaged(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+        self._mark_live_timeskip_interruption("entity_damaged")
+
+    def on_player_killed(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+        self._mark_live_timeskip_interruption("player_killed")
+
+    def on_actor_detained(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._mark_live_timeskip_interruption("actor_detained")
+
+    def on_justice_booking_completed(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        self._mark_live_timeskip_interruption("justice_booking_completed")
+
+    def after_live_timeskip_tick(self):
+        state = self._live_timeskip_state()
+        if not bool(state.get("active")) and not bool(state.get("result_pending")):
+            return False
+        started_tick = int(state.get("started_tick", 0) or 0)
+        total_ticks = max(0, int(state.get("total_ticks", 0) or 0))
+        elapsed = max(0, min(total_ticks, int(getattr(self.sim, "tick", 0)) - started_tick))
+        state["elapsed_ticks"] = max(int(state.get("elapsed_ticks", 0) or 0), elapsed)
+        if not bool(state.get("active")):
+            return False
+        dialog_kind = self._live_timeskip_blocking_dialog_kind()
+        if dialog_kind:
+            self._mark_live_timeskip_interruption(dialog_kind)
+            return True
+        if int(getattr(self.sim, "tick", 0)) >= int(state.get("target_end_tick", 0) or 0):
+            self._mark_live_timeskip_complete()
+            return True
+        return False
+
+    def finalize_live_timeskip_result_if_ready(self):
+        state = self._live_timeskip_state()
+        if not bool(state.get("result_pending")):
+            return False
+        if self._live_timeskip_blocking_dialog_kind():
+            return False
+        vitality = self.sim.ecs.get(Vitality).get(self.player_eid)
+        if vitality and (bool(vitality.downed) or int(vitality.hp) <= 0):
+            self._reset_live_timeskip_state()
+            return False
+        effects = self.sim.ecs.get(StatusEffects).get(self.player_eid)
+        if bool(state.get("completed")) and str(state.get("service", "")).strip().lower() == "rest" and effects:
+            effects.add(
+                "well_rested",
+                int(state.get("well_rested_ticks", self.REST_WELL_RESTED_TICKS) or self.REST_WELL_RESTED_TICKS),
+                modifiers={
+                    "perception_buff": 0.8,
+                    "athletics_buff": 0.5,
+                    "energy_tick_delta": 0.01,
+                },
+            )
+            state["well_rested_granted"] = True
+
+        pos = self._current_player_position()
+        center = None
+        if pos is None and state.get("player_anchor"):
+            anchor = tuple(state.get("player_anchor") or ())
+            if len(anchor) >= 3:
+                center = (int(anchor[0]), int(anchor[1]), int(anchor[2]))
+        _rehydrate_entity_knowledge(
+            self.sim,
+            self.player_eid,
+            center=center,
+            radius=20,
+            search_radius=10,
+            current_tick=int(getattr(self.sim, "tick", 0)),
+            reason=f"service_{state.get('service', '')}",
+            force_routine_rethink=True,
+            lead_kinds=_service_rehydrate_lead_kinds(state.get("service", "")),
+        )
+
+        recovery = dict(state.get("recovery_applied", {}) or {})
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=self.player_eid,
+            property_id=state.get("property_id"),
+            property_name=state.get("property_name", state.get("property_id", "site")),
+            service=state.get("service"),
+            hp_gain=int(recovery.get("hp_gain", 0) or 0),
+            energy_gain=int(recovery.get("energy_gain", 0) or 0),
+            safety_gain=int(recovery.get("safety_gain", 0) or 0),
+            social_gain=int(recovery.get("social_gain", 0) or 0),
+            credits_spent=int(state.get("credits_spent", 0) or 0),
+            cooldown_ticks=int(state.get("cooldown_ticks", 0) or 0),
+            time_advanced_ticks=int(state.get("elapsed_ticks", 0) or 0),
+            practice_note=str(state.get("practice_note", "") or "").strip(),
+            completed=bool(state.get("completed")),
+            interrupted=bool(state.get("interrupted")),
+            interruption_reason=str(state.get("interruption_reason", "") or "").strip().lower(),
+            wake_cause=str(state.get("wake_cause", "") or "").strip().lower(),
+            well_rested_ticks=int(state.get("well_rested_ticks", 0) or 0),
+            well_rested_granted=bool(state.get("well_rested_granted")),
+        ))
+        self._reset_live_timeskip_state()
+        return True
 
     def _cooldown_key(self, eid, prop, service):
         return (int(eid), str(prop.get("id")), str(service).strip().lower())
@@ -1604,31 +2051,17 @@ class SiteServiceSystem(System):
 
         self._set_service_cooldown(eid, prop, "shelter", self.SHELTER_COOLDOWN_TICKS)
         stay_ticks = self._hours_to_ticks(self.SHELTER_STAY_HOURS)
-        advanced_ticks = self._advance_time_for_service(eid, prop, "shelter", stay_ticks)
-
-        if needs:
-            if energy_gain > 0:
-                needs.energy = _clamp(float(needs.energy) + energy_gain)
-            if safety_gain > 0:
-                needs.safety = _clamp(float(needs.safety) + safety_gain)
-            if social_gain > 0:
-                needs.social = _clamp(float(needs.social) + social_gain)
-        if vitality and hp_gain > 0:
-            vitality.hp = min(int(vitality.max_hp), int(vitality.hp) + hp_gain)
-
-        self.sim.emit(Event(
-            "site_service_used",
+        self._begin_live_lodging(
             eid=eid,
-            property_id=prop["id"],
-            property_name=prop.get("name", prop["id"]),
+            prop=prop,
             service="shelter",
+            stay_ticks=stay_ticks,
+            cooldown_ticks=self.SHELTER_COOLDOWN_TICKS,
+            hp_gain=hp_gain,
             energy_gain=energy_gain,
             safety_gain=safety_gain,
             social_gain=social_gain,
-            hp_gain=hp_gain,
-            cooldown_ticks=self.SHELTER_COOLDOWN_TICKS,
-            time_advanced_ticks=advanced_ticks,
-        ))
+        )
 
     def _apply_rest(self, eid, prop):
         ready_in = self._service_ready_in(eid, prop, "rest")
@@ -1677,48 +2110,26 @@ class SiteServiceSystem(System):
             missing_hp = max(0, int(vitality.max_hp) - int(vitality.hp))
             hp_gain = min(missing_hp, max(5, int(round((missing_hp * 0.6) * quality_mult))))
 
-        effects = self.sim.ecs.get(StatusEffects).get(eid)
         if assets:
             assets.credits = max(0, int(assets.credits) - int(rest_cost))
 
         cooldown_ticks = max(1, int(round(float(self.REST_COOLDOWN_TICKS) * self._service_cooldown_mult(practice_modifiers))))
         self._set_service_cooldown(eid, prop, "rest", cooldown_ticks)
         stay_ticks = max(1, int(round(float(self._hours_to_ticks(self.REST_STAY_HOURS)) * self._service_time_mult(practice_modifiers))))
-        advanced_ticks = self._advance_time_for_service(eid, prop, "rest", stay_ticks)
-
-        if needs:
-            needs.energy = _clamp(float(needs.energy) + energy_gain)
-            needs.safety = _clamp(float(needs.safety) + safety_gain)
-            needs.social = _clamp(float(needs.social) + social_gain)
-        if vitality and hp_gain > 0:
-            vitality.hp = min(int(vitality.max_hp), int(vitality.hp) + hp_gain)
-        if effects:
-            effects.add(
-                "well_rested",
-                self.REST_WELL_RESTED_TICKS,
-                modifiers={
-                    "perception_buff": 0.8,
-                    "athletics_buff": 0.5,
-                    "energy_tick_delta": 0.01,
-                },
-            )
-
-        self.sim.emit(Event(
-            "site_service_used",
+        self._begin_live_lodging(
             eid=eid,
-            property_id=prop["id"],
-            property_name=prop.get("name", prop["id"]),
+            prop=prop,
             service="rest",
+            stay_ticks=stay_ticks,
+            cooldown_ticks=cooldown_ticks,
+            hp_gain=hp_gain,
             energy_gain=energy_gain,
             safety_gain=safety_gain,
             social_gain=social_gain,
-            hp_gain=hp_gain,
             credits_spent=rest_cost,
-            well_rested_ticks=self.REST_WELL_RESTED_TICKS,
-            cooldown_ticks=cooldown_ticks,
-            time_advanced_ticks=advanced_ticks,
             practice_note=practice_note,
-        ))
+            well_rested_ticks=self.REST_WELL_RESTED_TICKS,
+        )
 
     def _transit_destinations(self, prop, service):
         service = str(service or "").strip().lower()
@@ -2100,6 +2511,23 @@ class SiteServiceSystem(System):
         ))
 
     def update(self):
+        state = self._live_timeskip_state()
+        if bool(state.get("result_pending")) and not bool(state.get("active")):
+            self.finalize_live_timeskip_result_if_ready()
+        if bool(state.get("active")):
+            plan = state.get("recovery_plan", {}) if isinstance(state.get("recovery_plan"), dict) else {}
+            pulses = tuple(plan.get("pulses", ()) or ())
+            pulse_index = max(0, int(plan.get("pulse_index", 0) or 0))
+            next_tick = int(getattr(self.sim, "tick", 0)) + 1
+            while pulse_index < len(pulses):
+                pulse = pulses[pulse_index] if isinstance(pulses[pulse_index], dict) else {}
+                if next_tick < int(pulse.get("at_tick", 0) or 0):
+                    break
+                self._apply_live_timeskip_recovery_pulse(pulse)
+                pulse_index += 1
+            plan["pulse_index"] = pulse_index
+            state["recovery_plan"] = plan
+
         deliveries = getattr(self.sim, "pending_vehicle_deliveries", None)
         if not deliveries:
             return

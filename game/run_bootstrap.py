@@ -47,6 +47,7 @@ from game.property_keys import ensure_actor_has_property_key, ensure_property_lo
 from game.run_echoes import maybe_seed_run_echo_for_chunk
 from game.run_objectives import seed_run_objective
 from game.skills import seed_skill_profile
+from game.weapons import WEAPON_CATALOG, roll_weapon_instance
 from game.vehicles import (
     generate_chunk_vehicle_records,
     roll_vehicle_profile,
@@ -59,8 +60,9 @@ from game.vehicles import (
 class NormalRunBootstrapProfile:
     profile_id: str = "normal"
     preferred_area_type: str = "city"
-    starter_wallet_credits: int = 48
-    starter_bank_credits: int = 0
+    starter_wallet_credit_range: tuple[int, int] = (30, 76)
+    starter_bank_credit_range: tuple[int, int] = (10, 32)
+    starter_bank_credit_chance: float = 0.22
     vehicle_seed_chance: float = 0.42
     bootstrap_player_opportunity_intel: bool = False
     objective_visible: bool = False
@@ -73,6 +75,25 @@ class NormalRunBootstrapProfile:
         ("calm_patch", 1),
         ("caff_shot", 1),
         ("hydration_salts", 1),
+    )
+    starter_melee_weapon_chance: float = 0.28
+    starter_firearm_chance: float = 0.09
+    starter_armor_chance: float = 0.22
+    starter_melee_weapon_pool: tuple[str, ...] = (
+        "crowbar_club",
+        "crowbar_club",
+        "shiv_knife",
+        "trail_machete",
+    )
+    starter_firearm_pool: tuple[str, ...] = (
+        "holdout_pistol",
+        "holdout_pistol",
+        "rust_revolver",
+    )
+    starter_armor_pool: tuple[str, ...] = (
+        "padded_jacket",
+        "padded_jacket",
+        "security_vest",
     )
 
 
@@ -88,6 +109,10 @@ class NormalRunBootstrapResult:
     pressure_note: str
     starter_vehicle_seeded: bool
     street_kit_items: tuple[tuple[str, int], ...]
+    starter_wallet_credits: int
+    starter_bank_credits: int
+    starter_weapon_id: str
+    starter_armor_item_id: str
     opening_rumor_text: str
     opening_rumor_topics_text: str
 
@@ -550,6 +575,90 @@ def _give_item(sim, eid, item_id, quantity=1, owner_tag="npc"):
     )[0]
 
 
+def _starter_int_range(rng, bounds, *, minimum=0):
+    if not isinstance(bounds, (tuple, list)) or len(bounds) < 2:
+        return int(max(minimum, 0))
+    try:
+        lo = int(bounds[0])
+        hi = int(bounds[1])
+    except (TypeError, ValueError):
+        return int(max(minimum, 0))
+    if hi < lo:
+        lo, hi = hi, lo
+    lo = max(int(minimum), lo)
+    hi = max(lo, hi)
+    return int(rng.randint(lo, hi))
+
+
+def _give_starter_weapon(sim, eid, weapon_id, *, owner_tag="player", named_chance=0.0):
+    weapon_id = str(weapon_id or "").strip()
+    if not weapon_id:
+        return False
+    loadout = sim.ecs.get(WeaponLoadout).get(eid)
+    inventory = sim.ecs.get(Inventory).get(eid)
+    item_def = ITEM_CATALOG.get(weapon_id)
+    weapon_def = WEAPON_CATALOG.get(weapon_id)
+    if loadout is None or inventory is None or item_def is None or weapon_def is None:
+        return False
+
+    rng = random.Random(f"{sim.seed}:starter_weapon:{eid}:{weapon_id}")
+    instance = roll_weapon_instance(rng, weapon_id, named_chance=named_chance)
+    metadata = {
+        "starter_item": True,
+        "weapon_instance": dict(instance),
+    }
+    custom_name = str(instance.get("custom_name", "")).strip()
+    if custom_name:
+        metadata["display_name"] = custom_name
+    added, instance_id = inventory.add_item(
+        item_id=weapon_id,
+        quantity=1,
+        stack_max=item_def.get("stack_max", 1),
+        instance_factory=sim.new_item_instance_id,
+        owner_eid=eid,
+        owner_tag=owner_tag,
+        metadata=metadata,
+    )
+    if not added:
+        return False
+    instance["inventory_instance_id"] = instance_id
+    loadout.add_weapon(weapon_id, instance=instance)
+    return True
+
+
+def _give_starter_armor(sim, eid, item_id, *, owner_tag="player"):
+    item_id = str(item_id or "").strip()
+    if not item_id:
+        return False
+    loadout = sim.ecs.get(ArmorLoadout).get(eid)
+    inventory = sim.ecs.get(Inventory).get(eid)
+    item_def = ITEM_CATALOG.get(item_id)
+    if loadout is None or inventory is None or item_def is None:
+        return False
+    armor = item_def.get("armor", {})
+    if not isinstance(armor, dict):
+        return False
+    added, instance_id = inventory.add_item(
+        item_id=item_id,
+        quantity=1,
+        stack_max=item_def.get("stack_max", 1),
+        instance_factory=sim.new_item_instance_id,
+        owner_eid=eid,
+        owner_tag=owner_tag,
+        metadata={"starter_item": True},
+    )
+    if not added:
+        return False
+    loadout.equip(
+        instance_id=instance_id,
+        item_id=item_id,
+        name=item_def.get("name"),
+        damage_reduction=armor.get("damage_reduction", 0.0),
+        slot=armor.get("slot", "body"),
+    )
+    return True
+
+
 def _pick_false_claim(pool, true_value, rng):
     options = [value for value in pool if value != true_value]
     if not options:
@@ -929,6 +1038,18 @@ def bootstrap_normal_run(
         name_gender_score=None,
         gender_inference_source=None,
     )
+    starter_wallet_credits = _starter_int_range(
+        run_rng,
+        profile.starter_wallet_credit_range,
+        minimum=0,
+    )
+    starter_bank_credits = 0
+    if run_rng.random() < float(profile.starter_bank_credit_chance):
+        starter_bank_credits = _starter_int_range(
+            run_rng,
+            profile.starter_bank_credit_range,
+            minimum=0,
+        )
     player = _spawn(
         sim,
         Position(*player_pos),
@@ -938,9 +1059,9 @@ def bootstrap_normal_run(
         PlayerModeState(),
         Collider(blocks=True),
         NoiseProfile(move_radius=6),
-        PlayerAssets(credits=int(profile.starter_wallet_credits)),
+        PlayerAssets(credits=int(starter_wallet_credits)),
         VehicleState(),
-        FinancialProfile(bank_balance=int(profile.starter_bank_credits)),
+        FinancialProfile(bank_balance=int(starter_bank_credits)),
         player_core_stats,
         player_insight,
         player_skill_profile,
@@ -962,6 +1083,22 @@ def bootstrap_normal_run(
         street_kit_items.append(run_rng.choice(profile.street_kit_variants))
     for item_id, quantity in street_kit_items:
         _give_item(sim, player, item_id, quantity=quantity, owner_tag="player")
+
+    starter_weapon_id = ""
+    if profile.starter_melee_weapon_pool and run_rng.random() < float(profile.starter_melee_weapon_chance):
+        rolled_weapon = str(run_rng.choice(profile.starter_melee_weapon_pool) or "").strip()
+        if _give_starter_weapon(sim, player, rolled_weapon, owner_tag="player"):
+            starter_weapon_id = rolled_weapon
+    elif profile.starter_firearm_pool and run_rng.random() < float(profile.starter_firearm_chance):
+        rolled_weapon = str(run_rng.choice(profile.starter_firearm_pool) or "").strip()
+        if _give_starter_weapon(sim, player, rolled_weapon, owner_tag="player"):
+            starter_weapon_id = rolled_weapon
+
+    starter_armor_item_id = ""
+    if profile.starter_armor_pool and run_rng.random() < float(profile.starter_armor_chance):
+        rolled_armor = str(run_rng.choice(profile.starter_armor_pool) or "").strip()
+        if _give_starter_armor(sim, player, rolled_armor, owner_tag="player"):
+            starter_armor_item_id = rolled_armor
 
     vehicle = None
     if run_rng.random() < float(profile.vehicle_seed_chance):
@@ -991,12 +1128,16 @@ def bootstrap_normal_run(
         "gender_identity": str(player_identity.gender_identity or "nonbinary"),
         "start_chunk": {"cx": int(sim.active_chunk["cx"]), "cy": int(sim.active_chunk["cy"])},
         "starter_vehicle_seeded": bool(vehicle),
+        "starter_wallet_credits": int(starter_wallet_credits),
+        "starter_bank_credits": int(starter_bank_credits),
         "bootstrap_player_opportunity_intel": bool(profile.bootstrap_player_opportunity_intel),
         "run_objective_visible": bool(profile.objective_visible),
         "street_kit_items": [
             {"item_id": str(item_id).strip().lower(), "quantity": int(quantity)}
             for item_id, quantity in street_kit_items
         ],
+        "starter_weapon_id": starter_weapon_id,
+        "starter_armor_item_id": starter_armor_item_id,
     }
 
     return NormalRunBootstrapResult(
@@ -1010,6 +1151,10 @@ def bootstrap_normal_run(
         pressure_note=pressure_note,
         starter_vehicle_seeded=bool(vehicle),
         street_kit_items=tuple((str(item_id), int(quantity)) for item_id, quantity in street_kit_items),
+        starter_wallet_credits=int(starter_wallet_credits),
+        starter_bank_credits=int(starter_bank_credits),
+        starter_weapon_id=str(starter_weapon_id),
+        starter_armor_item_id=str(starter_armor_item_id),
         opening_rumor_text=opening_rumor_text,
         opening_rumor_topics_text=opening_rumor_topics_text,
     )

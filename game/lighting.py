@@ -8,6 +8,7 @@ from game.property_access import (
     property_is_storefront,
     site_services_for_property,
 )
+from game.system_support.fire_runtime import fire_state
 
 
 PHASE_OUTDOOR_AMBIENT = {
@@ -39,6 +40,12 @@ _APERTURE_LOCAL_LIGHT_KIND_SCALE = {
     "service_door": 0.84,
     "employee_door": 0.8,
     "side_door": 0.78,
+}
+
+_FIRE_INTENSITY_PROFILE = {
+    1: {"radius": 2, "intensity": 0.34},
+    2: {"radius": 3, "intensity": 0.56},
+    3: {"radius": 4, "intensity": 0.78},
 }
 
 
@@ -299,6 +306,35 @@ def _active_power_cut_cache_key(sim, *, tick=None):
     return tuple(active)
 
 
+def _active_fire_cache_key(sim):
+    state = getattr(sim, "fire_state", None)
+    if not isinstance(state, dict):
+        return ()
+    cells = state.get("cells", {})
+    if not isinstance(cells, dict) or not cells:
+        return ()
+
+    active = []
+    for coord, cell in cells.items():
+        if not isinstance(cell, dict):
+            continue
+        try:
+            fire_intensity = int(cell.get("fire_intensity", 0) or 0)
+        except (TypeError, ValueError):
+            fire_intensity = 0
+        if fire_intensity <= 0:
+            continue
+        try:
+            x = int(coord[0])
+            y = int(coord[1])
+            z = int(coord[2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        active.append((x, y, z, fire_intensity))
+    active.sort()
+    return tuple(active)
+
+
 def _power_cut_active_at(sim, x, y, z=0, *, tick=None):
     power_cuts = getattr(sim, "fixture_power_cuts", None)
     if not isinstance(power_cuts, dict) or not power_cuts:
@@ -496,6 +532,49 @@ def _aperture_light_sources(sim, clock):
     return sources
 
 
+def _fire_light_sources(sim):
+    bounds = _loaded_property_bounds(sim)
+    sources = []
+    cells = fire_state(sim).get("cells", {})
+    if not isinstance(cells, dict) or not cells:
+        return sources
+
+    for coord, cell in cells.items():
+        if not isinstance(cell, dict):
+            continue
+        try:
+            x = int(coord[0])
+            y = int(coord[1])
+            z = int(coord[2])
+            fire_intensity = int(cell.get("fire_intensity", 0) or 0)
+        except (TypeError, ValueError, IndexError):
+            continue
+        if fire_intensity <= 0:
+            continue
+        if bounds is not None:
+            min_x, max_x, min_y, max_y = bounds
+            profile = _FIRE_INTENSITY_PROFILE.get(max(1, min(3, fire_intensity)), _FIRE_INTENSITY_PROFILE[3])
+            margin = int(profile.get("radius", 0) or 0)
+            if not (
+                (min_x - margin) <= x <= (max_x + margin)
+                and (min_y - margin) <= y <= (max_y + margin)
+            ):
+                continue
+        profile = _FIRE_INTENSITY_PROFILE.get(max(1, min(3, fire_intensity)), _FIRE_INTENSITY_PROFILE[3])
+        sources.append({
+            "x": x,
+            "y": y,
+            "z": z,
+            "radius": int(profile.get("radius", 2) or 2),
+            "intensity": _clamp_unit(profile.get("intensity", 0.34), default=0.34),
+            "kind": "fire",
+            "building_id": str(cell.get("building_id", "") or "").strip() or None,
+            "property_id": str(cell.get("property_id", "") or "").strip() or None,
+        })
+
+    return sources
+
+
 def _local_light_sources(sim, clock=None):
     if clock is None:
         clock = clock_snapshot(sim)
@@ -507,6 +586,7 @@ def _local_light_sources(sim, clock=None):
         int(clock.get("hour", 0)),
         int(len(getattr(sim, "properties", {}))),
         _active_power_cut_cache_key(sim, tick=clock.get("tick", getattr(sim, "tick", 0))),
+        _active_fire_cache_key(sim),
     )
     if tuple(state.get("source_cache_key", ())) == cache_key:
         cached = state.get("local_light_sources", ())
@@ -514,9 +594,9 @@ def _local_light_sources(sim, clock=None):
             return tuple(cached)
 
     if str(clock.get("phase", "day")).strip().lower() not in _LIGHT_PHASES:
-        sources = ()
+        sources = tuple(_fire_light_sources(sim))
     else:
-        sources = tuple(_authored_fixture_light_sources(sim, clock) + _aperture_light_sources(sim, clock))
+        sources = tuple(_authored_fixture_light_sources(sim, clock) + _aperture_light_sources(sim, clock) + _fire_light_sources(sim))
 
     state["source_cache_key"] = cache_key
     state["local_light_sources"] = [dict(source) for source in sources]

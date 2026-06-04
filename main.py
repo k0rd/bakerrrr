@@ -1,6 +1,8 @@
 import curses
+import faulthandler
 import os
 import random
+import signal
 import sys
 import time
 
@@ -239,6 +241,22 @@ def _resolve_ui_backend(argv=None):
     if backend in {"pygame", "tile", "tiles"}:
         return "pygame"
     return "curses"
+
+
+def _install_usr1_stack_dump_handler():
+    if not hasattr(signal, "SIGUSR1"):
+        return False
+    stream = getattr(sys, "__stderr__", None) or getattr(sys, "stderr", None)
+    try:
+        if not faulthandler.is_enabled():
+            faulthandler.enable(file=stream, all_threads=True)
+    except (AttributeError, OSError, RuntimeError, ValueError):
+        pass
+    try:
+        faulthandler.register(signal.SIGUSR1, file=stream, all_threads=True, chain=False)
+        return True
+    except (AttributeError, OSError, RuntimeError, ValueError):
+        return False
 
 
 def _prompt_character_name_text():
@@ -556,7 +574,12 @@ def _ensure_loaded_player_identity(view, sim, character_name):
 
 
 def _register_runtime_systems(sim, view, player):
+    def _live_timeskip_stride(system, stride):
+        setattr(system, "live_timeskip_tick_stride", int(stride))
+        return system
+
     input_system = InputSystem(sim, view, player)
+    input_system.runtime_tag = "input"
     cover_system = CoverSystem(sim)
     player_action_system = PlayerActionSystem(sim)
     camera_system = CameraSystem(sim, player)
@@ -622,6 +645,61 @@ def _register_runtime_systems(sim, view, player):
 
     log_system = EventLogSystem(sim, player)
     render_system = RenderSystem(sim, view, player, hud_lines=10)
+    render_system.runtime_tag = "render"
+    sim.site_service_system = site_service_system
+
+    _live_timeskip_stride(combat_pacing_system, 0)
+    _live_timeskip_stride(player_action_system, 0)
+    _live_timeskip_stride(skill_progression_system, 0)
+    _live_timeskip_stride(service_menu_system, 0)
+    _live_timeskip_stride(trade_system, 0)
+    _live_timeskip_stride(finance_system, 12)
+    _live_timeskip_stride(npc_interaction_system, 0)
+    _live_timeskip_stride(weapon_system, 0)
+    _live_timeskip_stride(world_streaming_system, 4)
+    _live_timeskip_stride(camera_system, 5)
+    _live_timeskip_stride(cover_system, 10)
+    _live_timeskip_stride(item_system, 1)
+    _live_timeskip_stride(incident_knowledge_system, 10)
+    _live_timeskip_stride(observed_incident_consequence_system, 10)
+    _live_timeskip_stride(observed_incident_response_system, 10)
+    _live_timeskip_stride(observed_incident_dispatch_system, 10)
+    _live_timeskip_stride(lighting_system, 0)
+    _live_timeskip_stride(property_system, 20)
+    _live_timeskip_stride(player_business_system, 60)
+    _live_timeskip_stride(property_awareness_system, 20)
+    _live_timeskip_stride(property_defense_system, 20)
+    _live_timeskip_stride(npc_memory_system, 10)
+    _live_timeskip_stride(animal_social_system, 60)
+    _live_timeskip_stride(rumor_system, 20)
+    _live_timeskip_stride(business_reputation_system, 20)
+    _live_timeskip_stride(npc_needs_system, 10)
+    _live_timeskip_stride(npc_settlement_system, 600)
+    _live_timeskip_stride(status_effect_system, 5)
+    _live_timeskip_stride(npc_item_use_system, 5)
+    _live_timeskip_stride(npc_social_system, 10)
+    _live_timeskip_stride(eavesdrop_system, 0)
+    _live_timeskip_stride(business_pulse_aftermath_system, 60)
+    _live_timeskip_stride(world_events_system, 60)
+    _live_timeskip_stride(door_wait_system, 10)
+    _live_timeskip_stride(criminal_drive_system, 60)
+    _live_timeskip_stride(npc_will_system, 12)
+    _live_timeskip_stride(business_pulse_scene_system, 0)
+    _live_timeskip_stride(npc_weapon_system, 1)
+    _live_timeskip_stride(criminal_justice_system, 5)
+    _live_timeskip_stride(npc_system, 1)
+    _live_timeskip_stride(opportunity_system, 20)
+    _live_timeskip_stride(rival_operator_system, 60)
+    _live_timeskip_stride(objective_progress_system, 60)
+    _live_timeskip_stride(run_pressure_system, 60)
+    _live_timeskip_stride(organization_practice_evolution_system, 600)
+    _live_timeskip_stride(organization_reputation_system, 60)
+    _live_timeskip_stride(organization_response_system, 60)
+    _live_timeskip_stride(final_operation_system, 60)
+    _live_timeskip_stride(run_epilogue_system, 120)
+    _live_timeskip_stride(visibility_system, 10)
+    _live_timeskip_stride(stealth_system, 30)
+    _live_timeskip_stride(log_system, 0)
 
     sim.register_system(input_system)
     sim.register_system(cover_system)
@@ -665,6 +743,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(business_pulse_aftermath_system)
     sim.register_system(world_events_system)
     suppression_system = SuppressionSystem(sim, player)
+    _live_timeskip_stride(suppression_system, 5)
     sim.register_system(door_wait_system)
     sim.register_system(criminal_drive_system)
     sim.register_system(npc_will_system)
@@ -699,12 +778,68 @@ def _run_loop(sim, view, character_name):
         (sim.world_traits.get("tick_divisor") if isinstance(getattr(sim, "world_traits", None), dict) else None)
         or 4
     )
+    LIVE_TIMESKIP_MAX_BATCH = 900
+    LIVE_TIMESKIP_TARGET_SLICES = 6
+    LIVE_TIMESKIP_SLICE_BUDGET_SECONDS = 0.02
+    LIVE_TIMESKIP_MIN_YIELD_SECONDS = 0.001
     _frame = 0
     while True:
         if not sim.running:
             break
 
+        site_service_system = getattr(sim, "site_service_system", None)
+        if site_service_system is not None:
+            try:
+                site_service_system.finalize_live_timeskip_result_if_ready()
+            except AttributeError:
+                pass
+
         frame_start = time.perf_counter()
+
+        live_timeskip = getattr(sim, "live_timeskip", {})
+        if isinstance(live_timeskip, dict) and bool(live_timeskip.get("active")):
+            pump_window = getattr(view, "pump_window", None)
+            if callable(pump_window):
+                pump_window()
+            drain_keys = getattr(view, "drain_keys", None)
+            if callable(drain_keys):
+                drain_keys()
+            remaining = max(0, int(live_timeskip.get("target_end_tick", sim.tick)) - int(getattr(sim, "tick", 0)))
+            target_slices = max(1, int(LIVE_TIMESKIP_TARGET_SLICES))
+            batch = max(
+                1,
+                min(
+                    int(LIVE_TIMESKIP_MAX_BATCH),
+                    ((remaining + target_slices - 1) // target_slices) if remaining > 0 else target_slices,
+                ),
+            )
+            slice_deadline = time.perf_counter() + float(LIVE_TIMESKIP_SLICE_BUDGET_SECONDS)
+            steps = 0
+            while steps < batch:
+                if not sim.running:
+                    break
+                live_timeskip = getattr(sim, "live_timeskip", {})
+                if not isinstance(live_timeskip, dict) or not bool(live_timeskip.get("active")):
+                    break
+                sim.run_headless_tick()
+                steps += 1
+                if site_service_system is not None and hasattr(site_service_system, "after_live_timeskip_tick"):
+                    site_service_system.after_live_timeskip_tick()
+                if time.perf_counter() >= slice_deadline:
+                    break
+            if site_service_system is not None:
+                try:
+                    site_service_system.finalize_live_timeskip_result_if_ready()
+                except AttributeError:
+                    pass
+            sim.render_frame()
+            if callable(pump_window):
+                pump_window()
+            view.refresh()
+            elapsed = time.perf_counter() - frame_start
+            if elapsed < float(LIVE_TIMESKIP_MIN_YIELD_SECONDS):
+                time.sleep(float(LIVE_TIMESKIP_MIN_YIELD_SECONDS) - elapsed)
+            continue
 
         _frame += 1
         throttled = (_frame % WORLD_TICK_DIVISOR != 0) and not sim.turn_based
@@ -2680,6 +2815,7 @@ def _run_pygame():
 
 
 if __name__ == "__main__":
+    _install_usr1_stack_dump_handler()
     backend = _resolve_ui_backend()
     if backend == "pygame":
         run_end = _run_pygame()

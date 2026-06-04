@@ -44,6 +44,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "run_epilogue_ledger",
     "property_anchor_index",
     "property_cover_index",
+    "actor_attention_state",
     "property_order",
     "next_property_order",
     "ground_item_index",

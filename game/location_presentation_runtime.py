@@ -25,7 +25,7 @@ from game.dialogue_runtime import (
 )
 from game.economy import item_market_bias, store_supply_profile
 from game.items import ITEM_CATALOG, item_display_name
-from game.opportunities import opportunity_intel_for_observer
+from game.opportunities import opportunity_intel_for_observer, tracked_target_surface_snapshot
 from game.organizations import organization_name, property_organization_eid
 from game.population import (
     INDUSTRIAL_ARCHETYPES,
@@ -421,7 +421,13 @@ def _active_property_opportunities(sim, prop_id):
         if not isinstance(entry, dict):
             continue
         requirements = entry.get("requirements", {}) if isinstance(entry.get("requirements", {}), dict) else {}
-        if str(requirements.get("property_id", "")).strip() != prop_key:
+        property_matches = {
+            str(requirements.get("property_id", "")).strip(),
+            str(requirements.get("pickup_property_id", "")).strip(),
+            str(requirements.get("delivery_property_id", "")).strip(),
+        }
+        property_matches.discard("")
+        if prop_key not in property_matches:
             continue
         active.append(entry)
     return tuple(active)
@@ -442,6 +448,7 @@ def _nearest_stakeable_property(sim, pos):
 
 
 def _stakeout_property_opportunity_stats(sim, observer_eid, prop_id):
+    prop_key = str(prop_id or "").strip()
     active = list(_active_property_opportunities(sim, prop_id))
     if not active:
         return None
@@ -470,6 +477,11 @@ def _stakeout_property_opportunity_stats(sim, observer_eid, prop_id):
         "unknown_count": unknown_count,
         "least_confidence": max(0.0, min(1.0, float(least_confidence))),
         "mapped": unknown_count <= 0 and least_confidence >= (STAKEOUT_CONFIDENCE_CAP - 0.01),
+        "tracked_surface": tracked_target_surface_snapshot(
+            sim,
+            prop_key,
+            player_eid=observer_eid,
+        ),
     }
 
 

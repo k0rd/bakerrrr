@@ -473,6 +473,10 @@ class PlayerLookRuntime:
                     else:
                         confidence_pct = int(round(float(stakeout_stats.get("least_confidence", 0.0) or 0.0) * 100.0))
                         detail_bits.append(f"stakeout:{max(0, confidence_pct)}%")
+                    tracked_surface = stakeout_stats.get("tracked_surface") if isinstance(stakeout_stats.get("tracked_surface"), dict) else None
+                    tracked_summary = str((tracked_surface or {}).get("summary", "") or "").strip()
+                    if tracked_summary:
+                        detail_bits.append(f"pulse:{tracked_summary}")
                 if detail_level >= 2:
                     org_snapshot = _organization_snapshot(self.sim, prop=best_property, ensure=True)
                     if isinstance(org_snapshot, dict):

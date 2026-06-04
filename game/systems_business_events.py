@@ -10,6 +10,7 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game.location_presentation_runtime import _location_building_category
+from game.opportunities import tracked_target_scene_rows
 from game.organizations import local_workplace_org_posture
 from game.player_businesses import (
     player_business_customer_policy as _player_business_customer_policy,
@@ -5462,6 +5463,50 @@ class BusinessPulseSceneSystem(System):
             })
 
         candidates.extend(_business_event_seed_scene_specs(self.sim, active_chunk, player_pos))
+        for tracked in tracked_target_scene_rows(self.sim, active_chunk):
+            property_id = str(tracked.get("property_id", "") or "").strip()
+            if not property_id:
+                continue
+            prop = self.sim.properties.get(property_id)
+            if not isinstance(prop, dict):
+                continue
+            anchor = _business_event_frontage_anchor(self.sim, prop)
+            if anchor is None:
+                continue
+            if _manhattan(player_pos.x, player_pos.y, anchor[0], anchor[1]) <= 1:
+                continue
+            pulse = _building_pulse_snapshot(self.sim, prop=prop, respect_chunk_cap=False)
+            if not isinstance(pulse, dict):
+                pulse = {}
+            pulse = dict(pulse)
+            pulse["event_phase"] = str(tracked.get("event_phase", "") or pulse.get("event_phase", "") or "").strip().lower()
+            if str(tracked.get("traffic_state", "") or "").strip():
+                pulse["traffic_state"] = str(tracked.get("traffic_state", "") or "").strip().lower()
+            if str(tracked.get("community_tone", "") or "").strip():
+                pulse["community_tone"] = str(tracked.get("community_tone", "") or "").strip().lower()
+            blueprint = _business_event_scene_blueprint(prop, pulse)
+            if blueprint is None:
+                continue
+            scene_id = self._scene_id_for(prop, pulse)
+            if not scene_id:
+                continue
+            active_scene_id = active_scene_by_property.get(property_id, "")
+            if active_scene_id and active_scene_id != scene_id:
+                continue
+            score = float(tracked.get("score", 0.0) or 0.0)
+            score += 0.95 if str(tracked.get("security_state", "") or "").strip().lower() in {"watched", "tight"} else 0.0
+            score -= float(_manhattan(player_pos.x, player_pos.y, anchor[0], anchor[1])) * 0.035
+            candidates.append({
+                "scene_id": scene_id,
+                "property_id": property_id,
+                "prop": prop,
+                "pulse": pulse,
+                "anchor": anchor,
+                "score": score,
+                "blueprint": blueprint,
+                "chunk": active_chunk,
+                "source_kind": "opportunity",
+            })
 
         candidates.sort(
             key=lambda row: (
@@ -5476,7 +5521,7 @@ class BusinessPulseSceneSystem(System):
             pulse = candidate.get("pulse") or {}
             event_phase = str(pulse.get("event_phase", "") or "").strip().lower()
             source_kind = str(candidate.get("source_kind", "pulse") or "pulse").strip().lower()
-            if source_kind == "seed" or event_phase in _BUSINESS_EVENT_AFTERMATH_PHASES:
+            if source_kind in {"seed", "opportunity"} or event_phase in _BUSINESS_EVENT_AFTERMATH_PHASES:
                 priority_candidates.append(candidate)
             else:
                 regular_candidates.append(candidate)

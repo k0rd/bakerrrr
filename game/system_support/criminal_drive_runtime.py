@@ -111,6 +111,52 @@ def clear_criminal_drive_activity(state):
     return state
 
 
+def _live_lodging_active(sim):
+    live = getattr(sim, "live_timeskip", None)
+    return isinstance(live, dict) and bool(live.get("active"))
+
+
+def _actor_target_scan_signature(sim, actor_eid):
+    pos = sim.ecs.get(Position).get(actor_eid)
+    if pos is None:
+        return None
+    try:
+        chunk = sim.chunk_coords(int(pos.x), int(pos.y))
+    except Exception:
+        chunk = None
+    return (chunk, int(getattr(pos, "z", 0) or 0))
+
+
+def _cached_target_scan(state, signature, *, current_tick, max_age):
+    if state is None or signature is None:
+        return None
+    if getattr(state, "target_scan_signature", None) != signature:
+        return None
+    try:
+        scan_tick = int(getattr(state, "target_scan_tick", 0) or 0)
+    except (TypeError, ValueError):
+        scan_tick = 0
+    if int(current_tick) - int(scan_tick) > int(max_age):
+        return None
+    opportunistic = getattr(state, "cached_opportunistic_target", None)
+    affiliations = getattr(state, "cached_affiliation_targets", ())
+    if not isinstance(affiliations, tuple):
+        affiliations = tuple(affiliations or ())
+    return opportunistic if isinstance(opportunistic, dict) else None, affiliations
+
+
+def _store_target_scan(state, signature, opportunistic_target, affiliation_targets, *, current_tick):
+    if state is None:
+        return
+    state.target_scan_tick = int(current_tick)
+    state.target_scan_signature = signature
+    state.cached_opportunistic_target = dict(opportunistic_target) if isinstance(opportunistic_target, dict) else None
+    if isinstance(affiliation_targets, tuple):
+        state.cached_affiliation_targets = tuple(dict(row) for row in affiliation_targets if isinstance(row, dict))
+    else:
+        state.cached_affiliation_targets = tuple(dict(row) for row in tuple(affiliation_targets or ()) if isinstance(row, dict))
+
+
 def _org_profile_tags(profile):
     return {
         _text(tag).lower()
@@ -879,17 +925,41 @@ def update_criminal_drive_state(sim, actor_eid, *, current_tick=None):
     affiliation_base = _actor_behavior_value(sim, actor_eid, BEHAVIOR_SEEK_CRIMINAL_AFFILIATION, 0.0)
 
     active_plan = active_plan_for_actor(sim, actor_eid, current_tick=current_tick)
-    should_scan_targets = bool(active_plan) or bool(criminal_rows)
-    should_scan_targets = should_scan_targets or float(pressure) >= 0.32 or float(affiliation_interest) >= 0.34
-    should_scan_targets = should_scan_targets or float(opportunistic_base) >= 0.18
-    should_scan_targets = should_scan_targets or float(planned_base) >= 0.18
-    should_scan_targets = should_scan_targets or float(affiliation_base) >= 0.18
+    should_scan_targets = not bool(active_plan)
+    should_scan_targets = should_scan_targets and (
+        bool(criminal_rows)
+        or float(pressure) >= 0.32
+        or float(affiliation_interest) >= 0.34
+        or float(opportunistic_base) >= 0.18
+        or float(planned_base) >= 0.18
+        or float(affiliation_base) >= 0.18
+    )
 
     opportunistic_target = None
     affiliation_target = ()
     if should_scan_targets:
-        opportunistic_target = choose_crime_target(sim, actor_eid, plan_kind="petty_theft")
-        affiliation_target = criminal_affiliation_targets(sim, actor_eid)
+        target_signature = _actor_target_scan_signature(sim, actor_eid)
+        cached_scan = None
+        if _live_lodging_active(sim):
+            cached_scan = _cached_target_scan(
+                state,
+                target_signature,
+                current_tick=current_tick,
+                max_age=48,
+            )
+        if cached_scan is not None:
+            opportunistic_target, affiliation_target = cached_scan
+        else:
+            opportunistic_target = choose_crime_target(sim, actor_eid, plan_kind="petty_theft")
+            affiliation_target = criminal_affiliation_targets(sim, actor_eid)
+            if _live_lodging_active(sim):
+                _store_target_scan(
+                    state,
+                    target_signature,
+                    opportunistic_target,
+                    affiliation_target,
+                    current_tick=current_tick,
+                )
     state.pressure = float(pressure)
     state.confidence = float(confidence)
     state.affiliation_interest = float(affiliation_interest)

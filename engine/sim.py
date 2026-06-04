@@ -81,6 +81,7 @@ class Simulation:
         self.overworld_markers_by_eid = {}
         self.next_overworld_marker_id_by_eid = {}
         self.pause_reasons = set()
+        self.live_timeskip = {}
         self.look_ui = {
             "active": False,
             "mode": "city",
@@ -128,6 +129,8 @@ class Simulation:
             self.contractors = {}
         if not isinstance(getattr(self, "fire_state", None), dict):
             self.fire_state = {}
+        if not isinstance(getattr(self, "live_timeskip", None), dict):
+            self.live_timeskip = {}
         if not hasattr(self, "disguise_state"):
             self.disguise_state = None
         if not hasattr(self, "equipped_container"):
@@ -2347,36 +2350,118 @@ class Simulation:
         for m in self.mutators:
             m.on_event(event, self)
 
-    def update(self):
+    def _system_runtime_tag(self, system):
+        tag = str(getattr(system, "runtime_tag", "") or "").strip().lower()
+        if tag:
+            return tag
+        name = system.__class__.__name__
+        if name == "InputSystem":
+            return "input"
+        if name == "RenderSystem":
+            return "render"
+        return ""
+
+    def _system_headless_stride(self, system, *, headless_profile=None):
+        profile = str(headless_profile or "").strip().lower()
+        if not profile:
+            return 1
+        raw = getattr(system, f"{profile}_tick_stride", None)
+        try:
+            stride = int(raw)
+        except (TypeError, ValueError):
+            return 1
+        return max(0, stride)
+
+    def _run_systems(self, systems, *, skip_runtime_tags=None, require_flag=None, headless_profile=None):
+        skip_tags = {
+            str(tag or "").strip().lower()
+            for tag in (skip_runtime_tags or ())
+            if str(tag or "").strip()
+        }
+        for system in systems:
+            if skip_tags and self._system_runtime_tag(system) in skip_tags:
+                continue
+            if require_flag and not getattr(system, require_flag, False):
+                continue
+            stride = self._system_headless_stride(system, headless_profile=headless_profile)
+            if stride == 0:
+                continue
+            if stride > 1 and (int(self.tick) % stride != 0):
+                continue
+            system.update()
+
+    def _update_cycle(
+        self,
+        *,
+        skip_runtime_tags=None,
+        ignore_pause=False,
+        force_full_tick=False,
+        headless_profile=None,
+    ):
         if not self.systems:
             return
 
-        if self.is_time_paused():
-            for system in self.systems:
-                if getattr(system, "runs_while_paused", False):
-                    system.update()
+        if not ignore_pause and self.is_time_paused():
+            self._run_systems(
+                self.systems,
+                skip_runtime_tags=skip_runtime_tags,
+                require_flag="runs_while_paused",
+                headless_profile=headless_profile,
+            )
             return
 
-        if self.turn_based:
+        if self.turn_based and not force_full_tick:
             self.turn_advance_requested = False
 
             # Input system is registered first and decides whether a turn advances.
-            self.systems[0].update()
+            self._run_systems(
+                self.systems[:1],
+                skip_runtime_tags=skip_runtime_tags,
+                headless_profile=headless_profile,
+            )
 
             if not self.turn_advance_requested:
-                for system in self.systems[1:]:
-                    if getattr(system, "runs_without_turn", False):
-                        system.update()
+                self._run_systems(
+                    self.systems[1:],
+                    skip_runtime_tags=skip_runtime_tags,
+                    require_flag="runs_without_turn",
+                    headless_profile=headless_profile,
+                )
                 return
 
             systems_to_run = self.systems[1:]
         else:
             systems_to_run = self.systems
 
-        for system in systems_to_run:
-            system.update()
+        self._run_systems(
+            systems_to_run,
+            skip_runtime_tags=skip_runtime_tags,
+            headless_profile=headless_profile,
+        )
 
         for m in self.mutators:
             m.on_tick(self)
 
         self.tick += 1
+
+    def update(self):
+        self._update_cycle()
+
+    def run_headless_tick(self, *, headless_profile=None):
+        profile = str(headless_profile or "").strip().lower()
+        if not profile:
+            live_timeskip = getattr(self, "live_timeskip", None)
+            if isinstance(live_timeskip, dict) and bool(live_timeskip.get("active")):
+                profile = "live_timeskip"
+        self._update_cycle(
+            skip_runtime_tags={"input", "render"},
+            ignore_pause=True,
+            force_full_tick=True,
+            headless_profile=profile,
+        )
+
+    def render_frame(self):
+        for system in self.systems:
+            if self._system_runtime_tag(system) != "render":
+                continue
+            system.update()

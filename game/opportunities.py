@@ -30,12 +30,14 @@ from game.property_access import (
     property_is_public,
     property_is_storefront,
     site_services_for_property,
+    world_hour,
 )
 from game.property_runtime import (
     building_id_from_property,
     building_id_from_structure,
     property_covering,
     property_focus_position,
+    resolve_property_record,
 )
 from game.service_runtime import _chunk_site_kinds
 
@@ -708,7 +710,172 @@ def _state(sim):
         state["origin_chunk"] = normalized_origin
     else:
         state["origin_chunk"] = None
+    tracked_targets = state.get("tracked_targets")
+    if not isinstance(tracked_targets, dict):
+        tracked_targets = {}
+        state["tracked_targets"] = tracked_targets
     return state
+
+
+_OPPORTUNITY_HOT_STAGE_KINDS = {
+    "watch_post",
+    "relay_watch",
+    "sightline_check",
+    "intel_scout",
+    "rival_followup",
+}
+_OPPORTUNITY_HOT_ACTIVITY_TAGS = {"stakeout", "intel"}
+
+
+def _tracked_targets_bucket(state):
+    if not isinstance(state, dict):
+        return {}
+    tracked_targets = state.get("tracked_targets")
+    if not isinstance(tracked_targets, dict):
+        tracked_targets = {}
+        state["tracked_targets"] = tracked_targets
+    return tracked_targets
+
+
+def _tracked_target_key(opportunity_id, stage_kind, property_id):
+    try:
+        opp_key = int(opportunity_id or 0)
+    except (TypeError, ValueError):
+        opp_key = 0
+    stage_key = str(stage_kind or "").strip().lower() or "task"
+    prop_key = str(property_id or "").strip()
+    if opp_key <= 0 or not prop_key:
+        return ""
+    return f"{opp_key}:{stage_key}:{prop_key}"
+
+
+def _opportunity_recent_activity_tags(opportunity):
+    requirements = _opportunity_requirements(opportunity)
+    tags = _normalize_activity_tags(requirements.get("recent_activity_tags"))
+    if tags:
+        return frozenset(tags)
+    defaults = opportunity.get("defaults", {}) if isinstance(opportunity.get("defaults", {}), dict) else {}
+    return frozenset(_normalize_activity_tags(defaults.get("recent_activity_tags")))
+
+
+def _opportunity_has_hot_target(opportunity):
+    if not isinstance(opportunity, dict):
+        return False
+    kind = str(opportunity.get("kind", "") or "").strip().lower()
+    if kind in _OPPORTUNITY_HOT_STAGE_KINDS:
+        return True
+    requirements = _opportunity_requirements(opportunity)
+    if bool(requirements.get("rival_followup")):
+        return True
+    risk = str(opportunity.get("risk", "") or "").strip().lower()
+    if risk == "hazardous":
+        return True
+    source = str(opportunity.get("source", "") or "").strip().lower()
+    if source in {"public_emergency", "emergency"}:
+        return True
+    return bool(_opportunity_recent_activity_tags(opportunity).intersection(_OPPORTUNITY_HOT_ACTIVITY_TAGS))
+
+
+def _opportunity_stage_targets(opportunity):
+    requirements = _opportunity_requirements(opportunity)
+    stage_rows = []
+
+    pickup_property_id = str(requirements.get("pickup_property_id", "") or "").strip()
+    pickup_building_id = str(requirements.get("pickup_building_id", "") or "").strip()
+    pickup_chunk = _chunk_tuple(requirements.get("pickup_chunk")) or _chunk_tuple(opportunity.get("chunk"))
+    if pickup_property_id:
+        stage_rows.append({
+            "stage_kind": "pickup",
+            "property_id": pickup_property_id,
+            "building_id": pickup_building_id,
+            "chunk": pickup_chunk,
+        })
+
+    require_item_id = str(requirements.get("require_item_id", "") or "").strip().lower()
+    if require_item_id:
+        delivery_property_id = str(
+            requirements.get("delivery_property_id", "") or requirements.get("property_id", "") or ""
+        ).strip()
+        delivery_building_id = str(
+            requirements.get("delivery_building_id", "") or requirements.get("building_id", "") or ""
+        ).strip()
+        delivery_chunk = _chunk_tuple(requirements.get("delivery_chunk")) or _chunk_tuple(requirements.get("visit_chunk")) or _chunk_tuple(opportunity.get("chunk"))
+        if delivery_property_id:
+            stage_rows.append({
+                "stage_kind": "delivery",
+                "property_id": delivery_property_id,
+                "building_id": delivery_building_id,
+                "chunk": delivery_chunk,
+            })
+        return tuple(stage_rows)
+
+    property_id = str(requirements.get("property_id", "") or "").strip()
+    building_id = str(requirements.get("building_id", "") or "").strip()
+    visit_chunk = _chunk_tuple(requirements.get("visit_chunk")) or _chunk_tuple(opportunity.get("chunk"))
+    if property_id:
+        stage_rows.append({
+            "stage_kind": "task",
+            "property_id": property_id,
+            "building_id": building_id,
+            "chunk": visit_chunk,
+        })
+    return tuple(stage_rows)
+
+
+def _tracked_target_record_for_stage(sim, opportunity_id, stage_kind, property_id):
+    state = _state(sim)
+    key = _tracked_target_key(opportunity_id, stage_kind, property_id)
+    tracked = _tracked_targets_bucket(state)
+    if key:
+        row = tracked.get(key)
+        if isinstance(row, dict):
+            return row
+    try:
+        target_id = int(opportunity_id or 0)
+    except (TypeError, ValueError):
+        target_id = 0
+    stage_key = str(stage_kind or "").strip().lower() or "task"
+    if target_id <= 0:
+        return None
+    for row in tracked.values():
+        if not isinstance(row, dict):
+            continue
+        try:
+            if int(row.get("opportunity_id", 0) or 0) != target_id:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if str(row.get("stage_kind", "") or "").strip().lower() != stage_key:
+            continue
+        return row
+    return None
+
+
+def _tracked_target_rows_for_opportunity(sim, opportunity_id):
+    try:
+        target_id = int(opportunity_id or 0)
+    except (TypeError, ValueError):
+        target_id = 0
+    if target_id <= 0:
+        return ()
+    tracked = _tracked_targets_bucket(_state(sim))
+    rows = []
+    for row in tracked.values():
+        if not isinstance(row, dict):
+            continue
+        try:
+            if int(row.get("opportunity_id", 0) or 0) != target_id:
+                continue
+        except (TypeError, ValueError):
+            continue
+        rows.append(row)
+    rows.sort(
+        key=lambda row: (
+            str(row.get("stage_kind", "") or ""),
+            str(row.get("property_id", "") or ""),
+        )
+    )
+    return tuple(rows)
 
 
 def _terminal_entries(state):
@@ -1546,7 +1713,7 @@ def _resolve_required_property(sim, requirements, *, property_key="property_id",
 
     property_id = str(requirements.get(property_key, "")).strip()
     if property_id:
-        prop = sim.properties.get(property_id)
+        prop = resolve_property_record(sim, property_id, include_saved=True)
         if isinstance(prop, dict):
             return prop
 
@@ -1555,6 +1722,15 @@ def _resolve_required_property(sim, requirements, *, property_key="property_id",
         for prop in getattr(sim, "properties", {}).values():
             if building_id_from_property(prop) == building_id:
                 return prop
+        saved_states = getattr(sim, "chunk_saved_states", {})
+        if isinstance(saved_states, dict):
+            for chunk_state in saved_states.values():
+                properties = chunk_state.get("properties", {}) if isinstance(chunk_state, dict) else {}
+                if not isinstance(properties, dict):
+                    continue
+                for prop in properties.values():
+                    if building_id_from_property(prop) == building_id:
+                        return prop
     return None
 
 
@@ -2542,8 +2718,562 @@ def _stage_notice(entry, prop, *, stage_kind):
     return f"O{opp_id} {title}: work target staged at {site_name}. {_opportunity_activity_instruction(requirements)}"
 
 
+def _restore_locked_stage_requirements(requirements, row):
+    requirements = requirements if isinstance(requirements, dict) else {}
+    row = row if isinstance(row, dict) else {}
+    stage_kind = str(row.get("stage_kind", "") or "").strip().lower() or "task"
+    property_id = str(row.get("property_id", "") or "").strip()
+    building_id = str(row.get("building_id", "") or "").strip()
+    chunk = _chunk_tuple(row.get("chunk"))
+    if not property_id:
+        return
+    if stage_kind == "pickup":
+        requirements["pickup_property_id"] = property_id
+        if building_id:
+            requirements["pickup_building_id"] = building_id
+        if chunk is not None:
+            requirements["pickup_chunk"] = chunk
+        return
+    if stage_kind == "delivery":
+        requirements["delivery_property_id"] = property_id
+        if building_id:
+            requirements["delivery_building_id"] = building_id
+            requirements["building_id"] = requirements.get("building_id") or building_id
+        requirements["property_id"] = requirements.get("property_id") or property_id
+        if chunk is not None:
+            requirements["delivery_chunk"] = chunk
+            requirements["visit_chunk"] = requirements.get("visit_chunk") or chunk
+        return
+    requirements["property_id"] = property_id
+    if building_id:
+        requirements["building_id"] = building_id
+    if chunk is not None:
+        requirements["visit_chunk"] = chunk
+
+
+def _tracked_target_property_record(sim, row):
+    row = row if isinstance(row, dict) else {}
+    property_id = str(row.get("property_id", "") or "").strip()
+    if not property_id:
+        return None
+    record = resolve_property_record(sim, property_id, include_saved=True)
+    return record if isinstance(record, dict) else None
+
+
+def _tracked_target_category(prop):
+    metadata = (prop or {}).get("metadata", {}) if isinstance((prop or {}).get("metadata", {}), dict) else {}
+    archetype = str(metadata.get("archetype", "") or "").strip().lower()
+    if archetype in {"hospital", "clinic", "pharmacy", "backroom_clinic"}:
+        return "medical"
+    if archetype in {"police_station", "checkpoint", "courthouse", "jail", "prison", "security_office"}:
+        return "secure"
+    if archetype in {"bar", "club", "restaurant", "cafe", "hotel"}:
+        return "hospitality"
+    if archetype in {"warehouse", "yard", "factory", "depot", "garage"}:
+        return "industrial"
+    if archetype in {"station", "terminal", "bus_stop", "transit_hub"}:
+        return "transit"
+    if archetype in {"apartment", "residence", "tenement", "shelter"}:
+        return "residential"
+    if archetype in {"office", "bank", "tower", "pawn_shop"}:
+        return "finance" if "bank" in archetype or "pawn" in archetype else "office"
+    if property_is_storefront(prop):
+        return "retail"
+    if property_is_public(prop):
+        return "public"
+    return "building"
+
+
+def _tracked_target_state_label(score, *, low, mid, high, top):
+    if score >= 0.82:
+        return top
+    if score >= 0.62:
+        return high
+    if score >= 0.36:
+        return mid
+    return low
+
+
+def _tracked_target_event_phase(category, base_phase, *, stage_kind="", traffic_state="", security_state="", stakes_state="", heat_state="", rng=None):
+    rng = rng if isinstance(rng, random.Random) else random.Random("opp-target-phase")
+    category = str(category or "").strip().lower()
+    base_phase = str(base_phase or "").strip().lower()
+    stage_kind = str(stage_kind or "").strip().lower()
+    traffic_state = str(traffic_state or "").strip().lower()
+    security_state = str(security_state or "").strip().lower()
+    stakes_state = str(stakes_state or "").strip().lower()
+    heat_state = str(heat_state or "").strip().lower()
+
+    if security_state in {"watched", "tight"}:
+        if category in {"secure", "medical", "residential"}:
+            return "visitor_screening"
+        if category in {"industrial", "transit"}:
+            return "manifest_check"
+        return "owner_screening"
+
+    if stage_kind == "pickup":
+        if category in {"industrial", "transit"}:
+            return rng.choice(("loading_push", "arrival_handoff", "dispatch_surge"))
+        if category == "hospitality":
+            return rng.choice(("reset_scramble", "counter_queue"))
+        return rng.choice(("counter_queue", "paperwork_surge"))
+
+    if stage_kind == "delivery":
+        if category in {"industrial", "transit"}:
+            return rng.choice(("dispatch_surge", "arrival_handoff", "loading_push"))
+        if category == "medical":
+            return "triage_spill"
+        return rng.choice(("paperwork_surge", "counter_queue", "crowd_spillover"))
+
+    if stakes_state in {"rising", "urgent"} or heat_state in {"watched", "hot"}:
+        if category in {"industrial", "transit"}:
+            return rng.choice(("dispatch_surge", "loading_push"))
+        if category == "hospitality":
+            return rng.choice(("table_turnover", "crowd_spillover"))
+        if category == "medical":
+            return rng.choice(("triage_spill", "paperwork_surge"))
+        if category == "residential":
+            return "neighbors_lingering"
+        return rng.choice(("paperwork_surge", "regulars_spill", "counter_queue"))
+
+    if traffic_state in {"thin", "patchy"}:
+        if category == "hospitality":
+            return "reset_scramble"
+        return "maintenance_loop"
+
+    if category in {"industrial", "transit"}:
+        return "dispatch_surge"
+    if category == "hospitality":
+        return "regulars_spill"
+    if category == "medical":
+        return "triage_spill"
+    if category == "residential":
+        return "neighbors_lingering"
+    if category == "secure":
+        return "visitor_screening"
+    return "paperwork_surge"
+
+
+def _tracked_target_surface_bits(row):
+    row = row if isinstance(row, dict) else {}
+    bits = []
+    security_state = str(row.get("security_state", "") or "").strip().lower()
+    if security_state == "tight":
+        bits.append("tighter access")
+    elif security_state == "watched":
+        bits.append("more watched")
+    traffic_state = str(row.get("traffic_state", "") or "").strip().lower()
+    if traffic_state == "thin":
+        bits.append("thinner crowd")
+    elif traffic_state == "patchy":
+        bits.append("patchier foot traffic")
+    elif traffic_state in {"busy", "heavy"}:
+        bits.append("noisier frontage")
+    stakes_state = str(row.get("stakes_state", "") or "").strip().lower()
+    if stakes_state == "urgent":
+        bits.append("a tightening window")
+    elif stakes_state == "rising":
+        bits.append("growing pressure")
+    heat_state = str(row.get("heat_state", "") or "").strip().lower()
+    if heat_state == "hot":
+        bits.append("a hotter read")
+    community_tone = str(row.get("community_tone", "") or "").strip().lower()
+    if community_tone == "protective":
+        bits.append("locals holding the edge")
+    elif community_tone == "troubled":
+        bits.append("a touch of local tension")
+    return tuple(bits[:3])
+
+
+def opportunity_target_summary_text(row, *, include_site=False, site_name=""):
+    row = row if isinstance(row, dict) else {}
+    bits = list(_tracked_target_surface_bits(row))
+    if not bits:
+        return ""
+    if include_site:
+        label = str(site_name or row.get("anchor_site_name", "") or "the site").strip() or "the site"
+        if len(bits) == 1:
+            return f"{label} feels {bits[0]}."
+        if len(bits) == 2:
+            return f"{label} feels {bits[0]}, with {bits[1]}."
+        return f"{label} feels {bits[0]}, with {bits[1]} and {bits[2]}."
+    return "; ".join(bits[:2])
+
+
+def _opportunity_focus_tracked_target(sim, opportunity, player_eid=None, *, property_id=""):
+    opportunity = opportunity if isinstance(opportunity, dict) else {}
+    requested_property_id = str(property_id or "").strip()
+    rows = list(_tracked_target_rows_for_opportunity(sim, opportunity.get("id")))
+    if not rows:
+        return None
+    if requested_property_id:
+        for row in rows:
+            if str(row.get("property_id", "") or "").strip() == requested_property_id:
+                return row
+
+    requirements = _opportunity_requirements(opportunity)
+    require_item_id = str(requirements.get("require_item_id", "") or "").strip().lower()
+    if require_item_id and player_eid is not None:
+        inventory = sim.ecs.get(Inventory).get(player_eid) if sim is not None and player_eid is not None else None
+        counts = _inventory_counts(inventory)
+        required_qty = max(1, _safe_int(requirements.get("require_item_qty"), default=1))
+        carried_qty = max(0, _safe_int(counts.get(require_item_id), default=0))
+        preferred_stage = "pickup" if bool(requirements.get("provide_item")) and carried_qty < required_qty else "delivery"
+    else:
+        preferred_stage = "task"
+
+    for row in rows:
+        if str(row.get("stage_kind", "") or "").strip().lower() == preferred_stage:
+            return row
+    return rows[0]
+
+
+def tracked_target_surface_snapshot(sim, property_id, *, player_eid=None):
+    property_key = str(property_id or "").strip()
+    if not property_key:
+        return None
+    state = _state(sim)
+    active = [entry for entry in state.get("active", ()) if isinstance(entry, dict)]
+    best = None
+    for entry in active:
+        row = _opportunity_focus_tracked_target(sim, entry, player_eid, property_id=property_key)
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("property_id", "") or "").strip() != property_key:
+            continue
+        summary = opportunity_target_summary_text(row, include_site=False)
+        if not summary:
+            continue
+        score = 0
+        if str(row.get("stakes_state", "") or "").strip().lower() == "urgent":
+            score += 4
+        elif str(row.get("stakes_state", "") or "").strip().lower() == "rising":
+            score += 2
+        if str(row.get("heat_state", "") or "").strip().lower() == "hot":
+            score += 3
+        elif str(row.get("heat_state", "") or "").strip().lower() == "watched":
+            score += 2
+        candidate = {
+            "property_id": property_key,
+            "opportunity_id": int(entry.get("id", 0) or 0),
+            "summary": summary,
+            "detail": opportunity_target_summary_text(
+                row,
+                include_site=True,
+                site_name=str(row.get("anchor_site_name", "") or ""),
+            ),
+            "stage_kind": str(row.get("stage_kind", "") or "").strip().lower(),
+            "row": row,
+            "score": score,
+        }
+        if best is None or int(candidate["score"]) > int(best["score"]):
+            best = candidate
+    return best
+
+
+def tracked_target_scene_rows(sim, chunk):
+    chunk = _chunk_tuple(chunk)
+    if chunk is None:
+        return ()
+    tracked = _tracked_targets_bucket(_state(sim))
+    rows = []
+    for row in tracked.values():
+        if not isinstance(row, dict) or bool(row.get("site_missing")):
+            continue
+        if _chunk_tuple(row.get("chunk")) != chunk:
+            continue
+        event_phase = str(row.get("event_phase", "") or "").strip().lower()
+        property_id = str(row.get("property_id", "") or "").strip()
+        if not property_id or not event_phase:
+            continue
+        score = 0.8
+        if str(row.get("stakes_state", "") or "").strip().lower() == "urgent":
+            score += 1.4
+        elif str(row.get("stakes_state", "") or "").strip().lower() == "rising":
+            score += 0.7
+        if str(row.get("heat_state", "") or "").strip().lower() == "hot":
+            score += 1.1
+        elif str(row.get("heat_state", "") or "").strip().lower() == "watched":
+            score += 0.55
+        rows.append({
+            "property_id": property_id,
+            "event_phase": event_phase,
+            "traffic_state": str(row.get("traffic_state", "") or "").strip().lower(),
+            "community_tone": str(row.get("community_tone", "") or "").strip().lower(),
+            "security_state": str(row.get("security_state", "") or "").strip().lower(),
+            "stakes_state": str(row.get("stakes_state", "") or "").strip().lower(),
+            "heat_state": str(row.get("heat_state", "") or "").strip().lower(),
+            "score": score,
+        })
+    rows.sort(
+        key=lambda row: (
+            -float(row.get("score", 0.0) or 0.0),
+            str(row.get("property_id", "") or ""),
+        )
+    )
+    return tuple(rows)
+
+
+def opportunity_target_arrival_notes(sim, chunk):
+    chunk = _chunk_tuple(chunk)
+    if chunk is None:
+        return ()
+    tracked = _tracked_targets_bucket(_state(sim))
+    notes = []
+    for row in tracked.values():
+        if not isinstance(row, dict) or not bool(row.get("arrival_note_pending")):
+            continue
+        if _chunk_tuple(row.get("chunk")) != chunk:
+            continue
+        site_name = str(row.get("anchor_site_name", "") or row.get("property_id", "site")).strip() or "site"
+        note = opportunity_target_summary_text(row, include_site=True, site_name=site_name)
+        if not note:
+            continue
+        row["arrival_note_pending"] = False
+        row["last_surface_tick"] = int(getattr(sim, "tick", 0))
+        notes.append(note)
+    return tuple(notes)
+
+
+def _refresh_tracked_targets(sim):
+    state = _state(sim)
+    tracked = _tracked_targets_bucket(state)
+    active_entries = [entry for entry in state.get("active", ()) if isinstance(entry, dict)]
+    live_stage_keys = set()
+    for entry in active_entries:
+        requirements = _opportunity_requirements(entry)
+        accepted = bool(requirements.get("player_accepted"))
+        hot = _opportunity_has_hot_target(entry)
+        if not (accepted or hot):
+            continue
+        tracking_reason = "accepted" if accepted else "hot"
+        for stage in _opportunity_stage_targets(entry):
+            property_id = str(stage.get("property_id", "") or "").strip()
+            if not property_id:
+                continue
+            stage_kind = str(stage.get("stage_kind", "") or "").strip().lower() or "task"
+            key = _tracked_target_key(entry.get("id"), stage_kind, property_id)
+            if not key:
+                continue
+            live_stage_keys.add(key)
+            row = tracked.get(key)
+            if not isinstance(row, dict):
+                row = {
+                    "opportunity_id": int(entry.get("id", 0) or 0),
+                    "stage_kind": stage_kind,
+                    "property_id": property_id,
+                    "building_id": str(stage.get("building_id", "") or "").strip(),
+                    "chunk": _chunk_tuple(stage.get("chunk")),
+                    "anchor_site_name": "",
+                    "tracking_reason": tracking_reason,
+                    "locked_target": True,
+                    "last_update_tick": -1,
+                    "last_surface_tick": -1,
+                    "event_phase": "",
+                    "traffic_state": "",
+                    "community_tone": "",
+                    "security_state": "",
+                    "stakes_state": "",
+                    "heat_state": "",
+                    "arrival_note_pending": False,
+                    "site_missing": False,
+                }
+                tracked[key] = row
+            row["tracking_reason"] = tracking_reason
+            row["locked_target"] = True
+            if str(stage.get("building_id", "") or "").strip():
+                row["building_id"] = str(stage.get("building_id", "") or "").strip()
+            if _chunk_tuple(stage.get("chunk")) is not None:
+                row["chunk"] = _chunk_tuple(stage.get("chunk"))
+            prop = _tracked_target_property_record(sim, row)
+            if isinstance(prop, dict):
+                row["site_missing"] = False
+                row["anchor_site_name"] = _property_label(prop, property_id)
+                try:
+                    row["chunk"] = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+                except (TypeError, ValueError):
+                    pass
+                if not str(row.get("building_id", "") or "").strip():
+                    row["building_id"] = building_id_from_property(prop)
+            _restore_locked_stage_requirements(requirements, row)
+    for key in list(tracked.keys()):
+        if key in live_stage_keys:
+            continue
+        tracked.pop(key, None)
+
+
+def _update_tracked_target_drift(sim, player_eid):
+    state = _state(sim)
+    tracked = _tracked_targets_bucket(state)
+    if not tracked:
+        return
+    current_hour = int(world_hour(sim)) % 24 if sim is not None else 0
+    if _safe_int(state.get("tracked_target_world_hour"), default=-1) == current_hour:
+        return
+    state["tracked_target_world_hour"] = current_hour
+
+    recent_property_tags, recent_building_tags, recent_chunk_tags = _recent_opportunity_activities(sim, freshness_ticks=32)
+    try:
+        from game.systems_business_events import _base_building_pulse_snapshot
+    except Exception:
+        _base_building_pulse_snapshot = None
+
+    current_chunk = _player_chunk(sim, player_eid)
+    for row in tracked.values():
+        if not isinstance(row, dict):
+            continue
+        previous = {
+            "event_phase": str(row.get("event_phase", "") or "").strip().lower(),
+            "traffic_state": str(row.get("traffic_state", "") or "").strip().lower(),
+            "community_tone": str(row.get("community_tone", "") or "").strip().lower(),
+            "security_state": str(row.get("security_state", "") or "").strip().lower(),
+            "stakes_state": str(row.get("stakes_state", "") or "").strip().lower(),
+            "heat_state": str(row.get("heat_state", "") or "").strip().lower(),
+        }
+        prop = _tracked_target_property_record(sim, row)
+        if not isinstance(prop, dict):
+            row["site_missing"] = True
+            row["last_update_tick"] = int(getattr(sim, "tick", 0))
+            continue
+
+        row["site_missing"] = False
+        row["anchor_site_name"] = _property_label(prop, row.get("property_id"))
+        if _base_building_pulse_snapshot is not None:
+            pulse = _base_building_pulse_snapshot(sim, prop=prop)
+        else:
+            pulse = {}
+        pulse = pulse if isinstance(pulse, dict) else {}
+        base_phase = str(pulse.get("event_phase", "") or pulse.get("phase", "") or "").strip().lower()
+        traffic_state = str(pulse.get("traffic_state", "") or "").strip().lower()
+        if not traffic_state:
+            if base_phase in {"rush", "lunch_rush", "evening_crowd", "crowd_spillover", "dispatch_surge", "loading_push"}:
+                traffic_state = "busy"
+            elif base_phase in {"after_hours", "locked_down", "back_office", "cleanup", "night_watch"}:
+                traffic_state = "thin"
+            else:
+                traffic_state = "steady"
+        community_tone = str(pulse.get("community_tone", "") or "").strip().lower()
+        category = str(pulse.get("category", "") or "").strip().lower() or _tracked_target_category(prop)
+
+        property_id = str(row.get("property_id", "") or "").strip()
+        building_id = str(row.get("building_id", "") or "").strip()
+        chunk = _chunk_tuple(row.get("chunk"))
+        activity_tags = set()
+        activity_tags.update(recent_property_tags.get(property_id, ()))
+        if building_id:
+            activity_tags.update(recent_building_tags.get(building_id, ()))
+        if chunk is not None:
+            activity_tags.update(recent_chunk_tags.get(chunk, ()))
+
+        requirements = None
+        for entry in state.get("active", ()):
+            if not isinstance(entry, dict):
+                continue
+            if _safe_int(entry.get("id"), default=0) != _safe_int(row.get("opportunity_id"), default=0):
+                continue
+            requirements = _opportunity_requirements(entry)
+            risk = str(entry.get("risk", "") or "").strip().lower()
+            expire_tick = _safe_int(entry.get("expire_tick"), default=-1)
+            break
+        else:
+            risk = ""
+            expire_tick = -1
+
+        security_score = 0.22 if property_is_public(prop) else 0.38
+        if property_is_storefront(prop):
+            security_score -= 0.04
+        if category in {"secure", "medical"}:
+            security_score += 0.26
+        if risk == "hazardous":
+            security_score += 0.18
+        if "stakeout" in activity_tags or "intel" in activity_tags:
+            security_score += 0.14
+        if not property_is_public(prop):
+            security_score += 0.06
+        security_state = _tracked_target_state_label(
+            security_score,
+            low="loose",
+            mid="steady",
+            high="watched",
+            top="tight",
+        )
+
+        heat_score = 0.14
+        if risk == "hazardous":
+            heat_score += 0.26
+        if "stakeout" in activity_tags:
+            heat_score += 0.2
+        if "intel" in activity_tags:
+            heat_score += 0.12
+        if security_state in {"watched", "tight"}:
+            heat_score += 0.12
+        heat_state = _tracked_target_state_label(
+            heat_score,
+            low="calm",
+            mid="active",
+            high="watched",
+            top="hot",
+        )
+
+        ticks_left = max(0, expire_tick - int(getattr(sim, "tick", 0))) if expire_tick >= 0 else 999999
+        stakes_score = 0.22 if row.get("tracking_reason") == "accepted" else 0.12
+        if risk == "hazardous":
+            stakes_score += 0.22
+        if ticks_left <= max(1, _opportunity_ticks_per_hour(sim) * 8):
+            stakes_score += 0.22
+        elif ticks_left <= max(1, _opportunity_ticks_per_hour(sim) * 16):
+            stakes_score += 0.12
+        if heat_state in {"watched", "hot"}:
+            stakes_score += 0.12
+        stakes_state = _tracked_target_state_label(
+            stakes_score,
+            low="cooling",
+            mid="live",
+            high="rising",
+            top="urgent",
+        )
+
+        if not community_tone:
+            if "contact" in activity_tags and property_is_public(prop):
+                community_tone = "protective"
+            elif risk == "hazardous" or heat_state in {"watched", "hot"}:
+                community_tone = "troubled"
+            else:
+                community_tone = ""
+
+        rng = random.Random(
+            f"{getattr(sim, 'seed', 'seed')}:opp-target-drift:"
+            f"{row.get('opportunity_id')}:{row.get('stage_kind')}:{property_id}:{current_hour}"
+        )
+        event_phase = _tracked_target_event_phase(
+            category,
+            base_phase,
+            stage_kind=str(row.get("stage_kind", "") or "").strip().lower(),
+            traffic_state=traffic_state,
+            security_state=security_state,
+            stakes_state=stakes_state,
+            heat_state=heat_state,
+            rng=rng,
+        )
+
+        row["event_phase"] = event_phase
+        row["traffic_state"] = traffic_state
+        row["community_tone"] = community_tone
+        row["security_state"] = security_state
+        row["stakes_state"] = stakes_state
+        row["heat_state"] = heat_state
+        row["last_update_tick"] = int(getattr(sim, "tick", 0))
+
+        current_summary = opportunity_target_summary_text(row, include_site=False)
+        previous_row = dict(previous)
+        previous_summary = opportunity_target_summary_text(previous_row, include_site=False)
+        if current_summary and current_summary != previous_summary and current_chunk != _chunk_tuple(row.get("chunk")):
+            row["arrival_note_pending"] = True
+
+
 def stage_active_opportunities(sim, player_eid):
     state = _state(sim)
+    _refresh_tracked_targets(sim)
     active = [entry for entry in state.get("active", ()) if isinstance(entry, dict)]
     if not active:
         return []
@@ -2577,6 +3307,14 @@ def stage_active_opportunities(sim, player_eid):
 
         pickup_chunk = _chunk_tuple(requirements.get("pickup_chunk"))
         if bool(requirements.get("provide_item")) and item_id and carried_qty < item_qty and pickup_chunk == current_chunk:
+            locked_pickup = _tracked_target_record_for_stage(
+                sim,
+                entry.get("id"),
+                "pickup",
+                requirements.get("pickup_property_id"),
+            )
+            if isinstance(locked_pickup, dict):
+                _restore_locked_stage_requirements(requirements, locked_pickup)
             existing_pickup = _site_target_for_requirements(
                 sim,
                 requirements,
@@ -2585,6 +3323,8 @@ def stage_active_opportunities(sim, player_eid):
                 chunk=current_chunk,
             )
             if existing_pickup is None:
+                if isinstance(locked_pickup, dict) and bool(locked_pickup.get("locked_target")):
+                    continue
                 prop = _pick_task_property(
                     sim,
                     current_chunk,
@@ -2613,6 +3353,14 @@ def stage_active_opportunities(sim, player_eid):
 
         property_key = "delivery_property_id" if stage_kind == "delivery" else "property_id"
         building_key = "delivery_building_id" if stage_kind == "delivery" else "building_id"
+        locked_target = _tracked_target_record_for_stage(
+            sim,
+            entry.get("id"),
+            stage_kind,
+            requirements.get(property_key),
+        )
+        if isinstance(locked_target, dict):
+            _restore_locked_stage_requirements(requirements, locked_target)
         existing_target = _site_target_for_requirements(
             sim,
             requirements,
@@ -2624,6 +3372,8 @@ def stage_active_opportunities(sim, player_eid):
             if stage_kind == "delivery" and not str(requirements.get("property_id", "")).strip():
                 requirements["property_id"] = str(existing_target.get("id", "") or "").strip()
                 requirements["building_id"] = building_id_from_property(existing_target)
+            continue
+        if isinstance(locked_target, dict) and bool(locked_target.get("locked_target")):
             continue
 
         prop = _pick_task_property(
@@ -2645,6 +3395,7 @@ def stage_active_opportunities(sim, player_eid):
         reserved_property_ids.add(prop_id)
         notices.append(_stage_notice(entry, prop, stage_kind=stage_kind))
 
+    _refresh_tracked_targets(sim)
     return notices
 
 
@@ -5445,8 +6196,11 @@ def advance_opportunity_lifecycle(sim, player_eid):
     state = _state(sim)
     active = list(state.get("active", ()))
     if not active:
+        _tracked_targets_bucket(state).clear()
         return {"completed": [], "failed": []}
 
+    _refresh_tracked_targets(sim)
+    _update_tracked_target_drift(sim, player_eid)
     stage_active_opportunities(sim, player_eid)
     metrics = _player_metrics(sim, player_eid)
     completed = []
@@ -5537,6 +6291,7 @@ def advance_opportunity_lifecycle(sim, player_eid):
 
     if completed or failed:
         state["active"] = remaining
+        _refresh_tracked_targets(sim)
     return {
         "completed": completed,
         "failed": failed,
@@ -5852,6 +6607,20 @@ def evaluate_opportunity_facts(sim, player_eid, limit=3, observer_eid=None):
         )
         risk = str(entry.get("risk", "low")).strip().lower()
         risk_score = {"calm": 0, "low": 1, "exposed": 2, "hazardous": 3}.get(risk, 1)
+        tracked_target = _opportunity_focus_tracked_target(sim, entry, player_eid)
+        tracked_summary = ""
+        tracked_detail = ""
+        tracked_stage_kind = ""
+        tracked_property_id = ""
+        if isinstance(tracked_target, dict):
+            tracked_summary = opportunity_target_summary_text(tracked_target, include_site=False)
+            tracked_detail = opportunity_target_summary_text(
+                tracked_target,
+                include_site=True,
+                site_name=str(tracked_target.get("anchor_site_name", "") or ""),
+            )
+            tracked_stage_kind = str(tracked_target.get("stage_kind", "") or "").strip().lower()
+            tracked_property_id = str(tracked_target.get("property_id", "") or "").strip()
         rows.append(
             {
                 "id": int(entry.get("id", 0)),
@@ -5879,6 +6648,10 @@ def evaluate_opportunity_facts(sim, player_eid, limit=3, observer_eid=None):
                 "awareness_state": awareness,
                 "confidence": confidence,
                 "intel_source": intel_source,
+                "tracked_target_summary": tracked_summary,
+                "tracked_target_detail": tracked_detail,
+                "tracked_target_stage_kind": tracked_stage_kind,
+                "tracked_target_property_id": tracked_property_id,
             }
         )
     return tuple(rows)

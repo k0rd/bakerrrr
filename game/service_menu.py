@@ -128,6 +128,7 @@ class ServiceMenuSystem(System):
         self.sim.events.subscribe("casino_ui_action", self.on_casino_ui_action)
         self.sim.events.subscribe("dialog_close_request", self.on_dialog_close_request)
         self.sim.events.subscribe("service_menu_execute_request", self.on_service_menu_execute_request)
+        self.sim.events.subscribe("site_service_started", self.on_site_service_started)
         self.sim.events.subscribe("site_service_used", self.on_site_service_used)
         self.sim.events.subscribe("site_service_blocked", self.on_site_service_blocked)
         self.sim.events.subscribe("site_intel_report", self.on_site_intel_report)
@@ -2769,6 +2770,29 @@ class ServiceMenuSystem(System):
             "casino_session": None,
         })
 
+    def _dismiss_service_menu_for_started_service(self):
+        self._clear_casino_session()
+        state = self._dialog_ui_state()
+        self.sim.set_time_paused(False, reason="dialog")
+        state.update({
+            "open": False,
+            "kind": "conversation",
+            "npc_eid": None,
+            "property_id": None,
+            "title": "Conversation",
+            "subtitle": "",
+            "transcript": [],
+            "topics": [],
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": "root",
+            "casino_session": None,
+        })
+
     def _begin_pending_service_result(self, *, channel, property_id, property_name, service=""):
         self.pending_service_result = {
             "channel": str(channel or "").strip().lower(),
@@ -2936,6 +2960,9 @@ class ServiceMenuSystem(System):
             safety_gain = int(event.data.get("safety_gain", 0))
             social_gain = int(event.data.get("social_gain", 0))
             time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0))
+            interrupted = bool(event.data.get("interrupted"))
+            interruption_reason = str(event.data.get("interruption_reason", "") or "").strip().lower()
+            wake_cause = str(event.data.get("wake_cause", "") or "").strip().lower()
             gain_bits = []
             if hp_gain > 0:
                 gain_bits.append(f"HP +{hp_gain}")
@@ -2945,12 +2972,23 @@ class ServiceMenuSystem(System):
                 gain_bits.append(f"S +{safety_gain}")
             if social_gain > 0:
                 gain_bits.append(f"So +{social_gain}")
-            lines = [
-                f"{prop_name} gives you a safe place to steady up.",
-                " ".join(gain_bits) if gain_bits else "You settle yourself and recover a little.",
-            ]
+            if interrupted:
+                lines = [f"{prop_name} gives you a safe place to steady up, but the stay is cut short."]
+            else:
+                lines = [f"{prop_name} gives you a safe place to steady up."]
+            lines.append(" ".join(gain_bits) if gain_bits else "You settle yourself and recover a little.")
             if time_advanced_ticks > 0:
-                lines.append(f"You lay low for {_tick_duration_label(self.sim, time_advanced_ticks)}.")
+                duration_line = f"You lay low for {_tick_duration_label(self.sim, time_advanced_ticks)}."
+                if interrupted:
+                    duration_line = f"You only manage {_tick_duration_label(self.sim, time_advanced_ticks)} before it breaks."
+                lines.append(duration_line)
+            if interrupted:
+                if interruption_reason == "woken_by_noise" and wake_cause:
+                    lines.append(f"Nearby {wake_cause.replace('_', ' ')} wakes you.")
+                elif interruption_reason in {"justice_surrender", "justice_questioning", "actor_detained", "justice_booking_completed"}:
+                    lines.append("Justice reaches you before you can finish laying low.")
+                else:
+                    lines.append("Danger reaches you before you can finish laying low.")
             return f"Shelter: {prop_name}", lines
         if service == "rest":
             hp_gain = int(event.data.get("hp_gain", 0))
@@ -2959,6 +2997,10 @@ class ServiceMenuSystem(System):
             social_gain = int(event.data.get("social_gain", 0))
             credits_spent = int(event.data.get("credits_spent", 0))
             time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0))
+            interrupted = bool(event.data.get("interrupted"))
+            interruption_reason = str(event.data.get("interruption_reason", "") or "").strip().lower()
+            wake_cause = str(event.data.get("wake_cause", "") or "").strip().lower()
+            well_rested_granted = bool(event.data.get("well_rested_granted"))
             gain_bits = []
             if hp_gain > 0:
                 gain_bits.append(f"HP +{hp_gain}")
@@ -2971,7 +3013,19 @@ class ServiceMenuSystem(System):
             lines = [f"Room rented for {_credit_amount_label(credits_spent)}."]
             lines.append(" ".join(gain_bits) if gain_bits else "You come away better rested.")
             if time_advanced_ticks > 0:
-                lines.append(f"You sleep through {_tick_duration_label(self.sim, time_advanced_ticks)}.")
+                duration_line = f"You sleep through {_tick_duration_label(self.sim, time_advanced_ticks)}."
+                if interrupted:
+                    duration_line = f"You only get {_tick_duration_label(self.sim, time_advanced_ticks)} before waking."
+                lines.append(duration_line)
+            if interrupted:
+                if interruption_reason == "woken_by_noise" and wake_cause:
+                    lines.append(f"Nearby {wake_cause.replace('_', ' ')} wakes you.")
+                elif interruption_reason in {"justice_surrender", "justice_questioning", "actor_detained", "justice_booking_completed"}:
+                    lines.append("Justice reaches you before you can finish the room stay.")
+                else:
+                    lines.append("Danger reaches you before the room stay can finish.")
+            elif well_rested_granted:
+                lines.append("You wake up well rested.")
             return f"Rest: {prop_name}", lines
         if service in TRANSIT_SERVICE_IDS:
             profile = _transit_service_profile(service) or {}
@@ -3643,7 +3697,17 @@ class ServiceMenuSystem(System):
                 self._forfeit_active_casino_session()
             self._close_service_menu()
             return
+        live_timeskip = getattr(self.sim, "live_timeskip", {})
+        if isinstance(live_timeskip, dict) and bool(live_timeskip.get("result_pending")):
+            return
         self._clear_pending_service_result()
+
+    def on_site_service_started(self, event):
+        if not self._event_matches_pending(event, channel="site"):
+            return
+        if not bool(event.data.get("live_timeskip")):
+            return
+        self._dismiss_service_menu_for_started_service()
 
     def on_service_menu_execute_request(self, event):
         if event.data.get("eid") != self.player_eid:

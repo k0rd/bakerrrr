@@ -898,6 +898,47 @@ class RenderSystem(System):
         map_w = min(self.sim.tilemap.width, screen_w)
         hud_w = max(1, int(screen_w))
         hud_text_w = _view_text_wrap_width(self.view, hud_w)
+        live_timeskip = getattr(self.sim, "live_timeskip", {})
+        if isinstance(live_timeskip, dict) and bool(live_timeskip.get("active")):
+            service = str(live_timeskip.get("service", "") or "").strip().lower()
+            prop_name = str(live_timeskip.get("property_name", live_timeskip.get("property_id", "site")) or "site").strip() or "site"
+            title = "Sleeping..." if service == "rest" else "Laying low..."
+            started_tick = int(live_timeskip.get("started_tick", 0) or 0)
+            total_ticks = max(0, int(live_timeskip.get("total_ticks", 0) or 0))
+            elapsed_ticks = max(
+                int(live_timeskip.get("elapsed_ticks", 0) or 0),
+                max(0, min(total_ticks, int(getattr(self.sim, "tick", 0)) - started_tick)),
+            )
+            panel_w = max(32, min(screen_w, 52))
+            panel_h = max(8, min(screen_h, 10))
+            panel_x = max(0, (screen_w - panel_w) // 2)
+            panel_y = max(0, (screen_h - panel_h) // 2)
+            top = "+" + ("-" * max(0, panel_w - 2)) + "+"
+            mid = "|" + (" " * max(0, panel_w - 2)) + "|"
+            bot = "+" + ("-" * max(0, panel_w - 2)) + "+"
+            self.view.draw_text(panel_x, panel_y, top, color="human")
+            for row in range(1, max(1, panel_h - 1)):
+                self.view.draw_text(panel_x, panel_y + row, mid, color="human")
+            self.view.draw_text(panel_x, panel_y + panel_h - 1, bot, color="human")
+
+            def _clip(text, width):
+                text = str(text or "")
+                if width <= 0:
+                    return ""
+                if len(text) <= width:
+                    return text
+                if width <= 3:
+                    return text[:width]
+                return text[: width - 3] + "..."
+
+            body_w = max(8, panel_w - 4)
+            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(title, body_w), color="objective")
+            self.view.draw_text(panel_x + 2, panel_y + 3, _clip(prop_name, body_w), color="human")
+            if total_ticks > 0:
+                progress = f"{_tick_duration_label(self.sim, elapsed_ticks)} / {_tick_duration_label(self.sim, total_ticks)}"
+                self.view.draw_text(panel_x + 2, panel_y + 4, _clip(progress, body_w), color="default")
+            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip("The city keeps moving without you.", body_w), color="default")
+            return
         camera_x = (player_pos.x - (map_w // 2)) if player_pos else 0
         camera_y = (player_pos.y - (map_h // 2)) if player_pos else 0
         zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()

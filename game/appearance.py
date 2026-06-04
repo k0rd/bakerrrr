@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from engine.buildings import building_exterior_profile
 from game.components import AI, CreatureIdentity, Render, Vitality
+from game.human_description import human_render_color_key as _human_render_color_key
 from game.property_runtime import (
     building_id_from_structure,
     finance_services_for_property,
@@ -436,7 +437,16 @@ def _entity_state_overlays(vitality):
     return ({"glyph": " ", "semantic_id": "entity_state_downed"},)
 
 
-def entity_default_snapshot(identity, *, role="", player=False, catalog=None):
+def _hominid_semantic_id_for_role(catalog, role=""):
+    semantic_role = "human"
+    if role == "guard":
+        semantic_role = "guard"
+    elif role == "scout":
+        semantic_role = "scout"
+    return catalog.semantic_id_for_key("entities", "hominid", semantic_role, allow_defaults=True)
+
+
+def entity_default_snapshot(identity, *, role="", player=False, catalog=None, seed=None, eid=None):
     catalog = catalog or get_runtime_semantic_catalog()
 
     if player:
@@ -458,8 +468,15 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None):
 
     if taxonomy == "hominid":
         glyph = "@"
+        if seed is not None:
+            color = _human_render_color_key(
+                seed,
+                eid=eid,
+                identity=identity,
+                personal_name=getattr(identity, "personal_name", None),
+            ) or color
         color = color or "human"
-        semantic_id = catalog.semantic_id_for_key("entities", "hominid", color, allow_defaults=True)
+        semantic_id = _hominid_semantic_id_for_role(catalog, role=role)
     elif taxonomy in ENTITY_TAXONOMY_SEMANTICS:
         color = color or taxonomy
         semantic_id = ENTITY_TAXONOMY_SEMANTICS.get(taxonomy)
@@ -866,6 +883,8 @@ class AppearanceManager:
             role=str(getattr(ai, "role", "") or "").strip().lower(),
             player=player_controlled,
             catalog=self.catalog,
+            seed=getattr(self.sim, "seed", None),
+            eid=eid,
         )
         state_semantic = _entity_state_semantic(identity, vitality)
         if state_semantic:

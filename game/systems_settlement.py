@@ -22,6 +22,14 @@ from game.system_support.opportunity_knowledge_runtime import (
     opportunity_snapshot_for_chunk as _opportunity_snapshot_for_chunk,
     remember_opportunity_lead as _remember_opportunity_lead,
 )
+from game.system_support.actor_attention_runtime import (
+    actor_attention_state as _actor_attention_state,
+    attention_scope_for_actor as _attention_scope_for_actor,
+    note_settlement_cache as _note_settlement_cache,
+    pop_due_actors as _pop_due_actors,
+    refresh_actor_attention as _refresh_actor_attention,
+    schedule_actor_due as _schedule_actor_due,
+)
 
 AI = _systems.AI
 CreatureIdentity = _systems.CreatureIdentity
@@ -1243,6 +1251,31 @@ class NPCSettlementSystem(System):
         if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
             return []
         key = (int(chunk[0]), int(chunk[1]))
+        prop_ids = self._cached_property_ids_in_chunk(key)
+        if prop_ids is not None:
+            return [
+                prop
+                for prop_id in tuple(prop_ids or ())
+                for prop in (self.sim.properties.get(str(prop_id)),)
+                if isinstance(prop, dict)
+            ]
+        return self._discover_props_in_chunk(key)
+
+    def _settlement_cache_bucket(self, kind):
+        state = _actor_attention_state(self.sim)
+        cache = state.setdefault("settlement_candidate_cache", {})
+        bucket = cache.setdefault(str(kind or "arrival").strip().lower() or "arrival", {})
+        return bucket
+
+    def _chunk_cache_signature(self, key):
+        records = getattr(self.sim, "chunk_property_records", {}).get(key, ())
+        return (
+            len(getattr(self.sim, "properties", {}) or {}),
+            len(tuple(records or ())),
+            bool(getattr(self.sim, "property_registry_dirty", False)),
+        )
+
+    def _discover_props_in_chunk(self, key):
         props = []
         seen = set()
         for record in tuple(getattr(self.sim, "chunk_property_records", {}).get(key, ()) or ()):
@@ -1260,6 +1293,72 @@ class NPCSettlementSystem(System):
             if _property_chunk_key(self.sim, prop) == key:
                 props.append(prop)
         return props
+
+    def _cached_property_ids_in_chunk(self, key):
+        if not isinstance(key, (tuple, list)) or len(key) < 2:
+            return None
+        key = (int(key[0]), int(key[1]))
+        tick = int(getattr(self.sim, "tick", 0) or 0)
+        signature = self._chunk_cache_signature(key)
+        bucket = self._settlement_cache_bucket("arrival")
+        entry = bucket.get(key)
+        if (
+            isinstance(entry, dict)
+            and tuple(entry.get("signature", ())) == tuple(signature)
+            and tick - int(entry.get("tick", -10_000) or -10_000) <= 300
+        ):
+            _note_settlement_cache(self.sim, hit=True)
+            return tuple(entry.get("property_ids", ()) or ())
+        _note_settlement_cache(self.sim, hit=False)
+        props = self._discover_props_in_chunk(key)
+        prop_ids = tuple(
+            str((prop or {}).get("id", "") or "").strip()
+            for prop in tuple(props or ())
+            if str((prop or {}).get("id", "") or "").strip()
+        )
+        bucket[key] = {
+            "tick": tick,
+            "signature": tuple(signature),
+            "property_ids": prop_ids,
+        }
+        return prop_ids
+
+    def _candidate_property_ids_in_chunk(self, kind, chunk):
+        if not isinstance(chunk, (tuple, list)) or len(chunk) < 2:
+            return ()
+        key = (int(chunk[0]), int(chunk[1]))
+        kind = str(kind or "").strip().lower()
+        if kind not in {"home", "work"}:
+            return tuple(self._cached_property_ids_in_chunk(key) or ())
+        source_ids = tuple(self._cached_property_ids_in_chunk(key) or ())
+        signature = (self._chunk_cache_signature(key), source_ids)
+        tick = int(getattr(self.sim, "tick", 0) or 0)
+        bucket = self._settlement_cache_bucket(kind)
+        entry = bucket.get(key)
+        if (
+            isinstance(entry, dict)
+            and tuple(entry.get("signature", ())) == tuple(signature)
+            and tick - int(entry.get("tick", -10_000) or -10_000) <= 300
+        ):
+            _note_settlement_cache(self.sim, hit=True)
+            return tuple(entry.get("property_ids", ()) or ())
+        _note_settlement_cache(self.sim, hit=False)
+        filtered = []
+        for prop_id in source_ids:
+            prop = self.sim.properties.get(str(prop_id))
+            if not isinstance(prop, dict):
+                continue
+            if kind == "home":
+                if _newcomer_home_kind(prop):
+                    filtered.append(str(prop_id))
+            elif _newcomer_work_capacity(self.sim, prop) > 0:
+                filtered.append(str(prop_id))
+        bucket[key] = {
+            "tick": tick,
+            "signature": tuple(signature),
+            "property_ids": tuple(filtered),
+        }
+        return tuple(filtered)
 
     def _home_available_slots(self, prop, *, moving_eids=()):
         capacity = _newcomer_home_capacity(prop)
@@ -1288,7 +1387,10 @@ class NPCSettlementSystem(System):
         best_score = float("-inf")
         exclude_property_id = str(exclude_property_id or "").strip()
         required_capacity = max(1, int(required_capacity or 1))
-        for prop in self._props_in_chunk(chunk):
+        for prop_id in self._candidate_property_ids_in_chunk("home", chunk):
+            prop = self.sim.properties.get(str(prop_id))
+            if not isinstance(prop, dict):
+                continue
             if exclude_property_id and str(prop.get("id", "") or "").strip() == exclude_property_id:
                 continue
             home_kind = _newcomer_home_kind(prop)
@@ -1331,7 +1433,10 @@ class NPCSettlementSystem(System):
         best_prop = None
         best_score = float("-inf")
         exclude_property_id = str(exclude_property_id or "").strip()
-        for prop in self._props_in_chunk(chunk):
+        for prop_id in self._candidate_property_ids_in_chunk("work", chunk):
+            prop = self.sim.properties.get(str(prop_id))
+            if not isinstance(prop, dict):
+                continue
             if exclude_property_id and str(prop.get("id", "") or "").strip() == exclude_property_id:
                 continue
             capacity = _newcomer_work_capacity(self.sim, prop)
@@ -2086,7 +2191,13 @@ class NPCSettlementSystem(System):
 
         weighted = []
         try:
-            search_props = self._props_in_chunk(self.sim.chunk_coords(int(pos.x), int(pos.y)))
+            chunk = self.sim.chunk_coords(int(pos.x), int(pos.y))
+            search_props = [
+                prop
+                for prop_id in self._candidate_property_ids_in_chunk("home", chunk)
+                for prop in (self.sim.properties.get(str(prop_id)),)
+                if isinstance(prop, dict)
+            ]
         except (TypeError, ValueError):
             search_props = tuple(self.sim.properties.values())
         for prop in search_props:
@@ -2129,7 +2240,10 @@ class NPCSettlementSystem(System):
             for dy in (-1, 0, 1):
                 for dx in (-1, 0, 1):
                     chunk = (int(origin_chunk[0]) + dx, int(origin_chunk[1]) + dy)
-                    for prop in self._props_in_chunk(chunk):
+                    for prop_id in self._candidate_property_ids_in_chunk("work", chunk):
+                        prop = self.sim.properties.get(str(prop_id))
+                        if not isinstance(prop, dict):
+                            continue
                         prop_id = str((prop or {}).get("id", "") or "").strip()
                         if not prop_id or prop_id in seen:
                             continue
@@ -2353,6 +2467,15 @@ class NPCSettlementSystem(System):
         employment_status = str(getattr(newcomer, "employment_status", "") or "").strip().lower()
         is_unsettled = (housing_status in {"unhoused", "drifting"}) and employment_status != "employed"
         if is_unsettled and int(self.sim.tick) - int(newcomer.arrived_tick) >= _NEWCOMER_DRIFTER_TIMEOUT_TICKS:
+            if self._preserve_hireable_seeker(eid, newcomer, pos):
+                newcomer.arrived_tick = int(self.sim.tick) - max(0, _NEWCOMER_DRIFTER_TIMEOUT_TICKS - 300)
+                newcomer.life_review_failures = min(3, int(getattr(newcomer, "life_review_failures", 0) or 0) + 1)
+                newcomer.life_goal = "seeking_work" if employment_status != "employed" else "seeking_home"
+            else:
+                self.sim.remove_entity(eid)
+                return
+
+        if is_unsettled and int(self.sim.tick) - int(newcomer.arrived_tick) >= _NEWCOMER_DRIFTER_TIMEOUT_TICKS:
             self.sim.remove_entity(eid)
             return
 
@@ -2373,11 +2496,102 @@ class NPCSettlementSystem(System):
 
         self._refresh_status(eid, newcomer)
 
+    def _preserve_hireable_seeker(self, eid, newcomer, pos=None):
+        pos = pos if pos is not None else self.sim.ecs.get(Position).get(eid)
+        if pos is None:
+            return False
+        scope_info = _attention_scope_for_actor(self.sim, eid, pos=pos, ai=self.sim.ecs.get(AI).get(eid))
+        if str((scope_info or {}).get("scope", "") or "").strip().lower() in {"full", "warm"}:
+            return True
+        active = self._active_chunk_coord()
+        chunk = self._actor_chunk_key(eid)
+        return bool(active is not None and chunk == active)
+
+    def _settlement_due_tick(self, eid, newcomer):
+        now = int(getattr(self.sim, "tick", 0) or 0)
+        ticks = []
+        pos = self.sim.ecs.get(Position).get(eid)
+        routine = _ensure_npc_routine(self.sim, eid) if pos is not None else None
+        occupation = self.sim.ecs.get(Occupation).get(eid)
+        home_prop = _home_property(self.sim, routine=routine)
+        work_prop = _workplace_property(self.sim, occupation=occupation, routine=routine)
+        if home_prop is None:
+            ticks.append(int(getattr(newcomer, "last_housing_tick", 0) or 0) + _NEWCOMER_HOME_RETRY_TICKS)
+        if work_prop is None:
+            ticks.append(int(getattr(newcomer, "last_job_tick", 0) or 0) + _NEWCOMER_JOB_RETRY_TICKS)
+        stage = str(getattr(newcomer, "life_review_stage", "") or "").strip().lower()
+        if stage:
+            ticks.append(int(getattr(newcomer, "life_review_next_tick", now) or now))
+        ticks.append(int(getattr(newcomer, "last_life_tick", 0) or 0) + _NPC_LIFE_REVIEW_TICKS)
+        housing_status = str(getattr(newcomer, "housing_status", "") or "").strip().lower()
+        employment_status = str(getattr(newcomer, "employment_status", "") or "").strip().lower()
+        if (housing_status in {"unhoused", "drifting"}) and employment_status != "employed":
+            ticks.append(int(getattr(newcomer, "arrived_tick", 0) or 0) + _NEWCOMER_DRIFTER_TIMEOUT_TICKS)
+        return max(0, min(int(value) for value in ticks if value is not None))
+
+    def _schedule_settlement_due(self, eid, newcomer):
+        due_tick = self._settlement_due_tick(eid, newcomer)
+        delay = max(0, int(due_tick) - int(getattr(self.sim, "tick", 0) or 0))
+        return _schedule_actor_due(self.sim, eid, "settlement", delay_ticks=delay, reason="settlement_due")
+
+    def _resync_settlement_due(self):
+        state = _actor_attention_state(self.sim)
+        membership = state.get("due_membership", {}).get("settlement", {})
+        for eid, newcomer in tuple(self.sim.ecs.get(NPCSettlement).items()):
+            if newcomer is None or not self._eligible_life_actor(eid):
+                continue
+            due_tick = self._settlement_due_tick(eid, newcomer)
+            current_due = membership.get(int(eid))
+            if current_due is None or int(due_tick) < int(current_due):
+                delay = max(0, int(due_tick) - int(getattr(self.sim, "tick", 0) or 0))
+                _schedule_actor_due(self.sim, eid, "settlement", delay_ticks=delay, reason="settlement_exact_due")
+
     def update(self):
-        if int(self.sim.tick) % 30 != 0:
+        tick = int(getattr(self.sim, "tick", 0) or 0)
+        live_timeskip = getattr(self.sim, "live_timeskip", None)
+        live_timeskip_active = isinstance(live_timeskip, dict) and bool(live_timeskip.get("active"))
+        if live_timeskip_active:
+            _refresh_actor_attention(self.sim, player_eid=getattr(self.sim, "player_eid", None))
+            state = _actor_attention_state(self.sim)
+            membership = state.get("due_membership", {}).get("settlement", {})
+            last_resync = int(state.get("last_settlement_resync_tick", -10_000) or -10_000)
+            needs_resync = not membership or (tick - last_resync) >= 600
+            if needs_resync:
+                if tick % 600 == 0:
+                    self._backfill_resident_settlements()
+                    self._maybe_spawn_newcomer()
+                self._resync_settlement_due()
+                state["last_settlement_resync_tick"] = tick
+            budget = max(1, int(_NPC_SETTLEMENT_MAX_LIFE_UPDATES_PER_UPDATE))
+            candidate_eids = set(_pop_due_actors(self.sim, "settlement", current_tick=tick, limit=budget))
+            if not candidate_eids:
+                return
+            for eid in sorted(candidate_eids):
+                newcomer = self.sim.ecs.get(NPCSettlement).get(eid)
+                if newcomer is None or not self._eligible_life_actor(eid):
+                    continue
+                self._update_newcomer(eid, newcomer)
+                self._consider_life_upgrade(eid, newcomer)
+                if self.sim.ecs.get(NPCSettlement).get(eid) is not None:
+                    self._schedule_settlement_due(eid, newcomer)
             return
-        self._backfill_resident_settlements()
-        self._maybe_spawn_newcomer()
-        for eid, newcomer in self._settlement_worklist():
+
+        _refresh_actor_attention(self.sim, player_eid=getattr(self.sim, "player_eid", None))
+        if tick % (300 if live_timeskip_active else 30) == 0:
+            self._backfill_resident_settlements()
+            self._maybe_spawn_newcomer()
+        self._resync_settlement_due()
+        budget = max(1, int(_NPC_SETTLEMENT_MAX_LIFE_UPDATES_PER_UPDATE))
+        candidate_eids = set(_pop_due_actors(self.sim, "settlement", current_tick=tick, limit=budget))
+        if not candidate_eids and tick % 30 == 0:
+            # Preserve normal-play responsiveness for the active local pool while
+            # letting the shared scheduler own remote/coasting actors.
+            candidate_eids.update(eid for eid, _newcomer in self._settlement_worklist())
+        for eid in sorted(candidate_eids):
+            newcomer = self.sim.ecs.get(NPCSettlement).get(eid)
+            if newcomer is None or not self._eligible_life_actor(eid):
+                continue
             self._update_newcomer(eid, newcomer)
             self._consider_life_upgrade(eid, newcomer)
+            if self.sim.ecs.get(NPCSettlement).get(eid) is not None:
+                self._schedule_settlement_due(eid, newcomer)

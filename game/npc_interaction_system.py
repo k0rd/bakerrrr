@@ -436,6 +436,9 @@ class NPCInteractionSystem(System):
     FALLOUT_MIN_STANDING = 0.28
     SIDE_JOB_MIN_STANDING = 0.44
     SIDE_JOB_COOLDOWN_TICKS = 240
+    CHECK_IN_MIN_HOURS = 1.0
+    SENSITIVE_INFO_TOPICS = {"keyholder", "weak_point"}
+    SENSITIVE_INFO_TRUSTED_BONDS = {"friend", "family", "partner", "coworker", "owner", "workplace", "job_issuer"}
     SIDE_JOB_KINDS = ("issuer_delivery", "issuer_pickup", "issuer_procure", "issuer_pressure")
     SIDE_JOB_ITEM_POOL = (
         "credstick_chip",
@@ -899,6 +902,13 @@ class NPCInteractionSystem(System):
         if not ai:
             return "hard to read"
         state = str(ai.state or "idle").strip().lower() or "idle"
+        if state == "holding":
+            try:
+                incident_id = int(getattr(ai, "incident_id", None))
+            except (TypeError, ValueError):
+                incident_id = -1
+            if incident_id >= 0:
+                return "making a call"
         if state in {"investigating", "protecting", "reporting_incident"}:
             pos = self.sim.ecs.get(Position).get(getattr(ai, "eid", None)) if hasattr(ai, "eid") else None
             if pos is None:
@@ -1950,6 +1960,95 @@ class NPCInteractionSystem(System):
             "detail_level": detail_level,
             "base_detail_level": base_detail,
         }
+
+    def _ticks_per_hour(self):
+        world_traits = getattr(self.sim, "world_traits", {}) or {}
+        clock = world_traits.get("clock", {}) if isinstance(world_traits, dict) else {}
+        if not isinstance(clock, dict):
+            clock = {}
+        try:
+            ticks_per_hour = int(clock.get("ticks_per_hour", 600))
+        except (TypeError, ValueError):
+            ticks_per_hour = 600
+        return max(60, ticks_per_hour)
+
+    def _check_in_elapsed_ticks(self, context):
+        entry = context.get("person_entry") if isinstance(context, dict) else None
+        if not isinstance(entry, dict):
+            return 0
+        raw_last_met_tick = entry.get("last_met_tick")
+        if raw_last_met_tick is None:
+            raw_last_met_tick = entry.get("tick")
+        if raw_last_met_tick is None:
+            return 0
+        last_met_tick = _int_or_default(raw_last_met_tick, 0)
+        return max(0, int(self.sim.tick) - int(last_met_tick))
+
+    def _sensitive_info_threshold(self, context, topic_id):
+        topic_id = str(topic_id or "").strip().lower() or "keyholder"
+        base = {
+            "keyholder": 0.56,
+            "weak_point": 0.62,
+        }.get(topic_id, 0.56)
+        role = str(context.get("pressure_role", "") or self._dialogue_pressure_role(context)).strip().lower() or "local"
+        extra = {
+            "guard": 0.1,
+            "worker": 0.08,
+            "merchant": 0.05,
+            "neighbor": -0.02,
+            "chaotic": -0.06,
+        }.get(role, 0.0)
+        if bool(context.get("workplace_here")):
+            extra += 0.03
+        if context.get("recent_offense"):
+            extra += 0.08
+        if str(context.get("pressure_tier", "low")).strip().lower() == "high":
+            extra += 0.05
+        elif str(context.get("pressure_tier", "low")).strip().lower() == "medium":
+            extra += 0.02
+        return max(0.32, min(0.92, base + extra))
+
+    def _sensitive_info_topic_available(self, context, topic_id):
+        if not isinstance(context, dict):
+            return False
+        topic_id = str(topic_id or "").strip().lower()
+        if topic_id not in self.SENSITIVE_INFO_TOPICS:
+            return True
+        if bool(context.get("guarded")) or not bool(context.get("human", True)):
+            return False
+        if not isinstance(context.get("owner_place"), dict):
+            return False
+
+        bond = context.get("bond") if isinstance(context.get("bond"), dict) else {}
+        bond_kind = str(bond.get("kind", "") or "").strip().lower()
+        trust = max(0.0, min(1.0, float(bond.get("trust", 0.0) or 0.0)))
+        closeness = max(0.0, min(1.0, float(bond.get("closeness", 0.0) or 0.0)))
+        standing = max(
+            max(0.0, min(1.0, float(context.get("social_standing", 0.0) or 0.0))),
+            max(0.0, min(1.0, float(context.get("contact_standing", 0.0) or 0.0))),
+            max(0.0, min(1.0, float(context.get("intro_standing", 0.0) or 0.0))),
+        )
+        relationship_score = max(standing, (trust * 0.6) + (closeness * 0.4))
+        threshold = self._sensitive_info_threshold(context, topic_id)
+        opened_count = max(0, int(context.get("opened_count", 0) or 0))
+
+        if bond_kind in self.SENSITIVE_INFO_TRUSTED_BONDS:
+            if opened_count <= 0 and standing < threshold:
+                return False
+            return relationship_score >= max(0.36, threshold - 0.08)
+
+        if not bool(context.get("met_directly")):
+            return False
+        if opened_count < 2:
+            return False
+        return relationship_score >= threshold
+
+    def _sensitive_info_block_line(self, context, topic_id):
+        topic_id = str(topic_id or "").strip().lower()
+        place_name = str(context.get("owner_place_name", "")).strip() or "the place"
+        if topic_id == "weak_point":
+            return f"I am not mapping the soft seam in {place_name} for someone I barely know."
+        return f"I am not naming who carries the real access around {place_name} unless I know you better."
 
     def _player_current_chunk(self):
         pos = self.sim.ecs.get(Position).get(self.player_eid)
@@ -6413,10 +6512,12 @@ class NPCInteractionSystem(System):
         if topic_id == "rapport":
             return not bool(context.get("door_answering"))
         if topic_id == "check_in":
+            min_elapsed = max(60, int(round(float(self.CHECK_IN_MIN_HOURS) * float(self._ticks_per_hour()))))
             return (
                 bool(context.get("met_directly"))
                 and bool(context.get("relationship_has_nontrivial_history"))
                 and str(context.get("pressure_tier", "low")).strip().lower() != "high"
+                and self._check_in_elapsed_ticks(context) >= min_elapsed
             )
         if topic_id == "job_feel":
             return bool(str(context.get("career_text", "")).strip())
@@ -9470,6 +9571,8 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "entry" and not self._entry_summary(context):
                 continue
+            if topic_id in self.SENSITIVE_INFO_TOPICS and not self._sensitive_info_topic_available(context, topic_id):
+                continue
             if topic_id == "keyholder" and not self._keyholder_summary(context):
                 continue
             if topic_id == "weak_point" and not self._weak_point_summary(context):
@@ -10235,6 +10338,8 @@ class NPCInteractionSystem(System):
                 lines.append(prep_detail)
             return {"npc_lines": lines}
         if topic_id == "keyholder":
+            if not self._sensitive_info_topic_available(context, topic_id):
+                return {"npc_lines": [self._sensitive_info_block_line(context, topic_id)]}
             quality = self._dialogue_pressure_intel_quality(context, topic_id)
             owner_place = context.get("owner_place")
             if owner_place and not context.get("guarded"):
@@ -10260,6 +10365,8 @@ class NPCInteractionSystem(System):
                 lines.append(prep_detail)
             return {"npc_lines": lines}
         if topic_id == "weak_point":
+            if not self._sensitive_info_topic_available(context, topic_id):
+                return {"npc_lines": [self._sensitive_info_block_line(context, topic_id)]}
             quality = self._dialogue_pressure_intel_quality(context, topic_id)
             owner_place = context.get("owner_place")
             if owner_place and not context.get("guarded"):

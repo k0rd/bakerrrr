@@ -93,6 +93,7 @@ from game.opportunities import (
     resolve_opportunities,
     seed_run_opportunities,
     stage_active_opportunities,
+    opportunity_target_arrival_notes,
 )
 from game.property_keys import (
     can_receive_property_key,
@@ -2441,6 +2442,9 @@ class EventLogSystem(System):
             safety_gain = int(event.data.get("safety_gain", 0))
             social_gain = int(event.data.get("social_gain", 0))
             time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0))
+            interrupted = bool(event.data.get("interrupted"))
+            interruption_reason = str(event.data.get("interruption_reason", "") or "").strip().lower()
+            wake_cause = str(event.data.get("wake_cause", "") or "").strip().lower()
             if hp_gain > 0:
                 bits.append(f"HP +{hp_gain}")
             if energy_gain > 0:
@@ -2451,7 +2455,15 @@ class EventLogSystem(System):
                 bits.append(f"So +{social_gain}")
             gains = " ".join(bits) if bits else "steadying your nerves"
             duration_note = f" over {_tick_duration_label(self.sim, time_advanced_ticks)}" if time_advanced_ticks > 0 else ""
-            self.sim.log.add(f"Shelter: {prop_name} lets you catch your breath{duration_note} ({gains}).")
+            text = f"Shelter: {prop_name} lets you catch your breath{duration_note} ({gains})."
+            if interrupted:
+                if interruption_reason == "woken_by_noise" and wake_cause:
+                    text += f" Nearby {wake_cause.replace('_', ' ')} wakes you."
+                elif interruption_reason in {"justice_surrender", "justice_questioning", "actor_detained", "justice_booking_completed"}:
+                    text += " Justice cuts the stay short."
+                else:
+                    text += " Danger cuts the stay short."
+            self.sim.log.add(text)
             return
         if service == "rest":
             bits = []
@@ -2461,6 +2473,10 @@ class EventLogSystem(System):
             social_gain = int(event.data.get("social_gain", 0))
             credits_spent = int(event.data.get("credits_spent", 0))
             time_advanced_ticks = int(event.data.get("time_advanced_ticks", 0))
+            interrupted = bool(event.data.get("interrupted"))
+            interruption_reason = str(event.data.get("interruption_reason", "") or "").strip().lower()
+            wake_cause = str(event.data.get("wake_cause", "") or "").strip().lower()
+            well_rested_granted = bool(event.data.get("well_rested_granted"))
             if hp_gain > 0:
                 bits.append(f"HP +{hp_gain}")
             if energy_gain > 0:
@@ -2471,7 +2487,17 @@ class EventLogSystem(System):
                 bits.append(f"So +{social_gain}")
             gains = " ".join(bits) if bits else "a good night's sleep"
             duration_note = f", {_tick_duration_label(self.sim, time_advanced_ticks)}" if time_advanced_ticks > 0 else ""
-            self.sim.log.add(f"Rest: {prop_name} rents you a room (-{credits_spent}c{duration_note}). {gains}. You feel well rested.")
+            text = f"Rest: {prop_name} rents you a room (-{credits_spent}c{duration_note}). {gains}."
+            if interrupted:
+                if interruption_reason == "woken_by_noise" and wake_cause:
+                    text += f" Nearby {wake_cause.replace('_', ' ')} wakes you."
+                elif interruption_reason in {"justice_surrender", "justice_questioning", "actor_detained", "justice_booking_completed"}:
+                    text += " Justice cuts the stay short."
+                else:
+                    text += " Danger cuts the stay short."
+            elif well_rested_granted:
+                text += " You feel well rested."
+            self.sim.log.add(text)
             return
         if service == "vehicle_fetch":
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
@@ -5801,6 +5827,9 @@ class EventLogSystem(System):
             if pressure_note:
                 note = f"{note}; {pressure_note}"
             self.sim.log.add(f"Local feel: {note}.")
+
+        for note in opportunity_target_arrival_notes(self.sim, (cx, cy)):
+            self.sim.log.add(f"Target drift: {note}", channel="opportunity", priority="high")
 
         revealed_ids = _world_event_revealed_ids(self.sim)
         for active_event in active_world_events_near_chunk(self.sim, (cx, cy), radius=_WORLD_EVENT_PLAYER_REVEAL_RADIUS):
