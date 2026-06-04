@@ -175,6 +175,40 @@ _HUMAN_RENDER_PALETTE_ROWS = (
 
 HUMAN_RENDER_COLOR_KEYS = frozenset(row[2] for row in _HUMAN_RENDER_PALETTE_ROWS)
 
+_HAIR_RENDER_COLOR_KEYS = {
+    "black": "human_charcoal",
+    "dark brown": "human_olive",
+    "chestnut": "human_rust",
+    "warm brown": "human_rust",
+    "ash blond": "human_accent",
+    "honey blond": "human_accent",
+    "platinum blond": "human_monochrome",
+    "auburn": "human_wine",
+    "copper-red": "human_rust",
+    "silver": "human_monochrome",
+    "charcoal": "human_charcoal",
+}
+
+_EYE_RENDER_COLOR_KEYS = {
+    "dark brown": "human_olive",
+    "brown": "human_rust",
+    "hazel": "human_olive",
+    "gray": "human_monochrome",
+    "green": "human_olive",
+    "blue": "human_slate",
+    "amber": "human_accent",
+}
+
+_COMPLEXION_RENDER_COLOR_KEYS = {
+    "deep brown complexion": "human_rust",
+    "rich brown complexion": "human_rust",
+    "warm brown complexion": "human_rust",
+    "olive complexion": "human_olive",
+    "golden complexion": "human_accent",
+    "freckled fair complexion": "human_monochrome",
+    "pale complexion": "human_monochrome",
+}
+
 _CONDITION_PHRASES = (
     "kept surprisingly neat",
     "a little worn at the cuffs",
@@ -436,7 +470,33 @@ def human_physical_summary(seed, *, eid=None, identity=None, personal_name=None)
     return f"{summary}."
 
 
-def human_conversation_description(seed, *, eid=None, identity=None, personal_name=None):
+def _conversation_segment(text, *, color=None, attrs=0):
+    return {
+        "text": str(text or ""),
+        "color": color,
+        "attrs": int(attrs or 0),
+    }
+
+
+def _conversation_text(segments):
+    return "".join(str(segment.get("text", "")) for segment in segments or () if isinstance(segment, dict))
+
+
+def _hair_descriptor_color_key(profile):
+    return _HAIR_RENDER_COLOR_KEYS.get(str(profile.get("hair_color", "")).strip().lower()) or str(
+        profile.get("render_color_key", "") or ""
+    ).strip() or None
+
+
+def _eye_descriptor_color_key(profile):
+    return _EYE_RENDER_COLOR_KEYS.get(str(profile.get("eye_color", "")).strip().lower()) or None
+
+
+def _complexion_descriptor_color_key(profile):
+    return _COMPLEXION_RENDER_COLOR_KEYS.get(str(profile.get("complexion_phrase", "")).strip().lower()) or None
+
+
+def human_conversation_presentation(seed, *, eid=None, identity=None, personal_name=None):
     profile = build_human_description_profile(
         seed,
         eid=eid,
@@ -444,7 +504,7 @@ def human_conversation_description(seed, *, eid=None, identity=None, personal_na
         personal_name=personal_name,
     )
     if not profile:
-        return ""
+        return {"text": "", "segments": []}
 
     rng = random.Random(f"{profile['seed_token']}:conversation")
     slots = pronoun_format_slots(
@@ -458,31 +518,65 @@ def human_conversation_description(seed, *, eid=None, identity=None, personal_na
         "man": "man",
         "nonbinary": "person",
     }.get(str(profile.get("gender_identity", "") or "").strip().lower(), "person")
-    first_tail = _join_with_and((profile["hair_phrase"], profile["standout_phrase"]))
-    attire_tail = ", ".join(
-        bit
-        for bit in (
-            profile.get("attire_phrase", ""),
-            profile.get("palette_phrase", ""),
-            profile.get("condition_phrase", ""),
-        )
-        if str(bit).strip()
-    )
+    eye_phrase = f"{profile['eye_color']} eyes" if str(profile.get("eye_color", "")).strip() else ""
     demeanor_tail = ""
     if rng.random() < 0.54:
         demeanor_tail = f", and the whole look feels {profile['demeanor_phrase']}"
     elif rng.random() < 0.24:
         demeanor_tail = f", with {profile['accessory_phrase']} finishing the look"
-    sentences = [
-        f"You see a {identity_noun} here.",
-        f"{slots['person_subject_cap']} {slots['person_be']} {profile['stature_phrase']} and {slots['person_have']} {first_tail}.",
-        (
-            f"{slots['person_possessive_adj_cap']} {profile['eye_color']} eyes and "
-            f"{profile['complexion_phrase']} stand out against {attire_tail}"
-            f"{demeanor_tail}."
-        ),
+    attire_bits = [
+        str(profile.get("attire_phrase", "")).strip(),
+        str(profile.get("palette_phrase", "")).strip(),
+        str(profile.get("condition_phrase", "")).strip(),
     ]
-    return " ".join(sentence for sentence in sentences[:3] if str(sentence).strip())
+    attire_bits = [bit for bit in attire_bits if bit]
+
+    segments = [
+        _conversation_segment(f"You see a {identity_noun} here. "),
+        _conversation_segment(
+            f"{slots['person_subject_cap']} {slots['person_be']} {profile['stature_phrase']} and {slots['person_have']} "
+        ),
+        _conversation_segment(profile.get("hair_phrase", ""), color=_hair_descriptor_color_key(profile)),
+    ]
+    standout_phrase = str(profile.get("standout_phrase", "")).strip()
+    if standout_phrase:
+        segments.append(_conversation_segment(" and "))
+        segments.append(_conversation_segment(standout_phrase))
+    segments.append(_conversation_segment(". "))
+    segments.append(_conversation_segment(f"{slots['person_possessive_adj_cap']} "))
+    if eye_phrase:
+        segments.append(_conversation_segment(eye_phrase, color=_eye_descriptor_color_key(profile)))
+    complexion_phrase = str(profile.get("complexion_phrase", "")).strip()
+    if complexion_phrase:
+        if eye_phrase:
+            segments.append(_conversation_segment(" and "))
+        segments.append(_conversation_segment(complexion_phrase, color=_complexion_descriptor_color_key(profile)))
+    segments.append(_conversation_segment(" stand out against "))
+    for idx, bit in enumerate(attire_bits):
+        bit_color = str(profile.get("render_color_key", "") or "").strip() or None
+        if idx == len(attire_bits) - 1:
+            bit_color = None if bit == str(profile.get("condition_phrase", "")).strip() else bit_color
+        if idx > 0:
+            segments.append(_conversation_segment(", "))
+        segments.append(_conversation_segment(bit, color=bit_color))
+    if demeanor_tail:
+        segments.append(_conversation_segment(demeanor_tail))
+    segments.append(_conversation_segment("."))
+    plain = _conversation_text(segments).strip()
+    return {
+        "text": plain,
+        "segments": [segment for segment in segments if str(segment.get("text", ""))],
+    }
+
+
+def human_conversation_description(seed, *, eid=None, identity=None, personal_name=None):
+    presentation = human_conversation_presentation(
+        seed,
+        eid=eid,
+        identity=identity,
+        personal_name=personal_name,
+    )
+    return str(presentation.get("text", "")).strip()
 
 
 def human_render_color_key(seed, *, eid=None, identity=None, personal_name=None):

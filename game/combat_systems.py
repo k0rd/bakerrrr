@@ -1555,6 +1555,8 @@ class StatusEffectSystem(System):
                 energy_delta = _float_or_default(modifiers.get("energy_tick_delta", 0.0), 0.0)
                 safety_delta = _float_or_default(modifiers.get("safety_tick_delta", 0.0), 0.0)
                 social_delta = _float_or_default(modifiers.get("social_tick_delta", 0.0), 0.0)
+                hunger_delta = _float_or_default(modifiers.get("hunger_tick_delta", 0.0), 0.0)
+                thirst_delta = _float_or_default(modifiers.get("thirst_tick_delta", 0.0), 0.0)
 
                 if energy_delta:
                     needs.energy = _clamp(needs.energy + energy_delta)
@@ -1562,6 +1564,10 @@ class StatusEffectSystem(System):
                     needs.safety = _clamp(needs.safety + safety_delta)
                 if social_delta:
                     needs.social = _clamp(needs.social + social_delta)
+                if hunger_delta and hasattr(needs, "hunger"):
+                    needs.hunger = _clamp(needs.hunger + hunger_delta)
+                if thirst_delta and hasattr(needs, "thirst"):
+                    needs.thirst = _clamp(needs.thirst + thirst_delta)
 
             vitality = vitalities.get(eid)
             hp_tick_delta = _float_or_default(modifiers.get("hp_tick_delta", 0.0), 0.0)

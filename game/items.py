@@ -370,7 +370,8 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "legal",
         "effects": [
             {"type": "modify_need", "need": "energy", "delta": 18},
-            {"type": "status", "status": "well_fed", "duration": 22, "modifiers": {"energy_tick_delta": 0.08, "move_speed_mult": 0.04}},
+            {"type": "modify_need", "need": "hunger", "delta": 32},
+            {"type": "status", "status": "well_fed", "duration": 22, "modifiers": {"energy_tick_delta": 0.08, "move_speed_mult": 0.04, "hp_tick_delta": 0.06}},
         ],
     },
     "caff_shot": {
@@ -414,7 +415,8 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "legal",
         "effects": [
             {"type": "modify_need", "need": "social", "delta": 16},
-            {"type": "status", "status": "buzzed", "duration": 20, "modifiers": {"social_tick_delta": 0.08, "safety_tick_delta": -0.04, "ranged_accuracy_mult": -0.18, "melee_damage_mult": 0.06, "retreat_bias_delta": -0.06}},
+            {"type": "modify_need", "need": "thirst", "delta": 12},
+            {"type": "status", "status": "buzzed", "duration": 20, "modifiers": {"social_tick_delta": 0.08, "safety_tick_delta": -0.04, "ranged_accuracy_mult": -0.18, "melee_damage_mult": 0.06, "retreat_bias_delta": -0.06, "hp_tick_delta": 0.03}},
         ],
     },
     "med_gel": {
@@ -469,7 +471,9 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "legal",
         "effects": [
             {"type": "modify_need", "need": "energy", "delta": 14},
+            {"type": "modify_need", "need": "hunger", "delta": 26},
             {"type": "modify_need", "need": "safety", "delta": 4},
+            {"type": "status", "status": "nourished", "duration": 18, "modifiers": {"energy_tick_delta": 0.04, "hp_tick_delta": 0.06}},
         ],
     },
     "noodle_cup": {
@@ -480,6 +484,8 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "legal",
         "effects": [
             {"type": "modify_need", "need": "energy", "delta": 16},
+            {"type": "modify_need", "need": "hunger", "delta": 30},
+            {"type": "modify_need", "need": "thirst", "delta": 6},
             {"type": "status", "status": "warm_meal", "duration": 16, "modifiers": {"energy_tick_delta": 0.05, "safety_tick_delta": 0.03, "hp_tick_delta": 0.12}},
         ],
     },
@@ -487,12 +493,13 @@ DEFAULT_ITEM_CATALOG = {
         "name": "Hydration Salts",
         "glyph": "!",
         "stack_max": 2,
-        "tags": ["consumable", "medical", "safety", "legal"],
+        "tags": ["consumable", "drink", "medical", "safety", "legal"],
         "legal_status": "legal",
         "effects": [
             {"type": "modify_need", "need": "safety", "delta": 12},
             {"type": "modify_need", "need": "energy", "delta": 8},
-            {"type": "status", "status": "hydrated", "duration": 20, "modifiers": {"safety_tick_delta": 0.05, "energy_tick_delta": 0.04, "move_speed_mult": 0.05, "suppression_resist_mult": 0.12}},
+            {"type": "modify_need", "need": "thirst", "delta": 34},
+            {"type": "status", "status": "hydrated", "duration": 20, "modifiers": {"safety_tick_delta": 0.05, "energy_tick_delta": 0.04, "move_speed_mult": 0.05, "suppression_resist_mult": 0.12, "hp_tick_delta": 0.06}},
         ],
     },
     "micro_medkit": {

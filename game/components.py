@@ -711,10 +711,12 @@ class MovementThrottle:
 
 
 class NPCNeeds:
-    def __init__(self, energy=85.0, safety=75.0, social=65.0):
+    def __init__(self, energy=85.0, safety=75.0, social=65.0, hunger=86.0, thirst=90.0):
         self.energy = float(energy)
         self.safety = float(safety)
         self.social = float(social)
+        self.hunger = float(hunger)
+        self.thirst = float(thirst)
         self.critical = set()
 
 
@@ -749,6 +751,235 @@ class NPCOpportunityKnowledge:
         self.active_targets = dict(active_targets or {})
         self.failed_target_keys = dict(failed_target_keys or {})
         self.last_refresh_tick_by_kind = dict(last_refresh_tick_by_kind or {})
+
+
+class SocialKnowledge:
+    def __init__(self, max_records=32, max_social=12):
+        self.max_records = max(4, int(max_records or 32))
+        self.max_social = max(1, int(max_social or 12))
+        self.entries = {}
+        self.social_queue = []
+        self.last_shared = {}
+
+    def _entry_key(self, source_domain, subject_key):
+        domain = str(source_domain or "").strip().lower()
+        subject = str(subject_key or "").strip()
+        if not domain or not subject:
+            return None
+        return f"{domain}:{subject}"
+
+    def remember(
+        self,
+        source_domain,
+        subject_key,
+        *,
+        learned_tick=0,
+        source_kind="",
+        source_eid=None,
+        confidence=0.5,
+        firsthand=False,
+        propagation_depth=0,
+        social_interest=0.0,
+        summary="",
+        detail="",
+        tags=(),
+        refs=None,
+    ):
+        entry_key = self._entry_key(source_domain, subject_key)
+        if entry_key is None:
+            return None
+        try:
+            learned_tick = int(learned_tick)
+        except (TypeError, ValueError):
+            learned_tick = 0
+        incoming_learned_tick = int(learned_tick)
+        try:
+            source_eid = int(source_eid) if source_eid is not None else None
+        except (TypeError, ValueError):
+            source_eid = None
+        try:
+            propagation_depth = max(0, int(propagation_depth))
+        except (TypeError, ValueError):
+            propagation_depth = 0
+
+        confidence = _clamp_unit(confidence, default=0.5)
+        social_interest = _clamp_unit(social_interest, default=0.0)
+        source_kind = str(source_kind or "").strip().lower()
+        source_domain = str(source_domain or "").strip().lower()
+        subject_key = str(subject_key or "").strip()
+        summary = str(summary or "").strip()
+        detail = str(detail or "").strip()
+
+        existing = self.entries.get(entry_key)
+        first_tick = learned_tick
+        if isinstance(existing, dict):
+            first_tick = _safe_int(existing.get("learned_tick"), learned_tick)
+            learned_tick = min(learned_tick, first_tick)
+            confidence = max(confidence, float(existing.get("confidence", 0.0) or 0.0))
+            social_interest = max(social_interest, float(existing.get("social_interest", 0.0) or 0.0))
+            firsthand = bool(firsthand or existing.get("firsthand", False))
+            if not source_kind:
+                source_kind = str(existing.get("source_kind", "") or "").strip().lower()
+            if source_eid is None:
+                source_eid = existing.get("source_eid")
+            propagation_depth = min(
+                propagation_depth,
+                _safe_int(existing.get("propagation_depth"), propagation_depth),
+            )
+            if not summary:
+                summary = str(existing.get("summary", "") or "").strip()
+            if not detail:
+                detail = str(existing.get("detail", "") or "").strip()
+
+        tag_set = {
+            str(tag).strip().lower()
+            for tag in tuple((existing or {}).get("tags", ()) if isinstance(existing, dict) else ()) or ()
+            if str(tag).strip()
+        }
+        for tag in tuple(tags or ()) or ():
+            token = str(tag).strip().lower()
+            if token:
+                tag_set.add(token)
+
+        clean_refs = {}
+        if isinstance(existing, dict) and isinstance(existing.get("refs"), dict):
+            clean_refs.update(existing.get("refs") or {})
+        if isinstance(refs, dict):
+            for raw_key, raw_value in refs.items():
+                key = str(raw_key or "").strip()
+                if key:
+                    clean_refs[key] = raw_value
+
+        record = dict(existing) if isinstance(existing, dict) else {}
+        record.update({
+            "key": entry_key,
+            "source_domain": source_domain,
+            "subject_key": subject_key,
+            "learned_tick": int(learned_tick),
+            "last_learned_tick": int(
+                incoming_learned_tick
+                if not isinstance(existing, dict)
+                else max(
+                    _safe_int(existing.get("last_learned_tick"), _safe_int(existing.get("learned_tick"), learned_tick)),
+                    _safe_int(existing.get("learned_tick"), learned_tick),
+                    int(incoming_learned_tick),
+                )
+            ),
+            "source_kind": source_kind,
+            "source_eid": source_eid,
+            "confidence": float(confidence),
+            "firsthand": bool(firsthand),
+            "propagation_depth": int(propagation_depth),
+            "social_interest": float(social_interest),
+            "summary": summary,
+            "detail": detail,
+            "tags": tuple(sorted(tag_set)),
+            "refs": clean_refs,
+        })
+        self.entries[entry_key] = record
+        self._trim_records()
+        return record
+
+    def queue_entry(self, entry_key, *, score=0.0, tick=0):
+        key = str(entry_key or "").strip()
+        if not key or key not in self.entries:
+            return False
+        try:
+            tick = int(tick)
+        except (TypeError, ValueError):
+            tick = 0
+        score = _clamp_unit(score, default=0.0)
+
+        existing = None
+        for entry in self.social_queue:
+            if str(entry.get("key", "") or "").strip() == key:
+                existing = entry
+                break
+        if existing is None:
+            self.social_queue.append({
+                "key": key,
+                "score": float(score),
+                "queued_tick": int(tick),
+            })
+        else:
+            existing["score"] = max(float(existing.get("score", 0.0) or 0.0), float(score))
+            existing["queued_tick"] = max(int(existing.get("queued_tick", tick) or tick), int(tick))
+        self._trim_queue()
+        return True
+
+    def mark_shared(self, entry_key, *, tick=0, channel="social"):
+        key = str(entry_key or "").strip()
+        if not key:
+            return False
+        try:
+            tick = int(tick)
+        except (TypeError, ValueError):
+            tick = 0
+        channel_key = str(channel or "social").strip().lower() or "social"
+        shared = self.last_shared.get(key)
+        if not isinstance(shared, dict):
+            shared = {}
+            self.last_shared[key] = shared
+        shared[channel_key] = int(tick)
+        return True
+
+    def forget(self, entry_key):
+        key = str(entry_key or "").strip()
+        if not key:
+            return False
+        removed = key in self.entries
+        self.entries.pop(key, None)
+        self.social_queue = [
+            entry for entry in self.social_queue
+            if str(entry.get("key", "") or "").strip() != key
+        ]
+        self.last_shared.pop(key, None)
+        return removed
+
+    def _trim_records(self):
+        if len(self.entries) <= self.max_records:
+            return
+        ranked = sorted(
+            self.entries.values(),
+            key=lambda record: (
+                float(record.get("social_interest", 0.0) or 0.0),
+                float(record.get("confidence", 0.0) or 0.0),
+                bool(record.get("firsthand", False)),
+                int(record.get("last_learned_tick", 0) or 0),
+            ),
+            reverse=True,
+        )
+        keep_keys = {
+            str(record.get("key", "") or "").strip()
+            for record in ranked[: self.max_records]
+        }
+        for entry_key in tuple(self.entries.keys()):
+            if entry_key not in keep_keys:
+                self.forget(entry_key)
+
+    def _trim_queue(self):
+        filtered = []
+        seen = set()
+        for entry in sorted(
+            self.social_queue,
+            key=lambda row: (
+                float(row.get("score", 0.0) or 0.0),
+                int(row.get("queued_tick", 0) or 0),
+            ),
+            reverse=True,
+        ):
+            key = str(entry.get("key", "") or "").strip()
+            if not key or key in seen or key not in self.entries:
+                continue
+            filtered.append({
+                "key": key,
+                "score": _clamp_unit(entry.get("score", 0.0), default=0.0),
+                "queued_tick": int(entry.get("queued_tick", 0) or 0),
+            })
+            seen.add(key)
+            if len(filtered) >= self.max_social:
+                break
+        self.social_queue = filtered
 
 
 class BehaviorProfile:

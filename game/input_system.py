@@ -1484,7 +1484,7 @@ class InputSystem(System):
         body_w, _transcript_h, _option_h = self._dialog_body_dimensions()
         display_lines = []
         for raw in raw_lines:
-            wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
+            wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
             display_lines.extend(wrapped)
         return display_lines or ["No conversation yet."]
 

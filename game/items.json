@@ -20,12 +20,18 @@
         "delta": 18
       },
       {
+        "type": "modify_need",
+        "need": "hunger",
+        "delta": 32
+      },
+      {
         "type": "status",
         "status": "well_fed",
         "duration": 22,
         "modifiers": {
           "energy_tick_delta": 0.08,
-          "move_speed_mult": 0.04
+          "move_speed_mult": 0.04,
+          "hp_tick_delta": 0.06
         }
       }
     ]
@@ -111,6 +117,11 @@
         "delta": 16
       },
       {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 12
+      },
+      {
         "type": "status",
         "status": "buzzed",
         "duration": 20,
@@ -119,7 +130,8 @@
           "safety_tick_delta": -0.04,
           "ranged_accuracy_mult": -0.18,
           "melee_damage_mult": 0.06,
-          "retreat_bias_delta": -0.06
+          "retreat_bias_delta": -0.06,
+          "hp_tick_delta": 0.03
         }
       }
     ]
@@ -250,8 +262,22 @@
       },
       {
         "type": "modify_need",
+        "need": "hunger",
+        "delta": 26
+      },
+      {
+        "type": "modify_need",
         "need": "safety",
         "delta": 4
+      },
+      {
+        "type": "status",
+        "status": "nourished",
+        "duration": 18,
+        "modifiers": {
+          "energy_tick_delta": 0.04,
+          "hp_tick_delta": 0.06
+        }
       }
     ]
   },
@@ -273,6 +299,16 @@
         "delta": 16
       },
       {
+        "type": "modify_need",
+        "need": "hunger",
+        "delta": 30
+      },
+      {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 6
+      },
+      {
         "type": "status",
         "status": "warm_meal",
         "duration": 16,
@@ -290,6 +326,7 @@
     "stack_max": 2,
     "tags": [
       "consumable",
+      "drink",
       "medical",
       "safety",
       "legal"
@@ -307,6 +344,11 @@
         "delta": 8
       },
       {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 34
+      },
+      {
         "type": "status",
         "status": "hydrated",
         "duration": 20,
@@ -314,7 +356,8 @@
           "safety_tick_delta": 0.05,
           "energy_tick_delta": 0.04,
           "move_speed_mult": 0.05,
-          "suppression_resist_mult": 0.12
+          "suppression_resist_mult": 0.12,
+          "hp_tick_delta": 0.06
         }
       }
     ]
@@ -753,6 +796,11 @@
         "type": "modify_need",
         "need": "social",
         "delta": 12
+      },
+      {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 6
       },
       {
         "type": "modify_need",
@@ -1269,8 +1317,22 @@
       },
       {
         "type": "modify_need",
+        "need": "hunger",
+        "delta": 18
+      },
+      {
+        "type": "modify_need",
         "need": "safety",
         "delta": 2
+      },
+      {
+        "type": "status",
+        "status": "snacked",
+        "duration": 12,
+        "modifiers": {
+          "energy_tick_delta": 0.04,
+          "hp_tick_delta": 0.04
+        }
       }
     ]
   },
@@ -1297,13 +1359,19 @@
         "delta": 3
       },
       {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 34
+      },
+      {
         "type": "status",
         "status": "refreshed",
         "duration": 12,
         "modifiers": {
           "safety_tick_delta": 0.03,
           "move_speed_mult": 0.03,
-          "suppression_resist_mult": 0.05
+          "suppression_resist_mult": 0.05,
+          "hp_tick_delta": 0.05
         }
       }
     ]
@@ -1327,8 +1395,28 @@
       },
       {
         "type": "modify_need",
+        "need": "hunger",
+        "delta": 24
+      },
+      {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 8
+      },
+      {
+        "type": "modify_need",
         "need": "safety",
         "delta": 5
+      },
+      {
+        "type": "status",
+        "status": "warm_broth",
+        "duration": 16,
+        "modifiers": {
+          "energy_tick_delta": 0.04,
+          "safety_tick_delta": 0.02,
+          "hp_tick_delta": 0.08
+        }
       }
     ]
   },
@@ -1352,6 +1440,11 @@
       },
       {
         "type": "modify_need",
+        "need": "thirst",
+        "delta": 16
+      },
+      {
+        "type": "modify_need",
         "need": "social",
         "delta": 4
       },
@@ -1364,7 +1457,8 @@
           "safety_tick_delta": -0.03,
           "weapon_cooldown_mult": -0.08,
           "ranged_accuracy_mult": 0.08,
-          "suppression_resist_mult": 0.08
+          "suppression_resist_mult": 0.08,
+          "hp_tick_delta": 0.04
         }
       }
     ]
@@ -1471,6 +1565,112 @@
           "retreat_bias_delta": -0.16,
           "melee_damage_mult": 0.08,
           "ranged_accuracy_mult": -0.06
+        }
+      }
+    ]
+  },
+  "rice_bowl": {
+    "name": "Rice Bowl",
+    "glyph": "%",
+    "stack_max": 2,
+    "tags": [
+      "consumable",
+      "energy",
+      "food",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 12
+      },
+      {
+        "type": "modify_need",
+        "need": "hunger",
+        "delta": 34
+      },
+      {
+        "type": "status",
+        "status": "square_meal",
+        "duration": 20,
+        "modifiers": {
+          "energy_tick_delta": 0.05,
+          "safety_tick_delta": 0.02,
+          "hp_tick_delta": 0.08
+        }
+      }
+    ]
+  },
+  "sealed_juice": {
+    "name": "Sealed Juice",
+    "glyph": "!",
+    "stack_max": 3,
+    "tags": [
+      "consumable",
+      "drink",
+      "energy",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 5
+      },
+      {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 28
+      },
+      {
+        "type": "status",
+        "status": "sugared",
+        "duration": 12,
+        "modifiers": {
+          "energy_tick_delta": 0.035,
+          "hp_tick_delta": 0.05
+        }
+      }
+    ]
+  },
+  "fruit_cup": {
+    "name": "Fruit Cup",
+    "glyph": "%",
+    "stack_max": 3,
+    "tags": [
+      "consumable",
+      "drink",
+      "energy",
+      "food",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 8
+      },
+      {
+        "type": "modify_need",
+        "need": "hunger",
+        "delta": 18
+      },
+      {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 16
+      },
+      {
+        "type": "status",
+        "status": "fresh_snack",
+        "duration": 14,
+        "modifiers": {
+          "safety_tick_delta": 0.02,
+          "hp_tick_delta": 0.05
         }
       }
     ]
@@ -1678,7 +1878,8 @@
           "safety_tick_delta": -0.05,
           "ranged_accuracy_mult": -0.18,
           "melee_damage_mult": 0.06,
-          "retreat_bias_delta": -0.06
+          "retreat_bias_delta": -0.06,
+          "hp_tick_delta": 0.03
         }
       }
     ]

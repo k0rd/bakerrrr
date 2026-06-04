@@ -3,7 +3,13 @@
 import re
 
 from game.service_runtime import _int_or_default
-from game.system_support.status_runtime import _float_or_default, _status_multiplier
+from game.system_support.status_runtime import (
+    SURVIVAL_CRITICAL_LEVEL,
+    SURVIVAL_SEVERE_LEVEL,
+    _ensure_survival_needs,
+    _float_or_default,
+    _status_multiplier,
+)
 
 
 def _floor_label(z, *, long=False):
@@ -65,6 +71,22 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
         status_chunks.append(f"Security {security}")
     status_chunks.append(f"Time {time_label} {light_phase}")
     return status_chunks
+
+
+def _survival_indicator_chunks(needs):
+    needs = _ensure_survival_needs(needs)
+    if needs is None:
+        return []
+
+    def label(prefix, value):
+        value = max(0.0, min(100.0, _float_or_default(value, 0.0)))
+        marker = "!!" if value < SURVIVAL_SEVERE_LEVEL else "!" if value < SURVIVAL_CRITICAL_LEVEL else ""
+        return f"{prefix}{marker}{value:.0f}"
+
+    return [
+        label("F", getattr(needs, "hunger", 0.0)),
+        label("W", getattr(needs, "thirst", 0.0)),
+    ]
 
 
 def _sentence_from_note(note):

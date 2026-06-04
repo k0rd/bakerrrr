@@ -1,6 +1,6 @@
 from engine.events import Event
 from engine.systems import System
-from game.components import FinancialProfile, Inventory, PlayerAssets, Position
+from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position
 from game.casino_ui_runtime import (
     CASINO_FLOOR_ARCHETYPES,
     CASINO_MACHINE_SERVICE_IDS,
@@ -115,6 +115,10 @@ from game.service_runtime import (
 )
 from game.skills import skill_label as _skill_label
 from game.system_support.building_repair_runtime import owned_repairable_buildings as _owned_repairable_buildings
+from game.system_support.npc_behavior_runtime import (
+    _nutrition_capabilities_for_property,
+    _receive_nutrition_at_actor,
+)
 
 
 class ServiceMenuSystem(System):
@@ -234,6 +238,37 @@ class ServiceMenuSystem(System):
             for entry in list(getattr(inventory, "items", ()) or ())
             if str(entry.get("item_id", "") or "").strip().lower() == item_id
         )
+
+    def _player_can_redeem_meal_voucher(self, prop):
+        if not isinstance(prop, dict):
+            return False
+        caps = _nutrition_capabilities_for_property(prop)
+        if not caps.get("food"):
+            return False
+        if self._inventory_item_count("meal_voucher") <= 0:
+            return False
+        needs = self.sim.ecs.get(NPCNeeds).get(self.player_eid)
+        if needs is None:
+            return False
+        hunger = getattr(needs, "hunger", 100.0)
+        hunger = 100.0 if hunger is None else float(hunger)
+        return hunger < 90.0
+
+    def _redeem_meal_voucher_lines(self, prop, result, before_hunger, before_thirst):
+        prop_name = str((prop or {}).get("name", (prop or {}).get("id", "Meal"))).strip() or "Meal"
+        needs = self.sim.ecs.get(NPCNeeds).get(self.player_eid)
+        after_hunger = float(getattr(needs, "hunger", before_hunger) if needs is not None else before_hunger)
+        after_thirst = float(getattr(needs, "thirst", before_thirst) if needs is not None else before_thirst)
+        lines = ["Voucher redeemed for an instant meal."]
+        if result and isinstance(result, dict):
+            bits = []
+            if abs(after_hunger - float(before_hunger)) > 0.01:
+                bits.append(f"F {int(round(before_hunger))}->{int(round(after_hunger))}")
+            if abs(after_thirst - float(before_thirst)) > 0.01:
+                bits.append(f"W {int(round(before_thirst))}->{int(round(after_thirst))}")
+            if bits:
+                lines.append(" ".join(bits))
+        return f"Meal Voucher: {prop_name}", lines
 
     def _casino_session(self):
         state = self._casino_ui_state()
@@ -2592,6 +2627,9 @@ class ServiceMenuSystem(System):
         if "insurance" in finance_services:
             options.append({"id": "insurance", "label": _service_menu_option_label("insurance")})
 
+        if self._player_can_redeem_meal_voucher(prop):
+            options.append({"id": "redeem_meal_voucher", "label": "Redeem meal voucher"})
+
         for site_service in _site_services_for_property(prop):
             options.append({"id": site_service, "label": _service_menu_option_label(site_service)})
 
@@ -3107,6 +3145,8 @@ class ServiceMenuSystem(System):
             return "Business hours", ["That business record is no longer available through this terminal."]
         if option_id.startswith("banking_business_markup:"):
             return "Business markup", ["That business record is no longer available through this terminal."]
+        if option_id == "redeem_meal_voucher":
+            return "Meal Voucher", ["That meal voucher counter is no longer available here."]
         if option_id == "building_repair" or option_id.startswith("building_repair:target|"):
             return "Building Repair", ["That contractor quote is no longer available here."]
         if option_id == "business_remodel" or option_id.startswith("business_remodel:"):
@@ -3828,6 +3868,39 @@ class ServiceMenuSystem(System):
             else:
                 title, lines = self._bank_blocked_lines(Event("banking_action_blocked", eid=self.player_eid, reason="no_banking_service"))
                 self._present_service_result(title, lines)
+            return
+        if option_id == "redeem_meal_voucher":
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            pos = self._position_for(self.player_eid)
+            if not pos:
+                return
+            needs = self.sim.ecs.get(NPCNeeds).get(self.player_eid)
+            if needs is None:
+                self._present_service_result("Meal Voucher", ["No meal need is available right now."], property_id=property_id)
+                return
+            if not _nutrition_capabilities_for_property(prop).get("food"):
+                self._present_service_result("Meal Voucher", ["This place is not serving meals right now."], property_id=property_id)
+                return
+            if self._inventory_item_count("meal_voucher") <= 0:
+                self._present_service_result("Meal Voucher", ["You do not have a meal voucher to redeem."], property_id=property_id)
+                return
+            before_hunger = float(getattr(needs, "hunger", 100.0) if getattr(needs, "hunger", None) is not None else 100.0)
+            before_thirst = float(getattr(needs, "thirst", 100.0) if getattr(needs, "thirst", None) is not None else 100.0)
+            result = _receive_nutrition_at_actor(
+                self.sim,
+                self.player_eid,
+                pos,
+                prop=prop,
+                redeem_meal_voucher=True,
+            )
+            if not result:
+                self._present_service_result("Meal Voucher", ["You do not need a meal right now."], property_id=property_id)
+                return
+            title, lines = self._redeem_meal_voucher_lines(prop, result, before_hunger, before_thirst)
+            self._present_service_result(title, lines, property_id=property_id)
             return
         if option_id == "building_repair":
             if isinstance(prop, dict):

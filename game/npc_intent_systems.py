@@ -191,6 +191,7 @@ from game.system_support.opportunity_knowledge_runtime import (
     schedule_will_rethink as _schedule_will_rethink,
     will_rethink_due as _will_rethink_due,
 )
+from game.system_support.social_knowledge_runtime import hydrate_relationship_social_knowledge
 from game.system_support.access_runtime import _attempt_locked_property_entry_with_sim
 from game.system_support.criminal_drive_runtime import (
     active_plan_for_actor,
@@ -233,9 +234,11 @@ from game.system_support.npc_behavior_runtime import (
     _find_scavenge_ground_item_target,
     _inventory_scavenge_sale_rows,
     _inventory_contraband_heat,
+    _npc_try_consume_nutrition,
     _pick_social_venue as _behavior_pick_social_venue,
     _receive_lodging_at_actor,
     _receive_medical_aid_at_actor,
+    _receive_nutrition_at_actor,
     _receive_safe_spot_at_actor,
     _resolve_street_buy_between_actors,
     _resolve_street_appraise_between_actors,
@@ -248,7 +251,12 @@ from game.system_support.npc_behavior_runtime import (
 )
 from game.system_support.settlement_runtime import _home_property
 from game.system_support.status_runtime import (
+    SURVIVAL_CRITICAL_LEVEL,
+    SURVIVAL_LOW_LEVEL,
+    SURVIVAL_SEVERE_LEVEL,
+    _ensure_survival_needs,
     _npc_status_metric_args,
+    _survival_pressure_snapshot,
     _status_int_offset,
     _status_modifier_total,
     _status_multiplier,
@@ -1280,31 +1288,192 @@ class NPCNeedsSystem(System):
 
     CRITICAL_LEVEL = 30.0
     STABLE_LEVEL = 45.0
+    SURVIVAL_STABLE_LEVEL = SURVIVAL_LOW_LEVEL
+    DEPRIVATION_DAMAGE_INTERVAL = 18
 
-    def _sync_threshold(self, eid, needs, key, value):
-        if value < self.CRITICAL_LEVEL and key not in needs.critical:
+    def _sync_threshold(self, eid, needs, key, value, *, critical_level=None, stable_level=None):
+        critical_level = self.CRITICAL_LEVEL if critical_level is None else float(critical_level)
+        stable_level = self.STABLE_LEVEL if stable_level is None else float(stable_level)
+        if value < critical_level and key not in needs.critical:
             needs.critical.add(key)
             self.sim.emit(Event("npc_need_critical", npc_eid=eid, need=key, value=value))
+            if key in {"hunger", "thirst"}:
+                _mark_actor_urgent(self.sim, eid, family="will", reason=f"need:{key}", ttl_ticks=20)
+                _schedule_actor_due(self.sim, eid, "will", delay_ticks=0, reason=f"need:{key}")
+                _schedule_will_rethink(self.sim, eid, current_tick=getattr(self.sim, "tick", 0), delay_ticks=0)
 
-        if value > self.STABLE_LEVEL and key in needs.critical:
+        if value > stable_level and key in needs.critical:
             needs.critical.remove(key)
             self.sim.emit(Event("npc_need_stabilized", npc_eid=eid, need=key, value=value))
+
+    def _active_deprivation_damage_allowed(self, eid, pos):
+        if eid == getattr(self.sim, "player_eid", None):
+            return True
+        if pos is None:
+            return False
+        try:
+            return str(self.sim.detail_for_xy(pos.x, pos.y)).strip().lower() == "active"
+        except Exception:
+            return False
+
+    def _deprivation_damage_ready(self, eid):
+        current_tick = int(getattr(self.sim, "tick", 0) or 0)
+        cooldowns = getattr(self.sim, "deprivation_damage_cooldowns", None)
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
+            setattr(self.sim, "deprivation_damage_cooldowns", cooldowns)
+        try:
+            next_tick = int(cooldowns.get(int(eid), 0) or 0)
+        except (TypeError, ValueError):
+            next_tick = 0
+        if current_tick < next_tick:
+            return False
+        cooldowns[int(eid)] = current_tick + int(self.DEPRIVATION_DAMAGE_INTERVAL)
+        return True
+
+    def _deprivation_damage_amount(self, snapshot):
+        hunger = snapshot.get("hunger", 100.0)
+        thirst = snapshot.get("thirst", 100.0)
+        hunger = 100.0 if hunger is None else float(hunger)
+        thirst = 100.0 if thirst is None else float(thirst)
+        worst = min(hunger, thirst)
+        severity = max(0.0, min(1.0, (SURVIVAL_SEVERE_LEVEL - worst) / max(1.0, SURVIVAL_SEVERE_LEVEL)))
+        damage = 1 + int(round(severity * 2.0))
+        if hunger < SURVIVAL_SEVERE_LEVEL and thirst < SURVIVAL_SEVERE_LEVEL:
+            damage += 1
+        return int(max(1, min(4, damage)))
+
+    def _apply_deprivation_damage(self, eid, pos, vitality, snapshot):
+        if vitality is None or bool(getattr(vitality, "downed", False)):
+            return False
+        if not self._active_deprivation_damage_allowed(eid, pos):
+            return False
+        if not self._deprivation_damage_ready(eid):
+            return False
+
+        reason = str(snapshot.get("reason", "") or "deprivation").strip().lower() or "deprivation"
+        damage = self._deprivation_damage_amount(snapshot)
+        max_hp = max(1, int(getattr(vitality, "max_hp", 1) or 1))
+        before_hp = max(0, int(getattr(vitality, "hp", max_hp) or max_hp))
+        after_hp = max(0, before_hp - damage)
+        vitality.hp = int(after_hp)
+        x = int(getattr(pos, "x", 0) or 0) if pos is not None else 0
+        y = int(getattr(pos, "y", 0) or 0) if pos is not None else 0
+        z = int(getattr(pos, "z", 0) or 0) if pos is not None else 0
+
+        self.sim.emit(Event(
+            "entity_damaged",
+            target_eid=eid,
+            source_eid=None,
+            weapon_id=reason,
+            damage_kind="deprivation",
+            reason=reason,
+            raw_damage=damage,
+            damage=damage,
+            cover_absorb=0.0,
+            armor_absorb=0.0,
+            hp=int(vitality.hp),
+            max_hp=max_hp,
+            x=x,
+            y=y,
+            z=z,
+        ))
+        self.sim.emit(Event(
+            "actor_deprivation_damage",
+            target_eid=eid,
+            reason=reason,
+            damage=damage,
+            hp=int(vitality.hp),
+            max_hp=max_hp,
+            hunger=round(float(snapshot.get("hunger", 0.0) or 0.0), 2),
+            thirst=round(float(snapshot.get("thirst", 0.0) or 0.0), 2),
+            x=x,
+            y=y,
+            z=z,
+        ))
+        if vitality.hp > 0:
+            return True
+
+        vitality.downed_count += 1
+        setattr(vitality, "last_attacker_eid", None)
+        setattr(vitality, "death_reason", reason)
+        vitality.downed = True
+        vitality.downed_tick = int(getattr(self.sim, "tick", 0) or 0)
+
+        if eid == getattr(self.sim, "player_eid", None):
+            self.sim.emit(Event(
+                "player_killed",
+                target_eid=eid,
+                source_eid=None,
+                source_name="",
+                weapon_id=reason,
+                reason=reason,
+                damage_kind="deprivation",
+                x=x,
+                y=y,
+                z=z,
+            ))
+            return True
+
+        _apply_downed_actor_state(self.sim, eid, tick=getattr(self.sim, "tick", 0))
+        collider = self.sim.ecs.get(Collider).get(eid)
+        if collider:
+            collider.blocks = False
+        render = self.sim.ecs.get(Render).get(eid)
+        if render:
+            render.glyph = "x"
+        self.sim.emit(Event(
+            "npc_downed",
+            target_eid=eid,
+            source_eid=None,
+            reason=reason,
+            damage_kind="deprivation",
+            x=x,
+            y=y,
+            z=z,
+        ))
+        return True
 
     def update(self):
         needs_map = self.sim.ecs.get(NPCNeeds)
         ais = self.sim.ecs.get(AI)
         positions = self.sim.ecs.get(Position)
+        vitalities = self.sim.ecs.get(Vitality)
 
         for eid, needs in needs_map.items():
             pos = positions.get(eid)
             if pos and not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
                 continue
+            _ensure_survival_needs(needs)
+            _npc_try_consume_nutrition(self.sim, eid, needs)
 
             ai = ais.get(eid)
             state = ai.state if ai else "idle"
 
             needs.energy = _clamp(needs.energy - 0.07)
             needs.social = _clamp(needs.social - 0.05)
+            hunger_drain = 0.024
+            thirst_drain = 0.045
+            if state in {
+                "working",
+                "investigating",
+                "protecting",
+                "seeking_safety",
+                "chasing",
+                "casing_target",
+                "committing_property_crime",
+            }:
+                hunger_drain += 0.006
+                thirst_drain += 0.012
+            if state in {"resting", "socializing", "lounging"}:
+                hunger_drain *= 0.82
+                thirst_drain *= 0.82
+            current_hunger = getattr(needs, "hunger", 86.0)
+            current_thirst = getattr(needs, "thirst", 90.0)
+            current_hunger = 86.0 if current_hunger is None else float(current_hunger)
+            current_thirst = 90.0 if current_thirst is None else float(current_thirst)
+            needs.hunger = _clamp(current_hunger - hunger_drain)
+            needs.thirst = _clamp(current_thirst - thirst_drain)
 
             if state in {"investigating", "protecting", "seeking_safety"}:
                 needs.safety = _clamp(needs.safety - 0.08)
@@ -1318,9 +1487,38 @@ class NPCNeedsSystem(System):
             if state == "resting":
                 needs.energy = _clamp(needs.energy + 0.35)
 
+            pressure = _survival_pressure_snapshot(needs)
+            hunger_pressure = float(pressure.get("hunger_pressure", 0.0) or 0.0)
+            thirst_pressure = float(pressure.get("thirst_pressure", 0.0) or 0.0)
+            if hunger_pressure or thirst_pressure:
+                needs.energy = _clamp(needs.energy - ((hunger_pressure * 0.026) + (thirst_pressure * 0.04)))
+                if float(getattr(needs, "hunger", 100.0) if getattr(needs, "hunger", None) is not None else 100.0) < SURVIVAL_CRITICAL_LEVEL:
+                    needs.social = _clamp(needs.social - 0.018)
+                    needs.safety = _clamp(needs.safety - 0.012)
+                if float(getattr(needs, "thirst", 100.0) if getattr(needs, "thirst", None) is not None else 100.0) < SURVIVAL_CRITICAL_LEVEL:
+                    needs.safety = _clamp(needs.safety - 0.028)
+                if pressure.get("severe"):
+                    self._apply_deprivation_damage(eid, pos, vitalities.get(eid), pressure)
+
             self._sync_threshold(eid, needs, "energy", needs.energy)
             self._sync_threshold(eid, needs, "safety", needs.safety)
             self._sync_threshold(eid, needs, "social", needs.social)
+            self._sync_threshold(
+                eid,
+                needs,
+                "hunger",
+                needs.hunger,
+                critical_level=SURVIVAL_CRITICAL_LEVEL,
+                stable_level=self.SURVIVAL_STABLE_LEVEL,
+            )
+            self._sync_threshold(
+                eid,
+                needs,
+                "thirst",
+                needs.thirst,
+                critical_level=SURVIVAL_CRITICAL_LEVEL,
+                stable_level=self.SURVIVAL_STABLE_LEVEL,
+            )
 
 class NPCWillSystem(System):
 
@@ -2002,6 +2200,20 @@ class NPCWillSystem(System):
                 will.target_eid = ai.target_eid
                 will.last_tick = self.sim.tick
                 continue
+
+            if ai.state == "seeking_social" and ai.target and ai.target_eid is not None:
+                urgent_social_interrupt = (
+                    _strongest_memory_entry(memory, "threat", predicate=_memory_visible)
+                    or _strongest_memory_entry(memory, "ally_threatened", predicate=_memory_visible)
+                    or _strongest_memory_entry(memory, "conflict_side", predicate=_memory_visible)
+                    or _strongest_memory_entry(memory, "property_threat", predicate=_memory_visible)
+                )
+                if not urgent_social_interrupt:
+                    will.intent = "seeking_social"
+                    will.target = ai.target
+                    will.target_eid = ai.target_eid
+                    will.last_tick = self.sim.tick
+                    continue
 
             drive_state = criminal_drives.get(eid)
             if ai.state in {"casing_target", "committing_property_crime", "rendezvousing_crew", "seeking_criminal_affiliation"} and ai.target:
@@ -2974,25 +3186,41 @@ class NPCWillSystem(System):
                     best_target = routine.home
                     best_target_eid = None
 
+            raw_hunger = getattr(needs, "hunger", 100.0)
+            raw_thirst = getattr(needs, "thirst", 100.0)
+            hunger_value = float(raw_hunger if raw_hunger is not None else 100.0)
+            thirst_value = float(raw_thirst if raw_thirst is not None else 100.0)
+            nutrition_need = ""
+            nutrition_pressure = 0.0
+            if hunger_value < 55.0 or thirst_value < 55.0:
+                hunger_gap = max(0.0, 60.0 - hunger_value)
+                thirst_gap = max(0.0, 60.0 - thirst_value)
+                nutrition_pressure = max(hunger_gap * 0.82, thirst_gap * 0.96)
+                if hunger_value < 30.0 or thirst_value < 30.0:
+                    nutrition_pressure += 18.0
+                nutrition_need = "thirst" if thirst_gap >= hunger_gap else "hunger"
             social_venue_pressure = (100.0 - needs.social) * (0.3 + (seek_social_contact * 0.95))
-            if not work_active and social_venue_pressure > best_score:
+            venue_pressure = max(social_venue_pressure, nutrition_pressure)
+            nutrition_breaks_work = hunger_value < 30.0 or thirst_value < 30.0
+            if (not work_active or nutrition_breaks_work) and venue_pressure > best_score:
                 own_prop_id = None
                 if occupation and isinstance(getattr(occupation, "workplace", None), dict):
                     own_prop_id = occupation.workplace.get("property_id")
                 if ai.state == "socializing" and ai.target is not None:
                     best_intent = "socializing"
-                    best_score = social_venue_pressure
+                    best_score = venue_pressure
                     best_target = ai.target
                     best_target_eid = None
                 else:
                     _sv_prop, _sv_focus = _pick_social_venue(
                         self.sim, pos.x, pos.y, pos.z, eid,
                         own_prop_id=own_prop_id,
+                        nutrition=nutrition_need,
                     )
                     if _sv_focus:
                         needs.social = _clamp(needs.social + 0.15)
                         best_intent = "socializing"
-                        best_score = social_venue_pressure
+                        best_score = venue_pressure
                         best_target = _sv_focus
                         best_target_eid = None
 
@@ -4014,6 +4242,7 @@ class NPCInvestigateSystem(System):
                 if ai.state == "socializing":
                     arrived_prop = _property_covering(self.sim, tx, ty, tz) or _property_covering(self.sim, pos.x, pos.y, pos.z)
                     if isinstance(arrived_prop, dict) and str(arrived_prop.get("id", "") or "").strip():
+                        _receive_nutrition_at_actor(self.sim, eid, pos, prop=arrived_prop)
                         self.sim.emit(Event(
                             "npc_social_venue_visited",
                             npc_eid=eid,
@@ -4234,6 +4463,19 @@ class NPCInvestigateSystem(System):
                         reverse = partner_social.bonds[eid]
                         reverse["closeness"] = min(1.0, float(reverse.get("closeness", 0.0)) + 0.02)
                         reverse["trust"] = min(1.0, float(reverse.get("trust", 0.0)) + 0.012)
+                    hydrate_relationship_social_knowledge(
+                        self.sim,
+                        eid,
+                        partner_eid=partner_eid,
+                        source_event="seeking_social_bond",
+                    )
+                    if partner_eid is not None:
+                        hydrate_relationship_social_knowledge(
+                            self.sim,
+                            partner_eid,
+                            partner_eid=eid,
+                            source_event="seeking_social_bond",
+                        )
                     partner_ai = ais.get(partner_eid)
                     roles = {
                         str(ai.role or "").strip().lower(),
@@ -4270,7 +4512,13 @@ class NPCInvestigateSystem(System):
                         channel=(chatter or {}).get("channel", "social"),
                         priority=(chatter or {}).get("priority", "low"),
                         opportunity_id=(chatter or {}).get("opportunity_id"),
+                        incident_id=(chatter or {}).get("incident_id"),
                         property_id=(chatter or {}).get("property_id"),
+                        actor_eid=(chatter or {}).get("actor_eid"),
+                        other_eid=(chatter or {}).get("other_eid"),
+                        relationship_kind=(chatter or {}).get("relationship_kind", ""),
+                        social_knowledge_key=(chatter or {}).get("social_knowledge_key", ""),
+                        source_domain=(chatter or {}).get("source_domain", ""),
                         confidence_hint=(chatter or {}).get("confidence_hint", 0.0),
                         property_lead_kind=(chatter or {}).get("property_lead_kind", ""),
                     ))

@@ -27,6 +27,7 @@ from game.property_runtime import property_covering, property_runtime_container_
 from game.system_support.awareness_runtime import event_observation_accountability
 from game.system_support.item_provenance_runtime import CLAIM_PUBLIC_FREE, CLAIM_SCENE_SALVAGE, classify_item_claim, stamp_item_provenance
 from game.system_support.offense_runtime import OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS, WILDLIFE_OFFENSE_CONTEXTS
+from game.system_support.social_knowledge_runtime import hydrate_incident_social_knowledge
 
 
 CAMERA_OWNER_AI_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
@@ -252,6 +253,7 @@ class IncidentKnowledgeSystem(System):
         )
         update_incident_propagation(incident, propagation_depth)
 
+        social_queued = False
         if queue and str(source_kind or "").strip().lower() != "self":
             if urgency >= self.MIN_URGENT_QUEUE_SCORE:
                 knowledge.queue_incident(
@@ -261,12 +263,14 @@ class IncidentKnowledgeSystem(System):
                     tick=getattr(self.sim, "tick", 0),
                 )
             elif social_interest >= self.MIN_SOCIAL_QUEUE_SCORE:
-                knowledge.queue_incident(
+                social_queued = knowledge.queue_incident(
                     incident_id,
                     queue="social",
                     score=social_interest,
                     tick=getattr(self.sim, "tick", 0),
                 )
+        if social_queued:
+            hydrate_incident_social_knowledge(self.sim, eid, source_event="incident_social_queued")
 
         self.sim.emit(Event(
             "knowledge_incident_learned",

@@ -19,6 +19,7 @@ from game.human_identity import normalize_gender_identity, pronoun_display_text
 from game.run_pressure import pressure_snapshot
 from game.skill_ui import skill_birth_debug_line, skill_change_reason_label
 from game.skills import ALL_SKILL_IDS, actor_skill, profile_neglect_pressure, profile_recent_skill_changes, skill_label
+from game.status_ui_runtime import _survival_indicator_chunks
 from game.weapons import weapon_by_id
 
 
@@ -190,9 +191,12 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
         f"HP {hp_text} | Heat {str(pressure.get('tier', 'low'))} {int(pressure.get('attention', 0))} | Status {active_status_count}",
         ]
     if needs is not None:
+        survival_summary = " | ".join(_survival_indicator_chunks(needs))
         summary_lines.append(
             f"Needs Energy {float(getattr(needs, 'energy', 0.0)):.0f} | Safety {float(getattr(needs, 'safety', 0.0)):.0f} | Social {float(getattr(needs, 'social', 0.0)):.0f}"
         )
+        if survival_summary:
+            summary_lines.append(f"Survival {survival_summary}")
     summary_lines.append(f"Active effects {_active_status_text(status_effects, duration_label_fn=duration_label_fn, sim=sim)}")
     if identity is not None:
         gender_identity = normalize_gender_identity(getattr(identity, "gender_identity", None), default="nonbinary")

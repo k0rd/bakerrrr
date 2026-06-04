@@ -36,6 +36,7 @@ from game.run_objectives import evaluate_run_objective
 from game.run_pressure import pressure_snapshot
 from game.service_runtime import _overworld_discovery_profile, _overworld_travel_profile
 from game.skill_ui import skill_debug_lines
+from game.status_ui_runtime import _survival_indicator_chunks
 
 
 def _segment(text, color=None, attrs=0, **extras):
@@ -465,7 +466,10 @@ def build_debug_overlay(
     )
     inventory_summary = f"Inventory {inventory.slot_count() if inventory else 0}/{inventory.capacity if inventory else 0}"
     if needs:
+        survival_summary = "/".join(_survival_indicator_chunks(needs))
         needs_summary = f"{inventory_summary} | Needs E{needs.energy:.0f}/S{needs.safety:.0f}/So{needs.social:.0f}"
+        if survival_summary:
+            needs_summary += f" | {survival_summary}"
     else:
         needs_summary = f"{inventory_summary} | Needs -"
 

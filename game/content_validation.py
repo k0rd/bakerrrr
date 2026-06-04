@@ -22,7 +22,7 @@ NPC_NAMES_PATH = GAME_DIR / "npc_names.json"
 RENDER_SEMANTICS_PATH = GAME_DIR / "render_semantics.json"
 
 ALLOWED_ITEM_EFFECTS = {"modify_need", "restore_hp", "status", "credits", "add_ammo"}
-ALLOWED_ITEM_NEEDS = {"energy", "safety", "social"}
+ALLOWED_ITEM_NEEDS = {"energy", "safety", "social", "hunger", "thirst"}
 ALLOWED_LEGAL_STATUS = {"legal", "restricted", "illegal"}
 ALLOWED_WEAPON_TRAJECTORIES = {"ballistic", "lobbed", "beam"}
 ALLOWED_FIXTURE_KINDS = {"fixture", "asset"}

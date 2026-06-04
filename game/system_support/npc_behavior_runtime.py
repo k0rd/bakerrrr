@@ -28,6 +28,7 @@ from game.property_runtime import (
 from game.systems_business_reputation import business_opinion_profile, social_secret_site_trust_gate
 from game.system_support.container_runtime import _unlink_removed_item_from_gear
 from game.system_support.interaction_ordering import _manhattan
+from game.system_support.item_runtime import _apply_item_effects_to_entity
 from game.system_support.opportunity_knowledge_runtime import (
     best_opportunity_lead as _best_opportunity_lead,
     mark_opportunity_failure as _mark_opportunity_failure,
@@ -98,6 +99,32 @@ _SOCIAL_VENUE_ARCHETYPES = _NIGHTLIFE_ARCHETYPES | frozenset({
     "street_kitchen",
     "food_cart",
     "arcade",
+})
+_FOOD_VENUE_ARCHETYPES = frozenset({
+    "cafe",
+    "restaurant",
+    "diner",
+    "street_kitchen",
+    "food_cart",
+    "market",
+    "tavern",
+    "bar",
+    "lounge",
+})
+_DRINK_VENUE_ARCHETYPES = frozenset({
+    "cafe",
+    "restaurant",
+    "diner",
+    "street_kitchen",
+    "food_cart",
+    "market",
+    "tavern",
+    "bar",
+    "lounge",
+    "nightclub",
+    "music_venue",
+    "karaoke_box",
+    "pool_hall",
 })
 _DRUG_IDENTIFICATION_CAREERS = frozenset({
     "broker",
@@ -278,6 +305,249 @@ def _clamp_need_value(value):
     except (TypeError, ValueError):
         number = 0.0
     return float(max(0.0, min(100.0, number)))
+
+
+def _item_positive_need_delta(item_def, need):
+    total = 0.0
+    if not isinstance(item_def, dict):
+        return 0.0
+    for effect in tuple(item_def.get("effects", ()) or ()):
+        if not isinstance(effect, dict) or str(effect.get("type", "")).strip().lower() != "modify_need":
+            continue
+        if str(effect.get("need", "")).strip().lower() != str(need).strip().lower():
+            continue
+        try:
+            delta = float(effect.get("delta", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            delta = 0.0
+        if delta > 0.0:
+            total += delta
+    return float(total)
+
+
+def _nutrition_capabilities_for_property(prop):
+    if not isinstance(prop, dict):
+        return {"food": False, "drink": False}
+    metadata = prop.get("metadata", {}) if isinstance(prop.get("metadata"), dict) else {}
+    archetype = _behavior_token(metadata.get("archetype"))
+    services = {
+        str(service or "").strip().lower()
+        for service in _site_services_for_property(prop)
+        if str(service or "").strip()
+    }
+    vending = "vending" in services
+    return {
+        "food": bool(archetype in _FOOD_VENUE_ARCHETYPES or vending),
+        "drink": bool(archetype in _DRINK_VENUE_ARCHETYPES or vending),
+    }
+
+
+def _nutrition_item_score(item_def, need):
+    tags = _item_tags(item_def)
+    need = str(need or "").strip().lower()
+    if need == "hunger":
+        direct = _item_positive_need_delta(item_def, "hunger")
+        if direct <= 0.0 and "food" not in tags:
+            return 0.0
+        return direct + (4.0 if "food" in tags else 0.0)
+    if need == "thirst":
+        direct = _item_positive_need_delta(item_def, "thirst")
+        if direct <= 0.0 and "drink" not in tags:
+            return 0.0
+        return direct + (4.0 if "drink" in tags else 0.0)
+    return 0.0
+
+
+def _npc_nutrition_cooldowns(sim):
+    cooldowns = getattr(sim, "npc_nutrition_cooldowns", None)
+    if not isinstance(cooldowns, dict):
+        cooldowns = {}
+        setattr(sim, "npc_nutrition_cooldowns", cooldowns)
+    return cooldowns
+
+
+def _npc_try_consume_nutrition(sim, actor_eid, needs, *, low_threshold=45.0, cooldown_ticks=180):
+    if sim is None or needs is None:
+        return None
+    try:
+        actor_eid = int(actor_eid)
+    except (TypeError, ValueError):
+        return None
+    if actor_eid == getattr(sim, "player_eid", None):
+        return None
+
+    vitality = sim.ecs.get(Vitality).get(actor_eid)
+    if vitality is not None and bool(getattr(vitality, "downed", False)):
+        return None
+    inventory = sim.ecs.get(Inventory).get(actor_eid)
+    if inventory is None or not getattr(inventory, "items", None):
+        return None
+
+    hunger = _clamp_need_value(getattr(needs, "hunger", 100.0))
+    thirst = _clamp_need_value(getattr(needs, "thirst", 100.0))
+    need_rows = []
+    if hunger < float(low_threshold):
+        need_rows.append(("hunger", float(low_threshold) - hunger))
+    if thirst < float(low_threshold):
+        need_rows.append(("thirst", float(low_threshold) - thirst))
+    if not need_rows:
+        return None
+    need_rows.sort(key=lambda row: row[1], reverse=True)
+
+    current_tick = int(getattr(sim, "tick", 0) or 0)
+    cooldowns = _npc_nutrition_cooldowns(sim).setdefault(actor_eid, {})
+    for need, _urgency in need_rows:
+        try:
+            if current_tick < int(cooldowns.get(need, 0) or 0):
+                continue
+        except (TypeError, ValueError):
+            pass
+        candidates = []
+        for entry in list(getattr(inventory, "items", ()) or ()):
+            item_id = str(entry.get("item_id", "") or "").strip()
+            item_def = ITEM_CATALOG.get(item_id)
+            score = _nutrition_item_score(item_def, need)
+            if score <= 0.0:
+                continue
+            candidates.append((score, item_id, entry, item_def))
+        if not candidates:
+            continue
+        candidates.sort(key=lambda row: (row[0], row[1]), reverse=True)
+        _score, item_id, entry, item_def = candidates[0]
+        before_value = _clamp_need_value(getattr(needs, need, 0.0))
+        if sim.ecs.get(StatusEffects).get(actor_eid) is None:
+            sim.ecs.add(actor_eid, StatusEffects())
+        applied = _apply_item_effects_to_entity(
+            sim,
+            actor_eid,
+            item_def,
+            item_metadata=entry.get("metadata") if isinstance(entry, dict) else None,
+        )
+        if not applied:
+            continue
+        removed = inventory.remove_item(instance_id=entry.get("instance_id"), quantity=1)
+        if not removed:
+            continue
+        after_value = _clamp_need_value(getattr(needs, need, before_value))
+        cooldowns[need] = current_tick + int(max(1, cooldown_ticks))
+        sim.emit(Event(
+            "npc_nutrition_consumed",
+            npc_eid=actor_eid,
+            item_id=item_id,
+            item_name=item_display_name(item_id),
+            need=need,
+            before=round(before_value, 2),
+            after=round(after_value, 2),
+            applied=tuple(applied),
+        ))
+        return {
+            "need": need,
+            "item_id": item_id,
+            "before": before_value,
+            "after": after_value,
+            "applied": tuple(applied),
+        }
+    return None
+
+
+def _receive_nutrition_at_actor(sim, actor_eid, pos, *, prop=None, redeem_meal_voucher=False):
+    if sim is None or pos is None:
+        return None
+    try:
+        actor_eid = int(actor_eid)
+    except (TypeError, ValueError):
+        return None
+    if prop is None:
+        prop = _property_covering(sim, pos.x, pos.y, pos.z)
+    if not isinstance(prop, dict):
+        return None
+    caps = _nutrition_capabilities_for_property(prop)
+    if not caps.get("food") and not caps.get("drink"):
+        return None
+    needs = sim.ecs.get(NPCNeeds).get(actor_eid)
+    if needs is None:
+        return None
+    before_hunger = _clamp_need_value(getattr(needs, "hunger", 100.0))
+    before_thirst = _clamp_need_value(getattr(needs, "thirst", 100.0))
+    changed = {}
+    inventory = sim.ecs.get(Inventory).get(actor_eid)
+    voucher_redeemed = False
+    if bool(redeem_meal_voucher) and caps.get("food") and inventory is not None and before_hunger < 90.0:
+        voucher = inventory.find(item_id="meal_voucher")
+        if voucher:
+            removed = inventory.remove_item(instance_id=voucher.get("instance_id"), quantity=1)
+            voucher_redeemed = bool(removed)
+    hunger_gain = 38.0 if voucher_redeemed else 22.0
+    thirst_gain = 10.0 if voucher_redeemed else 24.0
+    if caps.get("food") and (before_hunger < 72.0 or voucher_redeemed):
+        needs.hunger = _clamp_need_value(before_hunger + hunger_gain)
+        changed["hunger"] = (before_hunger, needs.hunger)
+    if caps.get("drink") and before_thirst < 76.0:
+        needs.thirst = _clamp_need_value(before_thirst + thirst_gain)
+        changed["thirst"] = (before_thirst, needs.thirst)
+    if changed and hasattr(needs, "social"):
+        needs.social = _clamp_need_value(float(getattr(needs, "social", 0.0) or 0.0) + 0.4)
+    if not changed:
+        return None
+    credits_cost = 0
+    if not voucher_redeemed:
+        if "hunger" in changed:
+            credits_cost += 2
+        if "thirst" in changed:
+            credits_cost += 1
+    credits_spent = 0
+    if credits_cost > 0:
+        credits_spent = _spend_inventory_credits(inventory, credits_cost) if inventory is not None else 0
+        if credits_spent < credits_cost:
+            if "hunger" in changed:
+                needs.hunger = before_hunger
+            if "thirst" in changed:
+                needs.thirst = before_thirst
+            sim.emit(Event(
+                "npc_nutrition_unpaid",
+                npc_eid=actor_eid,
+                property_id=str(prop.get("id", "") or "").strip() or None,
+                property_name=str(prop.get("name", "") or "").strip(),
+                credits_cost=int(credits_cost),
+                credits_spent=int(credits_spent),
+                hunger=round(before_hunger, 2),
+                thirst=round(before_thirst, 2),
+            ))
+            return None
+
+    statuses = sim.ecs.get(StatusEffects).get(actor_eid)
+    if statuses is None:
+        statuses = StatusEffects()
+        sim.ecs.add(actor_eid, statuses)
+    statuses.add(
+        status="voucher_meal" if voucher_redeemed else "shared_meal" if changed.get("hunger") else "shared_drink",
+        duration=18,
+        modifiers={
+            "hp_tick_delta": 0.1 if voucher_redeemed else 0.06,
+            "energy_tick_delta": 0.035 if voucher_redeemed else 0.025,
+            "safety_tick_delta": 0.02 if voucher_redeemed else 0.015,
+        },
+        source_item=None,
+    )
+    prop_id = str(prop.get("id", "") or "").strip()
+    sim.emit(Event(
+        "npc_nutrition_shared",
+        npc_eid=actor_eid,
+        property_id=prop_id or None,
+        property_name=str(prop.get("name", "") or "").strip(),
+        hunger_before=round(before_hunger, 2),
+        hunger_after=round(_clamp_need_value(getattr(needs, "hunger", before_hunger)), 2),
+        thirst_before=round(before_thirst, 2),
+        thirst_after=round(_clamp_need_value(getattr(needs, "thirst", before_thirst)), 2),
+        source="social_venue",
+        meal_voucher_redeemed=bool(voucher_redeemed),
+        credits_cost=int(credits_cost),
+        credits_spent=int(credits_spent),
+    ))
+    return {
+        "property_id": prop_id or None,
+        "changed": dict(changed),
+    }
 
 
 def _npc_behavior_runtime_cache(sim, *, current_tick=None):
@@ -1724,7 +1994,7 @@ def _social_venue_secret_access(sim, actor_eid, prop):
     }
 
 
-def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12):
+def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12, nutrition=None):
     """Return a (property, focus_position) pair for a nearby social venue.
 
     This uses the actor's own business knowledge rather than a global truth
@@ -1743,7 +2013,8 @@ def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12):
     except (TypeError, ValueError):
         return None, None
 
-    rng = random.Random(f"{getattr(sim, 'seed', 0)}:{actor_eid}:{int(getattr(sim, 'tick', 0) or 0)}:socialize")
+    nutrition = str(nutrition or "").strip().lower()
+    rng = random.Random(f"{getattr(sim, 'seed', 0)}:{actor_eid}:{int(getattr(sim, 'tick', 0) or 0)}:socialize:{nutrition}")
     inventory = sim.ecs.get(Inventory).get(actor_eid)
     liquid_credits = _inventory_liquid_credits(inventory)
     if liquid_credits <= 6:
@@ -1805,6 +2076,13 @@ def _pick_social_venue(sim, x, y, z, eid, own_prop_id=None, radius=12):
         score = base_score + max(0.0, (search_radius + 2 - distance) * 0.42)
         if archetype in _NIGHTLIFE_ARCHETYPES and liquid_credits <= 4:
             score -= 1.8
+        caps = _nutrition_capabilities_for_property(prop)
+        if nutrition in {"hunger", "food"}:
+            score += 5.2 if caps.get("food") else -2.8
+        elif nutrition in {"thirst", "water", "drink"}:
+            score += 5.0 if caps.get("drink") else -2.4
+        elif nutrition in {"both", "nutrition"}:
+            score += (3.2 if caps.get("food") else -1.4) + (3.0 if caps.get("drink") else -1.2)
         score += _business_target_reputation_bonus(
             sim,
             actor_eid,

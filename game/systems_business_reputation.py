@@ -15,6 +15,7 @@ from game.property_runtime import (
 )
 from game.system_support.actor_runtime import _detail_tick_allowed
 from game.system_support.interaction_ordering import _manhattan
+from game.system_support.social_knowledge_runtime import hydrate_business_social_knowledge
 
 _SOCIAL_SECRET_ARCHETYPES = frozenset({
     "nightclub",
@@ -1077,6 +1078,7 @@ class BusinessReputationSystem(System):
             queue_score = self._queue_score(record)
             if queue_score >= self.MIN_SOCIAL_QUEUE_SCORE:
                 knowledge.queue_property(property_id, score=queue_score, tick=getattr(self.sim, "tick", 0))
+            hydrate_business_social_knowledge(self.sim, eid, source_event="business_knowledge_learned")
             self.sim.emit(Event(
                 "business_knowledge_learned",
                 eid=eid,
@@ -1451,6 +1453,8 @@ class BusinessReputationSystem(System):
                         ))
                 source_knowledge.mark_shared(property_id, tick=now, channel="social")
                 target_knowledge.mark_shared(property_id, tick=now, channel="social")
+                hydrate_business_social_knowledge(self.sim, from_eid, source_event="business_reputation_shared")
+                hydrate_business_social_knowledge(self.sim, to_eid, source_event="business_reputation_shared")
                 shares += 1
                 self.sim.emit(Event(
                     "business_reputation_shared",

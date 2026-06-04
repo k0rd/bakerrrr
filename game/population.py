@@ -1992,12 +1992,12 @@ def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
     if archetype in MEDICAL_ARCHETYPES:
         return ("med_gel", "micro_medkit", "hydration_salts", "calm_patch", "trauma_foam", "field_dressing", "bandage_roll", "pain_blocker", "bottled_water")
     if archetype in SALVAGE_ARCHETYPES or archetype in INDUSTRIAL_ARCHETYPES:
-        return ("street_ration", "protein_wrap", "caff_shot", "city_pass_token", "prybar", "glass_cutter", "energy_bar", "canteen_coffee", "battery_pack", "scrap_circuit", "pocket_multitool")
+        return ("street_ration", "protein_wrap", "rice_bowl", "caff_shot", "city_pass_token", "prybar", "glass_cutter", "energy_bar", "canteen_coffee", "sealed_juice", "battery_pack", "scrap_circuit", "pocket_multitool")
     if archetype in NIGHTLIFE_ARCHETYPES:
-        return ("spark_brew", "cheap_whiskey", "caff_shot", "smoke_tab", "city_pass_token", "street_ration", "mint_strip", "deck_of_cards", "lucky_charm")
+        return ("spark_brew", "cheap_whiskey", "caff_shot", "smoke_tab", "city_pass_token", "street_ration", "fruit_cup", "mint_strip", "deck_of_cards", "lucky_charm")
     if archetype in STOREFRONT_ARCHETYPES or archetype in TRANSIT_ARCHETYPES:
-        return ("street_ration", "protein_wrap", "spark_brew", "city_pass_token", "transit_daypass", "scratch_ticket", "energy_bar", "bottled_water", "meal_voucher", "mint_strip")
-    return ("street_ration", "protein_wrap", "spark_brew", "calm_patch", "city_pass_token", "scratch_ticket", "energy_bar", "bottled_water", "meal_voucher", "lucky_charm")
+        return ("street_ration", "protein_wrap", "spark_brew", "city_pass_token", "transit_daypass", "scratch_ticket", "energy_bar", "bottled_water", "sealed_juice", "fruit_cup", "meal_voucher", "mint_strip")
+    return ("street_ration", "protein_wrap", "spark_brew", "calm_patch", "city_pass_token", "scratch_ticket", "energy_bar", "bottled_water", "fruit_cup", "meal_voucher", "lucky_charm")
 
 
 def _weapon_use_profile_for(role):
@@ -2225,6 +2225,8 @@ def _spawn_human(
         energy=rng.uniform(62.0, 88.0),
         safety=rng.uniform(58.0, 86.0),
         social=rng.uniform(52.0, 84.0),
+        hunger=rng.uniform(68.0, 94.0),
+        thirst=rng.uniform(70.0, 96.0),
     )
     shift_start = None
     shift_end = None
@@ -2498,6 +2500,8 @@ def _spawn_wildlife(sim, rng, profile, position):
             energy=rng.uniform(68.0, 92.0),
             safety=rng.uniform(54.0, 82.0),
             social=rng.uniform(28.0, 62.0),
+            hunger=rng.uniform(70.0, 96.0),
+            thirst=rng.uniform(72.0, 98.0),
         ),
         NPCWill(),
         StatusEffects(),

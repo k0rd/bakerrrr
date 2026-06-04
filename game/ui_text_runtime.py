@@ -93,6 +93,9 @@ def _line_segments(line):
         segments = line.get("segments")
         if isinstance(segments, list):
             return segments
+    segments = getattr(line, "segments", None)
+    if isinstance(segments, list):
+        return segments
     return None
 
 

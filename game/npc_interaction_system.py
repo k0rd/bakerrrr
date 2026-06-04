@@ -40,6 +40,7 @@ from game.components import (
     PropertyPortfolio,
     Render,
     SkillProfile,
+    SocialKnowledge,
     StatusEffects,
     SuppressionState,
     VehicleState,
@@ -80,6 +81,11 @@ from game.service_runtime import (
 from game.system_support.opportunity_knowledge_runtime import (
     rehydrate_entity_knowledge as _rehydrate_entity_knowledge,
 )
+from game.system_support.social_knowledge_runtime import (
+    hydrate_social_knowledge,
+    social_knowledge_for,
+    social_knowledge_payload_for_record,
+)
 from engine.events import Event
 from game.items import (
     ITEM_CATALOG,
@@ -107,7 +113,10 @@ from game.human_identity import (
     player_address_term,
     pronoun_format_slots,
 )
-from game.human_description import human_conversation_description
+from game.human_description import (
+    human_conversation_presentation,
+    human_render_color_key,
+)
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
     append_external_opportunity,
@@ -345,6 +354,29 @@ from game.vehicles import (
 THREAT_STATES = {"protecting", "investigating"}
 
 
+class _StyledTranscriptLine(str):
+    def __new__(cls, text, segments=()):
+        plain = str(text or "")
+        obj = str.__new__(cls, plain)
+        obj.segments = [
+            {
+                "text": str(segment.get("text", "")),
+                "color": segment.get("color"),
+                "attrs": int(segment.get("attrs", 0) or 0),
+            }
+            for segment in tuple(segments or ())
+            if isinstance(segment, dict) and str(segment.get("text", ""))
+        ]
+        return obj
+
+    @property
+    def text(self):
+        return str(self)
+
+    def __reduce__(self):
+        return (self.__class__, (str(self), list(getattr(self, "segments", ()) or ())))
+
+
 class NPCInteractionSystem(System):
 
     STATE_TEXT = {
@@ -378,6 +410,7 @@ class NPCInteractionSystem(System):
         "rapport",
         "check_in",
         "local",
+        "street_talk",
         "opportunities",
         "attention",
         "contacts",
@@ -411,6 +444,11 @@ class NPCInteractionSystem(System):
         "angle",
         "risk",
         "attention",
+        "street_talk",
+        "social_incident",
+        "social_business",
+        "social_opportunity",
+        "social_relationship",
         "hire_runner",
         "backup_orders",
         "backup_follow",
@@ -457,6 +495,15 @@ class NPCInteractionSystem(System):
     CONTRACTOR_RETURN_WAIT_TICKS = 20
     CONTRACTOR_KILL_SURCHARGE = 90
     SERVICE_LOCATOR_SEARCH_RADIUS = 8
+    SOCIAL_KNOWLEDGE_ROOT_TOPIC = "street_talk"
+    SOCIAL_KNOWLEDGE_TOPICS = {
+        "social_incident": "incident",
+        "social_business": "business",
+        "social_opportunity": "opportunity",
+        "social_relationship": "relationship",
+    }
+    SOCIAL_KNOWLEDGE_TOPIC_IDS = frozenset({"street_talk", *SOCIAL_KNOWLEDGE_TOPICS.keys()})
+    SOCIAL_KNOWLEDGE_SHARE_COOLDOWN_TICKS = 180
     OUTFITTER_LOCATOR_ARCHETYPES = ("outfitter", "surplus_store")
     JUSTICE_LOCATOR_ARCHETYPES = ("jail", "courthouse", "prison")
     JUSTICE_LOCATOR_ROLE_TOKENS = ("guard", "corrections", "deputy", "bailiff", "sergeant")
@@ -3297,6 +3344,186 @@ class NPCInteractionSystem(System):
             source=str(source or "dialogue"),
         )
 
+    def _social_knowledge_player_aligned(self, context):
+        if not isinstance(context, dict):
+            return False
+        if bool(context.get("guarded")) or bool(context.get("door_answering")) or bool(context.get("peaceful_orders_only")):
+            return False
+        pressure_tier = str(context.get("pressure_tier", "low") or "low").strip().lower() or "low"
+        if pressure_tier == "high":
+            return False
+        bond = context.get("bond") if isinstance(context.get("bond"), dict) else {}
+        kind = str(bond.get("kind", "") or "").strip().lower()
+        try:
+            trust = float(bond.get("trust", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            trust = 0.0
+        try:
+            closeness = float(bond.get("closeness", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            closeness = 0.0
+        try:
+            standing = float(context.get("contact_standing", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            standing = 0.0
+        try:
+            rapport = float(context.get("rapport", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            rapport = 0.0
+        relationship_score = (trust * 0.56) + (closeness * 0.34) + (rapport * 0.18)
+        if kind in {"friend", "family", "partner", "coworker", "owner", "workplace", "job_issuer"}:
+            relationship_score += 0.08
+        threshold = 0.46 if pressure_tier == "low" else 0.58
+        return max(standing, relationship_score) >= threshold
+
+    def _social_knowledge_dialogue_candidates(self, context, *, domain=None):
+        if not self._social_knowledge_player_aligned(context):
+            return ()
+        npc_eid = context.get("npc_eid") if isinstance(context, dict) else None
+        if npc_eid is None:
+            return ()
+        domain_key = str(domain or "").strip().lower()
+        hydrate_social_knowledge(
+            self.sim,
+            npc_eid,
+            partner_eid=self.player_eid,
+            opportunity_rows=context.get("opportunity_rows", ()),
+            source_event="dialogue_social_knowledge_hydrate",
+        )
+        knowledge = social_knowledge_for(self.sim, npc_eid, create=False)
+        if not isinstance(knowledge, SocialKnowledge):
+            return ()
+        now = int(getattr(self.sim, "tick", 0) or 0)
+        rows = []
+        for queue_index, queue_row in enumerate(tuple(getattr(knowledge, "social_queue", ()) or ())):
+            if not isinstance(queue_row, dict):
+                continue
+            key = str(queue_row.get("key", "") or "").strip()
+            record = (knowledge.entries or {}).get(key)
+            if not isinstance(record, dict):
+                continue
+            record_domain = str(record.get("source_domain", "") or "").strip().lower()
+            if domain_key and record_domain != domain_key:
+                continue
+            if not str(record.get("summary", "") or "").strip():
+                continue
+            shared = knowledge.last_shared.get(key)
+            if isinstance(shared, dict):
+                last_dialogue = _int_or_default(shared.get("dialogue"), -10_000)
+                if now - last_dialogue < self.SOCIAL_KNOWLEDGE_SHARE_COOLDOWN_TICKS:
+                    continue
+            try:
+                queue_score = float(queue_row.get("score", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                queue_score = 0.0
+            try:
+                interest = float(record.get("social_interest", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                interest = 0.0
+            try:
+                confidence = float(record.get("confidence", 0.5) or 0.5)
+            except (TypeError, ValueError):
+                confidence = 0.5
+            score = queue_score + (interest * 0.72) + (confidence * 0.24)
+            if record_domain == "opportunity":
+                score += 0.08
+            if record_domain == "relationship" and str((record.get("refs") or {}).get("relationship_kind", "")).strip().lower() in {"friend", "family", "partner"}:
+                score += 0.07
+            rows.append((-(score), queue_index, key, record))
+        rows.sort(key=lambda row: (row[0], row[1], row[2]))
+        return tuple(record for _score, _index, _key, record in rows)
+
+    def _social_knowledge_topic_available(self, context, topic_id):
+        topic_id = str(topic_id or "").strip().lower()
+        if topic_id == self.SOCIAL_KNOWLEDGE_ROOT_TOPIC:
+            return bool(self._social_knowledge_dialogue_candidates(context))
+        domain = self.SOCIAL_KNOWLEDGE_TOPICS.get(topic_id)
+        if domain:
+            return bool(self._social_knowledge_dialogue_candidates(context, domain=domain))
+        return False
+
+    def _remember_dialogue_social_knowledge_gain(self, context, payload, record):
+        if not isinstance(payload, dict):
+            return
+        npc_eid = context.get("npc_eid") if isinstance(context, dict) else None
+        domain = str(payload.get("source_domain", "") or "").strip().lower()
+        try:
+            confidence = max(0.24, min(0.94, float(payload.get("confidence_hint", 0.58) or 0.58)))
+        except (TypeError, ValueError):
+            confidence = 0.58
+        if domain == "opportunity":
+            opportunity_id = _int_or_default(payload.get("opportunity_id"), 0)
+            if opportunity_id > 0:
+                reveal_opportunity_to_observer(
+                    self.sim,
+                    self.player_eid,
+                    opportunity_id,
+                    awareness_state="heard",
+                    confidence=max(0.42, min(0.9, confidence * 0.92)),
+                    source="npc_dialogue_social_knowledge",
+                )
+                self.sim.emit(Event(
+                    "dialogue_opportunity_hint",
+                    eid=self.player_eid,
+                    npc_eid=npc_eid,
+                    summary=str(payload.get("summary", "") or "").strip(),
+                    detail=str(payload.get("detail", "") or "").strip(),
+                ))
+        elif domain == "business":
+            property_id = str(payload.get("property_id", "") or "").strip()
+            prop = self.sim.properties.get(property_id) if property_id else None
+            if isinstance(prop, dict):
+                self._remember_player_property_lead(
+                    prop,
+                    source_eid=npc_eid,
+                    lead_kind=str(payload.get("property_lead_kind", "") or "").strip().lower() or "business_reputation",
+                    confidence=max(0.48, confidence),
+                )
+        knowledge = social_knowledge_for(self.sim, npc_eid, create=False)
+        key = str((record or {}).get("key", "") or "").strip() if isinstance(record, dict) else ""
+        if isinstance(knowledge, SocialKnowledge) and key:
+            knowledge.mark_shared(key, tick=getattr(self.sim, "tick", 0), channel="dialogue")
+
+    def _resolve_social_knowledge_dialogue_topic(self, context, topic_id, *, ask_count=1):
+        topic_id = str(topic_id or "").strip().lower()
+        domain = self.SOCIAL_KNOWLEDGE_TOPICS.get(topic_id)
+        candidates = self._social_knowledge_dialogue_candidates(context, domain=domain)
+        if not candidates:
+            return {"npc_lines": [self._say("social_knowledge_none", context, topic_id=topic_id, count=ask_count)]}
+        record = candidates[0]
+        payload = social_knowledge_payload_for_record(
+            self.sim,
+            context.get("npc_eid"),
+            self.player_eid,
+            "aligned_dialogue",
+            record,
+        ) or {}
+        summary = str(payload.get("summary") or record.get("summary", "") or "").strip()
+        detail = str(payload.get("detail") or record.get("detail", "") or summary).strip()
+        source_domain = str(payload.get("source_domain") or record.get("source_domain", "") or "").strip().lower()
+        bank_id = f"social_knowledge_{source_domain}" if source_domain in {"incident", "business", "opportunity", "relationship"} else "social_knowledge"
+        self._remember_dialogue_social_knowledge_gain(context, payload, record)
+        self.sim.emit(Event(
+            "dialogue_social_knowledge_shared",
+            eid=self.player_eid,
+            npc_eid=context.get("npc_eid"),
+            social_knowledge_key=record.get("key"),
+            source_domain=source_domain,
+            summary=summary,
+            refs=dict(record.get("refs", {}) or {}) if isinstance(record.get("refs"), dict) else {},
+        ))
+        line = self._say(
+            bank_id,
+            context,
+            topic_id=topic_id,
+            count=ask_count,
+            social_knowledge_summary=summary,
+            social_knowledge_summary_lc=_dialogue_lower_start(summary),
+            social_knowledge_detail=detail,
+            social_knowledge_detail_lc=_dialogue_lower_start(detail),
+        )
+        return {"npc_lines": [line or str(payload.get("quote", "") or summary)]}
+
     def _learn_scene_followup(self, context, *, source="dialogue"):
         if not isinstance(context, dict):
             return None
@@ -3504,6 +3731,31 @@ class NPCInteractionSystem(System):
 
     def _social_need_line(self, npc_needs, bond):
         if npc_needs:
+            raw_hunger = getattr(npc_needs, "hunger", 100.0)
+            raw_thirst = getattr(npc_needs, "thirst", 100.0)
+            hunger = float(raw_hunger if raw_hunger is not None else 100.0)
+            thirst = float(raw_thirst if raw_thirst is not None else 100.0)
+            if hunger < 20.0 and thirst < 20.0:
+                options = (
+                    "They seem distracted by needing food and water more than conversation.",
+                    "They look hollowed out and dry-mouthed, like the room has narrowed to survival math.",
+                    "They keep glancing toward anything that might pass for a meal or a drink.",
+                )
+                return options[(int(getattr(self.sim, "tick", 0) or 0) // 17) % len(options)]
+            if thirst < 20.0:
+                options = (
+                    "They keep wetting their lips like water is the only thing in the room.",
+                    "Their voice comes out dry, and they keep scanning for something to drink.",
+                    "They look parched enough that every pause turns toward water.",
+                )
+                return options[(int(getattr(self.sim, "tick", 0) or 0) // 19) % len(options)]
+            if hunger < 20.0:
+                options = (
+                    "They look hollowed out by hunger.",
+                    "Their attention keeps slipping toward the thought of food.",
+                    "They seem hungry enough that patience is costing them effort.",
+                )
+                return options[(int(getattr(self.sim, "tick", 0) or 0) // 23) % len(options)]
             if npc_needs.safety < 40:
                 return "They seem on edge."
             if npc_needs.energy < 35:
@@ -9300,14 +9552,67 @@ class NPCInteractionSystem(System):
             return self._dialogue_tutorial_hint(context)
         return self._dialogue_status_hint(context)
 
-    def _dialogue_player_line(self, topic_label):
-        return f'You: "{str(topic_label).strip()}"'
+    def _dialogue_line_text(self, line):
+        if isinstance(line, dict):
+            return str(line.get("text", ""))
+        text_attr = getattr(line, "text", None)
+        if text_attr is not None:
+            return str(text_attr)
+        return str(line or "")
 
-    def _dialogue_npc_line(self, npc_name, text):
+    def _dialogue_transcript_line(self, segments, *, text=None):
+        plain = str(text or "").strip()
+        if not plain:
+            plain = "".join(
+                str(segment.get("text", ""))
+                for segment in tuple(segments or ())
+                if isinstance(segment, dict)
+            ).strip()
+        if not plain:
+            return ""
+        normalized = [
+            {
+                "text": str(segment.get("text", "")),
+                "color": segment.get("color"),
+                "attrs": int(segment.get("attrs", 0) or 0),
+            }
+            for segment in tuple(segments or ())
+            if isinstance(segment, dict) and str(segment.get("text", ""))
+        ]
+        if not normalized:
+            return plain
+        return _StyledTranscriptLine(plain, normalized)
+
+    def _dialogue_speaker_color(self, npc_eid=None, *, personal_name=""):
+        identity = self._human_identity_for_reference(eid=npc_eid, personal_name=personal_name)
+        if is_human_identity(identity):
+            color = human_render_color_key(
+                getattr(self.sim, "seed", 0),
+                eid=npc_eid,
+                identity=identity,
+                personal_name=getattr(identity, "personal_name", "") or personal_name,
+            )
+            if color:
+                return color
+        return "human"
+
+    def _dialogue_player_line(self, topic_label):
+        text = f'You: "{str(topic_label).strip()}"'
+        return self._dialogue_transcript_line(
+            ({"text": text, "color": "player", "attrs": 0},),
+            text=text,
+        )
+
+    def _dialogue_npc_line(self, npc_name, text, *, npc_eid=None):
         text = str(text or "").strip()
         if not text:
             return ""
-        return f'{npc_name}: "{text}"'
+        line = f'{npc_name}: "{text}"'
+        color = self._dialogue_speaker_color(npc_eid, personal_name=npc_name)
+        return self._dialogue_transcript_line(
+            ({"text": line, "color": color, "attrs": 0},),
+            text=line,
+        )
 
     def _dialogue_narration_line(self, text):
         return str(text or "").strip()
@@ -9333,13 +9638,15 @@ class NPCInteractionSystem(System):
         identity = context.get("identity")
         if not is_human_identity(identity):
             return ""
-        return self._dialogue_narration_line(
-            human_conversation_description(
-                getattr(self.sim, "seed", 0),
-                eid=context.get("npc_eid"),
-                identity=identity,
-                personal_name=getattr(identity, "personal_name", ""),
-            )
+        presentation = human_conversation_presentation(
+            getattr(self.sim, "seed", 0),
+            eid=context.get("npc_eid"),
+            identity=identity,
+            personal_name=getattr(identity, "personal_name", ""),
+        )
+        return self._dialogue_transcript_line(
+            presentation.get("segments", ()),
+            text=presentation.get("text", ""),
         )
 
     def _player_dialogue_identity(self):
@@ -9379,7 +9686,12 @@ class NPCInteractionSystem(System):
         return rng.choice(variants).format(player_address=player_term)
 
     def _dialogue_opening_lines_with_narration(self, context, lines):
-        resolved = [str(line).strip() for line in tuple(lines or ()) if str(line).strip()]
+        resolved = []
+        for line in tuple(lines or ()):
+            text = self._dialogue_line_text(line).strip()
+            if not text:
+                continue
+            resolved.append(line if not isinstance(line, str) or text == str(line) else text)
         narration = self._dialogue_human_narration_line(context)
         if narration:
             return [narration] + [line for line in resolved if line]
@@ -9412,6 +9724,7 @@ class NPCInteractionSystem(System):
                 self._dialogue_npc_line(
                     context["npc_name"],
                     "Okay. I dropped it. Just tell me where you want me.",
+                    npc_eid=context["npc_eid"],
                 )
             ])
         if bool(context.get("door_answering")):
@@ -9424,12 +9737,13 @@ class NPCInteractionSystem(System):
                 first = "We're closed, but if this is quick I can help from the doorway."
             else:
                 first = "We're shut, but I'm listening. What do you need?"
-            lines = [self._dialogue_npc_line(context["npc_name"], first)]
+            lines = [self._dialogue_npc_line(context["npc_name"], first, npc_eid=context["npc_eid"])]
             if bool(context.get("door_answer_services")) and context.get("service_summary"):
                 lines.append(
                     self._dialogue_npc_line(
                         context["npc_name"],
                         f"If you just need {context['service_summary']}, I can handle that from here.",
+                        npc_eid=context["npc_eid"],
                     )
                 )
             elif bool(context.get("door_answer_hours")) and context.get("hours_text"):
@@ -9437,6 +9751,7 @@ class NPCInteractionSystem(System):
                     self._dialogue_npc_line(
                         context["npc_name"],
                         f"If you're checking hours, it's {self._dialogue_hours_summary(context)}.",
+                        npc_eid=context["npc_eid"],
                     )
                 )
             return self._dialogue_opening_lines_with_narration(context, lines)
@@ -9448,19 +9763,19 @@ class NPCInteractionSystem(System):
                 count=open_count,
                 npc_name=context["npc_name"],
             )
-            lines = [self._dialogue_npc_line(context["npc_name"], first)]
+            lines = [self._dialogue_npc_line(context["npc_name"], first, npc_eid=context["npc_eid"])]
             address_line = self._authority_player_address_line(context, open_count=open_count)
             if address_line:
-                lines.append(self._dialogue_npc_line(context["npc_name"], address_line))
+                lines.append(self._dialogue_npc_line(context["npc_name"], address_line, npc_eid=context["npc_eid"]))
             if context.get("trespass_prop"):
                 prop_name = str(context["trespass_prop"].get("name", context["trespass_prop"].get("id", "property"))).strip() or "property"
-                lines.append(self._dialogue_npc_line(context["npc_name"], f"You should not be hanging around {prop_name}."))
+                lines.append(self._dialogue_npc_line(context["npc_name"], f"You should not be hanging around {prop_name}.", npc_eid=context["npc_eid"]))
             elif context.get("recent_offense"):
                 action = str(context["recent_offense"].get("data", {}).get("action", "trouble")).replace("_", " ").strip() or "trouble"
-                lines.append(self._dialogue_npc_line(context["npc_name"], f"I still remember your {action}."))
+                lines.append(self._dialogue_npc_line(context["npc_name"], f"I still remember your {action}.", npc_eid=context["npc_eid"]))
             anchor_line = self._relationship_anchor_opening_line(context)
             if anchor_line:
-                lines.append(self._dialogue_npc_line(context["npc_name"], anchor_line))
+                lines.append(self._dialogue_npc_line(context["npc_name"], anchor_line, npc_eid=context["npc_eid"]))
             return self._dialogue_opening_lines_with_narration(context, lines)
         if context.get("intro_source_name") and open_count <= 1:
             bank_id = "greet_introduced"
@@ -9478,12 +9793,12 @@ class NPCInteractionSystem(System):
             npc_name=context["npc_name"],
             intro_source_name=context.get("intro_source_name", "someone"),
         )
-        lines = [self._dialogue_npc_line(context["npc_name"], first)]
+        lines = [self._dialogue_npc_line(context["npc_name"], first, npc_eid=context["npc_eid"])]
         anchor_line = self._relationship_anchor_opening_line(context)
         if anchor_line:
-            lines.append(self._dialogue_npc_line(context["npc_name"], anchor_line))
+            lines.append(self._dialogue_npc_line(context["npc_name"], anchor_line, npc_eid=context["npc_eid"]))
         for shaped_line in _shaped_opening_lines(context, limit=1):
-            formatted = self._dialogue_npc_line(context["npc_name"], shaped_line)
+            formatted = self._dialogue_npc_line(context["npc_name"], shaped_line, npc_eid=context["npc_eid"])
             if formatted and formatted not in lines:
                 lines.append(formatted)
         return self._dialogue_opening_lines_with_narration(context, lines)
@@ -9517,6 +9832,8 @@ class NPCInteractionSystem(System):
             elif not (peaceful_orders_only and topic_id in peaceful_topics) and topic_id not in self.ROOT_TOPICS and topic_id not in unlocked and topic_id not in door_topics:
                 continue
             if door_topics and topic_id not in door_topics:
+                continue
+            if topic_id in self.SOCIAL_KNOWLEDGE_TOPIC_IDS and not self._social_knowledge_topic_available(context, topic_id):
                 continue
             if topic_id in self.SERVICE_LOCATOR_TOPICS and not self._service_locator_topic_available(context, topic_id):
                 continue
@@ -9677,7 +9994,7 @@ class NPCInteractionSystem(System):
             line = str(raw_line or "").strip()
             if not line:
                 continue
-            formatted = self._dialogue_npc_line(context["npc_name"], line)
+            formatted = self._dialogue_npc_line(context["npc_name"], line, npc_eid=context["npc_eid"])
             if formatted and formatted not in transcript:
                 transcript.append(formatted)
         self.sim.set_time_paused(True, reason="dialog")
@@ -9998,6 +10315,8 @@ class NPCInteractionSystem(System):
             return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
         if topic_id == "read_player":
             return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
+        if topic_id in self.SOCIAL_KNOWLEDGE_TOPIC_IDS:
+            return self._resolve_social_knowledge_dialogue_topic(context, topic_id, ask_count=ask_count)
         if topic_id == "workplace":
             workplace_prop = context.get("workplace_prop")
             if workplace_prop:
@@ -11308,7 +11627,7 @@ class NPCInteractionSystem(System):
             if narration:
                 transcript.append(narration)
         for line in response.get("npc_lines", ()) or ():
-            formatted = self._dialogue_npc_line(context["npc_name"], line)
+            formatted = self._dialogue_npc_line(context["npc_name"], line, npc_eid=context.get("npc_eid"))
             if formatted:
                 transcript.append(formatted)
         state["transcript"] = transcript

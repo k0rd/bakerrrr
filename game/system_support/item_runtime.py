@@ -288,7 +288,7 @@ def _apply_item_effects_to_entity(sim, eid, item_def, *, item_metadata=None):
             continue
 
     if needs:
-        for need in ("energy", "safety", "social"):
+        for need in ("energy", "safety", "social", "hunger", "thirst"):
             try:
                 delta = float(metadata.get(f"item_extra_{need}_delta", 0.0) or 0.0)
             except (TypeError, ValueError):

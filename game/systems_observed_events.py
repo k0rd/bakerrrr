@@ -34,6 +34,7 @@ from game.components import (
     Position,
 )
 from game.incident_runtime import incident_propagation_allowed, incident_record
+from game.system_support.social_knowledge_runtime import hydrate_incident_social_knowledge
 
 
 PEACE_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
@@ -367,6 +368,8 @@ class ObservedIncidentConsequenceSystem(System):
                     )
                 target_knowledge.mark_shared(incident_id, tick=now, channel="social")
 
+        hydrate_incident_social_knowledge(self.sim, from_eid, source_event="incident_rumor_shared")
+        hydrate_incident_social_knowledge(self.sim, to_eid, source_event="incident_rumor_shared")
         self.sim.observed_incident_stats["rumors_shared"] += 1
         if account.get("corruption_kind"):
             self.sim.observed_incident_stats["rumors_corrupted"] += 1

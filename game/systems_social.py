@@ -12,12 +12,18 @@ from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
 from game.location_presentation_runtime import _storefront_illegal_goods_signal
+from game.property_runtime import (
+    property_focus_position as _property_focus_position,
+    property_is_public as _property_is_public,
+)
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
 from game.system_support.entity_naming import _entity_display_name
+from game.system_support.social_knowledge_runtime import choose_social_knowledge_payload
 
 AI = _systems.AI
 CreatureIdentity = _systems.CreatureIdentity
 NPCMemory = _systems.NPCMemory
+NPCNeeds = _systems.NPCNeeds
 NPCRoutine = _systems.NPCRoutine
 NPCSocial = _systems.NPCSocial
 NPCTraits = _systems.NPCTraits
@@ -25,6 +31,8 @@ NPCWill = _systems.NPCWill
 Occupation = _systems.Occupation
 Position = _systems.Position
 PropertyKnowledge = _systems.PropertyKnowledge
+SocialKnowledge = _systems.SocialKnowledge
+Vitality = _systems.Vitality
 SPECIALTY_OPPORTUNITY_THEMES = _systems.SPECIALTY_OPPORTUNITY_THEMES
 _controller_access_requirement_text = _systems._controller_access_requirement_text
 _dialogue_hours_text = _systems._dialogue_hours_text
@@ -51,6 +59,14 @@ opportunity_intel_for_observer = _systems.opportunity_intel_for_observer
 organization_name = _systems.organization_name
 property_org_members = _systems.property_org_members
 reveal_opportunity_to_observer = _systems.reveal_opportunity_to_observer
+
+def _clamp(value, default=0.0):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = float(default)
+    return max(0.0, min(1.0, number))
+
 
 class NPCSocialDynamicsSystem(System):
 
@@ -771,6 +787,17 @@ class NPCSocialDynamicsSystem(System):
 
     def _social_chatter_payload(self, speaker_eid, partner_eid, relation, tone):
         relation = str(relation or "friend").strip().lower() or "friend"
+        opportunity_rows = self._social_opportunity_rows_for(speaker_eid, limit=5)
+        social_knowledge_payload = choose_social_knowledge_payload(
+            self.sim,
+            speaker_eid,
+            partner_eid,
+            relation,
+            tone,
+            opportunity_rows=opportunity_rows,
+        )
+        if social_knowledge_payload:
+            return social_knowledge_payload
         opportunistic_roll = self._social_roll(speaker_eid, partner_eid, tone, "opportunity")
         contraband_roll = self._social_roll(speaker_eid, partner_eid, tone, "contraband")
         bonus_builders = []
@@ -891,6 +918,296 @@ class NPCSocialDynamicsSystem(System):
                 against_eid=against_eid,
                 relation=bond["kind"],
             ))
+
+class SocialKnowledgeInfluenceSystem(System):
+
+    INFLUENCE_COOLDOWN_TICKS = 90
+    SAME_INTENT_COOLDOWN_TICKS = 36
+    MAX_BUSINESS_DISTANCE = 14
+    MAX_RELATIONSHIP_DISTANCE = 12
+    MIN_INFLUENCE_SCORE = 34.0
+
+    BLOCKED_STATES = {
+        "working",
+        "investigating",
+        "protecting",
+        "following",
+        "holding",
+        "helping_victim",
+        "reporting_incident",
+        "warning",
+        "chasing",
+        "evading_authority",
+        "seeking_safety",
+        "seeking_medical_aid",
+        "seeking_safe_spot",
+        "seeking_shelter",
+        "casing_target",
+        "committing_property_crime",
+        "rendezvousing_crew",
+        "seeking_criminal_affiliation",
+        "soliciting_player",
+        "seeking_street_buyer",
+        "seeking_street_appraiser",
+    }
+
+    SOCIAL_VENUE_ARCHETYPES = {
+        "nightclub",
+        "bar",
+        "music_venue",
+        "gaming_hall",
+        "arcade",
+        "theater",
+        "karaoke_box",
+        "pool_hall",
+        "cafe",
+        "restaurant",
+        "diner",
+        "tavern",
+        "lounge",
+        "park",
+        "plaza",
+        "market",
+        "library",
+        "gym",
+        "barbershop",
+        "salon",
+        "street_kitchen",
+        "food_cart",
+    }
+
+    def __init__(self, sim):
+        super().__init__(sim)
+        self.sim.social_knowledge_influence_system = self
+
+    def _state(self):
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            self.sim.world_traits = {}
+            traits = self.sim.world_traits
+        state = traits.get("social_knowledge_influence")
+        if not isinstance(state, dict):
+            state = {"last_influenced": {}}
+            traits["social_knowledge_influence"] = state
+        last = state.get("last_influenced")
+        if not isinstance(last, dict):
+            last = {}
+            state["last_influenced"] = last
+        return state
+
+    def _cooldown_ready(self, eid, key, intent):
+        now = int(getattr(self.sim, "tick", 0) or 0)
+        last = self._state()["last_influenced"]
+        card_key = f"{int(eid)}:{key}"
+        intent_key = f"{int(eid)}:{intent}"
+        if now - int(last.get(card_key, -10_000) or -10_000) < self.INFLUENCE_COOLDOWN_TICKS:
+            return False
+        if now - int(last.get(intent_key, -10_000) or -10_000) < self.SAME_INTENT_COOLDOWN_TICKS:
+            return False
+        return True
+
+    def _mark_cooldown(self, eid, key, intent):
+        now = int(getattr(self.sim, "tick", 0) or 0)
+        last = self._state()["last_influenced"]
+        last[f"{int(eid)}:{key}"] = now
+        last[f"{int(eid)}:{intent}"] = now
+
+    def _social_need_deficit(self, eid):
+        needs = self.sim.ecs.get(NPCNeeds).get(eid)
+        if needs is None:
+            return 0.45
+        try:
+            social = float(getattr(needs, "social", 65.0) or 65.0)
+        except (TypeError, ValueError):
+            social = 65.0
+        return max(0.0, min(1.0, (100.0 - social) / 100.0))
+
+    def _actor_can_be_influenced(self, eid, ai, pos):
+        if eid == getattr(self.sim, "player_eid", None):
+            return False
+        if ai is None or pos is None:
+            return False
+        if _entity_is_downed(self.sim, eid):
+            _apply_downed_actor_state(self.sim, eid, tick=getattr(self.sim, "tick", 0))
+            return False
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+        if state in self.BLOCKED_STATES:
+            return False
+        vitality = self.sim.ecs.get(Vitality).get(eid)
+        if vitality is not None and bool(getattr(vitality, "downed", False)):
+            return False
+        return True
+
+    def _business_card_candidate(self, eid, ai, pos, record):
+        refs = record.get("refs") if isinstance(record.get("refs"), dict) else {}
+        if str(refs.get("sentiment", "") or "").strip().lower() != "positive":
+            return None
+        property_id = str(refs.get("property_id", "") or "").strip()
+        prop = getattr(self.sim, "properties", {}).get(property_id) if property_id else None
+        if not isinstance(prop, dict):
+            return None
+        focus = _property_focus_position(prop)
+        if not isinstance(focus, (tuple, list)) or len(focus) < 3:
+            return None
+        fx, fy, fz = int(focus[0]), int(focus[1]), int(focus[2])
+        if int(fz) != int(pos.z):
+            return None
+        distance = _manhattan(pos.x, pos.y, fx, fy)
+        if distance <= 0 or distance > self.MAX_BUSINESS_DISTANCE:
+            return None
+
+        metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+        archetype = str(metadata.get("archetype", "") or "").strip().lower()
+        is_social_place = (
+            archetype in self.SOCIAL_VENUE_ARCHETYPES
+            or bool(_property_is_public(prop))
+            or bool(_property_is_storefront(prop))
+        )
+        if not is_social_place:
+            return None
+
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+        need_deficit = self._social_need_deficit(eid)
+        if state not in {"idle", "lounging", "socializing"} and need_deficit < 0.32:
+            return None
+        score = (
+            18.0
+            + (_clamp(record.get("social_interest"), default=0.0) * 30.0)
+            + (_clamp(record.get("confidence"), default=0.0) * 16.0)
+            + (need_deficit * 20.0)
+            + max(0.0, (self.MAX_BUSINESS_DISTANCE - distance) * 0.55)
+        )
+        return {
+            "intent": "socializing",
+            "target": (fx, fy, fz),
+            "target_eid": None,
+            "score": score,
+            "reason": "business_social_pull",
+        }
+
+    def _relationship_card_candidate(self, eid, ai, pos, record):
+        refs = record.get("refs") if isinstance(record.get("refs"), dict) else {}
+        actor_eid = _int_or_default(refs.get("actor_eid"), 0)
+        other_eid = _int_or_default(refs.get("other_eid"), 0)
+        if actor_eid <= 0 or other_eid <= 0:
+            return None
+        target_eid = None
+        if int(eid) == actor_eid:
+            target_eid = other_eid
+        elif int(eid) == other_eid:
+            target_eid = actor_eid
+        if target_eid is None or target_eid == int(eid):
+            return None
+        target_pos = self.sim.ecs.get(Position).get(target_eid)
+        if target_pos is None or int(target_pos.z) != int(pos.z):
+            return None
+        distance = _manhattan(pos.x, pos.y, target_pos.x, target_pos.y)
+        if distance > self.MAX_RELATIONSHIP_DISTANCE:
+            return None
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+        need_deficit = self._social_need_deficit(eid)
+        if state not in {"idle", "lounging", "seeking_social"} and need_deficit < 0.26:
+            return None
+        social = self.sim.ecs.get(NPCSocial).get(eid)
+        bond = (social.bonds or {}).get(target_eid) if social is not None else {}
+        closeness = _clamp((bond or {}).get("closeness"), default=0.0) if isinstance(bond, dict) else 0.0
+        trust = _clamp((bond or {}).get("trust"), default=0.0) if isinstance(bond, dict) else 0.0
+        score = (
+            16.0
+            + (_clamp(record.get("social_interest"), default=0.0) * 32.0)
+            + (_clamp(record.get("confidence"), default=0.0) * 12.0)
+            + (need_deficit * 24.0)
+            + (closeness * 8.0)
+            + (trust * 5.0)
+            + max(0.0, (self.MAX_RELATIONSHIP_DISTANCE - distance) * 0.4)
+        )
+        return {
+            "intent": "seeking_social",
+            "target": (int(target_pos.x), int(target_pos.y), int(target_pos.z)),
+            "target_eid": target_eid,
+            "score": score,
+            "reason": "relationship_check_in",
+        }
+
+    def _candidate_for_record(self, eid, ai, pos, record):
+        domain = str(record.get("source_domain", "") or "").strip().lower()
+        if domain == "business":
+            return self._business_card_candidate(eid, ai, pos, record)
+        if domain == "relationship":
+            return self._relationship_card_candidate(eid, ai, pos, record)
+        return None
+
+    def _apply_candidate(self, eid, ai, will, record, candidate):
+        intent = candidate["intent"]
+        target = candidate.get("target")
+        target_eid = candidate.get("target_eid")
+        if ai.state == intent and ai.target == target and ai.target_eid == target_eid:
+            return False
+
+        ai.state = intent
+        ai.target = target
+        ai.target_eid = target_eid
+        if will is not None:
+            will.intent = intent
+            will.score = float(candidate.get("score", 0.0) or 0.0)
+            will.target = target
+            will.target_eid = target_eid
+            will.last_tick = int(getattr(self.sim, "tick", 0) or 0)
+
+        self._mark_cooldown(eid, record.get("key"), intent)
+        self.sim.emit(Event(
+            "social_knowledge_influenced_intent",
+            npc_eid=eid,
+            intent=intent,
+            score=round(float(candidate.get("score", 0.0) or 0.0), 2),
+            target=target,
+            target_eid=target_eid,
+            social_knowledge_key=record.get("key"),
+            source_domain=record.get("source_domain"),
+            subject_key=record.get("subject_key"),
+            reason=candidate.get("reason", ""),
+            summary=record.get("summary", ""),
+        ))
+        self.sim.emit(Event(
+            "npc_intent_changed",
+            npc_eid=eid,
+            intent=intent,
+            score=round(float(candidate.get("score", 0.0) or 0.0), 2),
+            target=target,
+            target_eid=target_eid,
+        ))
+        return True
+
+    def update(self):
+        ais = self.sim.ecs.get(AI)
+        positions = self.sim.ecs.get(Position)
+        wills = self.sim.ecs.get(NPCWill)
+        for eid, knowledge in tuple(self.sim.ecs.get(SocialKnowledge).items()):
+            if not isinstance(knowledge, SocialKnowledge):
+                continue
+            ai = ais.get(eid)
+            pos = positions.get(eid)
+            if not self._actor_can_be_influenced(eid, ai, pos):
+                continue
+
+            best = None
+            for queue_row in tuple(getattr(knowledge, "social_queue", ()) or ()):
+                key = str(queue_row.get("key", "") or "").strip()
+                record = (knowledge.entries or {}).get(key)
+                if not isinstance(record, dict):
+                    continue
+                candidate = self._candidate_for_record(eid, ai, pos, record)
+                if not candidate:
+                    continue
+                if not self._cooldown_ready(eid, key, candidate.get("intent")):
+                    continue
+                queue_bonus = _clamp(queue_row.get("score"), default=0.0) * 8.0
+                candidate["score"] = float(candidate.get("score", 0.0) or 0.0) + queue_bonus
+                if best is None or candidate["score"] > best[0]:
+                    best = (candidate["score"], record, candidate)
+            if best is None or best[0] < self.MIN_INFLUENCE_SCORE:
+                continue
+            self._apply_candidate(eid, ai, wills.get(eid), best[1], best[2])
 
 class EavesdropSystem(System):
 

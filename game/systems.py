@@ -78,6 +78,7 @@ from game.components import (
     PropertyPortfolio,
     Render,
     SkillProfile,
+    SocialKnowledge,
     StatusEffects,
     SuppressionState,
     VehicleState,
@@ -4281,6 +4282,7 @@ from game.npc_intent_systems import NPCWillSystem
 from game.systems_social import (
     EavesdropSystem,
     NPCSocialDynamicsSystem,
+    SocialKnowledgeInfluenceSystem,
 )
 
 

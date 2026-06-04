@@ -275,6 +275,7 @@ from game.ui_text_runtime import (
     _line_segments,
     _line_text,
     _line_with_prefix,
+    _segment,
     _tick_duration_label,
 )
 from game.weapons import WEAPON_CATALOG, roll_weapon_instance, weapon_by_id
@@ -836,6 +837,52 @@ class EventLogSystem(System):
                 dedupe_window=dedupe_window,
                 dedupe_key=dedupe_key,
             )
+
+    def _entity_log_color(self, eid):
+        if eid is None:
+            return None
+        entry = _entity_legend_line(self.sim, eid, "", player_eid=self.player_eid)
+        for segment in _line_segments(entry) or ():
+            if isinstance(segment, dict) and segment.get("color"):
+                return segment.get("color")
+        return None
+
+    def _log_visible_social_quote(
+        self,
+        speaker_eid,
+        partner_eid,
+        speaker,
+        partner,
+        quote,
+        *,
+        channel="social",
+        priority="low",
+        dedupe_window=None,
+        dedupe_key=None,
+    ):
+        speaker_color = self._entity_log_color(speaker_eid)
+        partner_color = self._entity_log_color(partner_eid)
+        prefix = _entity_legend_line(self.sim, speaker_eid, "", player_eid=self.player_eid)
+        segments = list(_line_segments(prefix) or ())
+        if segments:
+            segments.append(_segment(" "))
+        segments.extend((
+            _segment(speaker, color=speaker_color),
+            _segment(", to "),
+            _segment(partner, color=partner_color),
+            _segment(': "'),
+            _segment(quote, color=speaker_color),
+            _segment('"'),
+        ))
+        text = "".join(str(segment.get("text", "")) for segment in segments if isinstance(segment, dict))
+        self._log_rich(
+            segments,
+            text=text,
+            channel=channel,
+            priority=priority,
+            dedupe_window=dedupe_window,
+            dedupe_key=dedupe_key,
+        )
 
     def _move_blocked_phrase(self, x, y, z, reason):
         reason = str(reason or "").strip().lower()
@@ -3626,10 +3673,12 @@ class EventLogSystem(System):
             speaker = self._npc_label(npc_eid)
             partner = self._npc_label(partner_eid)
             if quote:
-                text = f'{speaker}, to {partner}: "{quote}"'
-                self._log_npc_message(
+                self._log_visible_social_quote(
                     npc_eid,
-                    text,
+                    partner_eid,
+                    speaker,
+                    partner,
+                    quote,
                     channel=channel,
                     priority=priority,
                     dedupe_window=8,

@@ -293,9 +293,15 @@ def build_rapport_shape(sim, npc_eid, *, context=None):
     social_need = _float(getattr(needs, "social", 55.0), 55.0)
     energy_need = _float(getattr(needs, "energy", 60.0), 60.0)
     safety_need = _float(getattr(needs, "safety", 70.0), 70.0)
+    hunger_need = _float(getattr(needs, "hunger", 86.0), 86.0)
+    thirst_need = _float(getattr(needs, "thirst", 90.0), 90.0)
     social_hunger = _clamp01((52.0 - social_need) / 52.0)
     fatigue = _clamp01((46.0 - energy_need) / 46.0)
     safety_stress = _clamp01((54.0 - safety_need) / 54.0)
+    survival_pressure = max(
+        _clamp01((54.0 - hunger_need) / 54.0),
+        _clamp01((54.0 - thirst_need) / 54.0),
+    )
     guarded = bool(context.get("guarded"))
     pressure_tier = _text(context.get("pressure_tier", "low")).lower() or "low"
     pressure_penalty = {
@@ -326,6 +332,7 @@ def build_rapport_shape(sim, npc_eid, *, context=None):
         + (social_hunger * 0.18)
         - (0.11 if guarded else 0.0)
         - pressure_penalty
+        - (survival_pressure * 0.12)
     )
     privacy = _clamp01(
         0.18
@@ -334,6 +341,7 @@ def build_rapport_shape(sim, npc_eid, *, context=None):
         + (safety_stress * 0.18)
         + (0.14 if guarded else 0.0)
         - (social_hunger * 0.08)
+        + (survival_pressure * 0.08)
     )
     profession_pride = _clamp01(
         0.14
@@ -356,6 +364,7 @@ def build_rapport_shape(sim, npc_eid, *, context=None):
         - (discipline * 0.08)
         - (fatigue * 0.1)
         - (safety_stress * 0.1)
+        - (survival_pressure * 0.12)
         - pressure_penalty
     )
 
@@ -365,6 +374,7 @@ def build_rapport_shape(sim, npc_eid, *, context=None):
         + (social_hunger * 0.1)
         - (fatigue * 0.16)
         - (safety_stress * 0.16)
+        - (survival_pressure * 0.16)
         - pressure_penalty
         + (empathy * 0.06)
     )

@@ -140,6 +140,7 @@ from game.systems import (
     NPCSettlementSystem,
     RumorSystem,
     NPCSocialDynamicsSystem,
+    SocialKnowledgeInfluenceSystem,
     NPCWillSystem,
     SuppressionSystem,
     PlayerActionSystem,
@@ -623,6 +624,7 @@ def _register_runtime_systems(sim, view, player):
     eavesdrop_system = EavesdropSystem(sim, player)
     door_wait_system = DoorWaitSystem(sim)
     criminal_drive_system = CriminalDriveSystem(sim)
+    social_knowledge_influence_system = SocialKnowledgeInfluenceSystem(sim)
     npc_will_system = NPCWillSystem(sim)
     business_pulse_aftermath_system = BusinessPulseAftermathSystem(sim)
     business_pulse_scene_system = BusinessPulseSceneSystem(sim, player)
@@ -679,6 +681,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(npc_item_use_system, 5)
     _live_timeskip_stride(npc_social_system, 10)
     _live_timeskip_stride(eavesdrop_system, 0)
+    _live_timeskip_stride(social_knowledge_influence_system, 12)
     _live_timeskip_stride(business_pulse_aftermath_system, 60)
     _live_timeskip_stride(world_events_system, 60)
     _live_timeskip_stride(door_wait_system, 10)
@@ -746,6 +749,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(suppression_system, 5)
     sim.register_system(door_wait_system)
     sim.register_system(criminal_drive_system)
+    sim.register_system(social_knowledge_influence_system)
     sim.register_system(npc_will_system)
     sim.register_system(business_pulse_scene_system)
     sim.register_system(npc_weapon_system)

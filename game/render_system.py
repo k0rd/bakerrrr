@@ -315,6 +315,8 @@ from game.ui_text_runtime import (
     _log_filter_spec,
     _log_prefix,
     _mode_line,
+    _rich_line,
+    _segment,
     _tick_duration_label,
     _view_text_wrap_width,
     _wrap_display_lines,
@@ -329,6 +331,7 @@ from game.skill_ui import (
 from game.status_ui_runtime import (
     _active_status_summary,
     _hud_primary_status_chunks,
+    _survival_indicator_chunks,
 )
 from game.weapons import WEAPON_CATALOG, roll_weapon_instance, weapon_by_id
 
@@ -1970,6 +1973,7 @@ class RenderSystem(System):
             economy_chunks.append(
                 f"Needs E{player_needs.energy:.0f}/S{player_needs.safety:.0f}/So{player_needs.social:.0f}"
             )
+            economy_chunks.extend(_survival_indicator_chunks(player_needs))
         pressure = _pressure_snapshot(self.sim)
         pressure_tier = str(pressure.get("tier", "low")).strip().lower()
         pressure_attention = int(pressure.get("attention", 0))
@@ -2717,7 +2721,7 @@ class RenderSystem(System):
 
             display_lines = []
             for raw in list(dialog_ui.get("transcript", ()) or ()) or ["No conversation yet."]:
-                wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
+                wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
                 display_lines.extend(wrapped)
             display_lines = display_lines or ["No conversation yet."]
             max_scroll = max(0, len(display_lines) - transcript_h)
@@ -2726,7 +2730,12 @@ class RenderSystem(System):
             visible_lines = display_lines[scroll: scroll + transcript_h]
 
             for idx, line in enumerate(visible_lines[:transcript_h]):
-                self.view.draw_text(panel_x + 2, inner_top + idx, _clip(line, body_w))
+                self._draw_display_line(
+                    panel_x + 2,
+                    inner_top + idx,
+                    _clip_display_line(line, body_w),
+                    body_w,
+                )
 
             self.view.draw_text(panel_x + 2, divider_y, _clip("-" * body_w, body_w))
 
@@ -2756,12 +2765,25 @@ class RenderSystem(System):
                 topic_id = str(row.get("id", "")).strip().lower()
                 new_flag = "+" if topic_id in new_topic_ids else " "
                 label = str(row.get("label", row.get("id", "topic"))).strip() or "topic"
-                line = f"{marker}{new_flag}{absolute + 1:02d} {label}"
-                self.view.draw_text(panel_x + 2, options_y + idx, _clip(line, body_w))
+                row_attrs = getattr(curses, "A_BOLD", 0) if absolute == selected_index else 0
+                line = _rich_line(
+                    (
+                        _segment(marker, color="player", attrs=row_attrs),
+                        _segment(new_flag, color="objective" if topic_id in new_topic_ids else "player", attrs=row_attrs),
+                        _segment(f"{absolute + 1:02d} {label}", color="player", attrs=row_attrs),
+                    ),
+                    text=f"{marker}{new_flag}{absolute + 1:02d} {label}",
+                )
+                self._draw_display_line(
+                    panel_x + 2,
+                    options_y + idx,
+                    _clip_display_line(line, body_w),
+                    body_w,
+                )
 
             if not raw_topics:
                 empty_text = "(press Space to close)" if close_pending else "(no topics)"
-                self.view.draw_text(panel_x + 2, options_y, _clip(empty_text, body_w))
+                self.view.draw_text(panel_x + 2, options_y, _clip(empty_text, body_w), color="player")
 
             footer_bits = []
             if scroll > 0:

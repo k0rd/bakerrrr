@@ -16,6 +16,18 @@
       "weight": 16
     },
     {
+      "item_id": "rice_bowl",
+      "weight": 10
+    },
+    {
+      "item_id": "fruit_cup",
+      "weight": 9
+    },
+    {
+      "item_id": "sealed_juice",
+      "weight": 10
+    },
+    {
       "item_id": "spark_brew",
       "weight": 20
     },
@@ -192,6 +204,18 @@
     {
       "item_id": "noodle_cup",
       "weight": 12
+    },
+    {
+      "item_id": "rice_bowl",
+      "weight": 8
+    },
+    {
+      "item_id": "fruit_cup",
+      "weight": 7
+    },
+    {
+      "item_id": "sealed_juice",
+      "weight": 8
     },
     {
       "item_id": "energy_bar",
@@ -1354,6 +1378,18 @@
     {
       "item_id": "instant_soup_pack",
       "weight": 18
+    },
+    {
+      "item_id": "rice_bowl",
+      "weight": 22
+    },
+    {
+      "item_id": "fruit_cup",
+      "weight": 16
+    },
+    {
+      "item_id": "sealed_juice",
+      "weight": 14
     },
     {
       "item_id": "spark_brew",
