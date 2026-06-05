@@ -9,7 +9,7 @@ from .world import World, normalize_building_levels
 from .eventlog import EventLog
 from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
-from game.components import Position
+from game.components import AI, CreatureIdentity, Position
 from game.items import prepare_ground_item_stack_metadata
 from game.system_support.fire_runtime import fire_protected_chunks
 
@@ -47,6 +47,7 @@ class Simulation:
         self.chunk_saved_states = {}
         self.chunk_entity_index = {}
         self.entity_chunk_membership = {}
+        self.entity_identity_records = {}
         self.property_registry_dirty = False
         self.properties = {}
         self.property_anchor_index = {}
@@ -143,6 +144,8 @@ class Simulation:
             self.chunk_entity_index = {}
         if not isinstance(getattr(self, "entity_chunk_membership", None), dict):
             self.entity_chunk_membership = {}
+        if not isinstance(getattr(self, "entity_identity_records", None), dict):
+            self.entity_identity_records = {}
         self._bind_tilemap_runtime_state()
 
     def _bind_tilemap_runtime_state(self):
@@ -234,6 +237,109 @@ class Simulation:
             except (TypeError, ValueError):
                 continue
             self._track_chunk_entity(eid, key)
+
+    def _entity_identity_record_from_components(self, eid, component_map=None):
+        try:
+            int_eid = int(eid)
+        except (TypeError, ValueError):
+            int_eid = eid
+        identity = None
+        ai = None
+        if isinstance(component_map, dict):
+            identity = component_map.get(CreatureIdentity)
+            ai = component_map.get(AI)
+            if identity is None or ai is None:
+                for component_type, component in component_map.items():
+                    name = str(getattr(component_type, "__name__", component_type) or "")
+                    if identity is None and name == "CreatureIdentity":
+                        identity = component
+                    elif ai is None and name == "AI":
+                        ai = component
+        else:
+            identity = self.ecs.get(CreatureIdentity).get(eid)
+            ai = self.ecs.get(AI).get(eid)
+
+        record = {"eid": int_eid}
+        if identity is not None:
+            display_name = str(identity.display_name() or "").replace("_", " ").strip()
+            fields = {
+                "display_name": display_name,
+                "personal_name": getattr(identity, "personal_name", ""),
+                "common_name": getattr(identity, "common_name", ""),
+                "species": getattr(identity, "species", ""),
+                "creature_type": getattr(identity, "creature_type", ""),
+                "taxonomy_class": getattr(identity, "taxonomy_class", ""),
+                "gender_identity": getattr(identity, "gender_identity", ""),
+                "pronoun_set": getattr(identity, "pronoun_set", ""),
+            }
+            for key, value in fields.items():
+                text = str(value or "").replace("_", " ").strip()
+                if text:
+                    record[key] = text
+        if ai is not None:
+            role = str(getattr(ai, "role", "") or "").replace("_", " ").strip()
+            if role:
+                record["role"] = role
+        if len(record) <= 1:
+            return None
+        return record
+
+    def remember_entity_identity(self, eid, *, reason=""):
+        record = self._entity_identity_record_from_components(eid)
+        if not record:
+            return None
+        try:
+            key = int(eid)
+        except (TypeError, ValueError):
+            key = eid
+        existing = self.entity_identity_records.get(key)
+        if isinstance(existing, dict):
+            merged = dict(existing)
+            merged.update({k: v for k, v in record.items() if v not in (None, "")})
+            record = merged
+        reason_text = str(reason or "").strip().lower()
+        if reason_text:
+            record["last_reason"] = reason_text
+        record["last_seen_tick"] = int(getattr(self, "tick", 0) or 0)
+        self.entity_identity_records[key] = dict(record)
+        return dict(record)
+
+    def _saved_entity_identity_record(self, eid):
+        try:
+            int_eid = int(eid)
+        except (TypeError, ValueError):
+            int_eid = eid
+        for snapshot in tuple(getattr(self, "chunk_saved_states", {}).values()):
+            if not isinstance(snapshot, dict):
+                continue
+            entities = snapshot.get("entities", {})
+            if not isinstance(entities, dict):
+                continue
+            component_map = entities.get(int_eid)
+            if component_map is None:
+                component_map = entities.get(str(int_eid))
+            record = self._entity_identity_record_from_components(int_eid, component_map=component_map)
+            if record:
+                return record
+        return None
+
+    def entity_identity_record(self, eid):
+        try:
+            key = int(eid)
+        except (TypeError, ValueError):
+            key = eid
+        live = self._entity_identity_record_from_components(eid)
+        if live:
+            self.entity_identity_records[key] = dict(live)
+            return live
+        record = self.entity_identity_records.get(key)
+        if isinstance(record, dict):
+            return dict(record)
+        record = self._saved_entity_identity_record(eid)
+        if record:
+            self.entity_identity_records[key] = dict(record)
+            return record
+        return None
 
     def track_population_entity(self, eid, *, chunk=None):
         try:
@@ -2327,6 +2433,7 @@ class Simulation:
         return self.projectiles.pop(projectile_id, None)
 
     def remove_entity(self, eid):
+        self.remember_entity_identity(eid, reason="remove")
         position = self.ecs.get(Position).get(eid)
 
         if position is not None:

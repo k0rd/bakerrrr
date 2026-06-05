@@ -15,7 +15,7 @@ import random
 from engine.world import World
 from engine.events import Event
 from engine.systems import System
-from game.components import AI, NPCRoutine, NPCWill, Occupation, OrganizationAffiliations, PlayerAssets, Position
+from game.components import AI, NPCSocial, NPCRoutine, NPCWill, Occupation, OrganizationAffiliations, PlayerAssets, Position
 from game.dialogue_runtime import _queue_npc_initiated_dialogue
 from game.economy import chunk_economy_profile, pick_career_for_workplace, workplace_archetype_weight
 from game.organizations import (
@@ -68,6 +68,22 @@ PUBLIC_OWNER_TAGS = {
     "none",
     "public",
     "unowned",
+}
+BUSINESS_BOND_RANK = {
+    "family": 6,
+    "partner": 5,
+    "friend": 4,
+    "owner": 3,
+    "workplace": 3,
+    "job_issuer": 3,
+    "coworker": 2,
+    "neighbor": 1,
+    "local": 1,
+    "contact": 1,
+}
+BUSINESS_COWORKER_BASELINES = {
+    "manager": {"closeness": 0.52, "trust": 0.62, "protectiveness": 0.58},
+    "staff": {"closeness": 0.48, "trust": 0.58, "protectiveness": 0.54},
 }
 LARGE_STAFF_ARCHETYPES = {
     "hotel",
@@ -1618,6 +1634,13 @@ def _sync_staff_roster(sim, prop, state):
     roles = dict(state.get("staff_roles", {})) if isinstance(state.get("staff_roles"), dict) else {}
     owner_eid = prop.get("owner_eid")
     player_eid = getattr(sim, "player_eid", None)
+    social_owner_eid = owner_eid
+    if social_owner_eid is None and player_eid is not None:
+        prop_id = _text(prop.get("id"))
+        assets = sim.ecs.get(PlayerAssets).get(player_eid)
+        owner_tag = _text(prop.get("owner_tag")).lower()
+        if (assets and prop_id in getattr(assets, "owned_property_ids", set())) or owner_tag == "player":
+            social_owner_eid = player_eid
 
     for member in property_org_members(sim, prop):
         actor_eid = _int_or(member.get("eid"), default=0)
@@ -1629,6 +1652,8 @@ def _sync_staff_roster(sim, prop, state):
         if role not in {"manager", "staff"}:
             role = "staff"
         roles[str(actor_eid)] = role
+        if social_owner_eid is not None and player_eid is not None and _int_or(social_owner_eid, default=-1) == _int_or(player_eid, default=-2):
+            _ensure_player_business_staff_bond(sim, social_owner_eid, actor_eid, role=role)
 
     roster = sorted(
         _int_or(raw_eid, default=0)
@@ -1905,6 +1930,104 @@ def _property_owned_by_actor(sim, actor_eid, prop):
         return True
     assets = sim.ecs.get(PlayerAssets).get(actor_eid)
     return bool(assets and prop.get("id") in getattr(assets, "owned_property_ids", set()))
+
+
+def _bond_rank(kind):
+    return int(BUSINESS_BOND_RANK.get(str(kind or "").strip().lower(), 0))
+
+
+def _social_for_business_bond(sim, actor_eid):
+    if sim is None or actor_eid is None:
+        return None
+    try:
+        actor_eid = int(actor_eid)
+    except (TypeError, ValueError):
+        return None
+    socials = sim.ecs.get(NPCSocial)
+    social = socials.get(actor_eid)
+    if social is None:
+        social = NPCSocial()
+        sim.ecs.add(actor_eid, social)
+    return social
+
+
+def _upsert_business_coworker_bond(sim, source_eid, target_eid, *, role):
+    if source_eid is None or target_eid is None:
+        return False
+    try:
+        source_id = int(source_eid)
+        target_id = int(target_eid)
+    except (TypeError, ValueError):
+        return False
+    if source_id == target_id:
+        return False
+
+    social = _social_for_business_bond(sim, source_id)
+    if social is None:
+        return False
+
+    baseline = BUSINESS_COWORKER_BASELINES.get(str(role or "").strip().lower(), BUSINESS_COWORKER_BASELINES["staff"])
+    existing = social.bonds.get(target_id)
+    if isinstance(existing, dict) and _bond_rank(existing.get("kind")) > _bond_rank("coworker"):
+        return False
+
+    closeness = float(baseline["closeness"])
+    trust = float(baseline["trust"])
+    protectiveness = float(baseline["protectiveness"])
+    if isinstance(existing, dict):
+        closeness = max(closeness, float(existing.get("closeness", 0.0) or 0.0))
+        trust = max(trust, float(existing.get("trust", 0.0) or 0.0))
+        protectiveness = max(protectiveness, float(existing.get("protectiveness", 0.0) or 0.0))
+
+    social.add_bond(
+        target_id,
+        kind="coworker",
+        closeness=closeness,
+        trust=trust,
+        protectiveness=protectiveness,
+    )
+    return True
+
+
+def _ensure_player_business_staff_bond(sim, owner_eid, actor_eid, *, role):
+    changed = _upsert_business_coworker_bond(sim, actor_eid, owner_eid, role=role)
+    changed = _upsert_business_coworker_bond(sim, owner_eid, actor_eid, role=role) or changed
+    return bool(changed)
+
+
+def _remove_business_seeded_staff_bond(sim, owner_eid, actor_eid):
+    if sim is None or owner_eid is None or actor_eid is None:
+        return False
+    try:
+        owner_id = int(owner_eid)
+        actor_id = int(actor_eid)
+    except (TypeError, ValueError):
+        return False
+    if owner_id == actor_id:
+        return False
+
+    removed = False
+    max_baseline = {
+        key: max(float(row[key]) for row in BUSINESS_COWORKER_BASELINES.values())
+        for key in ("closeness", "trust", "protectiveness")
+    }
+    for source_id, target_id in ((owner_id, actor_id), (actor_id, owner_id)):
+        social = sim.ecs.get(NPCSocial).get(source_id)
+        if social is None:
+            continue
+        bond = social.bonds.get(target_id)
+        if not isinstance(bond, dict):
+            continue
+        if str(bond.get("kind", "") or "").strip().lower() != "coworker":
+            continue
+        if (
+            float(bond.get("closeness", 0.0) or 0.0) <= max_baseline["closeness"] + 0.001
+            and float(bond.get("trust", 0.0) or 0.0) <= max_baseline["trust"] + 0.001
+            and float(bond.get("protectiveness", 0.0) or 0.0) <= max_baseline["protectiveness"] + 0.001
+        ):
+            social.bonds.pop(target_id, None)
+            removed = True
+    return removed
 
 
 def _staffing_role_from_workplace(workplace, *, default="staff"):
@@ -2213,6 +2336,8 @@ def fire_actor_from_player_business(sim, owner_eid, actor_eid, prop=None):
         ]
         _sync_staff_roster(sim, employed_prop, state)
         _touch_player_business_runtime(employed_prop, sim=sim)
+
+    _remove_business_seeded_staff_bond(sim, owner_eid, actor_eid)
 
     return {
         "actor_eid": int(actor_eid),

@@ -1282,7 +1282,8 @@ def _known_person_source_name(sim, player_eid, source_eid, *, exclude_eid=None):
     ledger = sim.ecs.get(ContactLedger).get(player_eid)
     entry = ledger.person_entry(source_key) if ledger else None
     if not _person_name_known(entry):
-        return ""
+        display = _entity_display_name(sim, source_key, title_case=True)
+        return "" if str(display or "").strip().lower() == "entity" else display
     return _known_person_name(sim, player_eid, source_key, entry)
 
 

@@ -3808,6 +3808,26 @@ class NPCInteractionSystem(System):
             return owner_tag.replace("_", " "), "tag"
         return "", ""
 
+    def _property_owned_by_dialogue_player(self, prop):
+        if not isinstance(prop, dict):
+            return False
+        player_eid = getattr(self, "player_eid", None)
+        owner_eid = prop.get("owner_eid")
+        if owner_eid is not None and player_eid is not None:
+            try:
+                if int(owner_eid) == int(player_eid):
+                    return True
+            except (TypeError, ValueError):
+                if owner_eid == player_eid:
+                    return True
+
+        prop_id = str(prop.get("id", "") or "").strip()
+        assets = self.sim.ecs.get(PlayerAssets).get(player_eid) if player_eid is not None else None
+        if prop_id and assets and prop_id in getattr(assets, "owned_property_ids", set()):
+            return True
+
+        return str(prop.get("owner_tag", "") or "").strip().lower() == "player"
+
     def _human_identity_for_reference(self, *, eid=None, personal_name=""):
         identities = self.sim.ecs.get(CreatureIdentity)
         if eid is not None:
@@ -6303,6 +6323,8 @@ class NPCInteractionSystem(System):
         owner_eid = context.get("owner_eid")
         owner_name = str(context.get("owner_name", "")).strip()
         owner_source = str(context.get("owner_source", "")).strip().lower()
+        workplace_prop = context.get("workplace_prop")
+        player_owned_workplace = self._property_owned_by_dialogue_player(workplace_prop)
         scene_note = dict(context.get("scene_note", {}) or {})
         scene_type = str(scene_note.get("scene_type", "")).strip().lower()
         event_phase = str(scene_note.get("event_phase", "")).strip().lower()
@@ -6312,6 +6334,16 @@ class NPCInteractionSystem(System):
             return "Nobody at this stop signs me. I am with the delivery side, then I move on."
         if event_phase == "maintenance_loop" and not site_affiliated:
             return "Nobody here signs me. I am on the maintenance side for this call and then I am gone."
+        if player_owned_workplace and workplace_name:
+            if organization_role == "owner":
+                if career_text:
+                    return f"You own {workplace_name}. I keep doing {career_text} work here, but the final calls are yours."
+                return f"You own {workplace_name}. The final calls are yours now."
+            if organization_role == "manager":
+                return f"You own {workplace_name}. I manage it for you."
+            if career_text:
+                return f"You own {workplace_name}. I do {career_text} work here."
+            return f"You own {workplace_name}."
         if organization_role == "owner" and workplace_name and organization_name_text and organization_name_text.lower() != workplace_name.lower():
             return f"Nobody over me. {workplace_name} runs under {organization_name_text}, and it is mine."
         if organization_role == "owner" and workplace_name:
@@ -6383,9 +6415,30 @@ class NPCInteractionSystem(System):
         supervisor_eid = context.get("supervisor_eid")
         supervisor_name = str(context.get("supervisor_name", "")).strip()
         supervisor_role = str(context.get("supervisor_role", "")).strip().lower()
+        npc_eid = context.get("npc_eid")
         workplace_name = str(context.get("workplace_name", "")).strip()
         organization_name_text = str(context.get("organization_name", "")).strip()
         organization_kind = str(context.get("organization_kind", "")).strip().lower()
+        workplace_prop = context.get("workplace_prop")
+        player_owned_workplace = self._property_owned_by_dialogue_player(workplace_prop)
+
+        if player_owned_workplace:
+            place_text = workplace_name or "the place"
+            supervisor_is_self = False
+            if supervisor_eid is not None and npc_eid is not None:
+                try:
+                    supervisor_is_self = int(supervisor_eid) == int(npc_eid)
+                except (TypeError, ValueError):
+                    supervisor_is_self = supervisor_eid == npc_eid
+            if supervisor_name and not supervisor_is_self:
+                if supervisor_role == "manager":
+                    return f"{supervisor_name} runs the floor at {place_text} most days. Final calls go through you."
+                if supervisor_role == "owner":
+                    return f"You own {place_text}. {supervisor_name} may handle the old desk, but final calls go through you."
+                return f"I answer to {supervisor_name} day to day, and final calls go through you."
+            if organization_role in {"owner", "manager"}:
+                return f"You own {place_text}. I keep the floor moving, but final calls go through you."
+            return f"You own {place_text}. I work the shift, but final calls go through you."
 
         if organization_role == "owner":
             if workplace_name:
