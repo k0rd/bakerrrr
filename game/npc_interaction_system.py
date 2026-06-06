@@ -995,6 +995,15 @@ class NPCInteractionSystem(System):
             return
         self._npc_dialogue_cooldown_map()[int(npc_eid)] = int(self.sim.tick) + max(0, int(duration or 0))
 
+    def _dialogue_outfit_comment_state(self):
+        state = getattr(self.sim, "dialogue_outfit_comment_state", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.dialogue_outfit_comment_state = state
+        if not isinstance(state.get("by_npc"), dict):
+            state["by_npc"] = {}
+        return state
+
     def _state_text(self, ai):
         if not ai:
             return "hard to read"
@@ -9863,11 +9872,51 @@ class NPCInteractionSystem(System):
         cue = " ".join(str(impression.get("display_cue", "") or "outfit").strip().split())
         if not cue:
             return ""
+        try:
+            score = abs(float(impression.get("score", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+        if score < 0.24:
+            return ""
+        signature = str(impression.get("outfit_signature", "") or cue).strip()
+        armor_read = "armor" in cue.lower() or "armor" in signature.lower()
+        if not armor_read:
+            comment_chance = min(0.24, max(0.06, 0.08 + max(0.0, score - 0.24) * 0.22))
+            roll = random.Random(
+                f"{getattr(self.sim, 'seed', 0)}:dialogue-outfit-comment-gate:{npc_eid}:{signature}:{polarity}"
+            ).random()
+            if roll > comment_chance:
+                return ""
+        now = int(getattr(self.sim, "tick", 0) or 0)
+        comment_state = self._dialogue_outfit_comment_state()
+        by_npc = comment_state.get("by_npc", {})
+        npc_state = by_npc.get(int(npc_eid), {})
+        if not isinstance(npc_state, dict):
+            npc_state = {}
+        if str(npc_state.get("signature", "") or "").strip() == signature:
+            return ""
+        try:
+            global_next_tick = int(comment_state.get("global_next_tick", -1) or -1)
+        except (TypeError, ValueError):
+            global_next_tick = -1
+        try:
+            npc_next_tick = int(npc_state.get("next_tick", -1) or -1)
+        except (TypeError, ValueError):
+            npc_next_tick = -1
+        if now < global_next_tick or now < npc_next_tick:
+            return ""
         npc_name = str(context.get("npc_name", "") or "").strip()
         slots = self._human_pronoun_slots(eid=npc_eid, personal_name=npc_name, prefix="npc")
         possessive = str(slots.get("npc_possessive_adj_cap", "Their") or "Their")
         subject = str(slots.get("npc_subject", "they") or "they")
         be = str(slots.get("npc_be", "are") or "are")
+        by_npc[int(npc_eid)] = {
+            "signature": signature,
+            "last_tick": now,
+            "next_tick": now + 2400,
+        }
+        comment_state["by_npc"] = by_npc
+        comment_state["global_next_tick"] = now + 360
         if polarity == "positive":
             return f"{possessive} attention catches on your {cue}, and {subject} {be} a shade warmer for it."
         return f"{possessive} attention catches on your {cue}, and the exchange tightens by a fraction."
@@ -10015,6 +10064,8 @@ class NPCInteractionSystem(System):
                     )
                 )
             return self._dialogue_opening_lines_with_narration(context, lines)
+        if bool(context.get("initiated_by_npc")):
+            return self._dialogue_opening_lines_with_narration(context, [])
         if context.get("guarded"):
             first = self._say(
                 "greet_guarded",
@@ -10246,9 +10297,11 @@ class NPCInteractionSystem(System):
                 remainder.append(row)
         return preferred + remainder
 
-    def _open_dialogue(self, context, *, prompt_lines=(), highlight_topic_ids=()):
+    def _open_dialogue(self, context, *, prompt_lines=(), highlight_topic_ids=(), initiated_by_npc=False):
         memory = self._dialogue_memory(context["npc_eid"])
         state = self._dialog_ui_state()
+        context = dict(context)
+        context["initiated_by_npc"] = bool(initiated_by_npc or tuple(prompt_lines or ()))
         transcript = self._dialogue_opening_lines(context)
         for raw_line in tuple(prompt_lines or ()):
             line = str(raw_line or "").strip()
@@ -11966,6 +12019,7 @@ class NPCInteractionSystem(System):
             context,
             prompt_lines=prompt_lines,
             highlight_topic_ids=highlight_topic_ids,
+            initiated_by_npc=bool(tuple(prompt_lines or ())),
         )
         self.sim.emit(Event(
             "npc_interacted",
@@ -12078,12 +12132,19 @@ class NPCInteractionSystem(System):
             )
             return {"prompt_lines": (prompt,), "highlight_topic_ids": ("contacts",), "score": 0.58 + (standing * 0.06)}
         if context.get("run_objective_visible") or context.get("opportunity_summary"):
-            prompt = (
-                "If you are still looking for a line, I might have one."
-                if has_direct_history else
-                "I might have a line worth hearing if you need one."
+            if not has_direct_history:
+                return None
+            prompt_options = (
+                "If you are still looking for something useful nearby, ask.",
+                "I might have a lead if you are still looking.",
+                "If you still want a useful lead, I can point you at one thing.",
+                "If you are still chasing work around here, I know one place to start.",
             )
-            return {"prompt_lines": (prompt,), "highlight_topic_ids": ("opportunities",), "score": 0.5 + (trust * 0.04)}
+            chooser = random.Random(
+                f"{self.sim.seed}:relationship-opportunity-request:{context.get('npc_eid', 0)}:{opened_count}:{anchor_kind}"
+            )
+            prompt = prompt_options[chooser.randrange(len(prompt_options))]
+            return {"prompt_lines": (prompt,), "highlight_topic_ids": ("opportunities",), "score": 0.36 + (trust * 0.04)}
         return None
 
     def _tick_relationship_dialogue_requests(self):
