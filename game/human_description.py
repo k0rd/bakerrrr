@@ -358,6 +358,25 @@ def _join_with_and(parts):
     return f"{', '.join(bits[:-1])}, and {bits[-1]}"
 
 
+def _indefinite_article_phrase(text):
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered.startswith(("a ", "an ", "the ", "some ", "one ")):
+        return text
+    article = "an" if lowered[:1] in {"a", "e", "i", "o", "u"} else "a"
+    return f"{article} {text}"
+
+
+def _identity_noun(gender_identity):
+    return {
+        "woman": "woman",
+        "man": "man",
+        "nonbinary": "person",
+    }.get(str(gender_identity or "").strip().lower(), "person")
+
+
 def build_human_description_profile(seed, *, eid=None, identity=None, personal_name=None):
     if identity is not None and not is_human_identity(identity):
         return None
@@ -470,6 +489,40 @@ def human_physical_summary(seed, *, eid=None, identity=None, personal_name=None)
     return f"{summary}."
 
 
+def human_self_physical_summary(seed, *, eid=None, identity=None, personal_name=None):
+    profile = build_human_description_profile(
+        seed,
+        eid=eid,
+        identity=identity,
+        personal_name=personal_name,
+    )
+    if not profile:
+        return ""
+    identity_noun = _identity_noun(profile.get("gender_identity"))
+    stature = str(profile.get("stature_phrase", "") or "").strip()
+    features = []
+    eye_color = str(profile.get("eye_color", "") or "").strip()
+    if eye_color:
+        features.append(f"{eye_color} eyes")
+    complexion = str(profile.get("complexion_phrase", "") or "").strip()
+    if complexion:
+        features.append(_indefinite_article_phrase(complexion))
+    hair = str(profile.get("hair_phrase", "") or "").strip()
+    if hair:
+        features.append(hair)
+    standout = str(profile.get("standout_phrase", "") or "").strip()
+    if standout:
+        features.append(standout)
+
+    opening = f"I am a {identity_noun}"
+    if stature:
+        opening = f"{opening}, {stature}"
+    feature_text = _join_with_and(features)
+    if feature_text:
+        return f"{opening}, with {feature_text}."
+    return f"{opening}."
+
+
 def _conversation_segment(text, *, color=None, attrs=0):
     return {
         "text": str(text or ""),
@@ -513,11 +566,7 @@ def human_conversation_presentation(seed, *, eid=None, identity=None, personal_n
         personal_name=personal_name,
         seed_token=profile["seed_token"],
     )
-    identity_noun = {
-        "woman": "woman",
-        "man": "man",
-        "nonbinary": "person",
-    }.get(str(profile.get("gender_identity", "") or "").strip().lower(), "person")
+    identity_noun = _identity_noun(profile.get("gender_identity"))
     eye_phrase = f"{profile['eye_color']} eyes" if str(profile.get("eye_color", "")).strip() else ""
     demeanor_tail = ""
     if rng.random() < 0.54:

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from engine.events import Event
 from game.components import AppearanceLoadout, ArmorLoadout, CreatureIdentity, Inventory
-from game.human_description import human_physical_summary, human_render_color_key
+from game.human_description import human_self_physical_summary, human_render_color_key
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG, item_display_name, item_inventory_slot_cost
 
@@ -54,6 +54,15 @@ OUTFIT_COLOR_PRIORITY = (
     "ring_right",
     "earrings",
 )
+ARTICLELESS_APPEARANCE_TYPES = frozenset({
+    "boots",
+    "earrings",
+    "gloves",
+    "sandals",
+    "shorts",
+    "sneakers",
+    "trousers",
+})
 COSMETIC_ITEM_IDS = {
     "tee": {
         "label": "tee",
@@ -752,7 +761,18 @@ def appearance_worn_instance_ids(sim, eid):
     return set(loadout.worn_instance_ids())
 
 
-def _entry_phrase(entry, *, compact=False):
+def _indefinite_article_phrase(text):
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered.startswith(("a ", "an ", "the ", "some ", "one ")):
+        return text
+    article = "an" if lowered[:1] in {"a", "e", "i", "o", "u"} else "a"
+    return f"{article} {text}"
+
+
+def _entry_phrase(entry, *, compact=False, article=False):
     profile = appearance_metadata_for_entry(entry)
     if not profile:
         return ""
@@ -769,7 +789,22 @@ def _entry_phrase(entry, *, compact=False):
         bits.append(material)
     if label:
         bits.append(label)
-    return " ".join(bit for bit in bits if bit)
+    phrase = " ".join(bit for bit in bits if bit)
+    appearance_type = _key(profile.get("appearance_type") or profile.get("type"))
+    if article and appearance_type not in ARTICLELESS_APPEARANCE_TYPES:
+        return _indefinite_article_phrase(phrase)
+    return phrase
+
+
+def _join_with_and(parts):
+    bits = [str(part).strip() for part in tuple(parts or ()) if str(part).strip()]
+    if not bits:
+        return ""
+    if len(bits) == 1:
+        return bits[0]
+    if len(bits) == 2:
+        return f"{bits[0]} and {bits[1]}"
+    return f"{', '.join(bits[:-1])}, and {bits[-1]}"
 
 
 def _entry_for_slot(sim, eid, slot):
@@ -790,21 +825,21 @@ def _outfit_sentence(sim, eid):
     parts = []
     full_body = _entry_for_slot(sim, eid, "full_body")
     if full_body:
-        phrase = _entry_phrase(full_body)
+        phrase = _entry_phrase(full_body, article=True)
         if phrase:
             parts.append(phrase)
     else:
         top = _entry_for_slot(sim, eid, "top")
         bottom = _entry_for_slot(sim, eid, "bottom")
-        top_phrase = _entry_phrase(top) if top else ""
-        bottom_phrase = _entry_phrase(bottom) if bottom else ""
+        top_phrase = _entry_phrase(top, article=True) if top else ""
+        bottom_phrase = _entry_phrase(bottom, article=True) if bottom else ""
         if top_phrase:
             parts.append(top_phrase)
         if bottom_phrase:
             parts.append(bottom_phrase)
     outer = _entry_for_slot(sim, eid, "outer")
     if outer:
-        phrase = _entry_phrase(outer)
+        phrase = _entry_phrase(outer, article=True)
         if phrase:
             parts.append(phrase)
     armor = sim.ecs.get(ArmorLoadout).get(eid) if sim is not None else None
@@ -814,14 +849,14 @@ def _outfit_sentence(sim, eid):
             parts.append(name)
     shoes = _entry_for_slot(sim, eid, "shoes")
     if shoes:
-        phrase = _entry_phrase(shoes)
+        phrase = _entry_phrase(shoes, article=True)
         if phrase:
             parts.append(phrase)
     if not parts:
         return ""
     if len(parts) == 1:
-        return f"They are wearing {parts[0]}."
-    return f"They are wearing {', '.join(parts[:-1])}, and {parts[-1]}."
+        return f"I am wearing {parts[0]}."
+    return f"I am wearing {', '.join(parts[:-1])}, and {parts[-1]}."
 
 
 def _adornment_sentence(sim, eid):
@@ -830,14 +865,14 @@ def _adornment_sentence(sim, eid):
         entry = _entry_for_slot(sim, eid, slot)
         if not entry:
             continue
-        phrase = _entry_phrase(entry, compact=True)
+        phrase = _entry_phrase(entry, compact=True, article=True)
         if phrase:
             bits.append(phrase)
     if not bits:
         return ""
     if len(bits) == 1:
-        return f"They have {bits[0]} on."
-    return f"They have {', '.join(bits[:-1])}, and {bits[-1]} on."
+        return f"I have {bits[0]} on."
+    return f"I have {', '.join(bits[:-1])}, and {bits[-1]} on."
 
 
 def _salon_sentence(loadout):
@@ -847,23 +882,24 @@ def _salon_sentence(loadout):
     hair_color = _text(overrides.get("hair_color"))
     makeup = _text(overrides.get("makeup"))
     if hair_style and hair_color:
-        bits.append(f"hair worn {hair_style} and colored {hair_color}")
+        bits.append(f"my hair is worn {hair_style} and colored {hair_color}")
     elif hair_style:
-        bits.append(f"hair worn {hair_style}")
+        bits.append(f"my hair is worn {hair_style}")
     elif hair_color:
-        bits.append(f"hair colored {hair_color}")
+        bits.append(f"my hair is colored {hair_color}")
     if makeup and makeup.lower() != "none":
-        bits.append(f"{makeup} makeup")
+        bits.append(f"I have {makeup} makeup")
     if not bits:
         return ""
-    return "Salon styling: " + ", ".join(bits) + "."
+    sentence = _join_with_and(bits)
+    return sentence[:1].upper() + sentence[1:] + "." if sentence else ""
 
 
 def player_appearance_summary(sim, player_eid):
     identity = sim.ecs.get(CreatureIdentity).get(player_eid) if sim is not None else None
     base = ""
     if identity is not None:
-        base = human_physical_summary(
+        base = human_self_physical_summary(
             getattr(sim, "seed", 0),
             eid=player_eid,
             identity=identity,
