@@ -116,6 +116,26 @@ def _sheet_policy_text(finance, *, tick=0):
     return "".join(tokens) if tokens else "-"
 
 
+def _sheet_species_label(identity):
+    if identity is None:
+        return "Unknown"
+    species = str(getattr(identity, "species", "") or "").strip().lower()
+    creature_type = str(getattr(identity, "creature_type", "") or "").strip().lower()
+    taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower()
+    if creature_type == "human" or species in {"human", "homo sapiens"} or taxonomy == "hominid":
+        return "Human"
+    if not species:
+        return "Unknown"
+    return species.replace("_", " ").title()
+
+
+def _sheet_biological_sex_label(identity):
+    if identity is None:
+        return "unknown"
+    value = str(getattr(identity, "assigned_sex", "") or "").strip().lower()
+    return value or "unknown"
+
+
 def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     if sim is None or player_eid is None:
         return (
@@ -202,7 +222,6 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
         gender_identity = normalize_gender_identity(getattr(identity, "gender_identity", None), default="nonbinary")
         pronoun_text = pronoun_display_text(identity, default="they", personal_name=getattr(identity, "personal_name", ""))
         appearance_text = player_appearance_summary(sim, player_eid)
-        assigned_sex = str(getattr(identity, "assigned_sex", "") or "").strip().lower()
         summary_lines.extend([
             "",
             "IDENTITY",
@@ -210,8 +229,6 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
         ])
         if appearance_text:
             summary_lines.append(appearance_text)
-        if assigned_sex:
-            summary_lines.append(f"Assigned sex {assigned_sex}")
     summary_lines.extend([
         "",
         "RUN",
@@ -230,6 +247,14 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
                 f"Dex {int(getattr(core, 'dexterity', 0))} | Access {int(getattr(core, 'access', 0))}"
             ),
             f"Charm {int(getattr(core, 'charm', 0))} | Sense {int(getattr(core, 'common_sense', 0))}",
+        ])
+
+    if identity is not None:
+        summary_lines.extend([
+            "",
+            "REPRODUCTION",
+            f"Species: {_sheet_species_label(identity)}",
+            f"Biological sex: {_sheet_biological_sex_label(identity)}",
         ])
 
     loadout_lines = [

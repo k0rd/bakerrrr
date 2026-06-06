@@ -12053,6 +12053,11 @@ class NPCInteractionSystem(System):
         trust = float(bond.get("trust", 0.0) or 0.0)
         closeness = float(bond.get("closeness", 0.0) or 0.0)
         standing = float(context.get("contact_standing", 0.0) or 0.0)
+        try:
+            opened_count = int(context.get("opened_count", 0) or 0)
+        except (TypeError, ValueError):
+            opened_count = 0
+        has_direct_history = bool(context.get("met_directly")) or opened_count > 0
         anchor = self._relationship_anchor_episode_for_context(context) or {}
         anchor_kind = str(anchor.get("kind", "") or "").strip().lower()
         anchor_valence = str(anchor.get("valence", "neutral") or "neutral").strip().lower() or "neutral"
@@ -12066,10 +12071,18 @@ class NPCInteractionSystem(System):
                 prompt = "Good to see you again. If you want to pick that thread back up, ask."
             return {"prompt_lines": (prompt,), "highlight_topic_ids": ("check_in",), "score": 0.76 + (trust * 0.08) + (closeness * 0.05)}
         if context.get("social_leads") and standing >= 0.5:
-            prompt = "If you still need a useful name around here, ask."
+            prompt = (
+                "If you still need a useful name around here, ask."
+                if has_direct_history else
+                "I know a useful name around here if you need one."
+            )
             return {"prompt_lines": (prompt,), "highlight_topic_ids": ("contacts",), "score": 0.58 + (standing * 0.06)}
         if context.get("run_objective_visible") or context.get("opportunity_summary"):
-            prompt = "If you are still looking for a line, I might have one."
+            prompt = (
+                "If you are still looking for a line, I might have one."
+                if has_direct_history else
+                "I might have a line worth hearing if you need one."
+            )
             return {"prompt_lines": (prompt,), "highlight_topic_ids": ("opportunities",), "score": 0.5 + (trust * 0.04)}
         return None
 

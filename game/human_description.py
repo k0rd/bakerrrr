@@ -4,6 +4,7 @@ import random
 
 from game.human_identity import (
     is_human_identity,
+    normalize_gender_identity,
     pronoun_format_slots,
     seed_human_identity_profile,
 )
@@ -261,9 +262,12 @@ _STANDOUT_ROWS = (
     ("tired eyes that give the whole face away", "tired eyes"),
     ("a tattoo line disappearing under the collar", "collarline tattoo"),
     ("careful eyeliner sharp enough to read at a distance", "sharp eyeliner"),
+    ("a chipped front tooth when the mouth shifts", "chipped front tooth"),
+)
+
+_FACIAL_HAIR_STANDOUT_ROWS = (
     ("close-trimmed stubble kept exact", "trimmed stubble"),
     ("a clean shave that somehow still looks recent", "fresh clean shave"),
-    ("a chipped front tooth when the mouth shifts", "chipped front tooth"),
 )
 
 _DEMEANOR_ROWS = (
@@ -377,17 +381,25 @@ def _identity_noun(gender_identity):
     }.get(str(gender_identity or "").strip().lower(), "person")
 
 
+def _standout_rows_for(gender_identity, style_axis):
+    gender_identity = normalize_gender_identity(gender_identity, default="nonbinary")
+    style_axis = str(style_axis or "").strip().lower()
+    if gender_identity == "woman":
+        return _STANDOUT_ROWS
+    if gender_identity == "man" or style_axis == "masc":
+        return _STANDOUT_ROWS + _FACIAL_HAIR_STANDOUT_ROWS
+    return _STANDOUT_ROWS
+
+
 def build_human_description_profile(seed, *, eid=None, identity=None, personal_name=None):
     if identity is not None and not is_human_identity(identity):
         return None
     resolved_name = str(personal_name or getattr(identity, "personal_name", "") or "").strip()
     resolved_eid = 0 if eid is None else int(eid)
     preview = _identity_preview(seed, resolved_eid, resolved_name, identity)
-    gender_identity = str(
+    gender_identity = normalize_gender_identity(
         getattr(identity, "gender_identity", "") or preview.get("gender_identity", "") or "nonbinary"
-    ).strip().lower() or "nonbinary"
-    if gender_identity not in _STYLE_WEIGHTS:
-        gender_identity = "nonbinary"
+    )
 
     seed_token = f"{seed}:human-description:{resolved_eid}:{resolved_name}:{gender_identity}"
     rng = random.Random(seed_token)
@@ -403,7 +415,7 @@ def build_human_description_profile(seed, *, eid=None, identity=None, personal_n
     palette_phrase, palette_compact, render_color_key = _pick_row(rng, _HUMAN_RENDER_PALETTE_ROWS)
     condition_phrase = _pick_row(rng, _CONDITION_PHRASES)
     accessory_phrase, accessory_compact = _pick_row(rng, _ACCESSORY_ROWS[style_axis])
-    standout_phrase, standout_compact = _pick_row(rng, _STANDOUT_ROWS)
+    standout_phrase, standout_compact = _pick_row(rng, _standout_rows_for(gender_identity, style_axis))
     demeanor_phrase, demeanor_compact = _pick_row(rng, _DEMEANOR_ROWS)
     grooming_sentence = _pick_row(rng, _GROOMING_ROWS[style_axis])
 
