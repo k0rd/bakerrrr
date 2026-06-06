@@ -3,7 +3,19 @@
 from __future__ import annotations
 
 from engine.events import Event
-from game.components import AI, CriminalDriveState, FinancialProfile, Inventory, NPCNeeds, NPCRoutine, Occupation, PlayerAssets, Position, Vitality
+from game.components import (
+    AI,
+    CriminalDriveState,
+    FinancialProfile,
+    Inventory,
+    NPCNeeds,
+    NPCRoutine,
+    Occupation,
+    OrganizationCrimePlans,
+    PlayerAssets,
+    Position,
+    Vitality,
+)
 from game.item_semantics import item_legal_status as _item_legal_status, item_tags as _item_tags
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item
 from game.justice_runtime import justice_snapshot
@@ -42,6 +54,7 @@ TARGET_EXCLUDED_ARCHETYPES = {
 }
 CRIME_TARGET_RADIUS = 14
 AFFILIATION_RADIUS = 18
+_ACTIVE_PLAN_UNSET = object()
 
 
 def _safe_int(value, default=0):
@@ -76,6 +89,7 @@ def _criminal_drive_runtime_cache(sim, *, current_tick=None):
             "tick": tick,
             "nearby_buildings": {},
             "property_terms": {},
+            "active_plan_index": None,
         }
         sim.criminal_drive_runtime_cache = state
     return state
@@ -800,6 +814,68 @@ def active_plan_for_actor(sim, actor_eid, *, current_tick=None):
     return rows[0] if rows else None
 
 
+def _crime_plan_rows_for_organization(sim, organization_eid, *, profile=None, current_tick=None):
+    from game.organizations import organization_crime_plans
+
+    if profile is None:
+        profile = organization_profile(sim, organization_eid)
+    rows = []
+    for row in organization_crime_plans(
+        sim,
+        organization_eid,
+        current_tick=current_tick,
+        include_inactive=False,
+    ):
+        rows.append(
+            {
+                **row,
+                "organization_key": _text(getattr(profile, "key", "")),
+                "organization_name": _text(getattr(profile, "name", "")),
+                "organization_kind": _text(getattr(profile, "kind", "")) if profile else "other",
+            }
+        )
+    return tuple(rows)
+
+
+def active_crime_plan_actor_index(sim, *, current_tick=None):
+    if current_tick is None:
+        current_tick = getattr(sim, "tick", 0)
+    cache = _criminal_drive_runtime_cache(sim, current_tick=current_tick)
+    cached = cache.get("active_plan_index")
+    if isinstance(cached, dict):
+        return cached
+
+    index = {}
+    plan_components = sim.ecs.get(OrganizationCrimePlans)
+    for organization_eid in tuple(plan_components.keys()):
+        profile = organization_profile(sim, organization_eid)
+        for row in _crime_plan_rows_for_organization(
+            sim,
+            organization_eid,
+            profile=profile,
+            current_tick=current_tick,
+        ):
+            actor_ids = {
+                _safe_int(row.get("leader_eid"), default=0),
+                *{
+                    _safe_int(actor_eid, default=0)
+                    for actor_eid in tuple(row.get("assigned_member_eids", ()) or ())
+                },
+            } - {0}
+            for actor_id in actor_ids:
+                index.setdefault(int(actor_id), []).append(dict(row))
+    for rows in index.values():
+        rows.sort(
+            key=lambda row: (
+                0 if _text(row.get("stage")).lower() == "executing" else 1,
+                -_safe_int(row.get("last_update_tick"), default=0),
+                _text(row.get("plan_key")),
+            )
+        )
+    cache["active_plan_index"] = index
+    return index
+
+
 def find_registered_item_system(sim):
     for system in getattr(sim, "systems", ()):
         if hasattr(system, "_handle_pickup") and system.__class__.__name__ == "ItemSystem":
@@ -841,7 +917,7 @@ def criminal_activity_summary(intent, *, plan_kind="", method_label="", property
     return "working a target"
 
 
-def update_criminal_drive_state(sim, actor_eid, *, current_tick=None):
+def update_criminal_drive_state(sim, actor_eid, *, current_tick=None, active_plan=_ACTIVE_PLAN_UNSET):
     actor_eid = _safe_int(actor_eid, default=0)
     if actor_eid <= 0:
         return None
@@ -926,7 +1002,8 @@ def update_criminal_drive_state(sim, actor_eid, *, current_tick=None):
     planned_base = _actor_behavior_value(sim, actor_eid, BEHAVIOR_COMMIT_PLANNED_CRIME, 0.0)
     affiliation_base = _actor_behavior_value(sim, actor_eid, BEHAVIOR_SEEK_CRIMINAL_AFFILIATION, 0.0)
 
-    active_plan = active_plan_for_actor(sim, actor_eid, current_tick=current_tick)
+    if active_plan is _ACTIVE_PLAN_UNSET:
+        active_plan = active_plan_for_actor(sim, actor_eid, current_tick=current_tick)
     should_scan_targets = not bool(active_plan)
     should_scan_targets = should_scan_targets and (
         bool(criminal_rows)

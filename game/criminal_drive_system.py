@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from engine.events import Event
 from engine.systems import System
-from game.components import AI, CriminalDriveState, OrganizationProfile, Position, Vitality
+from game.components import AI, CriminalDriveState, OrganizationCrimePlans, OrganizationProfile, Position, Vitality
 from game.justice_runtime import justice_snapshot
 from game.organization_reputation import organization_instability_profile
 from game.organizations import (
@@ -23,6 +23,7 @@ from game.property_runtime import property_focus_position as _property_focus_pos
 from game.system_support.actor_runtime import _detail_tick_allowed, _entity_is_downed
 from game.system_support.criminal_drive_runtime import (
     CRIMINAL_FAMILIES,
+    active_crime_plan_actor_index,
     active_plan_for_actor,
     actor_criminal_memberships,
     choose_crime_target,
@@ -141,10 +142,73 @@ def _plan_event_fields(plan):
 class CriminalDriveSystem(System):
     def __init__(self, sim):
         super().__init__(sim)
+        self._actor_due_by_tick = {}
+        self._actor_due_membership = {}
+        self._next_actor_due_resync_tick = -1
         self.sim.events.subscribe("npc_crime_attempt_resolved", self.on_crime_attempt_resolved)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
         self.sim.events.subscribe("actor_detained", self.on_actor_detained)
         self.sim.events.subscribe("npc_custody_resolved", self.on_npc_custody_resolved)
+
+    def _schedule_actor_refresh(self, actor_eid, due_tick):
+        actor_eid = _safe_int(actor_eid, default=0)
+        if actor_eid <= 0:
+            return None
+        due_tick = max(0, _safe_int(due_tick, default=0))
+        old_tick = self._actor_due_membership.get(actor_eid)
+        if old_tick == due_tick:
+            return due_tick
+        if old_tick is not None:
+            old_bucket = self._actor_due_by_tick.get(old_tick)
+            if isinstance(old_bucket, set):
+                old_bucket.discard(actor_eid)
+                if not old_bucket:
+                    self._actor_due_by_tick.pop(old_tick, None)
+        self._actor_due_by_tick.setdefault(due_tick, set()).add(actor_eid)
+        self._actor_due_membership[actor_eid] = due_tick
+        return due_tick
+
+    def _pop_due_actor_refreshes(self, *, current_tick):
+        tick = _safe_int(current_tick, default=0)
+        ready = set()
+        for due_tick in sorted(raw for raw in tuple(self._actor_due_by_tick.keys()) if int(raw) <= tick):
+            bucket = self._actor_due_by_tick.pop(due_tick, set())
+            for actor_eid in tuple(bucket or ()):
+                if self._actor_due_membership.get(actor_eid) == due_tick:
+                    self._actor_due_membership.pop(actor_eid, None)
+                    ready.add(actor_eid)
+        return tuple(sorted(ready))
+
+    def _resync_actor_refresh_due(self, *, current_tick):
+        tick = _safe_int(current_tick, default=0)
+        if self._next_actor_due_resync_tick >= 0 and tick < self._next_actor_due_resync_tick:
+            return
+        ais = self.sim.ecs.get(AI)
+        live_actor_ids = set()
+        for actor_eid, ai in tuple(ais.items()):
+            if _text(getattr(ai, "role", "")).lower() == "wildlife":
+                continue
+            actor_eid = int(actor_eid)
+            live_actor_ids.add(actor_eid)
+            if actor_eid in self._actor_due_membership:
+                continue
+            offset = (ACTOR_REFRESH_INTERVAL - ((tick + actor_eid) % ACTOR_REFRESH_INTERVAL)) % ACTOR_REFRESH_INTERVAL
+            self._schedule_actor_refresh(actor_eid, tick + offset)
+        stale = [
+            actor_eid
+            for actor_eid in tuple(self._actor_due_membership.keys())
+            if actor_eid not in live_actor_ids
+        ]
+        for actor_eid in stale:
+            old_tick = self._actor_due_membership.pop(actor_eid, None)
+            if old_tick is None:
+                continue
+            bucket = self._actor_due_by_tick.get(old_tick)
+            if isinstance(bucket, set):
+                bucket.discard(actor_eid)
+                if not bucket:
+                    self._actor_due_by_tick.pop(old_tick, None)
+        self._next_actor_due_resync_tick = tick + ACTOR_REFRESH_INTERVAL
 
     def _actor_ready(self, eid, pos):
         if pos is None or _entity_is_downed(self.sim, eid):
@@ -389,8 +453,8 @@ class CriminalDriveSystem(System):
             record_organization_crime_plan(self.sim, **plan_row)
 
     def _advance_all_active_plans(self, *, current_tick):
-        profiles = self.sim.ecs.get(OrganizationProfile)
-        for organization_eid in tuple(profiles.keys()):
+        plan_components = self.sim.ecs.get(OrganizationCrimePlans)
+        for organization_eid in tuple(plan_components.keys()):
             family = _organization_family(self.sim, organization_eid)
             if family not in CRIMINAL_FAMILIES or _organization_is_vigilante(self.sim, organization_eid):
                 continue
@@ -511,22 +575,39 @@ class CriminalDriveSystem(System):
             )
 
     def _refresh_actor_states(self, *, current_tick):
+        self._resync_actor_refresh_due(current_tick=current_tick)
         ais = self.sim.ecs.get(AI)
         positions = self.sim.ecs.get(Position)
-        for actor_eid, ai in ais.items():
+        due_actor_ids = self._pop_due_actor_refreshes(current_tick=current_tick)
+        if not due_actor_ids:
+            return
+        active_plan_index = active_crime_plan_actor_index(self.sim, current_tick=current_tick)
+        for actor_eid in due_actor_ids:
+            ai = ais.get(actor_eid)
+            if ai is None:
+                continue
             if _text(getattr(ai, "role", "")).lower() == "wildlife":
                 continue
             pos = positions.get(actor_eid)
-            if not self._actor_ready(actor_eid, pos):
-                continue
-            if (int(current_tick) + int(actor_eid)) % ACTOR_REFRESH_INTERVAL != 0:
-                continue
-            if justice_snapshot(self.sim, actor_eid).get("in_custody"):
-                self._cancel_actor_activity(actor_eid, reason="custody")
-                continue
-            state = update_criminal_drive_state(self.sim, actor_eid, current_tick=current_tick)
-            if state is None:
-                continue
+            try:
+                if not self._actor_ready(actor_eid, pos):
+                    continue
+                if justice_snapshot(self.sim, actor_eid).get("in_custody"):
+                    self._cancel_actor_activity(actor_eid, reason="custody")
+                    continue
+                actor_plans = active_plan_index.get(int(actor_eid), ())
+                active_plan = actor_plans[0] if actor_plans else None
+                state = update_criminal_drive_state(
+                    self.sim,
+                    actor_eid,
+                    current_tick=current_tick,
+                    active_plan=active_plan,
+                )
+                if state is None:
+                    continue
+            finally:
+                if actor_eid in ais and _text(getattr(ai, "role", "")).lower() != "wildlife":
+                    self._schedule_actor_refresh(actor_eid, int(current_tick) + ACTOR_REFRESH_INTERVAL)
 
     def update(self):
         tick = _safe_int(getattr(self.sim, "tick", 0), default=0)
