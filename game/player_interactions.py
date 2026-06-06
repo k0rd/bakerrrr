@@ -2,6 +2,7 @@
 
 from engine.events import Event
 
+from game.appearance_loadout import is_entry_worn
 from game.components import Position
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
@@ -777,6 +778,9 @@ class PlayerInteractionRuntime:
         container = getattr(self.sim, "equipped_container", None)
         if isinstance(container, dict) and str(container.get("instance_id", "")).strip() == target_instance_id:
             _log_player_feedback(self.sim, "Take off the active container before stashing it.", kind="interaction")
+            return False
+        if is_entry_worn(target_entry):
+            _log_player_feedback(self.sim, "Remove the worn item before stashing it.", kind="interaction")
             return False
         removed = inventory.remove_item(instance_id=target_entry["instance_id"], quantity=target_entry["quantity"])
         if not removed:

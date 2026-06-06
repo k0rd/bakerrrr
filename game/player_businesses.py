@@ -41,6 +41,7 @@ from game.property_runtime import (
 )
 from game.skills import actor_skill as _actor_skill
 from game.system_support.ai_intent_runtime import _sync_ai_intent
+from game.system_support.actor_attention_runtime import record_actor_social_warmth as _record_actor_social_warmth
 from game.system_support.business_event_state import _business_event_actor_note
 from game.system_support.interaction_ordering import _manhattan
 from game.systems_business_reputation import business_opinion_profile, property_business_reputation_snapshot
@@ -1986,6 +1987,26 @@ def _upsert_business_coworker_bond(sim, source_eid, target_eid, *, role):
         trust=trust,
         protectiveness=protectiveness,
     )
+    player_eid = getattr(sim, "player_eid", None)
+    try:
+        player_id = int(player_eid) if player_eid is not None else None
+    except (TypeError, ValueError):
+        player_id = None
+    if player_id is not None and source_id != player_id:
+        old_closeness = float(existing.get("closeness", 0.0) or 0.0) if isinstance(existing, dict) else 0.0
+        old_trust = float(existing.get("trust", 0.0) or 0.0) if isinstance(existing, dict) else 0.0
+        old_protectiveness = float(existing.get("protectiveness", 0.0) or 0.0) if isinstance(existing, dict) else 0.0
+        bond = social.bonds.get(target_id)
+        _record_actor_social_warmth(
+            sim,
+            source_id,
+            other_eid=target_id,
+            reason="player_business_staff_bond",
+            trust_delta=float((bond or {}).get("trust", 0.0) or 0.0) - old_trust,
+            closeness_delta=float((bond or {}).get("closeness", 0.0) or 0.0) - old_closeness,
+            protectiveness_delta=float((bond or {}).get("protectiveness", 0.0) or 0.0) - old_protectiveness,
+            post_bond=bond,
+        )
     return True
 
 
@@ -2025,6 +2046,22 @@ def _remove_business_seeded_staff_bond(sim, owner_eid, actor_eid):
             and float(bond.get("trust", 0.0) or 0.0) <= max_baseline["trust"] + 0.001
             and float(bond.get("protectiveness", 0.0) or 0.0) <= max_baseline["protectiveness"] + 0.001
         ):
+            player_eid = getattr(sim, "player_eid", None)
+            try:
+                player_id = int(player_eid) if player_eid is not None else None
+            except (TypeError, ValueError):
+                player_id = None
+            if player_id is not None and source_id != player_id:
+                _record_actor_social_warmth(
+                    sim,
+                    source_id,
+                    other_eid=target_id,
+                    reason="player_business_staff_bond_removed",
+                    trust_delta=-float(bond.get("trust", 0.0) or 0.0),
+                    closeness_delta=-float(bond.get("closeness", 0.0) or 0.0),
+                    protectiveness_delta=-float(bond.get("protectiveness", 0.0) or 0.0),
+                    post_bond=bond,
+                )
             social.bonds.pop(target_id, None)
             removed = True
     return removed
@@ -2250,6 +2287,7 @@ def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role="")
         ai.role = "worker"
 
     sync_actor_organization_affiliations(sim, actor_eid, occupation=occupation)
+    _ensure_player_business_staff_bond(sim, owner_eid, actor_eid, role=role)
 
     state = player_business_state(prop, create=True)
     if state is not None:

@@ -11,6 +11,7 @@ from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
 from game.components import AI, CreatureIdentity, Position
 from game.items import prepare_ground_item_stack_metadata
+from game.system_support.actor_attention_runtime import warmth_protected_chunks
 from game.system_support.fire_runtime import fire_protected_chunks
 
 class Simulation:
@@ -612,6 +613,39 @@ class Simulation:
                         "detail": detail,
                     }
             report["unloaded"] = tuple(unloaded)
+
+        if isinstance(report, dict):
+            warmth_protected = set(warmth_protected_chunks(self, report.get("unloaded", ())))
+            if warmth_protected:
+                unloaded = []
+                detail_changed = list(report.get("detail_changed", ()) or ())
+                for raw_chunk in tuple(report.get("unloaded", ()) or ()):
+                    try:
+                        chunk = (int(raw_chunk[0]), int(raw_chunk[1]))
+                    except (TypeError, ValueError, IndexError):
+                        continue
+                    if chunk not in warmth_protected:
+                        unloaded.append(chunk)
+                        continue
+                    previous = previous_loaded.get(chunk)
+                    if isinstance(previous, dict):
+                        retained = dict(previous)
+                        retained["detail"] = "coarse"
+                        self.world.loaded_chunks[chunk] = retained
+                    else:
+                        self.world.loaded_chunks[chunk] = {
+                            "chunk": self.world.get_chunk(chunk[0], chunk[1]),
+                            "detail": "coarse",
+                        }
+                    if isinstance(previous, dict) and previous.get("detail") != "coarse" and chunk not in detail_changed:
+                        detail_changed.append(chunk)
+                report["unloaded"] = tuple(unloaded)
+                report["detail_changed"] = sorted(detail_changed)
+            report["warmth_protected"] = tuple(sorted(warmth_protected))
+            report["social_warmth_protected"] = tuple(sorted(warmth_protected))
+            report["loaded_count"] = len(self.world.loaded_chunks)
+            report["active_count"] = sum(1 for data in self.world.loaded_chunks.values() if data.get("detail") == "active")
+            report["changed"] = bool(report.get("changed")) or bool(warmth_protected)
 
         self.active_chunk_coord = (cx, cy)
         self.active_chunk = self.world.get_chunk(cx, cy)

@@ -819,21 +819,23 @@ def nearest_target_ground_item(sim, property_id, *, ground_item_id=None):
     return rows[0] if rows else None
 
 
-def criminal_activity_summary(intent, *, plan_kind="", property_name="", organization_name=""):
+def criminal_activity_summary(intent, *, plan_kind="", method_label="", property_name="", organization_name=""):
     intent_key = _text(intent).lower()
     property_name = _text(property_name)
     organization_name = _text(organization_name)
     plan_kind = _text(plan_kind).replace("_", " ")
+    method_label = _text(method_label)
+    plan_text = method_label or plan_kind
     if intent_key == "casing_target":
         return f"casing {property_name or 'a target'}".strip()
     if intent_key == "rendezvousing_crew":
-        if plan_kind:
-            return f"rendezvousing for {plan_kind}"
+        if plan_text:
+            return f"rendezvousing for {plan_text}"
         return f"meeting up with {organization_name or 'the crew'}".strip()
     if intent_key == "seeking_criminal_affiliation":
         return f"looking for a way into {organization_name or 'a crew'}".strip()
-    if plan_kind:
-        return f"working a {plan_kind}".strip()
+    if plan_text:
+        return f"working a {plan_text}".strip()
     if property_name:
         return f"working {property_name}".strip()
     return "working a target"
@@ -1013,6 +1015,7 @@ def update_criminal_drive_state(sim, actor_eid, *, current_tick=None):
         state.current_activity_summary = criminal_activity_summary(
             "rendezvousing_crew" if stage in {"forming", "rendezvous"} else "committing_property_crime",
             plan_kind=_text(active_plan.get("kind")),
+            method_label=_text(active_plan.get("method_label")),
             property_name=_text((target_prop or {}).get("name")),
             organization_name=_text(active_plan.get("organization_name")),
         )

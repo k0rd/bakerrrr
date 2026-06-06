@@ -7,6 +7,7 @@ state and turns it into compact report/look cues the player can choose to pursue
 from __future__ import annotations
 
 from game.components import Position
+from game.organization_presence import format_visible_property_org_presence
 from game.organizations import local_protective_pressure_snapshot
 from game.property_runtime import (
     building_id_from_property,
@@ -14,6 +15,7 @@ from game.property_runtime import (
     property_focus_position,
     property_metadata,
 )
+from game.system_support.crime_plan_runtime import crime_plan_surface_rows
 
 
 _PHASE_PROFILES = {
@@ -358,6 +360,7 @@ def _row_from_scene(sim, scene_id, scene, *, player_pos=None):
     summary = _text(profile.get("summary")) or "something local is visible"
     action = _text(profile.get("action")) or "inspect it or ask around"
     fixture_names = _scene_fixture_names(sim, scene)
+    organization_presence = format_visible_property_org_presence(sim, prop)
     return {
         "scene_id": _text(scene.get("scene_id")) or _text(scene_id),
         "property_id": property_id,
@@ -374,6 +377,46 @@ def _row_from_scene(sim, scene_id, scene, *, player_pos=None):
         "distance": int(distance),
         "distance_text": _distance_text(distance, dx, dy),
         "fixture_names": fixture_names,
+        "organization_presence": organization_presence,
+    }
+
+
+def _row_from_crime_plan(sim, prop, crew_row, *, player_pos=None):
+    if not isinstance(prop, dict) or not isinstance(crew_row, dict):
+        return None
+    anchor = crew_row.get("anchor") or property_focus_position(prop) or property_display_position(prop)
+    if anchor is None:
+        return None
+    try:
+        anchor = (int(anchor[0]), int(anchor[1]), int(anchor[2]))
+    except (TypeError, ValueError, IndexError):
+        return None
+    dx = dy = distance = 0
+    if player_pos is not None:
+        dx = int(anchor[0]) - int(player_pos.x)
+        dy = int(anchor[1]) - int(player_pos.y)
+        distance = abs(dx) + abs(dy)
+    org_name = _text(crew_row.get("organization_name")) or "a local crew"
+    method = _text(crew_row.get("method_label")) or "crew move"
+    stage = _text(crew_row.get("stage_label")) or "active"
+    role = _text(crew_row.get("site_role")) or "site"
+    return {
+        "scene_id": f"crew_activity:{_text(crew_row.get('plan_key'))}:{role}",
+        "property_id": _text(prop.get("id")),
+        "property_name": _property_name(prop),
+        "title": "Crew Activity",
+        "summary": f"{org_name} is {stage} a {method} at this {role}",
+        "action": _text(crew_row.get("action")) or "scan or inspect to mark the crew activity",
+        "event_phase": _text(crew_row.get("stage")).lower(),
+        "scene_type": "crew_activity",
+        "traffic_state": "",
+        "community_tone": "",
+        "source_kind": "crime_plan",
+        "anchor": anchor,
+        "distance": int(distance),
+        "distance_text": _distance_text(distance, dx, dy),
+        "fixture_names": (),
+        "organization_presence": org_name,
     }
 
 
@@ -394,6 +437,25 @@ def local_situation_rows(sim, player_eid=None, *, limit=4, current_chunk_only=Tr
         for row in rows
         if _text(row.get("property_id"))
     }
+    for prop in getattr(sim, "properties", {}).values():
+        if not isinstance(prop, dict):
+            continue
+        property_id = _text(prop.get("id"))
+        if property_id.lower() in seen_properties:
+            continue
+        anchor = property_focus_position(prop) or property_display_position(prop)
+        if anchor is None:
+            continue
+        if current_chunk_only and not _same_chunk(sim, player_pos, anchor):
+            continue
+        crew_rows = crime_plan_surface_rows(sim, prop=prop)
+        if not crew_rows:
+            continue
+        row = _row_from_crime_plan(sim, prop, crew_rows[0], player_pos=player_pos)
+        if not row:
+            continue
+        rows.append(row)
+        seen_properties.add(property_id.lower())
     for prop in getattr(sim, "properties", {}).values():
         if not isinstance(prop, dict):
             continue
@@ -430,6 +492,7 @@ def local_situation_rows(sim, player_eid=None, *, limit=4, current_chunk_only=Tr
                 "distance": int(distance),
                 "distance_text": _distance_text(distance, dx, dy),
                 "fixture_names": (),
+                "organization_presence": format_visible_property_org_presence(sim, prop),
             }
         )
     rows.sort(key=lambda row: (int(row.get("distance", 0)), str(row.get("title", "")), str(row.get("property_name", ""))))
@@ -443,9 +506,10 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
     for row in local_situation_rows(sim, player_eid, limit=limit, current_chunk_only=True):
         fixtures = tuple(row.get("fixture_names", ()) or ())
         fixture_text = f" Fixture: {fixtures[0]}." if fixtures else ""
+        org_text = f" Orgs: {row['organization_presence']}." if _text(row.get("organization_presence")) else ""
         lines.append(
             f"{row['title']} at {row['property_name']} ({row['distance_text']}): "
-            f"{row['summary']}; {row['action']}.{fixture_text}"
+            f"{row['summary']}; {row['action']}.{org_text}{fixture_text}"
         )
     return tuple(lines)
 
@@ -483,6 +547,15 @@ def _scene_for_property(sim, prop):
 def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
     """Return a terse look-mode situation cue for a property or scene fixture."""
 
+    crew_rows = crime_plan_surface_rows(sim, prop=prop)
+    if crew_rows:
+        row = _row_from_crime_plan(sim, prop, crew_rows[0], player_pos=_player_position(sim, viewer_eid))
+        if row:
+            return (
+                f"situation:{row['title']} active here - {row['summary']}; {row['action']}"
+                + (f"; orgs {row['organization_presence']}" if _text(row.get("organization_presence")) else "")
+            )
+
     scene = _scene_for_property(sim, prop)
     if scene is None:
         pressure = local_protective_pressure_snapshot(sim, prop)
@@ -512,5 +585,9 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
         return (
             f"situation:{row['title']} for {row['property_name']} - "
             f"{fixture_name} is the visible handle; {row['action']}"
+            + (f"; orgs {row['organization_presence']}" if _text(row.get("organization_presence")) else "")
         )
-    return f"situation:{row['title']} active here - {row['summary']}; {row['action']}"
+    return (
+        f"situation:{row['title']} active here - {row['summary']}; {row['action']}"
+        + (f"; orgs {row['organization_presence']}" if _text(row.get("organization_presence")) else "")
+    )

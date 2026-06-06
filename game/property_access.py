@@ -207,6 +207,7 @@ CONTROLLER_INTRUSION_PROFILES = {
 }
 
 DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
+    "barbershop": ("appearance_style",),
     "casino": ("slots", "video_poker", "keno", "roulette", "craps", "baccarat", "three_card_poker", "casino_holdem", "plinko", "twenty_one"),
     "contractor_office": ("building_repair", "business_remodel"),
     "dock_shack": ("shuttle_transit", "ferry_transit"),
@@ -217,6 +218,7 @@ DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "metro_exchange": ("rail_transit", "bus_transit"),
     "relay_post": ("bus_transit", "shuttle_transit"),
     "roadhouse": ("shuttle_transit",),
+    "salon": ("appearance_style",),
     "service_station": ("fuel", "repair", "vending"),
     "tavern": ("intel",),
     "tide_station": ("intel", "ferry_transit"),

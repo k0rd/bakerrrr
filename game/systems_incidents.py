@@ -25,6 +25,7 @@ from game.incident_runtime import (
 from game.organizations import property_org_members
 from game.property_runtime import property_covering, property_runtime_container_entries
 from game.system_support.awareness_runtime import event_observation_accountability
+from game.system_support.actor_attention_runtime import record_area_warmth
 from game.system_support.item_provenance_runtime import CLAIM_PUBLIC_FREE, CLAIM_SCENE_SALVAGE, classify_item_claim, stamp_item_provenance
 from game.system_support.offense_runtime import OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS, WILDLIFE_OFFENSE_CONTEXTS
 from game.system_support.social_knowledge_runtime import hydrate_incident_social_knowledge
@@ -758,6 +759,48 @@ class IncidentKnowledgeSystem(System):
         ))
         return incident
 
+    def _record_player_witnessed_area_warmth(self, incident, event, *, reason="witnessed_event", score_delta=0.8):
+        if not isinstance(incident, dict):
+            return False
+        player_eid = getattr(self.sim, "player_eid", None)
+        if player_eid is None:
+            return False
+        try:
+            player_id = int(player_eid)
+        except (TypeError, ValueError):
+            return False
+        offender = event.data.get("offender_eid", event.data.get("eid"))
+        try:
+            offender_id = int(offender) if offender is not None else None
+        except (TypeError, ValueError):
+            offender_id = None
+        observed_ids = set()
+        for raw in tuple(incident.get("observer_eids", ())) + tuple(incident.get("accountable_observer_eids", ())):
+            if raw is None:
+                continue
+            try:
+                observed_ids.add(int(raw))
+            except (TypeError, ValueError):
+                continue
+        if player_id != offender_id and player_id not in observed_ids:
+            return False
+        x = incident.get("x")
+        y = incident.get("y")
+        try:
+            if x is None or y is None or self.sim.detail_for_xy(int(x), int(y)) == "unloaded":
+                return False
+        except (AttributeError, TypeError, ValueError):
+            return False
+        return record_area_warmth(
+            self.sim,
+            x=x,
+            y=y,
+            reason=reason,
+            score_delta=score_delta,
+            source_kind="witnessed_event",
+            source_id=incident.get("id"),
+        )
+
     def _learn_self_and_witnesses(self, incident, event, *, source_kind="witnessed", witnesses=()):
         incident_id = int(incident.get("id", 0) or 0)
         offender_eid = event.data.get("offender_eid", event.data.get("eid"))
@@ -813,6 +856,7 @@ class IncidentKnowledgeSystem(System):
         )
         if context in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge"} and event.data.get("victim_eid") is not None:
             incident = self._capture_violent_scene_items(incident, event) or incident
+            self._record_player_witnessed_area_warmth(incident, event, reason="witnessed_event", score_delta=0.85)
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 

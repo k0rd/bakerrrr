@@ -4,12 +4,18 @@ import random
 
 from engine.events import Event
 from game.components import Inventory, PlayerAssets, Position, StatusEffects, WeaponLoadout
+from game.appearance_loadout import (
+    equip_appearance_item,
+    is_appearance_item,
+    mark_inventory_instance_worn,
+    stow_cosmetic_outer_for_armor,
+)
 from game.item_semantics import (
     identify_item_for_actor,
     item_display_name_for_actor,
     item_identification_profile,
 )
-from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name, item_lead_profile
+from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name, item_inventory_slot_cost, item_lead_profile
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_runtime import (
     property_covering as _property_covering,
@@ -214,8 +220,27 @@ class ItemActionRuntime:
         loadout = _ensure_armor_loadout(self.sim, eid)
         item_name = self._display_name_for_actor(eid, entry)
         if loadout.is_equipped(entry.get("instance_id")):
+            inventory = self._inventory_for(eid)
+            metadata = dict(entry.get("metadata") or {}) if isinstance(entry.get("metadata"), dict) else {}
+            metadata.pop("appearance_worn", None)
+            metadata.pop("appearance_slot", None)
+            stowed_cost = item_inventory_slot_cost({
+                "item_id": entry.get("item_id"),
+                "metadata": metadata,
+            })
+            if inventory and stowed_cost > 0 and inventory.slot_count() + stowed_cost > int(getattr(inventory, "capacity", 0) or 0):
+                self.sim.emit(Event(
+                    "item_use_blocked",
+                    eid=eid,
+                    reason="appearance_pack_full",
+                    item_id=item_def["id"],
+                    item_name=item_name,
+                    blocked_slot="outer",
+                ))
+                return False
             removed_reduction = loadout.damage_reduction
             loadout.clear()
+            mark_inventory_instance_worn(self.sim, eid, entry.get("instance_id"), worn=False)
             self.sim.emit(Event(
                 "armor_removed",
                 eid=eid,
@@ -230,7 +255,9 @@ class ItemActionRuntime:
             previous_name = loadout.equipped_name or loadout.equipped_item_id or "armor"
             previous_item_id = loadout.equipped_item_id
             previous_reduction = loadout.damage_reduction
+            previous_instance_id = loadout.equipped_instance_id
             loadout.clear()
+            mark_inventory_instance_worn(self.sim, eid, previous_instance_id, worn=False)
             self.sim.emit(Event(
                 "armor_removed",
                 eid=eid,
@@ -240,6 +267,18 @@ class ItemActionRuntime:
                 damage_reduction=previous_reduction,
             ))
 
+        outer_result = stow_cosmetic_outer_for_armor(self.sim, eid)
+        if not bool(getattr(outer_result, "ok", False)):
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason=f"appearance_{getattr(outer_result, 'reason', 'outer_blocked')}",
+                item_id=item_def["id"],
+                item_name=item_name,
+                blocked_slot="outer",
+            ))
+            return False
+
         loadout.equip(
             instance_id=entry.get("instance_id"),
             item_id=entry.get("item_id"),
@@ -247,6 +286,7 @@ class ItemActionRuntime:
             damage_reduction=armor["damage_reduction"],
             slot=armor.get("slot", "body"),
         )
+        mark_inventory_instance_worn(self.sim, eid, entry.get("instance_id"), worn=True, slot="outer")
         self.sim.emit(Event(
             "armor_equipped",
             eid=eid,
@@ -578,7 +618,7 @@ class ItemActionRuntime:
             ))
         return int(converted_credits)
 
-    def consume_item(self, eid, x, y, z, instance_id=None, reason="manual"):
+    def consume_item(self, eid, x, y, z, instance_id=None, reason="manual", preferred_appearance_slot=None):
         inventory = self._inventory_for(eid)
         if not inventory:
             self.sim.emit(Event("item_use_blocked", eid=eid, reason="no_inventory"))
@@ -606,6 +646,25 @@ class ItemActionRuntime:
                 item_def=item_def,
                 reason=reason,
             )
+
+        if is_appearance_item(entry, item_catalog=self.catalog):
+            result = equip_appearance_item(
+                self.sim,
+                eid,
+                entry.get("instance_id"),
+                preferred_slot=preferred_appearance_slot,
+            )
+            if bool(getattr(result, "ok", False)):
+                return True
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason=f"appearance_{getattr(result, 'reason', 'blocked')}",
+                item_id=item_def["id"],
+                item_name=item_name,
+                blocked_slot=getattr(result, "slot", ""),
+            ))
+            return False
 
         if item_def.get("disguise"):
             return self._toggle_disguise_item(
@@ -982,6 +1041,7 @@ class ItemActionRuntime:
             z=pos.z,
             instance_id=event.data.get("item_instance_id"),
             reason=event.data.get("reason", "request"),
+            preferred_appearance_slot=event.data.get("preferred_appearance_slot"),
         )
 
     def on_drop_item_request(self, event):

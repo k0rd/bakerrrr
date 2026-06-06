@@ -6,6 +6,7 @@ from typing import Mapping, Tuple
 
 from engine.buildings import building_exterior_profile
 from game.components import AI, CreatureIdentity, Render, Vitality
+from game.appearance_loadout import player_appearance_color_key
 from game.human_description import human_render_color_key as _human_render_color_key
 from game.property_runtime import (
     building_id_from_structure,
@@ -451,6 +452,60 @@ def _merge_snapshots(base, override):
     )
 
 
+def _is_building_structure_color(color):
+    key = str(color or "").strip().lower()
+    return (
+        key in {"building_edge", "building_fill", "building_roof"}
+        or key.startswith("building_edge_")
+        or key.startswith("building_fill_")
+        or key.startswith("building_roof_")
+    )
+
+
+def _is_building_structure_semantic(semantic_id):
+    key = str(semantic_id or "").strip().lower()
+    return key in {"wall_building", "floor_building_fill", "terrain_building_roof"}
+
+
+def _merge_structure_snapshot(
+    base,
+    override,
+    *,
+    preserve_base_glyph=False,
+    preserve_base_color=False,
+    preserve_base_semantic=False,
+):
+    if override is None:
+        return base
+    if base is None:
+        return override
+
+    override_color = override.color
+    if preserve_base_color or _is_building_structure_color(override_color):
+        override_color = None
+
+    override_semantic = override.semantic_id
+    if preserve_base_semantic or _is_building_structure_semantic(override_semantic):
+        override_semantic = None
+
+    return AppearanceSnapshot(
+        glyph=(
+            str(getattr(base, "glyph", "?"))[:1] or "?"
+            if preserve_base_glyph
+            else str(getattr(override, "glyph", "") or getattr(base, "glyph", "?"))[:1]
+            or getattr(base, "glyph", "?")
+        ),
+        color=override_color if override_color is not None else base.color,
+        semantic_id=override_semantic or base.semantic_id,
+        layer=override.layer if override.layer is not None else base.layer,
+        priority=override.priority if override.priority is not None else base.priority,
+        attrs=int(base.attrs or 0) | int(override.attrs or 0),
+        effects=tuple(dict.fromkeys(tuple(base.effects or ()) + tuple(override.effects or ()))),
+        visible=bool(base.visible) and bool(override.visible),
+        overlays=tuple(base.overlays or ()) + tuple(override.overlays or ()),
+    )
+
+
 def creature_color_key(identity, *, role=""):
     if not identity:
         return None
@@ -534,13 +589,14 @@ def _hominid_semantic_id_for_role(catalog, role=""):
     return catalog.semantic_id_for_key("entities", "hominid", semantic_role, allow_defaults=True)
 
 
-def entity_default_snapshot(identity, *, role="", player=False, catalog=None, seed=None, eid=None):
+def entity_default_snapshot(identity, *, role="", player=False, catalog=None, seed=None, eid=None, sim=None):
     catalog = catalog or get_runtime_semantic_catalog()
 
     if player:
+        color = player_appearance_color_key(sim, eid) if sim is not None and eid is not None else None
         return _semantic_snapshot(
             "@",
-            color="player",
+            color=color or "player",
             semantic_id="entity_player",
             catalog=catalog,
             preferred_categories=("entities",),
@@ -729,7 +785,13 @@ def tile_render_snapshot(sim, tile, x, y, z=0, revealed_building_id="", catalog=
             catalog=catalog,
             preferred_categories=("terrain", "properties"),
         )
-        return _merge_snapshots(base, explicit)
+        return _merge_structure_snapshot(
+            base,
+            explicit,
+            preserve_base_glyph=True,
+            preserve_base_color=True,
+            preserve_base_semantic=True,
+        )
 
     if bool(building_id) and not tile.walkable and glyph == "#":
         base = _semantic_snapshot(
@@ -739,7 +801,7 @@ def tile_render_snapshot(sim, tile, x, y, z=0, revealed_building_id="", catalog=
             catalog=catalog,
             preferred_categories=("properties", "terrain"),
         )
-        return _merge_snapshots(base, explicit)
+        return _merge_structure_snapshot(base, explicit)
 
     if is_building_floor:
         base = _semantic_snapshot(
@@ -749,7 +811,7 @@ def tile_render_snapshot(sim, tile, x, y, z=0, revealed_building_id="", catalog=
             catalog=catalog,
             preferred_categories=("properties", "terrain"),
         )
-        return _merge_snapshots(base, explicit)
+        return _merge_structure_snapshot(base, explicit)
 
     if tile.walkable and glyph == "." and not has_explicit_style and not is_building_floor:
         return district_floor_snapshot(sim, x, y, catalog=catalog)
@@ -1014,6 +1076,7 @@ class AppearanceManager:
             catalog=self.catalog,
             seed=getattr(self.sim, "seed", None),
             eid=eid,
+            sim=self.sim,
         )
         state_semantic = _entity_state_semantic(identity, vitality)
         if state_semantic:
@@ -1032,6 +1095,13 @@ class AppearanceManager:
             )
         state_overlays = _entity_state_overlays(vitality)
         owned = _owner_appearance(render, fallback_glyph=defaults.glyph)
+        owned_color = owned.color
+        if (
+            player_controlled
+            and str(owned_color or "").strip().lower() == "player"
+            and str(defaults.color or "").strip().lower() != "player"
+        ):
+            owned_color = None
         taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower()
         uses_legacy_hominid_placeholder = (
             taxonomy == "hominid"
@@ -1044,13 +1114,13 @@ class AppearanceManager:
         if not semantic_id:
             semantic_id = self.catalog.semantic_id_for(
                 glyph,
-                owned.color if owned.color is not None else defaults.color,
+                owned_color if owned_color is not None else defaults.color,
                 preferred_categories=("entities",),
             )
 
         return AppearanceSnapshot(
             glyph=glyph,
-            color=owned.color if owned.color is not None else defaults.color,
+            color=owned_color if owned_color is not None else defaults.color,
             semantic_id=semantic_id,
             layer=owned.layer if owned.layer is not None else defaults.layer,
             priority=owned.priority if owned.priority is not None else defaults.priority,

@@ -40,6 +40,7 @@ from game.property_runtime import (
     resolve_property_record,
 )
 from game.service_runtime import _chunk_site_kinds
+from game.system_support.actor_attention_runtime import record_actor_social_warmth as _record_actor_social_warmth
 
 
 MIN_ACTIVE_OPPORTUNITIES = 6
@@ -5746,6 +5747,16 @@ def _apply_personal_issuer_bond(sim, player_eid, opportunity):
             float(bond.get("protectiveness", 0.0)),
             float(NPCSocial.DEFAULT_PROTECT.get("friend", 0.7)),
         )
+    _record_actor_social_warmth(
+        sim,
+        person_eid,
+        other_eid=player_eid,
+        reason="opportunity_issuer_bond",
+        trust_delta=float(bond["trust"] - before_trust),
+        closeness_delta=float(bond["closeness"] - before_closeness),
+        protectiveness_delta=float(bond["protectiveness"] - before_protectiveness),
+        post_bond=bond,
+    )
 
     memory = memories.get(person_eid) if memories else None
     if memories is not None and memory is None:

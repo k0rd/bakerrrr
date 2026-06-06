@@ -75,6 +75,13 @@ COMPRESSED_ROUTINE_MOVE_STATES = {
 FULL_DISTANCE = 8
 FULL_LOS_DISTANCE = 14
 URGENT_DEFAULT_TTL = 12
+SOCIAL_WARMTH_CHUNK_BUDGET = 3
+SOCIAL_WARMTH_MIN_SCORE = 0.08
+SOCIAL_WARMTH_MAX_SCORE = 3.0
+SOCIAL_WARMTH_SPEND_FRACTION = 0.42
+SOCIAL_WARMTH_SPEND_MIN = 0.24
+SOCIAL_WARMTH_CHUNK_EXTRA_CAP = 0.45
+SOCIAL_WARMTH_MAX_ROWS = 48
 
 
 def _empty_stats():
@@ -90,6 +97,9 @@ def _empty_stats():
         "dormant_skipped": 0,
         "settlement_cache_hits": 0,
         "settlement_cache_misses": 0,
+        "social_warmth_actors": 0,
+        "area_warmth_areas": 0,
+        "social_warmth_protected_chunks": 0,
     }
 
 
@@ -104,6 +114,10 @@ def _new_state():
         "due_reasons": {family: {} for family in ATTENTION_FAMILIES},
         "urgent": {family: {} for family in ATTENTION_FAMILIES},
         "urgent_reasons": {family: {} for family in ATTENTION_FAMILIES},
+        "social_warmth": {},
+        "area_warmth": {},
+        "social_warmth_protected_chunks": set(),
+        "social_warmth_last_protected": (),
         "last_refresh_tick": None,
         "settlement_candidate_cache": {"home": {}, "work": {}, "arrival": {}},
         "stats": _empty_stats(),
@@ -123,6 +137,13 @@ def actor_attention_state(sim):
     state.setdefault("due_reasons", {})
     state.setdefault("urgent", {})
     state.setdefault("urgent_reasons", {})
+    if not isinstance(state.get("social_warmth"), dict):
+        state["social_warmth"] = {}
+    if not isinstance(state.get("area_warmth"), dict):
+        state["area_warmth"] = {}
+    if not isinstance(state.get("social_warmth_protected_chunks"), set):
+        state["social_warmth_protected_chunks"] = set(state.get("social_warmth_protected_chunks") or ())
+    state.setdefault("social_warmth_last_protected", ())
     for family in ATTENTION_FAMILIES:
         state["due"].setdefault(family, {})
         state["due_membership"].setdefault(family, {})
@@ -144,6 +165,17 @@ def _safe_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _unit_float(value, default=0.0):
+    return max(0.0, min(1.0, _safe_float(value, default)))
 
 
 def _chunk_for_xy(sim, x, y):
@@ -309,6 +341,468 @@ def _actor_is_urgent(sim, eid, ai=None, pos=None):
     if player_eid is not None and getattr(ai, "target_eid", None) == player_eid:
         return True
     return False
+
+
+def _bond_strength_score(post_bond):
+    if not isinstance(post_bond, dict):
+        return 0.0
+    trust = _unit_float(post_bond.get("trust"))
+    closeness = _unit_float(post_bond.get("closeness"))
+    protectiveness = _unit_float(post_bond.get("protectiveness"))
+    kind = str(post_bond.get("kind", "") or "").strip().lower()
+    kind_bonus = {
+        "family": 0.22,
+        "partner": 0.2,
+        "friend": 0.16,
+        "owner": 0.12,
+        "workplace": 0.12,
+        "coworker": 0.1,
+        "neighbor": 0.04,
+        "contact": 0.04,
+        "local": 0.03,
+    }.get(kind, 0.0)
+    return min(1.0, (trust * 0.38) + (closeness * 0.34) + (protectiveness * 0.22) + kind_bonus)
+
+
+def _social_warmth_rows(state):
+    rows = state.setdefault("social_warmth", {})
+    if not isinstance(rows, dict):
+        rows = {}
+        state["social_warmth"] = rows
+    return rows
+
+
+def _area_warmth_rows(state):
+    rows = state.setdefault("area_warmth", {})
+    if not isinstance(rows, dict):
+        rows = {}
+        state["area_warmth"] = rows
+    return rows
+
+
+def _prune_social_warmth(sim, state=None, *, live_only=False):
+    state = actor_attention_state(sim) if state is None else state
+    rows = _social_warmth_rows(state)
+    positions = sim.ecs.get(Position) if live_only else None
+    for raw_eid, row in tuple(rows.items()):
+        try:
+            eid = int(raw_eid)
+        except (TypeError, ValueError):
+            rows.pop(raw_eid, None)
+            continue
+        if not isinstance(row, dict):
+            rows.pop(raw_eid, None)
+            continue
+        score = _safe_float(row.get("score"), 0.0)
+        if score < SOCIAL_WARMTH_MIN_SCORE:
+            rows.pop(raw_eid, None)
+            continue
+        if live_only and positions.get(eid) is None:
+            rows.pop(raw_eid, None)
+    if len(rows) <= SOCIAL_WARMTH_MAX_ROWS:
+        return
+    ordered = sorted(
+        (
+            (_safe_float(row.get("score"), 0.0), raw_eid)
+            for raw_eid, row in rows.items()
+            if isinstance(row, dict)
+        ),
+        key=lambda item: (-item[0], str(item[1])),
+    )
+    keep = {raw_eid for _score, raw_eid in ordered[:SOCIAL_WARMTH_MAX_ROWS]}
+    for raw_eid in tuple(rows.keys()):
+        if raw_eid not in keep:
+            rows.pop(raw_eid, None)
+
+
+def _prune_area_warmth(sim, state=None):
+    state = actor_attention_state(sim) if state is None else state
+    rows = _area_warmth_rows(state)
+    for key, row in tuple(rows.items()):
+        if not isinstance(row, dict):
+            rows.pop(key, None)
+            continue
+        chunk = _normalize_chunk(row.get("chunk"))
+        if chunk is None:
+            rows.pop(key, None)
+            continue
+        score = _safe_float(row.get("score"), 0.0)
+        if score < SOCIAL_WARMTH_MIN_SCORE:
+            rows.pop(key, None)
+            continue
+        row["chunk"] = chunk
+    if len(rows) <= SOCIAL_WARMTH_MAX_ROWS:
+        return
+    ordered = sorted(
+        (
+            (_safe_float(row.get("score"), 0.0), key)
+            for key, row in rows.items()
+            if isinstance(row, dict)
+        ),
+        key=lambda item: (-item[0], str(item[1])),
+    )
+    keep = {key for _score, key in ordered[:SOCIAL_WARMTH_MAX_ROWS]}
+    for key in tuple(rows.keys()):
+        if key not in keep:
+            rows.pop(key, None)
+
+
+def record_actor_social_warmth(
+    sim,
+    actor_eid,
+    other_eid=None,
+    reason="",
+    trust_delta=0,
+    closeness_delta=0,
+    protectiveness_delta=0,
+    post_bond=None,
+):
+    """Record runtime-only warmth for an actor after a meaningful bond change."""
+
+    try:
+        actor_id = int(actor_eid)
+    except (TypeError, ValueError):
+        return False
+    player_eid = getattr(sim, "player_eid", None)
+    try:
+        if player_eid is not None and actor_id == int(player_eid):
+            return False
+    except (TypeError, ValueError):
+        pass
+
+    delta_score = (
+        abs(_safe_float(trust_delta, 0.0)) * 0.9
+        + abs(_safe_float(closeness_delta, 0.0)) * 0.8
+        + abs(_safe_float(protectiveness_delta, 0.0)) * 0.55
+    )
+    if delta_score < 0.0001:
+        return False
+
+    bond_strength = _bond_strength_score(post_bond)
+    bump = max(0.05, delta_score * (1.0 + bond_strength) + min(0.4, bond_strength * 0.22))
+    state = actor_attention_state(sim)
+    rows = _social_warmth_rows(state)
+    existing = rows.get(actor_id)
+    if not isinstance(existing, dict):
+        existing = rows.get(str(actor_id), {})
+    if not isinstance(existing, dict):
+        existing = {}
+    old_score = _safe_float(existing.get("score"), 0.0)
+    new_score = min(SOCIAL_WARMTH_MAX_SCORE, old_score + bump)
+    try:
+        other_id = int(other_eid) if other_eid is not None else None
+    except (TypeError, ValueError):
+        other_id = None
+    reason_text = str(reason or "").strip().lower() or "social_bond"
+    old_reason_score = _safe_float(existing.get("reason_score"), 0.0)
+    if old_reason_score > bump and str(existing.get("reason", "") or "").strip():
+        reason_text = str(existing.get("reason", "") or "").strip().lower()
+        reason_score = old_reason_score
+    else:
+        reason_score = bump
+    row = {
+        "actor_eid": actor_id,
+        "other_eid": other_id,
+        "score": new_score,
+        "peak_score": max(_safe_float(existing.get("peak_score"), 0.0), new_score),
+        "reason": reason_text,
+        "reason_score": reason_score,
+        "change_score": delta_score,
+        "bond_strength": bond_strength,
+        "last_tick": _safe_int(getattr(sim, "tick", 0), 0),
+        "spend_count": _safe_int(existing.get("spend_count"), 0),
+    }
+    rows.pop(str(actor_id), None)
+    rows[actor_id] = row
+    _prune_social_warmth(sim, state)
+    return True
+
+
+def record_area_warmth(
+    sim,
+    chunk=None,
+    x=None,
+    y=None,
+    reason="",
+    score_delta=0.0,
+    source_kind="",
+    source_id=None,
+):
+    """Record runtime-only warmth for a directly observed place or scene."""
+
+    area_chunk = _normalize_chunk(chunk)
+    if area_chunk is None:
+        area_chunk = _chunk_for_xy(sim, x, y)
+    if area_chunk is None:
+        return False
+
+    bump = _safe_float(score_delta, 0.0)
+    if bump <= 0.0:
+        return False
+
+    reason_text = str(reason or "").strip().lower() or "area"
+    source_kind_text = str(source_kind or "").strip().lower()
+    source_id_text = "" if source_id is None else str(source_id).strip()
+    if source_kind_text and source_id_text:
+        key = f"{source_kind_text}:{source_id_text}"
+    else:
+        key = f"{area_chunk[0]},{area_chunk[1]}:{reason_text}"
+
+    state = actor_attention_state(sim)
+    rows = _area_warmth_rows(state)
+    existing = rows.get(key, {})
+    if not isinstance(existing, dict):
+        existing = {}
+    old_score = _safe_float(existing.get("score"), 0.0)
+    new_score = min(SOCIAL_WARMTH_MAX_SCORE, old_score + bump)
+    old_reason_score = _safe_float(existing.get("reason_score"), 0.0)
+    if old_reason_score > bump and str(existing.get("reason", "") or "").strip():
+        reason_text = str(existing.get("reason", "") or "").strip().lower()
+        reason_score = old_reason_score
+    else:
+        reason_score = bump
+    rows[key] = {
+        "chunk": area_chunk,
+        "score": new_score,
+        "peak_score": max(_safe_float(existing.get("peak_score"), 0.0), new_score),
+        "reason": reason_text,
+        "reason_score": reason_score,
+        "source_kind": source_kind_text,
+        "source_id": source_id_text,
+        "last_tick": _safe_int(getattr(sim, "tick", 0), 0),
+        "spend_count": _safe_int(existing.get("spend_count"), 0),
+    }
+    _prune_area_warmth(sim, state)
+    return True
+
+
+def _live_social_warmth_rows(sim, state=None):
+    state = actor_attention_state(sim) if state is None else state
+    _prune_social_warmth(sim, state, live_only=True)
+    rows = _social_warmth_rows(state)
+    positions = sim.ecs.get(Position)
+    live = []
+    for raw_eid, row in tuple(rows.items()):
+        try:
+            eid = int(raw_eid)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(row, dict):
+            continue
+        pos = positions.get(eid)
+        if pos is None:
+            continue
+        score = _safe_float(row.get("score"), 0.0)
+        if score < SOCIAL_WARMTH_MIN_SCORE:
+            continue
+        live.append((eid, pos, score, row))
+    return tuple(live)
+
+
+def _live_area_warmth_rows(sim, state=None):
+    state = actor_attention_state(sim) if state is None else state
+    _prune_area_warmth(sim, state)
+    rows = _area_warmth_rows(state)
+    live = []
+    for key, row in tuple(rows.items()):
+        if not isinstance(row, dict):
+            continue
+        chunk = _normalize_chunk(row.get("chunk"))
+        if chunk is None:
+            continue
+        score = _safe_float(row.get("score"), 0.0)
+        if score < SOCIAL_WARMTH_MIN_SCORE:
+            continue
+        live.append((str(key), chunk, score, row))
+    return tuple(live)
+
+
+def _social_warmth_reason_for_actor(state, eid):
+    row = _social_warmth_rows(state).get(eid)
+    if not isinstance(row, dict):
+        row = _social_warmth_rows(state).get(str(eid))
+    if not isinstance(row, dict):
+        return None
+    score = _safe_float(row.get("score"), 0.0)
+    if score < SOCIAL_WARMTH_MIN_SCORE:
+        return None
+    reason = str(row.get("reason", "") or "").strip().lower() or "social_bond"
+    return f"social_warmth:{reason}"
+
+
+def social_warm_actor_eids(sim):
+    return tuple(sorted(eid for eid, _pos, _score, _row in _live_social_warmth_rows(sim)))
+
+
+def _spend_warmth_row(rows, key):
+    row = rows.get(key)
+    if not isinstance(row, dict):
+        row = rows.get(str(key))
+    if not isinstance(row, dict):
+        return None
+    score = _safe_float(row.get("score"), 0.0)
+    spend = max(SOCIAL_WARMTH_SPEND_MIN, score * SOCIAL_WARMTH_SPEND_FRACTION)
+    remaining = max(0.0, score - spend)
+    if remaining < SOCIAL_WARMTH_MIN_SCORE:
+        rows.pop(key, None)
+        rows.pop(str(key), None)
+        return 0.0
+    row["score"] = remaining
+    row["reason_score"] = min(_safe_float(row.get("reason_score"), remaining), remaining)
+    row["spend_count"] = _safe_int(row.get("spend_count"), 0) + 1
+    rows.pop(str(key), None)
+    rows[key] = row
+    return remaining
+
+
+def _spend_social_warmth_row(rows, eid):
+    return _spend_warmth_row(rows, eid)
+
+
+def _warmth_item(kind, key, chunk, score, row, *, actor_eid=None):
+    reason = str((row or {}).get("reason", "") or "").strip().lower()
+    if not reason:
+        reason = "social_bond" if kind == "actor" else "area"
+    item = {
+        "kind": str(kind),
+        "key": key,
+        "chunk": chunk,
+        "score": float(score),
+        "row": row,
+        "reason": reason,
+        "priority": 0 if kind == "actor" else 1,
+    }
+    if actor_eid is not None:
+        item["actor_eid"] = int(actor_eid)
+    return item
+
+
+def warmth_protected_chunks(sim, unload_candidates, *, budget=SOCIAL_WARMTH_CHUNK_BUDGET):
+    state = actor_attention_state(sim)
+    candidates = {
+        chunk
+        for chunk in (_normalize_chunk(raw) for raw in tuple(unload_candidates or ()))
+        if chunk is not None
+    }
+    state["social_warmth_protected_chunks"] = set()
+    state["social_warmth_last_protected"] = ()
+    if not candidates:
+        return set()
+    try:
+        budget = int(budget)
+    except (TypeError, ValueError):
+        budget = SOCIAL_WARMTH_CHUNK_BUDGET
+    if budget <= 0:
+        return set()
+
+    by_chunk = defaultdict(list)
+    for eid, pos, score, row in _live_social_warmth_rows(sim, state):
+        chunk = _chunk_for_pos(sim, pos)
+        if chunk not in candidates:
+            continue
+        by_chunk[chunk].append(_warmth_item("actor", eid, chunk, score, row, actor_eid=eid))
+    for key, chunk, score, row in _live_area_warmth_rows(sim, state):
+        if chunk not in candidates:
+            continue
+        by_chunk[chunk].append(_warmth_item("area", key, chunk, score, row))
+
+    ranked = []
+    for chunk, warm_rows in by_chunk.items():
+        if not warm_rows:
+            continue
+        warm_rows = sorted(warm_rows, key=lambda item: (-float(item["score"]), int(item["priority"]), str(item["key"])))
+        top_row = warm_rows[0]
+        top_score = float(top_row["score"])
+        extra = sum(float(item["score"]) for item in warm_rows[1:])
+        chunk_score = top_score + min(SOCIAL_WARMTH_CHUNK_EXTRA_CAP, extra * 0.25)
+        ranked.append({
+            "chunk_score": float(chunk_score),
+            "chunk": chunk,
+            "top": top_row,
+            "items": tuple(warm_rows),
+            "actor_count": sum(1 for item in warm_rows if item["kind"] == "actor"),
+            "area_count": sum(1 for item in warm_rows if item["kind"] == "area"),
+        })
+
+    selected = sorted(
+        ranked,
+        key=lambda item: (-float(item["chunk_score"]), int(item["top"]["priority"]), item["chunk"]),
+    )[:budget]
+    protected = {item["chunk"] for item in selected}
+    social_rows = _social_warmth_rows(state)
+    area_rows = _area_warmth_rows(state)
+    last = []
+    for selected_row in selected:
+        chunk = selected_row["chunk"]
+        top = selected_row["top"]
+        reason = str(top.get("reason", "") or "").strip().lower()
+        last_row = {
+            "kind": str(top.get("kind", "actor") or "actor"),
+            "chunk": chunk,
+            "score": float(selected_row["chunk_score"]),
+            "top_score": float(top["score"]),
+            "actor_count": int(selected_row["actor_count"]),
+            "area_count": int(selected_row["area_count"]),
+            "reason": reason or ("social_bond" if top.get("kind") == "actor" else "area"),
+        }
+        if top.get("kind") == "actor":
+            last_row["actor_eid"] = int(top.get("actor_eid", top.get("key")))
+        else:
+            last_row["area_key"] = str(top.get("key", ""))
+        last.append(last_row)
+        for item in selected_row["items"]:
+            if item["kind"] == "actor":
+                _spend_social_warmth_row(social_rows, item["key"])
+            else:
+                _spend_warmth_row(area_rows, item["key"])
+    state["social_warmth_protected_chunks"] = protected
+    state["social_warmth_last_protected"] = tuple(last)
+    _prune_social_warmth(sim, state, live_only=True)
+    _prune_area_warmth(sim, state)
+    return set(protected)
+
+
+def social_warmth_protected_chunks(sim, unload_candidates, *, budget=SOCIAL_WARMTH_CHUNK_BUDGET):
+    return warmth_protected_chunks(sim, unload_candidates, budget=budget)
+
+
+def warmth_debug_summary(sim, *, limit=1):
+    state = actor_attention_state(sim)
+    live_actor_rows = tuple(_live_social_warmth_rows(sim, state))
+    live_area_rows = tuple(_live_area_warmth_rows(sim, state))
+    protected = state.get("social_warmth_protected_chunks", set())
+    if not isinstance(protected, set):
+        protected = set(protected or ())
+    combined = []
+    for eid, pos, score, row in live_actor_rows:
+        combined.append(_warmth_item("actor", eid, _chunk_for_pos(sim, pos), score, row, actor_eid=eid))
+    for key, chunk, score, row in live_area_rows:
+        combined.append(_warmth_item("area", key, chunk, score, row))
+    combined = sorted(combined, key=lambda item: (-float(item["score"]), int(item["priority"]), str(item["key"])))
+    top = []
+    for item in combined[: max(0, int(limit))]:
+        row = {
+            "kind": item["kind"],
+            "chunk": item["chunk"],
+            "score": float(item["score"]),
+            "reason": str(item.get("reason", "") or "").strip().lower(),
+        }
+        if item["kind"] == "actor":
+            row["actor_eid"] = int(item["actor_eid"])
+        else:
+            row["area_key"] = str(item["key"])
+        top.append(row)
+    return {
+        "actor_count": len(live_actor_rows),
+        "area_count": len(live_area_rows),
+        "protected_count": len(protected),
+        "top": tuple(top),
+        "last_protected": tuple(state.get("social_warmth_last_protected", ()) or ()),
+    }
+
+
+def social_warmth_debug_summary(sim, *, limit=1):
+    return warmth_debug_summary(sim, limit=limit)
 
 
 def _settlement_active(newcomer):
@@ -596,6 +1090,10 @@ def attention_scope_for_actor(sim, eid, *, pos=None, ai=None):
     if reasons:
         return {"scope": "full", "reasons": tuple(sorted(set(reasons)))}
 
+    social_warmth_reason = _social_warmth_reason_for_actor(state, eid)
+    if social_warmth_reason:
+        return {"scope": "warm", "reasons": (social_warmth_reason,)}
+
     warm_chunks = state.get("warm_chunks", set())
     if chunk in warm_chunks:
         chunk_reasons = state.get("chunk_reasons", {}).get(chunk, set())
@@ -678,6 +1176,10 @@ def refresh_actor_attention(sim, *, player_eid=None):
     for family in ATTENTION_FAMILIES:
         stats["due_counts"][family] = sum(len(bucket or ()) for bucket in state["due"][family].values())
         stats["urgent_counts"][family] = len(state["urgent"][family])
+    stats["social_warmth_actors"] = len(social_warm_actor_eids(sim))
+    stats["area_warmth_areas"] = len(_live_area_warmth_rows(sim, state))
+    protected = state.get("social_warmth_protected_chunks", set())
+    stats["social_warmth_protected_chunks"] = len(protected if isinstance(protected, set) else set(protected or ()))
     state["stats"] = stats
     state["last_refresh_tick"] = tick
     return state

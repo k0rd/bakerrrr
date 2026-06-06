@@ -15,6 +15,8 @@ from game.human_description import human_conversation_description, human_look_de
 from game.human_identity import is_human_identity
 from game.justice_runtime import justice_summary_rows
 from game.local_situations import local_situation_report_lines
+from game.organization_presence import format_property_org_presence
+from game.system_support.crime_plan_runtime import crime_plan_surface_rows
 from game.objective_progress import (
     objective_progress_explain_delta,
     objective_progress_recent_history,
@@ -888,6 +890,7 @@ def _known_location_summary_bits(sim, prop, known):
         "service_used_cars": "used-vehicle lead",
         "service_vehicle_fetch": "vehicle-retrieval lead",
         "service_gaming": "gaming lead",
+        "organization_presence": "organization read",
     }.get(lead_kind, "")
     if lead_label:
         bits.append(lead_label)
@@ -965,6 +968,18 @@ def _known_location_fact_lines(
 
     if lead_kind == "location" and source_name:
         facts.append(f"{source_name} pointed this place out for you.")
+
+    if lead_kind == "organization_presence":
+        presence = format_property_org_presence(sim, prop, include_primary=True)
+        if presence:
+            facts.append(f"Organization presence: {presence}.")
+
+    if lead_kind == "crew_activity":
+        crew_rows = crime_plan_surface_rows(sim, prop=prop)
+        if crew_rows:
+            facts.append(f"Crew activity: {crew_rows[0].get('surface_text')}.")
+        else:
+            facts.append("Crew activity was marked here, but no live crew detail is loaded.")
 
     if lead_kind == "hours" and hours_text:
         facts.append(f"Public hours: {hours_text}.")

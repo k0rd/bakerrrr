@@ -2710,10 +2710,6 @@ class Inventory:
                     return True, created_instance_id
 
         while quantity > 0:
-            slot_cost = item_inventory_slot_cost(item_id)
-            if slot_cost > 0 and (self.slot_count() + slot_cost) > self.capacity:
-                return False, created_instance_id
-
             amount = min(stack_max, quantity)
             portion_metadata, remaining_metadata = split_item_stack_metadata(
                 item_id,
@@ -2721,6 +2717,12 @@ class Inventory:
                 stack_quantity=remaining_quantity,
                 removed_quantity=amount,
             )
+            slot_cost = item_inventory_slot_cost({
+                "item_id": item_id,
+                "metadata": portion_metadata,
+            })
+            if slot_cost > 0 and (self.slot_count() + slot_cost) > self.capacity:
+                return False, created_instance_id
             if instance_id and created_instance_id is None:
                 iid = instance_id
             elif instance_factory:
@@ -3253,6 +3255,58 @@ class ArmorLoadout:
 
     def is_equipped(self, instance_id):
         return bool(instance_id) and self.equipped_instance_id == str(instance_id).strip()
+
+
+class AppearanceLoadout:
+    VALID_SLOTS = (
+        "hat",
+        "earrings",
+        "necklace",
+        "bracelet",
+        "ring_left",
+        "ring_right",
+        "top",
+        "bottom",
+        "full_body",
+        "shoes",
+        "outer",
+    )
+
+    def __init__(self, slots=None, body_overrides=None):
+        self.slots = self._clean_slots(slots)
+        self.body_overrides = self._clean_overrides(body_overrides)
+
+    @classmethod
+    def _clean_slots(cls, slots=None):
+        clean = {slot: None for slot in cls.VALID_SLOTS}
+        if isinstance(slots, dict):
+            for slot, value in slots.items():
+                key = str(slot or "").strip().lower()
+                if key not in clean:
+                    continue
+                text = str(value or "").strip()
+                clean[key] = text or None
+        return clean
+
+    @staticmethod
+    def _clean_overrides(body_overrides=None):
+        clean = {}
+        if isinstance(body_overrides, dict):
+            for key, value in body_overrides.items():
+                clean_key = str(key or "").strip().lower()
+                clean_value = str(value or "").strip()
+                if clean_key and clean_value:
+                    clean[clean_key] = clean_value
+        return clean
+
+    def normalize(self):
+        self.slots = self._clean_slots(getattr(self, "slots", None))
+        self.body_overrides = self._clean_overrides(getattr(self, "body_overrides", None))
+        return self
+
+    def worn_instance_ids(self):
+        self.normalize()
+        return {str(value).strip() for value in self.slots.values() if str(value or "").strip()}
 
 
 class SuppressionState:

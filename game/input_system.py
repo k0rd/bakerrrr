@@ -4,6 +4,7 @@ import curses
 import time
 from engine.events import Event
 from engine.systems import System
+from game.appearance_loadout import APPEARANCE_SLOT_LABELS, appearance_metadata_for_entry, is_appearance_item, is_entry_worn
 from game.components import (
     AI,
     AnimalMemory,
@@ -850,6 +851,13 @@ class InputSystem(System):
             marked = self._mark_selected_known_location()
             if marked:
                 self._close_report_ui()
+                _log_player_feedback(
+                    self.sim,
+                    f"{target.get('name', 'Known location')} is outside loaded street detail; marked it on the overworld map.",
+                    kind="movement",
+                    dedupe_window=2,
+                    dedupe_key=f"known_location:unloaded_walk:{str(target.get('property_id') or target.get('name') or target.get('chunk'))}",
+                )
             return bool(marked)
 
         overlay = getattr(self.sim, "combat_overlay", {})
@@ -1207,6 +1215,20 @@ class InputSystem(System):
         current_zoom = str(getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
         target_chunk = tuple(target.get("chunk", self.sim.chunk_coords(pos.x, pos.y)))
         focus_x, focus_y, focus_z = target.get("focus", (pos.x, pos.y, pos.z))
+        detail = str(self.sim.detail_for_xy(int(focus_x), int(focus_y))).strip().lower() or "unloaded"
+
+        if current_zoom != "overworld" and detail == "unloaded":
+            marked = self._mark_selected_known_location()
+            if marked:
+                self._close_report_ui()
+                _log_player_feedback(
+                    self.sim,
+                    f"{target.get('name', 'Known location')} is known, but current street-level detail is not loaded; marked it on the overworld map.",
+                    kind="movement",
+                    dedupe_window=2,
+                    dedupe_key=f"known_location:unloaded_inspect:{str(target.get('property_id') or target.get('name') or target.get('chunk'))}",
+                )
+            return bool(marked)
 
         self._close_report_ui()
         if current_zoom != "overworld":
@@ -2995,6 +3017,23 @@ class InputSystem(System):
                 armor_label += " equipped"
             effect_labels.append(armor_label)
 
+        if is_appearance_item(entry, item_catalog=self.catalog):
+            profile = appearance_metadata_for_entry(entry, item_catalog=self.catalog)
+            slots = tuple(profile.get("slots", ()) or ())
+            slot_text = "/".join(str(slot).replace("_", " ") for slot in slots) if slots else "slot?"
+            color = str(profile.get("color", "") or "").strip()
+            material = str(profile.get("material", "") or "").strip()
+            style = str(profile.get("style", "") or "").strip()
+            accent = str(profile.get("accent_color", "") or "").strip()
+            wearable_bits = [f"wear {slot_text}"]
+            if color or material or style:
+                wearable_bits.append(" ".join(bit for bit in (style, color, material) if bit))
+            if accent:
+                wearable_bits.append(f"accent {accent}")
+            if is_entry_worn(entry):
+                wearable_bits.append("worn")
+            effect_labels.extend(wearable_bits)
+
         disguise_profile = item_def.get("disguise", {}) if isinstance(item_def.get("disguise"), dict) else {}
         disguise_role_id = str(disguise_profile.get("role_id", "")).strip().lower()
         if disguise_role_id:
@@ -3087,21 +3126,55 @@ class InputSystem(System):
             self._toggle_container_inventory_view()
             return True
 
+        choice = state.get("appearance_slot_choice") if isinstance(state.get("appearance_slot_choice"), dict) else None
+        if choice:
+            slots = tuple(choice.get("slots", ()) or ())
+            selected_slot = None
+            if key in (ord("1"), ord("l"), ord("L")) and len(slots) >= 1:
+                selected_slot = str(slots[0])
+            elif key in (ord("2"), ord("r"), ord("R")) and len(slots) >= 2:
+                selected_slot = str(slots[1])
+            elif key in (27, ord("q"), ord("Q")):
+                state.pop("appearance_slot_choice", None)
+                state["inspect_text"] = "Appearance slot choice cancelled."
+                return True
+            if selected_slot:
+                state.pop("appearance_slot_choice", None)
+                self.sim.turn_advance_requested = True
+                self.sim.emit(Event(
+                    "use_item_request",
+                    eid=self.player_eid,
+                    item_instance_id=choice.get("instance_id"),
+                    preferred_appearance_slot=selected_slot,
+                    reason="inventory_panel",
+                ))
+                return True
+            labels = [
+                f"{idx + 1} {APPEARANCE_SLOT_LABELS.get(slot, str(slot).replace('_', ' ').title())}"
+                for idx, slot in enumerate(slots[:2])
+            ]
+            state["inspect_text"] = f"Choose slot: {' | '.join(labels)}."
+            return True
+
         if key in (KEY_UP, ord("k"), ord("K")):
+            state.pop("appearance_slot_choice", None)
             state["selected_index"] -= 1
             self._normalize_inventory_selection()
             return True
 
         if key in (KEY_DOWN, ord("j"), ord("J")):
+            state.pop("appearance_slot_choice", None)
             state["selected_index"] += 1
             self._normalize_inventory_selection()
             return True
 
         if ord("1") <= key <= ord("9"):
+            state.pop("appearance_slot_choice", None)
             state["selected_index"] = key - ord("1")
             self._normalize_inventory_selection()
             return True
         if key == ord("0"):
+            state.pop("appearance_slot_choice", None)
             state["selected_index"] = 9
             self._normalize_inventory_selection()
             return True
@@ -3125,8 +3198,22 @@ class InputSystem(System):
             return True
 
         if key in (ord("u"), ord("U")):
-            self.sim.turn_advance_requested = True
             if selected:
+                if is_appearance_item(selected, item_catalog=self.catalog) and not is_entry_worn(selected):
+                    profile = appearance_metadata_for_entry(selected, item_catalog=self.catalog)
+                    slots = tuple(profile.get("slots", ()) or ())
+                    if len(slots) > 1:
+                        labels = [
+                            f"{idx + 1} {APPEARANCE_SLOT_LABELS.get(slot, str(slot).replace('_', ' ').title())}"
+                            for idx, slot in enumerate(slots[:2])
+                        ]
+                        state["appearance_slot_choice"] = {
+                            "instance_id": selected["instance_id"],
+                            "slots": slots[:2],
+                        }
+                        state["inspect_text"] = f"Choose slot: {' | '.join(labels)}."
+                        return True
+                self.sim.turn_advance_requested = True
                 self.sim.emit(Event(
                     "use_item_request",
                     eid=self.player_eid,
@@ -3134,6 +3221,7 @@ class InputSystem(System):
                     reason="inventory_panel",
                 ))
             else:
+                self.sim.turn_advance_requested = True
                 self.sim.emit(Event("item_use_blocked", eid=self.player_eid, reason="no_usable_item"))
             return True
 

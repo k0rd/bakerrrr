@@ -10,6 +10,7 @@ from engine.tilemap import Tile
 from game.bones import maybe_seed_bones_for_chunk
 from game.components import (
     ArmorLoadout,
+    AppearanceLoadout,
     Collider,
     ContactLedger,
     CoreStats,
@@ -31,6 +32,11 @@ from game.components import (
     VehicleState,
     Vitality,
     WeaponLoadout,
+)
+from game.appearance_loadout import (
+    mark_inventory_instance_worn,
+    seed_player_starting_outfit,
+    stow_cosmetic_outer_for_armor,
 )
 from game.human_identity import seed_player_identity_profile
 from game.economy import chunk_economy_profile
@@ -649,6 +655,9 @@ def _give_starter_armor(sim, eid, item_id, *, owner_tag="player"):
     )
     if not added:
         return False
+    outer_result = stow_cosmetic_outer_for_armor(sim, eid)
+    if not bool(getattr(outer_result, "ok", False)):
+        return False
     loadout.equip(
         instance_id=instance_id,
         item_id=item_id,
@@ -656,6 +665,7 @@ def _give_starter_armor(sim, eid, item_id, *, owner_tag="player"):
         damage_reduction=armor.get("damage_reduction", 0.0),
         slot=armor.get("slot", "body"),
     )
+    mark_inventory_instance_worn(sim, eid, instance_id, worn=True, slot="outer")
     return True
 
 
@@ -1070,6 +1080,7 @@ def bootstrap_normal_run(
         StatusEffects(),
         Vitality(max_hp=120, recover_to_hp=42),
         ArmorLoadout(),
+        AppearanceLoadout(),
         WeaponLoadout(),
         CoverState(),
         ContactLedger(),
@@ -1077,6 +1088,12 @@ def bootstrap_normal_run(
         PropertyPortfolio(),
     )
     sim.player_eid = player
+
+    starter_outfit_items = seed_player_starting_outfit(
+        sim,
+        player,
+        seed_token=f"{character_name}:{sim.seed}:bootstrap",
+    )
 
     street_kit_items = list(profile.street_kit_base)
     if profile.street_kit_variants:
@@ -1136,6 +1153,7 @@ def bootstrap_normal_run(
             {"item_id": str(item_id).strip().lower(), "quantity": int(quantity)}
             for item_id, quantity in street_kit_items
         ],
+        "starter_outfit_items": [dict(row) for row in tuple(starter_outfit_items or ())],
         "starter_weapon_id": starter_weapon_id,
         "starter_armor_item_id": starter_armor_item_id,
     }

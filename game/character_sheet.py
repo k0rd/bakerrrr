@@ -14,7 +14,7 @@ from game.components import (
     Vitality,
     WeaponLoadout,
 )
-from game.human_description import human_physical_summary
+from game.appearance_loadout import appearance_slot_rows, player_appearance_summary
 from game.human_identity import normalize_gender_identity, pronoun_display_text
 from game.run_pressure import pressure_snapshot
 from game.skill_ui import skill_birth_debug_line, skill_change_reason_label
@@ -201,12 +201,7 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     if identity is not None:
         gender_identity = normalize_gender_identity(getattr(identity, "gender_identity", None), default="nonbinary")
         pronoun_text = pronoun_display_text(identity, default="they", personal_name=getattr(identity, "personal_name", ""))
-        appearance_text = human_physical_summary(
-            getattr(sim, "seed", 0),
-            eid=player_eid,
-            identity=identity,
-            personal_name=getattr(identity, "personal_name", ""),
-        )
+        appearance_text = player_appearance_summary(sim, player_eid)
         assigned_sex = str(getattr(identity, "assigned_sex", "") or "").strip().lower()
         summary_lines.extend([
             "",
@@ -245,6 +240,14 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
     if inventory is not None:
         loadout_lines.append(f"Inventory slots {inventory.slot_count()}/{int(getattr(inventory, 'capacity', 0) or 0)}")
     loadout_lines.append(f"Active effects {_active_status_text(status_effects, duration_label_fn=duration_label_fn, sim=sim)}")
+
+    appearance_lines = [
+        "APPEARANCE",
+        player_appearance_summary(sim, player_eid) or "No appearance data.",
+        "",
+        "SLOTS",
+    ]
+    appearance_lines.extend(appearance_slot_rows(sim, player_eid))
 
     skills_lines = ["SKILLS"]
     birth_line = skill_birth_debug_line(profile)
@@ -318,6 +321,11 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
             "id": "loadout",
             "label": "Loadout",
             "lines": loadout_lines,
+        },
+        {
+            "id": "appearance",
+            "label": "Appearance",
+            "lines": appearance_lines,
         },
     )
 

@@ -83,6 +83,7 @@ from game.population import (
     spawn_chunk_npcs,
     work_shift_active,
 )
+from game.organizations import organization_profile
 from game.property_access import (
     PropertyIngressResult,
     _boundary_tile as _property_boundary_tile,
@@ -163,8 +164,10 @@ from game.system_support.actor_attention_runtime import (
     note_attention_resolution as _note_attention_resolution,
     pop_due_actors as _pop_due_actors,
     refresh_actor_attention as _refresh_actor_attention,
+    record_actor_social_warmth as _record_actor_social_warmth,
     schedule_actor_due as _schedule_actor_due,
 )
+from game.outfit_impression import apply_visible_outfit_social_offset
 from game.criminal_justice_runtime import _noise_merits_attention
 from game.dialogue_runtime import (
     _active_contractor_record,
@@ -262,6 +265,22 @@ from game.system_support.status_runtime import (
     _status_multiplier,
     _status_tick_step,
 )
+
+
+def _crime_plan_event_fields(sim, actor_eid, plan_key):
+    plan_key = str(plan_key or "").strip()
+    if not plan_key:
+        return {}
+    plan = active_plan_for_actor(sim, actor_eid, current_tick=getattr(sim, "tick", 0))
+    if not isinstance(plan, dict) or str(plan.get("plan_key", "") or "").strip() != plan_key:
+        return {}
+    return {
+        "plan_method_key": str(plan.get("method_key", "") or "").strip() or None,
+        "plan_method_label": str(plan.get("method_label", "") or "").strip() or None,
+        "plan_stage": str(plan.get("stage", "") or "").strip().lower() or None,
+    }
+
+
 _FACADE_MODULE = None
 _WILDLIFE_MODULE = None
 
@@ -1873,10 +1892,28 @@ class NPCWillSystem(System):
         ))
         if intent in {"casing_target", "committing_property_crime", "rendezvousing_crew", "seeking_criminal_affiliation"}:
             drive = criminal_drive_state(self.sim, eid, create=False)
+            plan_key = str(getattr(drive, "current_plan_key", "") or "").strip() if drive is not None else ""
             try:
                 organization_eid = int(getattr(drive, "current_affiliation_organization_eid", 0) or 0) or None
             except (TypeError, ValueError):
                 organization_eid = None
+            if organization_eid is None and plan_key:
+                active_plan = active_plan_for_actor(self.sim, eid, current_tick=self.sim.tick)
+                if isinstance(active_plan, dict) and str(active_plan.get("plan_key", "") or "").strip() == plan_key:
+                    try:
+                        organization_eid = int(active_plan.get("organization_eid", 0) or 0) or None
+                    except (TypeError, ValueError):
+                        organization_eid = None
+            organization_name = ""
+            organization_key = ""
+            organization_kind = ""
+            plan_fields = _crime_plan_event_fields(self.sim, eid, plan_key)
+            if organization_eid is not None:
+                profile = organization_profile(self.sim, organization_eid)
+                if profile is not None:
+                    organization_name = str(getattr(profile, "name", "") or "").strip()
+                    organization_key = str(getattr(profile, "key", "") or "").strip()
+                    organization_kind = str(getattr(profile, "kind", "") or "").strip().lower()
             self.sim.emit(Event(
                 "npc_crime_attempt_started",
                 npc_eid=eid,
@@ -1884,9 +1921,13 @@ class NPCWillSystem(System):
                 score=round(score, 2),
                 target=target,
                 target_eid=target_eid,
-                plan_key=str(getattr(drive, "current_plan_key", "") or "").strip() or None,
+                plan_key=plan_key or None,
                 property_id=str(getattr(drive, "current_target_property_id", "") or "").strip() or None,
                 organization_eid=organization_eid,
+                organization_name=organization_name or None,
+                organization_key=organization_key or None,
+                organization_kind=organization_kind or None,
+                **plan_fields,
                 summary=str(getattr(drive, "current_activity_summary", "") or "").strip() or None,
                 x=int(target[0]) if isinstance(target, (list, tuple)) and len(target) >= 1 else None,
                 y=int(target[1]) if isinstance(target, (list, tuple)) and len(target) >= 2 else None,
@@ -4048,12 +4089,14 @@ class NPCInvestigateSystem(System):
                     ai.state = "idle"
                     ai.target = None
                     ai.target_eid = None
+                    plan_key = str(getattr(drive_state, "current_plan_key", "") or "").strip()
                     self.sim.emit(Event(
                         "npc_crime_attempt_resolved",
                         npc_eid=eid,
                         success=False,
                         reason="cased_target",
-                        plan_key=str(getattr(drive_state, "current_plan_key", "") or "").strip() or None,
+                        plan_key=plan_key or None,
+                        **_crime_plan_event_fields(self.sim, eid, plan_key),
                         x=tx,
                         y=ty,
                         z=tz,
@@ -4125,6 +4168,7 @@ class NPCInvestigateSystem(System):
                             success=False,
                             reason="no_loot",
                             plan_key=plan_key or None,
+                            **_crime_plan_event_fields(self.sim, eid, plan_key),
                             x=tx,
                             y=ty,
                             z=tz,
@@ -4457,12 +4501,62 @@ class NPCInvestigateSystem(System):
                     bond = social.bonds.get(partner_eid) if social else None
                     if bond:
                         relation = str(bond.get("kind", "friend")).strip().lower() or "friend"
-                        bond["closeness"] = min(1.0, float(bond.get("closeness", 0.0)) + 0.025)
-                        bond["trust"] = min(1.0, float(bond.get("trust", 0.0)) + 0.015)
+                        old_closeness = float(bond.get("closeness", 0.0) or 0.0)
+                        old_trust = float(bond.get("trust", 0.0) or 0.0)
+                        offset = apply_visible_outfit_social_offset(
+                            self.sim,
+                            eid,
+                            partner_eid,
+                            trust_delta=0.015,
+                            closeness_delta=0.025,
+                            context="npc_socialized",
+                        )
+                        bond["closeness"] = min(
+                            1.0,
+                            float(bond.get("closeness", 0.0)) + float(offset.get("closeness_delta", 0.025)),
+                        )
+                        bond["trust"] = min(
+                            1.0,
+                            float(bond.get("trust", 0.0)) + float(offset.get("trust_delta", 0.015)),
+                        )
+                        _record_actor_social_warmth(
+                            self.sim,
+                            eid,
+                            other_eid=partner_eid,
+                            reason="npc_socialized",
+                            trust_delta=float(bond.get("trust", 0.0) or 0.0) - old_trust,
+                            closeness_delta=float(bond.get("closeness", 0.0) or 0.0) - old_closeness,
+                            post_bond=bond,
+                        )
                     if partner_social and eid in partner_social.bonds:
                         reverse = partner_social.bonds[eid]
-                        reverse["closeness"] = min(1.0, float(reverse.get("closeness", 0.0)) + 0.02)
-                        reverse["trust"] = min(1.0, float(reverse.get("trust", 0.0)) + 0.012)
+                        old_closeness = float(reverse.get("closeness", 0.0) or 0.0)
+                        old_trust = float(reverse.get("trust", 0.0) or 0.0)
+                        reverse_offset = apply_visible_outfit_social_offset(
+                            self.sim,
+                            partner_eid,
+                            eid,
+                            trust_delta=0.012,
+                            closeness_delta=0.02,
+                            context="npc_socialized",
+                        )
+                        reverse["closeness"] = min(
+                            1.0,
+                            float(reverse.get("closeness", 0.0)) + float(reverse_offset.get("closeness_delta", 0.02)),
+                        )
+                        reverse["trust"] = min(
+                            1.0,
+                            float(reverse.get("trust", 0.0)) + float(reverse_offset.get("trust_delta", 0.012)),
+                        )
+                        _record_actor_social_warmth(
+                            self.sim,
+                            partner_eid,
+                            other_eid=eid,
+                            reason="npc_socialized",
+                            trust_delta=float(reverse.get("trust", 0.0) or 0.0) - old_trust,
+                            closeness_delta=float(reverse.get("closeness", 0.0) or 0.0) - old_closeness,
+                            post_bond=reverse,
+                        )
                     hydrate_relationship_social_knowledge(
                         self.sim,
                         eid,
@@ -4627,12 +4721,14 @@ class NPCInvestigateSystem(System):
                                 else:
                                     self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + 1)
                                 continue
+                            plan_key = str(getattr(criminal_drive_state(self.sim, eid, create=False), "current_plan_key", "") or "").strip()
                             self.sim.emit(Event(
                                 "npc_crime_attempt_resolved",
                                 npc_eid=eid,
                                 success=False,
                                 reason=str(method or direct_reason or "locked_property"),
-                                plan_key=str(getattr(criminal_drive_state(self.sim, eid, create=False), "current_plan_key", "") or "").strip() or None,
+                                plan_key=plan_key or None,
+                                **_crime_plan_event_fields(self.sim, eid, plan_key),
                                 x=tx,
                                 y=ty,
                                 z=tz,
@@ -4700,12 +4796,14 @@ class NPCInvestigateSystem(System):
                                 else:
                                     self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + 1)
                                 continue
+                            plan_key = str(getattr(criminal_drive_state(self.sim, eid, create=False), "current_plan_key", "") or "").strip()
                             self.sim.emit(Event(
                                 "npc_crime_attempt_resolved",
                                 npc_eid=eid,
                                 success=False,
                                 reason=str(method or blocked_reason or "locked_property"),
-                                plan_key=str(getattr(criminal_drive_state(self.sim, eid, create=False), "current_plan_key", "") or "").strip() or None,
+                                plan_key=plan_key or None,
+                                **_crime_plan_event_fields(self.sim, eid, plan_key),
                                 x=nx,
                                 y=ny,
                                 z=pos.z,

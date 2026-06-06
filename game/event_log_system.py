@@ -73,6 +73,11 @@ from game.item_semantics import (
     item_unknown_inspect_text_for_actor,
 )
 from game.organizations import local_protective_pressure_snapshot
+from game.system_support.actor_attention_runtime import record_area_warmth
+from game.system_support.crime_plan_runtime import (
+    CRIME_PLAN_OBSERVATION_WITNESS,
+    record_crime_plan_observation,
+)
 from game.objective_progress import (
     award_objective_progress,
     objective_progress_explain_delta,
@@ -350,6 +355,14 @@ def _ingress_label(*args, **kwargs):
 def _room_entry_description(*args, **kwargs):
     return _facade()._room_entry_description(*args, **kwargs)
 
+
+def _possessive_label(label):
+    label = str(label or "").strip()
+    if not label:
+        return ""
+    return f"{label}'" if label.lower().endswith("s") else f"{label}'s"
+
+
 class EventLogSystem(System):
     def on_world_event_started(self, event):
         if not world_event_visible_to_viewer(self.sim, event.data, self.player_eid):
@@ -435,6 +448,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("npc_defend_property", self.on_npc_defend_property)
         self.sim.events.subscribe("npc_crime_attempt_started", self.on_npc_crime_attempt_started)
         self.sim.events.subscribe("npc_crime_attempt_resolved", self.on_npc_crime_attempt_resolved)
+        self.sim.events.subscribe("crime_plan_disrupted", self.on_crime_plan_disrupted)
         self.sim.events.subscribe("npc_affiliation_attempt_resolved", self.on_npc_affiliation_attempt_resolved)
         self.sim.events.subscribe("npc_need_critical", self.on_npc_need_critical)
         self.sim.events.subscribe("action_offense", self.on_action_offense)
@@ -468,6 +482,8 @@ class EventLogSystem(System):
         self.sim.events.subscribe("animal_socialized", self.on_animal_socialized)
         self.sim.events.subscribe("armor_equipped", self.on_armor_equipped)
         self.sim.events.subscribe("armor_removed", self.on_armor_removed)
+        self.sim.events.subscribe("appearance_item_equipped", self.on_appearance_item_equipped)
+        self.sim.events.subscribe("appearance_item_unequipped", self.on_appearance_item_unequipped)
         self.sim.events.subscribe("disguise_equipped", self.on_disguise_equipped)
         self.sim.events.subscribe("disguise_removed", self.on_disguise_removed)
         self.sim.events.subscribe("disguise_blown", self.on_disguise_blown)
@@ -2843,15 +2859,61 @@ class EventLogSystem(System):
             return
         intent = str(event.data.get("intent", "") or "").strip().lower()
         summary = str(event.data.get("summary", "") or "").strip()
+        org_name = str(event.data.get("organization_name", "") or "").strip()
+        method_label = str(event.data.get("plan_method_label", "") or "").strip()
+        plan_stage = str(event.data.get("plan_stage", "") or "").strip().lower()
+        plan_key = str(event.data.get("plan_key", "") or "").strip()
+        record_area_warmth(
+            self.sim,
+            x=event.data.get("x"),
+            y=event.data.get("y"),
+            reason="crime_scene",
+            score_delta=0.75,
+            source_kind="crime_scene",
+            source_id=plan_key or f"{npc_eid}:{intent}:{getattr(self.sim, 'tick', 0)}",
+        )
+        if plan_key:
+            record_crime_plan_observation(
+                self.sim,
+                plan_key,
+                observer_eid=self.player_eid,
+                source_kind="witnessed_event",
+                score_delta=CRIME_PLAN_OBSERVATION_WITNESS,
+            )
         npc_name = self._npc_label(npc_eid)
         if intent == "rendezvousing_crew":
-            text = f"{npc_name} looks like they're linking up for a crew move."
+            if org_name and method_label:
+                text = f"{npc_name} looks like they're linking up with {org_name} for a {method_label}."
+            elif org_name:
+                text = f"{npc_name} looks like they're linking up with {org_name} for a crew move."
+            elif method_label:
+                text = f"{npc_name} looks like they're linking up for a {method_label}."
+            else:
+                text = f"{npc_name} looks like they're linking up for a crew move."
         elif intent == "seeking_criminal_affiliation":
-            text = f"{npc_name} looks like they're trying to find a crew."
+            if org_name:
+                text = f"{npc_name} looks like they're trying to find a way into {org_name}."
+            else:
+                text = f"{npc_name} looks like they're trying to find a crew."
         elif intent == "casing_target":
-            text = f"{npc_name} is casing the block."
+            if org_name and method_label:
+                text = f"{npc_name} is casing the block for {_possessive_label(org_name)} {method_label}."
+            elif org_name:
+                text = f"{npc_name} is casing the block for {org_name}."
+            else:
+                text = f"{npc_name} is casing the block."
         elif intent == "committing_property_crime":
-            text = f"{npc_name} looks like they're moving on a soft target."
+            if org_name and method_label:
+                text = f"{npc_name} looks like they're moving on {_possessive_label(org_name)} {method_label}."
+            elif org_name:
+                text = f"{npc_name} looks like they're moving on a soft target for {org_name}."
+            elif method_label:
+                text = f"{npc_name} looks like they're moving on a {method_label}."
+            else:
+                text = f"{npc_name} looks like they're moving on a soft target."
+        elif method_label:
+            stage_text = f" ({plan_stage})" if plan_stage else ""
+            text = summary or f"{npc_name} is moving with a {method_label}{stage_text}."
         else:
             text = summary or f"{npc_name} is moving with criminal purpose."
         self._log(
@@ -2870,19 +2932,52 @@ class EventLogSystem(System):
             return
         success = bool(event.data.get("success"))
         reason = str(event.data.get("reason", "") or "").strip().replace("_", " ")
+        method_label = str(event.data.get("plan_method_label", "") or "").strip()
+        plan_stage = str(event.data.get("plan_stage", "") or "").strip().lower()
         npc_name = self._npc_label(npc_eid)
         if success:
-            text = f"{npc_name} slips something and starts clearing out."
+            if method_label:
+                text = f"{npc_name} pulls off the {method_label} and starts clearing out."
+            else:
+                text = f"{npc_name} slips something and starts clearing out."
         else:
             text = f"{npc_name} loses their nerve around the target."
+            if method_label:
+                stage_text = f" during {plan_stage}" if plan_stage else ""
+                text = f"{npc_name}'s {method_label}{stage_text} falls apart."
             if reason and reason not in {"cased target", "no loot"}:
-                text = f"{npc_name}'s move falls apart: {reason}."
+                text = f"{npc_name}'s {method_label or 'move'} falls apart: {reason}."
         self._log(
             text,
             channel="alerts",
             priority="high" if success else "normal",
             dedupe_window=8,
             dedupe_key=f"npc_crime_resolved:{npc_eid}:{str(event.data.get('plan_key', '') or '')}:{int(success)}",
+        )
+
+    def on_crime_plan_disrupted(self, event):
+        observer_eid = event.data.get("observer_eid")
+        if observer_eid not in {None, self.player_eid} and not self._player_can_perceive_event_position(event):
+            return
+        if observer_eid is None and not self._player_can_perceive_event_position(event):
+            return
+        org_name = str(event.data.get("organization_name", "") or "").strip() or "A local crew"
+        method_label = str(event.data.get("plan_method_label", "") or "").strip() or "crew move"
+        action = str(event.data.get("action", "") or "").strip().lower()
+        if action == "cancelled":
+            text = f"{_possessive_label(org_name)} {method_label} gets spooked and breaks off."
+            priority = "high"
+        elif action == "delayed":
+            text = f"{_possessive_label(org_name)} {method_label} gets spooked and slows down."
+            priority = "normal"
+        else:
+            return
+        self._log(
+            text,
+            channel="alerts",
+            priority=priority,
+            dedupe_window=8,
+            dedupe_key=f"crime_plan_disrupted:{event.data.get('plan_key')}:{action}",
         )
 
     def on_npc_affiliation_attempt_resolved(self, event):
@@ -3244,6 +3339,20 @@ class EventLogSystem(System):
         armor_name = event.data.get("armor_name", event.data.get("item_id", "armor"))
         self.sim.log.add(f"Removed {armor_name}.")
 
+    def on_appearance_item_equipped(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "item"))).strip() or "item"
+        slot = str(event.data.get("slot", "") or "").replace("_", " ").strip()
+        suffix = f" ({slot})" if slot else ""
+        _log_player_feedback(self.sim, f"Wearing {item_name}{suffix}.", kind="interaction")
+
+    def on_appearance_item_unequipped(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "item"))).strip() or "item"
+        _log_player_feedback(self.sim, f"Removed {item_name}.", kind="interaction")
+
     def on_disguise_equipped(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -3374,6 +3483,14 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"{item_name} has no effect right now.", kind="interaction")
         elif reason == "consume_failed":
             _log_player_feedback(self.sim, f"{item_name} failed before it took effect.", kind="interaction")
+        elif reason == "appearance_pack_full":
+            _log_player_feedback(self.sim, f"Your pack is too full to stow {item_name}.", kind="interaction")
+        elif reason == "appearance_armor_outer_active":
+            _log_player_feedback(self.sim, "Armor is occupying your outer slot.", kind="interaction")
+        elif reason == "appearance_slot_occupied":
+            _log_player_feedback(self.sim, "That appearance slot is already occupied.", kind="interaction")
+        elif str(reason or "").startswith("appearance_conflicts_"):
+            _log_player_feedback(self.sim, f"{item_name} conflicts with what you are already wearing.", kind="interaction")
         else:
             _log_player_feedback(self.sim, f"You cannot use {item_name} right now.", kind="interaction")
 

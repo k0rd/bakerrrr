@@ -26,7 +26,9 @@ from game.dialogue_runtime import (
 from game.economy import item_market_bias, store_supply_profile
 from game.items import ITEM_CATALOG, item_display_name
 from game.opportunities import opportunity_intel_for_observer, tracked_target_surface_snapshot
+from game.organization_presence import format_property_org_presence, format_visible_property_org_presence
 from game.organizations import organization_name, property_organization_eid
+from game.system_support.crime_plan_runtime import crime_plan_surface_rows
 from game.population import (
     INDUSTRIAL_ARCHETYPES,
     MEDICAL_ARCHETYPES,
@@ -735,6 +737,13 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
     organization_text = organization_name(sim, organization_eid)
     if organization_text and organization_text.lower() != bits[0].lower():
         bits.append(f"org:{organization_text}")
+    visible_presence = format_visible_property_org_presence(sim, prop)
+    if visible_presence:
+        bits.append(f"orgs:{visible_presence}")
+    elif not organization_text:
+        primary_presence = format_property_org_presence(sim, prop, include_primary=True, max_rows=1)
+        if primary_presence:
+            bits.append(f"orgs:{primary_presence}")
     if kind == "building":
         building_id = _building_id_from_property(prop)
         revealed_building_id = _viewer_revealed_building_id(
@@ -969,6 +978,13 @@ def _property_knowledge_hint(sim, viewer_eid, prop):
         return f"known:{source_name} mentioned public hours" if source_name else "known:hours"
     if lead_kind == "location":
         return f"known:{source_name} placed this on your map" if source_name else "known:location"
+    if lead_kind == "organization_presence":
+        return "known:organization presence"
+    if lead_kind == "crew_activity":
+        crew_rows = crime_plan_surface_rows(sim, prop=prop)
+        if crew_rows:
+            return "known:crew activity"
+        return "known:crew activity (no live detail)"
     if lead_kind in {"access", "security"}:
         return f"known:{source_name} mentioned access" if source_name else "known:access"
     if lead_kind == "contraband":

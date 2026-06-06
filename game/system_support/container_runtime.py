@@ -1,5 +1,6 @@
 """Shared inventory-container runtime helpers."""
 
+from game.appearance_loadout import clear_removed_entry_appearance, mark_inventory_instance_worn
 from game.components import ArmorLoadout, Inventory, WeaponLoadout
 from game.items import ITEM_CATALOG, item_display_name
 from game.weapons import weapon_by_id
@@ -83,6 +84,11 @@ def _unlink_removed_item_from_gear(sim, eid, removed_entry, item_catalog=None):
         )
         changes["armor_item_id"] = armor_loadout.equipped_item_id or removed_entry.get("item_id")
         armor_loadout.clear()
+        mark_inventory_instance_worn(sim, eid, instance_id, worn=False)
+
+    appearance_changes = clear_removed_entry_appearance(sim, eid, removed_entry)
+    if appearance_changes:
+        changes.update(appearance_changes)
 
     weapon_loadout = sim.ecs.get(WeaponLoadout).get(eid)
     if weapon_loadout:

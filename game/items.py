@@ -55,6 +55,8 @@ def _normalize_item_category(item_id, tags, item):
         return "weapon"
     if "ammo" in tag_set:
         return "ammo"
+    if "cosmetic" in tag_set:
+        return "cosmetic"
     if item.get("armor") or "armor" in tag_set or "wearable" in tag_set:
         return "armor"
     if "medical" in tag_set:
@@ -188,11 +190,15 @@ def is_credstick_item(item_id):
 def item_inventory_slot_cost(item_or_entry):
     if isinstance(item_or_entry, dict):
         item_id = item_or_entry.get("item_id")
+        metadata = item_or_entry.get("metadata") if isinstance(item_or_entry.get("metadata"), dict) else {}
     else:
         item_id = item_or_entry
+        metadata = {}
     item_key = str(item_id or "").strip().lower()
     if not item_key:
         return 1
+    if bool(metadata.get("appearance_worn")):
+        return 0
     return 0 if item_key in ZERO_SLOT_ITEM_IDS else 1
 
 

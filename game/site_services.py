@@ -2,6 +2,7 @@ import random
 
 from engine.events import Event
 from engine.systems import System
+from game.appearance_loadout import apply_appearance_service
 from engine.underground import UNDERGROUND_ACCESS_SERVICE
 from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, PropertyKnowledge, StatusEffects, VehicleState, Vitality
 from game.items import ITEM_CATALOG, item_display_name
@@ -1995,6 +1996,9 @@ class SiteServiceSystem(System):
         if service == "business_remodel":
             self._apply_business_remodel_service(eid, prop, request=request)
             return True
+        if service == "appearance_style":
+            self._apply_appearance_style_service(eid, prop, request=request)
+            return True
         if service in TRANSIT_SERVICE_IDS:
             self._apply_transit_service(eid, prop, pos, service, request=request)
             return True
@@ -2008,6 +2012,42 @@ class SiteServiceSystem(System):
             self._apply_vehicle_fetch(eid, prop, pos)
             return True
         return False
+
+    def _apply_appearance_style_service(self, eid, prop, request=None):
+        request = request if isinstance(request, dict) else {}
+        style_kind = str(request.get("style_kind", "") or "").strip().lower()
+        style_value = str(request.get("style_value", "") or "").strip().lower()
+        result = apply_appearance_service(
+            self.sim,
+            eid,
+            kind=style_kind,
+            value=style_value,
+            prop=prop,
+        )
+        if not bool(getattr(result, "ok", False)):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="appearance_style",
+                reason=getattr(result, "reason", "invalid_style"),
+            ))
+            return False
+        label = style_kind.replace("_", " ").title()
+        value = style_value.replace("_", " ").title()
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service="appearance_style",
+            headline="Styling updated.",
+            lines=(f"{label}: {value}.", "Your character-sheet appearance has been updated."),
+            style_kind=style_kind,
+            style_value=style_value,
+        ))
+        return True
 
     def _apply_shelter(self, eid, prop):
         ready_in = self._service_ready_in(eid, prop, "shelter")

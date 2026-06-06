@@ -31,6 +31,7 @@ from game.property_runtime import (
 )
 from game.systems_business_reputation import property_business_reputation_snapshot, property_supports_business_reputation
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
+from game.system_support.actor_attention_runtime import record_area_warmth
 from game.system_support.ai_intent_runtime import _sync_ai_intent
 from game.system_support.business_event_state import (
     _business_event_actor_note,
@@ -6214,6 +6215,15 @@ class BusinessPulseSceneSystem(System):
             self._materialize_gathering_scene(scene, blueprint, rng)
         if scene["spawned_entity_ids"] or scene["spawned_property_ids"]:
             _business_event_scene_state(self.sim)["active"][scene["scene_id"]] = scene
+            warmth_reason = str(scene.get("event_phase", "") or scene.get("scene_type", "") or "scene").strip().lower()
+            record_area_warmth(
+                self.sim,
+                chunk=scene.get("chunk"),
+                reason=f"business_scene:{warmth_reason}",
+                score_delta=1.05,
+                source_kind="business_scene",
+                source_id=scene.get("scene_id"),
+            )
             if scene["event_phase"] in _BUSINESS_EVENT_POSTURE_LOG_PHASES and prop is not None:
                 self.sim.emit(Event(
                     "business_scene_posture_started",

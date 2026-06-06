@@ -186,6 +186,18 @@ ORGANIZATION_CRIME_PLAN_KINDS = {
     "covert_sale",
     "fence_run",
 }
+ORGANIZATION_CRIME_PLAN_METHODS = {
+    "soft_target_sweep",
+    "rear_entry_burglary",
+    "covert_sale_handoff",
+    "fence_run_handoff",
+}
+ORGANIZATION_CRIME_PLAN_METHOD_LABELS = {
+    "soft_target_sweep": "soft-target sweep",
+    "rear_entry_burglary": "rear-entry burglary",
+    "covert_sale_handoff": "covert sale handoff",
+    "fence_run_handoff": "fence handoff",
+}
 ORGANIZATION_CRIME_PLAN_STAGES = {
     "forming",
     "rendezvous",
@@ -4211,6 +4223,40 @@ def _normalize_crime_plan_kind(value, default="petty_theft"):
     return kind
 
 
+def crime_plan_method_for_family(family, kind):
+    family = _text(family).lower().replace(" ", "_")
+    kind = _normalize_crime_plan_kind(kind, default="petty_theft")
+    if family == "street_gang" and kind == "burglary":
+        return "rear_entry_burglary"
+    if family == "street_gang" and kind == "petty_theft":
+        return "soft_target_sweep"
+    if family == "criminal_network" and kind == "fence_run":
+        return "fence_run_handoff"
+    if family == "criminal_network" and kind == "covert_sale":
+        return "covert_sale_handoff"
+    return {
+        "burglary": "rear_entry_burglary",
+        "covert_sale": "covert_sale_handoff",
+        "fence_run": "fence_run_handoff",
+    }.get(kind, "soft_target_sweep")
+
+
+def crime_plan_method_label(method_key, kind=None):
+    method_key = _text(method_key).lower().replace(" ", "_")
+    if method_key not in ORGANIZATION_CRIME_PLAN_METHODS:
+        method_key = crime_plan_method_for_family("", kind)
+    return ORGANIZATION_CRIME_PLAN_METHOD_LABELS.get(method_key, method_key.replace("_", " "))
+
+
+def _normalize_crime_plan_method(value, *, kind=None, default=None):
+    method = _text(value).lower().replace(" ", "_")
+    if method not in ORGANIZATION_CRIME_PLAN_METHODS:
+        method = _text(default).lower().replace(" ", "_")
+    if method not in ORGANIZATION_CRIME_PLAN_METHODS:
+        method = crime_plan_method_for_family("", kind)
+    return method
+
+
 def _normalize_crime_plan_stage(value, default="forming"):
     stage = _text(value).lower().replace(" ", "_")
     if stage not in ORGANIZATION_CRIME_PLAN_STAGES:
@@ -4220,6 +4266,9 @@ def _normalize_crime_plan_stage(value, default="forming"):
 
 def _normalize_crime_plan_row(row, organization_eid=None, entry_id=None):
     row = dict(row or {})
+    kind = _normalize_crime_plan_kind(row.get("kind"), default="petty_theft")
+    method_key = _normalize_crime_plan_method(row.get("method_key"), kind=kind)
+    method_label = _text(row.get("method_label")) or crime_plan_method_label(method_key, kind=kind)
     assigned = row.get("assigned_member_eids")
     if isinstance(assigned, (list, tuple, set)):
         assigned_member_eids = tuple(
@@ -4244,8 +4293,10 @@ def _normalize_crime_plan_row(row, organization_eid=None, entry_id=None):
         "entry_id": _safe_int(row.get("entry_id"), default=entry_id),
         "organization_eid": _safe_int(row.get("organization_eid"), default=organization_eid) or None,
         "plan_key": _text(row.get("plan_key")).lower().replace(" ", "_") or None,
-        "kind": _normalize_crime_plan_kind(row.get("kind"), default="petty_theft"),
+        "kind": kind,
         "stage": _normalize_crime_plan_stage(row.get("stage"), default="forming"),
+        "method_key": method_key,
+        "method_label": method_label,
         "leader_eid": _safe_int(row.get("leader_eid"), default=0) or None,
         "assigned_member_eids": assigned_member_eids,
         "target_property_id": _text(row.get("target_property_id")) or None,
@@ -4257,6 +4308,9 @@ def _normalize_crime_plan_row(row, organization_eid=None, entry_id=None):
         "expires_tick": expires_tick,
         "required_member_count": max(1, _safe_int(row.get("required_member_count"), default=1)),
         "source_pressure": max(0.0, min(1.5, _safe_float(row.get("source_pressure"), default=0.0))),
+        "observed_by_player_tick": _safe_int(row.get("observed_by_player_tick"), default=0) or None,
+        "disruption_score": max(0.0, min(2.0, _safe_float(row.get("disruption_score"), default=0.0))),
+        "last_disruption_reason": _text(row.get("last_disruption_reason")).lower().replace(" ", "_") or None,
         "last_update_tick": last_update_tick,
         "resolved_tick": _safe_int(row.get("resolved_tick"), default=0) or None,
         "result": _text(row.get("result")).lower().replace(" ", "_") or None,
@@ -4352,6 +4406,8 @@ def record_organization_crime_plan(
     plan_key,
     kind="petty_theft",
     stage="forming",
+    method_key=None,
+    method_label=None,
     leader_eid=None,
     assigned_member_eids=(),
     target_property_id=None,
@@ -4363,6 +4419,9 @@ def record_organization_crime_plan(
     expires_tick=None,
     required_member_count=1,
     source_pressure=0.0,
+    observed_by_player_tick=None,
+    disruption_score=None,
+    last_disruption_reason=None,
     summary=None,
     resolved_tick=None,
     result=None,
@@ -4395,6 +4454,8 @@ def record_organization_crime_plan(
         "plan_key": clean_key,
         "kind": existing.get("kind", kind) if kind is None else kind,
         "stage": existing.get("stage", stage) if stage is None else stage,
+        "method_key": existing.get("method_key") if method_key is None else method_key,
+        "method_label": existing.get("method_label") if method_label is None else method_label,
         "leader_eid": existing.get("leader_eid") if leader_eid is None else leader_eid,
         "assigned_member_eids": existing.get("assigned_member_eids", assigned_member_eids)
         if assigned_member_eids is None
@@ -4412,6 +4473,15 @@ def record_organization_crime_plan(
         "source_pressure": existing.get("source_pressure", source_pressure)
         if source_pressure is None
         else source_pressure,
+        "observed_by_player_tick": existing.get("observed_by_player_tick")
+        if observed_by_player_tick is None
+        else observed_by_player_tick,
+        "disruption_score": existing.get("disruption_score", disruption_score)
+        if disruption_score is None
+        else disruption_score,
+        "last_disruption_reason": existing.get("last_disruption_reason")
+        if last_disruption_reason is None
+        else last_disruption_reason,
         "last_update_tick": now_tick,
         "resolved_tick": existing.get("resolved_tick") if resolved_tick is None else resolved_tick,
         "result": existing.get("result") if result is None else result,
@@ -4430,6 +4500,8 @@ def advance_organization_crime_plan(
     plan_key,
     *,
     stage=None,
+    method_key=None,
+    method_label=None,
     leader_eid=None,
     assigned_member_eids=None,
     execute_after_tick=None,
@@ -4440,6 +4512,9 @@ def advance_organization_crime_plan(
     disposal_property_id=None,
     required_member_count=None,
     source_pressure=None,
+    observed_by_player_tick=None,
+    disruption_score=None,
+    last_disruption_reason=None,
     summary=None,
     resolved_tick=None,
     result=None,
@@ -4457,6 +4532,8 @@ def advance_organization_crime_plan(
         plan_key=clean_key,
         kind=existing.get("kind"),
         stage=existing.get("stage") if stage is None else stage,
+        method_key=existing.get("method_key") if method_key is None else method_key,
+        method_label=existing.get("method_label") if method_label is None else method_label,
         leader_eid=existing.get("leader_eid") if leader_eid is None else leader_eid,
         assigned_member_eids=existing.get("assigned_member_eids") if assigned_member_eids is None else assigned_member_eids,
         target_property_id=existing.get("target_property_id") if target_property_id is None else target_property_id,
@@ -4468,6 +4545,13 @@ def advance_organization_crime_plan(
         expires_tick=existing.get("expires_tick") if expires_tick is None else expires_tick,
         required_member_count=existing.get("required_member_count") if required_member_count is None else required_member_count,
         source_pressure=existing.get("source_pressure") if source_pressure is None else source_pressure,
+        observed_by_player_tick=existing.get("observed_by_player_tick")
+        if observed_by_player_tick is None
+        else observed_by_player_tick,
+        disruption_score=existing.get("disruption_score") if disruption_score is None else disruption_score,
+        last_disruption_reason=existing.get("last_disruption_reason")
+        if last_disruption_reason is None
+        else last_disruption_reason,
         summary=existing.get("summary") if summary is None else summary,
         resolved_tick=existing.get("resolved_tick") if resolved_tick is None else resolved_tick,
         result=existing.get("result") if result is None else result,

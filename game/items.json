@@ -2318,6 +2318,442 @@
     "legal_status": "legal",
     "effects": []
   },
+  "tee": {
+    "name": "Tee",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "top"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "button_up": {
+    "name": "Button-Up",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "top"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "blouse": {
+    "name": "Blouse",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "top"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "sweater": {
+    "name": "Sweater",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "top"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "overshirt": {
+    "name": "Overshirt",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "top"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "turtleneck": {
+    "name": "Turtleneck",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "top"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "trousers": {
+    "name": "Trousers",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "bottom"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "shorts": {
+    "name": "Shorts",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "bottom"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "skirt": {
+    "name": "Skirt",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "bottom"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "dress": {
+    "name": "Dress",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "full_body"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "boots": {
+    "name": "Boots",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "shoes"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "sneakers": {
+    "name": "Sneakers",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "shoes"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "sandals": {
+    "name": "Sandals",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "shoes"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "cap": {
+    "name": "Cap",
+    "glyph": "^",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "hat"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "baseball_cap": {
+    "name": "Baseball Cap",
+    "glyph": "^",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "hat"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "bandana": {
+    "name": "Bandana",
+    "glyph": "^",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "hat"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "jacket": {
+    "name": "Jacket",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "outer"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "windbreaker": {
+    "name": "Windbreaker",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "outer"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "coat": {
+    "name": "Coat",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "outer"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "cardigan": {
+    "name": "Cardigan",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "outer"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "blazer": {
+    "name": "Blazer",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "outer"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "vest": {
+    "name": "Vest",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "outer"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "earrings": {
+    "name": "Earrings",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "jewelry",
+      "legal"
+    ],
+    "appearance_slots": [
+      "earrings"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "ring": {
+    "name": "Ring",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "jewelry",
+      "legal"
+    ],
+    "appearance_slots": [
+      "ring_left",
+      "ring_right"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "necklace": {
+    "name": "Necklace",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "jewelry",
+      "legal"
+    ],
+    "appearance_slots": [
+      "necklace"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "scarf": {
+    "name": "Scarf",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "necklace"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "bracelet": {
+    "name": "Bracelet",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "jewelry",
+      "legal"
+    ],
+    "appearance_slots": [
+      "bracelet"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "gloves": {
+    "name": "Gloves",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "clothing",
+      "legal"
+    ],
+    "appearance_slots": [
+      "bracelet"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "watch": {
+    "name": "Watch",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "cosmetic",
+      "jewelry",
+      "legal"
+    ],
+    "appearance_slots": [
+      "bracelet"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
   "worker_coverall": {
     "name": "Worker Coverall",
     "glyph": "[",

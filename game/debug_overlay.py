@@ -18,6 +18,7 @@ from game.human_identity import identity_debug_summary, is_human_identity
 from game.incident_runtime import incident_record
 from game.lighting import lighting_state, update_lighting_state
 from game.opportunities import evaluate_opportunity_facts
+from game.organization_presence import format_property_org_presence
 from game.organization_reputation import organization_snapshot, top_organization_snapshots
 from game.property_access import property_access_controller, property_access_level, property_status_text
 from game.property_runtime import (
@@ -37,6 +38,7 @@ from game.run_pressure import pressure_snapshot
 from game.service_runtime import _overworld_discovery_profile, _overworld_travel_profile
 from game.skill_ui import skill_debug_lines
 from game.status_ui_runtime import _survival_indicator_chunks
+from game.system_support.actor_attention_runtime import warmth_debug_summary
 
 
 def _segment(text, color=None, attrs=0, **extras):
@@ -179,6 +181,9 @@ def organization_summary_rows(sim, *, current_prop=None):
     current_snapshot = organization_snapshot(sim, prop=current_prop, ensure=True) if current_prop else None
     if current_snapshot is not None:
         rows.append(f"Current: {organization_snapshot_line(current_snapshot)}")
+    current_presence = format_property_org_presence(sim, current_prop, include_primary=True) if current_prop else ""
+    if current_presence:
+        rows.append(f"Presence: {current_presence}")
 
     hot_rows = [
         row for row in top_organization_snapshots(sim, limit=3, sort_by="heat")
@@ -286,7 +291,6 @@ def _identity_debug_lines(sim, npc_eid):
         return ("Identity unavailable.",)
     mode = str(summary.get("mode", "stored") or "stored").strip().lower()
     prefix = "Identity preview" if mode == "preview" else "Identity"
-    assigned = str(summary.get("assigned_sex", "") or "-").strip().lower() or "-"
     gender_identity = str(summary.get("gender_identity", "") or "-").strip().lower() or "-"
     pronoun_set = str(summary.get("pronoun_set", "") or "-").strip().lower() or "-"
     try:
@@ -295,7 +299,7 @@ def _identity_debug_lines(sim, npc_eid):
         score = 0.0
     source = str(summary.get("gender_inference_source", "") or "unknown").strip().lower() or "unknown"
     return (
-        f"{prefix} | assigned {assigned} | identity {gender_identity} | pronouns {pronoun_set}",
+        f"{prefix} | identity {gender_identity} | pronouns {pronoun_set}",
         f"Name gender score {score:+.2f} | source {source}",
     )
 
@@ -497,6 +501,26 @@ def build_debug_overlay(
     lines.append(
         f"World loaded {len(loaded_chunks)} | Active {sum(1 for detail in chunk_detail.values() if detail == 'active')} | "
         f"Realized {realized_count} | Saved {saved_chunk_count}"
+    )
+    warmth = warmth_debug_summary(sim, limit=1)
+    warmth_top = "-"
+    top_rows = tuple(warmth.get("top", ()) or ())
+    if top_rows:
+        top = top_rows[0]
+        if str(top.get("kind", "actor") or "actor") == "area":
+            warmth_top = f"area:{top.get('reason', 'area')} chunk {top.get('chunk', '?')} {float(top.get('score', 0.0) or 0.0):.2f}"
+        else:
+            warmth_top = f"actor:{top.get('reason', 'social_bond')} #{top.get('actor_eid', '?')} {float(top.get('score', 0.0) or 0.0):.2f}"
+    else:
+        protected_rows = tuple(warmth.get("last_protected", ()) or ())
+        if protected_rows:
+            top = protected_rows[0]
+            warmth_kind = str(top.get("kind", "actor") or "actor")
+            warmth_top = f"{warmth_kind}:{top.get('reason', 'social_bond')} chunk {top.get('chunk', '?')} spent"
+    lines.append(
+        f"Warmth: {int(warmth.get('actor_count', 0) or 0)} actors / "
+        f"{int(warmth.get('area_count', 0) or 0)} areas / "
+        f"{int(warmth.get('protected_count', 0) or 0)} protected chunks | Top {warmth_top}"
     )
     lines.append(
         f"Entities {len(positions)} | Floor {len(sim.tilemap.entities_on_floor(active_z))} | "

@@ -4453,6 +4453,7 @@ def _site_service_label(service):
         return str(transit_profile.get("service_label", service)).strip().lower() or service.replace("_", " ")
     mapping = {
         "building_repair": "building repair",
+        "appearance_style": "styling",
         "business_remodel": "business refit",
         "intel": "intel",
         "underground_access": "passage",
@@ -4482,6 +4483,7 @@ def _service_menu_option_label(option_id):
         "banking": "Manage bank funds",
         "insurance": "Review coverage",
         "building_repair": "Repair a building",
+        "appearance_style": "Change appearance",
         "business_remodel": "Change business type",
         "underground_access": "Use passage",
         "vending": "Buy a snack",

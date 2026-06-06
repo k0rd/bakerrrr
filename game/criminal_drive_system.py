@@ -12,11 +12,14 @@ from game.organizations import (
     actor_org_memberships,
     advance_organization_crime_plan,
     cancel_organization_crime_plan,
+    crime_plan_method_for_family,
+    crime_plan_method_label,
     organization_crime_plans,
     organization_policy_snapshot,
     organization_profile,
     record_organization_crime_plan,
 )
+from game.property_runtime import property_focus_position as _property_focus_position
 from game.system_support.actor_runtime import _detail_tick_allowed, _entity_is_downed
 from game.system_support.criminal_drive_runtime import (
     CRIMINAL_FAMILIES,
@@ -123,6 +126,16 @@ def _plan_kind_priority(kind):
     if key == "fence_run":
         return 3
     return 4
+
+
+def _plan_event_fields(plan):
+    if not isinstance(plan, dict):
+        return {}
+    return {
+        "plan_method_key": _text(plan.get("method_key")) or None,
+        "plan_method_label": _text(plan.get("method_label")) or None,
+        "plan_stage": _text(plan.get("stage")).lower() or None,
+    }
 
 
 class CriminalDriveSystem(System):
@@ -233,6 +246,7 @@ class CriminalDriveSystem(System):
         if pressure < min_pressure and len(members) < 2:
             return None
         kind = self._pick_plan_kind(organization_eid, instability=instability)
+        method_key = crime_plan_method_for_family(family, kind)
         required = 2 if kind == "burglary" else 1
         if len(members) < required:
             return None
@@ -256,6 +270,8 @@ class CriminalDriveSystem(System):
             "plan_key": plan_key,
             "kind": kind,
             "stage": "rendezvous",
+            "method_key": method_key,
+            "method_label": crime_plan_method_label(method_key, kind=kind),
             "leader_eid": int(leader["actor_eid"]),
             "assigned_member_eids": assigned,
             "target_property_id": target_property_id,
@@ -420,6 +436,7 @@ class CriminalDriveSystem(System):
             state.last_failure_tick = tick
         if plan_key:
             state.current_plan_key = _text(plan_key) or None
+        plan = active_plan_for_actor(self.sim, actor_eid, current_tick=tick) if plan_key else None
         self.sim.emit(
             Event(
                 "npc_crime_attempt_resolved",
@@ -427,6 +444,7 @@ class CriminalDriveSystem(System):
                 success=bool(success),
                 reason=_text(reason),
                 plan_key=_text(plan_key) or None,
+                **_plan_event_fields(plan),
                 x=None,
                 y=None,
                 z=None,

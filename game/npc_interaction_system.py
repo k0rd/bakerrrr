@@ -86,6 +86,7 @@ from game.system_support.social_knowledge_runtime import (
     social_knowledge_for,
     social_knowledge_payload_for_record,
 )
+from game.system_support.actor_attention_runtime import record_actor_social_warmth as _record_actor_social_warmth
 from engine.events import Event
 from game.items import (
     ITEM_CATALOG,
@@ -116,6 +117,10 @@ from game.human_identity import (
 from game.human_description import (
     human_conversation_presentation,
     human_render_color_key,
+)
+from game.outfit_impression import (
+    apply_visible_outfit_social_offset,
+    visible_outfit_impression,
 )
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
@@ -895,17 +900,62 @@ class NPCInteractionSystem(System):
             trust=0.1 if guarded else 0.22,
             protectiveness=0.14 if guarded else 0.18,
         )
-        return social.bonds.get(self.player_eid)
+        bond = social.bonds.get(self.player_eid)
+        if isinstance(bond, dict):
+            _record_actor_social_warmth(
+                self.sim,
+                npc_eid,
+                other_eid=self.player_eid,
+                reason="dialogue_bond_created",
+                trust_delta=float(bond.get("trust", 0.0) or 0.0),
+                closeness_delta=float(bond.get("closeness", 0.0) or 0.0),
+                protectiveness_delta=float(bond.get("protectiveness", 0.0) or 0.0),
+                post_bond=bond,
+            )
+        return bond
 
     def _shift_dialogue_bond(self, npc_eid, *, trust_delta=0.0, closeness_delta=0.0, guarded=False):
         if abs(float(trust_delta)) < 0.0001 and abs(float(closeness_delta)) < 0.0001:
             return None
+        offset = apply_visible_outfit_social_offset(
+            self.sim,
+            npc_eid,
+            self.player_eid,
+            trust_delta=trust_delta,
+            closeness_delta=closeness_delta,
+            context="dialogue",
+        )
+        trust_delta = float(offset.get("trust_delta", trust_delta))
+        closeness_delta = float(offset.get("closeness_delta", closeness_delta))
+        social = self.sim.ecs.get(NPCSocial).get(npc_eid)
+        old_bond = (social.bonds or {}).get(self.player_eid) if social else None
         bond = self._ensure_dialogue_bond(npc_eid, guarded=guarded)
         if not bond:
             return None
+        old_trust = float(bond.get("trust", 0.0) or 0.0)
+        old_closeness = float(bond.get("closeness", 0.0) or 0.0)
+        old_protectiveness = float(bond.get("protectiveness", 0.0) or 0.0)
         bond["trust"] = max(0.0, min(0.98, float(bond.get("trust", 0.0)) + float(trust_delta)))
         bond["closeness"] = max(0.0, min(0.98, float(bond.get("closeness", 0.0)) + float(closeness_delta)))
         self._promote_dialogue_bond_if_ready(bond)
+        actual_trust = float(bond.get("trust", 0.0) or 0.0) - old_trust
+        actual_closeness = float(bond.get("closeness", 0.0) or 0.0) - old_closeness
+        actual_protectiveness = float(bond.get("protectiveness", 0.0) or 0.0) - old_protectiveness
+        if old_bond is not None and (
+            abs(actual_trust) >= 0.0001
+            or abs(actual_closeness) >= 0.0001
+            or abs(actual_protectiveness) >= 0.0001
+        ):
+            _record_actor_social_warmth(
+                self.sim,
+                npc_eid,
+                other_eid=self.player_eid,
+                reason="dialogue_bond_shift",
+                trust_delta=actual_trust,
+                closeness_delta=actual_closeness,
+                protectiveness_delta=actual_protectiveness,
+                post_bond=bond,
+            )
         return bond
 
     def _promote_dialogue_bond_if_ready(self, bond):
@@ -3603,10 +3653,35 @@ class NPCInteractionSystem(System):
                 protectiveness=0.18,
             )
             bond = social.bonds.get(self.player_eid)
+            if isinstance(bond, dict):
+                _record_actor_social_warmth(
+                    self.sim,
+                    npc_eid,
+                    other_eid=self.player_eid,
+                    reason="dialogue_bond_created",
+                    trust_delta=float(bond.get("trust", 0.0) or 0.0),
+                    closeness_delta=float(bond.get("closeness", 0.0) or 0.0),
+                    protectiveness_delta=float(bond.get("protectiveness", 0.0) or 0.0),
+                    post_bond=bond,
+                )
         elif intro_entry and not guarded:
             intro_standing = float(intro_entry.get("standing", 0.0))
+            old_closeness = float(bond.get("closeness", 0.0) or 0.0)
+            old_trust = float(bond.get("trust", 0.0) or 0.0)
             bond["closeness"] = max(float(bond.get("closeness", 0.0)), 0.16 + (intro_standing * 0.14))
             bond["trust"] = max(float(bond.get("trust", 0.0)), 0.2 + (intro_standing * 0.18))
+            actual_closeness = float(bond.get("closeness", 0.0) or 0.0) - old_closeness
+            actual_trust = float(bond.get("trust", 0.0) or 0.0) - old_trust
+            if abs(actual_closeness) >= 0.0001 or abs(actual_trust) >= 0.0001:
+                _record_actor_social_warmth(
+                    self.sim,
+                    npc_eid,
+                    other_eid=self.player_eid,
+                    reason="dialogue_intro_standing",
+                    trust_delta=actual_trust,
+                    closeness_delta=actual_closeness,
+                    post_bond=bond,
+                )
         if guarded or self._recently_interacted(npc_eid):
             return bond
         (perception, conversation, streetwise), _ = self._player_social_axes()
@@ -3623,9 +3698,30 @@ class NPCInteractionSystem(System):
             0.012 + ((common_sense / 10.0) * 0.03 * (0.85 + (npc_traits.discipline * 0.25))),
         )
         goodwill_mult = max(0.2, float(_pressure_effects(self.sim).get("goodwill_mult", 1.0)))
+        old_closeness = float(bond.get("closeness", 0.0) or 0.0)
+        old_trust = float(bond.get("trust", 0.0) or 0.0)
+        old_protectiveness = float(bond.get("protectiveness", 0.0) or 0.0)
         bond["closeness"] = min(0.95, float(bond.get("closeness", 0.0)) + (closeness_gain * goodwill_mult))
         bond["trust"] = min(0.95, float(bond.get("trust", 0.0)) + (trust_gain * goodwill_mult))
         self._promote_dialogue_bond_if_ready(bond)
+        actual_closeness = float(bond.get("closeness", 0.0) or 0.0) - old_closeness
+        actual_trust = float(bond.get("trust", 0.0) or 0.0) - old_trust
+        actual_protectiveness = float(bond.get("protectiveness", 0.0) or 0.0) - old_protectiveness
+        if (
+            abs(actual_closeness) >= 0.0001
+            or abs(actual_trust) >= 0.0001
+            or abs(actual_protectiveness) >= 0.0001
+        ):
+            _record_actor_social_warmth(
+                self.sim,
+                npc_eid,
+                other_eid=self.player_eid,
+                reason="dialogue_bond_shift",
+                trust_delta=actual_trust,
+                closeness_delta=actual_closeness,
+                protectiveness_delta=actual_protectiveness,
+                post_bond=bond,
+            )
         return bond
 
     def _memory_line(self, memory, player_profile):
@@ -5853,7 +5949,6 @@ class NPCInteractionSystem(System):
             subtitle_bits.append(career_text)
         elif role_text:
             subtitle_bits.append(role_text)
-        subtitle_bits.append(state_text)
         if contractor_status and contractor_status not in {"passive cover", "waiting on you"}:
             subtitle_bits.append(contractor_status)
         elif peaceful_orders_only:
@@ -9687,6 +9782,96 @@ class NPCInteractionSystem(System):
         )
         return self._dialogue_narration_line(line)
 
+    def _dialogue_opening_activity_sentence(self, context):
+        if not isinstance(context, dict):
+            return ""
+        phrase = " ".join(str(context.get("state_text", "") or "").strip().split())
+        if not phrase:
+            return ""
+        phrase = phrase.rstrip(".")
+        if phrase.strip().lower() == "hard to read":
+            return ""
+        npc_eid = context.get("npc_eid")
+        npc_name = str(context.get("npc_name", "") or "").strip()
+        slots = self._human_pronoun_slots(eid=npc_eid, personal_name=npc_name, prefix="npc")
+        subject = str(slots.get("npc_subject", "they") or "they")
+        subject_cap = str(slots.get("npc_subject_cap", subject[:1].upper() + subject[1:]) or "They")
+        be = str(slots.get("npc_be", "are") or "are")
+        look = self._human_present_verb("look", eid=npc_eid, personal_name=npc_name) or "look"
+        lower_phrase = phrase.lower()
+        first_word = lower_phrase.split(" ", 1)[0]
+        if lower_phrase.startswith(("on ", "between ")):
+            return f"{subject_cap} {be} {phrase}."
+        if first_word.endswith("ing"):
+            return f"{subject_cap} {look} like {subject} {be} {phrase}."
+        return f"{subject_cap} {be} {phrase}."
+
+    def _dialogue_opening_context_clause(self, context):
+        if not isinstance(context, dict):
+            return ""
+        npc_eid = context.get("npc_eid")
+        npc_name = str(context.get("npc_name", "") or "").strip()
+        slots = self._human_pronoun_slots(eid=npc_eid, personal_name=npc_name, prefix="npc")
+        subject = str(slots.get("npc_subject", "they") or "they")
+        obj = str(slots.get("npc_object", "them") or "them")
+        possessive = str(slots.get("npc_possessive_adj", "their") or "their")
+        if bool(context.get("door_answering")):
+            mood = str(context.get("door_answer_mood", "") or "").strip().lower()
+            if mood in {"hostile", "irritated"}:
+                return "The doorway keeps the exchange tense."
+        if bool(context.get("guarded")):
+            if context.get("trespass_prop"):
+                return f"There is a guarded edge to the way {subject} watches this place."
+            if context.get("recent_offense"):
+                return f"There is a guarded edge to the way {subject} holds the conversation."
+            return "There is a guarded edge to the exchange."
+        scene_note = context.get("scene_note")
+        if isinstance(scene_note, dict) and (
+            context.get("scene_local_line") or context.get("scene_detail_line")
+        ):
+            return f"The local scene still has part of {possessive} attention."
+        try:
+            opened_count = max(0, int(context.get("opened_count", 0) or 0))
+        except (TypeError, ValueError):
+            opened_count = 0
+        try:
+            social_standing = float(context.get("social_standing", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            social_standing = 0.0
+        if opened_count > 0 and bool(context.get("met_directly")) and social_standing >= 0.46:
+            return f"There is a little recognition in the way {subject} settles into the exchange."
+        workplace_name = str(context.get("workplace_name", "") or "").strip()
+        if bool(context.get("workplace_here")) and workplace_name:
+            return f"{workplace_name} sets the rhythm around {obj}."
+        return ""
+
+    def _dialogue_opening_outfit_sentence(self, context):
+        if not isinstance(context, dict):
+            return ""
+        npc_eid = context.get("npc_eid")
+        if npc_eid is None or self.player_eid is None:
+            return ""
+        impression = visible_outfit_impression(
+            self.sim,
+            npc_eid,
+            self.player_eid,
+            context="dialogue",
+        )
+        polarity = str(impression.get("polarity", "neutral") or "neutral").strip().lower()
+        if polarity not in {"positive", "negative"}:
+            return ""
+        cue = " ".join(str(impression.get("display_cue", "") or "outfit").strip().split())
+        if not cue:
+            return ""
+        npc_name = str(context.get("npc_name", "") or "").strip()
+        slots = self._human_pronoun_slots(eid=npc_eid, personal_name=npc_name, prefix="npc")
+        possessive = str(slots.get("npc_possessive_adj_cap", "Their") or "Their")
+        subject = str(slots.get("npc_subject", "they") or "they")
+        be = str(slots.get("npc_be", "are") or "are")
+        if polarity == "positive":
+            return f"{possessive} attention catches on your {cue}, and {subject} {be} a shade warmer for it."
+        return f"{possessive} attention catches on your {cue}, and the exchange tightens by a fraction."
+
     def _dialogue_human_narration_line(self, context):
         identity = context.get("identity")
         if not is_human_identity(identity):
@@ -9697,9 +9882,31 @@ class NPCInteractionSystem(System):
             identity=identity,
             personal_name=getattr(identity, "personal_name", ""),
         )
+        segments = [
+            dict(segment)
+            for segment in tuple(presentation.get("segments", ()) or ())
+            if isinstance(segment, dict)
+        ]
+        base_text = str(presentation.get("text", "") or "").strip()
+        extra_text = " ".join(
+            line
+            for line in (
+                self._dialogue_opening_activity_sentence(context),
+                self._dialogue_opening_context_clause(context),
+                self._dialogue_opening_outfit_sentence(context),
+            )
+            if line
+        ).strip()
+        if extra_text:
+            if segments:
+                last_text = str(segments[-1].get("text", "") or "")
+                if last_text and not last_text.endswith((" ", "\n")):
+                    segments.append({"text": " ", "color": None, "attrs": 0})
+            segments.append({"text": extra_text, "color": None, "attrs": 0})
+            base_text = f"{base_text} {extra_text}".strip() if base_text else extra_text
         return self._dialogue_transcript_line(
-            presentation.get("segments", ()),
-            text=presentation.get("text", ""),
+            segments,
+            text=base_text,
         )
 
     def _player_dialogue_identity(self):
@@ -12062,9 +12269,30 @@ class NPCInteractionSystem(System):
         bond = self._ensure_dialogue_bond(npc_eid, guarded=False)
         if not bond:
             return None
+        old_trust = float(bond.get("trust", 0.0) or 0.0)
+        old_closeness = float(bond.get("closeness", 0.0) or 0.0)
+        old_protectiveness = float(bond.get("protectiveness", 0.0) or 0.0)
         bond["trust"] = max(float(bond.get("trust", 0.0) or 0.0), 0.72)
         bond["closeness"] = max(float(bond.get("closeness", 0.0) or 0.0), 0.64)
         bond["protectiveness"] = max(float(bond.get("protectiveness", 0.0) or 0.0), 0.88)
+        actual_trust = float(bond.get("trust", 0.0) or 0.0) - old_trust
+        actual_closeness = float(bond.get("closeness", 0.0) or 0.0) - old_closeness
+        actual_protectiveness = float(bond.get("protectiveness", 0.0) or 0.0) - old_protectiveness
+        if (
+            abs(actual_trust) >= 0.0001
+            or abs(actual_closeness) >= 0.0001
+            or abs(actual_protectiveness) >= 0.0001
+        ):
+            _record_actor_social_warmth(
+                self.sim,
+                npc_eid,
+                other_eid=self.player_eid,
+                reason="backup_bond",
+                trust_delta=actual_trust,
+                closeness_delta=actual_closeness,
+                protectiveness_delta=actual_protectiveness,
+                post_bond=bond,
+            )
         return bond
 
     def _contractor_follow_target(self, npc_eid, npc_pos, ally_pos):

@@ -6,6 +6,7 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game.appearance import ground_item_color as _ground_item_color, item_display_glyph as _appearance_item_display_glyph
+from game.appearance_loadout import cosmetic_variant_metadata, is_appearance_item
 from game.components import Inventory, PlayerAssets, Position, VehicleState
 from game.economy import item_market_bias, store_supply_profile
 from game.item_semantics import item_display_name_for_actor
@@ -722,6 +723,35 @@ class TradeSystem(System):
                 ("field_dressing", 10),
                 ("energy_bar", 10),
                 ("bottled_water", 10),
+                ("tee", 12),
+                ("button_up", 10),
+                ("blouse", 8),
+                ("sweater", 8),
+                ("overshirt", 8),
+                ("turtleneck", 7),
+                ("trousers", 10),
+                ("shorts", 8),
+                ("skirt", 8),
+                ("dress", 8),
+                ("boots", 10),
+                ("sneakers", 10),
+                ("sandals", 7),
+                ("cap", 8),
+                ("baseball_cap", 8),
+                ("bandana", 7),
+                ("jacket", 10),
+                ("windbreaker", 8),
+                ("coat", 8),
+                ("cardigan", 7),
+                ("blazer", 7),
+                ("vest", 7),
+                ("earrings", 6),
+                ("ring", 6),
+                ("necklace", 6),
+                ("scarf", 6),
+                ("bracelet", 6),
+                ("gloves", 6),
+                ("watch", 5),
             ),
         },
         "surplus_store": {
@@ -782,6 +812,35 @@ class TradeSystem(System):
                 ("calm_patch", 8),
                 ("smoke_tab", 6),
                 ("city_pass_token", 10),
+                ("tee", 14),
+                ("button_up", 10),
+                ("blouse", 7),
+                ("sweater", 9),
+                ("overshirt", 8),
+                ("turtleneck", 6),
+                ("trousers", 12),
+                ("shorts", 10),
+                ("skirt", 10),
+                ("dress", 8),
+                ("boots", 8),
+                ("sneakers", 10),
+                ("sandals", 8),
+                ("cap", 10),
+                ("baseball_cap", 10),
+                ("bandana", 9),
+                ("jacket", 8),
+                ("windbreaker", 7),
+                ("coat", 7),
+                ("cardigan", 8),
+                ("blazer", 6),
+                ("vest", 7),
+                ("earrings", 6),
+                ("ring", 6),
+                ("necklace", 6),
+                ("scarf", 7),
+                ("bracelet", 6),
+                ("gloves", 7),
+                ("watch", 5),
             ),
         },
         "hotel": {
@@ -1460,6 +1519,11 @@ class TradeSystem(System):
             item_def = ITEM_CATALOG.get(item_id)
             if not item_def:
                 continue
+            entry_metadata = cosmetic_variant_metadata(
+                item_id,
+                seed_token=f"{self.sim.seed}:{prop['id']}:{cycle_index}:{len(entries)}",
+                item_catalog=ITEM_CATALOG,
+            ) if is_appearance_item(item_id, item_catalog=ITEM_CATALOG) else {}
             bias = item_market_bias(item_id, market_profile)
             base = int(max(1, self.ITEM_BASE_VALUES.get(item_id, 10)))
             buy_price = max(
@@ -1472,6 +1536,7 @@ class TradeSystem(System):
             item_max_stock = max(item_min_stock, int(round(max_stock * stock_mult)))
             entries.append({
                 "item_id": item_id,
+                "metadata": entry_metadata or None,
                 "stock": rng.randint(item_min_stock, item_max_stock),
                 "buy_price": buy_price,
                 "sell_price": sell_price,
@@ -1732,9 +1797,13 @@ class TradeSystem(System):
         ):
             item_id = entry.get("item_id")
             item_def = ITEM_CATALOG.get(item_id, {"name": item_id, "glyph": "*"})
+            row_entry = {
+                "item_id": item_id,
+                "metadata": entry.get("metadata") if isinstance(entry.get("metadata"), dict) else None,
+            }
             rows.append({
                 "item_id": item_id,
-                "item_name": item_display_name_for_actor(self.sim, self.player_eid, {"item_id": item_id}, item_catalog=ITEM_CATALOG),
+                "item_name": item_display_name_for_actor(self.sim, self.player_eid, row_entry, item_catalog=ITEM_CATALOG),
                 "glyph": _item_display_glyph(item_def),
                 "price": 0 if owner_transfer else self._effective_buy_price(entry.get("buy_price", 1), terms),
                 "stock": int(max(0, entry.get("stock", 0))),
@@ -2086,12 +2155,14 @@ class TradeSystem(System):
         if not str(source_practice_key or "").strip() and item_practice.get("source_practice_key"):
             source_practice_key = item_practice.get("source_practice_key")
         next_sale_count = int(choice.get("sale_count", 0) or 0) + 1
+        base_metadata = dict(choice.get("metadata") or {}) if isinstance(choice.get("metadata"), dict) else {}
+        base_metadata.update({
+            "purchased_from": store_prop["id"],
+            "store_cycle": store.get("cycle_index"),
+        })
         item_metadata = realize_item_instance_metadata(
             item_id,
-            {
-                "purchased_from": store_prop["id"],
-                "store_cycle": store.get("cycle_index"),
-            },
+            base_metadata,
             practice_bundle=item_practice,
             source_property_id=store_prop["id"],
             source_organization_eid=source_organization_eid,
@@ -2151,7 +2222,12 @@ class TradeSystem(System):
             property_id=store_prop["id"],
             store_name=store_prop.get("name", store_prop["id"]),
             item_id=item_id,
-            item_name=item_def.get("name", item_id),
+            item_name=item_display_name_for_actor(
+                self.sim,
+                self.player_eid,
+                {"item_id": item_id, "metadata": item_metadata, "instance_id": instance_id},
+                item_catalog=ITEM_CATALOG,
+            ),
             price=price,
             base_price=base_price,
             stock_left=choice["stock"],
@@ -2284,6 +2360,8 @@ class TradeSystem(System):
         existing = self._entry_for_item(store, item_id)
         if existing:
             existing["stock"] = int(existing.get("stock", 0)) + int(max(1, removed.get("quantity", 1)))
+            if is_appearance_item(removed, item_catalog=ITEM_CATALOG) and not isinstance(existing.get("metadata"), dict):
+                existing["metadata"] = dict(removed.get("metadata") or {})
             stock_now = existing["stock"]
         else:
             base = int(max(1, self.ITEM_BASE_VALUES.get(item_id, 10)))
@@ -2294,6 +2372,7 @@ class TradeSystem(System):
             sell_price = max(1, int(round(buy_price * sell_ratio)))
             existing = {
                 "item_id": item_id,
+                "metadata": dict(removed.get("metadata") or {}) if is_appearance_item(removed, item_catalog=ITEM_CATALOG) else None,
                 "stock": int(max(1, removed.get("quantity", 1))),
                 "buy_price": buy_price,
                 "sell_price": sell_price,

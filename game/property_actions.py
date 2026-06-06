@@ -7,6 +7,7 @@ interaction, and purchase logic can evolve on a focused seam.
 
 from engine.events import Event
 from game.components import PlayerAssets, PropertyKnowledge
+from game.organization_presence import has_visible_property_org_presence
 from game.property_door_wait import _door_knock_attempt
 from game.property_doors import (
     _door_action_text,
@@ -31,6 +32,12 @@ from game.property_runtime import (
     property_focus_position as _property_focus_position,
     property_infrastructure_role as _property_infrastructure_role,
     remember_property_lead_for_actor as _remember_property_lead_for_actor,
+)
+from game.system_support.crime_plan_runtime import (
+    CRIME_PLAN_OBSERVATION_INSPECT,
+    CRIME_PLAN_OBSERVATION_SCAN,
+    crime_plan_surface_rows,
+    record_crime_plan_observation,
 )
 from game.system_support.interaction_ordering import (
     _interaction_target_order_key,
@@ -139,6 +146,7 @@ class PropertyActionRuntime:
             prior_confidence = float((existing or {}).get("confidence", 0.0) or 0.0)
         except (TypeError, ValueError):
             prior_confidence = 0.0
+        prior_kind = str((existing or {}).get("lead_kind", "") or "").strip().lower()
 
         if confidence is None:
             confidence = self.action_system.PLAYER_DISCOVERY_CONFIDENCE.get(
@@ -150,7 +158,28 @@ class PropertyActionRuntime:
         except (TypeError, ValueError):
             confidence = 0.58
         confidence = max(0.0, min(1.0, confidence))
-        if prior_confidence + 0.01 >= confidence:
+        mode = str(discovery_mode or "sight").strip().lower() or "sight"
+        crew_rows = crime_plan_surface_rows(self.sim, prop=prop) if mode in {"scan", "inspect"} else ()
+        if crew_rows:
+            score_delta = CRIME_PLAN_OBSERVATION_INSPECT if mode == "inspect" else CRIME_PLAN_OBSERVATION_SCAN
+            for row in crew_rows:
+                record_crime_plan_observation(
+                    self.sim,
+                    row.get("plan_key"),
+                    observer_eid=eid,
+                    source_kind=f"property_{mode}",
+                    score_delta=score_delta,
+                )
+        if crew_rows:
+            lead_kind = "crew_activity"
+        else:
+            lead_kind = (
+                "organization_presence"
+                if mode in {"scan", "sight", "inspect"} and has_visible_property_org_presence(self.sim, prop)
+                else None
+            )
+        next_kind = lead_kind or prior_kind
+        if prior_confidence + 0.01 >= confidence and prior_kind == next_kind:
             return False
 
         _remember_property_lead_for_actor(
@@ -158,12 +187,13 @@ class PropertyActionRuntime:
             eid,
             prop,
             confidence=confidence,
+            lead_kind=lead_kind,
         )
 
         updated = knowledge.known.get(prop["id"]) if isinstance(knowledge.known, dict) else None
         if isinstance(updated, dict):
             updated["anchored"] = True
-            updated["anchor_kind"] = str(discovery_mode or "sight").strip().lower() or "sight"
+            updated["anchor_kind"] = mode
             if updated.get("first_tick") is None:
                 updated["first_tick"] = int(getattr(self.sim, "tick", 0))
         try:

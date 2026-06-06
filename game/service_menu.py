@@ -1,5 +1,6 @@
 from engine.events import Event
 from engine.systems import System
+from game.appearance_loadout import STYLE_SERVICE_OPTIONS
 from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position
 from game.casino_ui_runtime import (
     CASINO_FLOOR_ARCHETYPES,
@@ -2784,6 +2785,43 @@ class ServiceMenuSystem(System):
             "casino_session": None,
         })
 
+    def _open_appearance_style_menu(self, prop):
+        state = self._dialog_ui_state()
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        prop_name = str(prop.get("name", prop.get("id", "Styling"))).strip() or "Styling"
+        topics = [{"id": "service_menu:root", "label": "Back"}]
+        label_prefix = {
+            "hair_style": "Hair style",
+            "hair_color": "Hair color",
+            "makeup": "Makeup",
+        }
+        for kind in ("hair_style", "hair_color", "makeup"):
+            for value in STYLE_SERVICE_OPTIONS.get(kind, ()):
+                topics.append({
+                    "id": f"appearance_style:{kind}:{value}",
+                    "label": f"{label_prefix.get(kind, kind.replace('_', ' ').title())}: {str(value).replace('_', ' ').title()}",
+                })
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": prop.get("id"),
+            "title": f"Styling: {prop_name}",
+            "subtitle": "",
+            "transcript": [f"Choose a styling change at {prop_name}."],
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Choose hair, color, or makeup styling.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": "appearance_style",
+            "casino_session": None,
+        })
+
     def _close_service_menu(self):
         self._clear_pending_service_result()
         self._clear_casino_session()
@@ -3121,6 +3159,14 @@ class ServiceMenuSystem(System):
             return f"Fetch: {prop_name}", [
                 line for line in lines
             ]
+        headline = str(event.data.get("headline", "") or "").strip()
+        explicit_lines = [
+            str(line).strip()
+            for line in tuple(event.data.get("lines", ()) or ())
+            if str(line).strip()
+        ]
+        if headline or explicit_lines:
+            return f"{_site_service_label(service).title()}: {prop_name}", explicit_lines or [headline]
         return f"Service: {prop_name}", [f"{prop_name} provides {_site_service_label(service)}."]
 
     def _stale_service_option_lines(self, option_id):
@@ -3151,6 +3197,8 @@ class ServiceMenuSystem(System):
             return "Building Repair", ["That contractor quote is no longer available here."]
         if option_id == "business_remodel" or option_id.startswith("business_remodel:"):
             return "Business Refit", ["That contractor quote is no longer available here."]
+        if option_id == "appearance_style" or option_id.startswith("appearance_style:"):
+            return "Styling", ["That styling option is no longer available here."]
         for service in CASINO_GAME_SERVICE_IDS:
             if option_id == service or option_id.startswith(f"{service}:"):
                 return _casino_game_title(service), ["That table is no longer open.", "Pick another seat or start a fresh round."]
@@ -3915,6 +3963,40 @@ class ServiceMenuSystem(System):
             else:
                 title, lines = self._stale_service_option_lines(option_id)
                 self._present_service_result(title, lines)
+            return
+        if option_id == "appearance_style":
+            if isinstance(prop, dict):
+                self._open_appearance_style_menu(prop)
+            else:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+            return
+        if option_id.startswith("appearance_style:"):
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            parts = option_id.split(":")
+            if len(parts) != 3:
+                self._present_service_result("Styling", ["That styling option is invalid."], property_id=property_id)
+                return
+            style_kind = str(parts[1] or "").strip().lower()
+            style_value = str(parts[2] or "").strip().lower()
+            self._begin_pending_service_result(
+                channel="site",
+                property_id=property_id,
+                property_name=prop.get("name", property_id),
+                service="appearance_style",
+            )
+            self.sim.emit(Event(
+                "site_service_request",
+                eid=self.player_eid,
+                property_id=property_id,
+                service="appearance_style",
+                property_name=prop.get("name", property_id),
+                style_kind=style_kind,
+                style_value=style_value,
+            ))
             return
         if option_id.startswith("building_repair:target|"):
             if not isinstance(prop, dict):

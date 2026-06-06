@@ -25,7 +25,7 @@ from game.items import ITEM_CATALOG
 from game.human_description import human_look_description_clause
 from game.human_identity import is_human_identity
 from game.local_situations import local_situation_look_text_for_property
-from game.organization_reputation import organization_snapshot as _organization_snapshot
+from game.organization_presence import format_actor_org_presence, format_property_org_presence
 from game.organizations import organization_name
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
@@ -38,6 +38,12 @@ from game.property_runtime import (
     viewer_revealed_building_id as _viewer_revealed_building_id,
 )
 from game.service_runtime import _int_or_default, _legend_line
+from game.system_support.actor_attention_runtime import record_area_warmth
+from game.system_support.crime_plan_runtime import (
+    CRIME_PLAN_OBSERVATION_SCAN,
+    crime_plan_surface_rows,
+    record_crime_plan_observation,
+)
 from game.system_support.entity_naming import _entity_display_name
 from game.system_support.interaction_ordering import _manhattan
 
@@ -144,7 +150,11 @@ class PlayerLookRuntime:
         detail = self.sim.detail_for_xy(x, y)
         chunk = self.sim.chunk_coords(x, y)
         if detail == "unloaded":
-            return _legend_line(f"({x},{y},{z}) chunk {chunk} is currently unloaded.", glyph="?", color="human")
+            return _legend_line(
+                f"({x},{y},{z}) chunk {chunk} is known only at map level; current street detail is not loaded.",
+                glyph="?",
+                color="human",
+            )
 
         tile = self.sim.tilemap.tile_at(x, y, z)
         revealed_building_id = _viewer_revealed_building_id(self.sim, eid, z=z)
@@ -285,6 +295,15 @@ class PlayerLookRuntime:
                 org_name = organization_name(self.sim, organization_eid)
                 if org_name and (not workplace_prop or org_name.lower() != str(workplace_prop.get("name", "")).strip().lower()):
                     detail_bits.append(f"org:{org_name}")
+                org_presence = format_actor_org_presence(self.sim, target_eid, include_primary=False)
+                if org_presence:
+                    detail_bits.append(f"orgs:{org_presence}")
+                crew_rows = crime_plan_surface_rows(self.sim, actor_eid=target_eid)
+                if crew_rows:
+                    row = crew_rows[0]
+                    org = str(row.get("organization_name", "") or "").strip()
+                    method = str(row.get("method_label", "") or "").strip()
+                    detail_bits.append(f"crew:{row.get('actor_text')}" + (f" {org}/{method}" if org and method else ""))
                 if detail_bits:
                     bits.append("npc:" + " ".join(detail_bits))
 
@@ -331,6 +350,24 @@ class PlayerLookRuntime:
             summary = str(preview.get("summary", "")).strip()
             if summary:
                 text = self._line_with_suffix(text, f"  {summary}")
+        elif purpose == "inspect" and self.sim.detail_for_xy(x, y) != "unloaded":
+            inspected_prop = _property_covering(self.sim, x, y, z)
+            if isinstance(inspected_prop, dict):
+                record_area_warmth(
+                    self.sim,
+                    x=x,
+                    y=y,
+                    reason="property_inspect",
+                    score_delta=0.55,
+                    source_kind="property_inspect",
+                    source_id=inspected_prop.get("id"),
+                )
+                if crime_plan_surface_rows(self.sim, prop=inspected_prop):
+                    self.action_system._remember_player_property_discovery(
+                        eid,
+                        inspected_prop,
+                        discovery_mode="inspect",
+                    )
         self.set_look_inspect_text(text)
         self.sim.emit(Event(
             "cursor_examined",
@@ -366,6 +403,17 @@ class PlayerLookRuntime:
                 continue
             best_property = prop
             best_property_dist = dist
+
+        if isinstance(best_property, dict):
+            record_area_warmth(
+                self.sim,
+                x=best_property.get("x"),
+                y=best_property.get("y"),
+                reason="property_scan",
+                score_delta=0.45,
+                source_kind="property_scan",
+                source_id=best_property.get("id"),
+            )
 
         best_item = None
         best_item_dist = radius + 1
@@ -423,6 +471,7 @@ class PlayerLookRuntime:
 
         lines = []
         if best_property:
+            crew_rows = crime_plan_surface_rows(self.sim, prop=best_property)
             self.action_system._remember_player_property_discovery(eid, best_property, discovery_mode="scan")
             property_text = f"Property {best_property_dist}t: {self._property_summary(self.sim, best_property, viewer_eid=eid)}"
             knowledge_hint = self._property_knowledge_hint(self.sim, eid, best_property)
@@ -431,6 +480,12 @@ class PlayerLookRuntime:
             contact_hint = self._property_contact_hint(self.sim, eid, best_property)
             if contact_hint:
                 property_text += f" {contact_hint}"
+            if crew_rows:
+                row = crew_rows[0]
+                property_text += (
+                    f" crew:{row.get('organization_name') or 'local crew'} "
+                    f"{row.get('stage_label')} {row.get('method_label')}"
+                )
             lines.append(self._property_legend_line(
                 best_property,
                 property_text,
@@ -478,11 +533,12 @@ class PlayerLookRuntime:
                     if tracked_summary:
                         detail_bits.append(f"pulse:{tracked_summary}")
                 if detail_level >= 2:
-                    org_snapshot = _organization_snapshot(self.sim, prop=best_property, ensure=True)
-                    if isinstance(org_snapshot, dict):
-                        org_name = str(org_snapshot.get("organization_name", "") or "").strip()
-                        if org_name:
-                            detail_bits.append(f"org:{org_name}")
+                    org_presence = format_property_org_presence(self.sim, best_property, include_primary=True)
+                    if org_presence:
+                        detail_bits.append(f"orgs:{org_presence}")
+                if crew_rows:
+                    row = crew_rows[0]
+                    detail_bits.append(f"crew:{row.get('site_role')} {row.get('method_label')} {row.get('stage_label')}")
                 if detail_bits:
                     lines.append("Property detail: " + "  ".join(detail_bits))
                 prep_reveal_tier = min(detail_level, access_prep_reveal_tier)
@@ -559,6 +615,20 @@ class PlayerLookRuntime:
                 org_name = organization_name(self.sim, organization_eid)
                 if org_name and (not workplace_prop or org_name.lower() != str(workplace_prop.get("name", "")).strip().lower()):
                     job_bits.append(f"org:{org_name}")
+                org_presence = format_actor_org_presence(self.sim, npc_eid, include_primary=False)
+                if org_presence:
+                    job_bits.append(f"orgs:{org_presence}")
+                crew_rows = crime_plan_surface_rows(self.sim, actor_eid=npc_eid)
+                if crew_rows:
+                    row = crew_rows[0]
+                    job_bits.append(f"crew:{row.get('actor_text')} {row.get('method_label')}")
+                    record_crime_plan_observation(
+                        self.sim,
+                        row.get("plan_key"),
+                        observer_eid=eid,
+                        source_kind="npc_scan",
+                        score_delta=CRIME_PLAN_OBSERVATION_SCAN,
+                    )
                 lines.append("NPC: " + "  ".join(job_bits))
 
             rumor = None
