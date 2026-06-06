@@ -321,6 +321,10 @@ class NPCMemorySystem(System):
         offense_score = int(event.data.get("offense_score", 0) or 0)
         if perceived <= 0.0 and offense_score <= 0:
             return
+        action_key = str(event.data.get("action", "") or "").strip().lower()
+        context_key = str(event.data.get("context", "") or "").strip().lower()
+        dialogue_offense = action_key == "talk" or context_key.startswith("dialogue_")
+        violence_eligible = bool(event.data.get("violence_eligible", False))
 
         positions = self.sim.ecs.get(Position)
         memories = self.sim.ecs.get(NPCMemory)
@@ -398,6 +402,21 @@ class NPCMemorySystem(System):
                 via="npc_offended",
                 incident_id=event.data.get("incident_id"),
             )
+            if dialogue_offense and eid == offended_eid:
+                memory.remember(
+                    tick=self.sim.tick,
+                    kind="social_irritation",
+                    strength=max(0.12, min(1.0, impact * 1.15)),
+                    actor_eid=offender_eid,
+                    action=event.data.get("action"),
+                    context=event.data.get("context"),
+                    offense_score=offense_score,
+                    via="npc_offended",
+                    incident_id=event.data.get("incident_id"),
+                )
+
+            if dialogue_offense and not violence_eligible:
+                continue
 
             if (offense_score >= 20 or perceived >= 0.62) and abs(alignment) >= 0.18:
                 side_eid = offended_eid if alignment >= 0.0 else offender_eid

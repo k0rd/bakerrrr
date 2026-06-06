@@ -326,7 +326,7 @@ from game.property_doors import (
     _set_door_open_state,
     _set_property_locked_override,
 )
-from game.property_ingress import PropertyIngressRuntime
+from game.property_ingress import PropertyIngressRuntime, maybe_emit_accidental_trespass_boundary
 from game.overworld_runtime import (
     PlayerOverworldRuntime,
     _chunk_tuple,
@@ -2110,14 +2110,16 @@ def _emit_move_access_events(
             breach_severity=ingress.breach_severity,
         )
         if access.inside_bounds and access.severity_score > 0:
-            witnesses = _watchers_for_position(
+            observation = observation_payload_for_position(
                 sim,
                 target_x,
                 target_y,
                 target_z,
                 exclude_eid=eid,
                 offender_eid=eid,
+                observation_channels=("actor_witness",),
             )
+            witnesses = tuple(observation.get("witnesses", ()))
             offense_score = max(
                 _offense_score_for_action(action, context="ordinary"),
                 10 if access.severity_label == "suspicious" else _offense_score_for_action(action, context="trespass"),
@@ -2127,6 +2129,27 @@ def _emit_move_access_events(
             if ingress.breach_severity > 0.0:
                 offense_score = min(100, offense_score + int(round(ingress.breach_severity * 12.0)))
 
+            ingress_method = _ingress_method_from_context(
+                ingress.ingress_kind,
+                ingress.aperture_kind,
+            )
+            if maybe_emit_accidental_trespass_boundary(
+                sim,
+                eid=eid,
+                prop=prop,
+                access=access,
+                ingress=ingress,
+                x=target_x,
+                y=target_y,
+                z=target_z,
+                observation=observation,
+                ingress_method=ingress_method,
+                action=action,
+                offense_score=offense_score,
+            ):
+                trespass_triggered = True
+                return trespass_triggered
+
             sim.emit(Event(
                 "property_trespass",
                 offender_eid=eid,
@@ -2135,9 +2158,7 @@ def _emit_move_access_events(
                 x=target_x,
                 y=target_y,
                 z=target_z,
-                witnessed=bool(witnesses),
-                witness_count=len(witnesses),
-                witnesses=tuple(witnesses[:4]),
+                **observation,
                 access_level=access.access_level,
                 severity_score=access.severity_score,
                 severity_label=access.severity_label,
@@ -2146,10 +2167,7 @@ def _emit_move_access_events(
                 current_hour=access.current_hour,
                 ingress_kind=ingress.ingress_kind,
                 aperture_kind=ingress.aperture_kind,
-                ingress_method=_ingress_method_from_context(
-                    ingress.ingress_kind,
-                    ingress.aperture_kind,
-                ),
+                ingress_method=ingress_method,
                 breach_severity=ingress.breach_severity,
             ))
             if witnesses:

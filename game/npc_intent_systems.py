@@ -1172,7 +1172,7 @@ def _plan_behavior_tip_shares(sim, source_eid, pos, intent, *, medical_target=No
             "z": int(authority_pos[2]) if len(authority_pos) >= 3 else int(pos.z),
         }
         strength = max(0.24, min(0.94, float(avoidance_target.get("score", 0.0) or 0.0) / 100.0))
-    elif isinstance(safe_spot_share, dict) and intent not in {"protecting", "seeking_safety", "chasing", "warning", "helping_victim", "reporting_incident"}:
+    elif isinstance(safe_spot_share, dict) and intent not in {"protecting", "seeking_safety", "chasing", "warning", "helping_victim", "reporting_incident", "ejecting_target", "leaving_property"}:
         tip_kind = BEHAVIOR_TIP_SAFE_SPOT
         payload = {
             "property_id": safe_spot_share.get("property_id"),
@@ -1184,7 +1184,7 @@ def _plan_behavior_tip_shares(sim, source_eid, pos, intent, *, medical_target=No
             "z": int(safe_spot_share["target"][2]),
         }
         strength = max(0.22, min(0.9, float(safe_spot_share.get("score", 0.0) or 0.0) / 100.0))
-    elif isinstance(street_buy_share, dict) and intent not in {"protecting", "seeking_safety", "chasing", "warning", "helping_victim", "reporting_incident"}:
+    elif isinstance(street_buy_share, dict) and intent not in {"protecting", "seeking_safety", "chasing", "warning", "helping_victim", "reporting_incident", "ejecting_target", "leaving_property"}:
         desired_item_id = str(street_buy_share.get("desired_item_id", "") or "").strip().lower()
         tip_kind = BEHAVIOR_TIP_STREET_BUY
         payload = {
@@ -1203,7 +1203,7 @@ def _plan_behavior_tip_shares(sim, source_eid, pos, intent, *, medical_target=No
                 + (float(street_buy_share.get("buy_player_goods", 0.0) or 0.0) * 0.32),
             ),
         )
-    elif isinstance(street_appraise_share, dict) and intent not in {"protecting", "seeking_safety", "chasing", "warning", "helping_victim", "reporting_incident"}:
+    elif isinstance(street_appraise_share, dict) and intent not in {"protecting", "seeking_safety", "chasing", "warning", "helping_victim", "reporting_incident", "ejecting_target", "leaving_property"}:
         tip_kind = BEHAVIOR_TIP_STREET_APPRAISE
         payload = {
             "appraiser_eid": int(source_eid),
@@ -1549,6 +1549,8 @@ class NPCWillSystem(System):
         "helping_victim",
         "reporting_incident",
         "warning",
+        "ejecting_target",
+        "leaving_property",
         "chasing",
         "evading_authority",
         "seeking_safety",
@@ -1742,7 +1744,7 @@ class NPCWillSystem(System):
         state = str(getattr(ai, "state", "") or "").strip().lower()
         if state in {"protecting", "seeking_safety", "chasing"}:
             return 4
-        if state in {"reporting_incident", "helping_victim", "warning"}:
+        if state in {"reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property"}:
             return 6
         if state in {"seeking_medical_aid", "seeking_safe_spot", "seeking_shelter"}:
             return 10
@@ -1759,13 +1761,13 @@ class NPCWillSystem(System):
         if scope == "full":
             return max(2, min(delay, 12))
         if scope == "warm":
-            if state in {"protecting", "chasing", "seeking_safety", "reporting_incident", "helping_victim", "warning"}:
+            if state in {"protecting", "chasing", "seeking_safety", "reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property"}:
                 return max(90, delay)
             return max(240, delay)
         if scope == "compressed":
             if state in {"seeking_medical_aid", "seeking_safe_spot", "seeking_shelter"}:
                 return max(120, delay)
-            if state in {"protecting", "chasing", "seeking_safety", "reporting_incident", "helping_victim", "warning"}:
+            if state in {"protecting", "chasing", "seeking_safety", "reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property"}:
                 return max(120, delay)
             return max(300, delay)
         return 300
@@ -2235,7 +2237,7 @@ class NPCWillSystem(System):
             # Observed incident response intents are assigned by
             # ObservedIncidentResponseSystem. Preserve them here so the
             # ordinary needs/duty planner does not immediately stomp them.
-            if ai.state in {"reporting_incident", "helping_victim", "warning"} and ai.target:
+            if ai.state in {"reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property"} and ai.target:
                 will.intent = ai.state
                 will.target = ai.target
                 will.target_eid = ai.target_eid
@@ -3417,6 +3419,8 @@ class NPCInvestigateSystem(System):
         "helping_victim": 1,
         "reporting_incident": 2,
         "warning": 1,
+        "ejecting_target": 1,
+        "leaving_property": 1,
         "chasing": 1,
         "scavenging": 2,
         "selling_scavenged": 2,
@@ -3448,6 +3452,8 @@ class NPCInvestigateSystem(System):
         "helping_victim",
         "reporting_incident",
         "warning",
+        "ejecting_target",
+        "leaving_property",
         "chasing",
         "scavenging",
         "selling_scavenged",
@@ -3836,7 +3842,7 @@ class NPCInvestigateSystem(System):
             ))
             return True
 
-        if state in {"reporting_incident", "helping_victim", "warning"}:
+        if state in {"reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property"}:
             if not self._move_actor_position_direct(eid, pos, (tx, ty, tz)):
                 return False
             if state == "reporting_incident":
@@ -3860,7 +3866,7 @@ class NPCInvestigateSystem(System):
                     z=tz,
                     compressed=True,
                 ))
-            else:
+            elif state == "warning":
                 self.sim.emit(Event(
                     "npc_warning_arrived",
                     npc_eid=eid,
@@ -4331,7 +4337,7 @@ class NPCInvestigateSystem(System):
                     self.next_move_tick[eid] = self.sim.tick + arrival_cooldown
                 continue
 
-            if ai.state in {"investigating", "seeking_social", "seeking_companionship", "protecting", "reporting_incident", "helping_victim", "warning", "soliciting_player", "seeking_street_buyer", "seeking_street_appraiser"} and _manhattan(pos.x, pos.y, tx, ty) <= 1:
+            if ai.state in {"investigating", "seeking_social", "seeking_companionship", "protecting", "reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property", "soliciting_player", "seeking_street_buyer", "seeking_street_appraiser"} and _manhattan(pos.x, pos.y, tx, ty) <= 1:
                 if ai.state == "reporting_incident":
                     self.sim.emit(Event(
                         "npc_report_arrived",
@@ -4849,6 +4855,8 @@ class NPCInvestigateSystem(System):
                             "reporting_incident",
                             "helping_victim",
                             "warning",
+                            "ejecting_target",
+                            "leaving_property",
                             "seeking_medical_aid",
                             "seeking_safe_spot",
                             "seeking_shelter",

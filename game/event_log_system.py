@@ -453,6 +453,10 @@ class EventLogSystem(System):
         self.sim.events.subscribe("npc_need_critical", self.on_npc_need_critical)
         self.sim.events.subscribe("action_offense", self.on_action_offense)
         self.sim.events.subscribe("npc_offended", self.on_npc_offended)
+        self.sim.events.subscribe("npc_conversation_refused", self.on_npc_conversation_refused)
+        self.sim.events.subscribe("npc_eject_target", self.on_npc_eject_target)
+        self.sim.events.subscribe("npc_ejection_complied", self.on_npc_ejection_complied)
+        self.sim.events.subscribe("npc_ejection_refused", self.on_npc_ejection_refused)
         self.sim.events.subscribe("item_picked_up", self.on_item_picked_up)
         self.sim.events.subscribe("item_pickup_blocked", self.on_item_pickup_blocked)
         self.sim.events.subscribe("item_dropped", self.on_item_dropped)
@@ -495,6 +499,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("weapon_fire_blocked", self.on_weapon_fire_blocked)
         self.sim.events.subscribe("projectile_impact", self.on_projectile_impact)
         self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
+        self.sim.events.subscribe("actor_deprivation_damage", self.on_actor_deprivation_damage)
         self.sim.events.subscribe("player_downed", self.on_player_downed)
         self.sim.events.subscribe("player_critical_saved", self.on_player_critical_saved)
         self.sim.events.subscribe("player_killed", self.on_player_killed)
@@ -2830,6 +2835,64 @@ class EventLogSystem(System):
         quote, nearby_audio, other_floor_audio = self._warning_bark(npc_eid, event, prop)
         self._log_npc_bark(npc_eid, quote, nearby_audio, other_floor_audio, channel="alerts", priority="high")
 
+    def on_npc_conversation_refused(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+        npc_eid = event.data.get("npc_eid")
+        quote = str(event.data.get("line", "") or "").strip() or "I am done talking to you."
+        self._log_npc_bark(
+            npc_eid,
+            quote,
+            "You hear someone shut down the conversation nearby.",
+            "You hear someone refusing to talk on another floor.",
+            channel="alerts",
+            priority="high",
+            dedupe_key=f"conversation_refused:{npc_eid}",
+        )
+
+    def on_npc_eject_target(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+        npc_eid = event.data.get("npc_eid") or event.data.get("enforcer_eid")
+        place = str(event.data.get("property_name", "") or "").strip() or "this place"
+        if bool(event.data.get("follow_required", False)):
+            quote = f"Follow me out of {place}."
+        else:
+            quote = f"You need to leave {place}."
+        self._log_npc_bark(
+            npc_eid,
+            quote,
+            "You hear someone ordering you to leave nearby.",
+            "You hear someone ordering you to leave from another floor.",
+            channel="alerts",
+            priority="high",
+            dedupe_key=f"eject:{npc_eid}:{place}",
+        )
+
+    def on_npc_ejection_complied(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+        place = str(event.data.get("property_name", "") or "").strip() or "the property"
+        self._log(
+            f"You leave {place} before it escalates.",
+            channel="general",
+            priority="normal",
+            dedupe_window=4,
+            dedupe_key=f"ejection_complied:{event.data.get('property_id')}",
+        )
+
+    def on_npc_ejection_refused(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+        place = str(event.data.get("property_name", "") or "").strip() or "the property"
+        self._log(
+            f"You are still inside {place}; this is trespassing now.",
+            channel="alerts",
+            priority="high",
+            dedupe_window=4,
+            dedupe_key=f"ejection_refused:{event.data.get('property_id')}",
+        )
+
     def on_npc_defend_property(self, event):
         if event.data.get("offender_eid") != self.player_eid:
             return
@@ -2838,6 +2901,33 @@ class EventLogSystem(System):
         quote, nearby_audio, other_floor_audio = self._defense_bark(npc_eid, event, prop)
         self._log_npc_bark(npc_eid, quote, nearby_audio, other_floor_audio, channel="combat", priority="critical")
 
+    def _player_survival_need_warning(self, need, value):
+        need = str(need or "").strip().lower()
+        if need not in {"hunger", "thirst"}:
+            return
+        try:
+            value = max(0.0, min(100.0, float(value)))
+        except (TypeError, ValueError):
+            value = 0.0
+
+        if need == "hunger":
+            text = (
+                f"You are getting hungry ({value:.0f}/100). Hunger is draining energy; "
+                "if it gets severe, starvation can damage you."
+            )
+        else:
+            text = (
+                f"You are getting thirsty ({value:.0f}/100). Thirst is slowing you down; "
+                "if it gets severe, dehydration can damage you."
+            )
+        self._log(
+            text,
+            channel="general",
+            priority="high",
+            dedupe_window=90,
+            dedupe_key=f"player_survival_need:{need}",
+        )
+
     def on_npc_need_critical(self, event):
         npc_eid = event.data.get("npc_eid")
         need = event.data.get("need")
@@ -2845,6 +2935,7 @@ class EventLogSystem(System):
         if npc_eid is None or need is None or value is None:
             return
         if npc_eid == self.player_eid:
+            self._player_survival_need_warning(need, value)
             return
 
         if (self.sim.tick + npc_eid) % 20 == 0:
@@ -4113,6 +4204,51 @@ class EventLogSystem(System):
             channel="combat",
             priority="high",
             dedupe_window=1,
+        )
+
+    def on_actor_deprivation_damage(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+
+        reason = str(event.data.get("reason", "") or "deprivation").strip().lower() or "deprivation"
+        if reason == "dehydration":
+            cause = "dehydration"
+        elif reason == "starvation":
+            cause = "starvation"
+        elif reason == "deprivation":
+            cause = "hunger and thirst"
+        else:
+            cause = reason.replace("_", " ")
+
+        try:
+            damage = int(event.data.get("damage", 0) or 0)
+        except (TypeError, ValueError):
+            damage = 0
+        try:
+            hp = int(event.data.get("hp", 0) or 0)
+        except (TypeError, ValueError):
+            hp = 0
+        try:
+            max_hp = max(1, int(event.data.get("max_hp", 1) or 1))
+        except (TypeError, ValueError):
+            max_hp = 1
+        try:
+            hunger = max(0.0, min(100.0, float(event.data.get("hunger", 0.0) or 0.0)))
+        except (TypeError, ValueError):
+            hunger = 0.0
+        try:
+            thirst = max(0.0, min(100.0, float(event.data.get("thirst", 0.0) or 0.0)))
+        except (TypeError, ValueError):
+            thirst = 0.0
+
+        subject = cause[:1].upper() + cause[1:]
+        verb = "are" if cause == "hunger and thirst" else "is"
+        self._log(
+            f"{subject} {verb} damaging you: -{damage} HP ({hp}/{max_hp} HP). Food {hunger:.0f}/100, water {thirst:.0f}/100.",
+            channel="general",
+            priority="critical",
+            dedupe_window=4,
+            dedupe_key=f"player_deprivation_damage:{reason}",
         )
 
     def on_player_downed(self, event):

@@ -7,7 +7,7 @@ instead of living only as inline player-action code.
 
 from engine.events import Event
 from engine.tilemap import Tile
-from game.components import Position
+from game.components import NPCMemory, Position
 from game.movement_runtime import try_move_entity
 from game.property_doors import _set_door_open_state
 from game.property_access import (
@@ -22,6 +22,7 @@ from game.property_runtime import (
     property_aperture_at as _property_aperture_at,
     property_covering as _property_covering,
 )
+from game.social_boundary_runtime import active_ejection_state, ejection_key
 from game.skills import actor_skill as _actor_skill
 from game.system_support.access_runtime import _attempt_locked_property_entry_with_sim
 from game.system_support.awareness_runtime import observation_payload_for_position
@@ -54,6 +55,298 @@ def _standing_reason_label(reason):
         "relationship": "relation",
     }
     return mapping.get(reason, reason.replace("_", " "))
+
+
+_SOFT_ACCIDENTAL_TRESPASS_INGRESS_KINDS = frozenset({"ordinary_entry", "internal"})
+_HARD_TRESPASS_METHODS = frozenset({
+    "manual_side_entry",
+    "jimmied_side_entry",
+    "forced_side_entry",
+    "quiet_window_entry",
+    "careful_window_entry",
+    "crash_window_entry",
+    "window_entry",
+    "forced_breach",
+    "deep_breach",
+    "side_entry",
+    "alternate_entry",
+})
+_SCUFFLE_MEMORY_KINDS = frozenset({"threat", "conflict_side", "ally_threatened"})
+_SCUFFLE_NOISE_TERMS = (
+    "attack",
+    "assault",
+    "combat",
+    "explosion",
+    "fight",
+    "fire_weapon",
+    "gun",
+    "gunshot",
+    "hit",
+    "melee",
+    "scuffle",
+    "shoot",
+    "shot",
+    "struggle",
+    "violence",
+    "weapon",
+)
+
+
+def _text(value):
+    return str(value or "").strip()
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _property_id(prop):
+    if not isinstance(prop, dict):
+        return ""
+    return _text(prop.get("id"))
+
+
+def _observer_eids_from_observation(observation, observer_eids=()):
+    if isinstance(observation, dict):
+        for key in ("accountable_observer_eids", "witnesses", "observer_eids"):
+            values = observation.get(key)
+            if values:
+                observer_eids = values
+                break
+    if observer_eids is None:
+        return ()
+    if isinstance(observer_eids, (int, str)):
+        observer_eids = (observer_eids,)
+    normalized = []
+    seen = set()
+    for value in tuple(observer_eids or ()):
+        eid = _safe_int(value, default=0)
+        if eid <= 0 or eid in seen:
+            continue
+        seen.add(eid)
+        normalized.append(eid)
+    return tuple(normalized)
+
+
+def _active_ejection_covers(sim, property_id, target_eid):
+    key = ejection_key(property_id, target_eid)
+    if not key:
+        return False
+    row = active_ejection_state(sim).get(key)
+    if not isinstance(row, dict):
+        return False
+    return not bool(row.get("refused", False))
+
+
+def _boundary_violation_has_listener(sim):
+    events = getattr(sim, "events", None)
+    subscribers = getattr(events, "subscribers", {}) if events is not None else {}
+    return bool(subscribers.get("npc_boundary_violation"))
+
+
+def _soft_trespass_candidate_allowed(sim, eid, prop, access, ingress, *, ingress_method=""):
+    if _safe_int(eid, default=0) != _safe_int(getattr(sim, "player_eid", None), default=-1):
+        return False
+    if not isinstance(prop, dict) or access is None or ingress is None:
+        return False
+    if bool(getattr(access, "permitted", False)):
+        return False
+    if _text(getattr(access, "access_level", "")).lower() != "public":
+        return False
+    if getattr(access, "currently_open", None) is not False:
+        return False
+    if bool(getattr(access, "organization_denied_entry", False)):
+        return False
+    if _safe_int(getattr(access, "severity_score", 0), default=0) > 28:
+        return False
+    if _text(getattr(access, "severity_label", "")).lower() == "serious_trespass":
+        return False
+
+    ingress_kind = _text(getattr(ingress, "ingress_kind", "")).lower()
+    if ingress_kind not in _SOFT_ACCIDENTAL_TRESPASS_INGRESS_KINDS:
+        return False
+    if _safe_float(getattr(ingress, "breach_severity", 0.0), default=0.0) > 0.01:
+        return False
+
+    method = _text(ingress_method).lower()
+    if method in _HARD_TRESPASS_METHODS:
+        return False
+    return True
+
+
+def _entry_position(entry):
+    data = entry.get("data") if isinstance(entry, dict) else None
+    data = data if isinstance(data, dict) else {}
+    try:
+        return int(data["x"]), int(data["y"]), int(data.get("z", 0))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _memory_entry_mentions_scuffle(entry):
+    data = entry.get("data") if isinstance(entry, dict) else None
+    data = data if isinstance(data, dict) else {}
+    haystack = " ".join(
+        _text(data.get(key)).lower()
+        for key in ("cause", "action", "context", "source_event", "via")
+    )
+    return any(term in haystack for term in _SCUFFLE_NOISE_TERMS)
+
+
+def _recent_scuffle_near_claimant(sim, claimant_eid, prop, x, y, z, *, max_age=18, radius=8):
+    memory = sim.ecs.get(NPCMemory).get(claimant_eid)
+    if not memory:
+        return False
+    now = _safe_int(getattr(sim, "tick", 0), default=0)
+    property_id = _property_id(prop)
+    for entry in tuple(getattr(memory, "entries", ()) or ()):
+        kind = _text(entry.get("kind")).lower() if isinstance(entry, dict) else ""
+        if kind == "noise":
+            if not _memory_entry_mentions_scuffle(entry):
+                continue
+        elif kind not in _SCUFFLE_MEMORY_KINDS:
+            continue
+
+        tick = _safe_int(entry.get("tick") if isinstance(entry, dict) else None, default=-10_000)
+        age = now - tick
+        if age < 0 or age > int(max_age):
+            continue
+
+        data = entry.get("data") if isinstance(entry, dict) else None
+        data = data if isinstance(data, dict) else {}
+        if property_id and _text(data.get("property_id")) == property_id:
+            return True
+
+        entry_pos = _entry_position(entry)
+        if entry_pos is None:
+            return age <= 4 and kind in _SCUFFLE_MEMORY_KINDS
+        ex, ey, ez = entry_pos
+        if int(ez) != int(z):
+            continue
+        if abs(int(ex) - int(x)) + abs(int(ey) - int(y)) <= int(radius):
+            return True
+    return False
+
+
+def _soft_trespass_claimants(sim, prop, observer_eids, x, y, z):
+    positions = sim.ecs.get(Position)
+    candidates = []
+    priority_by_reason = {
+        "owner": 0,
+        "manager": 1,
+        "employee": 2,
+        "credential_holder": 3,
+        "resident": 4,
+    }
+    for observer_eid in tuple(observer_eids or ()):
+        pos = positions.get(observer_eid) if positions else None
+        if pos is None:
+            continue
+        access, reason = _property_claim_reason(
+            sim,
+            observer_eid,
+            prop,
+            x=pos.x,
+            y=pos.y,
+            z=pos.z,
+            min_standing=0.58,
+        )
+        reason = _text(reason).lower()
+        if not reason:
+            continue
+        priority = priority_by_reason.get(reason, 5)
+        candidates.append((priority, -_safe_float(getattr(access, "standing", 0.0), default=0.0), observer_eid, reason))
+    candidates.sort()
+    return tuple(candidates)
+
+
+def maybe_emit_accidental_trespass_boundary(
+    sim,
+    *,
+    eid,
+    prop,
+    access,
+    ingress,
+    x,
+    y,
+    z,
+    observation=None,
+    observer_eids=(),
+    ingress_method="",
+    action="move",
+    offense_score=None,
+):
+    """Divert soft after-hours public-entry mistakes into social ejection."""
+
+    property_id = _property_id(prop)
+    if _active_ejection_covers(sim, property_id, eid):
+        return True
+    if not _boundary_violation_has_listener(sim):
+        return False
+    if not _soft_trespass_candidate_allowed(
+        sim,
+        eid,
+        prop,
+        access,
+        ingress,
+        ingress_method=ingress_method,
+    ):
+        return False
+
+    observers = _observer_eids_from_observation(observation, observer_eids)
+    claimants = _soft_trespass_claimants(sim, prop, observers, x, y, z)
+    if not claimants:
+        return False
+    if any(
+        _recent_scuffle_near_claimant(sim, claimant_eid, prop, x, y, z)
+        for _priority, _standing, claimant_eid, _reason in claimants
+    ):
+        return False
+
+    _priority, _standing, claimant_eid, claim_reason = claimants[0]
+    severity = _safe_int(getattr(access, "severity_score", 0), default=0)
+    if offense_score is None:
+        offense_score = max(14, min(28, severity + 4))
+    self_reported_method = _text(ingress_method).lower() or _text(getattr(ingress, "ingress_kind", "")).lower()
+    sim.emit(Event(
+        "npc_boundary_violation",
+        npc_eid=claimant_eid,
+        enforcer_eid=claimant_eid,
+        target_eid=eid,
+        offender_eid=eid,
+        property_id=property_id,
+        property_name=prop.get("name"),
+        context="accidental_trespass",
+        source_kind="accidental_trespass",
+        claim_reason=claim_reason,
+        action=action,
+        offense_score=max(14, min(32, _safe_int(offense_score, default=severity + 4))),
+        perceived=max(0.48, min(0.68, 0.44 + (severity / 100.0))),
+        violation_count=0,
+        violence_eligible=False,
+        record_watchlist=False,
+        x=x,
+        y=y,
+        z=z,
+        access_level=getattr(access, "access_level", ""),
+        currently_open=getattr(access, "currently_open", None),
+        current_hour=getattr(access, "current_hour", None),
+        ingress_kind=getattr(ingress, "ingress_kind", ""),
+        aperture_kind=getattr(ingress, "aperture_kind", ""),
+        ingress_method=self_reported_method,
+        accidental=True,
+    ))
+    return True
 
 
 class PropertyIngressRuntime:
@@ -704,6 +997,30 @@ class PropertyIngressRuntime:
             )
             severity_score = min(100, severity_score + int(max(0, severity_bonus)))
             severity_label = _trespass_label_from_score(severity_score)
+            offense_score = min(
+                100,
+                max(
+                    self.action_system._offense_score_for("move", context="trespass"),
+                    14,
+                )
+                + int(round(float(ingress.breach_severity) * 10.0))
+                + int(max(0, offense_bonus)),
+            )
+            if maybe_emit_accidental_trespass_boundary(
+                self.sim,
+                eid=eid,
+                prop=prop,
+                access=access,
+                ingress=ingress,
+                x=candidate["x"],
+                y=candidate["y"],
+                z=candidate["z"],
+                observation=observation,
+                ingress_method=ingress_method,
+                action="move",
+                offense_score=offense_score,
+            ):
+                return
             self.sim.emit(Event(
                 "property_trespass",
                 offender_eid=eid,
@@ -724,15 +1041,6 @@ class PropertyIngressRuntime:
                 ingress_method=ingress_method,
                 breach_severity=ingress.breach_severity,
             ))
-            offense_score = min(
-                100,
-                max(
-                    self.action_system._offense_score_for("move", context="trespass"),
-                    14,
-                )
-                + int(round(float(ingress.breach_severity) * 10.0))
-                + int(max(0, offense_bonus)),
-            )
             self.action_system._emit_action_offense(
                 eid=eid,
                 action="move",

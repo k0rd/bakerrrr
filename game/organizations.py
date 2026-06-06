@@ -6731,6 +6731,46 @@ def _site_link_matches_property(prop, row):
     return False
 
 
+def _property_org_link_index(sim, *, active_only=True, cache=None):
+    cache_state = _organization_runtime_cache_state(sim)
+    if not isinstance(cache, dict):
+        cache = cache_state.get("property_links", {})
+    index_key = ("__link_index__", bool(active_only))
+    cached = cache.get(index_key)
+    if isinstance(cached, dict):
+        return cached
+
+    by_property = {}
+    by_building = {}
+    for organization_eid, _profile_component in sim.ecs.get(OrganizationProfile).items():
+        profile = organization_profile(sim, organization_eid)
+        if profile is None:
+            continue
+        for raw_row in tuple(getattr(profile, "site_links", ()) or ()):
+            row = _normalize_site_link_row(raw_row, organization_eid=organization_eid)
+            if active_only and not bool(row.get("active", True)):
+                continue
+            enriched = {
+                **row,
+                "organization_key": _text(profile.key),
+                "organization_name": _text(profile.name),
+                "organization_kind": _normalize_org_kind(profile.kind, default="other"),
+            }
+            property_id = _text(row.get("property_id"))
+            building_id = _text(row.get("building_id"))
+            if property_id:
+                by_property.setdefault(property_id, []).append(enriched)
+            if building_id:
+                by_building.setdefault(building_id, []).append(enriched)
+
+    result = {
+        "by_property": by_property,
+        "by_building": by_building,
+    }
+    cache[index_key] = result
+    return result
+
+
 def _upsert_profile_site_link(profile, row):
     row = _normalize_site_link_row(row, organization_eid=row.get("organization_eid"))
     for index, existing in enumerate(profile.site_links):
@@ -6839,14 +6879,14 @@ def link_property_organization(
 def property_org_links(sim, prop, *, active_only=True):
     if not isinstance(prop, dict):
         return ()
-    cache_state = _organization_runtime_cache_state(sim)
-    cache = cache_state.get("property_links", {})
     metadata = _property_metadata(prop)
     cache_key = (
         _text(prop.get("id")),
         _text(metadata.get("building_id")) or _text(metadata.get("local_building_id")),
         bool(active_only),
     )
+    cache_state = _organization_runtime_cache_state(sim)
+    cache = cache_state.get("property_links", {})
     cached = cache.get(cache_key)
     if isinstance(cached, tuple):
         return cached
@@ -6861,22 +6901,43 @@ def property_org_links(sim, prop, *, active_only=True):
             for row in profile.site_links
         ):
             link_property_organization(sim, prop, organization_eid=primary_org_eid, link_kind="operates", primary=True, active=True)
+            cache_state = _organization_runtime_cache_state(sim)
+            cache = cache_state.get("property_links", {})
+            cached = cache.get(cache_key)
+            if isinstance(cached, tuple):
+                return cached
 
+    link_index = _property_org_link_index(sim, active_only=active_only, cache=cache)
+    property_id = _text(prop.get("id"))
+    building_ids = {
+        _text(metadata.get("building_id")),
+        _text(metadata.get("local_building_id")),
+    } - {""}
     rows = []
-    for organization_eid, profile in sim.ecs.get(OrganizationProfile).items():
-        profile = organization_profile(sim, organization_eid)
-        for row in profile.site_links:
-            row = _normalize_site_link_row(row, organization_eid=organization_eid)
-            if active_only and not bool(row.get("active", True)):
+    seen = set()
+    for row in tuple(link_index.get("by_property", {}).get(property_id, ()) if property_id else ()):
+        key = (
+            _safe_int(row.get("organization_eid"), default=0),
+            _text(row.get("property_id")),
+            _text(row.get("building_id")),
+            _text(row.get("link_kind")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(dict(row))
+    for building_id in sorted(building_ids):
+        for row in tuple(link_index.get("by_building", {}).get(building_id, ())):
+            key = (
+                _safe_int(row.get("organization_eid"), default=0),
+                _text(row.get("property_id")),
+                _text(row.get("building_id")),
+                _text(row.get("link_kind")),
+            )
+            if key in seen:
                 continue
-            if not _site_link_matches_property(prop, row):
-                continue
-            rows.append({
-                **row,
-                "organization_key": _text(profile.key),
-                "organization_name": _text(profile.name),
-                "organization_kind": _normalize_org_kind(profile.kind, default="other"),
-            })
+            seen.add(key)
+            rows.append(dict(row))
     rows.sort(
         key=lambda row: (
             0 if row.get("primary") else 1,

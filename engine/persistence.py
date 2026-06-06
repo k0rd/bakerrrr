@@ -45,6 +45,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "property_anchor_index",
     "property_cover_index",
     "actor_attention_state",
+    "active_ejections",
     "property_order",
     "next_property_order",
     "ground_item_index",

@@ -5,11 +5,18 @@ import re
 from game.service_runtime import _int_or_default
 from game.system_support.status_runtime import (
     SURVIVAL_CRITICAL_LEVEL,
+    SURVIVAL_LOW_LEVEL,
     SURVIVAL_SEVERE_LEVEL,
     _ensure_survival_needs,
     _float_or_default,
     _status_multiplier,
 )
+from game.ui_text_runtime import _rich_line, _segment
+
+
+SURVIVAL_METER_HIGH_COLOR = "survival_meter_high"
+SURVIVAL_METER_MID_COLOR = "survival_meter_mid"
+SURVIVAL_METER_LOW_COLOR = "survival_meter_low"
 
 
 def _floor_label(z, *, long=False):
@@ -73,7 +80,16 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
     return status_chunks
 
 
-def _survival_indicator_chunks(needs):
+def _survival_meter_color(value):
+    value = max(0.0, min(100.0, _float_or_default(value, 0.0)))
+    if value >= SURVIVAL_LOW_LEVEL:
+        return SURVIVAL_METER_HIGH_COLOR
+    if value >= SURVIVAL_CRITICAL_LEVEL:
+        return SURVIVAL_METER_MID_COLOR
+    return SURVIVAL_METER_LOW_COLOR
+
+
+def _survival_indicator_chunks(needs, *, rich=False):
     needs = _ensure_survival_needs(needs)
     if needs is None:
         return []
@@ -81,7 +97,10 @@ def _survival_indicator_chunks(needs):
     def label(prefix, value):
         value = max(0.0, min(100.0, _float_or_default(value, 0.0)))
         marker = "!!" if value < SURVIVAL_SEVERE_LEVEL else "!" if value < SURVIVAL_CRITICAL_LEVEL else ""
-        return f"{prefix}{marker}{value:.0f}"
+        text = f"{prefix}{marker}{value:.0f}"
+        if rich:
+            return _rich_line([_segment(text, color=_survival_meter_color(value))], text=text)
+        return text
 
     return [
         label("F", getattr(needs, "hunger", 0.0)),

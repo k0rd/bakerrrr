@@ -87,6 +87,11 @@ from game.system_support.social_knowledge_runtime import (
     social_knowledge_payload_for_record,
 )
 from game.system_support.actor_attention_runtime import record_actor_social_warmth as _record_actor_social_warmth
+from game.social_boundary_runtime import (
+    BOUNDARY_REFUSAL_TICKS,
+    BOUNDARY_REFUSAL_VIOLENCE_THRESHOLD,
+    dialogue_refusal_active,
+)
 from engine.events import Event
 from game.items import (
     ITEM_CATALOG,
@@ -790,7 +795,108 @@ class NPCInteractionSystem(System):
         memory.setdefault("last_property_id", "")
         memory.setdefault("last_property_lead_kind", "")
         memory.setdefault("last_property_source_eid", None)
+        memory.setdefault("refusal_until_tick", 0)
+        memory.setdefault("refusal_reason", "")
+        memory.setdefault("boundary_violation_count", 0)
         return memory
+
+    def _dialogue_boundary_property(self, context):
+        if not isinstance(context, dict):
+            return None
+        for key in ("trespass_prop", "current_prop", "workplace_prop", "owner_place", "home_prop", "owned_prop"):
+            prop = context.get(key)
+            if isinstance(prop, dict) and str(prop.get("id", "") or "").strip():
+                return prop
+        return None
+
+    def _dialogue_refusal_line(self, context):
+        prop = self._dialogue_boundary_property(context)
+        place_name = str((prop or {}).get("name") or (prop or {}).get("id") or "").strip()
+        if place_name:
+            return f"I am done talking to you. Leave {place_name} alone."
+        return "I am done talking to you."
+
+    def _activate_dialogue_refusal(
+        self,
+        context,
+        *,
+        context_id="dialogue",
+        perceived=0.0,
+        offense_score=0,
+        violation_count=0,
+        violence_eligible=False,
+    ):
+        if not isinstance(context, dict):
+            return
+        npc_eid = context.get("npc_eid")
+        if npc_eid is None:
+            return
+        memory = self._dialogue_memory(npc_eid)
+        memory["refusal_until_tick"] = max(
+            int(memory.get("refusal_until_tick", 0) or 0),
+            int(self.sim.tick) + BOUNDARY_REFUSAL_TICKS,
+        )
+        memory["refusal_reason"] = str(context_id or "dialogue").strip().lower() or "dialogue"
+        memory["boundary_violation_count"] = max(
+            int(memory.get("boundary_violation_count", 0) or 0),
+            int(max(0, violation_count)),
+        )
+        prop = self._dialogue_boundary_property(context)
+        property_id = str(prop.get("id", "") or "").strip() if isinstance(prop, dict) else ""
+        self.sim.emit(Event(
+            "npc_boundary_violation",
+            npc_eid=npc_eid,
+            target_eid=self.player_eid,
+            source_kind="dialogue",
+            context=str(context_id or "dialogue").strip().lower() or "dialogue",
+            property_id=property_id,
+            offense_score=int(max(0, offense_score)),
+            perceived=round(float(max(0.0, perceived)), 3),
+            violation_count=int(max(0, violation_count)),
+            violence_eligible=bool(violence_eligible),
+        ))
+
+    def _refuse_dialogue_if_active(self, context):
+        if not isinstance(context, dict):
+            return False
+        npc_eid = context.get("npc_eid")
+        if npc_eid is None:
+            return False
+        memory = self._dialogue_memory(npc_eid)
+        if not dialogue_refusal_active(memory, self.sim.tick):
+            return False
+        count = int(memory.get("boundary_violation_count", 0) or 0) + 1
+        memory["boundary_violation_count"] = count
+        memory["refusal_until_tick"] = max(
+            int(memory.get("refusal_until_tick", 0) or 0),
+            int(self.sim.tick) + max(24, BOUNDARY_REFUSAL_TICKS // 2),
+        )
+        line = self._dialogue_refusal_line(context)
+        prop = self._dialogue_boundary_property(context)
+        property_id = str(prop.get("id", "") or "").strip() if isinstance(prop, dict) else ""
+        violence_eligible = count >= BOUNDARY_REFUSAL_VIOLENCE_THRESHOLD
+        self.sim.emit(Event(
+            "npc_conversation_refused",
+            npc_eid=npc_eid,
+            target_eid=self.player_eid,
+            line=line,
+            property_id=property_id,
+            violation_count=count,
+            violence_eligible=violence_eligible,
+        ))
+        self.sim.emit(Event(
+            "npc_boundary_violation",
+            npc_eid=npc_eid,
+            target_eid=self.player_eid,
+            source_kind="dialogue_refusal",
+            context="dialogue_refusal",
+            property_id=property_id,
+            offense_score=32 if violence_eligible else 20,
+            perceived=0.78 if violence_eligible else 0.56,
+            violation_count=count,
+            violence_eligible=violence_eligible,
+        ))
+        return True
 
     def _guard_grace_key(self, npc_eid, prop):
         return _dialogue_guard_grace_key(npc_eid, prop)
@@ -9500,6 +9606,13 @@ class NPCInteractionSystem(System):
             perceived=perceived,
             offense_score=offense_score,
         )
+        if close_dialog and offense_score >= 24:
+            self._activate_dialogue_refusal(
+                context,
+                context_id=f"dialogue_{tactic}",
+                perceived=perceived,
+                offense_score=offense_score,
+            )
         if tactic == "pry" and outcome in {"wary", "fail"}:
             self._remember_player_relationship_episode(
                 npc_eid,
@@ -11769,6 +11882,13 @@ class NPCInteractionSystem(System):
             perceived=perceived,
             offense_score=offense_score,
         )
+        if close_dialog and offense_score >= 24:
+            self._activate_dialogue_refusal(
+                context,
+                context_id="dialogue_repeat",
+                perceived=perceived,
+                offense_score=offense_score,
+            )
         return response
 
     def _dialogue_repeat_bonus_detail(self, context, topic_id, ask_count):
@@ -11988,6 +12108,8 @@ class NPCInteractionSystem(System):
         self._remember_opportunity_npc_interaction(npc_eid)
         context = self._dialogue_context(npc_eid, allow_distant=allow_distant)
         if not context:
+            return False
+        if context.get("human") and self._refuse_dialogue_if_active(context):
             return False
         fresh = not self._recently_interacted(npc_eid)
         bond = self._conversation_bond(

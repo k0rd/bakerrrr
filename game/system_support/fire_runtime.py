@@ -60,6 +60,18 @@ WALL_SEMANTICS = {"wall_building"}
 FLOOR_SEMANTICS = {"floor_building_fill"}
 DOOR_SEMANTICS = {"feature_door"}
 WINDOW_SEMANTICS = {"feature_window"}
+_STATE_DICT_KEYS = (
+    "chunk_index",
+    "property_index",
+    "building_index",
+    "frozen_boundaries",
+    "environmental_ignition_days",
+    "contact_cooldowns",
+    "damage_marks",
+    "response_seed_ids",
+    "environmental_candidate_cache",
+)
+_STATE_SET_KEYS = ("last_active_properties", "last_smoke_properties")
 
 _BURN_TIER_PROFILES = {
     "none": {
@@ -239,28 +251,40 @@ def _normalize_advance_tick_by_coord(raw_index):
     return index
 
 
+def _fire_state_runtime_ready(state):
+    if not isinstance(state, dict) or not bool(state.get("_runtime_normalized")):
+        return False
+    if not isinstance(state.get("cells"), dict):
+        return False
+    for name in _STATE_DICT_KEYS:
+        if not isinstance(state.get(name), dict):
+            return False
+    if not isinstance(state.get("advance_due"), dict):
+        return False
+    if not isinstance(state.get("advance_tick_by_coord"), dict):
+        return False
+    if not isinstance(state.get("protected_chunks"), set):
+        return False
+    for name in _STATE_SET_KEYS:
+        if not isinstance(state.get(name), set):
+            return False
+    return True
+
+
 def fire_state(sim):
     state = getattr(sim, "fire_state", None)
     if not isinstance(state, dict):
         state = {}
         sim.fire_state = state
+    elif _fire_state_runtime_ready(state):
+        return state
 
     cells = state.get("cells")
     if not isinstance(cells, dict):
         cells = {}
         state["cells"] = cells
 
-    for name in (
-        "chunk_index",
-        "property_index",
-        "building_index",
-        "frozen_boundaries",
-        "environmental_ignition_days",
-        "contact_cooldowns",
-        "damage_marks",
-        "response_seed_ids",
-        "environmental_candidate_cache",
-    ):
+    for name in _STATE_DICT_KEYS:
         if not isinstance(state.get(name), dict):
             state[name] = {}
     state["advance_due"] = _normalize_advance_due(state.get("advance_due"))
@@ -276,7 +300,7 @@ def fire_state(sim):
             }
         else:
             state["protected_chunks"] = set()
-    for name in ("last_active_properties", "last_smoke_properties"):
+    for name in _STATE_SET_KEYS:
         values = state.get(name)
         if isinstance(values, set):
             continue
@@ -331,6 +355,7 @@ def fire_state(sim):
             if building_id:
                 _set_bucket(state["building_index"], building_id).add(coord)
     _sync_protected_chunks(sim, state=state)
+    state["_runtime_normalized"] = True
     return state
 
 

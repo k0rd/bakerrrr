@@ -109,6 +109,7 @@ from game.service_menu import ServiceMenuSystem
 from game.site_services import SiteServiceSystem
 from game.skill_progression import SkillProgressionSystem
 from game.skills import seed_skill_profile
+from game.npc_boundary_system import NPCBoundaryEnforcementSystem
 from game.npc_interaction_system import NPCInteractionSystem
 from game.objective_progress import ObjectiveProgressSystem
 from game.criminal_justice_system import CriminalJusticeSystem
@@ -611,6 +612,7 @@ def _register_runtime_systems(sim, view, player):
     player_business_system = PlayerBusinessSystem(sim, player)
     property_awareness_system = PropertyAwarenessSystem(sim)
     property_defense_system = PropertyDefenseSystem(sim)
+    npc_boundary_system = NPCBoundaryEnforcementSystem(sim)
 
     npc_memory_system = NPCMemorySystem(sim)
     animal_social_system = AnimalSocialSystem(sim)
@@ -671,6 +673,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(player_business_system, 60)
     _live_timeskip_stride(property_awareness_system, 20)
     _live_timeskip_stride(property_defense_system, 20)
+    _live_timeskip_stride(npc_boundary_system, 2)
     _live_timeskip_stride(npc_memory_system, 10)
     _live_timeskip_stride(animal_social_system, 60)
     _live_timeskip_stride(rumor_system, 20)
@@ -732,6 +735,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(player_business_system)
     sim.register_system(property_awareness_system)
     sim.register_system(property_defense_system)
+    sim.register_system(npc_boundary_system)
 
     sim.register_system(npc_memory_system)
     sim.register_system(animal_social_system)

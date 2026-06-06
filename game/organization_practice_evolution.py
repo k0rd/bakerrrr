@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 
 from engine.systems import System
-from game.components import OrganizationPracticeProgress
+from game.components import OrganizationPracticeProgress, OrganizationProfile
 from game.items import ITEM_CATALOG
 from game.organizations import (
     organization_child_organizations,
@@ -888,6 +888,57 @@ class OrganizationPracticeEvolutionSystem(System):
             return True
         return detail != "unloaded"
 
+    def _collective_staffing_candidate_properties(self):
+        loaded_props = []
+        props_by_id = {}
+        props_by_building_id = {}
+        for prop in self.sim.properties.values():
+            if not isinstance(prop, dict) or not self._loaded_property(prop):
+                continue
+            prop_id = _text(prop.get("id"))
+            if prop_id:
+                props_by_id[prop_id] = prop
+            metadata = _property_metadata(prop)
+            for building_id in (
+                _text(metadata.get("building_id")),
+                _text(metadata.get("local_building_id")),
+            ):
+                if building_id:
+                    props_by_building_id.setdefault(building_id, prop)
+            loaded_props.append(prop)
+
+        candidates = {}
+        for organization_eid, _profile_component in tuple(self.sim.ecs.get(OrganizationProfile).items()):
+            policy = organization_policy_snapshot(self.sim, organization_eid) or {}
+            if _text(policy.get("family")).lower() not in COLLECTIVE_FAMILIES:
+                continue
+            profile = organization_profile(self.sim, organization_eid)
+            if profile is None:
+                continue
+            for raw_link in tuple(getattr(profile, "site_links", ()) or ()):
+                if not isinstance(raw_link, dict) or not bool(raw_link.get("active", True)):
+                    continue
+                prop = props_by_id.get(_text(raw_link.get("property_id")))
+                if prop is None:
+                    prop = props_by_building_id.get(_text(raw_link.get("building_id")))
+                if isinstance(prop, dict):
+                    prop_id = _text(prop.get("id"))
+                    if prop_id:
+                        candidates[prop_id] = prop
+
+        for prop in loaded_props:
+            prop_id = _text(prop.get("id"))
+            if not prop_id or prop_id in candidates:
+                continue
+            organization_eid = _safe_int(_property_metadata(prop).get("organization_eid"), default=0)
+            if organization_eid <= 0:
+                continue
+            policy = organization_policy_snapshot(self.sim, organization_eid) or {}
+            if _text(policy.get("family")).lower() in COLLECTIVE_FAMILIES:
+                candidates[prop_id] = prop
+
+        return tuple(candidates[key] for key in sorted(candidates))
+
     def _periodic_collective_staffing_signals(self, tick):
         if tick <= 0 or tick % self.refresh_interval != 0:
             return
@@ -900,9 +951,7 @@ class OrganizationPracticeEvolutionSystem(System):
         except Exception:
             player_business_status_snapshot = None
 
-        for prop in self.sim.properties.values():
-            if not isinstance(prop, dict) or not self._loaded_property(prop):
-                continue
+        for prop in self._collective_staffing_candidate_properties():
             links = _candidate_link_rows(self.sim, prop)
             if not _has_family_link(links, "labor_union") and not _has_family_link(links, "trade_guild"):
                 continue

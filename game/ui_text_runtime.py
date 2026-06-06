@@ -805,6 +805,76 @@ def _flow_text_chunks(chunks, width, gap="  ", max_lines=None):
     return lines or [""]
 
 
+def _display_chunk(raw_chunk):
+    if raw_chunk is None:
+        return None
+    text = _line_text(raw_chunk).strip()
+    if not text:
+        return None
+    segments = _line_segments(raw_chunk)
+    if segments:
+        return _rich_line(segments, text=text)
+    return _rich_line([_segment(text)], text=text)
+
+
+def _display_line_segments(line):
+    segments = _line_segments(line)
+    if segments:
+        return list(segments)
+    text = _line_text(line)
+    return [_segment(text)] if text else []
+
+
+def _join_display_chunks(left, right, gap):
+    if not _line_text(left):
+        return right
+    if not _line_text(right):
+        return left
+    segments = _display_line_segments(left)
+    segments.append(_segment(gap))
+    segments.extend(_display_line_segments(right))
+    return _rich_line(segments)
+
+
+def _flow_display_chunks(chunks, width, gap="  ", max_lines=None):
+    width = max(1, int(width))
+    lines = []
+    current = None
+
+    for raw_chunk in chunks or ():
+        chunk = _display_chunk(raw_chunk)
+        if chunk is None:
+            continue
+
+        candidate = chunk if current is None else _join_display_chunks(current, chunk, gap)
+        if len(_line_text(candidate)) <= width:
+            current = candidate
+            continue
+
+        if current is not None:
+            lines.append(current)
+            if max_lines is not None and len(lines) >= max_lines:
+                return lines[:max_lines]
+            current = None
+
+        wrapped = _wrap_display_lines(chunk, width)
+        if len(wrapped) == 1:
+            current = wrapped[0]
+            continue
+
+        lines.extend(wrapped[:-1])
+        if max_lines is not None and len(lines) >= max_lines:
+            return lines[:max_lines]
+        current = wrapped[-1]
+
+    if current is not None or not lines:
+        lines.append(current if current is not None else "")
+
+    if max_lines is not None:
+        lines = lines[:max_lines]
+    return lines or [""]
+
+
 def _fit_wrapped_sections(sections, max_rows):
     max_rows = max(1, int(max_rows))
     normalized = []

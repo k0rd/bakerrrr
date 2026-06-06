@@ -300,6 +300,7 @@ from game.location_presentation_runtime import (
 from game.ui_text_runtime import (
     _clip_display_line,
     _filtered_log_lines,
+    _flow_display_chunks,
     _fit_wrapped_sections,
     _flow_text_chunks,
     _hud_log_lines,
@@ -1973,7 +1974,7 @@ class RenderSystem(System):
             economy_chunks.append(
                 f"Needs E{player_needs.energy:.0f}/S{player_needs.safety:.0f}/So{player_needs.social:.0f}"
             )
-            economy_chunks.extend(_survival_indicator_chunks(player_needs))
+            economy_chunks.extend(_survival_indicator_chunks(player_needs, rich=True))
         pressure = _pressure_snapshot(self.sim)
         pressure_tier = str(pressure.get("tier", "low")).strip().lower()
         pressure_attention = int(pressure.get("attention", 0))
@@ -1991,7 +1992,7 @@ class RenderSystem(System):
                 f"Threats {player_cover.threat_count}",
                 f"Via {cover_source}",
             ])
-        economy_lines = _flow_text_chunks(economy_chunks, hud_text_w, max_lines=3)
+        economy_lines = _flow_display_chunks(economy_chunks, hud_text_w, max_lines=3)
 
         objective_eval = evaluate_visible_run_objective(self.sim, self.player_eid)
         objective_line = ""

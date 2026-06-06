@@ -668,6 +668,8 @@ class MovementThrottle:
     DEFAULT_STATE_COOLDOWNS = {
         "investigating": 2,
         "protecting": 1,
+        "ejecting_target": 1,
+        "leaving_property": 1,
         "chasing": 1,
         "scavenging": 2,
         "following": 1,

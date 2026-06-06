@@ -80,6 +80,7 @@ class Simulation:
         self.world_traits = {}
         self.organization_index = {}
         self.world_rumors = []
+        self.active_ejections = {}
         self.overworld_markers_by_eid = {}
         self.next_overworld_marker_id_by_eid = {}
         self.pause_reasons = set()
@@ -133,6 +134,8 @@ class Simulation:
             self.fire_state = {}
         if not isinstance(getattr(self, "live_timeskip", None), dict):
             self.live_timeskip = {}
+        if not isinstance(getattr(self, "active_ejections", None), dict):
+            self.active_ejections = {}
         if not hasattr(self, "disguise_state"):
             self.disguise_state = None
         if not hasattr(self, "equipped_container"):
