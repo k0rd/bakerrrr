@@ -397,11 +397,20 @@ class PlayerActionSystem(System):
             confidence=confidence,
         )
 
-    def _handle_door_interaction(self, eid, pos):
-        return self.property_actions.handle_door_interaction(eid, pos)
+    def _action_target_tuple(self, event, pos):
+        data = getattr(event, "data", {}) or {}
+        if "target_x" not in data or "target_y" not in data:
+            return None
+        target_z = data.get("target_z")
+        if target_z is None and pos is not None:
+            target_z = pos.z
+        return (data.get("target_x"), data.get("target_y"), target_z)
 
-    def _handle_door_lock_toggle(self, eid, pos):
-        return self.property_actions.handle_door_lock_toggle(eid, pos)
+    def _handle_door_interaction(self, eid, pos, *, target=None):
+        return self.property_actions.handle_door_interaction(eid, pos, target=target)
+
+    def _handle_door_lock_toggle(self, eid, pos, *, target=None):
+        return self.property_actions.handle_door_lock_toggle(eid, pos, target=target)
 
     def _npc_for_player_action(self, eid, pos, radius=1, *, preferred_dir=None, exact_direction=False):
         positions = self.sim.ecs.get(Position)
@@ -451,12 +460,47 @@ class PlayerActionSystem(System):
         candidates.sort(key=lambda row: row[0])
         return candidates[0][1]
 
-    def _talk_npc_for_player_action(self, eid, pos):
+    def _talk_npc_for_player_action(self, eid, pos, *, target_eid=None, force_target=False):
         positions = self.sim.ecs.get(Position)
         ais = self.sim.ecs.get(AI)
         players = self.sim.ecs.get(PlayerControlled)
         identities = self.sim.ecs.get(CreatureIdentity)
         occupations = self.sim.ecs.get(Occupation)
+
+        def _valid_talk_target(other_eid, *, max_range=2):
+            if other_eid is None:
+                return None
+            try:
+                other_eid = int(other_eid)
+            except (TypeError, ValueError):
+                return None
+            if other_eid == eid:
+                return None
+            if players.get(other_eid):
+                return None
+            if not ais.get(other_eid):
+                return None
+            other_pos = positions.get(other_eid)
+            if not other_pos or other_pos.z != pos.z:
+                return None
+            dist = _manhattan(pos.x, pos.y, other_pos.x, other_pos.y)
+            if dist <= 0 or dist > int(max_range):
+                return None
+            if not _has_line_of_sight(
+                self.sim,
+                int(pos.x),
+                int(pos.y),
+                int(pos.z),
+                int(other_pos.x),
+                int(other_pos.y),
+                int(other_pos.z),
+            ):
+                return None
+            return other_eid
+
+        targeted = _valid_talk_target(target_eid, max_range=2)
+        if targeted is not None or force_target:
+            return targeted
 
         def _collect(max_range):
             candidates = []
@@ -469,10 +513,8 @@ class PlayerActionSystem(System):
                     continue
                 if other_pos.z != pos.z:
                     continue
-                dx = int(other_pos.x) - int(pos.x)
-                dy = int(other_pos.y) - int(pos.y)
-                chebyshev = max(abs(dx), abs(dy))
-                if chebyshev <= 0 or chebyshev > max_range:
+                dist = _manhattan(pos.x, pos.y, other_pos.x, other_pos.y)
+                if dist <= 0 or dist > max_range:
                     continue
                 if not _has_line_of_sight(
                     self.sim,
@@ -492,7 +534,7 @@ class PlayerActionSystem(System):
                     pos.y,
                     other_pos.x,
                     other_pos.y,
-                    stable_tiebreaker=(chebyshev, -humanish, -has_job, other_eid),
+                    stable_tiebreaker=(dist, -humanish, -has_job, other_eid),
                 )
                 candidates.append((sort_key, other_eid))
             if not candidates:
@@ -968,11 +1010,12 @@ class PlayerActionSystem(System):
     def _try_advance_stakeout(self, eid, pos):
         return self.player_movement.try_advance_stakeout(eid, pos)
 
-    def _handle_interact_action(self, eid, pos, *, force_direction=False):
+    def _handle_interact_action(self, eid, pos, *, force_direction=False, target=None):
         return self.player_interactions.handle_interact_action(
             eid,
             pos,
             force_direction=force_direction,
+            target=target,
         )
 
     def _dialog_ui_state(self):
@@ -1336,7 +1379,7 @@ class PlayerActionSystem(System):
             return
 
         if action == "toggle_door_lock":
-            self._handle_door_lock_toggle(eid, pos)
+            self._handle_door_lock_toggle(eid, pos, target=self._action_target_tuple(event, pos))
             return
 
         if action == "scan":
@@ -1348,7 +1391,12 @@ class PlayerActionSystem(System):
             return
 
         if action == "talk":
-            if self.property_actions.handle_talk_action(eid, pos):
+            if self.property_actions.handle_talk_action(
+                eid,
+                pos,
+                target_eid=event.data.get("target_eid"),
+                force_target=bool(event.data.get("force_target")),
+            ):
                 self.sim.turn_advance_requested = True
             return
 
@@ -1361,6 +1409,7 @@ class PlayerActionSystem(System):
                 eid,
                 pos,
                 force_direction=bool(event.data.get("force_direction")),
+                target=self._action_target_tuple(event, pos),
             )
             return
 

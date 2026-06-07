@@ -1001,7 +1001,11 @@ class SiteServiceSystem(System):
         x = int(x)
         y = int(y)
         z = int(z)
-        if self.sim.tilemap.is_walkable(x, y, z) and not self.sim.property_at(x, y, z):
+        if (
+            self.sim.tilemap.is_walkable(x, y, z)
+            and self.sim.structure_at(x, y, z) is None
+            and not self.sim.property_at(x, y, z)
+        ):
             return x, y
 
         for r in range(1, max(1, int(radius)) + 1):
@@ -2586,10 +2590,12 @@ class SiteServiceSystem(System):
             if not spawn:
                 spawn = (tx, ty)
             sx, sy = spawn
-            vehicle_prop["x"] = sx
-            vehicle_prop["y"] = sy
-            vehicle_prop["z"] = tz
-            self.sim.property_anchor_index[(sx, sy, tz)] = vehicle_prop.get("id")
+            moved = self.sim.move_property(vehicle_prop.get("id"), sx, sy, tz)
+            if not moved:
+                vehicle_prop["x"] = sx
+                vehicle_prop["y"] = sy
+                vehicle_prop["z"] = tz
+                self.sim.rebuild_spatial_indexes()
             eid = delivery.get("eid")
             vehicle_state = self._vehicle_state_for(eid) if eid else None
             if vehicle_state and not vehicle_state.active_vehicle_id:

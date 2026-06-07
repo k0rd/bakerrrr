@@ -9,6 +9,8 @@ def _combat_overlay_state(sim):
     overlay.setdefault("active", False)
     overlay.setdefault("manual_pacing", False)
     overlay.setdefault("threat_count", 0)
+    overlay.setdefault("direct_threat_count", 0)
+    overlay.setdefault("ambient_threat_count", 0)
     overlay.setdefault("nearest_threat_dist", None)
     overlay.setdefault("player_exposure", 1.0)
     return overlay

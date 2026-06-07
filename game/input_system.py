@@ -4,6 +4,7 @@ import curses
 import time
 from engine.events import Event
 from engine.systems import System
+from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.appearance_loadout import APPEARANCE_SLOT_LABELS, appearance_metadata_for_entry, is_appearance_item, is_entry_worn
 from game.components import (
     AI,
@@ -152,7 +153,9 @@ from game.location_presentation_runtime import (
 )
 from game.service_runtime import _int_or_default
 from game.system_support.combat_targeting_runtime import (
+    _actor_is_direct_player_hostile,
     _entity_uses_melee_aim,
+    _entity_visible_to_player,
     _first_targetable_entity_at,
     _weapon_ammo_type_label,
     _weapon_context_for_entity,
@@ -211,8 +214,6 @@ def _facade():
 
     return facade
 
-
-THREAT_STATES = {"protecting", "investigating"}
 
 def _path_next_step(*args, **kwargs):
     return _facade()._path_next_step(*args, **kwargs)
@@ -2087,8 +2088,10 @@ class InputSystem(System):
             max_range = int(max(1, weapon.get("range", 1))) if weapon else 12
 
         candidates = []
-        for other_eid, ai in ais.items():
-            if ai.state not in THREAT_STATES:
+        for other_eid in ais:
+            if not _actor_is_direct_player_hostile(self.sim, other_eid, player_eid=self.player_eid):
+                continue
+            if not _entity_visible_to_player(self.sim, self.player_eid, other_eid):
                 continue
             other_pos = positions.get(other_eid)
             if not other_pos or int(other_pos.z) != int(player_pos.z):
@@ -2279,6 +2282,121 @@ class InputSystem(System):
             return None
         return (int(best[2]), int(best[3]), int(best[4]))
 
+    def _talk_target_eid_at(self, x, y, z):
+        try:
+            x = int(x)
+            y = int(y)
+            z = int(z)
+        except (TypeError, ValueError):
+            return None
+        positions = self.sim.ecs.get(Position)
+        ais = self.sim.ecs.get(AI)
+        players = self.sim.ecs.get(PlayerControlled)
+        identities = self.sim.ecs.get(CreatureIdentity)
+        occupations = self.sim.ecs.get(Occupation)
+        candidates = []
+        for other_eid in self.sim.tilemap.entities_at(x, y, z):
+            if int(other_eid) == int(self.player_eid):
+                continue
+            if players.get(other_eid):
+                continue
+            if not ais.get(other_eid):
+                continue
+            other_pos = positions.get(other_eid)
+            if not other_pos or int(other_pos.z) != z:
+                continue
+            identity = identities.get(other_eid)
+            humanish = int(bool(identity and identity.taxonomy_class == "hominid"))
+            has_job = int(bool(occupations.get(other_eid)))
+            candidates.append((-humanish, -has_job, int(other_eid)))
+        if not candidates:
+            return None
+        candidates.sort()
+        return candidates[0][2]
+
+    def _talk_target_is_visible(self, pos, target_x, target_y, target_z):
+        if pos is None:
+            return False
+        try:
+            target_x = int(target_x)
+            target_y = int(target_y)
+            target_z = int(target_z)
+        except (TypeError, ValueError):
+            return False
+        if int(target_z) != int(pos.z):
+            return False
+        if _manhattan(pos.x, pos.y, target_x, target_y) > 2:
+            return False
+        return _has_line_of_sight(
+            self.sim,
+            int(pos.x),
+            int(pos.y),
+            int(pos.z),
+            target_x,
+            target_y,
+            target_z,
+        )
+
+    def _default_talk_cursor(self, pos):
+        if pos is None:
+            return None
+        positions = self.sim.ecs.get(Position)
+        ais = self.sim.ecs.get(AI)
+        players = self.sim.ecs.get(PlayerControlled)
+        identities = self.sim.ecs.get(CreatureIdentity)
+        occupations = self.sim.ecs.get(Occupation)
+        candidates = []
+        for other_eid, other_pos in positions.items():
+            if other_eid == self.player_eid:
+                continue
+            if players.get(other_eid):
+                continue
+            if not ais.get(other_eid):
+                continue
+            if other_pos.z != pos.z:
+                continue
+            dist = _manhattan(pos.x, pos.y, other_pos.x, other_pos.y)
+            if dist <= 0 or dist > 2:
+                continue
+            if not self._talk_target_is_visible(pos, other_pos.x, other_pos.y, other_pos.z):
+                continue
+            identity = identities.get(other_eid)
+            humanish = int(bool(identity and identity.taxonomy_class == "hominid"))
+            has_job = int(bool(occupations.get(other_eid)))
+            sort_key = _interaction_target_order_key(
+                pos.x,
+                pos.y,
+                other_pos.x,
+                other_pos.y,
+                stable_tiebreaker=(dist, -humanish, -has_job, int(other_eid)),
+            )
+            candidates.append((sort_key, int(other_pos.x), int(other_pos.y), int(other_pos.z)))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda row: row[0])
+        return (candidates[0][1], candidates[0][2], candidates[0][3])
+
+    def _activate_talk_helper(self, zoom_mode):
+        if str(zoom_mode or "city").strip().lower() != "city":
+            return False
+
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(self.player_eid)
+        if pos is None:
+            return False
+
+        target = self._default_talk_cursor(pos)
+        if target is None:
+            return False
+
+        return self._activate_look_mode_at(
+            "city",
+            x=int(target[0]),
+            y=int(target[1]),
+            z=int(target[2]),
+            purpose="talk",
+        )
+
     def _activate_adjacent_interact_helper(self, zoom_mode):
         if str(zoom_mode or "city").strip().lower() != "city":
             return False
@@ -2368,6 +2486,13 @@ class InputSystem(System):
                             if self.sim.tilemap.in_bounds(tx, ty):
                                 state["x"] = tx
                                 state["y"] = ty
+                    elif purpose == "talk":
+                        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+                        if player_pos:
+                            if _manhattan(player_pos.x, player_pos.y, nx, ny) <= 2:
+                                state["x"] = nx
+                                state["y"] = ny
+                                state["z"] = int(player_pos.z)
                     elif purpose == "aim" and _entity_uses_melee_aim(self.sim, self.player_eid):
                         player_pos = self.sim.ecs.get(Position).get(self.player_eid)
                         if player_pos:
@@ -2407,11 +2532,43 @@ class InputSystem(System):
 
         if purpose == "interact":
             if key == ord(";"):
-                self._emit_turn_action("toggle_door_lock")
+                self._emit_turn_action(
+                    "toggle_door_lock",
+                    target_x=int(state.get("x", 0)),
+                    target_y=int(state.get("y", 0)),
+                    target_z=int(state.get("z", 0)),
+                )
                 self._deactivate_look_mode()
                 return True
             if key in ENTER_KEYS or key == ord("'"):
-                self._emit_turn_action("interact", force_direction=True)
+                self._emit_turn_action(
+                    "interact",
+                    force_direction=True,
+                    target_x=int(state.get("x", 0)),
+                    target_y=int(state.get("y", 0)),
+                    target_z=int(state.get("z", 0)),
+                )
+                self._deactivate_look_mode()
+                return True
+            if key == ord("x"):
+                self._emit_cursor_examine(announce=True)
+                return True
+            return True
+
+        if purpose == "talk":
+            if key in ENTER_KEYS or key == ord("/"):
+                target_x = int(state.get("x", 0))
+                target_y = int(state.get("y", 0))
+                target_z = int(state.get("z", 0))
+                self._emit_player_action(
+                    "talk",
+                    consume_turn=False,
+                    force_target=True,
+                    target_eid=self._talk_target_eid_at(target_x, target_y, target_z),
+                    target_x=target_x,
+                    target_y=target_y,
+                    target_z=target_z,
+                )
                 self._deactivate_look_mode()
                 return True
             if key == ord("x"):
@@ -3684,7 +3841,8 @@ class InputSystem(System):
             return
 
         if key == ord("/"):
-            self._emit_player_action("talk", consume_turn=False)
+            if not self._activate_talk_helper(zoom_mode):
+                self._emit_player_action("talk", consume_turn=False)
             return
 
         if key == ord("."):

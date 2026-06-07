@@ -15,10 +15,15 @@ from game.property_runtime import (
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import _detail_tick_allowed, _entity_is_downed
 from game.system_support.awareness_runtime import _watchers_for_position
-from game.system_support.combat_targeting_runtime import QUIET_NOISE_CAUSES
+from game.system_support.combat_targeting_runtime import (
+    COMBAT_RELATION_AMBIENT,
+    COMBAT_RELATION_DIRECT,
+    QUIET_NOISE_CAUSES,
+    _combat_relation_to_player,
+    _entity_visible_to_player,
+)
 from game.system_support.combat_pacing_runtime import _combat_overlay_state
 from game.system_support.cover_runtime import (
-    THREAT_STATES,
     _effective_cover_value,
     _is_cover_state_valid,
     _threat_positions_for_entity,
@@ -112,15 +117,17 @@ class CombatPacingSystem(System):
         if not player_pos:
             return {
                 "count": 0,
+                "direct_count": 0,
+                "ambient_count": 0,
                 "nearest_dist": None,
             }
 
         threat_count = 0
+        direct_count = 0
+        ambient_count = 0
         nearest = None
-        for eid, ai in ais.items():
+        for eid, _ai in ais.items():
             if eid == self.player_eid:
-                continue
-            if ai.state not in THREAT_STATES:
                 continue
             if _entity_is_downed(self.sim, eid):
                 continue
@@ -133,12 +140,25 @@ class CombatPacingSystem(System):
             if dist > self.engage_radius:
                 continue
 
+            if not _entity_visible_to_player(self.sim, self.player_eid, eid):
+                continue
+
+            relation = _combat_relation_to_player(self.sim, eid, player_eid=self.player_eid)
+            if relation == COMBAT_RELATION_DIRECT:
+                direct_count += 1
+            elif relation == COMBAT_RELATION_AMBIENT:
+                ambient_count += 1
+            else:
+                continue
+
             threat_count += 1
             if nearest is None or dist < nearest:
                 nearest = dist
 
         return {
             "count": threat_count,
+            "direct_count": direct_count,
+            "ambient_count": ambient_count,
             "nearest_dist": nearest,
         }
 
@@ -149,6 +169,8 @@ class CombatPacingSystem(System):
 
         overlay = _combat_overlay_state(self.sim)
         overlay["threat_count"] = threat_count
+        overlay["direct_threat_count"] = snapshot.get("direct_count", 0)
+        overlay["ambient_threat_count"] = snapshot.get("ambient_count", 0)
         overlay["nearest_threat_dist"] = nearest
         manual_pacing = bool(overlay.get("manual_pacing"))
         player_cover = self.sim.ecs.get(CoverState).get(self.player_eid)
@@ -176,6 +198,8 @@ class CombatPacingSystem(System):
                     "combat_overlay_entered",
                     player_eid=self.player_eid,
                     threat_count=threat_count,
+                    direct_threat_count=snapshot.get("direct_count", 0),
+                    ambient_threat_count=snapshot.get("ambient_count", 0),
                     nearest_threat_dist=nearest,
                 ))
             return

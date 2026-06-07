@@ -1,6 +1,7 @@
 """Extracted systems from ``game.systems``: RenderSystem."""
 
 import curses
+import re
 from engine.systems import System
 from game.casino_ui_runtime import ensure_casino_ui_state
 from game.appearance import (
@@ -251,6 +252,9 @@ from game.service_runtime import (
 
 _FIRE_VISUAL_GLYPHS = ("*", "^", "x")
 _SMOKE_VISUAL_GLYPHS = ("~", ",")
+_HUD_CHANGE_FLASH_TICKS = 4
+_HUD_CHANGE_FLASH_FRAMES = 4
+_HUD_SURVIVAL_TOKEN_RE = re.compile(r"\b([FW])!{0,2}(\d{1,3})(?![/\d])")
 
 
 def _fire_visual_style(sim, x, y, z=0):
@@ -291,6 +295,20 @@ def _fire_visual_style(sim, x, y, z=0):
         "layer": layer,
         "priority": priority,
     }
+
+
+def _hud_flash_signature(line):
+    def survival_band(match):
+        prefix = str(match.group(1))
+        try:
+            value = int(match.group(2))
+        except (TypeError, ValueError):
+            value = 0
+        value = max(0, min(100, value))
+        band = min(3, max(0, value // 25))
+        return f"{prefix}#{band}"
+
+    return _HUD_SURVIVAL_TOKEN_RE.sub(survival_band, _line_text(line))
 from game.location_presentation_runtime import (
     _creature_color_key,
     _entity_render_style,
@@ -384,6 +402,9 @@ def _draw_overworld_frame(*args, **kwargs):
 
 def _entity_should_blink_in_combat(*args, **kwargs):
     return _facade()._entity_should_blink_in_combat(*args, **kwargs)
+
+def _entity_should_mark_ambient_combat(*args, **kwargs):
+    return _facade()._entity_should_mark_ambient_combat(*args, **kwargs)
 
 def _is_explored(*args, **kwargs):
     return _facade()._is_explored(*args, **kwargs)
@@ -536,6 +557,59 @@ class RenderSystem(System):
         self._hud_display = []     # entries currently visible in the HUD strip
         self._hud_seen_seq = -1    # last log sequence ingested
         self._hud_last_tick = -1   # last sim tick when we drained messages
+        self._hud_previous_section_lines = {}
+        self._hud_flash_until_by_line = {}
+        self._hud_render_frame = 0
+
+    def _hud_flash_clock(self):
+        try:
+            tick = int(getattr(self.sim, "tick", 0) or 0)
+        except (TypeError, ValueError):
+            tick = 0
+        return tick, int(self._hud_render_frame)
+
+    def _update_hud_flash_state(self, sections):
+        tick, frame = self._hud_flash_clock()
+        previous = self._hud_previous_section_lines if isinstance(self._hud_previous_section_lines, dict) else {}
+        current = {}
+        active_line_keys = set()
+
+        for section_index, section in enumerate(sections or ()):
+            section_id = str(section.get("id", f"section:{section_index}") or f"section:{section_index}")
+            lines = list(section.get("lines", ()) or ())
+            signatures = tuple(_hud_flash_signature(line) for line in lines)
+            current[section_id] = signatures
+            prior = previous.get(section_id)
+
+            for line_index, signature in enumerate(signatures):
+                key = (section_id, int(line_index))
+                active_line_keys.add(key)
+                if prior is None:
+                    continue
+                if line_index >= len(prior) or prior[line_index] != signature:
+                    self._hud_flash_until_by_line[key] = (
+                        tick + _HUD_CHANGE_FLASH_TICKS,
+                        frame + _HUD_CHANGE_FLASH_FRAMES,
+                    )
+
+        self._hud_previous_section_lines = current
+        self._hud_flash_until_by_line = {
+            key: value
+            for key, value in dict(self._hud_flash_until_by_line).items()
+            if key in active_line_keys
+            and tick < int(value[0])
+            and frame < int(value[1])
+        }
+
+    def _hud_flash_attrs(self, section_id, line_index):
+        key = (str(section_id), int(line_index))
+        expiry = self._hud_flash_until_by_line.get(key)
+        if not expiry:
+            return 0
+        tick, frame = self._hud_flash_clock()
+        if tick >= int(expiry[0]) or frame >= int(expiry[1]):
+            return 0
+        return getattr(curses, "A_REVERSE", 0)
 
     def _advance_hud_queue(self, budget):
         """Ingest new log entries and drain up to 2 per game tick into the HUD display buffer."""
@@ -777,15 +851,16 @@ class RenderSystem(System):
         lines.append("Dangerous actions teach through one-time log warnings, not confirmation popups.")
         return lines
 
-    def _draw_display_line(self, x, y, line, max_width):
+    def _draw_display_line(self, x, y, line, max_width, attrs=0):
         segments = _line_segments(line)
         if segments:
-            self.view.draw_segments(x, y, segments, max_width=max_width)
+            self.view.draw_segments(x, y, segments, max_width=max_width, attrs=int(attrs or 0))
             return
-        self.view.draw_text(x, y, _line_text(line))
+        self.view.draw_text(x, y, _line_text(line), attrs=int(attrs or 0))
 
     def update(self):
         self.view.clear()
+        self._hud_render_frame += 1
         begin_frame = getattr(self.view, "begin_frame", None)
         if callable(begin_frame):
             animation_tick = None
@@ -1635,8 +1710,12 @@ class RenderSystem(System):
 
             for _, eid, _pos, render, screen_x, screen_y in sorted(drawables, key=lambda item: (item[0], item[1])):
                 appearance = _entity_render_style(self.sim, eid, player_eid=self.player_eid)
+                attrs = _ambient_attr(_pos.x, _pos.y, _pos.z)
                 if _entity_should_blink_in_combat(self.sim, eid, player_eid=self.player_eid):
                     appearance = _appearance_with_effect(appearance, "blink")
+                elif _entity_should_mark_ambient_combat(self.sim, eid, player_eid=self.player_eid):
+                    appearance = _appearance_with_effect(appearance, "combat_ambient")
+                    attrs |= getattr(curses, "A_BOLD", 0)
                 fire_cell = fire_cell_state(self.sim, _pos.x, _pos.y, _pos.z)
                 if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
                     appearance = _appearance_with_effect(appearance, "blink")
@@ -1644,7 +1723,7 @@ class RenderSystem(System):
                     screen_x,
                     screen_y,
                     appearance,
-                    attrs=_ambient_attr(_pos.x, _pos.y, _pos.z),
+                    attrs=attrs,
                 )
 
             if look_ui.get("active") and look_purpose == "aim" and player_pos:
@@ -1817,11 +1896,17 @@ class RenderSystem(System):
         overlay = getattr(self.sim, "combat_overlay", {})
         if overlay.get("active"):
             threat_count = overlay.get("threat_count", 0)
+            direct_count = overlay.get("direct_threat_count", threat_count)
+            ambient_count = overlay.get("ambient_threat_count", 0)
             nearest = overlay.get("nearest_threat_dist")
             nearest_text = "?" if nearest is None else str(nearest)
             exposure = int(float(overlay.get("player_exposure", 1.0)) * 100)
+            if ambient_count:
+                threat_label = f"{direct_count} direct + {ambient_count} nearby"
+            else:
+                threat_label = str(threat_count)
             status_chunks.append(
-                f"Combat threats {threat_count} near {nearest_text} exp {exposure}%"
+                f"Combat threats {threat_label} near {nearest_text} exp {exposure}%"
             )
         if insight:
             status_chunks.extend(
@@ -1870,6 +1955,8 @@ class RenderSystem(System):
                 label = "Aim"
             elif look_purpose == "interact":
                 label = "Interact"
+            elif look_purpose == "talk":
+                label = "Talk"
             else:
                 label = "Look"
             if look_mode == "overworld":
@@ -2034,6 +2121,8 @@ class RenderSystem(System):
                     prefix = "Aim: "
                 elif look_purpose == "interact":
                     prefix = "Interact: "
+                elif look_purpose == "talk":
+                    prefix = "Talk: "
                 else:
                     prefix = "Look: "
                 report_hint_line = _line_with_prefix(look_entry, prefix)
@@ -2042,6 +2131,8 @@ class RenderSystem(System):
                     report_hint_line = "Aim mode active."
                 elif look_purpose == "interact":
                     report_hint_line = "Interact target mode active."
+                elif look_purpose == "talk":
+                    report_hint_line = "Talk target mode active."
                 else:
                     report_hint_line = "Look mode active."
             quest_lines = _wrap_display_lines(report_hint_line, hud_text_w, max_lines=2)
@@ -2083,6 +2174,8 @@ class RenderSystem(System):
                     controls = "Aim: move cursor, F cycle target, Enter fire, x inspect, Esc close, ? help"
             elif look_purpose == "interact":
                 controls = "Interact: choose adjacent tile, '/Enter confirm, ; lock, x inspect, Esc fallback, ? help"
+            elif look_purpose == "talk":
+                controls = "Talk: choose visible person, / or Enter confirm, x inspect, Esc close, ? help"
             elif look_purpose == "backup_order":
                 controls = "Order Mark: move cursor, E/Enter mark, x inspect, Esc cancel, ? help"
             else:
@@ -2149,31 +2242,37 @@ class RenderSystem(System):
         )
         wrapped_sections_spec = [
             {
+                "id": "status",
                 "lines": status_lines,
                 "min_lines": 1,
                 "trim_priority": 1,
             },
             {
+                "id": "streamed",
                 "lines": streamed_lines,
                 "min_lines": 1,
                 "trim_priority": 4,
             },
             {
+                "id": "economy",
                 "lines": economy_lines,
                 "min_lines": 1,
                 "trim_priority": 2,
             },
             {
+                "id": "mode",
                 "lines": _wrap_display_lines(mode_line, hud_text_w, max_lines=2),
                 "min_lines": 1,
                 "trim_priority": 0,
             },
             {
+                "id": "quest",
                 "lines": quest_lines,
                 "min_lines": 1,
                 "trim_priority": 5,
             },
             {
+                "id": "controls",
                 "lines": _wrap_display_lines(controls, hud_text_w, max_lines=2),
                 "min_lines": 1,
                 "trim_priority": 3,
@@ -2196,13 +2295,21 @@ class RenderSystem(System):
             wrapped_sections_spec,
             max(1, hud_lines - reserved_log_rows),
         )
+        self._update_hud_flash_state(wrapped_sections)
 
         hud_y = map_h
         for section in wrapped_sections:
-            for line in section["lines"]:
+            section_id = str(section.get("id", "section"))
+            for line_index, line in enumerate(section["lines"]):
                 if hud_y >= screen_h:
                     break
-                self._draw_display_line(0, hud_y, line, hud_w)
+                self._draw_display_line(
+                    0,
+                    hud_y,
+                    line,
+                    hud_w,
+                    attrs=self._hud_flash_attrs(section_id, line_index),
+                )
                 hud_y += 1
             if hud_y >= screen_h:
                 break

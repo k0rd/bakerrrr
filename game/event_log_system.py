@@ -4362,18 +4362,24 @@ class EventLogSystem(System):
         if event.data.get("player_eid") != self.player_eid:
             return
         threat_count = event.data.get("threat_count", 0)
+        direct_count = event.data.get("direct_threat_count", threat_count)
+        ambient_count = event.data.get("ambient_threat_count", 0)
         nearest = event.data.get("nearest_threat_dist")
         player_cover = self.sim.ecs.get(CoverState).get(self.player_eid)
         exposure = int(float(player_cover.exposure if player_cover else 1.0) * 100)
+        if ambient_count:
+            threat_label = f"{direct_count} direct + {ambient_count} nearby"
+        else:
+            threat_label = f"{threat_count} threat"
         if nearest is None:
             self._log(
-                f"Combat turn mode engaged ({threat_count} threat, exposure {exposure}%).",
+                f"Combat turn mode engaged ({threat_label}, exposure {exposure}%).",
                 channel="combat",
                 priority="critical",
             )
         else:
             self._log(
-                f"Combat turn mode engaged ({threat_count} threat, nearest {nearest}, exposure {exposure}%).",
+                f"Combat turn mode engaged ({threat_label}, nearest {nearest}, exposure {exposure}%).",
                 channel="combat",
                 priority="critical",
             )

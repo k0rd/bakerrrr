@@ -888,6 +888,7 @@ def _fit_wrapped_sections(sections, max_rows):
         min_lines = max(0, min(int(section.get("min_lines", 0)), len(lines)))
         trim_priority = int(section.get("trim_priority", 0))
         normalized.append({
+            "id": section.get("id", f"section:{len(normalized)}"),
             "lines": lines,
             "min_lines": min_lines,
             "trim_priority": trim_priority,

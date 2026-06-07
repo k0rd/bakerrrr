@@ -210,9 +210,31 @@ def _set_property_locked_override(prop, *, locked, tick=0, method="manual_lock")
     return True
 
 
-def _door_interaction_candidate(sim, pos, *, preferred_dir=None):
+def _door_interaction_candidate(sim, pos, *, preferred_dir=None, target=None):
     if pos is None:
         return None
+
+    if target is not None:
+        try:
+            target_x, target_y, target_z = target
+            target_x = int(target_x)
+            target_y = int(target_y)
+            target_z = int(target_z)
+        except (TypeError, ValueError):
+            target_x = target_y = target_z = None
+        if target_x is not None and target_z == int(pos.z):
+            dx = int(target_x) - int(pos.x)
+            dy = int(target_y) - int(pos.y)
+            if max(abs(dx), abs(dy)) <= 1:
+                state = _operable_door_state_at(sim, target_x, target_y, target_z)
+                if state is not None:
+                    return {
+                        "x": target_x,
+                        "y": target_y,
+                        "z": target_z,
+                        "state": state,
+                        "prop": _door_property_at(sim, target_x, target_y, target_z, state=state),
+                    }
 
     candidates = [
         (int(pos.x), int(pos.y), int(pos.z)),

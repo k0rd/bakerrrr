@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from engine.events import Event
 from engine.tilemap import Tile
+from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.components import AI, Collider, NPCTraits, Position, SuppressionState, Vitality, WeaponLoadout
 from game.property_access import property_access_level as _property_access_level
 from game.property_runtime import property_aperture_at as _property_aperture_at
@@ -19,6 +20,9 @@ from game.system_support.item_runtime import _weapon_uses_ammo
 from game.weapons import weapon_by_id
 
 THREAT_STATES = {"protecting", "investigating"}
+COMBAT_RELATION_NONE = "none"
+COMBAT_RELATION_DIRECT = "direct"
+COMBAT_RELATION_AMBIENT = "ambient"
 
 QUIET_NOISE_CAUSES = {
     "move",
@@ -153,6 +157,94 @@ def _entity_is_weapon_targetable(sim, eid, *, current_tick=None):
         return True
 
     return False
+
+
+def _player_visible_tiles(sim):
+    state = getattr(sim, "visibility_state", None)
+    if not isinstance(state, dict):
+        return None
+    visible = state.get("player_visible")
+    if visible is None:
+        return None
+    return set(visible or ())
+
+
+def _entity_visible_to_player(sim, player_eid, target_eid, *, require_visible=True):
+    if sim is None or player_eid is None or target_eid is None:
+        return False
+    positions = sim.ecs.get(Position)
+    player_pos = positions.get(player_eid)
+    target_pos = positions.get(target_eid)
+    if not player_pos or not target_pos or int(player_pos.z) != int(target_pos.z):
+        return False
+
+    if require_visible:
+        visible = _player_visible_tiles(sim)
+        if visible is not None and (int(target_pos.x), int(target_pos.y), int(target_pos.z)) not in visible:
+            return False
+
+    return _has_line_of_sight(
+        sim,
+        int(player_pos.x),
+        int(player_pos.y),
+        int(player_pos.z),
+        int(target_pos.x),
+        int(target_pos.y),
+        int(target_pos.z),
+    )
+
+
+def _actor_is_direct_player_hostile(sim, eid, *, player_eid):
+    if sim is None or eid is None or player_eid is None:
+        return False
+    try:
+        eid_int = int(eid)
+        player_int = int(player_eid)
+    except (TypeError, ValueError):
+        return False
+    if eid_int == player_int:
+        return False
+    ai = sim.ecs.get(AI).get(eid)
+    if not ai or str(getattr(ai, "state", "") or "").strip().lower() not in THREAT_STATES:
+        return False
+    if _entity_is_downed(sim, eid):
+        return False
+    suppression = sim.ecs.get(SuppressionState).get(eid)
+    if suppression and bool(getattr(suppression, "surrendered", False)):
+        return False
+    try:
+        return int(getattr(ai, "target_eid", 0) or 0) == player_int
+    except (TypeError, ValueError):
+        return False
+
+
+def _actor_is_ambient_combatant(sim, eid, *, player_eid):
+    if sim is None or eid is None or player_eid is None:
+        return False
+    try:
+        if int(eid) == int(player_eid):
+            return False
+    except (TypeError, ValueError):
+        return False
+    ai = sim.ecs.get(AI).get(eid)
+    if not ai or str(getattr(ai, "state", "") or "").strip().lower() not in THREAT_STATES:
+        return False
+    if _entity_is_downed(sim, eid):
+        return False
+    suppression = sim.ecs.get(SuppressionState).get(eid)
+    if suppression and bool(getattr(suppression, "surrendered", False)):
+        return False
+    if _actor_is_direct_player_hostile(sim, eid, player_eid=player_eid):
+        return False
+    return True
+
+
+def _combat_relation_to_player(sim, eid, *, player_eid):
+    if _actor_is_direct_player_hostile(sim, eid, player_eid=player_eid):
+        return COMBAT_RELATION_DIRECT
+    if _actor_is_ambient_combatant(sim, eid, player_eid=player_eid):
+        return COMBAT_RELATION_AMBIENT
+    return COMBAT_RELATION_NONE
 
 
 def _first_targetable_entity_at(sim, x, y, z, exclude_eid=None, *, current_tick=None):
@@ -514,16 +606,15 @@ def _entity_should_blink_in_combat(sim, eid, *, player_eid=None):
         return False
     if not _combat_turn_pacing_active(sim):
         return False
-    ai = sim.ecs.get(AI).get(eid)
-    if not ai or str(ai.state or "").strip().lower() not in THREAT_STATES:
+    return _combat_relation_to_player(sim, eid, player_eid=player_eid) == COMBAT_RELATION_DIRECT
+
+
+def _entity_should_mark_ambient_combat(sim, eid, *, player_eid=None):
+    if eid is None or (player_eid is not None and int(eid) == int(player_eid)):
         return False
-    if _entity_is_downed(sim, eid):
+    if not _combat_turn_pacing_active(sim):
         return False
-    player_pos = sim.ecs.get(Position).get(player_eid) if player_eid is not None else None
-    pos = sim.ecs.get(Position).get(eid)
-    if player_pos and pos and int(pos.z) != int(player_pos.z):
-        return False
-    return True
+    return _combat_relation_to_player(sim, eid, player_eid=player_eid) == COMBAT_RELATION_AMBIENT
 
 
 def _manual_fire_preview(sim, eid, x, y, z):

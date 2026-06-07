@@ -93,6 +93,7 @@ from game.social_boundary_runtime import (
     dialogue_refusal_active,
 )
 from engine.events import Event
+from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.items import (
     ITEM_CATALOG,
     apply_item_durability_loss,
@@ -684,6 +685,7 @@ class NPCInteractionSystem(System):
                 "hint": "",
                 "new_topic_ids": [],
                 "close_pending": False,
+                "allow_distant": False,
                 "street_buy_offer": None,
                 "street_buy_skipped_instance_ids": [],
             }
@@ -723,6 +725,7 @@ class NPCInteractionSystem(System):
                 "hint": "",
                 "new_topic_ids": [],
                 "close_pending": False,
+                "allow_distant": False,
                 "street_buy_offer": None,
                 "street_buy_skipped_instance_ids": [],
                 "backup_cursor_mark": None,
@@ -738,6 +741,7 @@ class NPCInteractionSystem(System):
             state.setdefault("hint", "")
             state.setdefault("new_topic_ids", [])
             state.setdefault("close_pending", False)
+            state.setdefault("allow_distant", False)
             state.setdefault("street_buy_offer", None)
             state.setdefault("street_buy_skipped_instance_ids", [])
             state.setdefault("backup_cursor_mark", None)
@@ -5744,9 +5748,24 @@ class NPCInteractionSystem(System):
             return None
         dx = abs(int(player_pos.x) - int(npc_pos.x))
         dy = abs(int(player_pos.y) - int(npc_pos.y))
-        max_range = 2 if allow_distant else 1
-        if max(dx, dy) > max_range:
+        if allow_distant:
+            if _manhattan(player_pos.x, player_pos.y, npc_pos.x, npc_pos.y) > 2:
+                return None
+        elif max(dx, dy) > 1:
             return None
+        player_detail = str(self.sim.detail_for_xy(int(player_pos.x), int(player_pos.y))).strip().lower()
+        npc_detail = str(self.sim.detail_for_xy(int(npc_pos.x), int(npc_pos.y))).strip().lower()
+        if player_detail != "unloaded" and npc_detail != "unloaded":
+            if not _has_line_of_sight(
+                self.sim,
+                int(player_pos.x),
+                int(player_pos.y),
+                int(player_pos.z),
+                int(npc_pos.x),
+                int(npc_pos.y),
+                int(npc_pos.z),
+            ):
+                return None
         if _entity_is_downed(self.sim, npc_eid):
             return None
         identity = self.sim.ecs.get(CreatureIdentity).get(npc_eid)
@@ -10458,6 +10477,7 @@ class NPCInteractionSystem(System):
             "hint": self._dialogue_hint_text(context),
             "new_topic_ids": [],
             "close_pending": False,
+            "allow_distant": bool(context.get("allow_distant")),
             "street_buy_offer": None,
             "street_buy_skipped_instance_ids": [],
             "machine_action": None,
@@ -10500,6 +10520,7 @@ class NPCInteractionSystem(System):
             "hint": "",
             "new_topic_ids": [],
             "close_pending": False,
+            "allow_distant": False,
             "street_buy_offer": None,
             "street_buy_skipped_instance_ids": [],
             "machine_action": None,
@@ -12133,6 +12154,7 @@ class NPCInteractionSystem(System):
         context = self._dialogue_context(npc_eid, bond=bond, allow_distant=allow_distant)
         if not context:
             return False
+        context["allow_distant"] = bool(allow_distant)
         if not context.get("human"):
             self._emit_simple_npc_interaction(context)
             return False
@@ -12346,7 +12368,8 @@ class NPCInteractionSystem(System):
             for row in list(state.get("topics", ()) or ())
             if str(row.get("id", "")).strip()
         }
-        context = self._dialogue_context(npc_eid)
+        allow_distant = bool(state.get("allow_distant"))
+        context = self._dialogue_context(npc_eid, allow_distant=allow_distant)
         if not context:
             self._close_dialog()
             self.sim.log.add("The conversation slips away.", channel="social", priority="low")
@@ -12365,7 +12388,7 @@ class NPCInteractionSystem(System):
             previous_topic_id=previous_topic_id,
             player_line_override=player_line_override,
         )
-        refreshed = self._dialogue_context(npc_eid)
+        refreshed = self._dialogue_context(npc_eid, allow_distant=allow_distant)
         if not refreshed:
             self._close_dialog()
             return

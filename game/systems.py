@@ -440,6 +440,11 @@ from game.system_support.combat_pacing_runtime import (
     _combat_turn_pacing_active,
     _set_manual_combat_pacing,
 )
+from game.system_support.combat_targeting_runtime import (
+    COMBAT_RELATION_AMBIENT,
+    COMBAT_RELATION_DIRECT,
+    _combat_relation_to_player,
+)
 from game.system_support.cover_runtime import (
     _effective_cover_value,
     _threat_positions_for_entity,
@@ -1633,16 +1638,15 @@ def _entity_should_blink_in_combat(sim, eid, *, player_eid=None):
         return False
     if not _combat_turn_pacing_active(sim):
         return False
-    ai = sim.ecs.get(AI).get(eid)
-    if not ai or str(ai.state or "").strip().lower() not in THREAT_STATES:
+    return _combat_relation_to_player(sim, eid, player_eid=player_eid) == COMBAT_RELATION_DIRECT
+
+
+def _entity_should_mark_ambient_combat(sim, eid, *, player_eid=None):
+    if eid is None or (player_eid is not None and int(eid) == int(player_eid)):
         return False
-    if _entity_is_downed(sim, eid):
+    if not _combat_turn_pacing_active(sim):
         return False
-    player_pos = sim.ecs.get(Position).get(player_eid) if player_eid is not None else None
-    pos = sim.ecs.get(Position).get(eid)
-    if player_pos and pos and int(pos.z) != int(player_pos.z):
-        return False
-    return True
+    return _combat_relation_to_player(sim, eid, player_eid=player_eid) == COMBAT_RELATION_AMBIENT
 
 
 def _weapon_ammo_type_label(weapon):

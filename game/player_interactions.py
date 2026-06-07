@@ -844,7 +844,7 @@ class PlayerInteractionRuntime:
             container_kind="cache",
         )
 
-    def handle_interact_action(self, eid, pos, *, force_direction=False):
+    def handle_interact_action(self, eid, pos, *, force_direction=False, target=None):
         preferred_dir = self.action_system._player_interact_direction(eid, pos)
         exact_direction = bool(force_direction and preferred_dir is not None)
 
@@ -906,4 +906,5 @@ class PlayerInteractionRuntime:
             eid,
             pos,
             force_direction=force_direction,
+            target=target,
         )
