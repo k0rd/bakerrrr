@@ -1745,16 +1745,6 @@ class InputSystem(System):
 
         if key in (ord("m"), ord("M")):
             if dialog_kind == "service_menu":
-                machine_action = state.get("machine_action") if isinstance(state.get("machine_action"), dict) else None
-                if machine_action:
-                    self._close_dialog_ui()
-                    self.sim.emit(Event(
-                        "trade_panel_open_request",
-                        eid=self.player_eid,
-                        mode=str(machine_action.get("mode", "buy") or "buy").strip().lower(),
-                        property_id=machine_action.get("property_id"),
-                        automated_only=bool(machine_action.get("automated_only")),
-                    ))
                 return True
             topic = next(
                 (row for row in list(state.get("topics", ()) or ()) if str(row.get("id", "")).strip().lower() == "trade"),

@@ -2574,7 +2574,7 @@ class ServiceMenuSystem(System):
         if reason == "no_staff":
             return f"Shopping: {prop_name}", [
                 f"No clerk is serving {prop_name} right now.",
-                "Try again when counter staff are present, or use M at unattended self-serve kiosks.",
+                "Try again when counter staff are present, or use an unattended self-serve kiosk directly.",
             ]
         return f"Shopping: {prop_name}", [f"No shopping counter is ready at {prop_name} right now."]
 
@@ -2758,7 +2758,7 @@ class ServiceMenuSystem(System):
         machine_profile = self._machine_service_profile(prop)
         machine_action = None
         if machine_profile:
-            transcript.append("M opens the unattended machine directly.")
+            transcript.append("Use the unattended machine directly from its tile.")
             machine_action = {
                 "property_id": prop.get("id"),
                 "mode": "buy",
@@ -2777,7 +2777,7 @@ class ServiceMenuSystem(System):
             "topics": list(options),
             "selected_index": 0,
             "scroll": 0,
-            "hint": "Pick a service. Staffed counters are routed here; M is for machines.",
+            "hint": "Pick a service. Staffed counters are routed here; machines open directly from their tile.",
             "new_topic_ids": [],
             "close_pending": False,
             "machine_action": machine_action,

@@ -771,7 +771,7 @@ def draw_report_modal(
             footer_bits.append("more below")
         footer = " | ".join(footer_bits) if footer_bits else ""
         action_verb = "restore" if filter_mode == "hidden" else "hide"
-        action_tail = f"Enter inspect | G go | M mark | R {action_verb} | H hidden | Tab people | Y close | O ops | L log | D debug | ? help"
+        action_tail = f"Enter inspect | G go | M mark | R {action_verb} | H hidden | Tab people notebook | Y close | O ops | L log | D debug | ? help"
         footer = f"{footer} | {action_tail}" if footer else action_tail
     elif report_kind == "known_people":
         rows = list(report_ui.get("rows", ()) or ())
@@ -842,7 +842,7 @@ def draw_report_modal(
         if scroll + list_h < len(rows):
             footer_bits.append("more below")
         footer = " | ".join(footer_bits) if footer_bits else ""
-        action_tail = "Tab locations | Y close | O ops | L log | D debug | ? help"
+        action_tail = "Tab places notebook | Y close | O ops | L log | D debug | ? help"
         footer = f"{footer} | {action_tail}" if footer else action_tail
     else:
         display_lines = report_display_lines(
@@ -869,7 +869,7 @@ def draw_report_modal(
         if scroll + body_h < len(display_lines):
             footer_bits.append("more below")
         footer = " | ".join(footer_bits) if footer_bits else ""
-        action_tail = "O close | Y locations | L log | D debug | ? help"
+        action_tail = "O close | Y notebooks | L log | D debug | ? help"
         footer = f"{footer} | {action_tail}" if footer else f"{action_tail} | Up/Down scroll"
 
     view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip_text(footer, panel_w - 4))
@@ -921,8 +921,8 @@ def draw_debug_modal(
         footer_bits.append("more below")
     footer = " | ".join(footer_bits) if footer_bits else ""
     footer = (
-        f"{footer} | D close | O ops | Y locations | L log | ? help"
+        f"{footer} | D close | O ops | Y notebooks | L log | ? help"
         if footer
-        else "D close | O ops | Y locations | L log | Up/Down scroll | ? help"
+        else "D close | O ops | Y notebooks | L log | Up/Down scroll | ? help"
     )
     view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip_text(footer, panel_w - 4))

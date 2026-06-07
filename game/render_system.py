@@ -757,7 +757,7 @@ class RenderSystem(System):
             f"Aim/Combat: {aim_open}, move cursor, F cycle target, {aim_confirm}, C cover, v cover hop, Shift+S sneak, V cycle weapon.",
             "Items: I inventory, , picks up nearby items, U use/equip/stow, R drop.",
             "Visual classes: vehicles use '&' symbol colors only; properties use letters; items are bright symbols; humans use colored @ symbols and wildlife uses taxonomy letters.",
-            "Progress: O operations report, Y known locations and owned vehicles, L event log history.",
+            "Progress: O operations report, Y opens the Places notebook; Tab switches to the People notebook. L opens event log history.",
             "Log modal: T cycles filters; H sets the current modal filter as the live HUD filter.",
             "Debug: D live telemetry for lighting, stealth, pressure, property access, and objective state.",
             "Services: . uses the service on your tile, including banking, insurance, terminals, transit, and storefront counters. P buy property.",
@@ -766,7 +766,7 @@ class RenderSystem(System):
         if zoom_mode == "overworld":
             if view_only:
                 lines.append("Map view: move to browse chunks, Enter or x inspect the selected chunk, and t return on-foot.")
-                lines.append("Map tools: X opens the map from on foot, M adds a marker here, l lists markers, N jumps to the nearest marker, O ops, Y locations, L log.")
+                lines.append("Map tools: X opens the map from on foot, M adds a marker here, l lists markers, N jumps to the nearest marker, O ops, Y notebooks, L log.")
             else:
                 lines.append("In-vehicle map: move travels chunks, G drives to the last marker, M adds a marker, l lists markers, N jumps to the nearest marker, and t exits on-foot.")
             lines.append("Overworld POIs: stronger non-city chunks can replace the center glyph with a site initial.")
@@ -2024,7 +2024,7 @@ class RenderSystem(System):
             opportunity_line = "Opp 0 known"
         show_opportunity_line = bool(opportunity_line)
 
-        report_hint_line = "O ops report, Y known locations."
+        report_hint_line = "O ops report, Y notebooks."
 
         if look_ui.get("active"):
             look_entry = look_ui.get("inspect_text", "")
@@ -2091,21 +2091,21 @@ class RenderSystem(System):
             if inventory_panel_kind == "container":
                 controls = (
                     f"{inventory_container_label}: browse, U transfer, Left/Right or Tab switch "
-                    f"{inventory_container_label.lower()}/pack, E inspect, O ops, Y locations, "
+                    f"{inventory_container_label.lower()}/pack, E inspect, O ops, Y notebooks, "
                     f"L log, D debug, I/Esc close, ? help"
                 )
             else:
-                controls = "Inventory: browse, U use/equip/stow, R drop, E inspect, O ops, Y locations, L log, D debug, I/Esc close, ? help"
+                controls = "Inventory: browse, U use/equip/stow, R drop, E inspect, O ops, Y notebooks, L log, D debug, I/Esc close, ? help"
         elif trade_ui.get("open"):
-            controls = "Trade: browse, B/S mode, E trade, X inspect, O ops, Y locations, L log, D debug, M close, ? help"
+            controls = "Trade: browse, B/S mode, E trade, X inspect, O ops, Y notebooks, L log, D debug, M/Esc close, ? help"
         elif casino_ui.get("open"):
             casino_mode = str(casino_ui.get("mode", "floor") or "floor").strip().lower()
             if casino_mode in {"floor", "services", "wager"}:
-                controls = "Casino: Up/Down browse, Enter select, Tab switch page, O ops, Y locations, L log, D debug, Esc leave, ? help"
+                controls = "Casino: Up/Down browse, Enter select, Tab switch page, O ops, Y notebooks, L log, D debug, Esc leave, ? help"
             elif bool(casino_ui.get("close_pending")) or casino_mode == "result":
-                controls = "Casino result: Space return, O ops, Y locations, L log, D debug, Esc return, ? help"
+                controls = "Casino result: Space return, O ops, Y notebooks, L log, D debug, Esc return, ? help"
             else:
-                controls = "Casino live: arrows move focus, Space stage, Backspace pull chip, Enter resolve, O ops, Y locations, L log, D debug, Esc back, ? help"
+                controls = "Casino live: arrows move focus, Space stage, Backspace pull chip, Enter resolve, O ops, Y notebooks, L log, D debug, Esc back, ? help"
         elif dialog_ui.get("open"):
             dialog_topic_ids = {
                 str(row.get("id", "")).strip().lower()
@@ -2113,30 +2113,30 @@ class RenderSystem(System):
                 if isinstance(row, dict)
             }
             if dialog_topic_ids & {"backup_orders", "backup_goto_wait", "backup_wait_return", "backup_kill"}:
-                controls = "Dialog: Up/Down choose, E ask, X mark spot, PgUp/PgDn scroll, M trade, O ops, Y locations, L log, D debug, Esc close, ? help"
+                controls = "Dialog: Up/Down choose, E ask, X mark spot, PgUp/PgDn scroll, M trade, O ops, Y notebooks, L log, D debug, Esc close, ? help"
             else:
-                controls = "Dialog: Up/Down choose, E ask, PgUp/PgDn scroll, M trade, O ops, Y locations, L log, D debug, Esc close, ? help"
+                controls = "Dialog: Up/Down choose, E ask, PgUp/PgDn scroll, M trade, O ops, Y notebooks, L log, D debug, Esc close, ? help"
         elif character_ui.get("open"):
-            controls = "Sheet: Left/Right or Tab pages, 1-3 jump, Up/Down browse, PgUp/PgDn jump, +/Esc close, O ops, Y locations, L log, D debug, ? help"
+            controls = "Sheet: Left/Right or Tab pages, 1-4 jump, Up/Down browse, PgUp/PgDn jump, +/Esc close, O ops, Y notebooks, L log, D debug, ? help"
         elif report_ui.get("open"):
             report_kind = str(report_ui.get("kind", "progress")).strip().lower() or "progress"
             if report_kind == "known_locations":
-                controls = "Notebook: Up/Down choose, Enter inspect, G go, M mark, R hide/restore, H hidden view, O ops, Y close, L log, D debug, ? help"
+                controls = "Places Notebook: Up/Down choose, Enter inspect, G go, M mark, R hide/restore, H hidden view, Tab people notebook, O ops, Y close, L log, D debug, ? help"
             else:
-                controls = "Notebook: Up/Down browse, PgUp/PgDn jump, O ops, Y locations, L log, D debug, Esc close, ? help"
+                controls = "People Notebook: Up/Down browse, PgUp/PgDn jump, Tab places notebook, O ops, Y close, L log, D debug, Esc close, ? help"
         elif log_ui.get("open"):
-            controls = "Log: Up/Down browse, PgUp/PgDn jump, T filter, H set HUD filter, O ops, Y locations, D debug, L/Esc close, ? help"
+            controls = "Log: Up/Down browse, PgUp/PgDn jump, T filter, H set HUD filter, O ops, Y notebooks, D debug, L/Esc close, ? help"
         elif debug_ui.get("open"):
-            controls = "Debug: Up/Down browse, O ops, Y locations, L log, D/Esc close, ? help"
+            controls = "Debug: Up/Down browse, O ops, Y notebooks, L log, D/Esc close, ? help"
         elif overlay.get("active"):
             controls = f"Combat: move or act, {_aim_open_label(self.sim, self.player_eid)}, C cover, v hop, Shift+S sneak, ? help, Q quit"
         elif zoom_mode == "overworld":
             if bool(getattr(self.sim, "overworld_view_only_by_eid", {}).get(int(self.player_eid), False)):
                 controls = "Map: move browse chunks, Enter/x inspect selected chunk, M/l/N markers, + sheet, t return on-foot, ? help"
             else:
-                controls = "In-vehicle: move, G drive marker, M/l/N markers, O ops, Y locations, L log, + sheet, t exit on-foot, center icons UPPER=loaded lower=distant, ? help"
+                controls = "In-vehicle: move, G drive marker, M/l/N markers, O ops, Y notebooks, L log, + sheet, t exit on-foot, center icons UPPER=loaded lower=distant, ? help"
         else:
-            controls = f"Move: arrows/WASD/HJKL/QEZC, {_aim_open_label(self.sim, self.player_eid)}, / talk, . service, ' interact, , pickup, ; lock door, X map, + sheet, Shift+J breach door, O ops, Y locations, L log, D debug, or ? for help"
+            controls = f"Move: arrows/WASD/HJKL/QEZC, {_aim_open_label(self.sim, self.player_eid)}, / talk, . service, ' interact, , pickup, ; lock door, X map, + sheet, Shift+J breach door, O ops, Y notebooks, L log, D debug, or ? for help"
 
         mode_line = _mode_line(
             mode_state=player_modes,
@@ -2436,14 +2436,14 @@ class RenderSystem(System):
             if panel_kind == "container":
                 hint = (
                     f"U transfer  Left/Right or Tab switch {container_label.lower()}/pack  "
-                    f"E inspect  O ops  Y locations  L log  D debug  I close"
+                    f"E inspect  O ops  Y notebooks  L log  D debug  I close"
                 )
             else:
-                hint = "U use/equip/stow  R drop  E inspect  O ops  Y locations  L log  D debug  I close"
+                hint = "U use/equip/stow  R drop  E inspect  O ops  Y notebooks  L log  D debug  I close"
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, panel_w - 4))
         elif trade_ui.get("open"):
-            panel_w = min(max(40, map_w // 2), map_w)
-            panel_x = max(0, map_w - panel_w)
+            panel_w = min(max(52, screen_w - 4), screen_w)
+            panel_x = max(0, (screen_w - panel_w) // 2)
             panel_y = 0
             panel_h = max(8, min(map_h, map_h - 1))
 
@@ -2581,7 +2581,7 @@ class RenderSystem(System):
                 _clip_display_line(inspect_text, panel_w - 4),
                 panel_w - 4,
             )
-            hint = "E trade  B buy  S sell  X inspect  O ops  Y locations  L log  D debug  M close"
+            hint = "E trade  B buy  S sell  X inspect  O ops  Y notebooks  L log  D debug  M/Esc close"
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, panel_w - 4))
         elif casino_ui.get("open"):
             panel_w = min(max(78, map_w - 4), map_w)
@@ -2677,11 +2677,11 @@ class RenderSystem(System):
             footer = hint or "Casino floor"
             self.view.draw_text(panel_x + 2, footer_y, footer[: max(1, panel_w - 4)])
         elif dialog_ui.get("open"):
-            panel_w = min(max(62, map_w - 4), map_w)
+            panel_w = min(max(62, screen_w - 4), screen_w)
             panel_w = max(30, panel_w)
             panel_h = min(max(15, map_h - 1), map_h)
             panel_h = max(10, panel_h)
-            panel_x = max(0, (map_w - panel_w) // 2)
+            panel_x = max(0, (screen_w - panel_w) // 2)
             panel_y = max(0, (map_h - panel_h) // 2)
 
             def _clip(text, width):
@@ -2802,19 +2802,18 @@ class RenderSystem(System):
             }
             footer = " | ".join(footer_bits) if footer_bits else ""
             if close_pending:
-                action_tail = "Space close | Esc close | O ops | Y locations | L log | D debug | ? help"
+                action_tail = "Space close | Esc close | O ops | Y notebooks | L log | D debug | ? help"
             elif dialog_kind == "justice_surrender":
                 action_tail = "E choose | Esc resist | ? help"
             elif dialog_kind == "justice_questioning":
                 action_tail = "E choose | Esc refuse | ? help"
             elif dialog_kind == "service_menu":
-                has_machine_action = isinstance(dialog_ui.get("machine_action"), dict) and bool(dialog_ui.get("machine_action"))
-                action_tail = "E select | Esc close | M machine | O ops | Y locations | ? help" if has_machine_action else "E select | Esc close | O ops | Y locations | ? help"
+                action_tail = "E select | Esc close | O ops | Y notebooks | ? help"
             else:
                 if dialog_topic_ids & {"backup_orders", "backup_goto_wait", "backup_wait_return", "backup_kill"}:
-                    action_tail = "E ask | X mark | Esc close | M trade | O ops | Y locations | ? help"
+                    action_tail = "E ask | X mark | Esc close | M trade | O ops | Y notebooks | ? help"
                 else:
-                    action_tail = "E ask | Esc close | M trade | O ops | Y locations | ? help"
+                    action_tail = "E ask | Esc close | M trade | O ops | Y notebooks | ? help"
             if footer:
                 footer = f"{footer} | {action_tail}"
             else:
@@ -2828,9 +2827,9 @@ class RenderSystem(System):
                     footer = f"{action_tail} | L log | D debug"
                 else:
                     if dialog_topic_ids & {"backup_orders", "backup_goto_wait", "backup_wait_return", "backup_kill"}:
-                        footer = "E ask | X mark | Esc close | M trade | O ops | Y locations | L log | D debug | ? help"
+                        footer = "E ask | X mark | Esc close | M trade | O ops | Y notebooks | L log | D debug | ? help"
                     else:
-                        footer = "E ask | Esc close | M trade | O ops | Y locations | L log | D debug | ? help"
+                        footer = "E ask | Esc close | M trade | O ops | Y notebooks | L log | D debug | ? help"
             self.view.draw_text(panel_x + 2, footer_y, _clip(footer, body_w))
         elif character_ui.get("open"):
             panel_w = min(max(60, screen_w - 4), screen_w)
@@ -2883,11 +2882,12 @@ class RenderSystem(System):
             self.view.draw_text(panel_x + 2, panel_y + 2, _clip(nav_line, panel_w - 4))
 
             body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
-            body_h = max(1, panel_h - 5)
+            body_h = max(1, panel_h - 6)
             display_lines = []
             for raw in list(character_ui.get("lines", ()) or ()) or ["No character data."]:
                 wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
                 display_lines.extend(wrapped)
+            display_lines.extend(["", ""])
             display_lines = display_lines or ["No character data."]
             max_scroll = max(0, len(display_lines) - body_h)
             scroll = max(0, min(int(character_ui.get("scroll", 0)), max_scroll))
@@ -2903,7 +2903,7 @@ class RenderSystem(System):
             if scroll + body_h < len(display_lines):
                 footer_bits.append("more below")
             footer = " | ".join(footer_bits) if footer_bits else ""
-            action_tail = "Tab/Left/Right pages | 1-3 jump | + close | O ops | Y locations | L log | D debug | Up/Down scroll | ? help"
+            action_tail = "Tab/Left/Right pages | 1-4 jump | + close | O ops | Y notebooks | L log | D debug | Up/Down scroll | ? help"
             if footer:
                 footer = f"{footer} | {action_tail}"
             else:
@@ -2989,9 +2989,9 @@ class RenderSystem(System):
                 footer_bits.append("newer below")
             footer = " | ".join(footer_bits) if footer_bits else ""
             if footer:
-                footer = f"{footer} | T cycle filter | H set HUD filter | L close | O ops | Y locations | D debug | ? help"
+                footer = f"{footer} | T cycle filter | H set HUD filter | L close | O ops | Y notebooks | D debug | ? help"
             else:
-                footer = "T cycle filter | H set HUD filter | L close | O ops | Y locations | D debug | Up/Down scroll | ? help"
+                footer = "T cycle filter | H set HUD filter | L close | O ops | Y notebooks | D debug | Up/Down scroll | ? help"
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, panel_w - 4))
         elif debug_ui.get("open"):
             _report_debug_ui.draw_debug_modal(
