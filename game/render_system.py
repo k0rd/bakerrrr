@@ -2208,8 +2208,8 @@ class RenderSystem(System):
                 break
 
         if inventory_ui.get("open"):
-            panel_w = min(max(36, map_w // 2), map_w)
-            panel_x = max(0, map_w - panel_w)
+            panel_w = min(max(36, screen_w - 4), screen_w)
+            panel_x = max(0, (screen_w - panel_w) // 2)
             panel_y = 0
             panel_h = max(8, min(map_h, map_h - 1))
 
