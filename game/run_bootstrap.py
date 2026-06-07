@@ -74,6 +74,7 @@ class NormalRunBootstrapProfile:
     objective_visible: bool = False
     street_kit_base: tuple[tuple[str, int], ...] = (
         ("street_ration", 1),
+        ("bottled_water", 2),
         ("med_gel", 1),
         ("city_pass_token", 1),
     )

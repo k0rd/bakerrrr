@@ -12,22 +12,14 @@ from game.human_identity import (
 
 _STYLE_WEIGHTS = {
     "woman": (
-        ("femme", 0.48),
-        ("mixed", 0.22),
-        ("androgynous", 0.16),
-        ("masc", 0.14),
+        ("femme", 1.0),
     ),
     "man": (
-        ("masc", 0.48),
-        ("mixed", 0.22),
-        ("androgynous", 0.16),
-        ("femme", 0.14),
+        ("masc", 1.0),
     ),
     "nonbinary": (
-        ("androgynous", 0.36),
-        ("mixed", 0.28),
-        ("femme", 0.18),
-        ("masc", 0.18),
+        ("androgynous", 0.56),
+        ("mixed", 0.44),
     ),
 }
 
@@ -252,7 +244,7 @@ _ACCESSORY_ROWS = {
     ),
 }
 
-_STANDOUT_ROWS = (
+_GENERAL_STANDOUT_ROWS = (
     ("a scar on the right cheek", "scarred right cheek"),
     ("a nick through one eyebrow", "nicked eyebrow"),
     ("paint caught under the nails", "paint-stained nails"),
@@ -261,9 +253,14 @@ _STANDOUT_ROWS = (
     ("a split knuckle or two", "split knuckles"),
     ("tired eyes that give the whole face away", "tired eyes"),
     ("a tattoo line disappearing under the collar", "collarline tattoo"),
-    ("careful eyeliner sharp enough to read at a distance", "sharp eyeliner"),
     ("a chipped front tooth when the mouth shifts", "chipped front tooth"),
 )
+
+_EYELINER_STANDOUT_ROWS = (
+    ("careful eyeliner sharp enough to read at a distance", "sharp eyeliner"),
+)
+
+_STANDOUT_ROWS = _GENERAL_STANDOUT_ROWS + _EYELINER_STANDOUT_ROWS
 
 _FACIAL_HAIR_STANDOUT_ROWS = (
     ("close-trimmed stubble kept exact", "trimmed stubble"),
@@ -384,11 +381,20 @@ def _identity_noun(gender_identity):
 def _standout_rows_for(gender_identity, style_axis):
     gender_identity = normalize_gender_identity(gender_identity, default="nonbinary")
     style_axis = str(style_axis or "").strip().lower()
-    if gender_identity == "woman":
-        return _STANDOUT_ROWS
-    if gender_identity == "man" or style_axis == "masc":
-        return _STANDOUT_ROWS + _FACIAL_HAIR_STANDOUT_ROWS
-    return _STANDOUT_ROWS
+    rows = _GENERAL_STANDOUT_ROWS if gender_identity == "man" else _STANDOUT_ROWS
+    if gender_identity == "man" or (gender_identity == "nonbinary" and style_axis == "masc"):
+        rows = rows + _FACIAL_HAIR_STANDOUT_ROWS
+    return rows
+
+
+def _grooming_rows_for(gender_identity, style_axis):
+    gender_identity = normalize_gender_identity(gender_identity, default="nonbinary")
+    style_axis = str(style_axis or "").strip().lower()
+    rows = tuple(_GROOMING_ROWS.get(style_axis, _GROOMING_ROWS["mixed"]))
+    if gender_identity != "man":
+        return rows
+    filtered = tuple(row for row in rows if "makeup" not in str(row).lower())
+    return filtered or _GROOMING_ROWS["masc"]
 
 
 def build_human_description_profile(seed, *, eid=None, identity=None, personal_name=None):
@@ -417,7 +423,7 @@ def build_human_description_profile(seed, *, eid=None, identity=None, personal_n
     accessory_phrase, accessory_compact = _pick_row(rng, _ACCESSORY_ROWS[style_axis])
     standout_phrase, standout_compact = _pick_row(rng, _standout_rows_for(gender_identity, style_axis))
     demeanor_phrase, demeanor_compact = _pick_row(rng, _DEMEANOR_ROWS)
-    grooming_sentence = _pick_row(rng, _GROOMING_ROWS[style_axis])
+    grooming_sentence = _pick_row(rng, _grooming_rows_for(gender_identity, style_axis))
 
     hair_phrase = f"{hair_length} {hair_color} {hair_texture} hair {hair_style_phrase}"
     hair_compact = f"{hair_length} {hair_color} hair"
