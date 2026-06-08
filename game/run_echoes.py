@@ -233,6 +233,28 @@ def _incident_summary_text(record):
     return f"A case around {subject} still echoes locally."
 
 
+def _incident_echo_summary_key(record):
+    summary = " ".join(_text((record or {}).get("summary")).split()).casefold()
+    if summary:
+        return summary
+    return _text((record or {}).get("echo_id")).casefold()
+
+
+def _dedupe_incident_echo_records(records):
+    unique = []
+    seen = set()
+    for record in tuple(records or ()):
+        if not isinstance(record, dict):
+            continue
+        key = _incident_echo_summary_key(record)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        unique.append(record)
+    return tuple(unique)
+
+
 def _incident_dispatch_weight(ledger, incident_id):
     if ledger is None or incident_id is None:
         return 0
@@ -410,7 +432,7 @@ def archive_run_echoes(sim, player_eid, *, outcome="", reason="", objective_titl
 
     runtime = prime_run_echoes_runtime(sim)
     archive_path = runtime.get("archive_path")
-    incident_records_to_archive = _build_incident_echo_records(sim, outcome=outcome)
+    incident_records_to_archive = _dedupe_incident_echo_records(_build_incident_echo_records(sim, outcome=outcome))
     remnant_records = []
     remnant = _build_successful_remnant_echo_record(
         sim,
@@ -440,7 +462,7 @@ def archive_run_echoes(sim, player_eid, *, outcome="", reason="", objective_titl
     if incident_records_to_archive:
         strongest = incident_records_to_archive[0]
         lines.append(f"  Strongest incident echo: {_text(strongest.get('summary'))}")
-        for record in incident_records_to_archive:
+        for record in incident_records_to_archive[1:]:
             lines.append(f"  Incident echo: {_text(record.get('summary'))}")
     if remnant_records:
         lines.append(f"  Remnant echo: {_text(remnant_records[0].get('summary'))}")

@@ -22,7 +22,7 @@ from game.property_runtime import property_infrastructure_role as _property_infr
 
 
 PEACE_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
-PHONE_ITEM_IDS = {"burner_phone", "cell_phone", "phone", "radio", "walkie_talkie"}
+PHONE_ITEM_IDS = {"burner_phone", "cell_phone", "phone", "radio", "walkie_talkie", "two_way_radio"}
 RESPONSE_STATE_BY_CUE = {
     "report_authority": "reporting_incident",
     "help_victim": "helping_victim",

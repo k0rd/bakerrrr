@@ -1824,6 +1824,20 @@
     "legal_status": "legal",
     "effects": []
   },
+  "two_way_radio": {
+    "name": "Two-Way Radio",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "token",
+      "radio",
+      "communication",
+      "comms",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
   "scrap_circuit": {
     "name": "Scrap Circuit",
     "glyph": ")",

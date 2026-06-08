@@ -14,6 +14,7 @@ from game.appearance import (
     property_render_snapshot as _appearance_property_render_snapshot,
     CAT_COAT_COLOR as APPEARANCE_CAT_COAT_COLOR,
 )
+from game.appearance_loadout import is_entry_worn
 from game.components import (
     AI,
     AnimalMemory,
@@ -1867,6 +1868,34 @@ class RenderSystem(System):
                     attrs=attrs,
                 )
 
+            radio_scan = getattr(self.sim, "world_traits", {}).get("justice_radio_scan", {})
+            if isinstance(radio_scan, dict) and int(radio_scan.get("expires_tick", -1) or -1) >= int(getattr(self.sim, "tick", 0)):
+                ping_attr = getattr(curses, "A_BOLD", 0) | getattr(curses, "A_REVERSE", 0)
+                for row in tuple(radio_scan.get("positions", ()) or ()):
+                    if not isinstance(row, dict):
+                        continue
+                    wx = int(row.get("x", 0) or 0)
+                    wy = int(row.get("y", 0) or 0)
+                    wz = int(row.get("z", 0) or 0)
+                    if wz != int(active_z):
+                        continue
+                    if self.sim.detail_for_xy(wx, wy) == "unloaded":
+                        continue
+                    if _is_visible(wx, wy, wz):
+                        continue
+                    sx = wx - camera_x
+                    sy = wy - camera_y
+                    if not (0 <= sx < map_w and 0 <= sy < map_h):
+                        continue
+                    appearance = self.sim.appearance.marker(
+                        "justice_radio_ping",
+                        "!",
+                        color="player",
+                        layer="ui_overlay",
+                        priority=95,
+                    )
+                    self._draw_appearance(sx, sy, appearance, attrs=ping_attr)
+
             if look_ui.get("active") and look_purpose == "aim" and player_pos:
                 preview = _manual_fire_preview(
                     self.sim,
@@ -2630,7 +2659,10 @@ class RenderSystem(System):
                     stowed_container_instance = _entry_stowed_container_instance(entry)
                     if stowed_container_instance:
                         storage_suffix = " [stowed]"
-                label = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} {name} x{entry['quantity']}{ammo_suffix}{storage_suffix}"
+                worn_suffix = ""
+                if (panel_kind != "container" or container_view == "pack") and is_entry_worn(entry):
+                    worn_suffix = " [worn]"
+                label = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} {name} x{entry['quantity']}{ammo_suffix}{worn_suffix}{storage_suffix}"
                 self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2))
 
             if not entries:

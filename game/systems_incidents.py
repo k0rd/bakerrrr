@@ -985,7 +985,17 @@ class IncidentKnowledgeSystem(System):
             severity = 40
         building_id = str(event.data.get("building_id", "") or "").strip().lower()
         property_id = str(event.data.get("property_id", "") or "").strip().lower()
-        merge_subject = building_id or property_id or f"{int(x)}:{int(y)}:{int(event.data.get('z', 0) or 0)}"
+        try:
+            z = int(event.data.get("z", 0) or 0)
+        except (TypeError, ValueError):
+            z = 0
+        chunk_subject = ""
+        try:
+            chunk_x, chunk_y = self.sim.chunk_coords(int(x), int(y))
+            chunk_subject = f"chunk:{int(chunk_x)}:{int(chunk_y)}:{z}"
+        except (AttributeError, TypeError, ValueError):
+            chunk_subject = f"area:{int(x) // 16}:{int(y) // 16}:{z}"
+        merge_subject = building_id or property_id or chunk_subject
         source_kind = str(event.data.get("source_kind", "") or "").strip().lower()
         note = f"{source_kind} fire" if source_kind else "structure fire"
         incident = self._create_incident(

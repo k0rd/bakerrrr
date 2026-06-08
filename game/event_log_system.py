@@ -463,6 +463,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("item_drop_blocked", self.on_item_drop_blocked)
         self.sim.events.subscribe("item_used", self.on_item_used)
         self.sim.events.subscribe("item_use_blocked", self.on_item_use_blocked)
+        self.sim.events.subscribe("report_device_used", self.on_report_device_used)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
         self.sim.events.subscribe("business_scene_posture_started", self.on_business_scene_posture_started)
         self.sim.events.subscribe("business_scene_nuisance", self.on_business_scene_nuisance)
@@ -3374,6 +3375,33 @@ class EventLogSystem(System):
                     else:
                         _log_player_feedback(self.sim, f"{item_name} does not tell you anything new.", kind="interaction")
                 return
+            if usage_kind == "justice_radio_scan":
+                try:
+                    mechanics = float(event.data.get("mechanics", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    mechanics = 0.0
+                if not bool(event.data.get("success")):
+                    _log_player_feedback(self.sim, f"{item_name} spits static, overheats, and dies. Mechanics {mechanics:.1f} was not enough.", kind="interaction")
+                    return
+                rows = list(event.data.get("scan_rows", ()) or ())
+                duration = _int_or_default(event.data.get("duration"), 0)
+                radius = _int_or_default(event.data.get("radius"), 0)
+                if not rows:
+                    _log_player_feedback(self.sim, f"{item_name} burns out after a clean sweep: no justice signals within {radius} tiles.", kind="interaction")
+                    return
+                nearest = []
+                for row in rows[:3]:
+                    if not isinstance(row, dict):
+                        continue
+                    distance = _int_or_default(row.get("distance"), 0)
+                    role = str(row.get("role", "justice") or "justice").replace("_", " ")
+                    nearest.append(f"{role} {distance}t")
+                detail = "; ".join(nearest)
+                if detail:
+                    _log_player_feedback(self.sim, f"{item_name} burns out, but flags {len(rows)} justice signal(s) for {duration} ticks: {detail}.", kind="interaction")
+                else:
+                    _log_player_feedback(self.sim, f"{item_name} burns out, but flags {len(rows)} justice signal(s) for {duration} ticks.", kind="interaction")
+                return
             applied = list(event.data.get("applied", ()) or ())
             bits = []
             for entry in applied:
@@ -3584,6 +3612,24 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"{item_name} conflicts with what you are already wearing.", kind="interaction")
         else:
             _log_player_feedback(self.sim, f"You cannot use {item_name} right now.", kind="interaction")
+
+    def on_report_device_used(self, event):
+        npc_eid = event.data.get("npc_eid")
+        if npc_eid == self.player_eid or not self._player_can_perceive_entity(npc_eid):
+            return
+        method = str(event.data.get("method", "") or "").strip().lower()
+        if method == "radio":
+            message = f"{self._npc_label(npc_eid)} keys a radio and calls for help."
+        else:
+            message = f"{self._npc_label(npc_eid)} makes a quick phone call."
+        self._log_npc_message(
+            npc_eid,
+            message,
+            channel="alerts",
+            priority="normal",
+            dedupe_window=6,
+            dedupe_key=f"report-device:{npc_eid}:{event.data.get('incident_id')}:{method or 'device'}",
+        )
 
     def on_item_stolen(self, event):
         if event.data.get("offender_eid") != self.player_eid:

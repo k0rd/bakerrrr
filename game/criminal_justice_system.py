@@ -59,6 +59,7 @@ from game.items import (
     merge_item_stack_metadata,
     prepare_item_stack_metadata,
 )
+from game.item_semantics import inventory_has_phone
 from engine.systems import System
 from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
@@ -451,6 +452,26 @@ class CriminalJusticeSystem(System):
             use_legacy_witness_fallback=False,
             allow_position_backfill=False,
         )
+
+    def _event_has_justice_report_channel(self, event, *, offender_eid=None):
+        observation = self._event_accountability(event, offender_eid=offender_eid)
+        report_channels = {
+            str(channel or "").strip().lower()
+            for channel in tuple(observation.get("accountable_observation_channels", ()) or ())
+        }
+        if report_channels.intersection({"authority_report", "official_report", "camera_owner_feed"}):
+            return True
+        if "actor_witness" not in report_channels:
+            return False
+        for observer_eid in tuple(observation.get("accountable_observer_eids", ()) or ()):
+            enforcer, _law_drive, _priority = self._actor_is_enforcer(observer_eid)
+            if enforcer and self._actor_has_report_device(observer_eid):
+                return True
+        return False
+
+    def _actor_has_report_device(self, eid):
+        inventory = self.sim.ecs.get(Inventory).get(eid)
+        return inventory_has_phone(inventory, item_catalog=ITEM_CATALOG)
 
     def _mark_incident_accounted(self, incident_id, field="justice_accounted"):
         incident = incident_record(self.sim, incident_id)
@@ -2948,6 +2969,8 @@ class CriminalJusticeSystem(System):
         observation = self._event_accountability(event, offender_eid=offender_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
+        if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
+            return
         change = self._record_incident(
             offender_eid,
             incident_type="trespass",
@@ -2970,6 +2993,8 @@ class CriminalJusticeSystem(System):
         prop = self.sim.properties.get(property_id) if property_id else None
         observation = self._event_accountability(event, offender_eid=offender_eid)
         if not bool(observation.get("has_accountable_observation")):
+            return
+        if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
             return
         change = self._record_incident(
             offender_eid,
@@ -2997,6 +3022,8 @@ class CriminalJusticeSystem(System):
             return
         observation = self._event_accountability(event, offender_eid=offender_eid)
         if not bool(observation.get("has_accountable_observation")):
+            return
+        if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
             return
         change = self._record_incident(
             offender_eid,
@@ -3026,6 +3053,8 @@ class CriminalJusticeSystem(System):
             return
         observation = self._event_accountability(event, offender_eid=offender_eid)
         if not bool(observation.get("has_accountable_observation")):
+            return
+        if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
             return
         incident_type = self._incident_type_from_context(context)
         change = self._record_incident(

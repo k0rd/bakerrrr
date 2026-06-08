@@ -3,7 +3,7 @@
 import random
 
 from engine.events import Event
-from game.components import Inventory, PlayerAssets, Position, StatusEffects, WeaponLoadout
+from game.components import AI, Inventory, JusticeProfile, PlayerAssets, Position, StatusEffects, WeaponLoadout
 from game.appearance_loadout import (
     equip_appearance_item,
     is_appearance_item,
@@ -45,7 +45,12 @@ from game.system_support.item_provenance_runtime import (
     stamp_item_provenance,
 )
 from game.system_support.player_feedback import _log_player_feedback
+from game.skills import actor_skill
 from game.weapons import roll_weapon_instance, weapon_by_id
+
+
+RADIO_SCAN_JUSTICE_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
+RADIO_SCAN_MIN_MECHANICS = 6.0
 
 
 class ItemActionRuntime:
@@ -577,6 +582,111 @@ class ItemActionRuntime:
         )
         return True
 
+    def _is_radio_scanner_item(self, entry, item_def):
+        item_id = str((entry or {}).get("item_id") or item_def.get("id", "") or "").strip().lower()
+        tags = _item_tags(item_def)
+        return item_id in {"two_way_radio", "radio", "walkie_talkie"} or "radio" in tags
+
+    def _justice_radio_scan_rows(self, eid, x, y, z, *, radius, limit):
+        positions = self.sim.ecs.get(Position)
+        ais = self.sim.ecs.get(AI)
+        justices = self.sim.ecs.get(JusticeProfile)
+        rows = []
+        for target_eid, pos in positions.items():
+            if int(target_eid) == int(eid) or int(pos.z) != int(z):
+                continue
+            ai = ais.get(target_eid)
+            justice = justices.get(target_eid)
+            role = str(getattr(ai, "role", "") or "").strip().lower()
+            if role not in RADIO_SCAN_JUSTICE_ROLES and not bool(getattr(justice, "enforce_all", False)):
+                continue
+            if _entity_is_downed(self.sim, target_eid):
+                continue
+            distance = _manhattan(int(x), int(y), int(pos.x), int(pos.y))
+            if distance > int(radius):
+                continue
+            rows.append({
+                "eid": int(target_eid),
+                "x": int(pos.x),
+                "y": int(pos.y),
+                "z": int(pos.z),
+                "distance": int(distance),
+                "role": role or "justice",
+            })
+        rows.sort(key=lambda row: (int(row.get("distance", 0)), int(row.get("eid", 0))))
+        return rows[: max(1, int(limit))]
+
+    def _use_radio_scan(self, eid, x, y, z, inventory, entry, item_def, *, reason="manual"):
+        item_id = str(entry.get("item_id", item_def.get("id", "two_way_radio")) or "two_way_radio").strip().lower()
+        item_name = self._display_name_for_actor(eid, entry)
+        entry_metadata = dict(entry.get("metadata") or {}) if isinstance(entry.get("metadata"), dict) else {}
+        removed = inventory.remove_item(instance_id=entry["instance_id"], quantity=1)
+        if not removed:
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="consume_failed",
+                item_id=item_id,
+                item_name=item_name,
+            ))
+            return False
+
+        mechanics = float(actor_skill(self.sim, eid, "mechanics", default=5.0))
+        success = mechanics >= RADIO_SCAN_MIN_MECHANICS
+        duration = 0
+        radius = 0
+        rows = []
+        if success:
+            duration = max(18, min(90, int(round(18 + ((mechanics - RADIO_SCAN_MIN_MECHANICS) * 10)))))
+            radius = max(18, min(42, int(round(18 + ((mechanics - RADIO_SCAN_MIN_MECHANICS) * 5)))))
+            limit = max(3, min(8, int(round(3 + max(0.0, mechanics - RADIO_SCAN_MIN_MECHANICS)))))
+            rows = self._justice_radio_scan_rows(eid, x, y, z, radius=radius, limit=limit)
+            self.sim.world_traits["justice_radio_scan"] = {
+                "source_eid": int(eid),
+                "created_tick": int(getattr(self.sim, "tick", 0)),
+                "expires_tick": int(getattr(self.sim, "tick", 0)) + int(duration),
+                "radius": int(radius),
+                "mechanics": round(float(mechanics), 2),
+                "positions": list(rows),
+            }
+        self.sim.emit(Event(
+            "justice_radio_scan",
+            eid=eid,
+            item_id=item_id,
+            item_name=item_name,
+            success=bool(success),
+            broken=True,
+            mechanics=round(float(mechanics), 2),
+            duration=int(duration),
+            radius=int(radius),
+            rows=list(rows),
+        ))
+        self.sim.emit(Event(
+            "item_used",
+            eid=eid,
+            item_id=item_id,
+            item_name=item_name,
+            reason=reason,
+            applied=[],
+            usage_kind="justice_radio_scan",
+            success=bool(success),
+            broken=True,
+            mechanics=round(float(mechanics), 2),
+            duration=int(duration),
+            radius=int(radius),
+            scan_rows=list(rows),
+            item_metadata=entry_metadata,
+        ))
+        self.item_system._emit_action_offense(
+            eid=eid,
+            action="use_item",
+            context="ordinary",
+            x=x,
+            y=y,
+            z=z,
+        )
+        return True
+
     def reconcile_player_credsticks(self):
         inventory = self._inventory_for(self.player_eid)
         assets = self._assets_for(self.player_eid)
@@ -691,6 +801,18 @@ class ItemActionRuntime:
                 item_name=item_name,
             ))
             return False
+
+        if self._is_radio_scanner_item(entry, item_def):
+            return self._use_radio_scan(
+                eid,
+                x,
+                y,
+                z,
+                inventory,
+                entry,
+                item_def,
+                reason=reason,
+            )
 
         lead_result = self._use_lead_item(
             eid,

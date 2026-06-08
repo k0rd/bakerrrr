@@ -15,10 +15,12 @@ from __future__ import annotations
 
 from engine.events import Event
 from engine.systems import System
+from engine.visibility import observer_can_see_position
 
-from game.components import AI, IncidentKnowledge, Inventory, NPCWill, NPCRoutine, Position
+from game.components import AI, IncidentKnowledge, Inventory, JusticeProfile, NPCWill, NPCRoutine, Position
 from game.incident_runtime import incident_record
-from game.item_semantics import inventory_has_phone
+from game.items import item_display_name
+from game.item_semantics import inventory_has_phone, item_tags
 from game.property_runtime import property_infrastructure_role as _property_infrastructure_role
 from game.system_support.actor_runtime import _entity_is_downed
 from game.system_support.awareness_runtime import observation_payload_from_observers
@@ -84,6 +86,8 @@ class ObservedIncidentResponseSystem(System):
                 "reported": 0,
                 "help_arrivals": 0,
                 "phone_reports": 0,
+                "radio_reports": 0,
+                "radio_assists": 0,
                 "camera_reports": 0,
                 "dropped": 0,
             }
@@ -128,6 +132,8 @@ class ObservedIncidentResponseSystem(System):
             "cue_kind": cue_kind,
             "state": state,
             "method": route.get("method", ""),
+            "report_device_item_id": route.get("item_id"),
+            "report_device_item_name": route.get("item_name"),
             "target": route.get("target"),
             "target_eid": route.get("target_eid"),
             "urgency": _float(data.get("urgency"), 0.0),
@@ -139,11 +145,18 @@ class ObservedIncidentResponseSystem(System):
 
         # If the NPC has a phone/radio, reporting is immediate and local. Still
         # emit a report event so authority/report systems can dedupe globally.
-        if cue_kind == "report_authority" and route.get("method") in {"cell_phone", "camera_network"}:
+        if cue_kind == "report_authority" and route.get("method") in {"cell_phone", "radio", "camera_network"}:
+            if route.get("method") == "cell_phone":
+                self._emit_report_device_used(pending, x=pos.x, y=pos.y, z=pos.z)
             self._emit_authority_report(pending, x=pos.x, y=pos.y, z=pos.z)
+            if route.get("method") == "radio":
+                assist_eid = self._call_remote_peace_officer(pending, reporter_pos=pos, incident=incident)
+                if assist_eid is None:
+                    self._emit_report_device_used(pending, x=pos.x, y=pos.y, z=pos.z)
+                self.sim.observed_response_stats["radio_reports"] += 1
             if route.get("method") == "camera_network":
                 self.sim.observed_response_stats["camera_reports"] += 1
-            else:
+            elif route.get("method") == "cell_phone":
                 self.sim.observed_response_stats["phone_reports"] += 1
             self._clear_actor_cue(npc_eid, incident_id)
             return
@@ -265,8 +278,15 @@ class ObservedIncidentResponseSystem(System):
                 "target_eid": None,
             }
 
-        if self._has_phone(npc_eid):
-            return {"method": "cell_phone", "target": _pos_tuple(self.sim.ecs.get(Position).get(npc_eid)), "target_eid": None}
+        device = self._report_device(npc_eid)
+        if device:
+            return {
+                "method": device.get("method", "cell_phone"),
+                "item_id": device.get("item_id"),
+                "item_name": device.get("item_name"),
+                "target": _pos_tuple(self.sim.ecs.get(Position).get(npc_eid)),
+                "target_eid": None,
+            }
 
         pos = self.sim.ecs.get(Position).get(npc_eid)
         if pos is None:
@@ -316,6 +336,30 @@ class ObservedIncidentResponseSystem(System):
             return False
         return inventory_has_phone(inv)
 
+    def _report_device(self, eid):
+        inv = self.sim.ecs.get(Inventory).get(eid)
+        if not inv:
+            return None
+        fallback = None
+        for entry in tuple(getattr(inv, "items", ()) or ()):
+            item_id = _key(entry.get("item_id") if isinstance(entry, dict) else None)
+            tags = item_tags(entry)
+            if not item_id:
+                continue
+            if item_id in {"two_way_radio", "radio", "walkie_talkie"} or {"radio", "comms"} & tags:
+                return {
+                    "method": "radio",
+                    "item_id": item_id,
+                    "item_name": item_display_name(item_id, metadata=entry.get("metadata") if isinstance(entry, dict) else None),
+                }
+            if item_id in {"mobile_phone", "burner_phone", "unregistered_mobile_phone", "cell_phone", "phone"} or {"phone", "cellular"} & tags:
+                fallback = {
+                    "method": "cell_phone",
+                    "item_id": item_id,
+                    "item_name": item_display_name(item_id, metadata=entry.get("metadata") if isinstance(entry, dict) else None),
+                }
+        return fallback
+
     def _has_camera_network(self, eid, incident_id):
         try:
             incident_id = int(incident_id)
@@ -361,6 +405,48 @@ class ObservedIncidentResponseSystem(System):
             distance = _dist(origin, target)
             if distance <= int(max_radius):
                 ranked.append((distance, eid, target))
+        if not ranked:
+            return None
+        ranked.sort(key=lambda row: (row[0], row[1]))
+        return {"eid": ranked[0][1], "target": ranked[0][2]}
+
+    def _nearest_remote_peace_officer(self, npc_eid, pos, *, max_radius=32):
+        ais = self.sim.ecs.get(AI)
+        positions = self.sim.ecs.get(Position)
+        justices = self.sim.ecs.get(JusticeProfile)
+        origin = (int(pos.x), int(pos.y), int(pos.z))
+        ranked = []
+        for eid, ai in ais.items():
+            if eid == npc_eid:
+                continue
+            role = _key(getattr(ai, "role", ""))
+            justice = justices.get(eid)
+            if role not in PEACE_ROLES and not bool(getattr(justice, "enforce_all", False)):
+                continue
+            if _key(getattr(ai, "state", "")) in {"protecting", "reporting_incident", "helping_victim", "seeking_safety", "downed"}:
+                continue
+            if _entity_is_downed(self.sim, eid):
+                continue
+            p = positions.get(eid)
+            if not p or int(p.z) != int(pos.z):
+                continue
+            target = (int(p.x), int(p.y), int(p.z))
+            distance = _dist(origin, target)
+            if distance > int(max_radius):
+                continue
+            if observer_can_see_position(
+                self.sim,
+                npc_eid,
+                int(pos.x),
+                int(pos.y),
+                int(pos.z),
+                target[0],
+                target[1],
+                target[2],
+                radius=12,
+            ):
+                continue
+            ranked.append((distance, eid, target))
         if not ranked:
             return None
         ranked.sort(key=lambda row: (row[0], row[1]))
@@ -499,6 +585,78 @@ class ObservedIncidentResponseSystem(System):
             z=_int(z, 0),
             **observation,
         ))
+
+    def _emit_report_device_used(self, cue, *, x=None, y=None, z=None, assist_eid=None):
+        reporter_eid = _int(cue.get("npc_eid"), -1)
+        method = _key(cue.get("method"))
+        self.sim.emit(Event(
+            "report_device_used",
+            npc_eid=reporter_eid,
+            incident_id=_int(cue.get("incident_id"), -1),
+            method=method,
+            item_id=_text(cue.get("report_device_item_id")),
+            item_name=_text(cue.get("report_device_item_name")) or ("Two-Way Radio" if method == "radio" else "Phone"),
+            assist_eid=assist_eid,
+            x=_int(x, 0),
+            y=_int(y, 0),
+            z=_int(z, 0),
+        ))
+
+    def _call_remote_peace_officer(self, cue, *, reporter_pos, incident):
+        reporter_eid = _int(cue.get("npc_eid"), -1)
+        if reporter_eid < 0 or reporter_pos is None:
+            return None
+        candidate = self._nearest_remote_peace_officer(reporter_eid, reporter_pos)
+        if not candidate:
+            return None
+        incident_id = _int(cue.get("incident_id"), -1)
+        officer_eid = _int(candidate.get("eid"), -1)
+        target_eid = None
+        target = None
+        if isinstance(incident, dict):
+            target_eid = incident.get("primary_actor_eid")
+            target = self._entity_position(target_eid)
+            if target is None:
+                target = self._incident_position(incident)
+        if target is None:
+            target = _pos_tuple(reporter_pos)
+        if target is None:
+            return None
+
+        ai = self.sim.ecs.get(AI).get(officer_eid)
+        will = self.sim.ecs.get(NPCWill).get(officer_eid)
+        if not ai or not will:
+            return None
+        ai.state = "protecting" if target_eid is not None else "investigating"
+        ai.target = tuple(target)
+        ai.target_eid = target_eid
+        ai.incident_id = incident_id
+        ai.response_role = "radio_assist"
+        ai.suppress_report_for_incident_id = incident_id
+        will.intent = ai.state
+        will.score = max(72.0, min(98.0, _float(cue.get("urgency"), 0.7) * 100.0))
+        will.target = tuple(target)
+        will.target_eid = target_eid
+        will.last_tick = int(getattr(self.sim, "tick", 0))
+        self.sim.observed_response_stats["radio_assists"] += 1
+        self._emit_report_device_used(
+            cue,
+            x=reporter_pos.x,
+            y=reporter_pos.y,
+            z=reporter_pos.z,
+            assist_eid=officer_eid,
+        )
+        self.sim.emit(Event(
+            "radio_assist_called",
+            incident_id=incident_id,
+            reporter_eid=reporter_eid,
+            officer_eid=officer_eid,
+            target_eid=target_eid,
+            x=int(target[0]),
+            y=int(target[1]),
+            z=int(target[2]),
+        ))
+        return officer_eid
 
     def _finish_cue(self, npc_eid, cue):
         cue["completed"] = True

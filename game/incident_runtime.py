@@ -15,6 +15,7 @@ DEFAULT_INCIDENT_MERGE_RULES = {
     "item_stolen": {"ticks": 14, "radius": 2},
     "camera_alert": {"ticks": 10, "radius": 2},
     "disturbance": {"ticks": 8, "radius": 3},
+    "structure_fire": {"ticks": 180, "radius": 24},
 }
 
 DEFAULT_INCIDENT_MAX_AGE = {
@@ -24,6 +25,7 @@ DEFAULT_INCIDENT_MAX_AGE = {
     "item_stolen": 260,
     "camera_alert": 180,
     "disturbance": 90,
+    "structure_fire": 1200,
 }
 
 INCIDENT_LINK_KINDS = {
@@ -259,12 +261,14 @@ def _incident_max_age(kind):
 def _incident_matches(existing, *, kind="", tick=0, x=None, y=None, z=0, primary_actor_eid=None, victim_eid=None, owner_eid=None, property_id=None, merge_subject="", merge_ticks=8, merge_radius=2):
     if not isinstance(existing, dict):
         return False
-    if _text(existing.get("kind")).lower() != _text(kind).lower():
+    kind_key = _text(kind).lower()
+    if _text(existing.get("kind")).lower() != kind_key:
         return False
 
+    subject_key = _text(merge_subject).lower()
+    current_subject = _text(existing.get("merge_subject")).lower()
     if merge_subject:
-        current_subject = _text(existing.get("merge_subject")).lower()
-        if current_subject and current_subject != _text(merge_subject).lower():
+        if current_subject and current_subject != subject_key:
             return False
 
     if property_id:
@@ -295,6 +299,8 @@ def _incident_matches(existing, *, kind="", tick=0, x=None, y=None, z=0, primary
         return True
     if _int_or_default(ez, 0) != _int_or_default(z, 0):
         return False
+    if kind_key == "structure_fire" and subject_key and current_subject == subject_key:
+        return True
     distance = abs(_int_or_default(ex, 0) - _int_or_default(x, 0)) + abs(_int_or_default(ey, 0) - _int_or_default(y, 0))
     return distance <= max(0, _int_or_default(merge_radius, 2))
 

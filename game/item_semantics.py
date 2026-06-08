@@ -20,7 +20,7 @@ from game.items import ITEM_CATALOG, item_display_name, item_instance_condition
 
 LEGAL_STATUSES = {"legal", "restricted", "suspicious", "illegal", "stolen", "unknown"}
 PHONE_TAGS = {"phone", "cellular", "communication", "radio", "comms"}
-PHONE_ITEM_IDS = {"mobile_phone", "burner_phone", "unregistered_mobile_phone", "cell_phone", "phone", "radio", "walkie_talkie"}
+PHONE_ITEM_IDS = {"mobile_phone", "burner_phone", "unregistered_mobile_phone", "cell_phone", "phone", "radio", "walkie_talkie", "two_way_radio"}
 
 _APPEARANCE_SLOT_VALUES = {
     "color": (

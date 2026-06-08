@@ -1309,6 +1309,11 @@ class NPCNeedsSystem(System):
     STABLE_LEVEL = 45.0
     SURVIVAL_STABLE_LEVEL = SURVIVAL_LOW_LEVEL
     DEPRIVATION_DAMAGE_INTERVAL = 18
+    HUNGER_DRAIN_PER_TICK = 0.006
+    THIRST_DRAIN_PER_TICK = 0.011
+    ACTIVE_HUNGER_DRAIN_BONUS = 0.002
+    ACTIVE_THIRST_DRAIN_BONUS = 0.004
+    RESTING_SURVIVAL_DRAIN_MULT = 0.75
 
     def _sync_threshold(self, eid, needs, key, value, *, critical_level=None, stable_level=None):
         critical_level = self.CRITICAL_LEVEL if critical_level is None else float(critical_level)
@@ -1471,8 +1476,8 @@ class NPCNeedsSystem(System):
 
             needs.energy = _clamp(needs.energy - 0.07)
             needs.social = _clamp(needs.social - 0.05)
-            hunger_drain = 0.024
-            thirst_drain = 0.045
+            hunger_drain = self.HUNGER_DRAIN_PER_TICK
+            thirst_drain = self.THIRST_DRAIN_PER_TICK
             if state in {
                 "working",
                 "investigating",
@@ -1482,11 +1487,11 @@ class NPCNeedsSystem(System):
                 "casing_target",
                 "committing_property_crime",
             }:
-                hunger_drain += 0.006
-                thirst_drain += 0.012
+                hunger_drain += self.ACTIVE_HUNGER_DRAIN_BONUS
+                thirst_drain += self.ACTIVE_THIRST_DRAIN_BONUS
             if state in {"resting", "socializing", "lounging"}:
-                hunger_drain *= 0.82
-                thirst_drain *= 0.82
+                hunger_drain *= self.RESTING_SURVIVAL_DRAIN_MULT
+                thirst_drain *= self.RESTING_SURVIVAL_DRAIN_MULT
             current_hunger = getattr(needs, "hunger", 86.0)
             current_thirst = getattr(needs, "thirst", 90.0)
             current_hunger = 86.0 if current_hunger is None else float(current_hunger)
