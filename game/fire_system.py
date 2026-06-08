@@ -665,7 +665,7 @@ class FireSystem(System):
             self.sim.tilemap.set_tile(
                 int(coord[0]),
                 int(coord[1]),
-                Tile(walkable=True, transparent=True, glyph="/", color="feature_window", semantic_id="feature_window"),
+                Tile(walkable=True, transparent=True, glyph="/", color="feature_breach", semantic_id="feature_breach"),
                 z=int(coord[2]),
             )
         elif kind == "door":
@@ -682,7 +682,7 @@ class FireSystem(System):
             self.sim.tilemap.set_tile(
                 int(coord[0]),
                 int(coord[1]),
-                Tile(walkable=True, transparent=True, glyph="/", color="building_edge", semantic_id="wall_building"),
+                Tile(walkable=True, transparent=True, glyph="/", color="feature_breach", semantic_id="feature_breach"),
                 z=int(coord[2]),
             )
 

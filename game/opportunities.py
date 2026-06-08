@@ -51,6 +51,9 @@ BASE_OPPORTUNITY_EXPIRE_HOURS = 24.0
 ACCEPTED_OPPORTUNITY_EXPIRE_HOURS = 36.0
 URGENT_OPPORTUNITY_EXPIRE_HOURS = 12.0
 ACCEPTED_URGENT_OPPORTUNITY_EXPIRE_HOURS = 18.0
+OPPORTUNITY_REFILL_COOLDOWN_HOURS = 1.0
+OPPORTUNITY_TERMINAL_REFILL_DELAY_HOURS = 0.25
+OPPORTUNITY_EMERGENCY_ACTIVE_COUNT = 2
 EXPIRE_DISTANCE_BONUS_HOURS_PER_CHUNK = 1.0
 EXPIRE_DISTANCE_BONUS_CAP_HOURS = 12.0
 _OPPORTUNITY_URGENCY_KEYWORDS = (
@@ -715,6 +718,18 @@ def _state(sim):
     if not isinstance(tracked_targets, dict):
         tracked_targets = {}
         state["tracked_targets"] = tracked_targets
+    current_tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    fallback_refill_tick = _safe_int(
+        state.get("last_refresh_tick"),
+        default=_safe_int(state.get("seed_tick"), default=current_tick),
+    )
+    state["last_refill_tick"] = _safe_int(state.get("last_refill_tick"), default=fallback_refill_tick)
+    state["next_refill_tick"] = _safe_int(
+        state.get("next_refill_tick"),
+        default=state["last_refill_tick"],
+    )
+    state["pending_refill_reason"] = str(state.get("pending_refill_reason", "") or "").strip().lower()
+    state["last_refill_reason"] = str(state.get("last_refill_reason", "") or "").strip().lower()
     return state
 
 
@@ -1386,6 +1401,56 @@ def _opportunity_ticks_per_hour(sim):
     except (TypeError, ValueError):
         ticks_per_hour = 600
     return max(1, ticks_per_hour)
+
+
+def _opportunity_hours_to_ticks(sim, hours):
+    try:
+        value = float(hours)
+    except (TypeError, ValueError):
+        value = 0.0
+    return max(1, int(round(_opportunity_ticks_per_hour(sim) * max(0.0, value))))
+
+
+def _opportunity_refill_cooldown_ticks(sim):
+    return _opportunity_hours_to_ticks(sim, OPPORTUNITY_REFILL_COOLDOWN_HOURS)
+
+
+def _opportunity_terminal_refill_delay_ticks(sim):
+    return _opportunity_hours_to_ticks(sim, OPPORTUNITY_TERMINAL_REFILL_DELAY_HOURS)
+
+
+def _active_opportunity_count(state):
+    if not isinstance(state, dict):
+        return 0
+    return sum(1 for entry in state.get("active", ()) if isinstance(entry, dict))
+
+
+def _record_opportunity_refill(state, sim, reason):
+    if not isinstance(state, dict):
+        return state
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    reason_key = str(reason or "periodic").strip().lower() or "periodic"
+    state["last_refill_tick"] = tick
+    state["last_refill_reason"] = reason_key
+    state["pending_refill_reason"] = ""
+    state["next_refill_tick"] = tick + _opportunity_refill_cooldown_ticks(sim)
+    return state
+
+
+def _schedule_opportunity_refill(state, sim, reason, delay_ticks):
+    if not isinstance(state, dict):
+        return state
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    try:
+        delay = max(1, int(delay_ticks))
+    except (TypeError, ValueError):
+        delay = 1
+    next_tick = tick + delay
+    current_next = _safe_int(state.get("next_refill_tick"), default=0)
+    if current_next <= tick or current_next > next_tick:
+        state["next_refill_tick"] = next_tick
+    state["pending_refill_reason"] = str(reason or "periodic").strip().lower() or "periodic"
+    return state
 
 
 def _opportunity_has_readable_urgency(opportunity):
@@ -4552,6 +4617,7 @@ def seed_run_opportunities(sim, player_eid=None, rng=None, count_min=MIN_ACTIVE_
     state = _state(sim)
     if state["seeded"] and state["active"]:
         return state
+    before_active_count = _active_opportunity_count(state)
 
     if not isinstance(rng, random.Random):
         seed = f"{getattr(sim, 'seed', 'seed')}:opportunity-seed"
@@ -4611,6 +4677,8 @@ def seed_run_opportunities(sim, player_eid=None, rng=None, count_min=MIN_ACTIVE_
             break
 
     _bootstrap_player_opportunity_intel(sim, state, player_eid, origin_chunk=origin_chunk)
+    if _active_opportunity_count(state) > before_active_count:
+        _record_opportunity_refill(state, sim, "initial")
     return state
 
 
@@ -5128,9 +5196,10 @@ def seed_contract_kill_opportunity(sim, player_eid, rng=None):
     return None
 
 
-def refresh_dynamic_opportunities(sim, player_eid, rng=None):
+def refresh_dynamic_opportunities(sim, player_eid, rng=None, refill_reason="immediate"):
     state = _state(sim)
     seed_run_opportunities(sim, player_eid=player_eid, rng=rng)
+    before_active_count = _active_opportunity_count(state)
     active = state.get("active", [])
     if len(active) >= MAX_ACTIVE_OPPORTUNITIES:
         return state
@@ -5209,7 +5278,68 @@ def refresh_dynamic_opportunities(sim, player_eid, rng=None):
     _bootstrap_player_opportunity_intel(sim, state, player_eid, origin_chunk=current)
     seed_contract_kill_opportunity(sim, player_eid, rng=rng)
     state["last_refresh_tick"] = int(getattr(sim, "tick", 0))
+    if _active_opportunity_count(state) > before_active_count:
+        _record_opportunity_refill(state, sim, refill_reason)
     return state
+
+
+def ensure_initial_opportunities(sim, player_eid=None, rng=None):
+    state = _state(sim)
+    if bool(state.get("seeded", False)):
+        return state
+    return seed_run_opportunities(sim, player_eid=player_eid, rng=rng)
+
+
+def refresh_due_dynamic_opportunities(sim, player_eid, rng=None, *, reason="periodic", force=False):
+    state = _state(sim)
+    if not bool(state.get("seeded", False)):
+        return seed_run_opportunities(sim, player_eid=player_eid, rng=rng)
+
+    tick = _safe_int(getattr(sim, "tick", 0), default=0)
+    reason_key = str(reason or "periodic").strip().lower() or "periodic"
+    active_count = _active_opportunity_count(state)
+
+    def _attempt_refill(refill_reason):
+        refreshed = refresh_dynamic_opportunities(sim, player_eid, rng=rng, refill_reason=refill_reason)
+        if _active_opportunity_count(refreshed) <= active_count:
+            refreshed["next_refill_tick"] = tick + _opportunity_refill_cooldown_ticks(sim)
+            refreshed["pending_refill_reason"] = ""
+        return refreshed
+
+    if force:
+        return _attempt_refill(reason_key)
+
+    if active_count >= MAX_ACTIVE_OPPORTUNITIES:
+        if _safe_int(state.get("next_refill_tick"), default=0) <= tick:
+            state["next_refill_tick"] = tick + _opportunity_refill_cooldown_ticks(sim)
+        if str(state.get("pending_refill_reason", "") or "").strip().lower() == "terminal":
+            state["pending_refill_reason"] = ""
+        return state
+
+    if active_count <= OPPORTUNITY_EMERGENCY_ACTIVE_COUNT:
+        return _attempt_refill("emergency")
+
+    pending_reason = str(state.get("pending_refill_reason", "") or "").strip().lower()
+    if pending_reason == "terminal" and active_count >= MIN_ACTIVE_OPPORTUNITIES:
+        state["pending_refill_reason"] = ""
+        state["next_refill_tick"] = tick + _opportunity_refill_cooldown_ticks(sim)
+        return state
+
+    terminal_reason = reason_key in {"terminal", "completed", "failed", "completion", "failure"}
+    if terminal_reason and active_count < MIN_ACTIVE_OPPORTUNITIES:
+        return _schedule_opportunity_refill(
+            state,
+            sim,
+            "terminal",
+            _opportunity_terminal_refill_delay_ticks(sim),
+        )
+
+    next_refill_tick = _safe_int(state.get("next_refill_tick"), default=tick)
+    if tick < next_refill_tick:
+        return state
+
+    refill_reason = pending_reason or reason_key or "periodic"
+    return _attempt_refill(refill_reason)
 
 
 def _completion_detail(sim, opportunity, metrics):

@@ -16,6 +16,7 @@ from game.property_runtime import (
     property_is_storefront,
     property_metadata,
 )
+from game.system_support.building_repair_runtime import property_damage_records
 
 
 RISKY_ROOM_KINDS = {
@@ -89,6 +90,14 @@ _BURN_TIER_PROFILES = {
         "spread_bias": 0.26,
         "fuel_strength": 0.34,
         "burn_budget": 3,
+    },
+    "spent": {
+        "can_ignite": False,
+        "can_carry_fire": False,
+        "can_carry_smoke": True,
+        "spread_bias": 0.0,
+        "fuel_strength": 0.0,
+        "burn_budget": 0,
     },
     "medium": {
         "can_ignite": True,
@@ -606,6 +615,31 @@ def _structure_aperture_kind(sim, structure, x, y, z):
     return ""
 
 
+def _active_fire_at(sim, key):
+    state = getattr(sim, "fire_state", None)
+    if not isinstance(state, dict):
+        return False
+    cell = (state.get("cells") or {}).get(key)
+    if not isinstance(cell, dict):
+        return False
+    return _safe_int(cell.get("fire_intensity"), 0) > 0
+
+
+def _fire_damage_record_at(sim, prop, key):
+    if not isinstance(prop, dict) or key is None:
+        return None
+    for record in property_damage_records(sim, prop):
+        if _text(record.get("cause")).lower() != "fire":
+            continue
+        try:
+            record_key = (int(record.get("x")), int(record.get("y")), int(record.get("z", 0)))
+        except (TypeError, ValueError):
+            continue
+        if record_key == key:
+            return record
+    return None
+
+
 def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
     key = _coord_key(x, y, z)
     if sim is None or key is None:
@@ -636,6 +670,26 @@ def fire_behavior_for_cell(sim, x, y, z=0, *, prop=None):
         or _text((property_aperture_at(linked_prop, key[0], key[1], key[2]) or {}).get("kind")).lower()
         or _structure_aperture_kind(sim, structure, key[0], key[1], key[2])
     )
+
+    spent_damage_record = None if _active_fire_at(sim, key) else _fire_damage_record_at(sim, linked_prop, key)
+    if spent_damage_record is not None:
+        structural_damage_kind = _text(spent_damage_record.get("repair_kind")).lower()
+        profile = dict(_BURN_TIER_PROFILES["spent"])
+        profile.update({
+            "burn_tier": "spent",
+            "property_id": property_id or None,
+            "building_id": building_id or None,
+            "property_name": _text((linked_prop or {}).get("name")) or None,
+            "property_public": bool(linked_prop and (property_is_public(linked_prop) or property_is_storefront(linked_prop))),
+            "room_kind": room_kind or None,
+            "archetype": archetype or None,
+            "fixture_type": fixture_type or None,
+            "hazard_profile": hazard_profile or None,
+            "aperture_kind": aperture_kind or None,
+            "structural_damage_kind": structural_damage_kind,
+            "source_tags": ("fire_spent", "structural_damage"),
+        })
+        return profile
 
     burn_tier = "none"
     source_tags = set()

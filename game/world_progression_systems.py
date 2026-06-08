@@ -92,11 +92,12 @@ from game.opportunities import (
     evaluate_opportunity_board,
     evaluate_opportunity_facts,
     format_reward_text,
+    ensure_initial_opportunities,
     opportunity_intel_for_observer,
     opportunity_distance_text,
     opportunity_known_count,
     opportunity_source_label,
-    refresh_dynamic_opportunities,
+    refresh_due_dynamic_opportunities,
     reveal_opportunity_to_observer,
     resolve_external_opportunity,
     seed_run_opportunities,
@@ -1085,7 +1086,7 @@ class OpportunitySystem(System):
         ))
 
     def _emit_report(self, limit=8):
-        refresh_dynamic_opportunities(self.sim, self.player_eid)
+        ensure_initial_opportunities(self.sim, player_eid=self.player_eid, rng=self.seed_rng)
         board = evaluate_opportunity_board(self.sim, self.player_eid, limit=max(1, int(limit)))
         title = (
             f"Opportunities ({int(board.get('active_count', 0))} active / "
@@ -1414,7 +1415,7 @@ class OpportunitySystem(System):
         self._ensure_seeded()
         tick = int(getattr(self.sim, "tick", 0))
         if tick - self.last_refresh_tick >= self.refresh_interval:
-            refresh_dynamic_opportunities(self.sim, self.player_eid)
+            refresh_due_dynamic_opportunities(self.sim, self.player_eid, reason="periodic")
             self.last_refresh_tick = tick
         self._emit_new_opportunity_log()
         for notice in stage_active_opportunities(self.sim, self.player_eid):
@@ -1427,7 +1428,7 @@ class OpportunitySystem(System):
             return
 
         if completed or failed:
-            refresh_dynamic_opportunities(self.sim, self.player_eid)
+            refresh_due_dynamic_opportunities(self.sim, self.player_eid, reason="terminal")
             self._emit_new_opportunity_log()
             for notice in stage_active_opportunities(self.sim, self.player_eid):
                 self.sim.log.add(notice, channel="opportunity", priority="high")
