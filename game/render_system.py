@@ -255,6 +255,16 @@ _SMOKE_VISUAL_GLYPHS = ("~", ",")
 _HUD_CHANGE_FLASH_TICKS = 4
 _HUD_CHANGE_FLASH_FRAMES = 4
 _HUD_SURVIVAL_TOKEN_RE = re.compile(r"\b([FW])!{0,2}(\d{1,3})(?![/\d])")
+_HUD_SURVIVAL_VALUE_RE = re.compile(r"^([FW])!{0,2}(\d{1,3})$")
+_HUD_FLASH_VALUE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"(?:"
+    r"(?:So|[FWES])!{0,2}[+-]?\d+(?:\.\d+)?%?"
+    r"|[+-]?\d+(?::\d{2})?(?:[.,/][+-]?\d+(?::\d{2})?)*%?"
+    r")"
+    r"(?![A-Za-z0-9_])"
+)
+_HUD_FLASH_WORD_RE = re.compile(r"\S+")
 
 
 def _fire_visual_style(sim, x, y, z=0):
@@ -309,6 +319,125 @@ def _hud_flash_signature(line):
         return f"{prefix}#{band}"
 
     return _HUD_SURVIVAL_TOKEN_RE.sub(survival_band, _line_text(line))
+
+
+def _hud_flash_value_signature(value):
+    text = str(value or "")
+    survival = _HUD_SURVIVAL_VALUE_RE.match(text)
+    if survival:
+        prefix = str(survival.group(1))
+        try:
+            numeric = int(survival.group(2))
+        except (TypeError, ValueError):
+            numeric = 0
+        numeric = max(0, min(100, numeric))
+        return f"{prefix}#{min(3, max(0, numeric // 25))}"
+    return text
+
+
+def _hud_flash_value_tokens(text):
+    return [
+        (match.span(), _hud_flash_value_signature(match.group(0)))
+        for match in _HUD_FLASH_VALUE_RE.finditer(str(text or ""))
+    ]
+
+
+def _hud_merge_ranges(ranges, text_length):
+    normalized = []
+    for start, end in ranges or ():
+        start = max(0, min(int(start), int(text_length)))
+        end = max(0, min(int(end), int(text_length)))
+        if end <= start:
+            continue
+        normalized.append((start, end))
+    if not normalized:
+        return ()
+
+    normalized.sort()
+    merged = []
+    for start, end in normalized:
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+            continue
+        merged[-1][1] = max(merged[-1][1], end)
+    return tuple((start, end) for start, end in merged)
+
+
+def _hud_flash_changed_ranges(previous_text, current_text):
+    previous_text = str(previous_text or "")
+    current_text = str(current_text or "")
+    if not current_text or previous_text == current_text:
+        return ()
+
+    previous_values = [signature for _span, signature in _hud_flash_value_tokens(previous_text)]
+    current_values = _hud_flash_value_tokens(current_text)
+    ranges = []
+    for index, (span, signature) in enumerate(current_values):
+        if index >= len(previous_values) or previous_values[index] != signature:
+            ranges.append(span)
+    if ranges:
+        return _hud_merge_ranges(ranges, len(current_text))
+
+    previous_words = [match.group(0) for match in _HUD_FLASH_WORD_RE.finditer(previous_text)]
+    for index, match in enumerate(_HUD_FLASH_WORD_RE.finditer(current_text)):
+        if index >= len(previous_words) or previous_words[index] != match.group(0):
+            ranges.append(match.span())
+    return _hud_merge_ranges(ranges, len(current_text))
+
+
+def _hud_line_with_flash_ranges(line, ranges, flash_attrs):
+    flash_attrs = int(flash_attrs or 0)
+    text = _line_text(line)
+    ranges = _hud_merge_ranges(ranges, len(text))
+    if not flash_attrs or not ranges:
+        return line
+
+    source_segments = _line_segments(line)
+    if not source_segments:
+        source_segments = [_segment(text)]
+
+    out_segments = []
+    cursor = 0
+    for segment in source_segments:
+        if not isinstance(segment, dict):
+            segment = _segment(str(segment))
+        segment_text = str(segment.get("text", ""))
+        if not segment_text:
+            continue
+        segment_start = cursor
+        segment_end = segment_start + len(segment_text)
+        split_points = {segment_start, segment_end}
+        for range_start, range_end in ranges:
+            overlap_start = max(segment_start, range_start)
+            overlap_end = min(segment_end, range_end)
+            if overlap_end > overlap_start:
+                split_points.add(overlap_start)
+                split_points.add(overlap_end)
+
+        points = sorted(split_points)
+        extras = {
+            key: value
+            for key, value in segment.items()
+            if key not in {"text", "color", "attrs"}
+        }
+        for left, right in zip(points, points[1:]):
+            if right <= left:
+                continue
+            chunk_text = segment_text[left - segment_start:right - segment_start]
+            active = any(left < range_end and right > range_start for range_start, range_end in ranges)
+            attrs = int(segment.get("attrs", 0) or 0)
+            if active:
+                attrs |= flash_attrs
+            out_segments.append(_segment(
+                chunk_text,
+                color=segment.get("color"),
+                attrs=attrs,
+                **extras,
+            ))
+        cursor = segment_end
+
+    return _rich_line(out_segments, text=text)
+
 from game.location_presentation_runtime import (
     _creature_color_key,
     _entity_render_style,
@@ -558,7 +687,8 @@ class RenderSystem(System):
         self._hud_seen_seq = -1    # last log sequence ingested
         self._hud_last_tick = -1   # last sim tick when we drained messages
         self._hud_previous_section_lines = {}
-        self._hud_flash_until_by_line = {}
+        self._hud_previous_section_texts = {}
+        self._hud_flash_ranges_by_line = {}
         self._hud_render_frame = 0
 
     def _hud_flash_clock(self):
@@ -571,15 +701,20 @@ class RenderSystem(System):
     def _update_hud_flash_state(self, sections):
         tick, frame = self._hud_flash_clock()
         previous = self._hud_previous_section_lines if isinstance(self._hud_previous_section_lines, dict) else {}
+        previous_texts = self._hud_previous_section_texts if isinstance(self._hud_previous_section_texts, dict) else {}
         current = {}
+        current_texts = {}
         active_line_keys = set()
 
         for section_index, section in enumerate(sections or ()):
             section_id = str(section.get("id", f"section:{section_index}") or f"section:{section_index}")
             lines = list(section.get("lines", ()) or ())
             signatures = tuple(_hud_flash_signature(line) for line in lines)
+            texts = tuple(_line_text(line) for line in lines)
             current[section_id] = signatures
+            current_texts[section_id] = texts
             prior = previous.get(section_id)
+            prior_texts = previous_texts.get(section_id, ())
 
             for line_index, signature in enumerate(signatures):
                 key = (section_id, int(line_index))
@@ -587,29 +722,35 @@ class RenderSystem(System):
                 if prior is None:
                     continue
                 if line_index >= len(prior) or prior[line_index] != signature:
-                    self._hud_flash_until_by_line[key] = (
-                        tick + _HUD_CHANGE_FLASH_TICKS,
-                        frame + _HUD_CHANGE_FLASH_FRAMES,
-                    )
+                    previous_text = prior_texts[line_index] if line_index < len(prior_texts) else ""
+                    ranges = _hud_flash_changed_ranges(previous_text, texts[line_index])
+                    if ranges:
+                        self._hud_flash_ranges_by_line[key] = (
+                            ranges,
+                            tick + _HUD_CHANGE_FLASH_TICKS,
+                            frame + _HUD_CHANGE_FLASH_FRAMES,
+                        )
 
         self._hud_previous_section_lines = current
-        self._hud_flash_until_by_line = {
+        self._hud_previous_section_texts = current_texts
+        self._hud_flash_ranges_by_line = {
             key: value
-            for key, value in dict(self._hud_flash_until_by_line).items()
+            for key, value in dict(self._hud_flash_ranges_by_line).items()
             if key in active_line_keys
-            and tick < int(value[0])
-            and frame < int(value[1])
+            and tick < int(value[1])
+            and frame < int(value[2])
         }
 
-    def _hud_flash_attrs(self, section_id, line_index):
+    def _hud_flash_line(self, section_id, line_index, line):
         key = (str(section_id), int(line_index))
-        expiry = self._hud_flash_until_by_line.get(key)
-        if not expiry:
-            return 0
+        state = self._hud_flash_ranges_by_line.get(key)
+        if not state:
+            return line
+        ranges, expire_tick, expire_frame = state
         tick, frame = self._hud_flash_clock()
-        if tick >= int(expiry[0]) or frame >= int(expiry[1]):
-            return 0
-        return getattr(curses, "A_REVERSE", 0)
+        if tick >= int(expire_tick) or frame >= int(expire_frame):
+            return line
+        return _hud_line_with_flash_ranges(line, ranges, getattr(curses, "A_REVERSE", 0))
 
     def _advance_hud_queue(self, budget):
         """Ingest new log entries and drain up to 2 per game tick into the HUD display buffer."""
@@ -2306,9 +2447,8 @@ class RenderSystem(System):
                 self._draw_display_line(
                     0,
                     hud_y,
-                    line,
+                    self._hud_flash_line(section_id, line_index, line),
                     hud_w,
-                    attrs=self._hud_flash_attrs(section_id, line_index),
                 )
                 hud_y += 1
             if hud_y >= screen_h:
