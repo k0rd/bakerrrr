@@ -3668,6 +3668,7 @@ class ItemSystem(System):
         self.item_actions = ItemActionRuntime(self)
         self.sim.events.subscribe("player_action", self.on_player_action)
         self.sim.events.subscribe("use_item_request", self.on_use_item_request)
+        self.sim.events.subscribe("throw_item_request", self.on_throw_item_request)
         self.sim.events.subscribe("drop_item_request", self.on_drop_item_request)
 
     def _offense_score_for(self, action, context="ordinary"):
@@ -3738,6 +3739,9 @@ class ItemSystem(System):
 
     def on_use_item_request(self, event):
         return self.item_actions.on_use_item_request(event)
+
+    def on_throw_item_request(self, event):
+        return self.item_actions.on_throw_item_request(event)
 
     def on_drop_item_request(self, event):
         return self.item_actions.on_drop_item_request(event)

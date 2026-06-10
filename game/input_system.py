@@ -512,10 +512,14 @@ class InputSystem(System):
                 "chunk_x": 0,
                 "chunk_y": 0,
                 "inspect_text": "",
+                "throw_item_instance_id": None,
+                "throw_item_name": "",
             }
             self.sim.look_ui = state
         else:
             state.setdefault("purpose", "inspect")
+            state.setdefault("throw_item_instance_id", None)
+            state.setdefault("throw_item_name", "")
         return state
 
     def _overworld_view_only_for_player(self):
@@ -2080,6 +2084,48 @@ class InputSystem(System):
         )
         return True
 
+    def _emit_throw_item(self):
+        state = self._look_state()
+        if str(state.get("mode", "city")).lower() != "city":
+            return False
+        instance_id = str(state.get("throw_item_instance_id", "") or "").strip()
+        if not instance_id:
+            return False
+        self.sim.turn_advance_requested = True
+        self.sim.emit(Event(
+            "throw_item_request",
+            eid=self.player_eid,
+            item_instance_id=instance_id,
+            target_x=int(state.get("x", 0)),
+            target_y=int(state.get("y", 0)),
+            target_z=int(state.get("z", 0)),
+            reason="inventory_panel",
+        ))
+        self._deactivate_look_mode()
+        return True
+
+    def _activate_throw_item_targeting(self, entry):
+        if not isinstance(entry, dict):
+            return False
+        item_def = self.catalog.get(entry.get("item_id"), {})
+        throw_profile = item_def.get("throw_profile") if isinstance(item_def.get("throw_profile"), dict) else None
+        if not throw_profile:
+            return False
+        pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if not pos:
+            return False
+        target_x = int(pos.x) + 1 if self.sim.tilemap.in_bounds(int(pos.x) + 1, int(pos.y)) else int(pos.x)
+        target_y = int(pos.y)
+        item_name = item_display_name_for_actor(self.sim, self.player_eid, entry, item_catalog=self.catalog)
+        self._close_inventory_ui()
+        if not self._activate_look_mode_at("city", x=target_x, y=target_y, z=int(pos.z), purpose="throw"):
+            return False
+        state = self._look_state()
+        state["throw_item_instance_id"] = str(entry.get("instance_id", "") or "").strip()
+        state["throw_item_name"] = item_name
+        state["inspect_text"] = f"Throwing {item_name}. Enter throws; Esc cancels."
+        return True
+
     def _aim_cycle_candidates(self):
         positions = self.sim.ecs.get(Position)
         ais = self.sim.ecs.get(AI)
@@ -2434,6 +2480,8 @@ class InputSystem(System):
         self._reset_aim_hold_repeat()
         state["active"] = False
         state["inspect_text"] = ""
+        state["throw_item_instance_id"] = None
+        state["throw_item_name"] = ""
         if was_aim:
             _set_manual_combat_pacing(self.sim, False)
         self.sim.emit(Event(
@@ -2531,6 +2579,15 @@ class InputSystem(System):
                 return True
             if key in ENTER_KEYS:
                 self._emit_aimed_fire()
+                return True
+            if key == ord("x"):
+                self._emit_cursor_examine(announce=True)
+                return True
+            return True
+
+        if purpose == "throw":
+            if key in ENTER_KEYS:
+                self._emit_throw_item()
                 return True
             if key == ord("x"):
                 self._emit_cursor_examine(announce=True)
@@ -3224,6 +3281,18 @@ class InputSystem(System):
             container_name = str(current_container.get("item_name", "container") or "container").strip().lower() or "container"
             effect_labels.append(f"in {container_name}")
 
+        throw_profile = item_def.get("throw_profile", {}) if isinstance(item_def.get("throw_profile"), dict) else {}
+        if throw_profile:
+            throw_bits = [f"throw rng {int(throw_profile.get('range', 1))}"]
+            damage = int(max(0, _int_or_default(throw_profile.get("damage"), 0)))
+            if damage > 0:
+                throw_bits.append(f"impact {damage}")
+            if int(max(0, _int_or_default(throw_profile.get("explosion_radius"), 0))) > 0:
+                throw_bits.append(f"blast r{int(throw_profile.get('explosion_radius', 0))}")
+            if int(max(0, _int_or_default(throw_profile.get("fire_intensity"), 0))) > 0:
+                throw_bits.append("fire")
+            effect_labels.append(" ".join(throw_bits))
+
         effect_text = ", ".join(effect_labels) if effect_labels else "no active effect"
         state["inspect_text"] = _item_legend_line(
             entry["item_id"],
@@ -3353,6 +3422,10 @@ class InputSystem(System):
 
         if key in (ord("u"), ord("U")):
             if selected:
+                item_def = self.catalog.get(selected.get("item_id"), {})
+                if isinstance(item_def.get("throw_profile"), dict):
+                    self._activate_throw_item_targeting(selected)
+                    return True
                 if is_appearance_item(selected, item_catalog=self.catalog) and not is_entry_worn(selected):
                     profile = appearance_metadata_for_entry(selected, item_catalog=self.catalog)
                     slots = tuple(profile.get("slots", ()) or ())

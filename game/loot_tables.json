@@ -190,6 +190,42 @@
     {
       "item_id": "lucky_charm",
       "weight": 6
+    },
+    {
+      "item_id": "electrolyte_drink",
+      "weight": 10
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 7
+    },
+    {
+      "item_id": "glucose_gel",
+      "weight": 6
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 4
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 5
+    },
+    {
+      "item_id": "brick",
+      "weight": 3
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 3
+    },
+    {
+      "item_id": "pocket_light_rounds",
+      "weight": 3
+    },
+    {
+      "item_id": "stab_vest",
+      "weight": 1
     }
   ],
   "kind:building": [
@@ -376,6 +412,42 @@
     {
       "item_id": "lucky_charm",
       "weight": 6
+    },
+    {
+      "item_id": "electrolyte_drink",
+      "weight": 10
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 7
+    },
+    {
+      "item_id": "glucose_gel",
+      "weight": 6
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 4
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 5
+    },
+    {
+      "item_id": "brick",
+      "weight": 3
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 3
+    },
+    {
+      "item_id": "pocket_light_rounds",
+      "weight": 3
+    },
+    {
+      "item_id": "stab_vest",
+      "weight": 1
     }
   ],
   "kind:fixture": [
@@ -446,6 +518,26 @@
     {
       "item_id": "deck_of_cards",
       "weight": 7
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 6
+    },
+    {
+      "item_id": "brick",
+      "weight": 4
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 3
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 2
+    },
+    {
+      "item_id": "pocket_light_rounds",
+      "weight": 2
     }
   ],
   "kind:asset": [
@@ -552,6 +644,26 @@
     {
       "item_id": "lucky_charm",
       "weight": 5
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 6
+    },
+    {
+      "item_id": "brick",
+      "weight": 4
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 3
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 2
+    },
+    {
+      "item_id": "pocket_light_rounds",
+      "weight": 2
     }
   ],
   "archetype:checkpoint": [
@@ -844,6 +956,70 @@
     {
       "item_id": "black_market_stim",
       "weight": 7
+    },
+    {
+      "item_id": "bulk_light_rounds",
+      "weight": 18
+    },
+    {
+      "item_id": "buckshot_pouch",
+      "weight": 14
+    },
+    {
+      "item_id": "slug_sleeve",
+      "weight": 10
+    },
+    {
+      "item_id": "carbine_mag_bundle",
+      "weight": 14
+    },
+    {
+      "item_id": "single_launcher_round",
+      "weight": 5
+    },
+    {
+      "item_id": "snub_revolver",
+      "weight": 8
+    },
+    {
+      "item_id": "surplus_pistol",
+      "weight": 10
+    },
+    {
+      "item_id": "pipe_pistol",
+      "weight": 4
+    },
+    {
+      "item_id": "pump_shotgun",
+      "weight": 10
+    },
+    {
+      "item_id": "riot_shotgun",
+      "weight": 8
+    },
+    {
+      "item_id": "varmint_rifle",
+      "weight": 8
+    },
+    {
+      "item_id": "marksman_rifle",
+      "weight": 5
+    },
+    {
+      "item_id": "plate_carrier",
+      "weight": 8
+    },
+    {
+      "item_id": "ballistic_helmet",
+      "weight": 7
+    },
+    {
+      "item_id": "patrol_rain_shell",
+      "weight": 5
+    },
+    {
+      "item_id": "molotov_cocktail",
+      "weight": 2
     }
   ],
   "archetype:outfitter": [
@@ -876,8 +1052,16 @@
       "weight": 12
     },
     {
+      "item_id": "buckshot_pouch",
+      "weight": 8
+    },
+    {
       "item_id": "rifle_mag_crate",
       "weight": 9
+    },
+    {
+      "item_id": "rifle_strip_pack",
+      "weight": 7
     },
     {
       "item_id": "trail_machete",
@@ -918,6 +1102,38 @@
     {
       "item_id": "courier_mesh",
       "weight": 9
+    },
+    {
+      "item_id": "stab_vest",
+      "weight": 8
+    },
+    {
+      "item_id": "armored_motor_jacket",
+      "weight": 8
+    },
+    {
+      "item_id": "cutproof_apron",
+      "weight": 5
+    },
+    {
+      "item_id": "maintenance_vest",
+      "weight": 6
+    },
+    {
+      "item_id": "contractor_badge_lanyard",
+      "weight": 3
+    },
+    {
+      "item_id": "electrolyte_drink",
+      "weight": 8
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 6
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 5
     }
   ],
   "archetype:surplus_store": [
@@ -1024,6 +1240,74 @@
     {
       "item_id": "ceramic_plate_rig",
       "weight": 4
+    },
+    {
+      "item_id": "bulk_light_rounds",
+      "weight": 16
+    },
+    {
+      "item_id": "buckshot_pouch",
+      "weight": 14
+    },
+    {
+      "item_id": "slug_sleeve",
+      "weight": 10
+    },
+    {
+      "item_id": "rifle_strip_pack",
+      "weight": 12
+    },
+    {
+      "item_id": "carbine_mag_bundle",
+      "weight": 12
+    },
+    {
+      "item_id": "single_launcher_round",
+      "weight": 4
+    },
+    {
+      "item_id": "snub_revolver",
+      "weight": 8
+    },
+    {
+      "item_id": "surplus_pistol",
+      "weight": 12
+    },
+    {
+      "item_id": "pump_shotgun",
+      "weight": 10
+    },
+    {
+      "item_id": "riot_shotgun",
+      "weight": 8
+    },
+    {
+      "item_id": "varmint_rifle",
+      "weight": 9
+    },
+    {
+      "item_id": "marksman_rifle",
+      "weight": 5
+    },
+    {
+      "item_id": "stab_vest",
+      "weight": 8
+    },
+    {
+      "item_id": "armored_motor_jacket",
+      "weight": 8
+    },
+    {
+      "item_id": "plate_carrier",
+      "weight": 7
+    },
+    {
+      "item_id": "ballistic_helmet",
+      "weight": 6
+    },
+    {
+      "item_id": "patrol_rain_shell",
+      "weight": 5
     }
   ],
   "archetype:nightclub": [
@@ -1074,6 +1358,26 @@
     {
       "item_id": "black_market_stim",
       "weight": 8
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 10
+    },
+    {
+      "item_id": "molotov_cocktail",
+      "weight": 1
+    },
+    {
+      "item_id": "electrolyte_drink",
+      "weight": 6
+    },
+    {
+      "item_id": "glucose_gel",
+      "weight": 5
+    },
+    {
+      "item_id": "pocket_light_rounds",
+      "weight": 3
     }
   ],
   "archetype:bar": [
@@ -1116,6 +1420,26 @@
     {
       "item_id": "deck_of_cards",
       "weight": 11
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 14
+    },
+    {
+      "item_id": "brick",
+      "weight": 3
+    },
+    {
+      "item_id": "molotov_cocktail",
+      "weight": 1
+    },
+    {
+      "item_id": "electrolyte_drink",
+      "weight": 6
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 2
     }
   ],
   "archetype:apartment": [
@@ -1182,6 +1506,30 @@
     {
       "item_id": "lucky_charm",
       "weight": 7
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 8
+    },
+    {
+      "item_id": "brick",
+      "weight": 4
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 5
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 5
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 3
+    },
+    {
+      "item_id": "pocket_light_rounds",
+      "weight": 2
     }
   ],
   "archetype:house": [
@@ -1244,6 +1592,30 @@
     {
       "item_id": "lucky_charm",
       "weight": 8
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 7
+    },
+    {
+      "item_id": "brick",
+      "weight": 4
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 6
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 5
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 3
+    },
+    {
+      "item_id": "varmint_rifle",
+      "weight": 2
     }
   ],
   "archetype:tenement": [
@@ -1294,6 +1666,30 @@
     {
       "item_id": "burner_phone",
       "weight": 4
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 8
+    },
+    {
+      "item_id": "brick",
+      "weight": 5
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 4
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 4
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 3
+    },
+    {
+      "item_id": "pocket_light_rounds",
+      "weight": 2
     }
   ],
   "archetype:corner_store": [
@@ -1360,6 +1756,30 @@
     {
       "item_id": "deck_of_cards",
       "weight": 8
+    },
+    {
+      "item_id": "electrolyte_drink",
+      "weight": 12
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 7
+    },
+    {
+      "item_id": "glucose_gel",
+      "weight": 7
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 7
+    },
+    {
+      "item_id": "pocket_light_rounds",
+      "weight": 5
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 3
     }
   ],
   "archetype:restaurant": [
@@ -1468,6 +1888,30 @@
     {
       "item_id": "synth_focus_tabs",
       "weight": 8
+    },
+    {
+      "item_id": "antiseptic_wipes",
+      "weight": 12
+    },
+    {
+      "item_id": "suture_kit",
+      "weight": 5
+    },
+    {
+      "item_id": "glucose_gel",
+      "weight": 10
+    },
+    {
+      "item_id": "electrolyte_drink",
+      "weight": 12
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 10
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 8
     }
   ],
   "archetype:backroom_clinic": [
@@ -1518,6 +1962,34 @@
     {
       "item_id": "black_market_stim",
       "weight": 6
+    },
+    {
+      "item_id": "antiseptic_wipes",
+      "weight": 12
+    },
+    {
+      "item_id": "suture_kit",
+      "weight": 8
+    },
+    {
+      "item_id": "glucose_gel",
+      "weight": 10
+    },
+    {
+      "item_id": "electrolyte_drink",
+      "weight": 10
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 8
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 8
+    },
+    {
+      "item_id": "contractor_badge_lanyard",
+      "weight": 2
     }
   ],
   "archetype:warehouse": [
@@ -1568,6 +2040,38 @@
     {
       "item_id": "city_pass_token",
       "weight": 8
+    },
+    {
+      "item_id": "bolt_cutters",
+      "weight": 8
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 5
+    },
+    {
+      "item_id": "tire_iron",
+      "weight": 8
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 6
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 5
+    },
+    {
+      "item_id": "brick",
+      "weight": 5
+    },
+    {
+      "item_id": "cutproof_apron",
+      "weight": 4
+    },
+    {
+      "item_id": "maintenance_vest",
+      "weight": 4
     }
   ],
   "archetype:factory": [
@@ -1606,6 +2110,34 @@
     {
       "item_id": "hotwire_leads",
       "weight": 4
+    },
+    {
+      "item_id": "bolt_cutters",
+      "weight": 7
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 5
+    },
+    {
+      "item_id": "tire_iron",
+      "weight": 8
+    },
+    {
+      "item_id": "cutproof_apron",
+      "weight": 7
+    },
+    {
+      "item_id": "maintenance_vest",
+      "weight": 5
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 4
+    },
+    {
+      "item_id": "brick",
+      "weight": 5
     }
   ],
   "archetype:machine_shop": [
@@ -1636,6 +2168,26 @@
     {
       "item_id": "lockpick_kit",
       "weight": 6
+    },
+    {
+      "item_id": "bolt_cutters",
+      "weight": 8
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 6
+    },
+    {
+      "item_id": "tire_iron",
+      "weight": 9
+    },
+    {
+      "item_id": "cutproof_apron",
+      "weight": 7
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 5
     }
   ],
   "archetype:auto_garage": [
@@ -1678,6 +2230,34 @@
     {
       "item_id": "lockpick_kit",
       "weight": 10
+    },
+    {
+      "item_id": "tire_iron",
+      "weight": 12
+    },
+    {
+      "item_id": "bolt_cutters",
+      "weight": 7
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 6
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 5
+    },
+    {
+      "item_id": "brick",
+      "weight": 5
+    },
+    {
+      "item_id": "cutproof_apron",
+      "weight": 5
+    },
+    {
+      "item_id": "maintenance_vest",
+      "weight": 4
     }
   ],
   "archetype:freight_depot": [
@@ -1704,6 +2284,26 @@
     {
       "item_id": "focus_inhaler",
       "weight": 8
+    },
+    {
+      "item_id": "bolt_cutters",
+      "weight": 7
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 5
+    },
+    {
+      "item_id": "tire_iron",
+      "weight": 7
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 6
+    },
+    {
+      "item_id": "bulk_light_rounds",
+      "weight": 3
     }
   ],
   "archetype:bank": [
@@ -1966,6 +2566,74 @@
     {
       "item_id": "cocaine_bindle",
       "weight": 5
+    },
+    {
+      "item_id": "pocket_light_rounds",
+      "weight": 12
+    },
+    {
+      "item_id": "bulk_light_rounds",
+      "weight": 8
+    },
+    {
+      "item_id": "buckshot_pouch",
+      "weight": 8
+    },
+    {
+      "item_id": "rifle_strip_pack",
+      "weight": 7
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 8
+    },
+    {
+      "item_id": "tire_iron",
+      "weight": 7
+    },
+    {
+      "item_id": "snub_revolver",
+      "weight": 9
+    },
+    {
+      "item_id": "surplus_pistol",
+      "weight": 8
+    },
+    {
+      "item_id": "pipe_pistol",
+      "weight": 5
+    },
+    {
+      "item_id": "pump_shotgun",
+      "weight": 6
+    },
+    {
+      "item_id": "varmint_rifle",
+      "weight": 5
+    },
+    {
+      "item_id": "stab_vest",
+      "weight": 7
+    },
+    {
+      "item_id": "armored_motor_jacket",
+      "weight": 6
+    },
+    {
+      "item_id": "bolt_cutters",
+      "weight": 7
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 6
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 4
+    },
+    {
+      "item_id": "brick",
+      "weight": 4
     }
   ],
   "archetype:chop_shop": [
@@ -2080,6 +2748,50 @@
     {
       "item_id": "caff_shot",
       "weight": 12
+    },
+    {
+      "item_id": "tire_iron",
+      "weight": 10
+    },
+    {
+      "item_id": "bolt_cutters",
+      "weight": 10
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 7
+    },
+    {
+      "item_id": "pipe_pistol",
+      "weight": 5
+    },
+    {
+      "item_id": "snub_revolver",
+      "weight": 5
+    },
+    {
+      "item_id": "pocket_light_rounds",
+      "weight": 8
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 6
+    },
+    {
+      "item_id": "brick",
+      "weight": 6
+    },
+    {
+      "item_id": "molotov_cocktail",
+      "weight": 3
+    },
+    {
+      "item_id": "cutproof_apron",
+      "weight": 5
+    },
+    {
+      "item_id": "maintenance_vest",
+      "weight": 5
     }
   ],
   "archetype:junk_market": [
@@ -2130,6 +2842,42 @@
     {
       "item_id": "spark_brew",
       "weight": 10
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 10
+    },
+    {
+      "item_id": "brick",
+      "weight": 9
+    },
+    {
+      "item_id": "tire_iron",
+      "weight": 8
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 7
+    },
+    {
+      "item_id": "bolt_cutters",
+      "weight": 5
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 5
+    },
+    {
+      "item_id": "molotov_cocktail",
+      "weight": 2
+    },
+    {
+      "item_id": "pipe_pistol",
+      "weight": 4
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 5
     }
   ],
   "archetype:soup_kitchen": [
@@ -2264,6 +3012,34 @@
     {
       "item_id": "med_gel",
       "weight": 8
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 8
+    },
+    {
+      "item_id": "brick",
+      "weight": 4
+    },
+    {
+      "item_id": "pocket_light_rounds",
+      "weight": 5
+    },
+    {
+      "item_id": "buckshot_pouch",
+      "weight": 4
+    },
+    {
+      "item_id": "snub_revolver",
+      "weight": 3
+    },
+    {
+      "item_id": "pump_shotgun",
+      "weight": 3
+    },
+    {
+      "item_id": "electrolyte_drink",
+      "weight": 6
     }
   ],
   "archetype:dock_shack": [
@@ -2290,6 +3066,30 @@
     {
       "item_id": "lockpick_kit",
       "weight": 6
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 8
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 6
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 5
+    },
+    {
+      "item_id": "brick",
+      "weight": 4
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 4
+    },
+    {
+      "item_id": "varmint_rifle",
+      "weight": 2
     }
   ],
   "archetype:ferry_post": [
@@ -2360,6 +3160,34 @@
     {
       "item_id": "city_pass_token",
       "weight": 10
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 6
+    },
+    {
+      "item_id": "brick",
+      "weight": 6
+    },
+    {
+      "item_id": "tire_iron",
+      "weight": 8
+    },
+    {
+      "item_id": "bolt_cutters",
+      "weight": 6
+    },
+    {
+      "item_id": "pipe_pistol",
+      "weight": 3
+    },
+    {
+      "item_id": "molotov_cocktail",
+      "weight": 2
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 5
     }
   ],
   "archetype:work_shed": [
@@ -2386,6 +3214,26 @@
     {
       "item_id": "med_gel",
       "weight": 8
+    },
+    {
+      "item_id": "bolt_cutters",
+      "weight": 7
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 5
+    },
+    {
+      "item_id": "tire_iron",
+      "weight": 8
+    },
+    {
+      "item_id": "box_cutter",
+      "weight": 6
+    },
+    {
+      "item_id": "cutproof_apron",
+      "weight": 4
     }
   ],
   "archetype:pump_house": [
@@ -2407,6 +3255,26 @@
     },
     {
       "item_id": "signal_jammer",
+      "weight": 4
+    },
+    {
+      "item_id": "inspection_mirror",
+      "weight": 5
+    },
+    {
+      "item_id": "bolt_cutters",
+      "weight": 5
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 6
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 4
+    },
+    {
+      "item_id": "glass_bottle",
       "weight": 4
     }
   ],
@@ -2430,6 +3298,30 @@
     {
       "item_id": "city_pass_token",
       "weight": 8
+    },
+    {
+      "item_id": "water_purifier_tabs",
+      "weight": 8
+    },
+    {
+      "item_id": "emergency_blanket",
+      "weight": 7
+    },
+    {
+      "item_id": "glucose_gel",
+      "weight": 5
+    },
+    {
+      "item_id": "rifle_strip_pack",
+      "weight": 5
+    },
+    {
+      "item_id": "varmint_rifle",
+      "weight": 4
+    },
+    {
+      "item_id": "glass_bottle",
+      "weight": 3
     }
   ]
 }

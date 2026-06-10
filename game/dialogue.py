@@ -1093,10 +1093,10 @@ PLAYER_TOPIC_BANKS = {
         "Want a spot on the schedule?",
     ),
     "fire": (
-        "We need to talk about your position.",
-        "This is not working out at {player_business_fire_name}.",
+        "I am firing you from {player_business_fire_name}.",
         "I am ending your work at {player_business_fire_name}.",
-        "Your shift with me is done.",
+        "Your shift at {player_business_fire_name} is done.",
+        "I need you off the schedule at {player_business_fire_name}.",
     ),
     "services": (
         "What does the place actually do?",
@@ -1763,6 +1763,7 @@ PLAYER_CONNECTIVE_SKIP_TOPICS = {
 
 
 PLAYER_MENU_BASE_LABEL_TOPICS = {
+    "fire",
     "street_buy_accept",
     "street_buy_next",
     "street_buy_decline",
@@ -4140,7 +4141,7 @@ def topic_label(topic_id, context=None):
     if topic_id == "hire_staff" and context.get("player_business_hire_name"):
         return _with_hint(f"Would you take a shift at {context['player_business_hire_name']}?", "player_business_hire_staff_fit_hint")
     if topic_id == "fire" and context.get("player_business_fire_name"):
-        return f"I'm letting you go from {context['player_business_fire_name']}."
+        return f"Fire you from {context['player_business_fire_name']}."
     if topic_id == "owner" and context.get("owner_place_name"):
         return f"Who runs {context['owner_place_name']}?"
     if topic_id == "security" and context.get("owner_place_name"):

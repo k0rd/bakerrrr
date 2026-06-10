@@ -38,6 +38,7 @@ from game.system_support.item_runtime import (
     _item_weapon_id,
     _weapon_uses_ammo,
 )
+from game.system_support.combat_targeting_runtime import _projectile_path_points
 from game.system_support.awareness_runtime import observation_payload_for_position
 from game.system_support.item_provenance_runtime import (
     CLAIM_PRIVATE_EFFECT,
@@ -79,6 +80,10 @@ class ItemActionRuntime:
             "legal_status": "legal",
             "effects": [],
         })
+
+    def _item_throw_profile(self, item_def):
+        profile = item_def.get("throw_profile") if isinstance(item_def, dict) else None
+        return profile if isinstance(profile, dict) else None
 
     def _display_name_for_actor(self, eid, item_or_entry, *, identified=None):
         return item_display_name_for_actor(
@@ -687,6 +692,177 @@ class ItemActionRuntime:
         )
         return True
 
+    def throw_item(self, eid, x, y, z, *, instance_id=None, target_x=None, target_y=None, target_z=None, reason="manual"):
+        inventory = self._inventory_for(eid)
+        if not inventory:
+            self.sim.emit(Event("item_use_blocked", eid=eid, reason="no_inventory"))
+            return False
+
+        entry = inventory.find(instance_id=instance_id) if instance_id else None
+        if not entry:
+            self.sim.emit(Event("item_use_blocked", eid=eid, reason="no_usable_item"))
+            return False
+
+        item_def = self._item_def(entry["item_id"])
+        throw_profile = self._item_throw_profile(item_def)
+        item_name = self._display_name_for_actor(eid, entry)
+        if not throw_profile:
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="item_not_throwable",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
+
+        try:
+            tx = int(target_x)
+            ty = int(target_y)
+            tz = int(target_z if target_z is not None else z)
+        except (TypeError, ValueError):
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="no_throw_target",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
+
+        if int(tz) != int(z):
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="wrong_floor",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
+
+        max_range = int(max(1, throw_profile.get("range", 5)))
+        distance = max(abs(int(tx) - int(x)), abs(int(ty) - int(y)))
+        if distance <= 0:
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="no_throw_target",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
+        if distance > max_range:
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="throw_out_of_range",
+                item_id=item_def["id"],
+                item_name=item_name,
+                range=max_range,
+            ))
+            return False
+
+        path = _projectile_path_points(int(x), int(y), tx, ty, max_steps=max_range)
+        if not path:
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="no_throw_target",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
+
+        removed = None
+        if bool(throw_profile.get("consume_on_throw", True)):
+            removed = inventory.remove_item(instance_id=entry["instance_id"], quantity=1)
+            if not removed:
+                self.sim.emit(Event(
+                    "item_use_blocked",
+                    eid=eid,
+                    reason="consume_failed",
+                    item_id=item_def["id"],
+                    item_name=item_name,
+                ))
+                return False
+
+        first_x, first_y = path[0]
+        trajectory = str(throw_profile.get("trajectory", "lobbed") or "lobbed").strip().lower() or "lobbed"
+        projectile_id = self.sim.register_projectile({
+            "source_eid": eid,
+            "weapon_id": f"throw:{item_def['id']}",
+            "thrown_item_id": item_def["id"],
+            "thrown_item_name": item_name,
+            "x": int(x),
+            "y": int(y),
+            "z": int(z),
+            "dx": int(first_x) - int(x),
+            "dy": int(first_y) - int(y),
+            "path": path,
+            "path_index": 0,
+            "speed": float(max(0.1, throw_profile.get("speed", 0.9))),
+            "travel_bank": 0.0,
+            "remaining_range": len(path),
+            "damage": int(max(1, throw_profile.get("damage", 1))),
+            "trajectory": trajectory,
+            "explosion_radius": int(max(0, throw_profile.get("explosion_radius", 0))),
+            "aoe_falloff": float(max(0.0, min(1.0, throw_profile.get("aoe_falloff", 0.5)))),
+            "cover_penetration": float(max(0.0, min(1.0, throw_profile.get("cover_penetration", 0.0)))),
+            "fire_intensity": int(max(0, throw_profile.get("fire_intensity", 0))),
+            "smoke_intensity": int(max(0, throw_profile.get("smoke_intensity", 0))),
+            "projectile_glyph": str(throw_profile.get("projectile_glyph", "*") or "*")[:1] or "*",
+            "target_x": tx,
+            "target_y": ty,
+            "target_z": tz,
+            "ignore_walls": trajectory == "lobbed",
+            "shatter": bool(throw_profile.get("shatter", False)),
+        })
+
+        noise_radius = int(max(0, throw_profile.get("noise_radius", 0)))
+        if noise_radius > 0:
+            self.sim.emit(Event(
+                "noise",
+                source_eid=eid,
+                x=int(x),
+                y=int(y),
+                z=int(z),
+                radius=noise_radius,
+                cause="throw_item",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+
+        self.sim.emit(Event(
+            "item_used",
+            eid=eid,
+            item_id=item_def["id"],
+            item_name=item_name,
+            reason=reason,
+            applied=[],
+            usage_kind="throw",
+            projectile_id=projectile_id,
+            target_x=tx,
+            target_y=ty,
+            target_z=tz,
+            consumed=bool(removed),
+            shatter=bool(throw_profile.get("shatter", False)),
+            incendiary=bool(int(throw_profile.get("fire_intensity", 0)) > 0),
+        ))
+
+        context = "explosive_discharge" if (
+            int(throw_profile.get("explosion_radius", 0)) > 0
+            or int(throw_profile.get("fire_intensity", 0)) > 0
+        ) else "ordinary"
+        self.item_system._emit_action_offense(
+            eid=eid,
+            action="use_item",
+            context=context,
+            x=int(x),
+            y=int(y),
+            z=int(z),
+        )
+        return True
+
     def reconcile_player_credsticks(self):
         inventory = self._inventory_for(self.player_eid)
         assets = self._assets_for(self.player_eid)
@@ -1164,6 +1340,32 @@ class ItemActionRuntime:
             instance_id=event.data.get("item_instance_id"),
             reason=event.data.get("reason", "request"),
             preferred_appearance_slot=event.data.get("preferred_appearance_slot"),
+        )
+
+    def on_throw_item_request(self, event):
+        eid = event.data.get("eid")
+        if eid is None:
+            return
+
+        if _entity_is_downed(self.sim, eid):
+            _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+            return
+
+        positions = self.sim.ecs.get(Position)
+        pos = positions.get(eid)
+        if not pos:
+            return
+
+        self.throw_item(
+            eid=eid,
+            x=pos.x,
+            y=pos.y,
+            z=pos.z,
+            instance_id=event.data.get("item_instance_id"),
+            target_x=event.data.get("target_x"),
+            target_y=event.data.get("target_y"),
+            target_z=event.data.get("target_z", pos.z),
+            reason=event.data.get("reason", "request"),
         )
 
     def on_drop_item_request(self, event):

@@ -37,7 +37,7 @@ content validation passed: 9 file(s) checked, 0 warning(s).
 [ok] test_city_large_parcel_layouts_expand_without_overlap
 [ok] test_vehicle_profiles_are_seed_stable_but_varied
 content regression checks passed.
-[ok]  content_regression (3.02s)
+[ok]  content_regression (2.98s)
 [run] player_guide_regression
       /usr/bin/python scripts/player_guide_regression.py
 player_guide_regression: ok (5 tests)
@@ -53,7 +53,7 @@ release_mode_regression: ok (4 tests)
 [run] startup_doctor_regression
       /usr/bin/python scripts/startup_doctor_regression.py
 startup_doctor_regression: ok (3 tests)
-[ok]  startup_doctor_regression (0.12s)
+[ok]  startup_doctor_regression (0.11s)
 [run] crash_report_regression
       /usr/bin/python scripts/crash_report_regression.py
 crash_report_regression: ok (1 tests)
@@ -82,7 +82,7 @@ crash_report_regression: ok (1 tests)
 [ok] test_identified_final_operation_target_survives_unload_and_save_resume
 [ok] test_opportunity_tracked_target_survives_unload_and_save_resume
 save/load regression checks passed.
-[ok]  save_load_regression (21.71s)
+[ok]  save_load_regression (21.67s)
 [run] lighting_regression
       /usr/bin/python scripts/lighting_regression.py
 [ok] test_phase4_notice_ranges
@@ -144,7 +144,7 @@ lighting regression checks passed.
 [ok] test_overworld_cursor_reveals_adjacent_chunk_identity_but_hides_distant_chunk
 [ok] test_overworld_scan_reveals_adjacent_neighbors
 vehicle regression checks passed.
-[ok]  vehicle_regression (3.89s)
+[ok]  vehicle_regression (3.87s)
 [run] organization_regression
       /usr/bin/python scripts/organization_regression.py
 [ok] test_property_organization_is_created_and_surfaced
@@ -214,7 +214,7 @@ vehicle regression checks passed.
 [ok] test_vigilante_pressure_emerges_block_watch_and_surfaces_locally
 [ok] test_civic_pressure_emerges_checkpoint_questioning_and_surfaces_locally
 organization regression checks passed.
-[ok]  organization_regression (3.53s)
+[ok]  organization_regression (3.49s)
 [run] finance_regression
       /usr/bin/python scripts/finance_regression.py
 [ok] test_policy_durations_cover_multiple_hours
@@ -261,7 +261,7 @@ finance regression checks passed.
 [ok] test_banking_menu_can_move_funds_into_and_out_of_business_account
 [ok] test_save_load_preserves_business_account_state
 player business regression checks passed.
-[ok]  player_business_regression (2.03s)
+[ok]  player_business_regression (2.01s)
 [run] business_reputation_regression
       /usr/bin/python scripts/business_reputation_regression.py
 [ok] test_direct_experience_and_incident_pressure_shape_business_opinion
@@ -278,7 +278,7 @@ business reputation regression checks passed.
 [run] social_knowledge_regression
       /usr/bin/python scripts/social_knowledge_regression.py
 social_knowledge_regression: ok
-[ok]  social_knowledge_regression (0.27s)
+[ok]  social_knowledge_regression (0.26s)
 [run] keyed_property_regression
       /usr/bin/python scripts/keyed_property_regression.py
 [ok] test_owned_protected_building_syncs_lock_and_owner_key
@@ -337,7 +337,7 @@ social_knowledge_regression: ok
 [ok] test_window_entry_missing_target_logs_hint
 [ok] test_newly_registered_business_keyholder_gets_key_before_hour_rollover_and_drops_it_on_death
 keyed property regression checks passed.
-[ok]  keyed_property_regression (3.83s)
+[ok]  keyed_property_regression (3.93s)
 [run] final_operation_regression
       /usr/bin/python scripts/final_operation_regression.py
 [ok] test_high_value_retrieval_identifies_site_and_item
@@ -385,7 +385,7 @@ spatial index regression checks passed.
 [ok] test_power_cut_blocks_elevator_but_not_stairs
 [ok] test_public_service_building_spawns_linked_terminal_and_supports_intel
 infrastructure interaction regression checks passed.
-[ok]  infrastructure_interaction_regression (5.65s)
+[ok]  infrastructure_interaction_regression (5.57s)
 [run] interior_room_regression
       /usr/bin/python scripts/interior_room_regression.py
 [ok] test_shell_span_profiles_expand_non_residential_buildings
@@ -410,7 +410,7 @@ infrastructure interaction regression checks passed.
 [ok] test_event_log_announces_building_and_room_entries_without_repeating_same_room
 [ok] test_non_south_entry_uses_lobby_as_the_actual_front_room
 interior room regression checks passed.
-[ok]  interior_room_regression (1.77s)
+[ok]  interior_room_regression (1.78s)
 [run] skill_regression
       /usr/bin/python scripts/skill_regression.py
 [ok] test_explicit_skill_profile_overrides_stat_fallback
@@ -495,7 +495,7 @@ suspicion regression checks passed.
 [run] criminal_justice_regression
       /usr/bin/python scripts/criminal_justice_regression.py
 criminal_justice_regression: ok
-[ok]  criminal_justice_regression (2.24s)
+[ok]  criminal_justice_regression (2.23s)
 [run] npc_will_regression
       /usr/bin/python scripts/npc_will_regression.py
 [ok] test_off_shift_socializing_intent_no_unboundlocal
@@ -544,11 +544,11 @@ criminal_justice_regression: ok
 [ok] test_indoor_wildlife_is_relocated_outside_on_will_update
 [ok] test_wildlife_habitat_can_keep_underground_pests_inside
 npc will regression checks passed.
-[ok]  npc_will_regression (3.06s)
+[ok]  npc_will_regression (3.00s)
 [run] actor_attention_regression
       /usr/bin/python scripts/actor_attention_regression.py
 actor_attention_regression: ok
-[ok]  actor_attention_regression (0.28s)
+[ok]  actor_attention_regression (0.29s)
 [run] outfit_impression_regression
       /usr/bin/python scripts/outfit_impression_regression.py
 outfit_impression_regression: ok
@@ -556,11 +556,11 @@ outfit_impression_regression: ok
 [run] wildlife_ecology_regression
       /usr/bin/python scripts/wildlife_ecology_regression.py
 wildlife ecology regression checks passed.
-[ok]  wildlife_ecology_regression (0.24s)
+[ok]  wildlife_ecology_regression (0.25s)
 [run] animal_social_regression
       /usr/bin/python scripts/animal_social_regression.py
 animal social regression checks passed.
-[ok]  animal_social_regression (0.16s)
+[ok]  animal_social_regression (0.17s)
 [run] rival_operator_regression
       /usr/bin/python scripts/rival_operator_regression.py
 [ok] test_offscreen_hazardous_job_can_kill_rival
@@ -577,7 +577,7 @@ animal social regression checks passed.
 [ok] test_resolving_rival_followup_does_not_chain_more_followups
 [ok] test_contract_kill_claim_does_not_spawn_generic_rival_aftermath
 rival operator regression checks passed.
-[ok]  rival_operator_regression (0.28s)
+[ok]  rival_operator_regression (0.27s)
 [run] dialog_ui_regression
       /usr/bin/python scripts/dialog_ui_regression.py
 [ok] test_reusable_pause_reasons_gate_sim_updates
@@ -717,7 +717,7 @@ rival operator regression checks passed.
 [ok] test_hired_backup_command_topics_surface_orders_and_paid_hit
 [ok] test_backup_goto_wait_can_mark_a_spot_directly_from_dialog
 dialog ui regression checks passed.
-[ok]  dialog_ui_regression (6.68s)
+[ok]  dialog_ui_regression (6.54s)
 [run] dialogue_social_context_regression
       /usr/bin/python scripts/dialogue_social_context_regression.py
 [ok] test_first_contact_stranger_has_no_continuity_or_deep_access
@@ -745,7 +745,7 @@ relationship_notebook_regression: passed 7 checks
 [run] dialogue_shape_regression
       /usr/bin/python scripts/dialogue_shape_regression.py
 dialogue shape regression checks passed.
-[ok]  dialogue_shape_regression (0.03s)
+[ok]  dialogue_shape_regression (0.04s)
 [run] debug_ui_regression
       /usr/bin/python scripts/debug_ui_regression.py
 [ok] test_debug_modal_opens_scrolls_and_closes
@@ -777,11 +777,13 @@ dialogue shape regression checks passed.
 [ok] test_render_surfaces_visible_fire_and_smoke_cells
 [ok] test_inventory_weapon_ammo_metadata_visible_in_inspect_and_rows
 [ok] test_inventory_rows_tag_worn_clothing_items
+[ok] test_inventory_rows_color_equipped_consequence_gear
+[ok] test_inventory_use_on_throwable_enters_throw_targeting_and_cancel_keeps_item
 [ok] test_cache_panel_reuses_inventory_style_render_and_mission_note
 [ok] test_legacy_cache_panel_state_upgrades_to_container_panel
 [ok] test_worn_container_panel_renders_shared_bag_interface
 debug UI regression checks passed.
-[ok]  debug_ui_regression (0.81s)
+[ok]  debug_ui_regression (0.82s)
 [run] curses_ui_regression
       /usr/bin/python scripts/curses_ui_regression.py
 [ok] test_constructor_initializes_terminal_state_and_palette
@@ -796,11 +798,11 @@ curses frontend regression checks passed.
 [run] bootstrap_regression
       /usr/bin/python scripts/bootstrap_regression.py
 bootstrap regression checks passed.
-[ok]  bootstrap_regression (10.34s)
+[ok]  bootstrap_regression (10.18s)
 [run] tutorial_regression
       /usr/bin/python scripts/tutorial_regression.py
 tutorial_regression: ok (8 tests)
-[ok]  tutorial_regression (1.02s)
+[ok]  tutorial_regression (1.01s)
 [run] courier_opportunity_regression
       /usr/bin/python scripts/courier_opportunity_regression.py
 [ok] test_dialogue_angle_and_risk_call_out_item_handling
@@ -857,7 +859,7 @@ tutorial_regression: ok (8 tests)
 [ok] test_water_run_still_accepts_water_discovery_without_handoff_site
 [ok] test_accepted_multi_stage_delivery_tracks_pickup_and_handoff_sites
 courier opportunity regression checks passed.
-[ok]  courier_opportunity_regression (0.92s)
+[ok]  courier_opportunity_regression (0.89s)
 [run] opportunity_cadence_regression
       /usr/bin/python scripts/opportunity_cadence_regression.py
 [ok] test_report_open_does_not_refill_seeded_board
@@ -869,7 +871,7 @@ courier opportunity regression checks passed.
 [ok] test_emergency_low_board_refills_immediately
 [ok] test_missing_cadence_state_normalizes_without_generation
 opportunity cadence regression checks passed.
-[ok]  opportunity_cadence_regression (0.20s)
+[ok]  opportunity_cadence_regression (0.19s)
 [run] world_event_regression
       /usr/bin/python scripts/world_event_regression.py
 PASS test_power_outage_dims_fixture_lighting
@@ -879,7 +881,7 @@ PASS test_world_event_reveal_waits_until_player_is_nearby
 PASS test_wilderness_roll_picks_hunter_or_campout_events
 PASS test_hunter_party_spawns_team_and_game_rack
 PASS test_campout_spawns_campfire_and_campers
-[ok]  world_event_regression (1.23s)
+[ok]  world_event_regression (1.21s)
 [run] newcomer_regression
       /usr/bin/python scripts/newcomer_regression.py
 [ok] test_newcomer_claims_nearby_lodging
@@ -893,7 +895,7 @@ PASS test_campout_spawns_campfire_and_campers
 [ok] test_unemployed_resident_does_not_relocate_to_remote_city_without_transit_access
 [ok] test_partner_household_can_relocate_together_to_a_better_city_chunk
 newcomer regression checks passed.
-[ok]  newcomer_regression (1.16s)
+[ok]  newcomer_regression (1.15s)
 [run] business_event_scene_regression
       /usr/bin/python scripts/business_event_scene_regression.py
 [ok] test_delivery_scene_spawns_vehicle_fixture_and_workers
@@ -955,7 +957,7 @@ newcomer regression checks passed.
 [ok] test_gathering_seed_fixture_and_actor_surface_scene_intel
 [ok] test_delivery_seed_escalates_into_later_inspection_followup
 business event scene regression checks passed.
-[ok]  business_event_scene_regression (5.89s)
+[ok]  business_event_scene_regression (5.71s)
 [run] local_situation_regression
       /usr/bin/python scripts/local_situation_regression.py
 [ok] test_quiet_chunk_does_not_emit_local_situation_rows
@@ -974,7 +976,7 @@ business event scene regression checks passed.
 [ok] test_report_and_look_choose_same_reported_hold_winner_for_crowded_property
 [ok] test_same_property_dedupe_prefers_concrete_scene_over_crew_activity
 local situation regression checks passed.
-[ok]  local_situation_regression (1.05s)
+[ok]  local_situation_regression (1.10s)
 [run] building_placement_regression
       /usr/bin/python scripts/building_placement_regression.py
 [ok] test_placement_profiles_are_deterministic
@@ -984,5 +986,5 @@ local situation regression checks passed.
 [ok] test_footprints_stay_in_bounds_and_do_not_overlap
 [ok] test_entries_apertures_properties_and_structures_align
 building placement regression checks passed.
-[ok]  building_placement_regression (0.85s)
+[ok]  building_placement_regression (0.88s)
 regression run passed: 47 check(s).

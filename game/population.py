@@ -1968,6 +1968,8 @@ def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
             "field_dressing",
             "bandage_roll",
             "bottled_water",
+            "electrolyte_drink",
+            "pocket_light_rounds",
             "battery_pack",
         )
     if role == "thief":
@@ -1979,6 +1981,8 @@ def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
             "glass_cutter",
             "hotwire_leads",
             "forged_badge",
+            "pocket_light_rounds",
+            "glass_bottle",
             "smoke_tab",
             "cocaine_bindle",
             "caff_shot",
@@ -1995,16 +1999,17 @@ def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
             "lucky_charm",
             "mint_strip",
             "bottled_water",
+            "glass_bottle",
         )
     if archetype in MEDICAL_ARCHETYPES:
-        return ("med_gel", "micro_medkit", "hydration_salts", "calm_patch", "trauma_foam", "field_dressing", "bandage_roll", "pain_blocker", "bottled_water")
+        return ("med_gel", "micro_medkit", "hydration_salts", "calm_patch", "trauma_foam", "field_dressing", "bandage_roll", "pain_blocker", "bottled_water", "electrolyte_drink", "water_purifier_tabs", "glucose_gel", "antiseptic_wipes", "suture_kit")
     if archetype in SALVAGE_ARCHETYPES or archetype in INDUSTRIAL_ARCHETYPES:
-        return ("street_ration", "protein_wrap", "rice_bowl", "caff_shot", "city_pass_token", "prybar", "glass_cutter", "energy_bar", "canteen_coffee", "sealed_juice", "battery_pack", "scrap_circuit", "pocket_multitool")
+        return ("street_ration", "protein_wrap", "rice_bowl", "caff_shot", "city_pass_token", "prybar", "glass_cutter", "energy_bar", "canteen_coffee", "sealed_juice", "battery_pack", "scrap_circuit", "pocket_multitool", "bolt_cutters", "inspection_mirror", "glass_bottle", "brick", "water_purifier_tabs")
     if archetype in NIGHTLIFE_ARCHETYPES:
-        return ("spark_brew", "cheap_whiskey", "caff_shot", "smoke_tab", "city_pass_token", "street_ration", "fruit_cup", "mint_strip", "deck_of_cards", "lucky_charm")
+        return ("spark_brew", "cheap_whiskey", "caff_shot", "smoke_tab", "city_pass_token", "street_ration", "fruit_cup", "mint_strip", "deck_of_cards", "lucky_charm", "glass_bottle", "electrolyte_drink")
     if archetype in STOREFRONT_ARCHETYPES or archetype in TRANSIT_ARCHETYPES:
-        return ("street_ration", "protein_wrap", "spark_brew", "city_pass_token", "transit_daypass", "scratch_ticket", "energy_bar", "bottled_water", "sealed_juice", "fruit_cup", "meal_voucher", "mint_strip")
-    return ("street_ration", "protein_wrap", "spark_brew", "calm_patch", "city_pass_token", "scratch_ticket", "energy_bar", "bottled_water", "fruit_cup", "meal_voucher", "lucky_charm")
+        return ("street_ration", "protein_wrap", "spark_brew", "city_pass_token", "transit_daypass", "scratch_ticket", "energy_bar", "bottled_water", "sealed_juice", "fruit_cup", "meal_voucher", "mint_strip", "electrolyte_drink", "glucose_gel")
+    return ("street_ration", "protein_wrap", "spark_brew", "calm_patch", "city_pass_token", "scratch_ticket", "energy_bar", "bottled_water", "fruit_cup", "meal_voucher", "lucky_charm", "electrolyte_drink")
 
 
 def _weapon_use_profile_for(role):
@@ -2062,14 +2067,18 @@ def _gear_pool_for(role, workplace_prop=None, home_prop=None):
             "weapon_chance": 0.78,
             "weapon_pool": (
                 ("service_pistol", 28),
+                ("surplus_pistol", 12),
                 ("rust_revolver", 18),
                 ("compact_smg", 16),
                 ("patrol_carbine", 12),
                 ("alley_shotgun", 8),
+                ("riot_shotgun", 7),
             ),
             "armor_chance": 0.72,
             "armor_pool": (
                 ("security_vest", 28),
+                ("plate_carrier", 10),
+                ("ballistic_helmet", 8),
                 ("riot_plates", 14),
                 ("courier_mesh", 8),
             ),
@@ -2079,13 +2088,17 @@ def _gear_pool_for(role, workplace_prop=None, home_prop=None):
             "weapon_chance": 0.42,
             "weapon_pool": (
                 ("holdout_pistol", 24),
+                ("snub_revolver", 16),
+                ("pipe_pistol", 10),
                 ("rust_revolver", 18),
                 ("machine_pistol", 10),
                 ("service_pistol", 8),
+                ("box_cutter", 8),
             ),
             "armor_chance": 0.24,
             "armor_pool": (
                 ("courier_mesh", 18),
+                ("stab_vest", 12),
                 ("padded_jacket", 14),
                 ("security_vest", 8),
             ),
@@ -2095,6 +2108,8 @@ def _gear_pool_for(role, workplace_prop=None, home_prop=None):
             "weapon_chance": 0.08,
             "weapon_pool": (
                 ("holdout_pistol", 14),
+                ("snub_revolver", 8),
+                ("box_cutter", 6),
                 ("rust_revolver", 8),
             ),
             "armor_chance": 0.06,
@@ -2108,13 +2123,19 @@ def _gear_pool_for(role, workplace_prop=None, home_prop=None):
             "weapon_chance": 0.2,
             "weapon_pool": (
                 ("holdout_pistol", 18),
+                ("snub_revolver", 12),
+                ("pipe_pistol", 6),
                 ("rust_revolver", 14),
                 ("alley_shotgun", 8),
+                ("pump_shotgun", 6),
+                ("tire_iron", 8),
             ),
             "armor_chance": 0.18,
             "armor_pool": (
                 ("padded_jacket", 18),
+                ("armored_motor_jacket", 10),
                 ("courier_mesh", 10),
+                ("stab_vest", 8),
             ),
         }
     if role == "worker" or archetype in INDUSTRIAL_ARCHETYPES:
@@ -2122,23 +2143,29 @@ def _gear_pool_for(role, workplace_prop=None, home_prop=None):
             "weapon_chance": 0.12,
             "weapon_pool": (
                 ("holdout_pistol", 12),
+                ("box_cutter", 10),
+                ("tire_iron", 8),
                 ("rust_revolver", 10),
             ),
             "armor_chance": 0.16,
             "armor_pool": (
                 ("courier_mesh", 12),
                 ("padded_jacket", 16),
+                ("cutproof_apron", 10),
+                ("armored_motor_jacket", 6),
             ),
         }
     return {
         "weapon_chance": 0.04,
         "weapon_pool": (
             ("holdout_pistol", 10),
+            ("box_cutter", 6),
         ),
         "armor_chance": 0.08,
         "armor_pool": (
             ("courier_mesh", 10),
             ("padded_jacket", 8),
+            ("stab_vest", 5),
         ),
     }
 

@@ -779,6 +779,160 @@
       }
     ]
   },
+  "pocket_light_rounds": {
+    "name": "Pocket Light Rounds",
+    "glyph": "=",
+    "stack_max": 3,
+    "tags": [
+      "ammo",
+      "legal",
+      "handgun",
+      "smg"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "add_ammo",
+        "amount": 6,
+        "weapon_tags": [
+          "handgun",
+          "smg",
+          "burst"
+        ]
+      }
+    ]
+  },
+  "bulk_light_rounds": {
+    "name": "Bulk Light Rounds",
+    "glyph": "=",
+    "stack_max": 2,
+    "tags": [
+      "ammo",
+      "restricted",
+      "handgun",
+      "smg"
+    ],
+    "legal_status": "restricted",
+    "effects": [
+      {
+        "type": "add_ammo",
+        "amount": 24,
+        "weapon_tags": [
+          "handgun",
+          "smg",
+          "burst"
+        ]
+      }
+    ]
+  },
+  "buckshot_pouch": {
+    "name": "Buckshot Pouch",
+    "glyph": "=",
+    "stack_max": 3,
+    "tags": [
+      "ammo",
+      "restricted",
+      "shotgun"
+    ],
+    "legal_status": "restricted",
+    "effects": [
+      {
+        "type": "add_ammo",
+        "amount": 4,
+        "weapon_tags": [
+          "shotgun"
+        ]
+      }
+    ]
+  },
+  "slug_sleeve": {
+    "name": "Slug Sleeve",
+    "glyph": "=",
+    "stack_max": 2,
+    "tags": [
+      "ammo",
+      "restricted",
+      "shotgun",
+      "precision"
+    ],
+    "legal_status": "restricted",
+    "effects": [
+      {
+        "type": "add_ammo",
+        "amount": 5,
+        "weapon_tags": [
+          "shotgun"
+        ]
+      }
+    ]
+  },
+  "rifle_strip_pack": {
+    "name": "Rifle Strip Pack",
+    "glyph": "=",
+    "stack_max": 3,
+    "tags": [
+      "ammo",
+      "restricted",
+      "rifle"
+    ],
+    "legal_status": "restricted",
+    "effects": [
+      {
+        "type": "add_ammo",
+        "amount": 5,
+        "weapon_tags": [
+          "rifle",
+          "carbine",
+          "precision"
+        ]
+      }
+    ]
+  },
+  "carbine_mag_bundle": {
+    "name": "Carbine Mag Bundle",
+    "glyph": "=",
+    "stack_max": 2,
+    "tags": [
+      "ammo",
+      "restricted",
+      "rifle",
+      "carbine"
+    ],
+    "legal_status": "restricted",
+    "effects": [
+      {
+        "type": "add_ammo",
+        "amount": 12,
+        "weapon_tags": [
+          "rifle",
+          "carbine",
+          "precision"
+        ]
+      }
+    ]
+  },
+  "single_launcher_round": {
+    "name": "Single Launcher Round",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "ammo",
+      "illegal",
+      "launcher",
+      "explosive"
+    ],
+    "legal_status": "illegal",
+    "effects": [
+      {
+        "type": "add_ammo",
+        "amount": 1,
+        "weapon_tags": [
+          "launcher",
+          "explosive"
+        ]
+      }
+    ]
+  },
   "smoke_tab": {
     "name": "Cannabis Joint",
     "glyph": "!",
@@ -2151,6 +2305,133 @@
     "effects": [],
     "weapon_id": "recoilless_launcher"
   },
+  "box_cutter": {
+    "name": "Box Cutter",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "melee",
+      "knife",
+      "concealable",
+      "tool",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "weapon_id": "box_cutter"
+  },
+  "tire_iron": {
+    "name": "Tire Iron",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "melee",
+      "club",
+      "tool",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "weapon_id": "tire_iron"
+  },
+  "snub_revolver": {
+    "name": "Snub Revolver",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "handgun",
+      "concealable",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "snub_revolver"
+  },
+  "surplus_pistol": {
+    "name": "Surplus Pistol",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "handgun",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "surplus_pistol"
+  },
+  "pipe_pistol": {
+    "name": "Pipe Pistol",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "handgun",
+      "improvised",
+      "illegal"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "weapon_id": "pipe_pistol"
+  },
+  "pump_shotgun": {
+    "name": "Pump Shotgun",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "shotgun",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "pump_shotgun"
+  },
+  "riot_shotgun": {
+    "name": "Riot Shotgun",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "shotgun",
+      "duty",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "riot_shotgun"
+  },
+  "varmint_rifle": {
+    "name": "Varmint Rifle",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "rifle",
+      "field",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "varmint_rifle"
+  },
+  "marksman_rifle": {
+    "name": "Marksman Rifle",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "weapon",
+      "rifle",
+      "precision",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "weapon_id": "marksman_rifle"
+  },
   "padded_jacket": {
     "name": "Padded Jacket",
     "glyph": "[",
@@ -2245,6 +2526,87 @@
     "armor": {
       "slot": "body",
       "damage_reduction": 0.34
+    }
+  },
+  "stab_vest": {
+    "name": "Stab Vest",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "armor",
+      "wearable",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "armor": {
+      "slot": "body",
+      "damage_reduction": 0.14
+    }
+  },
+  "armored_motor_jacket": {
+    "name": "Armored Motor Jacket",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "armor",
+      "wearable",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "armor": {
+      "slot": "body",
+      "damage_reduction": 0.16
+    }
+  },
+  "cutproof_apron": {
+    "name": "Cutproof Apron",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "armor",
+      "wearable",
+      "legal",
+      "workwear"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "armor": {
+      "slot": "body",
+      "damage_reduction": 0.08
+    }
+  },
+  "plate_carrier": {
+    "name": "Plate Carrier",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "armor",
+      "wearable",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "armor": {
+      "slot": "body",
+      "damage_reduction": 0.26
+    }
+  },
+  "ballistic_helmet": {
+    "name": "Ballistic Helmet",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "armor",
+      "wearable",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "armor": {
+      "slot": "head",
+      "damage_reduction": 0.1
     }
   },
   "pocket_multitool": {
@@ -2784,6 +3146,54 @@
       "strength": 1.0
     }
   },
+  "maintenance_vest": {
+    "name": "Maintenance Vest",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "clothing",
+      "disguise",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "disguise": {
+      "role_id": "worker",
+      "strength": 0.8
+    }
+  },
+  "contractor_badge_lanyard": {
+    "name": "Contractor Badge Lanyard",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "credential",
+      "disguise",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "disguise": {
+      "role_id": "worker",
+      "strength": 0.65
+    }
+  },
+  "patrol_rain_shell": {
+    "name": "Patrol Rain Shell",
+    "glyph": "[",
+    "stack_max": 1,
+    "tags": [
+      "clothing",
+      "disguise",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "disguise": {
+      "role_id": "guard",
+      "strength": 0.85
+    }
+  },
   "security_jacket": {
     "name": "Security Jacket",
     "glyph": "[",
@@ -2828,6 +3238,281 @@
     "effects": [],
     "container": {
       "bonus_slots": 6
+    }
+  },
+  "electrolyte_drink": {
+    "name": "Electrolyte Drink",
+    "glyph": "!",
+    "stack_max": 3,
+    "tags": [
+      "consumable",
+      "drink",
+      "safety",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 26
+      },
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 5
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 4
+      }
+    ]
+  },
+  "water_purifier_tabs": {
+    "name": "Water Purifier Tabs",
+    "glyph": "!",
+    "stack_max": 3,
+    "tags": [
+      "consumable",
+      "drink",
+      "medical",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 20
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 2
+      }
+    ]
+  },
+  "glucose_gel": {
+    "name": "Glucose Gel",
+    "glyph": "%",
+    "stack_max": 3,
+    "tags": [
+      "consumable",
+      "energy",
+      "medical",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 16
+      },
+      {
+        "type": "modify_need",
+        "need": "hunger",
+        "delta": 6
+      }
+    ]
+  },
+  "antiseptic_wipes": {
+    "name": "Antiseptic Wipes",
+    "glyph": "!",
+    "stack_max": 3,
+    "tags": [
+      "consumable",
+      "medical",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "restore_hp",
+        "delta": 2
+      },
+      {
+        "type": "status",
+        "status": "clean_dressing",
+        "duration": 10,
+        "modifiers": {
+          "hp_tick_delta": 0.04
+        }
+      }
+    ]
+  },
+  "suture_kit": {
+    "name": "Suture Kit",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [
+      {
+        "type": "restore_hp",
+        "delta": 8
+      },
+      {
+        "type": "status",
+        "status": "stitched",
+        "duration": 18,
+        "modifiers": {
+          "move_speed_mult": -0.04,
+          "hp_tick_delta": 0.1
+        }
+      }
+    ]
+  },
+  "emergency_blanket": {
+    "name": "Emergency Blanket",
+    "glyph": "{",
+    "stack_max": 2,
+    "tags": [
+      "consumable",
+      "safety",
+      "medical",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 10
+      },
+      {
+        "type": "status",
+        "status": "warmed",
+        "duration": 14,
+        "modifiers": {
+          "safety_tick_delta": 0.06,
+          "hp_tick_delta": 0.04
+        }
+      }
+    ]
+  },
+  "bolt_cutters": {
+    "name": "Bolt Cutters",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "tool",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "tool_profiles": [
+      {
+        "contexts": [
+          "side_entry"
+        ],
+        "enable_contexts": [
+          "side_entry"
+        ],
+        "intrusion_bonus": 0.75,
+        "mechanics_bonus": 0.9,
+        "perception_bonus": 0.1,
+        "requirement_delta": -1.0
+      }
+    ]
+  },
+  "inspection_mirror": {
+    "name": "Inspection Mirror",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "tool",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "tool_profiles": [
+      {
+        "contexts": [
+          "side_entry",
+          "badge_controller"
+        ],
+        "perception_bonus": 0.55,
+        "score_bonus": 0.2,
+        "requirement_delta": -0.35
+      }
+    ]
+  },
+  "glass_bottle": {
+    "name": "Glass Bottle",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "throwable",
+      "junk",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "throw_profile": {
+      "range": 5,
+      "trajectory": "lobbed",
+      "projectile_glyph": "*",
+      "speed": 0.95,
+      "damage": 3,
+      "noise_radius": 3,
+      "consume_on_throw": true,
+      "shatter": true
+    }
+  },
+  "brick": {
+    "name": "Brick",
+    "glyph": "*",
+    "stack_max": 1,
+    "tags": [
+      "throwable",
+      "junk",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "throw_profile": {
+      "range": 4,
+      "trajectory": "lobbed",
+      "projectile_glyph": "*",
+      "speed": 0.8,
+      "damage": 5,
+      "noise_radius": 4,
+      "consume_on_throw": true,
+      "shatter": false
+    }
+  },
+  "molotov_cocktail": {
+    "name": "Molotov Cocktail",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "throwable",
+      "illegal",
+      "explosive",
+      "fire"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "throw_profile": {
+      "range": 6,
+      "trajectory": "lobbed",
+      "projectile_glyph": "o",
+      "speed": 0.85,
+      "damage": 5,
+      "noise_radius": 8,
+      "explosion_radius": 1,
+      "aoe_falloff": 0.45,
+      "cover_penetration": 0.08,
+      "fire_intensity": 4,
+      "smoke_intensity": 2,
+      "consume_on_throw": true,
+      "shatter": true
     }
   }
 }

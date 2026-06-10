@@ -972,7 +972,7 @@ class RenderSystem(System):
             "Local terrain: = road, : trail, , brush, ^ rock, ~ water, _ shore flats.",
             "Remote sites: relay/lookout/survey sites provide intel; camps and huts can offer shelter.",
             f"Aim/Combat: {aim_open}, move cursor, F cycle target, {aim_confirm}, C cover, v cover hop, Shift+S sneak, V cycle weapon.",
-            "Items: I inventory, , picks up nearby items, U use/equip/stow, R drop.",
+            "Items: I inventory, , picks up nearby items, U use/equip/stow/throw, R drop.",
             "Visual classes: vehicles use '&' symbol colors only; properties use letters; items are bright symbols; humans use colored @ symbols and wildlife uses taxonomy letters.",
             "Progress: O operations report, Y opens the Places notebook; Tab switches to the People notebook. L opens event log history.",
             "Log modal: T cycles filters; H sets the current modal filter as the live HUD filter.",
@@ -2128,6 +2128,8 @@ class RenderSystem(System):
             look_mode = str(look_ui.get("mode", zoom_mode)).lower()
             if look_purpose == "aim":
                 label = "Aim"
+            elif look_purpose == "throw":
+                label = "Throw"
             elif look_purpose == "interact":
                 label = "Interact"
             elif look_purpose == "talk":
@@ -2357,6 +2359,9 @@ class RenderSystem(System):
                     controls = "Aim (Melee): reticle adjacent-only, F cycle target, Enter strike, x inspect, Esc close, ? help"
                 else:
                     controls = "Aim: move cursor, F cycle target, Enter fire, x inspect, Esc close, ? help"
+            elif look_purpose == "throw":
+                item_name = str(look_ui.get("throw_item_name", "") or "item").strip() or "item"
+                controls = f"Throw {item_name}: move cursor, Enter throw, x inspect, Esc cancel, ? help"
             elif look_purpose == "interact":
                 controls = "Interact: choose adjacent tile, '/Enter confirm, ; lock, x inspect, Esc fallback, ? help"
             elif look_purpose == "talk":
@@ -2630,27 +2635,33 @@ class RenderSystem(System):
                 glyph = item_def.get("glyph", "*")
                 name = item_display_name_for_actor(self.sim, self.player_eid, entry, item_catalog=ITEM_CATALOG)
                 gear_marker = ""
+                row_color = None
+                entry_instance_id = str(entry.get("instance_id", "") or "").strip()
                 if panel_kind != "container" or container_view == "pack":
-                    if armor_loadout and armor_loadout.is_equipped(entry.get("instance_id")):
+                    if armor_loadout and armor_loadout.is_equipped(entry_instance_id):
                         gear_marker = "A"
+                        row_color = "inventory_equipped_consequence"
                     elif (
                         isinstance(active_disguise, dict)
-                        and str(active_disguise.get("instance_id", "")).strip() == str(entry.get("instance_id", "")).strip()
+                        and str(active_disguise.get("instance_id", "")).strip() == entry_instance_id
                     ):
                         gear_marker = "D"
-                    elif weapon_loadout:
+                        row_color = "inventory_equipped_consequence"
+                    if not gear_marker and weapon_loadout:
                         weapon_id = _item_weapon_id(item_def)
                         instance = weapon_loadout.weapon_instances.get(weapon_id, {}) if weapon_id else {}
                         if (
                             weapon_id
                             and weapon_loadout.current_weapon() == weapon_id
                             and isinstance(instance, dict)
-                            and str(instance.get("inventory_instance_id", "")).strip() == str(entry.get("instance_id", "")).strip()
+                            and str(instance.get("inventory_instance_id", "")).strip() == entry_instance_id
                         ):
                             gear_marker = "W"
-                    elif (
-                        isinstance(equipped_container, dict)
-                        and str(equipped_container.get("instance_id", "")).strip() == str(entry.get("instance_id", "")).strip()
+                            row_color = "inventory_equipped_weapon"
+                    if (
+                        not gear_marker
+                        and isinstance(equipped_container, dict)
+                        and str(equipped_container.get("instance_id", "")).strip() == entry_instance_id
                     ):
                         gear_marker = "C"
                 ammo_suffix = ""
@@ -2678,8 +2689,10 @@ class RenderSystem(System):
                 worn_suffix = ""
                 if (panel_kind != "container" or container_view == "pack") and is_entry_worn(entry):
                     worn_suffix = " [worn]"
+                    if row_color is None:
+                        row_color = "inventory_equipped_clothing"
                 label = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} {name} x{entry['quantity']}{ammo_suffix}{worn_suffix}{storage_suffix}"
-                self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2))
+                self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2), color=row_color)
 
             if not entries:
                 empty_label = "(empty)"

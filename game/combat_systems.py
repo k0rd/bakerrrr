@@ -1036,6 +1036,10 @@ class WeaponSystem(System):
             z=z,
             radius=radius,
             hits=hit_count,
+            fire_intensity=int(max(0, projectile.get("fire_intensity", 0) or 0)),
+            smoke_intensity=int(max(0, projectile.get("smoke_intensity", 0) or 0)),
+            thrown_item_id=projectile.get("thrown_item_id"),
+            thrown_item_name=projectile.get("thrown_item_name"),
         ))
         return hit_count
 
@@ -1072,6 +1076,9 @@ class WeaponSystem(System):
             hit_eid=hit_eid,
             reason=reason,
             hits=hit_count,
+            shatter=bool(projectile.get("shatter", False)),
+            thrown_item_id=projectile.get("thrown_item_id"),
+            thrown_item_name=projectile.get("thrown_item_name"),
         ))
         self.sim.remove_projectile(projectile_id)
 

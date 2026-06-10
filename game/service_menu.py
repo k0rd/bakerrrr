@@ -1955,6 +1955,7 @@ class ServiceMenuSystem(System):
                 lines.append(f"Hiring: open {'/'.join(role_labels)} slots.")
         else:
             lines.append("Hiring: no immediate open slot.")
+        lines.append("Staff changes: hire or fire people face to face.")
         if market_note:
             lines.append(f"Market: {market_note}.")
         reputation_note = str(snapshot.get("last_reputation_note", "")).strip() or str(snapshot.get("reputation_note", "")).strip()

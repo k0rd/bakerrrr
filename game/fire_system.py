@@ -236,6 +236,7 @@ class FireSystem(System):
         if x is None or y is None:
             return
         source_eid = event.data.get("source_eid")
+        source_intensity = max(0, _safe_int(event.data.get("fire_intensity"), 0))
         origin = _coord_key(x, y, z)
         if origin is None:
             return
@@ -265,7 +266,7 @@ class FireSystem(System):
                     source_kind="explosion",
                     source_eid=source_eid,
                     spread_from=origin if is_spread else None,
-                    intensity=max(2, 4 - distance),
+                    intensity=max(2, (source_intensity or 4) - distance),
                     sync_protected=False,
                 )
 

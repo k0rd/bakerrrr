@@ -55,8 +55,12 @@ def _normalize_item_category(item_id, tags, item):
         return "weapon"
     if "ammo" in tag_set:
         return "ammo"
+    if item.get("throw_profile") or "throwable" in tag_set:
+        return "throwable"
     if "cosmetic" in tag_set:
         return "cosmetic"
+    if item.get("disguise") or "disguise" in tag_set:
+        return "disguise"
     if item.get("armor") or "armor" in tag_set or "wearable" in tag_set:
         return "armor"
     if "medical" in tag_set:
@@ -267,6 +271,41 @@ def _normalize_container_profile(value):
         return None
     return {
         "bonus_slots": int(bonus_slots),
+    }
+
+
+def _normalize_throw_profile(value):
+    if not isinstance(value, dict):
+        return None
+
+    range_ = max(1, _int_or_default(value.get("range"), 5))
+    damage = max(0, _int_or_default(value.get("damage"), 0))
+    noise_radius = max(0, _int_or_default(value.get("noise_radius"), 2))
+    explosion_radius = max(0, _int_or_default(value.get("explosion_radius"), 0))
+    fire_intensity = max(0, _int_or_default(value.get("fire_intensity"), 0))
+    smoke_intensity = max(0, _int_or_default(value.get("smoke_intensity"), 0))
+    cover_penetration = max(0.0, min(1.0, _float_or_default(value.get("cover_penetration"), 0.0)))
+    aoe_falloff = max(0.0, min(1.0, _float_or_default(value.get("aoe_falloff"), 0.5)))
+    speed = max(0.1, _float_or_default(value.get("speed"), 0.9))
+    trajectory = str(value.get("trajectory", "lobbed") or "lobbed").strip().lower()
+    if trajectory not in {"ballistic", "lobbed", "beam"}:
+        trajectory = "lobbed"
+    if damage <= 0 and explosion_radius <= 0 and fire_intensity <= 0 and smoke_intensity <= 0:
+        return None
+    return {
+        "range": range_,
+        "trajectory": trajectory,
+        "projectile_glyph": str(value.get("projectile_glyph", "*") or "*")[:1] or "*",
+        "speed": speed,
+        "damage": damage,
+        "noise_radius": noise_radius,
+        "explosion_radius": explosion_radius,
+        "aoe_falloff": aoe_falloff,
+        "cover_penetration": cover_penetration,
+        "fire_intensity": fire_intensity,
+        "smoke_intensity": smoke_intensity,
+        "consume_on_throw": bool(value.get("consume_on_throw", True)),
+        "shatter": bool(value.get("shatter", False)),
     }
 
 
@@ -1099,6 +1138,7 @@ def load_item_catalog(path=ITEMS_PATH):
             "armor": _normalize_armor_profile(item.get("armor")),
             "disguise": _normalize_disguise_profile(item.get("disguise")),
             "container": _normalize_container_profile(item.get("container")),
+            "throw_profile": _normalize_throw_profile(item.get("throw_profile")),
             "substance_profile": _normalize_substance_profile(item.get("substance_profile")),
             "lead_profile": _normalize_lead_profile(item.get("lead_profile")),
             "condition_profile": _normalize_condition_profile(

@@ -650,6 +650,298 @@
         "Hammer",
         "Backblast"
       ]
+    },
+    {
+      "id": "box_cutter",
+      "name": "Box Cutter",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 1.0,
+      "range": 1,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 7,
+      "cooldown_ticks": 1,
+      "noise_radius": 2,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.0,
+      "tags": [
+        "melee",
+        "knife",
+        "concealable"
+      ],
+      "named_prefixes": [
+        "Stockroom",
+        "Razored",
+        "Sleeve"
+      ],
+      "named_suffixes": [
+        "Cutter",
+        "Slice",
+        "Nine-Cent"
+      ]
+    },
+    {
+      "id": "tire_iron",
+      "name": "Tire Iron",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 1.0,
+      "range": 1,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 12,
+      "cooldown_ticks": 2,
+      "noise_radius": 3,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.0,
+      "tags": [
+        "melee",
+        "club",
+        "blunt",
+        "utility"
+      ],
+      "named_prefixes": [
+        "Garage",
+        "Roadside",
+        "Bent"
+      ],
+      "named_suffixes": [
+        "Iron",
+        "Knocker",
+        "Lever"
+      ]
+    },
+    {
+      "id": "snub_revolver",
+      "name": "Snub Revolver",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 1.55,
+      "range": 6,
+      "pellets": 1,
+      "spread": 1,
+      "base_damage": 16,
+      "cooldown_ticks": 2,
+      "noise_radius": 8,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.14,
+      "tags": [
+        "handgun",
+        "kinetic",
+        "concealable"
+      ],
+      "named_prefixes": [
+        "Pocket",
+        "Stub",
+        "Nickel"
+      ],
+      "named_suffixes": [
+        "Snub",
+        "Shortsix",
+        "Hideaway"
+      ]
+    },
+    {
+      "id": "surplus_pistol",
+      "name": "Surplus Pistol",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 1.65,
+      "range": 8,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 13,
+      "cooldown_ticks": 2,
+      "noise_radius": 7,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.12,
+      "tags": [
+        "handgun",
+        "kinetic"
+      ],
+      "named_prefixes": [
+        "Surplus",
+        "Depot",
+        "Stamped"
+      ],
+      "named_suffixes": [
+        "Pistol",
+        "Type-3",
+        "Service Old"
+      ]
+    },
+    {
+      "id": "pipe_pistol",
+      "name": "Pipe Pistol",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 1.35,
+      "range": 5,
+      "pellets": 1,
+      "spread": 1,
+      "base_damage": 17,
+      "cooldown_ticks": 3,
+      "noise_radius": 9,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.1,
+      "tags": [
+        "handgun",
+        "kinetic",
+        "improvised",
+        "concealable"
+      ],
+      "named_prefixes": [
+        "Pipe",
+        "Backroom",
+        "Filed"
+      ],
+      "named_suffixes": [
+        "One-Shot",
+        "Pistol",
+        "Crack"
+      ]
+    },
+    {
+      "id": "pump_shotgun",
+      "name": "Pump Shotgun",
+      "glyph": "!",
+      "projectile_glyph": ":",
+      "trajectory": "ballistic",
+      "speed": 1.2,
+      "range": 8,
+      "pellets": 6,
+      "spread": 2,
+      "base_damage": 8,
+      "cooldown_ticks": 3,
+      "noise_radius": 11,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.07,
+      "tags": [
+        "shotgun",
+        "kinetic",
+        "spread"
+      ],
+      "named_prefixes": [
+        "Pump",
+        "Porch",
+        "Depot"
+      ],
+      "named_suffixes": [
+        "Twelve",
+        "Scatter",
+        "Longarm"
+      ]
+    },
+    {
+      "id": "riot_shotgun",
+      "name": "Riot Shotgun",
+      "glyph": "!",
+      "projectile_glyph": ":",
+      "trajectory": "ballistic",
+      "speed": 1.25,
+      "range": 8,
+      "pellets": 7,
+      "spread": 2,
+      "base_damage": 8,
+      "cooldown_ticks": 3,
+      "noise_radius": 11,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.09,
+      "tags": [
+        "shotgun",
+        "kinetic",
+        "spread",
+        "duty"
+      ],
+      "named_prefixes": [
+        "Riot",
+        "Barricade",
+        "Station"
+      ],
+      "named_suffixes": [
+        "Line",
+        "Crowd",
+        "Breacher"
+      ]
+    },
+    {
+      "id": "varmint_rifle",
+      "name": "Varmint Rifle",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 1.85,
+      "range": 13,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 14,
+      "cooldown_ticks": 2,
+      "noise_radius": 8,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.2,
+      "tags": [
+        "rifle",
+        "kinetic",
+        "precision",
+        "field"
+      ],
+      "named_prefixes": [
+        "Field",
+        "Ridgetop",
+        "Barn"
+      ],
+      "named_suffixes": [
+        "Varmint",
+        "Needle",
+        "Reach"
+      ]
+    },
+    {
+      "id": "marksman_rifle",
+      "name": "Marksman Rifle",
+      "glyph": "!",
+      "projectile_glyph": ".",
+      "trajectory": "ballistic",
+      "speed": 1.95,
+      "range": 15,
+      "pellets": 1,
+      "spread": 0,
+      "base_damage": 21,
+      "cooldown_ticks": 3,
+      "noise_radius": 10,
+      "explosion_radius": 0,
+      "aoe_falloff": 0.0,
+      "cover_penetration": 0.28,
+      "tags": [
+        "rifle",
+        "kinetic",
+        "precision",
+        "heavy"
+      ],
+      "named_prefixes": [
+        "Marksman",
+        "Overwatch",
+        "Coldline"
+      ],
+      "named_suffixes": [
+        "Reach",
+        "Scope",
+        "Long Glass"
+      ]
     }
   ]
 }

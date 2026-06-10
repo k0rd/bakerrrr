@@ -690,6 +690,34 @@ def _validate_items(path, report):
                     field_name="bonus_slots",
                 )
 
+        if "throw_profile" in item:
+            throw_profile = item["throw_profile"]
+            if not _expect_type(report, source, item_path + ["throw_profile"], throw_profile, dict, "an object"):
+                continue
+            if "range" in throw_profile:
+                _validate_int(report, source, item_path + ["throw_profile", "range"], throw_profile.get("range"), minimum=1, field_name="range")
+            if "trajectory" in throw_profile:
+                trajectory = throw_profile.get("trajectory")
+                if _validate_non_empty_string(report, source, item_path + ["throw_profile", "trajectory"], trajectory, field_name="trajectory"):
+                    if str(trajectory).strip().lower() not in ALLOWED_WEAPON_TRAJECTORIES:
+                        report.error(source, item_path + ["throw_profile", "trajectory"], f"trajectory must be one of {sorted(ALLOWED_WEAPON_TRAJECTORIES)}")
+            if "projectile_glyph" in throw_profile:
+                if _validate_non_empty_string(report, source, item_path + ["throw_profile", "projectile_glyph"], throw_profile.get("projectile_glyph"), field_name="projectile_glyph"):
+                    if len(str(throw_profile.get("projectile_glyph"))) > 1:
+                        report.warn(source, item_path + ["throw_profile", "projectile_glyph"], "projectile_glyph will be truncated to the first character at runtime")
+                    _validate_reserved_glyph_literal(report, source, item_path + ["throw_profile", "projectile_glyph"], throw_profile.get("projectile_glyph"), owner_label="items")
+            if "speed" in throw_profile:
+                _validate_number(report, source, item_path + ["throw_profile", "speed"], throw_profile.get("speed"), minimum=0.1, field_name="speed")
+            for key in ("damage", "noise_radius", "explosion_radius", "fire_intensity", "smoke_intensity"):
+                if key in throw_profile:
+                    _validate_int(report, source, item_path + ["throw_profile", key], throw_profile.get(key), minimum=0, field_name=key)
+            for key in ("aoe_falloff", "cover_penetration"):
+                if key in throw_profile:
+                    _validate_number(report, source, item_path + ["throw_profile", key], throw_profile.get(key), minimum=0.0, maximum=1.0, field_name=key)
+            for key in ("consume_on_throw", "shatter"):
+                if key in throw_profile and not isinstance(throw_profile.get(key), bool):
+                    report.error(source, item_path + ["throw_profile", key], f"{key} must be boolean")
+
     if not item_ids:
         report.error(source, [], "item catalog must contain at least one valid item")
     return item_ids

@@ -3365,6 +3365,14 @@ class EventLogSystem(System):
         item_name = event.data.get("item_name", event.data.get("item_id", "item"))
         if eid == self.player_eid:
             usage_kind = str(event.data.get("usage_kind", "") or "").strip().lower()
+            if usage_kind == "throw":
+                target_x = event.data.get("target_x")
+                target_y = event.data.get("target_y")
+                if target_x is not None and target_y is not None:
+                    _log_player_feedback(self.sim, f"Threw {item_name} toward {int(target_x)},{int(target_y)}.", kind="interaction")
+                else:
+                    _log_player_feedback(self.sim, f"Threw {item_name}.", kind="interaction")
+                return
             if usage_kind == "property_lead":
                 if not bool(event.data.get("lead_changed")):
                     property_name = str(event.data.get("property_name", "") or "").strip()
@@ -3596,6 +3604,14 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, f"{item_name} only triggers automatically in a critical state.", kind="interaction")
         elif reason == "item_not_usable":
             _log_player_feedback(self.sim, f"{item_name} cannot be used.", kind="interaction")
+        elif reason == "item_not_throwable":
+            _log_player_feedback(self.sim, f"{item_name} is not something you can throw usefully.", kind="interaction")
+        elif reason == "no_throw_target":
+            _log_player_feedback(self.sim, f"Aim {item_name} away from yourself first.", kind="interaction")
+        elif reason == "throw_out_of_range":
+            _log_player_feedback(self.sim, f"{item_name} will not reach that far.", kind="interaction")
+        elif reason == "wrong_floor":
+            _log_player_feedback(self.sim, f"{item_name} cannot be thrown to another floor from here.", kind="interaction")
         elif reason == "no_property_lead":
             _log_player_feedback(self.sim, f"{item_name} does not point to any clear location right now.", kind="interaction")
         elif reason == "no_applicable_effect":
@@ -4153,6 +4169,10 @@ class EventLogSystem(System):
 
         profile = self._weapon_log_profile(event.data.get("weapon_id"), projectile_count=max(1, int(event.data.get("hits", 0))))
         reason = str(event.data.get("reason", "impact") or "impact").strip().lower()
+        thrown_name = str(event.data.get("thrown_item_name", "") or "").strip()
+        if thrown_name and bool(event.data.get("shatter", False)):
+            self._log(f"{thrown_name} shatters.", channel="combat", priority="high", dedupe_window=2)
+            return
         if reason == "shattered_window":
             self._log("The shot shatters the window.", channel="combat", priority="high", dedupe_window=2)
             return
