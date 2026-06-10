@@ -1,0 +1,93 @@
+name: Build bakerrrr Executables
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows executable
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pygame-ce pyinstaller windows-curses
+
+      - name: Build pygame executable
+        run: >
+          python -m PyInstaller
+          --clean
+          --onefile
+          --windowed
+          --name bakerrrr
+          --icon assets/icons/bakerrrr.ico
+          --runtime-hook build_tools/pyinstaller_pygame_runtime.py
+          --add-data "game/*.json;game"
+          --add-data "assets/icons/*.png;assets/icons"
+          main.py
+
+      - name: Run packaged doctor
+        run: dist\bakerrrr.exe --doctor
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: bakerrrr-windows
+          path: dist/bakerrrr.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  build-linux:
+    name: Linux executable
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pygame-ce pyinstaller
+
+      - name: Build pygame executable
+        run: >
+          python -m PyInstaller
+          --clean
+          --onefile
+          --windowed
+          --name bakerrrr
+          --runtime-hook build_tools/pyinstaller_pygame_runtime.py
+          --add-data "game/*.json:game"
+          --add-data "assets/icons/*.png:assets/icons"
+          main.py
+
+      - name: Run packaged doctor
+        run: ./dist/bakerrrr --doctor
+
+      - name: Upload Linux executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: bakerrrr-linux
+          path: dist/bakerrrr
+          if-no-files-found: error
+          retention-days: 14
