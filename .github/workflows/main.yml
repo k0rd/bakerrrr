@@ -11,10 +11,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -32,6 +32,9 @@ jobs:
           --name bakerrrr
           --icon assets/icons/bakerrrr.ico
           --runtime-hook build_tools/pyinstaller_pygame_runtime.py
+          --collect-submodules engine
+          --collect-submodules game
+          --collect-submodules ui
           --add-data "game/*.json;game"
           --add-data "assets/icons/*.png;assets/icons"
           main.py
@@ -40,7 +43,7 @@ jobs:
         run: dist\bakerrrr.exe --doctor
 
       - name: Upload Windows executable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bakerrrr-windows
           path: dist/bakerrrr.exe
@@ -52,10 +55,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -77,6 +80,9 @@ jobs:
           --windowed
           --name bakerrrr
           --runtime-hook build_tools/pyinstaller_pygame_runtime.py
+          --collect-submodules engine
+          --collect-submodules game
+          --collect-submodules ui
           --add-data "game/*.json:game"
           --add-data "assets/icons/*.png:assets/icons"
           main.py
@@ -85,7 +91,7 @@ jobs:
         run: ./dist/bakerrrr --doctor
 
       - name: Upload Linux executable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bakerrrr-linux
           path: dist/bakerrrr
