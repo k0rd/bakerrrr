@@ -673,7 +673,7 @@ class PlayerInteractionRuntime:
                 z=event_z,
                 **theft_observation,
             ))
-            self.action_system.item_system._emit_action_offense(
+            self.action_system._emit_action_offense(
                 eid=eid,
                 action="pickup_item",
                 context="item_theft",
