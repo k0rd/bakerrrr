@@ -71,6 +71,26 @@ _OPPORTUNITY_EXPIRE_VERSION = 3
 
 EXCLUDED_CONTRACT_ROLES = {"guard", "scout"}
 
+_FAILURE_FAMILY_BY_CODE = {
+    "target_killed": "contact",
+    "contact_unavailable": "contact",
+    "custody_compromised": "legal",
+    "booking_required_item_seized": "legal",
+    "booking_confiscated": "legal",
+    "booking_compromised": "legal",
+    "held_required_item_seized": "legal",
+    "held_property_seized": "legal",
+    "legal_compromise": "legal",
+    "pickup_unavailable": "pickup",
+    "handoff_unavailable": "handoff",
+    "site_unavailable": "site",
+    "activity_unavailable": "service_lane",
+    "expired": "expired",
+    "provided_item_lost": "item",
+    "rival_claimed": "rival",
+    "rival_burned": "rival",
+}
+
 FINANCE_ARCHETYPES = {
     "bank",
     "office",
@@ -6096,6 +6116,13 @@ def format_reward_text(reward):
     return ", ".join(bits) if bits else "none"
 
 
+def _failure_family_for_code(code):
+    code = str(code or "").strip().lower()
+    if not code:
+        return "failed"
+    return _FAILURE_FAMILY_BY_CODE.get(code, "failed")
+
+
 def _resolve_terminal_entry(
     sim,
     state,
@@ -6116,16 +6143,22 @@ def _resolve_terminal_entry(
         done["completed_tick"] = tick
         done["reward_applied"] = dict(reward_applied or {})
         done["completion_reason"] = str(reason).strip() or "requirements met"
-        state["completed"].append(done)
     else:
         done["status"] = "failed"
         done["failed_tick"] = tick
         done["failure_reason"] = str(reason).strip() or "opportunity failed"
         if isinstance(reward_applied, dict) and reward_applied:
             done["reward_applied"] = dict(reward_applied)
-        state["failed"].append(done)
     if isinstance(extra, dict):
         done.update(extra)
+    if terminal_status == "completed":
+        state["completed"].append(done)
+    else:
+        failure_code = str(done.get("failure_code", "") or "").strip().lower() or "failed"
+        done["failure_code"] = failure_code
+        failure_family = str(done.get("failure_family", "") or "").strip().lower()
+        done["failure_family"] = failure_family or _failure_family_for_code(failure_code)
+        state["failed"].append(done)
     if player_eid is not None:
         _upsert_observer_intel(
             sim,

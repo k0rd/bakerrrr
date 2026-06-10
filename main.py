@@ -1,15 +1,19 @@
 import curses
 import faulthandler
+import importlib.util
 import os
+import platform
 import random
 import signal
 import sys
 import time
+from pathlib import Path
 
 from engine.buildings import layout_chunk_building, world_building_id
 from engine.events import Event
 from engine.fixtures import generate_chunk_fixture_records
 from engine.persistence import (
+    SAVE_DIR,
     character_save_exists,
     delete_character_save,
     load_character_run,
@@ -80,6 +84,22 @@ from game.run_echoes import maybe_seed_run_echo_for_chunk, prime_run_echoes_runt
 from game.systems_incidents import IncidentKnowledgeSystem
 from game.systems_business_reputation import BusinessReputationSystem
 from game.run_bootstrap import bootstrap_normal_run
+from game.tutorial import (
+    TutorialSystem,
+    bootstrap_tutorial_run,
+    current_tutorial_hint,
+    is_tutorial_run,
+    tutorial_no_persistence,
+)
+from game.player_config import load_player_config, mark_tutorial_run_seen, tutorial_requested_from_options
+from game.release_runtime import (
+    debug_mode_from_options,
+    game_build_label,
+    install_sigusr2_debug_unlock_handler,
+    set_active_debug_sim,
+    set_debug_mode,
+    write_crash_report,
+)
 from game.vehicles import (
     generate_chunk_vehicle_records,
     roll_vehicle_profile,
@@ -213,7 +233,7 @@ def _env_int(name, default, minimum=None):
     return int(value)
 
 
-def _resolve_pygame_tile_px(default=40):
+def _resolve_pygame_tile_px(default=24):
     return _env_int("BAKERRRR_TILE_SIZE_PX", default, minimum=8)
 
 
@@ -243,6 +263,112 @@ def _resolve_ui_backend(argv=None):
     if backend in {"pygame", "tile", "tiles"}:
         return "pygame"
     return "curses"
+
+
+def _resolve_tutorial_flag(argv=None, config=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    explicit = "BAKERRRR_TUTORIAL" in os.environ
+    tutorial = _env_flag("BAKERRRR_TUTORIAL", False) if explicit else False
+    for raw in args:
+        value = str(raw).strip().lower()
+        if value == "--tutorial":
+            tutorial = True
+            explicit = True
+        elif value == "--no-tutorial":
+            tutorial = False
+            explicit = True
+    if config is None:
+        config = load_player_config()
+    return tutorial_requested_from_options(
+        tutorial_flag=tutorial,
+        config=config,
+        explicit=explicit,
+    )
+
+
+def _argv_has_flag(argv, flag):
+    wanted = str(flag or "").strip().lower()
+    return any(str(raw).strip().lower() == wanted for raw in list(argv or ()))
+
+
+def _resolve_debug_flag(argv=None):
+    return debug_mode_from_options(list(sys.argv[1:] if argv is None else argv))
+
+
+def _resource_root():
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        return Path(bundle_root)
+    return Path(__file__).resolve().parent
+
+
+def _doctor_report(argv=None, *, save_dir=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    root = _resource_root()
+    save_root = Path(save_dir) if save_dir is not None else SAVE_DIR
+    backend = _resolve_ui_backend(args)
+    tile_px = _resolve_pygame_tile_px()
+    ok = True
+    lines = [
+        game_build_label(),
+        f"python: {platform.python_version()} ({'ok' if sys.version_info >= (3, 11) else 'old'})",
+        f"platform: {platform.platform()}",
+        f"resource_root: {root}",
+        f"save_dir: {save_root}",
+        f"selected_ui: {backend}",
+        f"tile_size_px: {tile_px}",
+    ]
+    if sys.version_info < (3, 11):
+        ok = False
+
+    pygame_available = importlib.util.find_spec("pygame") is not None
+    curses_available = importlib.util.find_spec("curses") is not None
+    lines.append(f"pygame: {'available' if pygame_available else 'missing'}")
+    lines.append(f"curses: {'available' if curses_available else 'missing'}")
+    if backend == "pygame" and not pygame_available:
+        ok = False
+    if backend == "curses" and not curses_available:
+        ok = False
+
+    json_paths = [
+        root / "game" / "items.json",
+        root / "game" / "loot_tables.json",
+        root / "game" / "render_semantics.json",
+    ]
+    for path in json_paths:
+        exists = path.is_file()
+        lines.append(f"asset_json:{path.relative_to(root) if path.is_absolute() and root in path.parents else path}: {'ok' if exists else 'missing'}")
+        if not exists:
+            ok = False
+
+    icon_png = root / "assets" / "icons" / "bakerrrr.png"
+    lines.append(f"asset_icon:{icon_png.relative_to(root) if icon_png.is_absolute() and root in icon_png.parents else icon_png}: {'ok' if icon_png.is_file() else 'missing'}")
+    if not icon_png.is_file():
+        ok = False
+    icon_ico = root / "assets" / "icons" / "bakerrrr.ico"
+    if icon_ico.exists():
+        lines.append(f"asset_icon_windows:{icon_ico.relative_to(root)}: ok")
+
+    try:
+        save_root.mkdir(parents=True, exist_ok=True)
+        probe_path = save_root / ".bakerrrr_doctor_write_test"
+        probe_path.write_text("ok\n", encoding="utf-8")
+        probe_path.unlink(missing_ok=True)
+        lines.append("save_dir_writable: ok")
+    except OSError as exc:
+        ok = False
+        lines.append(f"save_dir_writable: failed ({exc})")
+
+    try:
+        config = load_player_config(config_path=save_root / "player_config.json")
+        state = "completed" if config.get("tutorial_completed") else ("seen" if config.get("tutorial_seen") else "fresh")
+        lines.append(f"player_config: readable ({state})")
+    except OSError as exc:
+        ok = False
+        lines.append(f"player_config: unreadable ({exc})")
+
+    lines.append(f"doctor: {'ok' if ok else 'failed'}")
+    return ok, lines
 
 
 def _install_usr1_stack_dump_handler():
@@ -646,6 +772,7 @@ def _register_runtime_systems(sim, view, player):
     organization_response_system = OrganizationResponseSystem(sim, player)
     final_operation_system = FinalOperationSystem(sim, player)
     run_epilogue_system = RunEpilogueLedgerSystem(sim, player)
+    tutorial_system = TutorialSystem(sim, player) if is_tutorial_run(sim) else None
 
     log_system = EventLogSystem(sim, player)
     render_system = RenderSystem(sim, view, player, hud_lines=10)
@@ -703,6 +830,8 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(organization_response_system, 60)
     _live_timeskip_stride(final_operation_system, 60)
     _live_timeskip_stride(run_epilogue_system, 120)
+    if tutorial_system is not None:
+        _live_timeskip_stride(tutorial_system, 0)
     _live_timeskip_stride(visibility_system, 10)
     _live_timeskip_stride(stealth_system, 30)
     _live_timeskip_stride(log_system, 0)
@@ -770,6 +899,8 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(organization_response_system)
     sim.register_system(final_operation_system)
     sim.register_system(run_epilogue_system)
+    if tutorial_system is not None:
+        sim.register_system(tutorial_system)
     sim.register_system(visibility_system)
     sim.register_system(stealth_system)
     sim.register_system(log_system)
@@ -777,6 +908,7 @@ def _register_runtime_systems(sim, view, player):
 
 
 def _run_loop(sim, view, character_name):
+    set_active_debug_sim(sim)
     frame_seconds = 1.0 / 20.0
     # Advance the world tick every WORLD_TICK_DIVISOR UI frames.
     # InputSystem (runs_while_paused=True) still fires every frame so player
@@ -872,6 +1004,25 @@ def _run_loop(sim, view, character_name):
 
     if run_end:
         return run_end
+
+    if tutorial_no_persistence(sim):
+        summary_lines = [
+            "Tutorial ended before completion.",
+            "This practice run did not write a save or alter future runs.",
+        ]
+        hint = current_tutorial_hint(sim)
+        if hint:
+            summary_lines.insert(1, hint)
+        return {
+            "show_post_curses": True,
+            "outcome": "ended",
+            "reason": "tutorial_quit",
+            "objective_title": "Tutorial",
+            "tick": int(getattr(sim, "tick", 0)),
+            "summary_lines": summary_lines,
+            "tutorial": True,
+            "saved": False,
+        }
 
     save_path = save_character_run(sim, character_name)
     return {
@@ -1207,6 +1358,8 @@ def _register_chunk_properties(sim, chunk):
                     "basement_levels": int(building.get("basement_levels", 0)),
                     "rooms": list(building.get("rooms", ())),
                     "footprint": dict(layout.get("footprint", {})),
+                    "placement": dict(layout.get("placement", {})),
+                    "placement_profile": dict(building.get("placement_profile", {})) if isinstance(building.get("placement_profile"), dict) else None,
                     "entry": dict(layout.get("entry", {})),
                     "apertures": [dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)],
                     "signage": dict(layout["signage"]) if isinstance(layout.get("signage"), dict) else None,
@@ -2585,7 +2738,7 @@ def _run_new_game_legacy(view, character_name):
     return _run_loop(sim, view, character_name)
 
 
-def _run_new_game(view, character_name, gender_identity):
+def _run_new_game(view, character_name, gender_identity, *, debug_mode=False):
     screen_w, screen_h = view.size()
 
     map_width = max(24, min(96, screen_w))
@@ -2623,6 +2776,7 @@ def _run_new_game(view, character_name, gender_identity):
         run_rng,
         gender_identity=gender_identity,
     )
+    set_debug_mode(sim, debug_mode, source="startup" if debug_mode else "public")
     if hasattr(sim, "reapply_door_states"):
         sim.reapply_door_states()
     _register_runtime_systems(sim, view, bootstrap.player_eid)
@@ -2692,7 +2846,70 @@ def _run_new_game(view, character_name, gender_identity):
     return _run_loop(sim, view, character_name)
 
 
-def _run_loaded_game(view, character_name):
+def _run_tutorial_game(view, character_name, gender_identity, *, debug_mode=False):
+    screen_w, screen_h = view.size()
+
+    map_width = max(24, min(96, screen_w))
+    map_height = max(14, min(40, screen_h - 10))
+
+    sim = Simulation(
+        seed=_resolve_run_seed(default=424242),
+        map_width=map_width,
+        map_height=map_height,
+        max_floors=3,
+        chunk_size=24,
+    )
+    sim.character_name = character_name
+    sim.world_traits["character_name"] = character_name
+    sim.world_traits["clock"] = {
+        "start_hour": 9,
+        "ticks_per_hour": 600,
+    }
+    sim.world_traits["rules"] = {
+        "tutorial_no_persistence": True,
+        "final_op_downed_fails_run": False,
+    }
+    run_nonce = random.SystemRandom().randrange(1, 1_000_000_000)
+    run_rng = random.Random(f"tutorial:{run_nonce}")
+    sim.world_traits["playtest_start"] = {"nonce": run_nonce, "tutorial": True}
+
+    bootstrap = bootstrap_tutorial_run(
+        sim,
+        character_name,
+        run_rng,
+        gender_identity=gender_identity,
+    )
+    set_debug_mode(sim, debug_mode, source="startup" if debug_mode else "public")
+    if hasattr(sim, "reapply_door_states"):
+        sim.reapply_door_states()
+    _register_runtime_systems(sim, view, bootstrap.player_eid)
+
+    normal = bootstrap.normal_bootstrap
+    sim.log.add("You arrive in a disposable tutorial block. Nothing here will be saved.")
+    sim.log.add(f"Character: {character_name}.")
+    sim.log.add(f"World seed: {sim.seed}.")
+    sim.log.add(
+        f"Training fixtures loaded: service {bootstrap.service_property_id}, "
+        f"shop {bootstrap.shop_property_id}, retrieval {bootstrap.final_property_id}."
+    )
+    sim.log.add(
+        f"Start area: {normal.start_name} ({normal.start_district_type}, chunk "
+        f"{normal.start_chunk[0]},{normal.start_chunk[1]})."
+    )
+    if normal.street_kit_items:
+        kit_text = ", ".join(
+            f"{item_id.replace('_', ' ')} x{quantity}"
+            for item_id, quantity in normal.street_kit_items
+        )
+        sim.log.add(f"Street kit: {kit_text}.")
+    sim.log.add("Tutorial route: follow the HUD line, ask Mara what now, and recover the Training Retrieval Case.")
+    sim.log.add("Controls start simple: move, x look, ' interact, / talk, . service, , pickup, i inventory, O report, Y notebooks, X map, L log, + sheet, ? help.")
+    sim.log.add(current_tutorial_hint(sim))
+
+    return _run_loop(sim, view, character_name)
+
+
+def _run_loaded_game(view, character_name, *, debug_mode=False):
     sim = load_character_run(character_name, delete_on_load=False)
     sim.character_name = normalize_character_name(character_name) or getattr(sim, "character_name", None)
     prime_bones_runtime(sim)
@@ -2719,6 +2936,7 @@ def _run_loaded_game(view, character_name):
         raise ValueError("save file is missing player entity")
     if not _ensure_loaded_player_identity(view, sim, sim.character_name or character_name):
         return None
+    set_debug_mode(sim, debug_mode, source="startup" if debug_mode else "public")
 
     player_pos = sim.ecs.get(Position).get(player)
     if player_pos:
@@ -2732,10 +2950,25 @@ def _run_loaded_game(view, character_name):
     return _run_loop(sim, view, sim.character_name or character_name)
 
 
-def _run_character_session(view, character_name, gender_identity=None):
+def _run_character_session(view, character_name, gender_identity=None, *, tutorial=False, debug_mode=False):
     """Launch either a resumed run or a fresh run for a given view backend."""
+    if tutorial:
+        resolved_identity = (
+            normalize_gender_identity(gender_identity, default="nonbinary")
+            if str(gender_identity or "").strip()
+            else ""
+        )
+        if not resolved_identity:
+            resolved_identity = _prompt_player_gender_identity_view(
+                view,
+                character_name=character_name,
+                resume=False,
+            )
+            if not resolved_identity:
+                return None
+        return _run_tutorial_game(view, character_name, resolved_identity, debug_mode=debug_mode)
     if character_save_exists(character_name):
-        return _run_loaded_game(view, character_name)
+        return _run_loaded_game(view, character_name, debug_mode=debug_mode)
     resolved_identity = (
         normalize_gender_identity(gender_identity, default="nonbinary")
         if str(gender_identity or "").strip()
@@ -2749,14 +2982,14 @@ def _run_character_session(view, character_name, gender_identity=None):
         )
         if not resolved_identity:
             return None
-    return _run_new_game(view, character_name, resolved_identity)
+    return _run_new_game(view, character_name, resolved_identity, debug_mode=debug_mode)
 
 
-def _run_curses(stdscr):
+def _run_curses(stdscr, tutorial=False, *, debug_mode=False):
     # Prompt before CursesView sets non-blocking input mode.
     character_name = _prompt_character_name(stdscr)
     selected_identity = None
-    if not character_save_exists(character_name):
+    if tutorial or not character_save_exists(character_name):
         selected_identity = _prompt_player_gender_identity(
             stdscr,
             character_name=character_name,
@@ -2765,10 +2998,10 @@ def _run_curses(stdscr):
         if not selected_identity:
             return None
     view = CursesView(stdscr)
-    return _run_character_session(view, character_name, selected_identity)
+    return _run_character_session(view, character_name, selected_identity, tutorial=tutorial, debug_mode=debug_mode)
 
 
-def _run_pygame():
+def _run_pygame(tutorial=False, *, debug_mode=False):
     # Pygame uses a fixed procedural default cell size unless overridden by env.
     # Override with BAKERRRR_TILE_SIZE_PX / _GRID_W / _GRID_H if you want a different view.
     grid_w = _env_int("BAKERRRR_TILE_GRID_W", 64, minimum=24)
@@ -2783,7 +3016,11 @@ def _run_pygame():
     try:
         character_name = view.prompt_text_input(
             "Character name:",
-            detail="Existing save with this name resumes once, then is deleted on load.",
+            detail=(
+                "Tutorial runs are disposable and ignore existing saves."
+                if tutorial
+                else "Existing save with this name resumes once, then is deleted on load."
+            ),
             max_length=40,
             title="bakerrrr - character",
             banner="BAKERRRR",
@@ -2791,6 +3028,12 @@ def _run_pygame():
             invalid_message="Please enter a valid character name.",
             normalizer=normalize_character_name,
             status_lines_callback=lambda raw: (
+                [{
+                    "text": f"Disposable tutorial will start for {normalize_character_name(raw)}.",
+                    "color": "objective",
+                }]
+                if tutorial and normalize_character_name(raw)
+                else
                 [{
                     "text": f"Resume available for {normalize_character_name(raw)}.",
                     "color": "objective",
@@ -2808,7 +3051,7 @@ def _run_pygame():
         if not character_name:
             return None
         selected_identity = None
-        if not character_save_exists(character_name):
+        if tutorial or not character_save_exists(character_name):
             selected_identity = _prompt_player_gender_identity_view(
                 view,
                 character_name=character_name,
@@ -2817,28 +3060,90 @@ def _run_pygame():
             if not selected_identity:
                 return None
         view.pygame.display.set_caption(f"bakerrrr - {character_name}")
-        return _run_character_session(view, character_name, selected_identity)
+        return _run_character_session(view, character_name, selected_identity, tutorial=tutorial, debug_mode=debug_mode)
     finally:
         view.close()
 
 
-if __name__ == "__main__":
+def _record_tutorial_run_if_needed(run_end):
+    if not isinstance(run_end, dict) or not bool(run_end.get("tutorial")):
+        return None
+    outcome = str(run_end.get("outcome", "") or "").strip().lower()
+    try:
+        return mark_tutorial_run_seen(
+            completed=outcome == "success",
+            run_end=run_end,
+        )
+    except OSError:
+        return None
+
+
+def _print_post_run_summary(run_end):
+    if not isinstance(run_end, dict) or not bool(run_end.get("show_post_curses")):
+        return
+    outcome = str(run_end.get("outcome", "unknown")).strip().upper()
+    reason = str(run_end.get("reason", "")).strip().replace("_", " ")
+    objective_title = str(run_end.get("objective_title", "Run")).strip() or "Run"
+    tick = int(run_end.get("tick", 0))
+    header = f"=== RUN {outcome} @ tick {tick}: {objective_title} ==="
+    if reason:
+        header += f" [{reason}]"
+    print(header)
+    for raw in run_end.get("summary_lines", ()):
+        line = str(raw).strip()
+        if line:
+            print(f"- {line}")
+
+
+def _run_entrypoint(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
     _install_usr1_stack_dump_handler()
-    backend = _resolve_ui_backend()
+    install_sigusr2_debug_unlock_handler()
+
+    if _argv_has_flag(args, "--version"):
+        print(game_build_label())
+        return 0
+    if _argv_has_flag(args, "--doctor"):
+        ok, lines = _doctor_report(args)
+        for line in lines:
+            print(line)
+        return 0 if ok else 1
+
+    backend = _resolve_ui_backend(args)
+    tutorial = _resolve_tutorial_flag(args)
+    debug_mode = _resolve_debug_flag(args)
     if backend == "pygame":
-        run_end = _run_pygame()
+        run_end = _run_pygame(tutorial=tutorial, debug_mode=debug_mode)
     else:
-        run_end = curses.wrapper(_run_curses)
-    if isinstance(run_end, dict) and bool(run_end.get("show_post_curses")):
-        outcome = str(run_end.get("outcome", "unknown")).strip().upper()
-        reason = str(run_end.get("reason", "")).strip().replace("_", " ")
-        objective_title = str(run_end.get("objective_title", "Run")).strip() or "Run"
-        tick = int(run_end.get("tick", 0))
-        header = f"=== RUN {outcome} @ tick {tick}: {objective_title} ==="
-        if reason:
-            header += f" [{reason}]"
-        print(header)
-        for raw in run_end.get("summary_lines", ()):
-            line = str(raw).strip()
-            if line:
-                print(f"- {line}")
+        run_end = curses.wrapper(lambda stdscr: _run_curses(stdscr, tutorial=tutorial, debug_mode=debug_mode))
+    _record_tutorial_run_if_needed(run_end)
+    _print_post_run_summary(run_end)
+    return 0
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    backend = _resolve_ui_backend(args)
+    tutorial = None
+    try:
+        tutorial = _resolve_tutorial_flag(args)
+    except Exception:
+        tutorial = None
+    try:
+        return _run_entrypoint(args)
+    except Exception as exc:  # noqa: BLE001 - top-level report should catch unexpected game crashes
+        try:
+            crash_path = write_crash_report(
+                exc,
+                argv=args,
+                backend=backend,
+                tutorial=tutorial,
+            )
+            print(f"bakerrrr crashed. Crash report written: {crash_path}", file=sys.stderr)
+        except Exception:
+            print("bakerrrr crashed before a crash report could be written.", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

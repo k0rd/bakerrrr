@@ -99,6 +99,15 @@ def _pick_property_roam_tile(*args, **kwargs):
 _BUSINESS_EVENT_SCENE_CAP = 1
 _BUSINESS_EVENT_REGULAR_SCENE_CAP = 1
 _BUSINESS_EVENT_RELEASE_CAP = _NEWCOMER_LOCAL_CAP + 1
+_BUSINESS_EVENT_ATTENTION_BIAS_PHASES = {
+    "block_watch",
+    "soft_front",
+    "taped_off_front",
+    "afterhours_aftermath",
+    "aftermath_cleanup",
+    "candle_vigil",
+    "street_triage",
+}
 _BUSINESS_EVENT_DELIVERY_PHASES = {
     "delivery_drop",
     "courier_stop",
@@ -781,6 +790,113 @@ def _deterministic_back_office_bias(prop, base_pulse, event):
     return 0.0
 
 
+_PLAYER_BUSINESS_OWNER_SIGNAL_PHASES = {
+    "owner_screening",
+    "owner_closed_turnover",
+    "help_wanted_board",
+    "regulars_spill",
+    "grumbling_front",
+    "block_watch",
+    "soft_front",
+}
+
+
+def _property_owner_matches_player(sim, prop):
+    if sim is None or not isinstance(prop, dict):
+        return False
+    if str(prop.get("owner_tag", "") or "").strip().lower() == "player":
+        return True
+    player_eid = getattr(sim, "player_eid", None)
+    owner_eid = prop.get("owner_eid")
+    if owner_eid is None or player_eid is None:
+        return False
+    try:
+        return int(owner_eid) == int(player_eid)
+    except (TypeError, ValueError):
+        return owner_eid == player_eid
+
+
+def _player_business_owner_signal_bias(kind, event_phase=""):
+    kind = str(kind or "").strip().lower()
+    event_phase = str(event_phase or "").strip().lower()
+    if not kind or not event_phase:
+        return 0.0
+    if kind == "screened" and event_phase == "owner_screening":
+        return 0.95
+    if kind == "closed_off" and event_phase == "owner_closed_turnover":
+        return 0.95
+    if kind == "thin" and event_phase == "help_wanted_board":
+        return 0.95
+    if kind == "loyal" and event_phase in {"regulars_spill", "block_watch"}:
+        return 0.52
+    if kind in {"expensive", "strained"} and event_phase in {"grumbling_front", "soft_front"}:
+        return 0.52
+    return 0.0
+
+
+def _player_business_owner_scene_fields(sim, prop, *, event_phase=""):
+    event_phase = str(event_phase or "").strip().lower()
+    if event_phase and event_phase not in _PLAYER_BUSINESS_OWNER_SIGNAL_PHASES:
+        return {}
+    if not _property_owner_matches_player(sim, prop):
+        return {}
+    summary = _player_business_summary(sim, prop)
+    if not isinstance(summary, dict):
+        return {}
+    cue = str(summary.get("player_business_cue", "") or "").strip()
+    kind = str(summary.get("owner_signal_kind", "") or "").strip().lower()
+    reason = str(summary.get("owner_signal_reason", "") or "").strip()
+    if not cue or not kind or not reason:
+        return {}
+    return {
+        "player_business_cue": cue,
+        "owner_signal_kind": kind,
+        "owner_signal_reason": reason,
+        "owner_signal_scene_bias": round(float(_player_business_owner_signal_bias(kind, event_phase)), 3),
+    }
+
+
+def _with_player_business_owner_scene_fields(sim, prop, event):
+    if not isinstance(event, dict):
+        return {}
+    result = dict(event)
+    event_phase = str(result.get("phase", "") or result.get("event_phase", "") or "").strip().lower()
+    fields = _player_business_owner_scene_fields(sim, prop, event_phase=event_phase)
+    if fields:
+        result.update(fields)
+        result["perimeter_bonus"] = max(
+            0.0,
+            float(result.get("perimeter_bonus", 0.0) or 0.0) + float(fields.get("owner_signal_scene_bias", 0.0) or 0.0),
+        )
+    return result
+
+
+def _business_event_scene_attention_bias(candidate):
+    if not isinstance(candidate, dict):
+        return 0.0
+    pulse = candidate.get("pulse") if isinstance(candidate.get("pulse"), dict) else {}
+    event_phase = str(pulse.get("event_phase", "") or "").strip().lower()
+    source_kind = str(candidate.get("source_kind", "pulse") or "pulse").strip().lower()
+    bonus = 0.0
+    if source_kind == "opportunity" or event_phase == "fire_response":
+        bonus += 0.60
+    if str(pulse.get("player_business_cue", "") or "").strip() or str(pulse.get("owner_signal_kind", "") or "").strip():
+        bonus += 0.35
+    if event_phase in _BUSINESS_EVENT_ATTENTION_BIAS_PHASES:
+        bonus += 0.25
+    return round(bonus, 3)
+
+
+def _apply_business_event_scene_attention_bias(candidate):
+    if not isinstance(candidate, dict):
+        return candidate
+    bonus = _business_event_scene_attention_bias(candidate)
+    candidate["attention_bias"] = bonus
+    if bonus:
+        candidate["score"] = float(candidate.get("score", 0.0) or 0.0) + float(bonus)
+    return candidate
+
+
 def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_pulse=None):
     if sim is None:
         return {}
@@ -816,6 +932,7 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
         base_pulse=base_pulse,
     )
     if isinstance(player_business_event, dict) and str(player_business_event.get("phase", "") or "").strip():
+        player_business_event = _with_player_business_owner_scene_fields(sim, prop, player_business_event)
         return {
             "phase": str(player_business_event.get("phase", "") or "").strip().lower(),
             "label": str(player_business_event.get("label", "") or "").strip(),
@@ -823,6 +940,10 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
             "entry_sentence": str(player_business_event.get("entry_sentence", "") or "").strip(),
             "emphasis": str(player_business_event.get("emphasis", "") or "").strip().lower(),
             "perimeter_bonus": max(0.0, float(player_business_event.get("perimeter_bonus", 0.0) or 0.0)),
+            "player_business_cue": str(player_business_event.get("player_business_cue", "") or "").strip(),
+            "owner_signal_kind": str(player_business_event.get("owner_signal_kind", "") or "").strip().lower(),
+            "owner_signal_reason": str(player_business_event.get("owner_signal_reason", "") or "").strip(),
+            "owner_signal_scene_bias": float(player_business_event.get("owner_signal_scene_bias", 0.0) or 0.0),
         }
     reputation_event = _business_reputation_micro_event(
         sim,
@@ -830,6 +951,7 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
         base_pulse=base_pulse,
     )
     if isinstance(reputation_event, dict) and str(reputation_event.get("phase", "") or "").strip():
+        reputation_event = _with_player_business_owner_scene_fields(sim, prop, reputation_event)
         return {
             "phase": str(reputation_event.get("phase", "") or "").strip().lower(),
             "label": str(reputation_event.get("label", "") or "").strip(),
@@ -837,6 +959,10 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
             "entry_sentence": str(reputation_event.get("entry_sentence", "") or "").strip(),
             "emphasis": str(reputation_event.get("emphasis", "") or "").strip().lower(),
             "perimeter_bonus": max(0.0, float(reputation_event.get("perimeter_bonus", 0.0) or 0.0)),
+            "player_business_cue": str(reputation_event.get("player_business_cue", "") or "").strip(),
+            "owner_signal_kind": str(reputation_event.get("owner_signal_kind", "") or "").strip().lower(),
+            "owner_signal_reason": str(reputation_event.get("owner_signal_reason", "") or "").strip(),
+            "owner_signal_scene_bias": float(reputation_event.get("owner_signal_scene_bias", 0.0) or 0.0),
         }
     events = list(_building_micro_event_pool(category, phase, open_now=open_now))
     if not events:
@@ -871,6 +997,13 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
             bias += float(_business_reputation_event_visibility_bias(event_item, traffic_profile) or 0.0)
         if workplace_posture:
             bias += float(_workplace_org_event_visibility_bias(event_item, workplace_posture) or 0.0)
+        owner_fields = _player_business_owner_scene_fields(
+            sim,
+            prop,
+            event_phase=str(event_item.get("phase", "") or "").strip().lower(),
+        )
+        if owner_fields:
+            bias += float(owner_fields.get("owner_signal_scene_bias", 0.0) or 0.0)
         deterministic_bias = float(_deterministic_back_office_bias(prop, base_pulse, event_item) or 0.0)
         bias += deterministic_bias
         if abs(bias) > 1e-6:
@@ -905,6 +1038,7 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
         event = rng.choice(candidate_events)
     if not isinstance(event, dict):
         return {}
+    event = _with_player_business_owner_scene_fields(sim, prop, event)
 
     event_phase = str(event.get("phase", "") or "").strip().lower()
     if event_phase in _BUSINESS_EVENT_DELIVERY_PHASES:
@@ -924,6 +1058,10 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
         "entry_sentence": str(event.get("entry_sentence", "") or "").strip(),
         "emphasis": str(event.get("emphasis", "") or "").strip().lower(),
         "perimeter_bonus": max(0.0, float(event.get("perimeter_bonus", 0.0) or 0.0)),
+        "player_business_cue": str(event.get("player_business_cue", "") or "").strip(),
+        "owner_signal_kind": str(event.get("owner_signal_kind", "") or "").strip().lower(),
+        "owner_signal_reason": str(event.get("owner_signal_reason", "") or "").strip(),
+        "owner_signal_scene_bias": float(event.get("owner_signal_scene_bias", 0.0) or 0.0),
     }
     traffic_state = str(traffic_profile.get("state", "") or "").strip().lower()
     if traffic_state:
@@ -1723,6 +1861,13 @@ def _building_pulse_snapshot(sim, prop=None, structure=None, *, respect_chunk_ca
             pulse["traffic_customer_delta"] = int(event.get("traffic_customer_delta", 0) or 0)
         except (TypeError, ValueError):
             pulse["traffic_customer_delta"] = 0
+        pulse["player_business_cue"] = str(event.get("player_business_cue", "") or "").strip()
+        pulse["owner_signal_kind"] = str(event.get("owner_signal_kind", "") or "").strip().lower()
+        pulse["owner_signal_reason"] = str(event.get("owner_signal_reason", "") or "").strip()
+        try:
+            pulse["owner_signal_scene_bias"] = float(event.get("owner_signal_scene_bias", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pulse["owner_signal_scene_bias"] = 0.0
     consequence_profile = _business_reputation_scene_consequence_profile(sim, prop=prop, base_pulse=pulse)
     pulse["community_tone"] = str(consequence_profile.get("tone", "") or "").strip().lower()
     return pulse
@@ -4787,6 +4932,9 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
     unique_pool = list(dict.fromkeys(pool))
     if not unique_pool:
         return {}
+    owner_reason = str(scene.get("owner_signal_reason", "") or "").strip()
+    if owner_reason:
+        note = f"{note} Owner read: {owner_reason}."
     if rng is None:
         rng = random.Random(f"{getattr(sim, 'seed', 0)}:business-scene-cache:{scene.get('scene_id', '')}")
     rng.shuffle(unique_pool)
@@ -5509,6 +5657,11 @@ class BusinessPulseSceneSystem(System):
                 "source_kind": "opportunity",
             })
 
+        candidates = [
+            _apply_business_event_scene_attention_bias(candidate)
+            for candidate in candidates
+            if isinstance(candidate, dict)
+        ]
         candidates.sort(
             key=lambda row: (
                 -float(row.get("score", 0.0) or 0.0),
@@ -5619,6 +5772,10 @@ class BusinessPulseSceneSystem(System):
             "linked_property_id": str(scene.get("property_id", "") or "").strip() or None,
             "linked_building_id": linked_building_id or None,
         }
+        for key in ("player_business_cue", "owner_signal_kind", "owner_signal_reason"):
+            value = str(scene.get(key, "") or "").strip()
+            if value:
+                metadata[key] = value
         if isinstance(extra_metadata, dict):
             metadata.update(dict(extra_metadata))
         property_id = self.sim.register_property(
@@ -5664,6 +5821,10 @@ class BusinessPulseSceneSystem(System):
             "linked_property_id": str(scene.get("property_id", "") or "").strip() or None,
             "linked_building_id": linked_building_id or None,
         })
+        for key in ("player_business_cue", "owner_signal_kind", "owner_signal_reason"):
+            value = str(scene.get(key, "") or "").strip()
+            if value:
+                metadata[key] = value
         property_id = self.sim.register_property(
             name=str(name).strip() or "Delivery Van",
             kind="vehicle",
@@ -6186,6 +6347,9 @@ class BusinessPulseSceneSystem(System):
             "event_phase": str((spec.get("pulse") or {}).get("event_phase", "") or "").strip().lower(),
             "traffic_state": str((spec.get("pulse") or {}).get("traffic_state", "") or "").strip().lower(),
             "community_tone": str((spec.get("pulse") or {}).get("community_tone", "") or "").strip().lower(),
+            "player_business_cue": str((spec.get("pulse") or {}).get("player_business_cue", "") or "").strip(),
+            "owner_signal_kind": str((spec.get("pulse") or {}).get("owner_signal_kind", "") or "").strip().lower(),
+            "owner_signal_reason": str((spec.get("pulse") or {}).get("owner_signal_reason", "") or "").strip(),
             "scene_type": str(blueprint.get("scene_type", "") or "").strip().lower(),
             "source_kind": str(spec.get("source_kind", "pulse") or "pulse").strip().lower(),
             "seed_id": str(spec.get("seed_id", "") or "").strip(),

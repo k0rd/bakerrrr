@@ -7,6 +7,7 @@ state and turns it into compact report/look cues the player can choose to pursue
 from __future__ import annotations
 
 from game.components import AI, Position
+from game.components import PlayerAssets
 from game.incident_runtime import incident_record
 from game.organization_presence import format_visible_property_org_presence
 from game.organizations import local_protective_pressure_snapshot
@@ -239,12 +240,18 @@ _WORLD_EVENT_PROFILES = {
 _ROW_PRIORITY_BY_SOURCE = {
     "business_event": 10,
     "business_scene": 10,
+    "pulse": 10,
+    "seed": 10,
     "opportunity": 10,
     "world_event": 20,
     "reported_incident_hold": 30,
     "crime_plan": 40,
     "protective_pressure": 50,
 }
+
+_HIGH_URGENCY_PHASES = {"fire_response", "street_triage"}
+_OWNER_ATTENTION_PHASES = {"block_watch", "soft_front"}
+_CONCRETE_SCENE_SOURCES = {"business_event", "business_scene", "pulse", "seed", "world_event"}
 
 
 def _text(value):
@@ -403,6 +410,68 @@ def _source_priority(source_kind, default=99):
     return _ROW_PRIORITY_BY_SOURCE.get(_text(source_kind).lower(), int(default))
 
 
+def _distance_band(distance):
+    distance = max(0, int(distance or 0))
+    if distance <= 1:
+        return 0
+    if distance <= 5:
+        return 1
+    if distance <= 10:
+        return 2
+    return 3
+
+
+def _row_urgency_priority(row):
+    source_kind = _text((row or {}).get("source_kind")).lower()
+    event_phase = _text((row or {}).get("event_phase")).lower()
+    if source_kind == "reported_incident_hold" or event_phase in _HIGH_URGENCY_PHASES:
+        return 0
+    if source_kind == "opportunity":
+        return 10
+    if (
+        event_phase in _OWNER_ATTENTION_PHASES
+        or _text((row or {}).get("player_business_cue"))
+        or _text((row or {}).get("owner_signal_kind"))
+    ):
+        return 20
+    if source_kind in _CONCRETE_SCENE_SOURCES:
+        return 30
+    if source_kind == "crime_plan":
+        return 80
+    if source_kind == "protective_pressure":
+        return 90
+    return 60
+
+
+def _row_dedupe_priority(row):
+    source_kind = _text((row or {}).get("source_kind")).lower()
+    event_phase = _text((row or {}).get("event_phase")).lower()
+    if source_kind == "reported_incident_hold" or event_phase in _HIGH_URGENCY_PHASES:
+        return 0
+    if source_kind == "opportunity":
+        return 5
+    if source_kind == "world_event":
+        return 8
+    if source_kind in {"business_event", "business_scene", "pulse", "seed"}:
+        return 10
+    if source_kind == "crime_plan":
+        return 80
+    if source_kind == "protective_pressure":
+        return 90
+    return 60
+
+
+def _with_rank_fields(row):
+    if not isinstance(row, dict):
+        return row
+    result = dict(row)
+    distance = int(result.get("distance", 0) or 0)
+    result["distance_band"] = _distance_band(distance)
+    result["urgency_priority"] = _row_urgency_priority(result)
+    result["dedupe_priority"] = _row_dedupe_priority(result)
+    return result
+
+
 def _property_is_player_owned_site(sim, prop, player_eid=None):
     if not isinstance(prop, dict):
         return False
@@ -418,8 +487,10 @@ def _property_is_player_owned_site(sim, prop, player_eid=None):
                 return True
     if _text(prop.get("owner_tag")).lower() == "player":
         return True
-    metadata = property_metadata(prop)
-    return isinstance(metadata.get("player_business"), dict)
+    property_id = _text(prop.get("id"))
+    assets = sim.ecs.get(PlayerAssets).get(player_eid) if sim is not None and player_eid is not None else None
+    owned_ids = getattr(assets, "owned_property_ids", set()) if assets is not None else set()
+    return bool(property_id and property_id in owned_ids)
 
 
 def _ownership_fields(sim, prop, player_eid=None):
@@ -427,6 +498,21 @@ def _ownership_fields(sim, prop, player_eid=None):
     return {
         "is_player_owned_site": bool(relevant),
         "player_business_relevance": bool(relevant),
+    }
+
+
+def _owner_cue_fields(scene, relevant):
+    if not relevant or not isinstance(scene, dict):
+        return {}
+    cue = _text(scene.get("player_business_cue"))
+    kind = _text(scene.get("owner_signal_kind")).lower()
+    reason = _text(scene.get("owner_signal_reason"))
+    if not cue:
+        return {}
+    return {
+        "player_business_cue": cue,
+        "owner_signal_kind": kind,
+        "owner_signal_reason": reason,
     }
 
 
@@ -482,6 +568,7 @@ def _row_from_scene(sim, scene_id, scene, *, player_pos=None, player_eid=None):
     fixture_names = _scene_fixture_names(sim, scene)
     organization_presence = format_visible_property_org_presence(sim, prop)
     source_kind = _text(scene.get("source_kind")).lower() or "business_scene"
+    ownership = _ownership_fields(sim, prop, player_eid=player_eid)
     return {
         "scene_id": _text(scene.get("scene_id")) or _text(scene_id),
         "property_id": property_id,
@@ -499,7 +586,8 @@ def _row_from_scene(sim, scene_id, scene, *, player_pos=None, player_eid=None):
         "organization_presence": organization_presence,
         "priority": _source_priority(source_kind, default=10),
         **_distance_fields(anchor, player_pos),
-        **_ownership_fields(sim, prop, player_eid=player_eid),
+        **ownership,
+        **_owner_cue_fields(scene, ownership.get("player_business_relevance")),
     }
 
 
@@ -843,8 +931,10 @@ def _row_dedupe_key(row):
 
 def _row_prefer_key(row):
     return (
-        _row_priority(row),
+        int(row.get("dedupe_priority", _row_dedupe_priority(row)) or 0),
+        int(row.get("urgency_priority", _row_urgency_priority(row)) or 0),
         int(row.get("distance", 0) or 0),
+        _row_priority(row),
         _text(row.get("title")).lower(),
         _text(row.get("property_name")).lower(),
     )
@@ -855,6 +945,7 @@ def _dedupe_and_sort_rows(rows, *, limit=4):
     for row in rows:
         if not isinstance(row, dict):
             continue
+        row = _with_rank_fields(row)
         key = _row_dedupe_key(row)
         current = best_by_key.get(key)
         if current is None or _row_prefer_key(row) < _row_prefer_key(current):
@@ -862,6 +953,8 @@ def _dedupe_and_sort_rows(rows, *, limit=4):
     deduped = list(best_by_key.values())
     deduped.sort(
         key=lambda row: (
+            int(row.get("distance_band", _distance_band(row.get("distance", 0))) or 0),
+            int(row.get("urgency_priority", _row_urgency_priority(row)) or 0),
             int(row.get("distance", 0) or 0),
             _row_priority(row),
             _text(row.get("title")).lower(),
@@ -940,7 +1033,13 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
         fixtures = tuple(row.get("fixture_names", ()) or ())
         fixture_text = f" Fixture: {fixtures[0]}." if fixtures else ""
         org_text = f" Orgs: {row['organization_presence']}." if _text(row.get("organization_presence")) else ""
-        owner_text = " Your business is directly involved." if row.get("player_business_relevance") else ""
+        owner_cue = _text(row.get("player_business_cue"))
+        if row.get("player_business_relevance") and owner_cue:
+            owner_text = f" Your business is directly involved: {owner_cue}."
+        elif row.get("player_business_relevance"):
+            owner_text = " Your business is directly involved."
+        else:
+            owner_text = ""
         lines.append(
             f"{row['title']} at {row['property_name']} ({row['distance_text']}): "
             f"{row['summary']}; {row['action']}.{org_text}{fixture_text}{owner_text}"
@@ -949,7 +1048,12 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
 
 
 def _look_owner_text(row):
-    return "; your business is directly involved" if row.get("player_business_relevance") else ""
+    if not row.get("player_business_relevance"):
+        return ""
+    owner_cue = _text(row.get("player_business_cue"))
+    if owner_cue:
+        return f"; your business is directly involved: {owner_cue}"
+    return "; your business is directly involved"
 
 
 def _look_org_text(row):

@@ -80,6 +80,7 @@ from game.character_sheet import (
 import game.report_debug_ui as _report_debug_ui
 from game.casino_ui_runtime import ensure_casino_ui_state
 from game.report_runtime import build_progress_report as _build_progress_report
+from game.release_runtime import debug_disabled_hint, debug_mode_enabled
 from game.run_objectives import reveal_run_objective
 from game.dialogue_runtime import (
     _dialog_backup_cursor_payload,
@@ -1393,6 +1394,9 @@ class InputSystem(System):
         state["scroll"] = 0
 
     def _refresh_debug_ui(self, reset_scroll=False):
+        if not debug_mode_enabled(self.sim):
+            debug_disabled_hint(self.sim)
+            return False
         return _report_debug_ui.refresh_debug_ui(
             self,
             reset_scroll=reset_scroll,
@@ -1404,7 +1408,7 @@ class InputSystem(System):
             ),
             line_text_fn=_line_text,
             wrap_display_lines_fn=_wrap_display_lines,
-        )
+        ) or True
 
     def _close_debug_ui(self):
         _report_debug_ui.close_debug_ui(self._debug_state())
@@ -1645,8 +1649,11 @@ class InputSystem(System):
             return True
 
         if key == ord("D"):
-            self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="back"))
-            self._refresh_debug_ui(reset_scroll=True)
+            if debug_mode_enabled(self.sim):
+                self.sim.emit(Event("casino_ui_action", eid=self.player_eid, action="back"))
+                self._refresh_debug_ui(reset_scroll=True)
+            else:
+                self._refresh_debug_ui(reset_scroll=True)
             return True
 
         if key == ord("\t"):
@@ -1732,8 +1739,8 @@ class InputSystem(System):
             return True
 
         if key == ord("D"):
-            self._close_dialog_ui()
-            self._refresh_debug_ui(reset_scroll=True)
+            if self._refresh_debug_ui(reset_scroll=True):
+                self._close_dialog_ui()
             return True
 
         if key in (ord("x"), ord("X"), ord(";")) and dialog_kind == "conversation" and self._dialog_can_mark_backup_spot():
@@ -1879,8 +1886,8 @@ class InputSystem(System):
             return True
 
         if key == ord("D"):
-            self._close_log_ui()
-            self._refresh_debug_ui(reset_scroll=True)
+            if self._refresh_debug_ui(reset_scroll=True):
+                self._close_log_ui()
             return True
 
         if key in (27, ord("l"), ord("L"), ord("q"), ord("Q")):
@@ -1948,8 +1955,8 @@ class InputSystem(System):
             return True
 
         if key == ord("D"):
-            self._close_character_ui()
-            self._refresh_debug_ui(reset_scroll=True)
+            if self._refresh_debug_ui(reset_scroll=True):
+                self._close_character_ui()
             return True
 
         if ord("1") <= key <= ord("9"):
@@ -3265,8 +3272,8 @@ class InputSystem(System):
             return True
 
         if key == ord("D"):
-            self._close_inventory_ui()
-            self._refresh_debug_ui(reset_scroll=True)
+            if self._refresh_debug_ui(reset_scroll=True):
+                self._close_inventory_ui()
             return True
 
         if panel_kind == "container" and key in (KEY_LEFT, KEY_RIGHT, ord("\t"), ord("["), ord("]")):
@@ -3416,8 +3423,11 @@ class InputSystem(System):
             return True
 
         if key == ord("D"):
-            self.sim.emit(Event("trade_panel_close_request", eid=self.player_eid))
-            self._refresh_debug_ui(reset_scroll=True)
+            if debug_mode_enabled(self.sim):
+                self.sim.emit(Event("trade_panel_close_request", eid=self.player_eid))
+                self._refresh_debug_ui(reset_scroll=True)
+            else:
+                self._refresh_debug_ui(reset_scroll=True)
             return True
 
         if key in (KEY_UP, ord("k"), ord("K")):

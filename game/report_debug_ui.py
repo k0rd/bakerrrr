@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import curses
 
+from game.release_runtime import release_control_text
 from ui.input_keys import ENTER_KEYS, KEY_DOWN, KEY_UP
 
 
@@ -379,8 +380,8 @@ def handle_report_input(host, key, *, line_text_fn, wrap_display_lines_fn):
         return True
 
     if key == ord("D"):
-        host._close_report_ui()
-        host._refresh_debug_ui(reset_scroll=True)
+        if host._refresh_debug_ui(reset_scroll=True):
+            host._close_report_ui()
         return True
 
     if key in (27, ord("q"), ord("Q")):
@@ -687,6 +688,7 @@ def draw_report_modal(
     known_location_detail_lines_fn,
     known_person_list_line_fn,
     known_person_detail_lines_fn,
+    sim=None,
 ):
     panel_x, panel_y, panel_w, panel_h = _centered_scroll_panel_geometry(screen_w, map_h)
     _draw_box(view, panel_x, panel_y, panel_w, panel_h)
@@ -872,6 +874,7 @@ def draw_report_modal(
         action_tail = "O close | Y notebooks | L log | D debug | ? help"
         footer = f"{footer} | {action_tail}" if footer else f"{action_tail} | Up/Down scroll"
 
+    footer = release_control_text(footer, sim)
     view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip_text(footer, panel_w - 4))
 
 

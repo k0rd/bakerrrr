@@ -1985,6 +1985,139 @@ def _window_apertures(building, left, right, top, bottom, entry_side, reserved=N
     return apertures
 
 
+def _normalized_placement_profile(building):
+    if not isinstance(building, dict):
+        return {}
+    profile = building.get("placement_profile")
+    if not isinstance(profile, dict):
+        return {}
+
+    def _pct(value, default=0.5):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            value = default
+        return max(0.12, min(0.88, value))
+
+    frontage_side = str(profile.get("frontage_side", "") or "").strip().lower()
+    if frontage_side not in set(WALL_SIDES):
+        frontage_side = ""
+
+    return {
+        "placement_kind": str(profile.get("placement_kind", "profile") or "profile").strip().lower() or "profile",
+        "anchor_x_pct": _pct(profile.get("anchor_x_pct", 0.5)),
+        "anchor_y_pct": _pct(profile.get("anchor_y_pct", 0.5)),
+        "frontage_side": frontage_side,
+        "row_overlap": bool(profile.get("row_overlap")),
+        "column_overlap": bool(profile.get("column_overlap")),
+    }
+
+
+def _point_from_pct(start, end, pct):
+    start = int(start)
+    end = int(end)
+    pct = max(0.0, min(1.0, float(pct)))
+    if end <= start:
+        return start
+    return int(round(start + ((end - start) * pct)))
+
+
+def _clamp_center_for_span(center, low, high, half_span):
+    low = int(low)
+    high = int(high)
+    half_span = max(0, int(half_span))
+    min_center = low + half_span
+    max_center = high - half_span
+    if min_center <= max_center:
+        return _clamp(center, min_center, max_center)
+    return _clamp(center, low, high)
+
+
+def _side_has_exterior_margin(side, left, right, top, bottom, origin_x, origin_y, chunk_size):
+    side = str(side or "").strip().lower()
+    chunk_min_x = int(origin_x)
+    chunk_min_y = int(origin_y)
+    chunk_max_x = int(origin_x) + int(chunk_size) - 1
+    chunk_max_y = int(origin_y) + int(chunk_size) - 1
+    if side == "north":
+        return int(top) - 1 >= chunk_min_y
+    if side == "south":
+        return int(bottom) + 1 <= chunk_max_y
+    if side == "west":
+        return int(left) - 1 >= chunk_min_x
+    if side == "east":
+        return int(right) + 1 <= chunk_max_x
+    return False
+
+
+def _choose_profile_front_side(profile, *, left, right, top, bottom, block_left, block_right, block_top, block_bottom, origin_x, origin_y, chunk_size, rng):
+    valid_sides = tuple(
+        side for side in WALL_SIDES
+        if _side_has_exterior_margin(side, left, right, top, bottom, origin_x, origin_y, chunk_size)
+    )
+    preferred = str((profile or {}).get("frontage_side", "") or "").strip().lower()
+    if preferred in valid_sides:
+        return preferred
+
+    fallback = _choose_block_front_side(
+        left=left,
+        right=right,
+        top=top,
+        bottom=bottom,
+        block_left=block_left,
+        block_right=block_right,
+        block_top=block_top,
+        block_bottom=block_bottom,
+        rng=rng,
+    )
+    if fallback in valid_sides:
+        return fallback
+    if valid_sides:
+        gaps = {
+            "north": max(0, int(top) - int(block_top)),
+            "south": max(0, int(block_bottom) - int(bottom)),
+            "west": max(0, int(left) - int(block_left)),
+            "east": max(0, int(block_right) - int(right)),
+        }
+        return sorted(valid_sides, key=lambda side: (gaps.get(side, 999), side))[0]
+    return fallback
+
+
+def _nearest_included_anchor(left, right, top, bottom, preferred_x, preferred_y, excluded):
+    excluded = {(int(x), int(y)) for x, y in set(excluded or ())}
+    preferred_x = int(preferred_x)
+    preferred_y = int(preferred_y)
+    candidates = []
+    for y in range(int(top) + 1, int(bottom)):
+        for x in range(int(left) + 1, int(right)):
+            if (int(x), int(y)) in excluded:
+                continue
+            candidates.append((
+                abs(int(x) - preferred_x) + abs(int(y) - preferred_y),
+                abs(int(x) - ((int(left) + int(right)) // 2)) + abs(int(y) - ((int(top) + int(bottom)) // 2)),
+                int(y),
+                int(x),
+            ))
+    if candidates:
+        _dist, _center_dist, y, x = sorted(candidates)[0]
+        return int(x), int(y)
+    for y in range(int(top), int(bottom) + 1):
+        for x in range(int(left), int(right) + 1):
+            if (int(x), int(y)) not in excluded:
+                return int(x), int(y)
+    return preferred_x, preferred_y
+
+
+def _included_interior_cell_count(left, right, top, bottom, excluded):
+    excluded = {(int(x), int(y)) for x, y in set(excluded or ())}
+    count = 0
+    for y in range(int(top) + 1, int(bottom)):
+        for x in range(int(left) + 1, int(right)):
+            if (int(x), int(y)) not in excluded:
+                count += 1
+    return int(count)
+
+
 def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_grid_y, building_index, building=None, building_count=None):
     chunk_size = int(max(8, chunk_size))
     block_w = max(4, chunk_size // 2)
@@ -2018,20 +2151,29 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
         f"layout_offsets:{int(origin_x)}:{int(origin_y)}:{int(chunk_size)}:{block_grid_x}:{block_grid_y}"
     )
 
-    if building_count <= 1:
-        offsets = [(0, 0)]
-        layout_mode = "solo"
-    elif building_count == 2:
-        horizontal_pair = [(-3, 0), (3, 0)]
-        vertical_pair = [(0, -3), (0, 3)]
-        offsets = horizontal_pair if block_rng.randint(0, 1) == 0 else vertical_pair
-        layout_mode = "pair_horizontal" if offsets is horizontal_pair else "pair_vertical"
+    profile = _normalized_placement_profile(building)
+    profile_used = bool(profile)
+    if profile_used:
+        layout_mode = str(profile.get("placement_kind", "profile") or "profile")
+        shell_cx = _point_from_pct(block_left, block_right, profile.get("anchor_x_pct", 0.5))
+        shell_cy = _point_from_pct(block_top, block_bottom, profile.get("anchor_y_pct", 0.5))
     else:
-        offsets = list(BUILDING_LAYOUT_OFFSETS)
-        layout_mode = "cluster"
-    if building_count > 2:
-        block_rng.shuffle(offsets)
-    off_x, off_y = offsets[int(building_index) % len(offsets)]
+        if building_count <= 1:
+            offsets = [(0, 0)]
+            layout_mode = "solo"
+        elif building_count == 2:
+            horizontal_pair = [(-3, 0), (3, 0)]
+            vertical_pair = [(0, -3), (0, 3)]
+            offsets = horizontal_pair if block_rng.randint(0, 1) == 0 else vertical_pair
+            layout_mode = "pair_horizontal" if offsets is horizontal_pair else "pair_vertical"
+        else:
+            offsets = list(BUILDING_LAYOUT_OFFSETS)
+            layout_mode = "cluster"
+        if building_count > 2:
+            block_rng.shuffle(offsets)
+        off_x, off_y = offsets[int(building_index) % len(offsets)]
+        shell_cx = center_x + off_x
+        shell_cy = center_y + off_y
 
     layout_rng = random.Random(
         _layout_rng_seed(
@@ -2045,13 +2187,23 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
         )
     )
 
-    shell_cx = center_x + off_x
-    shell_cy = center_y + off_y
-    shell_cx = max(block_left + 2, min(block_right - 2, shell_cx))
-    shell_cy = max(block_top + 2, min(block_bottom - 2, shell_cy))
-
     span_w, span_h = building_shell_span(building, rng=layout_rng)
-    if layout_mode == "pair_horizontal":
+    if profile_used and building_count > 1 and parcel_span_x == 1 and parcel_span_y == 1:
+        block_span_w = int(block_right) - int(block_left) + 1
+        block_span_h = int(block_bottom) - int(block_top) + 1
+        if min(block_span_w, block_span_h) <= 7:
+            span_w = min(span_w, 3)
+            span_h = min(span_h, 3)
+        elif building_count == 2 and str(layout_mode) == "pair_broken_row":
+            span_w = min(span_w, 5)
+            span_h = min(span_h, 7)
+        elif building_count == 2 and str(layout_mode) == "pair_broken_column":
+            span_w = min(span_w, 7)
+            span_h = min(span_h, 5)
+        else:
+            span_w = min(span_w, 5)
+            span_h = min(span_h, 5)
+    elif layout_mode == "pair_horizontal":
         span_w = min(span_w, 5)
     elif layout_mode == "pair_vertical":
         span_h = min(span_h, 5)
@@ -2065,6 +2217,9 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
     half_w = span_w // 2
     half_h = span_h // 2
 
+    shell_cx = _clamp_center_for_span(shell_cx, block_left, block_right, half_w)
+    shell_cy = _clamp_center_for_span(shell_cy, block_top, block_bottom, half_h)
+
     left = max(block_left, shell_cx - half_w)
     right = min(block_right, shell_cx + half_w)
     top = max(block_top, shell_cy - half_h)
@@ -2074,17 +2229,34 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
 
     anchor_x = max(left + 1, min(right - 1, shell_cx))
     anchor_y = max(top + 1, min(bottom - 1, shell_cy))
-    front_side = _choose_block_front_side(
-        left=left,
-        right=right,
-        top=top,
-        bottom=bottom,
-        block_left=block_left,
-        block_right=block_right,
-        block_top=block_top,
-        block_bottom=block_bottom,
-        rng=layout_rng,
-    )
+    if profile_used:
+        front_side = _choose_profile_front_side(
+            profile,
+            left=left,
+            right=right,
+            top=top,
+            bottom=bottom,
+            block_left=block_left,
+            block_right=block_right,
+            block_top=block_top,
+            block_bottom=block_bottom,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+            rng=layout_rng,
+        )
+    else:
+        front_side = _choose_block_front_side(
+            left=left,
+            right=right,
+            top=top,
+            bottom=bottom,
+            block_left=block_left,
+            block_right=block_right,
+            block_top=block_top,
+            block_bottom=block_bottom,
+            rng=layout_rng,
+        )
     entry_bias = (shell_cx + layout_rng.randint(-1, 1)) if front_side in {"north", "south"} else (shell_cy + layout_rng.randint(-1, 1))
     entry_x, entry_y = _wall_point_from_bias(left, right, top, bottom, front_side, entry_bias)
 
@@ -2116,6 +2288,8 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
         parcel_span_x=parcel_span_x,
         parcel_span_y=parcel_span_y,
     ))
+    if excluded and _included_interior_cell_count(left, right, top, bottom, excluded) <= 0:
+        excluded.clear()
 
     apertures = [
         {
@@ -2174,6 +2348,22 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
         if signage and (int(signage["x"]), int(signage["y"])) in excluded:
             signage = None
     excluded = frozenset(excluded)
+    anchor_x, anchor_y = _nearest_included_anchor(left, right, top, bottom, anchor_x, anchor_y, excluded)
+    placement = {
+        "kind": str(layout_mode),
+        "profiled": bool(profile_used),
+        "frontage_side": str(front_side),
+        "parcel_span_x": int(parcel_span_x),
+        "parcel_span_y": int(parcel_span_y),
+        "building_count": int(building_count),
+    }
+    if profile_used:
+        placement.update({
+            "anchor_x_pct": round(float(profile.get("anchor_x_pct", 0.5)), 2),
+            "anchor_y_pct": round(float(profile.get("anchor_y_pct", 0.5)), 2),
+            "row_overlap": bool(profile.get("row_overlap")),
+            "column_overlap": bool(profile.get("column_overlap")),
+        })
 
     return {
         "left": int(left),
@@ -2199,5 +2389,6 @@ def layout_chunk_building(origin_x, origin_y, chunk_size, block_grid_x, block_gr
             "top": int(top),
             "bottom": int(bottom),
         },
+        "placement": placement,
         "signage": signage,
     }

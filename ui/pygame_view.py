@@ -1,11 +1,20 @@
 import curses
+import sys
 import time
 from collections import deque
+from pathlib import Path
 
 from game.semantic_catalog import DEFAULT_RENDER_SEMANTICS_PATH, get_runtime_semantic_catalog
 from ui.input_keys import KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_UP
 
 _DEFAULT_RENDER_SEMANTICS_PATH = DEFAULT_RENDER_SEMANTICS_PATH
+
+
+def _resource_path(*parts):
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        return Path(bundle_root).joinpath(*parts)
+    return Path(__file__).resolve().parents[1].joinpath(*parts)
 
 
 class PygameView:
@@ -30,8 +39,10 @@ class PygameView:
 
         self.width_cells = max(24, int(width_cells))
         self.height_cells = max(14, int(height_cells))
-        resolved_cell_px = 40 if cell_px is None else cell_px
+        resolved_cell_px = 24 if cell_px is None else cell_px
         self.cell_px = max(8, int(resolved_cell_px))
+        self._window_icon_path = None
+        self._install_window_icon()
         self.surface = pygame.display.set_mode((self.width_cells * self.cell_px, self.height_cells * self.cell_px))
         pygame.display.set_caption(str(title or "bakerrrr"))
 
@@ -170,6 +181,19 @@ class PygameView:
             "casino_chip": (84, 182, 198),
             "casino_cursor": (198, 240, 214),
         }
+
+    def _install_window_icon(self):
+        icon_path = _resource_path("assets", "icons", "bakerrrr.png")
+        try:
+            if not icon_path.exists():
+                return False
+            icon = self.pygame.image.load(str(icon_path))
+            self.pygame.display.set_icon(icon)
+            self._window_icon_path = str(icon_path)
+            return True
+        except Exception:
+            self._window_icon_path = None
+            return False
 
     def prompt_text_input(
         self,

@@ -870,6 +870,50 @@ class World:
         "entertainment": 0.18,
     }
 
+    CITY_PLACEMENT_SOLO_POINTS = (
+        ("solo_center", 0.50, 0.50),
+        ("solo_edge_north", 0.46, 0.24),
+        ("solo_edge_south", 0.54, 0.76),
+        ("solo_edge_west", 0.24, 0.48),
+        ("solo_edge_east", 0.76, 0.52),
+        ("solo_corner_nw", 0.24, 0.24),
+        ("solo_corner_ne", 0.76, 0.25),
+        ("solo_corner_sw", 0.25, 0.76),
+        ("solo_corner_se", 0.76, 0.76),
+        ("solo_frontage_setback", 0.50, 0.30),
+    )
+
+    CITY_PLACEMENT_PAIR_PATTERNS = (
+        ("pair_staggered", ((0.22, 0.28), (0.78, 0.72))),
+        ("pair_diagonal", ((0.24, 0.24), (0.76, 0.76))),
+        ("pair_reverse_diagonal", ((0.76, 0.24), (0.24, 0.76))),
+        ("pair_broken_row", ((0.22, 0.38), (0.78, 0.62))),
+        ("pair_broken_column", ((0.38, 0.22), (0.62, 0.78))),
+        ("pair_offset_fronts", ((0.24, 0.76), (0.76, 0.26))),
+    )
+
+    CITY_PLACEMENT_CLUSTER_PATTERNS = (
+        ("cluster_broken_row", ((0.22, 0.22), (0.78, 0.22), (0.22, 0.78), (0.78, 0.78))),
+        ("cluster_broken_column", ((0.22, 0.22), (0.22, 0.78), (0.78, 0.22), (0.78, 0.78))),
+        ("cluster_courtyard", ((0.22, 0.22), (0.78, 0.22), (0.22, 0.78), (0.78, 0.78))),
+        ("cluster_zigzag", ((0.22, 0.78), (0.78, 0.22), (0.22, 0.22), (0.78, 0.78))),
+    )
+
+    CITY_PLACEMENT_ROOMY_PAIR_ARCHETYPES = {
+        "bank",
+        "command_center",
+        "courthouse",
+        "data_center",
+        "field_hospital",
+        "hotel",
+        "jail",
+        "metro_exchange",
+        "office",
+        "prison",
+        "server_hub",
+        "tower",
+    }
+
     CAREERS_BY_ARCHETYPE = {
         "warehouse": ("warehouse_loader", "inventory_clerk", "forklift_operator", "dock_dispatcher", "ore_yard_clerk", "manifest_checker", "cold_chain_runner"),
         "factory": ("assembly_tech", "line_supervisor", "maintenance_tech", "quality_inspector", "smelter_operator", "shift_foreman", "foundry_runner"),
@@ -2732,6 +2776,166 @@ class World:
             "settlement_name": descriptor.get("settlement_name"),
         }
 
+    @staticmethod
+    def _placement_pct(value):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            value = 0.50
+        return round(max(0.12, min(0.88, value)), 2)
+
+    def _placement_frontage_side(self, anchor_x_pct, anchor_y_pct, rng, preferred=None):
+        preferred = str(preferred or "").strip().lower()
+        if preferred in {"north", "south", "west", "east"}:
+            return preferred
+
+        x_pct = self._placement_pct(anchor_x_pct)
+        y_pct = self._placement_pct(anchor_y_pct)
+        if 0.38 <= x_pct <= 0.62 and 0.38 <= y_pct <= 0.62:
+            return rng.choice(("north", "south", "west", "east"))
+
+        gaps = (
+            ("west", x_pct),
+            ("east", 1.0 - x_pct),
+            ("north", y_pct),
+            ("south", 1.0 - y_pct),
+        )
+        nearest = sorted(gaps, key=lambda item: (item[1], item[0]))[:2]
+        return rng.choice(tuple(side for side, _gap in nearest))
+
+    def _building_placement_profile(self, *, cx, cy, block, building, building_index, building_count, district):
+        bx = int(block.get("grid_x", 0))
+        by = int(block.get("grid_y", 0))
+        building_id = str((building or {}).get("building_id", f"{bx}:{by}:{building_index}") or "").strip()
+        archetype = str((building or {}).get("archetype", "") or "").strip().lower()
+        parcel_span_x = max(1, int((building or {}).get("parcel_span_x", 1) or 1))
+        parcel_span_y = max(1, int((building or {}).get("parcel_span_y", 1) or 1))
+        district_type = str((district or {}).get("district_type", "residential") or "residential").strip().lower()
+        rng = random.Random(
+            f"{self.seed}:city-placement:{int(cx)}:{int(cy)}:{bx}:{by}:"
+            f"{int(building_index)}:{int(building_count)}:{building_id}:{archetype}:{district_type}"
+        )
+
+        if parcel_span_x > 1 or parcel_span_y > 1:
+            row_overlap = parcel_span_y > 1
+            column_overlap = parcel_span_x > 1
+            if row_overlap and column_overlap:
+                kind = "row_column_overlap"
+                anchor_x = 0.50 + rng.choice((-0.08, 0.08, 0.0))
+                anchor_y = 0.50 + rng.choice((-0.08, 0.08, 0.0))
+                preferred_side = rng.choice(("north", "south", "west", "east"))
+            elif row_overlap:
+                kind = "row_overlap"
+                anchor_x = rng.choice((0.28, 0.72, 0.50))
+                anchor_y = 0.50 + rng.choice((-0.08, 0.08, 0.0))
+                preferred_side = rng.choice(("west", "east"))
+            else:
+                kind = "column_overlap"
+                anchor_x = 0.50 + rng.choice((-0.08, 0.08, 0.0))
+                anchor_y = rng.choice((0.28, 0.72, 0.50))
+                preferred_side = rng.choice(("north", "south"))
+            anchor_x = self._placement_pct(anchor_x)
+            anchor_y = self._placement_pct(anchor_y)
+            return {
+                "placement_kind": kind,
+                "anchor_x_pct": anchor_x,
+                "anchor_y_pct": anchor_y,
+                "frontage_side": self._placement_frontage_side(anchor_x, anchor_y, rng, preferred=preferred_side),
+                "row_overlap": bool(row_overlap),
+                "column_overlap": bool(column_overlap),
+            }
+
+        try:
+            building_count = int(building_count)
+        except (TypeError, ValueError):
+            building_count = 1
+        building_count = max(1, building_count)
+
+        if building_count <= 1:
+            kind, anchor_x, anchor_y = rng.choice(self.CITY_PLACEMENT_SOLO_POINTS)
+        elif building_count == 2:
+            pattern_kind, anchors = rng.choice(self.CITY_PLACEMENT_PAIR_PATTERNS)
+            anchor_x, anchor_y = anchors[int(building_index) % len(anchors)]
+            kind = pattern_kind
+        else:
+            pattern_kind, anchors = rng.choice(self.CITY_PLACEMENT_CLUSTER_PATTERNS)
+            anchor_x, anchor_y = anchors[int(building_index) % len(anchors)]
+            kind = pattern_kind
+
+        anchor_x = self._placement_pct(anchor_x)
+        anchor_y = self._placement_pct(anchor_y)
+        return {
+            "placement_kind": kind,
+            "anchor_x_pct": anchor_x,
+            "anchor_y_pct": anchor_y,
+            "frontage_side": self._placement_frontage_side(anchor_x, anchor_y, rng),
+        }
+
+    def _assign_city_placement_profiles(self, blocks, district, *, cx, cy):
+        for block in blocks:
+            if not isinstance(block, dict) or block.get("parcel_reserved"):
+                continue
+            buildings = block.get("buildings", ())
+            if not isinstance(buildings, list) or not buildings:
+                continue
+            building_count = len(buildings)
+            bx = int(block.get("grid_x", 0))
+            by = int(block.get("grid_y", 0))
+            multi_building = building_count > 1 and all(
+                isinstance(building, dict)
+                and int(building.get("parcel_span_x", 1) or 1) == 1
+                and int(building.get("parcel_span_y", 1) or 1) == 1
+                for building in buildings
+            )
+            shared_kind = None
+            shared_anchors = ()
+            if multi_building:
+                block_rng = random.Random(
+                    f"{self.seed}:city-placement-block:{int(cx)}:{int(cy)}:{bx}:{by}:{building_count}"
+                )
+                if building_count == 2:
+                    pair_patterns = tuple(self.CITY_PLACEMENT_PAIR_PATTERNS)
+                    if any(
+                        str(building.get("archetype", "") or "").strip().lower() in self.CITY_PLACEMENT_ROOMY_PAIR_ARCHETYPES
+                        for building in buildings
+                        if isinstance(building, dict)
+                    ):
+                        pair_patterns = tuple(
+                            pattern for pattern in pair_patterns
+                            if str(pattern[0]) in {"pair_broken_row", "pair_broken_column"}
+                        ) or pair_patterns
+                    shared_kind, shared_anchors = block_rng.choice(pair_patterns)
+                else:
+                    shared_kind, shared_anchors = block_rng.choice(self.CITY_PLACEMENT_CLUSTER_PATTERNS)
+            for index, building in enumerate(buildings):
+                if not isinstance(building, dict):
+                    continue
+                if isinstance(building.get("placement_profile"), dict):
+                    continue
+                if multi_building and shared_kind and shared_anchors:
+                    anchor_x, anchor_y = shared_anchors[int(index) % len(shared_anchors)]
+                    side_rng = random.Random(
+                        f"{self.seed}:city-placement-front:{int(cx)}:{int(cy)}:{bx}:{by}:{index}:{shared_kind}"
+                    )
+                    anchor_x = self._placement_pct(anchor_x)
+                    anchor_y = self._placement_pct(anchor_y)
+                    building["placement_profile"] = {
+                        "placement_kind": str(shared_kind),
+                        "anchor_x_pct": anchor_x,
+                        "anchor_y_pct": anchor_y,
+                        "frontage_side": self._placement_frontage_side(anchor_x, anchor_y, side_rng),
+                    }
+                else:
+                    building["placement_profile"] = self._building_placement_profile(
+                        cx=cx,
+                        cy=cy,
+                        block=block,
+                        building=building,
+                        building_index=index,
+                        building_count=building_count,
+                        district=district,
+                    )
+
     def generate_building(self, district, bx, by, i, rng, used_business_names=None, preferred_archetypes=None):
         district_type = district["district_type"]
         options = list(self._buildings_for_district(district_type))
@@ -2834,13 +3038,19 @@ class World:
             return 0.0
         density = int(max(1, density))
         wealth = int(max(0, wealth))
+        if district_type in {"downtown", "corporate"}:
+            chance += 0.10
+        elif district_type in {"industrial", "military", "entertainment"}:
+            chance += 0.08
+        elif district_type == "slums":
+            chance += 0.06
         if density <= 4:
             chance += 0.06
         elif density >= 8:
-            chance -= 0.05
+            chance += 0.03
         if wealth >= 7:
             chance += 0.04
-        return max(0.0, min(0.42, chance))
+        return max(0.0, min(0.58, chance))
 
     def _reserve_large_city_parcel(self, blocks_by_coord, district, rng, used_business_names):
         district_type = str(district.get("district_type", "residential")).strip().lower() or "residential"
@@ -2896,7 +3106,7 @@ class World:
                 covered["buildings"] = []
         return True
 
-    def generate_blocks(self, district, rng):
+    def generate_blocks(self, district, rng, cx=0, cy=0):
         blocks = [
             {
                 "grid_x": bx,
@@ -2990,6 +3200,7 @@ class World:
                 ),
             ]
 
+        self._assign_city_placement_profiles(blocks, district, cx=cx, cy=cy)
         return blocks
 
     def generate_infrastructure(self, district, rng):
@@ -3011,7 +3222,7 @@ class World:
         district = self.generate_district(cx, cy, rng)
         descriptor = self.overworld_descriptor(cx, cy)
         area_type = str(district.get("area_type", descriptor.get("area_type", "city"))).strip().lower() or "city"
-        blocks = self.generate_blocks(district, rng) if area_type == "city" else []
+        blocks = self.generate_blocks(district, rng, cx=cx, cy=cy) if area_type == "city" else []
         sites = self.generate_non_city_sites(descriptor, self.chunk_site_rng(cx, cy)) if area_type != "city" else []
         infrastructure = self.generate_infrastructure(district, rng)
 

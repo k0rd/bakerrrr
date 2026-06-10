@@ -389,6 +389,8 @@ def _register_chunk_properties(sim, chunk):
                     "basement_levels": int(building.get("basement_levels", 0)),
                     "rooms": list(building.get("rooms", ())),
                     "footprint": dict(layout.get("footprint", {})),
+                    "placement": dict(layout.get("placement", {})),
+                    "placement_profile": dict(building.get("placement_profile", {})) if isinstance(building.get("placement_profile"), dict) else None,
                     "entry": dict(layout.get("entry", {})),
                     "apertures": [dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)],
                     "signage": dict(layout["signage"]) if isinstance(layout.get("signage"), dict) else None,

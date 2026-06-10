@@ -1944,6 +1944,9 @@ class ServiceMenuSystem(System):
         lines.append(f"Hours: {hours_mode_label} | {hours_text}.")
         lines.append(f"Markup: {markup_mode_label}.")
         lines.append(f"Status: {'open' if open_now else 'closed'} | {note}.")
+        owner_reason = str(snapshot.get("owner_signal_reason", "")).strip()
+        if owner_reason:
+            lines.append(f"Owner read: {owner_reason}.")
         if open_roles:
             role_labels = ["manager" if role == "manager" else "staff" for role in open_roles]
             if len(role_labels) == 1:

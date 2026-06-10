@@ -429,6 +429,9 @@ def _property_metadata(prop):
 def _player_business_warning_issue(summary):
     if not isinstance(summary, dict):
         return ""
+    owner_signal_kind = _text(summary.get("owner_signal_kind")).lower()
+    if owner_signal_kind == "expensive":
+        return "gouging"
     awareness = max(
         0,
         _int_or(
@@ -547,12 +550,18 @@ def _player_business_warning_issue_score(opinion, issue_kind):
 
 def _player_business_warning_prompt(prop, issue_kind, opinion, summary, *, speaker_role="local"):
     business_name = _text(_property_metadata(prop).get("business_name")) or _text((prop or {}).get("name")) or "this place"
+    owner_reason = _text((summary or {}).get("owner_signal_reason"))
     price_pain = max(0.0, -float((opinion or {}).get("price_fairness", 0.0) or 0.0))
     resentment = max(0.0, float((opinion or {}).get("resentment", 0.0) or 0.0))
     heat = max(0.0, float((opinion or {}).get("heat", 0.0) or 0.0))
     incident_pressure = max(0.0, float((opinion or {}).get("incident_pressure", 0.0) or 0.0))
     trust_gap = max(0.0, 0.45 - float((opinion or {}).get("trust", 0.0) or 0.0))
     if issue_kind == "gouging":
+        if owner_reason:
+            return (
+                f"You own {business_name}, right? People are reading the prices this way: {owner_reason}.",
+                "That is the kind of signal that makes locals start talking about the prices before they talk about the place.",
+            )
         if price_pain >= 0.34 or resentment >= 0.32:
             return (
                 f"You own {business_name}, right? People on this block think the prices there are starting to bite.",
@@ -576,6 +585,11 @@ def _player_business_warning_prompt(prop, issue_kind, opinion, summary, *, speak
         return (
             f"The floor at {business_name} is starting to feel hot, and people are reading it that way.",
             "If you let it keep sliding, this place is going to lose the room.",
+        )
+    if owner_reason:
+        return (
+            f"People around here are reading {business_name} pretty clearly: {owner_reason}.",
+            "You should get ahead of it before that becomes the whole story.",
         )
     return (
         f"People around here are starting to lose trust in {business_name}.",
@@ -1586,6 +1600,106 @@ def _business_reputation_market_effect(sim, prop):
     return result
 
 
+def _player_business_owner_signal(values):
+    base = {
+        "player_business_cue": "",
+        "owner_signal_kind": "",
+        "owner_signal_reason": "",
+    }
+    if not isinstance(values, dict):
+        return dict(base)
+
+    customer_policy = _normalize_customer_policy(values.get("customer_policy"))
+    hours_mode = _normalize_business_hours_mode(values.get("hours_mode"))
+    markup_mode = _normalize_business_markup_mode(values.get("markup_mode"))
+    required_staff = max(1, _int_or(values.get("required_staff"), default=1))
+    staff_total = max(0, _int_or(values.get("staff_total"), default=0))
+    service_reliability = float(values.get("service_reliability", 0.0) or 0.0)
+    manager_fit_score = float(values.get("manager_fit_score", 0.0) or 0.0)
+    staff_fit_score = float(values.get("staff_fit_score", 0.0) or 0.0)
+    reputation_note = _text(values.get("reputation_note")).lower()
+    community_signal_note = _text(values.get("community_signal_note")).lower()
+    community_note = _text(values.get("community_note")).lower()
+    scene_pressure_note = _text(values.get("scene_pressure_note")).lower()
+    note = _text(values.get("note") or values.get("operating_note")).lower()
+    footfall_delta = _int_or(values.get("footfall_delta_pct"), default=0)
+    churn_delta = _int_or(values.get("churn_delta_pct"), default=0)
+    open_now = bool(values.get("open_now"))
+
+    if customer_policy == "closed":
+        return {
+            "player_business_cue": "closed off by your customer policy",
+            "owner_signal_kind": "closed_off",
+            "owner_signal_reason": "your closed customer policy is making the frontage read closed-off",
+        }
+    if customer_policy == "staff_only":
+        return {
+            "player_business_cue": "screened by your staff-only policy",
+            "owner_signal_kind": "screened",
+            "owner_signal_reason": "your staff-only policy is visibly filtering the door",
+        }
+    if staff_total <= 0:
+        return {
+            "player_business_cue": "thin because nobody is working the floor",
+            "owner_signal_kind": "thin",
+            "owner_signal_reason": "your staffing gap is leaving the floor visibly thin",
+        }
+    if staff_total < required_staff:
+        return {
+            "player_business_cue": "thin from your staffing gap",
+            "owner_signal_kind": "thin",
+            "owner_signal_reason": "your staffing gap is showing up at the frontage",
+        }
+    if markup_mode == "steep" and (
+        reputation_note == "price grumbling"
+        or community_signal_note in {"making the block tense", "souring the block"}
+        or churn_delta >= 8
+    ):
+        return {
+            "player_business_cue": "expensive from your steep markup",
+            "owner_signal_kind": "expensive",
+            "owner_signal_reason": "your steep markup is giving locals a price-grumbling read",
+        }
+    if (
+        reputation_note == "front trouble"
+        or scene_pressure_note == "soft-front trouble"
+        or community_signal_note in {"making the block tense", "souring the block"}
+        or community_note == "tenser block"
+    ):
+        return {
+            "player_business_cue": "strained by neighborhood pressure",
+            "owner_signal_kind": "strained",
+            "owner_signal_reason": "your business is reading strained under neighborhood pressure",
+        }
+    if note in {"frayed ops", "patchy ops"} or (service_reliability and service_reliability < 0.68):
+        return {
+            "player_business_cue": "strained by patchy operations",
+            "owner_signal_kind": "strained",
+            "owner_signal_reason": "patchy operations are making the frontage feel strained",
+        }
+    if (
+        reputation_note in {"neighborhood staple", "growing regulars"}
+        or scene_pressure_note == "block watch"
+        or community_signal_note == "lifting the block"
+        or (markup_mode == "discount" and customer_policy == "public" and footfall_delta > 0)
+    ):
+        reason = "your fair open service is helping the frontage read loyal"
+        if hours_mode == "extended" and open_now:
+            reason = "your fair open service and extended hours are helping the frontage read loyal"
+        return {
+            "player_business_cue": "loyal from fair open service",
+            "owner_signal_kind": "loyal",
+            "owner_signal_reason": reason,
+        }
+    if hours_mode == "extended" and open_now and staff_total >= required_staff and max(manager_fit_score, staff_fit_score) >= 0.66:
+        return {
+            "player_business_cue": "active from your extended hours",
+            "owner_signal_kind": "loyal",
+            "owner_signal_reason": "your extended hours are keeping the business visibly active",
+        }
+    return dict(base)
+
+
 def _active_business_scene_market_pressure(sim, prop):
     base = {
         "scene_revenue_mult": 1.0,
@@ -1754,6 +1868,27 @@ def player_business_summary(sim, prop):
             if reputation_note:
                 note = reputation_note
 
+    signal_inputs = {
+        "open_now": bool(open_now),
+        "required_staff": required,
+        "staff_total": staff_total,
+        "manager_fit_score": float((role_fit.get("manager") or {}).get("score", 0.0) or 0.0) if isinstance(role_fit, dict) else 0.0,
+        "staff_fit_score": float((role_fit.get("staff") or {}).get("score", 0.0) or 0.0) if isinstance(role_fit, dict) else 0.0,
+        "service_reliability": float((last_summary or {}).get("service_reliability", 0.0) or 0.0) if isinstance(last_summary, dict) else 0.0,
+        "operating_note": str((last_summary or {}).get("operating_note", "")).strip() if isinstance(last_summary, dict) else "",
+        "customer_policy": customer_policy,
+        "hours_mode": hours_mode,
+        "markup_mode": str(markup_profile.get("mode", "standard")).strip() or "standard",
+        "reputation_note": str(reputation.get("reputation_note", "")).strip(),
+        "community_note": str(reputation.get("community_note", "")).strip(),
+        "community_signal_note": str(reputation.get("community_signal_note", "")).strip(),
+        "scene_pressure_note": str(scene_pressure.get("scene_pressure_note", "")).strip(),
+        "footfall_delta_pct": int(reputation.get("footfall_delta_pct", 0) or 0),
+        "churn_delta_pct": int(reputation.get("churn_delta_pct", 0) or 0),
+        "note": note,
+    }
+    owner_signal = _player_business_owner_signal(signal_inputs)
+
     summary = {
         "property_id": prop.get("id"),
         "business_name": _text(_property_metadata(prop).get("business_name")) or _text(prop.get("name")) or "Business",
@@ -1787,6 +1922,7 @@ def player_business_summary(sim, prop):
         "last_scene_nuisance_loss": _int_or(state.get("last_scene_nuisance_loss"), default=0),
         "last_scene_nuisance_tick": None if state.get("last_scene_nuisance_tick") is None else _int_or(state.get("last_scene_nuisance_tick"), default=0),
         "note": note,
+        **owner_signal,
     }
     if cache_state is not None and cache_key:
         cache_state.setdefault("summary", {})[cache_key] = dict(summary)
@@ -1849,6 +1985,9 @@ def player_business_status_snapshot(sim, prop):
         "last_scene_nuisance_note": str(summary.get("last_scene_nuisance_note", "")).strip(),
         "last_scene_nuisance_loss": _int_or(summary.get("last_scene_nuisance_loss"), default=0),
         "last_scene_nuisance_tick": None if summary.get("last_scene_nuisance_tick") is None else _int_or(summary.get("last_scene_nuisance_tick"), default=0),
+        "player_business_cue": str(summary.get("player_business_cue", "")).strip(),
+        "owner_signal_kind": str(summary.get("owner_signal_kind", "")).strip(),
+        "owner_signal_reason": str(summary.get("owner_signal_reason", "")).strip(),
         "last_reputation_awareness": _int_or(last_summary.get("reputation_awareness"), default=0),
         "last_footfall_delta_pct": _int_or(last_summary.get("footfall_delta_pct"), default=_int_or(summary.get("footfall_delta_pct"), default=0)),
         "last_churn_delta_pct": _int_or(last_summary.get("churn_delta_pct"), default=_int_or(summary.get("churn_delta_pct"), default=0)),
@@ -2789,7 +2928,7 @@ class PlayerBusinessSystem(System):
             if reputation_note:
                 note = reputation_note
 
-        state["last_summary"] = {
+        last_summary = {
             "hour": int(hour_counter % 24),
             "open_now": bool(open_now),
             "gross_revenue": int(gross_revenue),
@@ -2839,6 +2978,8 @@ class PlayerBusinessSystem(System):
             "account_balance": int(state.get("account_balance", 0)),
             "note": note,
         }
+        last_summary.update(_player_business_owner_signal(last_summary))
+        state["last_summary"] = last_summary
         self._queue_owner_warning(prop, state, dict(state.get("last_summary", {})), previous_summary=previous_summary)
 
     def update(self):

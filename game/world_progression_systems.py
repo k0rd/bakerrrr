@@ -612,6 +612,8 @@ class WorldStreamingSystem(System):
                     "basement_levels": int(basement_levels),
                     "rooms": list(building.get("rooms", ())),
                     "footprint": dict(layout.get("footprint", {})),
+                    "placement": dict(layout.get("placement", {})),
+                    "placement_profile": dict(building.get("placement_profile", {})) if isinstance(building.get("placement_profile"), dict) else None,
                     "footprint_excluded_cells": [
                         {"x": int(cell_x), "y": int(cell_y)}
                         for cell_x, cell_y in sorted(layout.get("excluded", ()) or ())
@@ -3036,6 +3038,55 @@ class RivalOperatorSystem(System):
         requirements = _opportunity_requirements(resolved)
         return bool(str(requirements.get("require_item_id", "")).strip().lower())
 
+    def _rival_followup_has_concrete_anchor(self, resolved):
+        if not isinstance(resolved, dict):
+            return False
+        requirements = _opportunity_requirements(resolved)
+        property_id, building_id = self._rival_followup_anchor(resolved)
+        property_id = str(property_id or "").strip()
+        building_id = str(building_id or "").strip()
+        if property_id and isinstance(getattr(self.sim, "properties", {}).get(property_id), dict):
+            return True
+        if building_id:
+            for prop in getattr(self.sim, "properties", {}).values():
+                if isinstance(prop, dict) and _building_id_from_property(prop) == building_id:
+                    return True
+        for key in ("interact_npc_eid", "pickup_interact_npc_eid"):
+            target_eid = _int_or_default(requirements.get(key), default=0)
+            if target_eid > 0 and self.sim.ecs.get(Position).get(target_eid) is not None:
+                return True
+        return False
+
+    def _rival_resolution_policy(self, resolved, *, resolution, casualty=""):
+        if not isinstance(resolved, dict):
+            return "no_followup"
+        if self._is_rival_followup_entry(resolved):
+            return "no_followup"
+
+        kind = str(resolved.get("kind", "")).strip().lower()
+        if kind == "contract_kill":
+            return "no_followup"
+        if self._is_consumptive_rival_job(resolved):
+            return "hard_fail"
+
+        requirements = _opportunity_requirements(resolved)
+        failure_policy = resolved.get("failure_policy", {}) if isinstance(resolved.get("failure_policy"), dict) else {}
+        explicit = failure_policy.get("allow_rival_followup")
+        if explicit is None:
+            explicit = requirements.get("allow_rival_followup")
+
+        has_anchor = self._rival_followup_has_concrete_anchor(resolved)
+        if explicit is not None:
+            return "salvage_followup" if bool(explicit) and has_anchor else "no_followup"
+        if not has_anchor:
+            return "no_followup"
+
+        if str(casualty or "").strip().lower() == "dead":
+            return "salvage_followup"
+        if str(resolution or "").strip().lower() in {"claimed", "burned"}:
+            return "salvage_followup"
+        return "no_followup"
+
     def _rival_resolution_reason(self, rival, resolved, *, resolution):
         rival_name = str(rival.get("name", "a rival")).strip() or "a rival"
         if not isinstance(resolved, dict):
@@ -3093,32 +3144,14 @@ class RivalOperatorSystem(System):
         return f"{rival_name} burned the scene"
 
     def _should_spawn_rival_followup(self, resolved, *, resolution, casualty=""):
-        if not isinstance(resolved, dict):
-            return False
-        if self._is_rival_followup_entry(resolved):
-            return False
-
-        kind = str(resolved.get("kind", "")).strip().lower()
-        requirements = resolved.get("requirements", {}) if isinstance(resolved.get("requirements", {}), dict) else {}
-        failure_policy = resolved.get("failure_policy", {}) if isinstance(resolved.get("failure_policy"), dict) else {}
-        explicit = failure_policy.get("allow_rival_followup")
-        if explicit is None:
-            explicit = requirements.get("allow_rival_followup")
-        if explicit is not None:
-            return bool(explicit)
-
-        if kind == "contract_kill":
-            return False
-        if casualty == "dead":
-            return True
-        if self._is_consumptive_rival_job(resolved):
-            return False
-        return resolution in {"claimed", "burned"}
+        return self._rival_resolution_policy(resolved, resolution=resolution, casualty=casualty) == "salvage_followup"
 
     def _spawn_rival_followup(self, rival, resolved, *, resolution, casualty=""):
         if not isinstance(resolved, dict):
             return None
-        if not self._should_spawn_rival_followup(resolved, resolution=resolution, casualty=casualty):
+        policy = self._rival_resolution_policy(resolved, resolution=resolution, casualty=casualty)
+        resolved["rival_resolution_policy"] = policy
+        if policy != "salvage_followup":
             return None
         chunk = self._normalize_chunk(resolved.get("chunk"), fallback=rival.get("current_chunk"))
         followup_requirements = self._rival_followup_requirements(resolved, chunk=chunk)
@@ -3517,14 +3550,19 @@ class FinalOperationSystem(System):
         self.sim.events.subscribe("item_picked_up", self.on_item_picked_up)
 
     def _conclude_run(self, *, outcome, reason, objective_title, summary_lines):
-        bones_record = archive_failed_run_bones(
-            self.sim,
-            self.player_eid,
-            outcome=outcome,
-            reason=reason,
-            objective_title=objective_title,
-            summary_lines=summary_lines,
-        )
+        from game.tutorial import tutorial_no_persistence
+
+        no_persistence = tutorial_no_persistence(self.sim)
+        bones_record = None
+        if not no_persistence:
+            bones_record = archive_failed_run_bones(
+                self.sim,
+                self.player_eid,
+                outcome=outcome,
+                reason=reason,
+                objective_title=objective_title,
+                summary_lines=summary_lines,
+            )
         traits = getattr(self.sim, "world_traits", None)
         if not isinstance(traits, dict):
             self.sim.world_traits = {}
@@ -3541,6 +3579,8 @@ class FinalOperationSystem(System):
         run_end["show_post_curses"] = True
         run_end["bones_archived"] = bool(isinstance(bones_record, dict))
         run_end["bones_record_id"] = str((bones_record or {}).get("record_id", "")).strip() if isinstance(bones_record, dict) else ""
+        run_end["tutorial"] = bool(no_persistence)
+        run_end["saved"] = False
 
         self.sim.emit(Event(
             "run_concluded",

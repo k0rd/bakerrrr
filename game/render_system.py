@@ -96,6 +96,7 @@ from game.lighting import (
     update_lighting_state as _update_lighting_state,
 )
 import game.report_debug_ui as _report_debug_ui
+from game.release_runtime import debug_mode_enabled, release_control_text
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
     append_external_opportunity,
@@ -975,10 +976,14 @@ class RenderSystem(System):
             "Visual classes: vehicles use '&' symbol colors only; properties use letters; items are bright symbols; humans use colored @ symbols and wildlife uses taxonomy letters.",
             "Progress: O operations report, Y opens the Places notebook; Tab switches to the People notebook. L opens event log history.",
             "Log modal: T cycles filters; H sets the current modal filter as the live HUD filter.",
-            "Debug: D live telemetry for lighting, stealth, pressure, property access, and objective state.",
             "Services: . uses the service on your tile, including banking, insurance, terminals, transit, and storefront counters. P buy property.",
             "Character: + opens the character sheet. Tab or Left/Right switch pages.",
         ]
+        if debug_mode_enabled(self.sim):
+            lines.insert(
+                -2,
+                "Debug: D live telemetry for lighting, stealth, pressure, property access, and objective state.",
+            )
         if zoom_mode == "overworld":
             if view_only:
                 lines.append("Map view: move to browse chunks, Enter or x inspect the selected chunk, and t return on-foot.")
@@ -2259,6 +2264,14 @@ class RenderSystem(System):
         final_operation_line = ""
         if final_operation_eval:
             final_operation_line = str(final_operation_eval.get("summary_line", "")).strip()
+        tutorial_hint = ""
+        try:
+            from game.tutorial import current_tutorial_hint as _current_tutorial_hint, is_tutorial_run as _is_tutorial_run
+
+            if _is_tutorial_run(self.sim):
+                tutorial_hint = str(_current_tutorial_hint(self.sim) or "").strip()
+        except Exception:
+            tutorial_hint = ""
         opportunity_rows = evaluate_opportunity_facts(
             self.sim,
             self.player_eid,
@@ -2308,7 +2321,9 @@ class RenderSystem(System):
             quest_lines = _wrap_display_lines(report_hint_line, hud_text_w, max_lines=2)
         else:
             quest_lines = []
-            if objective_line:
+            if tutorial_hint:
+                quest_lines.extend(_wrap_display_lines(tutorial_hint, hud_text_w, max_lines=1))
+            if objective_line and len(quest_lines) < 2:
                 quest_lines.extend(_wrap_display_lines(objective_line, hud_text_w, max_lines=1))
             if final_operation_line and len(quest_lines) < 2:
                 quest_lines.extend(
@@ -2401,6 +2416,7 @@ class RenderSystem(System):
         else:
             controls = f"Move: arrows/WASD/HJKL/QEZC, {_aim_open_label(self.sim, self.player_eid)}, / talk, . service, ' interact, , pickup, ; lock door, X map, + sheet, Shift+J breach door, O ops, Y notebooks, L log, D debug, or ? for help"
 
+        controls = release_control_text(controls, self.sim)
         mode_line = _mode_line(
             mode_state=player_modes,
             cover=player_cover,
@@ -2719,6 +2735,7 @@ class RenderSystem(System):
                 )
             else:
                 hint = "U use/equip/stow  R drop  E inspect  O ops  Y notebooks  L log  D debug  I close"
+            hint = release_control_text(hint, self.sim)
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, panel_w - 4))
         elif trade_ui.get("open"):
             panel_w = min(max(52, screen_w - 4), screen_w)
@@ -2861,6 +2878,7 @@ class RenderSystem(System):
                 panel_w - 4,
             )
             hint = "E trade  B buy  S sell  X inspect  O ops  Y notebooks  L log  D debug  M/Esc close"
+            hint = release_control_text(hint, self.sim)
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, panel_w - 4))
         elif casino_ui.get("open"):
             panel_w = min(max(78, map_w - 4), map_w)
@@ -3109,6 +3127,7 @@ class RenderSystem(System):
                         footer = "E ask | X mark | Esc close | M trade | O ops | Y notebooks | L log | D debug | ? help"
                     else:
                         footer = "E ask | Esc close | M trade | O ops | Y notebooks | L log | D debug | ? help"
+            footer = release_control_text(footer, self.sim)
             self.view.draw_text(panel_x + 2, footer_y, _clip(footer, body_w))
         elif character_ui.get("open"):
             panel_w = min(max(60, screen_w - 4), screen_w)
@@ -3187,6 +3206,7 @@ class RenderSystem(System):
                 footer = f"{footer} | {action_tail}"
             else:
                 footer = action_tail
+            footer = release_control_text(footer, self.sim)
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, panel_w - 4))
         elif report_ui.get("open"):
             _report_debug_ui.draw_report_modal(
@@ -3203,6 +3223,7 @@ class RenderSystem(System):
                 known_location_detail_lines_fn=_known_location_detail_lines,
                 known_person_list_line_fn=_known_person_list_line,
                 known_person_detail_lines_fn=_known_person_detail_lines,
+                sim=self.sim,
             )
         elif log_ui.get("open"):
             panel_w = min(max(56, screen_w - 4), screen_w)
@@ -3271,6 +3292,7 @@ class RenderSystem(System):
                 footer = f"{footer} | T cycle filter | H set HUD filter | L close | O ops | Y notebooks | D debug | ? help"
             else:
                 footer = "T cycle filter | H set HUD filter | L close | O ops | Y notebooks | D debug | Up/Down scroll | ? help"
+            footer = release_control_text(footer, self.sim)
             self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, panel_w - 4))
         elif debug_ui.get("open"):
             _report_debug_ui.draw_debug_modal(

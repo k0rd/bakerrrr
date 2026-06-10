@@ -537,17 +537,30 @@ class RunEpilogueLedgerSystem(System):
         self._record("run_pressure_tier", f"Run pressure crossed into {tier} territory.", event, weight=0.75)
 
     def on_run_concluded(self, event):
+        from game.tutorial import tutorial_no_persistence
+
+        tutorial = tutorial_no_persistence(self.sim)
         lines = self.build_summary_lines(outcome=str(event.data.get("outcome", "") or ""))
         if not lines:
-            return
-        echo_result = archive_run_echoes(
-            self.sim,
-            self.player_eid,
-            outcome=str(event.data.get("outcome", "") or ""),
-            reason=str(event.data.get("reason", "") or ""),
-            objective_title=str(event.data.get("objective_title", "") or ""),
-            summary_lines=tuple(event.data.get("summary_lines", ()) or ()),
-        )
+            lines = []
+        if tutorial:
+            echo_result = {"lines": [], "records": []}
+            tutorial_lines = [
+                "Tutorial run:",
+                "  Final target recovered through the normal final-operation path.",
+                "  Controls practiced in this run stay local to the tutorial.",
+                "  This tutorial does not affect future runs.",
+            ]
+            lines = tutorial_lines + [line for line in lines if str(line).strip()]
+        else:
+            echo_result = archive_run_echoes(
+                self.sim,
+                self.player_eid,
+                outcome=str(event.data.get("outcome", "") or ""),
+                reason=str(event.data.get("reason", "") or ""),
+                objective_title=str(event.data.get("objective_title", "") or ""),
+                summary_lines=tuple(event.data.get("summary_lines", ()) or ()),
+            )
         echo_lines = list((echo_result or {}).get("lines", ()) or ())
         echo_records = list((echo_result or {}).get("records", ()) or ())
         if echo_lines:

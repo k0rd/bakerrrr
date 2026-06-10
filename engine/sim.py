@@ -2113,6 +2113,8 @@ class Simulation:
                             "entry": entry,
                             "apertures": tuple(dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)),
                             "footprint": dict(layout.get("footprint", {})),
+                            "placement": dict(layout.get("placement", {})),
+                            "placement_profile": dict(building.get("placement_profile", {})) if isinstance(building.get("placement_profile"), dict) else None,
                             "signage": dict(layout["signage"]) if isinstance(layout.get("signage"), dict) else None,
                         }
                         self._stamp_room_shell(

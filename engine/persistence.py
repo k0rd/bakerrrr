@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import pickle
 import re
 import types
@@ -32,7 +33,16 @@ def _inventory_item_instance_ids_from_sim(sim):
     return ids
 
 SAVE_VERSION = 1
-SAVE_DIR = Path(__file__).resolve().parents[1] / "saves"
+
+
+def _default_save_dir():
+    raw = str(os.getenv("BAKERRRR_SAVE_DIR", "") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path(__file__).resolve().parents[1] / "saves"
+
+
+SAVE_DIR = _default_save_dir()
 BONES_ARCHIVE_PATH = SAVE_DIR / "bones.json"
 RUN_ECHOES_ARCHIVE_PATH = SAVE_DIR / "run_echoes.json"
 _EXCLUDED_SIM_STATE_KEYS = {

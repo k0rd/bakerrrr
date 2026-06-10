@@ -183,6 +183,13 @@ from game.dialogue_shape import (
     shaped_local_line as _shaped_local_line,
     shaped_opening_lines as _shaped_opening_lines,
 )
+from game.dialogue_social_context import dialogue_social_context_read as _dialogue_social_context_read
+from game.tutorial import (
+    current_tutorial_hint as _current_tutorial_hint,
+    is_tutorial_run as _is_tutorial_run,
+    tutorial_guide_line as _tutorial_guide_line,
+    tutorial_state as _tutorial_state,
+)
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
     building_id_from_structure as _building_id_from_structure,
@@ -1764,6 +1771,9 @@ class NPCInteractionSystem(System):
         bond_score = (trust * 0.6) + (closeness * 0.4)
         rapport = max(0.0, min(1.0, float(rapport or 0.0)))
         return max(0.0, min(0.96, 0.12 + (bond_score * 0.52) + (rapport * 0.42)))
+
+    def _dialogue_social_context_read(self, context):
+        return _dialogue_social_context_read(context)
 
     def _pressure_adjusted_tone(self, tone, *, pressure_tier="low", standing=0.0, recent_offense=False):
         tone_key = str(tone or "neutral").strip().lower() or "neutral"
@@ -6303,6 +6313,24 @@ class NPCInteractionSystem(System):
             "relationship_has_nontrivial_history": bool(relationship_history),
             "relationship_anchor_episode": dict(relationship_anchor) if isinstance(relationship_anchor, dict) else None,
         })
+        social_context = self._dialogue_social_context_read(context)
+        context.update({
+            "dialogue_social_context": dict(social_context),
+            "dialogue_relationship_band": str(social_context.get("band", "stranger")).strip().lower(),
+            "dialogue_social_reason": str(social_context.get("reason", "")).strip(),
+            "dialogue_social_score": float(social_context.get("score", 0.0) or 0.0),
+            "dialogue_deep_topics_ok": bool(social_context.get("deep_topics_ok")),
+            "dialogue_read_player_ok": bool(social_context.get("read_player_ok")),
+            "dialogue_check_in_ok": bool(social_context.get("check_in_ok")),
+        })
+        tutorial_read = _tutorial_state(self.sim) if _is_tutorial_run(self.sim) else {}
+        context["tutorial_guide"] = bool(
+            tutorial_read
+            and tutorial_read.get("guide_eid") is not None
+            and tutorial_read.get("guide_eid") == npc_eid
+        )
+        if context["tutorial_guide"]:
+            context["tutorial_hint"] = _current_tutorial_hint(self.sim)
         context["side_job_offer"] = self._side_job_for_npc(npc_eid)
         context["side_job_available"] = bool(context["side_job_offer"] or self._build_side_job_offer(context))
         context["pressure_role"] = self._dialogue_pressure_role(context)
@@ -6898,6 +6926,18 @@ class NPCInteractionSystem(System):
     def _relationship_anchor_opening_line(self, context):
         anchor = self._relationship_anchor_episode_for_context(context)
         if not anchor:
+            band = str(context.get("dialogue_relationship_band", "") or "").strip().lower()
+            try:
+                opened_count = max(0, int(context.get("opened_count", 0) or 0))
+            except (TypeError, ValueError):
+                opened_count = 0
+            if opened_count > 0 and bool(context.get("met_directly")):
+                if band in {"family", "partner", "friend"}:
+                    return "Good to see you again. What are we picking up today?"
+                if band == "trusted_coworker":
+                    return "Good to see you. If this is about the work, I am listening."
+                if band in {"trusted_local", "protective"}:
+                    return "I remember you. Go on."
             return ""
         kind = str(anchor.get("kind", "") or "").strip().lower()
         tone = str(context.get("tone", "neutral") or "neutral").strip().lower() or "neutral"
@@ -7009,6 +7049,13 @@ class NPCInteractionSystem(System):
         }
         base_note = note_map.get(read_key, note_map["unknown"])
         warm_note = warm_map.get(read_key, warm_map["unknown"])
+        band = str(context.get("dialogue_relationship_band", "") or "").strip().lower()
+        if read_key == "unknown" and band == "coworker":
+            base_note = "I know you through work. That is not the same as knowing you all the way."
+            warm_note = "I know you through work, and I am still deciding what kind of trust that becomes."
+        elif read_key == "unknown" and band == "introduced":
+            base_note = "I know the name that pointed you here better than I know you."
+            warm_note = "I know the name that pointed you here, but I am still reading you for myself."
         if anchor_preface:
             base_note = f"{anchor_preface} {base_note}"
             warm_note = f"{anchor_preface} {warm_note}"
@@ -7041,6 +7088,9 @@ class NPCInteractionSystem(System):
 
     def _rapport_topic_available(self, context, topic_id):
         topic_id = str(topic_id or "").strip().lower()
+        social_context = context.get("dialogue_social_context") if isinstance(context, dict) else {}
+        if not isinstance(social_context, dict):
+            social_context = self._dialogue_social_context_read(context)
         if not bool(context.get("human", True)) or bool(context.get("guarded")):
             return False
         if topic_id == "rapport":
@@ -7048,8 +7098,7 @@ class NPCInteractionSystem(System):
         if topic_id == "check_in":
             min_elapsed = max(60, int(round(float(self.CHECK_IN_MIN_HOURS) * float(self._ticks_per_hour()))))
             return (
-                bool(context.get("met_directly"))
-                and bool(context.get("relationship_has_nontrivial_history"))
+                bool(context.get("dialogue_check_in_ok", social_context.get("check_in_ok")))
                 and str(context.get("pressure_tier", "low")).strip().lower() != "high"
                 and self._check_in_elapsed_ticks(context) >= min_elapsed
             )
@@ -7061,15 +7110,12 @@ class NPCInteractionSystem(System):
             return bool(self._rapport_off_shift_note(context))
         if topic_id == "care_about":
             return (
-                float(context.get("social_standing", 0.0) or 0.0) >= 0.46
-                and int(context.get("opened_count", 0) or 0) >= 2
+                bool(context.get("dialogue_deep_topics_ok", social_context.get("deep_topics_ok")))
                 and str(context.get("pressure_tier", "low")).strip().lower() != "high"
             )
         if topic_id == "read_player":
             return (
-                float(context.get("social_standing", 0.0) or 0.0) >= 0.58
-                and bool(context.get("met_directly"))
-                and int(context.get("opened_count", 0) or 0) >= 2
+                bool(context.get("dialogue_read_player_ok", social_context.get("read_player_ok")))
             )
         return True
 
@@ -9798,6 +9844,15 @@ class NPCInteractionSystem(System):
             return "They are talking, but heat has them tight. One bad question could shut this down."
         if pressure_tier == "medium":
             return "They seem willing enough, but the heat is keeping them careful about names and favors."
+        band = str(context.get("dialogue_relationship_band", "") or "").strip().lower()
+        if band in {"friend", "family", "partner"}:
+            return "They seem comfortable and recognize you warmly. Continuity and personal questions should land better than a hard push."
+        if band == "trusted_coworker":
+            return "They trust you through the work. Practical questions are easy; personal ones still need care."
+        if band == "coworker":
+            return "They know you through work. Keep it practical before asking for the inside of things."
+        if band in {"trusted_local", "protective"}:
+            return "They seem to trust your shape here. A careful follow-up should land better than a demand."
         bond = context.get("bond") or self._bond_snapshot(context.get("npc_eid")) or {}
         trust = float(bond.get("trust", 0.0))
         closeness = float(bond.get("closeness", 0.0))
@@ -9979,6 +10034,16 @@ class NPCInteractionSystem(System):
             social_standing = float(context.get("social_standing", 0.0) or 0.0)
         except (TypeError, ValueError):
             social_standing = 0.0
+        band = str(context.get("dialogue_relationship_band", "") or "").strip().lower()
+        if opened_count > 0 and bool(context.get("met_directly")):
+            if band in {"friend", "family", "partner"}:
+                return f"There is real recognition in the way {subject} settles into the exchange."
+            if band == "trusted_coworker":
+                return f"There is work-trust in the way {subject} gives the question room."
+            if band == "coworker":
+                return f"There is workplace familiarity in the way {subject} keeps the exchange practical."
+            if band in {"trusted_local", "protective"}:
+                return f"There is a little earned ease in the way {subject} answers."
         if opened_count > 0 and bool(context.get("met_directly")) and social_standing >= 0.46:
             return f"There is a little recognition in the way {subject} settles into the exchange."
         workplace_name = str(context.get("workplace_name", "") or "").strip()
@@ -10406,7 +10471,14 @@ class NPCInteractionSystem(System):
                     line_override=label,
                 ),
             })
-        return self._augment_repeat_dialogue_rows(context, available)
+        rows = self._augment_repeat_dialogue_rows(context, available)
+        if context.get("tutorial_guide") and not any(str(row.get("id", "")).strip().lower() == "tutorial_next" for row in rows):
+            rows.insert(0, {
+                "id": "tutorial_next",
+                "label": "What now?",
+                "player_line": "What should I do next?",
+            })
+        return rows
 
     def _prioritize_dialog_topics(self, topics, highlight_topic_ids=()):
         highlight = {
@@ -10702,6 +10774,9 @@ class NPCInteractionSystem(System):
     def _resolve_dialog_topic(self, context, topic_id):
         topic_id = str(topic_id or "").strip().lower()
         npc_eid = context["npc_eid"]
+        if topic_id == "tutorial_next" and context.get("tutorial_guide"):
+            self._dialogue_mark_topic(npc_eid, topic_id)
+            return {"npc_lines": [_tutorial_guide_line(self.sim)]}
         ask_count = self._dialogue_mark_topic(npc_eid, topic_id)
         self._dialogue_unlock_topics(npc_eid, *_dialogue_topic_unlocks(topic_id))
         if topic_id == "name":

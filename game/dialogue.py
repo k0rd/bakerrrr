@@ -765,6 +765,25 @@ PLAYER_TOPIC_BANKS = {
                 "Maybe later. I am not handing you my whole day cold.",
             ),
         },
+        {
+            "text": "You holding up okay?",
+            "npc_reserved": (
+                "Holding up is about right.",
+                "Enough to keep moving. That is where the bar sits today.",
+            ),
+            "npc_open": (
+                "{rapport_day_note}",
+                "I appreciate the ask. {rapport_day_note}",
+            ),
+            "npc_warm": (
+                "{rapport_day_note} That lands better from someone who actually listens.",
+                "{rapport_day_note} Easier answer when the question does not feel thrown away.",
+            ),
+            "npc_rebuff": (
+                "That sounds warmer than where we are.",
+                "You are asking like we have more ease than we do.",
+            ),
+        },
     ),
     "check_in": (
         {
@@ -803,6 +822,25 @@ PLAYER_TOPIC_BANKS = {
             "npc_rebuff": (
                 "You are reaching for familiarity faster than I am willing to give it.",
                 "Maybe later. That question assumes more ease between us than I feel right now.",
+            ),
+        },
+        {
+            "text": "Want to pick up where we left off?",
+            "npc_reserved": (
+                "Carefully, maybe.",
+                "Depends which part you mean.",
+            ),
+            "npc_open": (
+                "{rapport_check_in_note}",
+                "We can pick up a little of it. {rapport_check_in_note}",
+            ),
+            "npc_warm": (
+                "{rapport_check_in_note} I was wondering whether that thread would come back around.",
+                "{rapport_check_in_note} With you, picking it back up does not feel wasted.",
+            ),
+            "npc_rebuff": (
+                "We did not leave enough there for you to pick up like that.",
+                "That is more continuity than I am ready to grant.",
             ),
         },
     ),
@@ -925,6 +963,25 @@ PLAYER_TOPIC_BANKS = {
                 "You are reaching right into the part I keep defended.",
             ),
         },
+        {
+            "text": "What would you hate to lose?",
+            "npc_reserved": (
+                "Enough that I do not list it for strangers.",
+                "A few things. Naming them makes them easier to hurt.",
+            ),
+            "npc_open": (
+                "{rapport_care_note}",
+                "If I am being honest, {rapport_care_note_lc}",
+            ),
+            "npc_warm": (
+                "{rapport_care_note} That is the sort of answer I only give when the room feels steady.",
+                "{rapport_care_note} It matters that you asked without trying to pry it loose.",
+            ),
+            "npc_rebuff": (
+                "No. That is too close to the lock.",
+                "You are asking me to name what can hurt me. Not right now.",
+            ),
+        },
     ),
     "read_player": (
         {
@@ -963,6 +1020,25 @@ PLAYER_TOPIC_BANKS = {
             "npc_rebuff": (
                 "No. That is more of my read than I feel like spending right now.",
                 "You are asking for a level of honesty that takes longer than this.",
+            ),
+        },
+        {
+            "text": "Where do I stand with you?",
+            "npc_reserved": (
+                "Somewhere I am still measuring.",
+                "Not in a place I can name cleanly yet.",
+            ),
+            "npc_open": (
+                "{rapport_read_note}",
+                "If you want it plain, {rapport_read_note_lc}",
+            ),
+            "npc_warm": (
+                "{rapport_read_warm_note}",
+                "{rapport_read_warm_note} That is not a line I give out for politeness.",
+            ),
+            "npc_rebuff": (
+                "You are asking for my private read before I am ready to spend it.",
+                "I am not putting a label on you just because you asked.",
             ),
         },
     ),
@@ -1973,10 +2049,76 @@ ROLE_STYLE_HINTS = {
         ),
     },
     "courier": {
+        "register": "plain",
         "catch_phrases": (
             "The road keeps no secrets.",
             "Every movement tells a story.",
             "Late packages make loud enemies.",
+            "Routes teach you who waits and who wanders.",
+        ),
+    },
+    "runner": {
+        "register": "plain",
+        "catch_phrases": (
+            "Fast feet hear a lot.",
+            "Loose routes make loud trouble.",
+            "A clean pass beats a pretty plan.",
+        ),
+    },
+    "driver": {
+        "register": "plain",
+        "catch_phrases": (
+            "Roads teach patience the hard way.",
+            "Every route has a mood.",
+            "A bad turn tells on you.",
+        ),
+    },
+    "mechanic": {
+        "register": "plain",
+        "catch_phrases": (
+            "Everything breaks where it was already tired.",
+            "Bad maintenance always finds daylight.",
+            "You can hear a problem before it admits itself.",
+        ),
+        "address_terms": (
+            "friend",
+            "chief",
+        ),
+    },
+    "shopkeeper": {
+        "register": "plain",
+        "catch_phrases": (
+            "Counters remember who leaned on them.",
+            "Bad business echoes.",
+            "Receipts are quieter than rumors, but not by much.",
+        ),
+        "address_terms": (
+            "friend",
+            "neighbor",
+        ),
+    },
+    "merchant": {
+        "register": "plain",
+        "catch_phrases": (
+            "Prices talk when people do not.",
+            "A counter sees more than it sells.",
+            "Bad heat sticks to shelves.",
+        ),
+        "address_terms": (
+            "friend",
+            "neighbor",
+        ),
+    },
+    "resident": {
+        "register": "plain",
+        "catch_phrases": (
+            "The block remembers faces.",
+            "People notice what repeats.",
+            "Doors hear more than walls admit.",
+        ),
+        "address_terms": (
+            "neighbor",
+            "friend",
         ),
     },
     "medic": {
@@ -1984,6 +2126,33 @@ ROLE_STYLE_HINTS = {
             "People talk when they hurt.",
             "Care comes around.",
             "Pain makes honest witnesses.",
+        ),
+        "address_terms": (
+            "friend",
+        ),
+    },
+    "doctor": {
+        "register": "plain",
+        "catch_phrases": (
+            "People tell the truth differently when they hurt.",
+            "Pain makes poor secrets.",
+            "Care gets complicated fast.",
+        ),
+        "address_terms": (
+            "friend",
+        ),
+    },
+    "street_doctor": {
+        "register": "rough",
+        "lead_ins": (
+            "Look,",
+            "Quietly,",
+            "Between us,",
+        ),
+        "catch_phrases": (
+            "Pain makes poor secrets.",
+            "Keep it clean or keep it moving.",
+            "Quiet care is still care.",
         ),
         "address_terms": (
             "friend",
@@ -2000,6 +2169,23 @@ ROLE_STYLE_HINTS = {
             "The market keeps moving.",
             "Value finds its level... without guidance.",
             "Risk always wants a receipt.",
+        ),
+        "address_terms": (
+            "associate",
+            "friend",
+        ),
+    },
+    "banker": {
+        "register": "official",
+        "lead_ins": (
+            "For the record,",
+            "Practically speaking,",
+            "On paper,",
+        ),
+        "catch_phrases": (
+            "Risk always wants a receipt.",
+            "Numbers remember what people forget.",
+            "Clean books are rarely quiet books.",
         ),
         "address_terms": (
             "associate",
@@ -2195,7 +2381,6 @@ STYLE_CATCH_BANKS = {
     "local_rumor",
     "local_opportunity",
     "local_other_bond",
-    "local_none",
     "social_knowledge",
     "social_knowledge_incident",
     "social_knowledge_business",
@@ -2259,6 +2444,10 @@ DIALOGUE_BANKS = {
         "Do not dress it up. What do you want?",
         "You have a question, ask it.",
         "I haven't shot you yet, so go on.",
+        "You are already on the wrong side of my patience.",
+        "Start with the useful part.",
+        "No wandering around the point. Speak.",
+        "This is not friendly time. What do you need?",
     ),
     "greet_wary": (
         "Yeah?",
@@ -2267,6 +2456,10 @@ DIALOGUE_BANKS = {
         "Alright. What is it?",
         "I am listening, for now.",
         "This better be cleaner than it looks.",
+        "You have my attention. That is not the same as trust.",
+        "Go ahead, but keep the shape simple.",
+        "I can hear a question coming. Make it a good one.",
+        "Careful start. What are you after?",
     ),
     "greet_neutral": (
         "Sure. What do you need?",
@@ -2285,6 +2478,10 @@ DIALOGUE_BANKS = {
         "Yeah, talk to me.",
         "You caught me in a decent mood. What are we talking about?",
         "Alright, I am here. Where do you want to start?",
+        "Hey. I can spare a minute for you.",
+        "Good timing. What are we looking at?",
+        "Yeah, I have got you. What do you need?",
+        "Alright. Let us pick this up properly.",
     ),
     "greet_introduced": (
         "If {intro_source_name} pointed you my way, I can spare a minute.",
@@ -2573,6 +2770,10 @@ DIALOGUE_BANKS = {
         "No clean {service_label} lead I would put my name behind.",
         "Nothing nearby for {service_label} that I would send you to with a straight face.",
         "I do not have the name for it if {service_label} is closer than the map admits.",
+        "I would be guessing on {service_label}, and guesses make bad directions.",
+        "{service_label} is not a thread I can pull cleanly from here.",
+        "No one close enough for {service_label} that I would call reliable.",
+        "I hear scraps about {service_label}, not a door I would send you through.",
     ),
     "hours": (
         "Usually {hours_text}.",
@@ -2765,6 +2966,10 @@ DIALOGUE_BANKS = {
         "The block is holding its breath, which usually means someone else is moving.",
         "No fresh word, just old grudges changing pockets.",
         "Nothing with a handle on it. Plenty of noise without a door.",
+        "No clean signal. Just people watching the usual corners.",
+        "Nothing has risen above background trouble yet.",
+        "The day is quiet in the way that makes people check twice.",
+        "No useful story has separated itself from the static.",
     ),
     "social_knowledge": (
         "Since it is you: {social_knowledge_summary}",
@@ -3149,6 +3354,9 @@ DIALOGUE_BANKS = {
         "Ask me again after we have had more time.",
         "Names are easier to give away than earn back. Not yet.",
         "I am not opening my people to a stranger with fresh questions.",
+        "Contacts are not loose change. Let me know your shape first.",
+        "Not cold. People live on the other end of those names.",
+        "I need more than a few questions before I start pointing you at anyone.",
     ),
     "contacts_caution_no": (
         "Not while attention is up. Keep your head down first.",
@@ -3282,6 +3490,9 @@ DIALOGUE_BANKS = {
         "Listen, once I trust you more, I will reconsider. But no.",
         "My name is not loose paper. Not yet.",
         "I am not ready to make your first impression mine.",
+        "A vouch is not a wave from across the street. Not yet.",
+        "My name travels farther than I do. I am keeping it here for now.",
+        "Ask again when I know whether my name comes back clean.",
     ),
     "vouch_caution_no": (
         "Not with this kind of attention on you.",
@@ -3389,6 +3600,9 @@ DIALOGUE_BANKS = {
         "Wrong pocket, wrong moment.",
         "I am conversation, not inventory.",
         "Nothing I can move across to you today.",
+        "No stock, no counter, no deal.",
+        "If you are shopping, you found the wrong person.",
+        "Nothing I am carrying belongs in a trade window.",
     ),
     "contract_offer": (
         "Word came down about a problem that needs handling. {target_description} Keep it quiet and you walk with {reward_hint}.",
@@ -3478,6 +3692,10 @@ DIALOGUE_BANKS = {
         "Leave some quiet behind you.",
         "Do not make me hear your name twice today.",
         "Walk like you meant to be here.",
+        "Keep the next step clean.",
+        "Try not to make the day louder.",
+        "Later. Move smart.",
+        "Go easy where you can.",
     ),
     "payoff_accept": (
         "Fine. {payoff_cost} and I did not see anything.",
@@ -4354,6 +4572,15 @@ def ordered_topic_ids():
     return tuple(TOPIC_ORDER)
 
 
+class _SafeFormatSlots(dict):
+    def __missing__(self, key):
+        return ""
+
+
+def _clean_dialogue_output(text):
+    return " ".join(str(text or "").split()).strip()
+
+
 def choose_dialogue_line(bank_id, *, seed, npc_eid, topic_id="", count=0, salt="", style_profile=None, **slots):
     options = tuple(DIALOGUE_BANKS.get(str(bank_id or "").strip().lower(), ()))
     if not options:
@@ -4362,10 +4589,10 @@ def choose_dialogue_line(bank_id, *, seed, npc_eid, topic_id="", count=0, salt="
     chooser = random.Random(
         f"{seed}:dialogue:{npc_eid}:{bank_id}:{topic_id}:{count}:{salt}"
     )
-    template = options[chooser.randrange(len(options))]
-    safe_slots = {key: str(value) for key, value in slots.items()}
-    line = str(template).format(**safe_slots).strip()
-    return style_dialogue_line(
+    template = str(options[chooser.randrange(len(options))])
+    safe_slots = _SafeFormatSlots({key: str(value) for key, value in slots.items()})
+    line = _clean_dialogue_output(template.format_map(safe_slots))
+    styled = style_dialogue_line(
         line,
         seed=seed,
         npc_eid=npc_eid,
@@ -4374,3 +4601,4 @@ def choose_dialogue_line(bank_id, *, seed, npc_eid, topic_id="", count=0, salt="
         count=count,
         style_profile=style_profile,
     )
+    return _clean_dialogue_output(styled)
