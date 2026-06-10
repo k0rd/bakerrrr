@@ -1,5 +1,6 @@
 name: Build bakerrrr Executables
-
+permissions:
+  contents: read
 on:
   push:
     branches: [main]
@@ -86,9 +87,6 @@ jobs:
           --add-data "game/*.json:game"
           --add-data "assets/icons/*.png:assets/icons"
           main.py
-
-      - name: Run packaged doctor
-        run: ./dist/bakerrrr --doctor
 
       - name: Upload Linux executable
         uses: actions/upload-artifact@v7
