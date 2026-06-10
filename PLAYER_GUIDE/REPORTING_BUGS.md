@@ -20,5 +20,5 @@ Optional but helpful:
 - A screenshot.
 - The run summary shown after the game ends.
 - A rough description of where you were: street, shop, vehicle map, notebook, inventory, dialogue, or combat.
-
-Please avoid posting surprise discoveries in public titles if you can. A little mystery is load-bearing around here.
+- Your game seed and the coordinates of the above, if available.
+Please avoid posting surprise discoveries in public titles if you can. Mystery is often sacred around here.
