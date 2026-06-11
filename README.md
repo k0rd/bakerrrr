@@ -1,6 +1,6 @@
 # BAKERRRR
 
-binary packages for both windowos and linux are avaiable in github actions or on https://laziadri.itch.io/bakerrrr
+binary packages for both windows and linux are avaiable in github actions or on https://laziadri.itch.io/bakerrrr
 
 
 
