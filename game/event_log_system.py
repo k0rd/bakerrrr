@@ -344,6 +344,14 @@ QUIET_NOISE_CAUSES = {
     "zoom_city_enter",
 }
 
+COMBAT_NOISE_CAUSES = {
+    "melee_attack",
+    "fire_weapon",
+    "throw_item",
+    "thrown_item",
+    "explosion",
+}
+
 _WORLD_EVENT_PLAYER_REVEAL_RADIUS = 1
 
 def _building_entry_description(*args, **kwargs):
@@ -1218,6 +1226,31 @@ class EventLogSystem(System):
         ai = self.sim.ecs.get(AI).get(eid)
         return str(getattr(ai, "role", "") or "").strip().lower()
 
+    def _investigation_combat_noise(self, npc_eid, event):
+        cause = str(event.data.get("cause", "") or "").strip().lower()
+        if cause not in COMBAT_NOISE_CAUSES:
+            return False
+        if event.data.get("source_eid") != self.player_eid:
+            return False
+        return True
+
+    def _investigation_bark_is_direct_target(self, npc_eid, event):
+        target_eid = event.data.get("target_eid")
+        if target_eid is not None and npc_eid is not None:
+            try:
+                if int(target_eid) == int(npc_eid):
+                    return True
+            except (TypeError, ValueError):
+                if target_eid == npc_eid:
+                    return True
+        ai = self.sim.ecs.get(AI).get(npc_eid)
+        if ai is None:
+            return False
+        try:
+            return int(getattr(ai, "target_eid", None)) == int(self.player_eid)
+        except (TypeError, ValueError):
+            return getattr(ai, "target_eid", None) == self.player_eid
+
     def _npc_notice_mode(self, npc_eid):
         positions = self.sim.ecs.get(Position)
         player_pos = positions.get(self.player_eid)
@@ -1266,6 +1299,21 @@ class EventLogSystem(System):
 
     def _investigation_bark(self, npc_eid, event):
         role = self._npc_role(npc_eid)
+        if self._investigation_combat_noise(npc_eid, event):
+            direct_target = self._investigation_bark_is_direct_target(npc_eid, event)
+            if direct_target:
+                quote = "Back off!"
+            elif role == "guard":
+                quote = "Drop it."
+            elif role in {"worker", "manager"}:
+                quote = "Stop that!"
+            else:
+                quote = "Cut it out!"
+            return (
+                quote,
+                "You hear someone shouting nearby.",
+                "You hear shouting on another floor.",
+            )
         positions = self.sim.ecs.get(Position)
         source_pos = positions.get(event.data.get("source_eid"))
         prop = _property_covering(self.sim, source_pos.x, source_pos.y, source_pos.z) if source_pos else None
@@ -2817,7 +2865,15 @@ class EventLogSystem(System):
             return
         npc_eid = event.data.get("npc_eid")
         quote, nearby_audio, other_floor_audio = self._investigation_bark(npc_eid, event)
-        self._log_npc_bark(npc_eid, quote, nearby_audio, other_floor_audio, channel="alerts", priority="high")
+        combat_noise = self._investigation_combat_noise(npc_eid, event)
+        self._log_npc_bark(
+            npc_eid,
+            quote,
+            nearby_audio,
+            other_floor_audio,
+            channel="combat" if combat_noise else "alerts",
+            priority="critical" if combat_noise and self._investigation_bark_is_direct_target(npc_eid, event) else "high",
+        )
 
     def on_npc_protect_ally(self, event):
         if event.data.get("against_eid") != self.player_eid:

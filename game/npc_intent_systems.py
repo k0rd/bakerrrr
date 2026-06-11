@@ -322,6 +322,12 @@ QUIET_NOISE_CAUSES = {
     "zoom_city_enter",
 }
 
+NOISE_INTERRUPT_PROTECTED_STATES = frozenset({
+    "protecting",
+    "seeking_safety",
+    "chasing",
+})
+
 _WILL_COASTING_STATES = frozenset({
     "selling_scavenged",
     "seeking_medical_aid",
@@ -3722,8 +3728,19 @@ class NPCInvestigateSystem(System):
             if not _noise_merits_attention(self.sim, eid, source_eid, nx, ny, nz, cause):
                 continue
 
+            state = str(getattr(ai, "state", "") or "").strip().lower()
+            will = wills.get(eid)
+            intent = str(getattr(will, "intent", "") or "").strip().lower() if will is not None else ""
+            if (
+                state in NOISE_INTERRUPT_PROTECTED_STATES
+                or intent in NOISE_INTERRUPT_PROTECTED_STATES
+                or _actor_in_live_combat(self.sim, eid)
+            ):
+                continue
+
             ai.state = "investigating"
             ai.target = (nx, ny, nz)
+            ai.target_eid = None
             self._urgent_move_eids.add(int(eid))
             _mark_actor_urgent(self.sim, eid, family="move", reason="noise", ttl_ticks=12)
             _mark_actor_urgent(self.sim, eid, family="will", reason="noise", ttl_ticks=12)
@@ -3736,6 +3753,8 @@ class NPCInvestigateSystem(System):
                 x=nx,
                 y=ny,
                 z=nz,
+                cause=cause,
+                target_eid=event.data.get("target_eid"),
             ))
 
     def _move_actor_position_direct(self, eid, pos, target):

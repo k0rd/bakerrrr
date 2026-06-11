@@ -477,6 +477,7 @@ class WeaponSystem(System):
             z=source_pos.z,
             radius=2,
             cause="melee_attack",
+            target_eid=target_eid,
         ))
 
         if loadout:
@@ -1247,6 +1248,7 @@ class WeaponSystem(System):
             z=pos.z,
             radius=int(max(1, weapon.get("noise_radius", 6))),
             cause="fire_weapon",
+            target_eid=target_eid,
         ))
 
         context = "explosive_discharge" if int(weapon.get("explosion_radius", 0)) > 0 else "armed_assault"

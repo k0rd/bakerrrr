@@ -6456,6 +6456,20 @@ class NPCInteractionSystem(System):
             return f"I have been here long enough to remember when {case_label} started sticking to {home_name}."
         return f"I have been here long enough to remember when {case_label} started sticking to the block."
 
+    def _history_variant(self, context, variant_key, variants, **slots):
+        variants = tuple(str(line).strip() for line in tuple(variants or ()) if str(line).strip())
+        if not variants:
+            return ""
+        npc_eid = context.get("npc_eid", 0) if isinstance(context, dict) else 0
+        opened_count = int((context or {}).get("opened_count", 0) or 0) if isinstance(context, dict) else 0
+        band = str((context or {}).get("dialogue_relationship_band", "") or "").strip().lower()
+        seed = (
+            f"{getattr(self.sim, 'seed', 0)}:dialogue-history:"
+            f"{npc_eid}:{variant_key}:{opened_count}:{band}:"
+            f"{slots.get('workplace_name', '')}:{slots.get('home_name', '')}:{slots.get('owner_place_name', '')}"
+        )
+        return random.Random(seed).choice(variants).format(**slots)
+
     def _history_summary(self, context):
         if context.get("is_rival_operator"):
             hustle = str(context.get("rival_hustle", "")).strip().lower()
@@ -6485,21 +6499,143 @@ class NPCInteractionSystem(System):
         home_name = str(context.get("home_name", "")).strip()
         other_name = str(context.get("other_name", "")).strip()
         run_echo_history_line = str(context.get("run_echo_history_line", "")).strip()
+        social_read = dict(context.get("dialogue_social_context", {}) or {})
+        band = str(context.get("dialogue_relationship_band", social_read.get("band", "")) or "").strip().lower()
+        pressure_tier = str(context.get("pressure_tier", social_read.get("pressure_tier", "low")) or "low").strip().lower()
+        trust_score = float(context.get("dialogue_social_score", social_read.get("score", 0.0)) or 0.0)
+        opened_count = max(0, int(context.get("opened_count", social_read.get("opened_count", 0)) or 0))
+        met_directly = bool(context.get("met_directly", social_read.get("met_directly", False)))
+        privileged_bands = {"trusted_coworker", "trusted_local", "protective", "friend", "family", "partner"}
+        full_place_read = (
+            not context.get("guarded")
+            and pressure_tier != "high"
+            and (
+                band in privileged_bands
+                or (met_directly and opened_count >= 3 and trust_score >= 0.48)
+            )
+        )
+        partial_place_read = (
+            not context.get("guarded")
+            and pressure_tier != "high"
+            and (met_directly or opened_count > 0 or band in {"met", "familiar", "coworker", "introduced"})
+        )
         base_line = ""
         if context.get("guarded") and owner_place_name:
-            base_line = f"I have been around {owner_place_name} long enough to know who belongs near it."
+            base_line = self._history_variant(
+                context,
+                "guarded_owner",
+                (
+                    "I have been around {owner_place_name} long enough to know who belongs near it.",
+                    "Long enough to know {owner_place_name} has regular faces and wrong ones.",
+                    "Enough to know the rhythm at {owner_place_name}. Not enough to hand out my whole route.",
+                ),
+                owner_place_name=owner_place_name,
+            )
         elif workplace_name and home_name and workplace_name.lower() != home_name.lower():
-            base_line = f"Long enough that {workplace_name} is work and {home_name} is home."
+            if full_place_read:
+                base_line = self._history_variant(
+                    context,
+                    "full_work_home",
+                    (
+                        "I keep the work side at {workplace_name} and the quiet hours around {home_name}.",
+                        "{workplace_name} takes the shift; {home_name} takes the rest of me.",
+                        "Enough that my day usually bends through {workplace_name} and ends back near {home_name}.",
+                        "Work pulls me to {workplace_name}. When I am done, I usually fold back toward {home_name}.",
+                    ),
+                    workplace_name=workplace_name,
+                    home_name=home_name,
+                )
+            elif partial_place_read:
+                base_line = self._history_variant(
+                    context,
+                    "partial_work_home",
+                    (
+                        "I know the work side around {workplace_name}. The rest is not for everybody.",
+                        "You can find me around {workplace_name} when the day needs me. After that, I keep my own map.",
+                        "{workplace_name} is the part I talk about. Where I land after is quieter.",
+                        "Long enough to know {workplace_name}. I do not give every address to every conversation.",
+                    ),
+                    workplace_name=workplace_name,
+                    home_name=home_name,
+                )
+            else:
+                base_line = self._history_variant(
+                    context,
+                    "refuse_work_home",
+                    (
+                        "Long enough not to sketch my whole day for someone I barely know.",
+                        "Long enough to have routines. Not long enough with you to list them.",
+                        "I am around. That is the clean answer for now.",
+                    ),
+                    workplace_name=workplace_name,
+                    home_name=home_name,
+                )
         elif home_name:
-            base_line = f"Long enough that {home_name} feels like home."
+            if full_place_read or partial_place_read:
+                base_line = self._history_variant(
+                    context,
+                    "home_only",
+                    (
+                        "Long enough that {home_name} feels like home.",
+                        "Most quiet hours pull me back toward {home_name}.",
+                        "I have roots around {home_name} now, for better or worse.",
+                    ),
+                    home_name=home_name,
+                )
+            else:
+                base_line = self._history_variant(
+                    context,
+                    "home_refuse",
+                    (
+                        "Long enough to have somewhere I go quiet. I do not give that out cold.",
+                        "I sleep somewhere. That is enough detail for first talk.",
+                        "Long enough to have a door of my own. Not long enough with you to name it.",
+                    ),
+                    home_name=home_name,
+                )
         elif workplace_name:
-            base_line = f"Long enough that {workplace_name} stopped feeling new."
+            base_line = self._history_variant(
+                context,
+                "work_only",
+                (
+                    "Long enough that {workplace_name} stopped feeling new.",
+                    "{workplace_name} has me on its rhythm now.",
+                    "I know the work side of {workplace_name} pretty well.",
+                ),
+                workplace_name=workplace_name,
+            )
         elif owner_place_name:
-            base_line = f"Long enough to know the rhythm around {owner_place_name}."
+            base_line = self._history_variant(
+                context,
+                "owner_place",
+                (
+                    "Long enough to know the rhythm around {owner_place_name}.",
+                    "Long enough to tell when {owner_place_name} is moving wrong.",
+                    "{owner_place_name} has a pattern. I have been around long enough to hear it.",
+                ),
+                owner_place_name=owner_place_name,
+            )
         elif other_name:
-            base_line = f"Long enough to know {other_name} and a few other faces."
+            base_line = self._history_variant(
+                context,
+                "other_faces",
+                (
+                    "Long enough to know {other_name} and a few other faces.",
+                    "Long enough that {other_name} is not just another face in the stream.",
+                    "A while. Enough to place {other_name} and some regulars.",
+                ),
+                other_name=other_name,
+            )
         else:
-            base_line = "Long enough to recognize the regulars."
+            base_line = self._history_variant(
+                context,
+                "regulars",
+                (
+                    "Long enough to recognize the regulars.",
+                    "Long enough to know which faces repeat.",
+                    "A while. The block has started naming itself back to me.",
+                ),
+            )
         if run_echo_history_line:
             return f"{base_line} {run_echo_history_line}"
         return base_line
