@@ -3198,7 +3198,6 @@ class RenderSystem(System):
             for raw in list(character_ui.get("lines", ()) or ()) or ["No character data."]:
                 wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
                 display_lines.extend(wrapped)
-            display_lines.extend(["", ""])
             display_lines = display_lines or ["No character data."]
             max_scroll = max(0, len(display_lines) - body_h)
             scroll = max(0, min(int(character_ui.get("scroll", 0)), max_scroll))

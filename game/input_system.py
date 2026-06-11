@@ -1075,6 +1075,22 @@ class InputSystem(System):
     def _scroll_panel_body_dimensions(self):
         return _report_debug_ui.scroll_panel_body_dimensions(self.view, self.sim)
 
+    def _character_panel_body_dimensions(self):
+        screen_w, screen_h = self.view.size()
+        try:
+            hud_lines = int(getattr(self.sim, "hud_lines", 10))
+        except (TypeError, ValueError):
+            hud_lines = 10
+        hud_lines = max(1, hud_lines)
+        map_h = max(1, min(self.sim.tilemap.height, screen_h - hud_lines))
+        panel_w = min(max(56, screen_w - 4), screen_w)
+        panel_w = max(28, panel_w)
+        panel_h = min(max(12, map_h - 1), map_h)
+        panel_h = max(8, panel_h)
+        body_w = max(8, int(_report_debug_ui.view_text_wrap_width(self.view, panel_w - 4)))
+        body_h = max(1, panel_h - 6)
+        return body_w, body_h
+
     def _refresh_report_ui(self, reset_scroll=False, kind=None):
         report_state = self._report_state()
         target_kind = str(kind or report_state.get("kind") or "progress").strip().lower() or "progress"
@@ -1447,7 +1463,7 @@ class InputSystem(System):
         if not raw_lines:
             raw_lines = ["No character data."]
 
-        body_w, _body_h = self._scroll_panel_body_dimensions()
+        body_w, _body_h = self._character_panel_body_dimensions()
         display_lines = []
         for raw in raw_lines:
             wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
@@ -1457,7 +1473,7 @@ class InputSystem(System):
     def _clamp_character_scroll(self):
         state = self._character_state()
         display_lines = self._character_display_lines()
-        _body_w, body_h = self._scroll_panel_body_dimensions()
+        _body_w, body_h = self._character_panel_body_dimensions()
         max_scroll = max(0, len(display_lines) - body_h)
         state["scroll"] = max(0, min(int(state.get("scroll", 0)), max_scroll))
         current_page = self._character_current_page()
@@ -2010,7 +2026,7 @@ class InputSystem(System):
         key_end = getattr(curses, "KEY_END", None)
         if key_end is not None and key == key_end:
             display_lines = self._character_display_lines()
-            _body_w, body_h = self._scroll_panel_body_dimensions()
+            _body_w, body_h = self._character_panel_body_dimensions()
             state["scroll"] = max(0, len(display_lines) - body_h)
             return True
 

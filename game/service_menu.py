@@ -3530,13 +3530,13 @@ class ServiceMenuSystem(System):
         if bool(event.data.get("handled")):
             return
         interaction_mode = str(event.data.get("interaction_mode", "") or "").strip().lower()
-        if interaction_mode and interaction_mode != "service":
-            return
-
         prop = self.sim.properties.get(event.data.get("property_id"))
         if not isinstance(prop, dict):
             return
         infrastructure_role = _property_infrastructure_role(prop)
+        if interaction_mode and interaction_mode != "service":
+            if interaction_mode != "physical" or infrastructure_role != "service_terminal":
+                return
         if infrastructure_role in {"access_panel", "security_post"}:
             return
 
