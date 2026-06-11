@@ -964,16 +964,17 @@ class RenderSystem(System):
             "",
             f"World seed: {self.sim.seed}",
             "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with space or 5.",
-            "Observe: / talks, ' physically interacts, . uses the service on your tile, ; locks or unlocks a nearby door, x opens the look cursor, and X opens the map. Vehicle interact enters or exits overworld.",
+            "Observe: / talks, ' physically interacts, . uses the service on your tile, ; locks or unlocks a nearby door, x opens the look cursor, T takes a tactical read, and X opens the map. Vehicle interact enters or exits overworld.",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
             "Ingress: Shift+J door breach, Shift+W window entry, Shift+K wall breach.",
             'Features: + closed door, \' open door, " window, / breach opening, > higher stairs, < lower stairs, : stair landing, E elevator.',
             "Infrastructure: typed markers (l lamp, p pole, h hydrant, u stop, j/t utility, $ ATM, c claim terminal, r access panel).",
             "Local terrain: = road, : trail, , brush, ^ rock, ~ water, _ shore flats.",
             "Remote sites: relay/lookout/survey sites provide intel; camps and huts can offer shelter.",
-            f"Aim/Combat: {aim_open}, move cursor, F cycle target, {aim_confirm}, C cover, v cover hop, Shift+S sneak, V cycle weapon.",
+            f"Aim/Combat: {aim_open}, move cursor, F cycle target, {aim_confirm}, T tactical read, C cover, v cover hop, Shift+S sneak, V cycle weapon.",
             "Items: I inventory, , picks up nearby items, U use/equip/stow/throw, R drop.",
             "Visual classes: vehicles use '&' symbol colors only; properties use letters; items are bright symbols; humans use colored @ symbols and wildlife uses taxonomy letters.",
+            "Badges: ! marks threats or restricted places, + marks allies or public services, * marks contacts or owned places, and L marks locked places.",
             "Progress: O operations report, Y opens the Places notebook; Tab switches to the People notebook. L opens event log history.",
             "Log modal: T cycles filters; H sets the current modal filter as the live HUD filter.",
             "Services: . uses the service on your tile, including banking, insurance, terminals, transit, and storefront counters. P buy property.",
@@ -1004,6 +1005,183 @@ class RenderSystem(System):
             self.view.draw_segments(x, y, segments, max_width=max_width, attrs=int(attrs or 0))
             return
         self.view.draw_text(x, y, _line_text(line), attrs=int(attrs or 0))
+
+    def _hud_token_line(self, text, *, label="", color=None):
+        text = str(text or "").strip()
+        if not text:
+            return ""
+        label = str(label or "").strip()
+        if not label:
+            label = text.split(" ", 1)[0].rstrip(":")
+        if not label:
+            return text
+        if not text.lower().startswith(label.lower()):
+            return text
+        prefix = text[:len(label)]
+        rest = text[len(label):]
+        return _rich_line(
+            (
+                _segment(prefix, color=color, attrs=getattr(curses, "A_BOLD", 0)),
+                _segment(rest),
+            ),
+            text=text,
+        )
+
+    def _hud_styled_chunk(self, text):
+        raw = text
+        text = _line_text(raw).strip()
+        if not text:
+            return ""
+        lower = text.lower()
+        if lower.startswith("combat "):
+            return self._hud_token_line(text, label="Combat", color="projectile")
+        if lower.startswith("heat "):
+            return self._hud_token_line(text, label="Heat", color="projectile")
+        if lower.startswith("hp "):
+            return self._hud_token_line(text, label="HP", color="survival_meter_mid")
+        if lower.startswith("cr "):
+            return self._hud_token_line(text, label="Cr", color="player")
+        if lower.startswith("opp "):
+            return self._hud_token_line(text, label="Opp", color="objective")
+        if lower.startswith("look "):
+            return self._hud_token_line(text, label="Look", color="objective")
+        if lower.startswith("aim "):
+            return self._hud_token_line(text, label="Aim", color="projectile")
+        if lower.startswith("read:") or lower.startswith("read "):
+            label = "Read:" if lower.startswith("read:") else "Read"
+            return self._hud_token_line(text, label=label, color="objective")
+        if lower.startswith("tactical:") or lower.startswith("tactical "):
+            label = "Tactical:" if lower.startswith("tactical:") else "Tactical"
+            return self._hud_token_line(text, label=label, color="projectile")
+        if lower.startswith("talk "):
+            return self._hud_token_line(text, label="Talk", color="player")
+        if lower.startswith("interact "):
+            return self._hud_token_line(text, label="Interact", color="property_service")
+        if lower.startswith("throw "):
+            return self._hud_token_line(text, label="Throw", color="projectile")
+        if _line_segments(raw):
+            return raw
+        return text
+
+    def _look_focus_label(self, look_purpose):
+        purpose = str(look_purpose or "inspect").strip().lower()
+        if purpose == "aim":
+            return "Aim", "projectile"
+        if purpose == "throw":
+            return "Throw", "projectile"
+        if purpose == "interact":
+            return "Interact", "property_service"
+        if purpose == "talk":
+            return "Talk", "player"
+        if purpose == "backup_order":
+            return "Order", "objective"
+        return "Look", "objective"
+
+    def _look_focus_coord_text(self, look_ui, *, active_z=0, zoom_mode="city"):
+        look_ui = look_ui if isinstance(look_ui, dict) else {}
+        mode = str(look_ui.get("mode", zoom_mode) or zoom_mode).strip().lower()
+        if mode == "overworld":
+            return f"{int(look_ui.get('chunk_x', 0) or 0)},{int(look_ui.get('chunk_y', 0) or 0)}c"
+        return (
+            f"{int(look_ui.get('x', 0) or 0)},"
+            f"{int(look_ui.get('y', 0) or 0)},"
+            f"{int(look_ui.get('z', active_z) or active_z)}"
+        )
+
+    def _look_focus_header_line(self, look_ui, look_purpose, *, active_z=0, zoom_mode="city"):
+        label, color = self._look_focus_label(look_purpose)
+        coord = self._look_focus_coord_text(look_ui, active_z=active_z, zoom_mode=zoom_mode)
+        text = f"{label} {coord}"
+        return _rich_line(
+            (
+                _segment(label, color=color, attrs=getattr(curses, "A_BOLD", 0)),
+                _segment(f" {coord}", color="building_edge"),
+            ),
+            text=text,
+        )
+
+    def _draw_look_focus_card(
+        self,
+        look_ui,
+        look_purpose,
+        *,
+        map_w,
+        map_h,
+        active_z=0,
+        zoom_mode="city",
+        panels_open=False,
+    ):
+        if panels_open or not isinstance(look_ui, dict) or not bool(look_ui.get("active")):
+            return False
+        inspect_text = look_ui.get("inspect_text", "")
+        if not _line_text(inspect_text).strip():
+            return False
+        map_w = int(map_w)
+        map_h = int(map_h)
+        if map_w < 30 or map_h < 8:
+            return False
+        panel_w = min(64, map_w - 2)
+        panel_w = max(28, panel_w)
+        body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
+        header = self._look_focus_header_line(look_ui, look_purpose, active_z=active_z, zoom_mode=zoom_mode)
+        body_lines = [header]
+        wrapped_inspect = list(_wrap_display_lines(inspect_text, body_w, max_lines=2) or [])
+        body_lines.extend(wrapped_inspect[: max(0, 3 - len(body_lines))])
+        if not body_lines:
+            return False
+        panel_h = len(body_lines) + 2
+        if panel_h + 1 >= map_h:
+            return False
+        panel_x = 1
+        panel_y = max(0, map_h - panel_h - 1)
+        top = "+" + ("-" * max(0, panel_w - 2)) + "+"
+        mid = "|" + (" " * max(0, panel_w - 2)) + "|"
+        bot = "+" + ("-" * max(0, panel_w - 2)) + "+"
+        self.view.draw_text(panel_x, panel_y, top, color="building_edge")
+        for row in range(1, panel_h - 1):
+            self.view.draw_text(panel_x, panel_y + row, mid, color="building_edge")
+        self.view.draw_text(panel_x, panel_y + panel_h - 1, bot, color="building_edge")
+        for idx, line in enumerate(body_lines[:3]):
+            self._draw_display_line(
+                panel_x + 2,
+                panel_y + 1 + idx,
+                _clip_display_line(line, body_w),
+                body_w,
+            )
+        return True
+
+    def _dialog_header_line(self, dialog_ui):
+        dialog_ui = dialog_ui if isinstance(dialog_ui, dict) else {}
+        title = str(dialog_ui.get("title", "Conversation")).strip() or "Conversation"
+        npc_eid = dialog_ui.get("npc_eid")
+        if npc_eid is None:
+            return f" {title} "
+        try:
+            npc_eid = int(npc_eid)
+        except (TypeError, ValueError):
+            return f" {title} "
+        appearance = None
+        try:
+            appearance = self.sim.appearance.entity(npc_eid, player_eid=self.player_eid)
+        except Exception:
+            appearance = None
+        color = getattr(appearance, "color", None) or "human"
+        semantic_id = getattr(appearance, "semantic_id", None) or "npc_civilian"
+        header_text = f" @ {title} "
+        return _rich_line(
+            (
+                _segment(" "),
+                _segment(
+                    "@",
+                    color=color,
+                    attrs=getattr(curses, "A_BOLD", 0),
+                    inline_glyph=True,
+                    semantic_id=semantic_id,
+                ),
+                _segment(f" {title} "),
+            ),
+            text=header_text,
+        )
 
     def update(self):
         self.view.clear()
@@ -2172,7 +2350,11 @@ class RenderSystem(System):
                             status_chunks.append(f"Target {target_name} ({condition})")
                         else:
                             status_chunks.append(f"Target {target_name}")
-        status_lines = _flow_text_chunks(status_chunks, hud_text_w, max_lines=3)
+        status_lines = _flow_display_chunks(
+            (self._hud_styled_chunk(chunk) for chunk in status_chunks),
+            hud_text_w,
+            max_lines=3,
+        )
 
         streamed_chunks = [
             f"Chunks {len(self.sim.chunk_detail)}",
@@ -2256,7 +2438,11 @@ class RenderSystem(System):
                 f"Threats {player_cover.threat_count}",
                 f"Via {cover_source}",
             ])
-        economy_lines = _flow_display_chunks(economy_chunks, hud_text_w, max_lines=3)
+        economy_lines = _flow_display_chunks(
+            (self._hud_styled_chunk(chunk) for chunk in economy_chunks),
+            hud_text_w,
+            max_lines=3,
+        )
 
         objective_eval = evaluate_visible_run_objective(self.sim, self.player_eid)
         objective_line = ""
@@ -2302,15 +2488,12 @@ class RenderSystem(System):
             look_entry = look_ui.get("inspect_text", "")
             look_text = _line_text(look_entry).strip()
             if look_text:
-                if look_purpose == "aim":
-                    prefix = "Aim: "
-                elif look_purpose == "interact":
-                    prefix = "Interact: "
-                elif look_purpose == "talk":
-                    prefix = "Talk: "
-                else:
-                    prefix = "Look: "
-                report_hint_line = _line_with_prefix(look_entry, prefix)
+                report_hint_line = self._look_focus_header_line(
+                    look_ui,
+                    look_purpose,
+                    active_z=active_z,
+                    zoom_mode=zoom_mode,
+                )
             else:
                 if look_purpose == "aim":
                     report_hint_line = "Aim mode active."
@@ -2320,7 +2503,7 @@ class RenderSystem(System):
                     report_hint_line = "Talk target mode active."
                 else:
                     report_hint_line = "Look mode active."
-            quest_lines = _wrap_display_lines(report_hint_line, hud_text_w, max_lines=2)
+            quest_lines = _wrap_display_lines(report_hint_line, hud_text_w, max_lines=1)
         else:
             quest_lines = []
             if tutorial_hint:
@@ -2338,7 +2521,7 @@ class RenderSystem(System):
             if show_opportunity_line and len(quest_lines) < 2:
                 quest_lines.extend(
                     _wrap_display_lines(
-                        opportunity_line,
+                        self._hud_styled_chunk(opportunity_line),
                         hud_text_w,
                         max_lines=1,
                     )
@@ -2353,12 +2536,24 @@ class RenderSystem(System):
                 )
             quest_lines = quest_lines[:2] or [report_hint_line]
 
+        read_state = getattr(self.sim, "situation_read_state", {})
+        read_text = ""
+        if isinstance(read_state, dict):
+            read_text = str(read_state.get("text", "") or "").strip()
+        read_lines = []
+        if read_text:
+            read_lines = _wrap_display_lines(
+                self._hud_styled_chunk(read_text),
+                hud_text_w,
+                max_lines=1,
+            )
+
         if look_ui.get("active"):
             if look_purpose == "aim":
                 if _entity_uses_melee_aim(self.sim, self.player_eid):
-                    controls = "Aim (Melee): reticle adjacent-only, F cycle target, Enter strike, x inspect, Esc close, ? help"
+                    controls = "Aim melee: move, F target, Enter strike, x inspect, T read, Esc, ?"
                 else:
-                    controls = "Aim: move cursor, F cycle target, Enter fire, x inspect, Esc close, ? help"
+                    controls = "Aim: move, F target, Enter fire, x inspect, T read, Esc, ?"
             elif look_purpose == "throw":
                 item_name = str(look_ui.get("throw_item_name", "") or "item").strip() or "item"
                 controls = f"Throw {item_name}: move cursor, Enter throw, x inspect, Esc cancel, ? help"
@@ -2369,7 +2564,7 @@ class RenderSystem(System):
             elif look_purpose == "backup_order":
                 controls = "Order Mark: move cursor, E/Enter mark, x inspect, Esc cancel, ? help"
             else:
-                controls = "Look: move cursor, Enter/x inspect, Esc close, ? help"
+                controls = "Look: move, Enter/x inspect, T read, Esc, ?"
         elif inventory_ui.get("open"):
             if inventory_panel_kind == "container":
                 controls = (
@@ -2412,14 +2607,14 @@ class RenderSystem(System):
         elif debug_ui.get("open"):
             controls = "Debug: Up/Down browse, O ops, Y notebooks, L log, D/Esc close, ? help"
         elif overlay.get("active"):
-            controls = f"Combat: move or act, {_aim_open_label(self.sim, self.player_eid)}, C cover, v hop, Shift+S sneak, ? help, Q quit"
+            controls = f"Combat: move/act, {_aim_open_label(self.sim, self.player_eid)}, T read, C cover, v hop, ?"
         elif zoom_mode == "overworld":
             if bool(getattr(self.sim, "overworld_view_only_by_eid", {}).get(int(self.player_eid), False)):
                 controls = "Map: move browse chunks, Enter/x inspect selected chunk, M/l/N markers, + sheet, t return on-foot, ? help"
             else:
                 controls = "In-vehicle: move, G drive marker, M/l/N markers, O ops, Y notebooks, L log, + sheet, t exit on-foot, center icons UPPER=loaded lower=distant, ? help"
         else:
-            controls = f"Move: arrows/WASD/HJKL/QEZC, {_aim_open_label(self.sim, self.player_eid)}, / talk, . service, ' interact, , pickup, ; lock door, X map, + sheet, Shift+J breach door, O ops, Y notebooks, L log, D debug, or ? for help"
+            controls = f"Move: arrows/WASD, {_aim_open_label(self.sim, self.player_eid)}, T read, / talk, . service, ' interact, ? help"
 
         controls = release_control_text(controls, self.sim)
         mode_line = _mode_line(
@@ -2433,24 +2628,6 @@ class RenderSystem(System):
         )
         wrapped_sections_spec = [
             {
-                "id": "status",
-                "lines": status_lines,
-                "min_lines": 1,
-                "trim_priority": 1,
-            },
-            {
-                "id": "streamed",
-                "lines": streamed_lines,
-                "min_lines": 1,
-                "trim_priority": 4,
-            },
-            {
-                "id": "economy",
-                "lines": economy_lines,
-                "min_lines": 1,
-                "trim_priority": 2,
-            },
-            {
                 "id": "mode",
                 "lines": _wrap_display_lines(mode_line, hud_text_w, max_lines=2),
                 "min_lines": 1,
@@ -2460,13 +2637,37 @@ class RenderSystem(System):
                 "id": "quest",
                 "lines": quest_lines,
                 "min_lines": 1,
-                "trim_priority": 5,
+                "trim_priority": 1,
+            },
+            {
+                "id": "read",
+                "lines": read_lines,
+                "min_lines": 1,
+                "trim_priority": 1,
+            },
+            {
+                "id": "economy",
+                "lines": economy_lines,
+                "min_lines": 1,
+                "trim_priority": 2,
+            },
+            {
+                "id": "status",
+                "lines": status_lines,
+                "min_lines": 1,
+                "trim_priority": 3,
             },
             {
                 "id": "controls",
                 "lines": _wrap_display_lines(controls, hud_text_w, max_lines=2),
                 "min_lines": 1,
-                "trim_priority": 3,
+                "trim_priority": 5,
+            },
+            {
+                "id": "streamed",
+                "lines": streamed_lines,
+                "min_lines": 1,
+                "trim_priority": 6,
             },
         ]
         desired_log_rows = 3 if hud_lines >= 9 else (2 if hud_lines >= 6 else 1)
@@ -2503,6 +2704,31 @@ class RenderSystem(System):
                 hud_y += 1
             if hud_y >= screen_h:
                 break
+
+        blocking_panel_open = any(
+            bool(state.get("open"))
+            for state in (
+                inventory_ui,
+                trade_ui,
+                casino_ui,
+                dialog_ui,
+                help_ui,
+                character_ui,
+                report_ui,
+                log_ui,
+                debug_ui,
+            )
+            if isinstance(state, dict)
+        )
+        self._draw_look_focus_card(
+            look_ui,
+            look_purpose,
+            map_w=map_w,
+            map_h=map_h,
+            active_z=active_z,
+            zoom_mode=zoom_mode,
+            panels_open=blocking_panel_open,
+        )
 
         if inventory_ui.get("open"):
             panel_w = min(max(36, screen_w - 4), screen_w)
@@ -3013,9 +3239,14 @@ class RenderSystem(System):
                     self.view.draw_text(panel_x, panel_y + row, mid)
                 self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
 
-            title = str(dialog_ui.get("title", "Conversation")).strip() or "Conversation"
             subtitle = str(dialog_ui.get("subtitle", "")).strip()
-            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(f" {title} ", panel_w - 4))
+            header_line = self._dialog_header_line(dialog_ui)
+            self._draw_display_line(
+                panel_x + 2,
+                panel_y + 1,
+                _clip_display_line(header_line, panel_w - 4),
+                panel_w - 4,
+            )
 
             body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
             inner_top = panel_y + 2

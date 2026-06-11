@@ -96,6 +96,34 @@
     "ui_overworld_marker_nearest": {
       "layer": "ui_overlay",
       "priority": 85
+    },
+    "ui_actor_threat": {
+      "layer": "ui_overlay",
+      "priority": 70
+    },
+    "ui_actor_ally": {
+      "layer": "ui_overlay",
+      "priority": 65
+    },
+    "ui_actor_contact": {
+      "layer": "ui_overlay",
+      "priority": 60
+    },
+    "ui_property_owned": {
+      "layer": "ui_overlay",
+      "priority": 55
+    },
+    "ui_property_locked": {
+      "layer": "ui_overlay",
+      "priority": 54
+    },
+    "ui_property_restricted": {
+      "layer": "ui_overlay",
+      "priority": 53
+    },
+    "ui_property_public": {
+      "layer": "ui_overlay",
+      "priority": 52
     }
   },
   "terrain": {

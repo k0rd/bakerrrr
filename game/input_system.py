@@ -2540,6 +2540,30 @@ class InputSystem(System):
             self._deactivate_look_mode()
             return True
 
+        if key == ord("T") and mode == "city":
+            target_x = int(state.get("x", 0))
+            target_y = int(state.get("y", 0))
+            target_z = int(state.get("z", 0))
+            target_eid = None
+            if purpose == "aim":
+                target_eid = _first_targetable_entity_at(
+                    self.sim,
+                    target_x,
+                    target_y,
+                    target_z,
+                    exclude_eid=self.player_eid,
+                )
+            self._emit_player_action(
+                "tactical_read",
+                consume_turn=self._tactical_read_consumes_turn(),
+                purpose=purpose,
+                target_x=target_x,
+                target_y=target_y,
+                target_z=target_z,
+                target_eid=target_eid,
+            )
+            return True
+
         if key in self.movement_keys:
             dx, dy = self.movement_keys[key]
             if mode == "overworld":
@@ -2683,6 +2707,10 @@ class InputSystem(System):
 
     def _emit_turn_action(self, action, **data):
         self._emit_player_action(action, consume_turn=True, **data)
+
+    def _tactical_read_consumes_turn(self):
+        overlay = _combat_overlay_state(self.sim)
+        return bool(getattr(self.sim, "turn_based", False) or overlay.get("active"))
 
     def _player_inventory(self):
         return self.sim.ecs.get(Inventory).get(self.player_eid)
@@ -3858,6 +3886,10 @@ class InputSystem(System):
 
         if key == ord("x") and zoom_mode != "overworld":
             self._activate_look_mode(zoom_mode=zoom_mode, purpose="inspect")
+            return
+
+        if key == ord("T") and zoom_mode != "overworld":
+            self._emit_player_action("tactical_read", consume_turn=self._tactical_read_consumes_turn())
             return
 
         if zoom_mode == "overworld":

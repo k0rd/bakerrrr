@@ -23,6 +23,10 @@ SKILL_DEFS = {
         "label": "Streetwise",
         "short": "sw",
     },
+    "tactics": {
+        "label": "Tactics",
+        "short": "ta",
+    },
     "intrusion": {
         "label": "Intrusion",
         "short": "in",
@@ -38,6 +42,8 @@ SKILL_ALIASES = {
     "charisma": "conversation",
     "social": "conversation",
     "awareness": "perception",
+    "tactical": "tactics",
+    "combat": "tactics",
 }
 
 TOOL_CONTEXT_ALIASES = {
@@ -55,16 +61,16 @@ TOOL_CONTEXT_ALIASES = {
     "side_door": "side_entry",
 }
 
-HUD_SKILL_IDS = ("perception", "conversation", "streetwise", "intrusion", "mechanics")
+HUD_SKILL_IDS = ("perception", "streetwise", "tactics", "conversation", "intrusion", "mechanics")
 ALL_SKILL_IDS = tuple(SKILL_DEFS.keys())
 SKILL_FLOOR_RATIO = float(getattr(SkillProfile, "DEFAULT_FLOOR_RATIO", 0.7) or 0.7)
 
 ROLE_SKILL_MODS = {
-    "player": {"intrusion": 0.3, "streetwise": 0.2, "perception": 0.15},
+    "player": {"intrusion": 0.3, "streetwise": 0.2, "perception": 0.15, "tactics": 0.1},
     "civilian": {"conversation": 0.2, "streetwise": 0.1},
     "worker": {"mechanics": 0.75, "intrusion": 0.35, "athletics": 0.2},
-    "guard": {"perception": 1.1, "athletics": 0.7, "streetwise": 0.25},
-    "scout": {"perception": 0.95, "athletics": 0.55, "streetwise": 0.4},
+    "guard": {"perception": 1.1, "athletics": 0.7, "streetwise": 0.25, "tactics": 0.9},
+    "scout": {"perception": 0.95, "athletics": 0.55, "streetwise": 0.4, "tactics": 0.55},
 }
 
 CAREER_KEYWORD_SKILL_MODS = {
@@ -81,14 +87,14 @@ CAREER_KEYWORD_SKILL_MODS = {
     "host": {"conversation": 0.55},
     "bartender": {"conversation": 0.6, "streetwise": 0.45},
     "dj": {"conversation": 0.35, "streetwise": 0.4},
-    "courier": {"athletics": 0.6, "perception": 0.45},
+    "courier": {"athletics": 0.6, "perception": 0.45, "tactics": 0.25},
     "dispatch": {"perception": 0.45, "conversation": 0.25},
-    "guard": {"perception": 0.75, "athletics": 0.4},
-    "patrol": {"perception": 0.7, "athletics": 0.4},
+    "guard": {"perception": 0.75, "athletics": 0.4, "tactics": 0.7},
+    "patrol": {"perception": 0.7, "athletics": 0.4, "tactics": 0.65},
     "bailiff": {"perception": 0.6, "conversation": 0.25},
-    "security": {"perception": 0.7, "intrusion": 0.2},
-    "lookout": {"perception": 0.75, "streetwise": 0.25},
-    "scout": {"perception": 0.8, "athletics": 0.35},
+    "security": {"perception": 0.7, "intrusion": 0.2, "tactics": 0.6},
+    "lookout": {"perception": 0.75, "streetwise": 0.25, "tactics": 0.5},
+    "scout": {"perception": 0.8, "athletics": 0.35, "tactics": 0.45},
     "salvage": {"streetwise": 0.6, "mechanics": 0.3},
     "scrap": {"streetwise": 0.55, "mechanics": 0.35},
     "chop": {"streetwise": 0.55, "mechanics": 0.45},
@@ -197,6 +203,14 @@ def derived_skill_value(skill_id, *, core=None, insight=None, default=5.0):
         value = (axes["charisma"] * 0.65) + (axes["charm"] * 0.2) + (axes["common_sense"] * 0.15)
     elif key == "streetwise":
         value = (axes["streetwise"] * 0.55) + (axes["common_sense"] * 0.3) + (axes["charisma"] * 0.15)
+    elif key == "tactics":
+        value = (
+            (axes["common_sense"] * 0.36)
+            + (axes["perception"] * 0.24)
+            + (axes["streetwise"] * 0.16)
+            + (axes["dexterity"] * 0.12)
+            + (axes["athleticism"] * 0.12)
+        )
     elif key == "intrusion":
         value = (axes["access"] * 0.55) + (axes["dexterity"] * 0.25) + (axes["common_sense"] * 0.2)
     elif key == "mechanics":
@@ -313,6 +327,11 @@ def skill_floor_value(baseline, floor_ratio=SKILL_FLOOR_RATIO):
 
 
 def actor_skill_floor(sim, eid, skill_id, default=5.0, floor_ratio=SKILL_FLOOR_RATIO):
+    profiles = sim.ecs.get(SkillProfile) if sim is not None else {}
+    profile = profiles.get(eid) if profiles else None
+    key = normalize_skill_id(skill_id)
+    if isinstance(profile, SkillProfile):
+        return profile.floor(key, default=default)
     baseline = actor_skill_baseline(sim, eid, skill_id, default=default)
     return skill_floor_value(baseline, floor_ratio=floor_ratio)
 
@@ -409,6 +428,8 @@ def profile_neglect_pressure(profile, *, tick, skill_ids=ALL_SKILL_IDS, grace_ti
         seen.add(key)
         current = profile.get(key)
         if current is None:
+            continue
+        if float(profile.decay_rate(key)) <= 0.0:
             continue
         floor = profile.floor(key)
         if float(current) <= float(floor) + 1e-9:
@@ -795,6 +816,8 @@ def seed_skill_profile(rng, *, role="", career="", core=None, insight=None, jitt
     career_text = str(career or "").strip().lower().replace(" ", "_")
     birth_biases = _player_birth_skill_biases(birth_key) if role_key == "player" else {}
     ratings = {}
+    floors = {}
+    decay_rates = {}
     for skill_id in SKILL_DEFS:
         value = derived_skill_value(skill_id, core=core, insight=insight, default=5.0)
         value += float(ROLE_SKILL_MODS.get(role_key, {}).get(skill_id, 0.0))
@@ -803,8 +826,11 @@ def seed_skill_profile(rng, *, role="", career="", core=None, insight=None, jitt
                 value += float(mods.get(skill_id, 0.0))
         value += float(rng.uniform(-abs(float(jitter)), abs(float(jitter))))
         value += float(birth_biases.get(skill_id, 0.0))
-        ratings[skill_id] = _clamp_skill(value)
-    return SkillProfile(ratings=ratings, birth_biases=birth_biases)
+        rating = _clamp_skill(value)
+        ratings[skill_id] = rating
+        floors[skill_id] = SkillProfile.default_floor_for_skill(skill_id, rating)
+        decay_rates[skill_id] = SkillProfile.default_decay_rate_for_skill(skill_id)
+    return SkillProfile(ratings=ratings, birth_biases=birth_biases, floors=floors, decay_rates=decay_rates)
 
 
 def access_skill_practice_awards(context, *, success, fumbled=False):

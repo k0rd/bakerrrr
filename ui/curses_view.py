@@ -362,13 +362,34 @@ class CursesView:
 
         return x, y, text
 
+    def _attrs_for_overlay_semantics(self, overlays):
+        attr = 0
+        for overlay in overlays or ():
+            if not isinstance(overlay, dict) or not bool(overlay.get("visible", True)):
+                continue
+            semantic_id = str(overlay.get("semantic_id", "") or "").strip().lower()
+            if semantic_id in {"ui_actor_threat", "ui_property_restricted"}:
+                attr |= int(getattr(curses, "A_BOLD", 0) or 0)
+                attr |= int(getattr(curses, "A_REVERSE", 0) or 0)
+            elif semantic_id == "ui_property_locked":
+                attr |= int(getattr(curses, "A_BOLD", 0) or 0)
+                attr |= int(getattr(curses, "A_UNDERLINE", 0) or 0)
+            elif semantic_id in {
+                "ui_actor_ally",
+                "ui_actor_contact",
+                "ui_property_owned",
+                "ui_property_public",
+            }:
+                attr |= int(getattr(curses, "A_BOLD", 0) or 0)
+        return attr
+
     def _draw_now(self, x, y, glyph, color=None, attrs=0, semantic_id=None, effects=None, overlays=None):
         region = self._clip_draw_region(x, y, str(glyph)[:1] or " ")
         if region is None:
             return
         try:
             x, y, text = region
-            attr = self._attr_for(color) | int(attrs)
+            attr = self._attr_for(color) | int(attrs) | self._attrs_for_overlay_semantics(overlays)
             effect_set = {
                 str(effect).strip().lower()
                 for effect in (effects or ())

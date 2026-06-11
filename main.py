@@ -129,6 +129,7 @@ from game.service_menu import ServiceMenuSystem
 from game.site_services import SiteServiceSystem
 from game.skill_progression import SkillProgressionSystem
 from game.skills import seed_skill_profile
+from game.situation_read import SituationReadSystem
 from game.npc_boundary_system import NPCBoundaryEnforcementSystem
 from game.npc_interaction_system import NPCInteractionSystem
 from game.objective_progress import ObjectiveProgressSystem
@@ -725,6 +726,7 @@ def _register_runtime_systems(sim, view, player):
     site_service_system = SiteServiceSystem(sim, player)
     npc_interaction_system = NPCInteractionSystem(sim, player)
     combat_pacing_system = CombatPacingSystem(sim, player, engage_radius=10, danger_radius=6, calm_frames_to_exit=14)
+    situation_read_system = SituationReadSystem(sim, player)
     world_streaming_system = WorldStreamingSystem(sim, player)
     noise_system = NoiseSystem(sim)
     lighting_system = LightingSystem(sim, player)
@@ -780,6 +782,7 @@ def _register_runtime_systems(sim, view, player):
     sim.site_service_system = site_service_system
 
     _live_timeskip_stride(combat_pacing_system, 0)
+    _live_timeskip_stride(situation_read_system, 0)
     _live_timeskip_stride(player_action_system, 0)
     _live_timeskip_stride(skill_progression_system, 0)
     _live_timeskip_stride(service_menu_system, 0)
@@ -839,6 +842,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(input_system)
     sim.register_system(cover_system)
     sim.register_system(combat_pacing_system)
+    sim.register_system(situation_read_system)
     sim.register_system(player_action_system)
     sim.register_system(camera_system)
     sim.register_system(skill_progression_system)

@@ -38,6 +38,7 @@ from game.property_runtime import (
     viewer_revealed_building_id as _viewer_revealed_building_id,
 )
 from game.service_runtime import _int_or_default, _legend_line
+from game.situation_read import build_focus_read
 from game.system_support.actor_attention_runtime import record_area_warmth
 from game.system_support.crime_plan_runtime import (
     CRIME_PLAN_OBSERVATION_SCAN,
@@ -345,11 +346,14 @@ class PlayerLookRuntime:
                     discovery_mode="sight",
                 )
         text = self.describe_city_cursor(eid=eid, x=x, y=y, z=z)
+        focus_read = build_focus_read(self.sim, eid, x, y, z, purpose=purpose)
         if purpose == "aim":
             preview = self._manual_fire_preview(self.sim, eid=eid, x=x, y=y, z=z)
             summary = str(preview.get("summary", "")).strip()
             if summary:
                 text = self._line_with_suffix(text, f"  {summary}")
+            if focus_read:
+                text = self._line_with_suffix(text, f"  {focus_read}")
         elif purpose == "inspect" and self.sim.detail_for_xy(x, y) != "unloaded":
             inspected_prop = _property_covering(self.sim, x, y, z)
             if isinstance(inspected_prop, dict):
@@ -368,6 +372,10 @@ class PlayerLookRuntime:
                         inspected_prop,
                         discovery_mode="inspect",
                     )
+            if focus_read:
+                text = self._line_with_suffix(text, f"  {focus_read}")
+        elif focus_read:
+            text = self._line_with_suffix(text, f"  {focus_read}")
         self.set_look_inspect_text(text)
         self.sim.emit(Event(
             "cursor_examined",

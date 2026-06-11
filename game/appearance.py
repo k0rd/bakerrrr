@@ -5,17 +5,22 @@ from dataclasses import dataclass
 from typing import Mapping, Tuple
 
 from engine.buildings import building_exterior_profile
-from game.components import AI, CreatureIdentity, Render, Vitality
+from game.components import AI, CreatureIdentity, NPCSocial, NPCWill, Render, Vitality
 from game.appearance_loadout import player_appearance_color_key
+from game.dialogue_runtime import active_contractor_record
 from game.human_description import human_render_color_key as _human_render_color_key
 from game.property_runtime import (
     building_id_from_structure,
     finance_services_for_property,
+    property_access_level,
     property_aperture_at,
     property_covering,
     property_fixture_type,
     property_is_public,
+    property_is_storefront,
+    property_lock_state,
     property_metadata,
+    site_services_for_property,
 )
 from game.semantic_catalog import get_runtime_semantic_catalog
 
@@ -417,6 +422,64 @@ def _property_cover_overlays(prop):
     )
 
 
+def _truthy_metadata_flag(metadata, *keys):
+    for key in keys:
+        if bool(metadata.get(key)):
+            return True
+    return False
+
+
+def _property_access_badge_overlay(prop):
+    if not isinstance(prop, dict):
+        return ()
+
+    metadata = property_metadata(prop)
+    owner_tag = str(prop.get("owner_tag", "") or "").strip().lower()
+    kind = str(prop.get("kind", "building") or "building").strip().lower() or "building"
+    if kind == "vehicle":
+        return ()
+    if owner_tag == "player":
+        return ({"glyph": "*", "color": "player", "semantic_id": "ui_property_owned"},)
+
+    try:
+        locked = bool(property_lock_state(prop).get("locked", False))
+    except (AttributeError, TypeError, ValueError):
+        locked = False
+    if locked:
+        return ({"glyph": "L", "color": "objective", "semantic_id": "ui_property_locked"},)
+
+    public = bool(property_is_public(prop))
+    service_facing = bool(
+        property_is_storefront(prop)
+        or finance_services_for_property(prop)
+        or site_services_for_property(prop)
+        or _truthy_metadata_flag(metadata, "is_storefront")
+    )
+    controller_kind = str(metadata.get("access_controller_kind", "") or "").strip().lower()
+    access_level = str(
+        property_access_level(prop)
+        or metadata.get("access_level", "")
+        or metadata.get("access", "")
+        or ""
+    ).strip().lower()
+    restricted = (
+        kind == "building"
+        and not public
+        and (
+            bool(controller_kind)
+            or access_level in {"private", "restricted", "secure", "staff", "staff_only"}
+            or owner_tag not in {"", "public", "city", "community", "neutral", "none", "unowned"}
+        )
+    )
+    if restricted:
+        return ({"glyph": "!", "color": "projectile", "semantic_id": "ui_property_restricted"},)
+
+    if public or service_facing:
+        return ({"glyph": "+", "color": "property_service", "semantic_id": "ui_property_public"},)
+
+    return ()
+
+
 def _owner_appearance(owner, fallback_glyph="?"):
     if owner is None:
         return _snapshot(fallback_glyph)
@@ -578,6 +641,81 @@ def _entity_state_overlays(vitality):
     if not bool(getattr(vitality, "downed", False)):
         return ()
     return ({"glyph": " ", "semantic_id": "entity_state_downed"},)
+
+
+ACTOR_THREAT_STATES = {
+    "attacking",
+    "chasing",
+    "ejecting_target",
+    "investigating",
+    "protecting",
+    "warning",
+}
+
+
+def _eid_equal(left, right):
+    if left is None or right is None:
+        return False
+    try:
+        return int(left) == int(right)
+    except (TypeError, ValueError):
+        return left == right
+
+
+def _vitality_is_living(vitality):
+    if vitality is None:
+        return True
+    if bool(getattr(vitality, "downed", False)):
+        return False
+    try:
+        return int(getattr(vitality, "hp", 0) or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _player_bond_score(social, player_eid):
+    if social is None or player_eid is None:
+        return 0.0
+    bond = getattr(social, "bonds", {}).get(player_eid)
+    if not isinstance(bond, dict):
+        return 0.0
+    try:
+        trust = float(bond.get("trust", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        trust = 0.0
+    try:
+        closeness = float(bond.get("closeness", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        closeness = 0.0
+    return max(trust, closeness)
+
+
+def _actor_badge_overlay(sim, eid, *, player_eid=None, ai=None, will=None, social=None, vitality=None):
+    if player_eid is None or _eid_equal(eid, player_eid) or not _vitality_is_living(vitality):
+        return ()
+
+    ai_state = str(getattr(ai, "state", "") or "").strip().lower()
+    will_intent = str(getattr(will, "intent", "") or "").strip().lower()
+    ai_target_eid = getattr(ai, "target_eid", None)
+    will_target_eid = getattr(will, "target_eid", None)
+    if (
+        (ai_state in ACTOR_THREAT_STATES and _eid_equal(ai_target_eid, player_eid))
+        or (will_intent in ACTOR_THREAT_STATES and _eid_equal(will_target_eid, player_eid))
+    ):
+        return ({"glyph": "!", "color": "projectile", "semantic_id": "ui_actor_threat"},)
+
+    contracted = active_contractor_record(sim, eid, ally_eid=player_eid, jobs={"backup", "party"}) is not None
+    if (
+        (ai_state == "following" and (_eid_equal(ai_target_eid, player_eid) or contracted))
+        or (will_intent == "following" and (_eid_equal(will_target_eid, player_eid) or contracted))
+        or contracted
+    ):
+        return ({"glyph": "+", "color": "player", "semantic_id": "ui_actor_ally"},)
+
+    if _player_bond_score(social, player_eid) >= 0.45:
+        return ({"glyph": "*", "color": "player", "semantic_id": "ui_actor_contact"},)
+
+    return ()
 
 
 def _hominid_semantic_id_for_role(catalog, role=""):
@@ -885,7 +1023,7 @@ def property_render_snapshot(prop, active_quest_target=None, catalog=None):
     glyph = str(explicit_glyph or default_glyph)[:1] or "P"
     color = str(explicit_color or default_color or "property_building")
     semantic_id = None
-    overlays = _property_cover_overlays(prop)
+    overlays = tuple(_property_cover_overlays(prop)) + tuple(_property_access_badge_overlay(prop))
     if kind == "vehicle":
         quality = str(metadata.get("vehicle_quality", "used")).strip().lower()
         paint_color = str(metadata.get("vehicle_paint", "")).strip()
@@ -1066,6 +1204,8 @@ class AppearanceManager:
         render = self.sim.ecs.get(Render).get(eid)
         identity = self.sim.ecs.get(CreatureIdentity).get(eid)
         ai = self.sim.ecs.get(AI).get(eid)
+        will = self.sim.ecs.get(NPCWill).get(eid)
+        social = self.sim.ecs.get(NPCSocial).get(eid)
         vitality = self.sim.ecs.get(Vitality).get(eid)
 
         player_controlled = player_eid is not None and eid == player_eid
@@ -1094,6 +1234,15 @@ class AppearanceManager:
                 overlays=defaults.overlays,
             )
         state_overlays = _entity_state_overlays(vitality)
+        badge_overlays = _actor_badge_overlay(
+            self.sim,
+            eid,
+            player_eid=player_eid,
+            ai=ai,
+            will=will,
+            social=social,
+            vitality=vitality,
+        )
         owned = _owner_appearance(render, fallback_glyph=defaults.glyph)
         owned_color = owned.color
         if (
@@ -1127,7 +1276,12 @@ class AppearanceManager:
             attrs=int(defaults.attrs or 0) | int(owned.attrs or 0),
             effects=tuple(dict.fromkeys(tuple(defaults.effects or ()) + tuple(owned.effects or ()))),
             visible=bool(defaults.visible) and bool(owned.visible),
-            overlays=tuple(defaults.overlays or ()) + tuple(state_overlays or ()) + tuple(owned.overlays or ()),
+            overlays=(
+                tuple(defaults.overlays or ())
+                + tuple(state_overlays or ())
+                + tuple(badge_overlays or ())
+                + tuple(owned.overlays or ())
+            ),
         )
 
     def tile(self, tile, x, y, z=0, *, revealed_building_id=""):

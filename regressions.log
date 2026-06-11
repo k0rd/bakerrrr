@@ -1,6 +1,6 @@
 [run] syntax
-      /usr/bin/python -m py_compile main.py engine/buildings.py engine/ecs.py engine/eventlog.py engine/events.py engine/fixtures.py engine/mutators.py engine/persistence.py engine/sim.py engine/sites.py engine/systems.py engine/tilemap.py engine/underground.py engine/visibility.py engine/world.py game/appearance.py game/appearance_loadout.py game/bones.py game/casino_ui_runtime.py game/character_sheet.py game/checks.py game/combat_systems.py game/components.py game/content_validation.py game/content_warnings.py game/criminal_drive_system.py game/criminal_justice_runtime.py game/criminal_justice_system.py game/debug_overlay.py game/dialogue.py game/dialogue_pressure.py game/dialogue_runtime.py game/dialogue_shape.py game/dialogue_social_context.py game/economy.py game/environment_hazard_system.py game/event_log_system.py game/final_operation.py game/finance_services.py game/fire_system.py game/human_description.py game/human_identity.py game/incident_runtime.py game/input_system.py game/item_actions.py game/item_semantics.py game/items.py game/json_metadata.py game/justice_runtime.py game/lighting.py game/local_situations.py game/location_presentation_runtime.py game/movement_runtime.py game/npc_boundary_system.py game/npc_intent_systems.py game/npc_interaction_system.py game/npc_judgment.py game/npc_names.py game/objective_progress.py game/opportunities.py game/org_names.py game/organization_practice_evolution.py game/organization_presence.py game/organization_reputation.py game/organization_response.py game/organizations.py game/outfit_impression.py game/overworld_runtime.py game/perception_systems.py game/player_action_system.py game/player_businesses.py game/player_config.py game/player_interactions.py game/player_look.py game/player_movement.py game/player_travel.py game/population.py game/property_access.py game/property_actions.py game/property_controllers.py game/property_door_wait.py game/property_doors.py game/property_ingress.py game/property_keys.py game/property_runtime.py game/property_security_systems.py game/release_runtime.py game/render_system.py game/report_debug_ui.py game/report_runtime.py game/run_bootstrap.py game/run_echoes.py game/run_epilogue.py game/run_objectives.py game/run_pressure.py game/semantic_catalog.py game/service_menu.py game/service_runtime.py game/site_services.py game/skill_progression.py game/skill_ui.py game/skills.py game/social_boundary_runtime.py game/status_ui_runtime.py game/systems.py game/systems_business_events.py game/systems_business_reputation.py game/systems_incidents.py game/systems_memory.py game/systems_observed_dispatch.py game/systems_observed_events.py game/systems_observed_response.py game/systems_settlement.py game/systems_social.py game/systems_wildlife.py game/systems_world_events.py game/trade_system.py game/tutorial.py game/ui_text_runtime.py game/vehicles.py game/weapons.py game/world_progression_systems.py ui/curses_view.py ui/input_keys.py ui/pygame_view.py scripts/__init__.py scripts/actor_attention_regression.py scripts/add_json_schema_metadata.py scripts/animal_social_regression.py scripts/appearance_loadout_regression.py scripts/bootstrap_regression.py scripts/build_workflow_regression.py scripts/building_floor_regression.py scripts/building_placement_regression.py scripts/business_event_scene_regression.py scripts/business_reputation_regression.py scripts/content_regression.py scripts/content_validation.py scripts/courier_opportunity_regression.py scripts/crash_report_regression.py scripts/criminal_drive_regression.py scripts/criminal_justice_regression.py scripts/curses_ui_regression.py scripts/debug_ui_regression.py scripts/dialog_ui_regression.py scripts/dialogue_pressure_regression.py scripts/dialogue_shape_regression.py scripts/dialogue_social_context_regression.py scripts/final_operation_regression.py scripts/finance_regression.py scripts/fire_regression.py scripts/gear_regression.py scripts/hud_regression.py scripts/hunger_thirst_regression.py scripts/incident_knowledge_regression.py scripts/incident_social_memory_regression.py scripts/infrastructure_interaction_regression.py scripts/interior_room_regression.py scripts/item_regression.py scripts/keyed_property_regression.py scripts/lighting_regression.py scripts/live_lodging_regression.py scripts/local_situation_regression.py scripts/log_ui_regression.py scripts/newcomer_regression.py scripts/npc_boundary_regression.py scripts/npc_log_regression.py scripts/npc_name_dedupe.py scripts/npc_will_regression.py scripts/objective_legibility_regression.py scripts/observation_accountability_regression.py scripts/observed_incident_channel_regression.py scripts/opportunity_cadence_regression.py scripts/opportunity_knowledge_regression.py scripts/organization_regression.py scripts/outfit_impression_regression.py scripts/player_business_regression.py scripts/player_guide_regression.py scripts/population_regression.py scripts/profile_opportunity_knowledge.py scripts/pygame_ui_regression.py scripts/relationship_notebook_regression.py scripts/release_mode_regression.py scripts/rival_operator_regression.py scripts/run_epilogue_regression.py scripts/run_regressions.py scripts/save_load_regression.py scripts/skill_regression.py scripts/social_knowledge_regression.py scripts/spatial_index_regression.py scripts/startup_doctor_regression.py scripts/storefront_trade_regression.py scripts/suspicion_regression.py scripts/tutorial_regression.py scripts/vehicle_regression.py scripts/wildlife_ecology_regression.py scripts/world_event_regression.py
-[ok]  syntax (1.00s)
+      /usr/bin/python -m py_compile main.py engine/buildings.py engine/ecs.py engine/eventlog.py engine/events.py engine/fixtures.py engine/mutators.py engine/persistence.py engine/sim.py engine/sites.py engine/systems.py engine/tilemap.py engine/underground.py engine/visibility.py engine/world.py game/appearance.py game/appearance_loadout.py game/bones.py game/casino_ui_runtime.py game/character_sheet.py game/checks.py game/combat_systems.py game/components.py game/content_validation.py game/content_warnings.py game/criminal_drive_system.py game/criminal_justice_runtime.py game/criminal_justice_system.py game/debug_overlay.py game/dialogue.py game/dialogue_pressure.py game/dialogue_runtime.py game/dialogue_shape.py game/dialogue_social_context.py game/economy.py game/environment_hazard_system.py game/event_log_system.py game/final_operation.py game/finance_services.py game/fire_system.py game/human_description.py game/human_identity.py game/incident_runtime.py game/input_system.py game/item_actions.py game/item_semantics.py game/items.py game/json_metadata.py game/justice_runtime.py game/lighting.py game/local_situations.py game/location_presentation_runtime.py game/movement_runtime.py game/npc_boundary_system.py game/npc_intent_systems.py game/npc_interaction_system.py game/npc_judgment.py game/npc_names.py game/objective_progress.py game/opportunities.py game/org_names.py game/organization_practice_evolution.py game/organization_presence.py game/organization_reputation.py game/organization_response.py game/organizations.py game/outfit_impression.py game/overworld_runtime.py game/perception_systems.py game/player_action_system.py game/player_businesses.py game/player_config.py game/player_interactions.py game/player_look.py game/player_movement.py game/player_travel.py game/population.py game/property_access.py game/property_actions.py game/property_controllers.py game/property_door_wait.py game/property_doors.py game/property_ingress.py game/property_keys.py game/property_runtime.py game/property_security_systems.py game/release_runtime.py game/render_system.py game/report_debug_ui.py game/report_runtime.py game/run_bootstrap.py game/run_echoes.py game/run_epilogue.py game/run_objectives.py game/run_pressure.py game/semantic_catalog.py game/service_menu.py game/service_runtime.py game/site_services.py game/situation_read.py game/skill_progression.py game/skill_ui.py game/skills.py game/social_boundary_runtime.py game/status_ui_runtime.py game/systems.py game/systems_business_events.py game/systems_business_reputation.py game/systems_incidents.py game/systems_memory.py game/systems_observed_dispatch.py game/systems_observed_events.py game/systems_observed_response.py game/systems_settlement.py game/systems_social.py game/systems_wildlife.py game/systems_world_events.py game/trade_system.py game/tutorial.py game/ui_text_runtime.py game/vehicles.py game/weapons.py game/world_progression_systems.py ui/curses_view.py ui/input_keys.py ui/pygame_view.py scripts/__init__.py scripts/actor_attention_regression.py scripts/add_json_schema_metadata.py scripts/animal_social_regression.py scripts/appearance_loadout_regression.py scripts/bootstrap_regression.py scripts/build_workflow_regression.py scripts/building_floor_regression.py scripts/building_placement_regression.py scripts/business_event_scene_regression.py scripts/business_reputation_regression.py scripts/content_regression.py scripts/content_validation.py scripts/courier_opportunity_regression.py scripts/crash_report_regression.py scripts/criminal_drive_regression.py scripts/criminal_justice_regression.py scripts/curses_ui_regression.py scripts/debug_ui_regression.py scripts/dialog_ui_regression.py scripts/dialogue_pressure_regression.py scripts/dialogue_shape_regression.py scripts/dialogue_social_context_regression.py scripts/final_operation_regression.py scripts/finance_regression.py scripts/fire_regression.py scripts/gear_regression.py scripts/hud_regression.py scripts/hunger_thirst_regression.py scripts/incident_knowledge_regression.py scripts/incident_social_memory_regression.py scripts/infrastructure_interaction_regression.py scripts/interior_room_regression.py scripts/item_regression.py scripts/keyed_property_regression.py scripts/lighting_regression.py scripts/live_lodging_regression.py scripts/local_situation_regression.py scripts/log_ui_regression.py scripts/newcomer_regression.py scripts/npc_boundary_regression.py scripts/npc_log_regression.py scripts/npc_name_dedupe.py scripts/npc_will_regression.py scripts/objective_legibility_regression.py scripts/observation_accountability_regression.py scripts/observed_incident_channel_regression.py scripts/opportunity_cadence_regression.py scripts/opportunity_knowledge_regression.py scripts/organization_regression.py scripts/outfit_impression_regression.py scripts/player_business_regression.py scripts/player_guide_regression.py scripts/population_regression.py scripts/profile_opportunity_knowledge.py scripts/pygame_ui_regression.py scripts/relationship_notebook_regression.py scripts/release_mode_regression.py scripts/rival_operator_regression.py scripts/run_epilogue_regression.py scripts/run_regressions.py scripts/save_load_regression.py scripts/skill_regression.py scripts/social_knowledge_regression.py scripts/spatial_index_regression.py scripts/startup_doctor_regression.py scripts/storefront_trade_regression.py scripts/suspicion_regression.py scripts/tutorial_regression.py scripts/vehicle_regression.py scripts/wildlife_ecology_regression.py scripts/world_event_regression.py
+[ok]  syntax (1.02s)
 [run] housekeeping
       bash scripts/check_housekeeping.sh
 housekeeping check passed.
@@ -37,7 +37,7 @@ content validation passed: 9 file(s) checked, 0 warning(s).
 [ok] test_city_large_parcel_layouts_expand_without_overlap
 [ok] test_vehicle_profiles_are_seed_stable_but_varied
 content regression checks passed.
-[ok]  content_regression (2.98s)
+[ok]  content_regression (3.03s)
 [run] player_guide_regression
       /usr/bin/python scripts/player_guide_regression.py
 player_guide_regression: ok (5 tests)
@@ -49,7 +49,7 @@ build_workflow_regression: ok (4 tests)
 [run] release_mode_regression
       /usr/bin/python scripts/release_mode_regression.py
 release_mode_regression: ok (4 tests)
-[ok]  release_mode_regression (0.15s)
+[ok]  release_mode_regression (0.16s)
 [run] startup_doctor_regression
       /usr/bin/python scripts/startup_doctor_regression.py
 startup_doctor_regression: ok (3 tests)
@@ -57,7 +57,7 @@ startup_doctor_regression: ok (3 tests)
 [run] crash_report_regression
       /usr/bin/python scripts/crash_report_regression.py
 crash_report_regression: ok (1 tests)
-[ok]  crash_report_regression (0.07s)
+[ok]  crash_report_regression (0.08s)
 [run] save_load_regression
       /usr/bin/python scripts/save_load_regression.py
 [ok] test_chunk_unload_and_restore
@@ -82,7 +82,7 @@ crash_report_regression: ok (1 tests)
 [ok] test_identified_final_operation_target_survives_unload_and_save_resume
 [ok] test_opportunity_tracked_target_survives_unload_and_save_resume
 save/load regression checks passed.
-[ok]  save_load_regression (21.72s)
+[ok]  save_load_regression (22.11s)
 [run] lighting_regression
       /usr/bin/python scripts/lighting_regression.py
 [ok] test_phase4_notice_ranges
@@ -96,7 +96,7 @@ save/load regression checks passed.
 [ok] test_phase2_explored_tiles_hold_last_seen_feature_state
 [ok] test_power_cut_suppresses_night_aperture_glow_immediately
 lighting regression checks passed.
-[ok]  lighting_regression (0.35s)
+[ok]  lighting_regression (0.36s)
 [run] vehicle_regression
       /usr/bin/python scripts/vehicle_regression.py
 [ok] test_zoom_on_foot_opens_view_only_overworld_map
@@ -144,7 +144,7 @@ lighting regression checks passed.
 [ok] test_overworld_cursor_reveals_adjacent_chunk_identity_but_hides_distant_chunk
 [ok] test_overworld_scan_reveals_adjacent_neighbors
 vehicle regression checks passed.
-[ok]  vehicle_regression (3.87s)
+[ok]  vehicle_regression (3.92s)
 [run] organization_regression
       /usr/bin/python scripts/organization_regression.py
 [ok] test_property_organization_is_created_and_surfaced
@@ -214,7 +214,7 @@ vehicle regression checks passed.
 [ok] test_vigilante_pressure_emerges_block_watch_and_surfaces_locally
 [ok] test_civic_pressure_emerges_checkpoint_questioning_and_surfaces_locally
 organization regression checks passed.
-[ok]  organization_regression (3.48s)
+[ok]  organization_regression (3.56s)
 [run] finance_regression
       /usr/bin/python scripts/finance_regression.py
 [ok] test_policy_durations_cover_multiple_hours
@@ -261,7 +261,7 @@ finance regression checks passed.
 [ok] test_banking_menu_can_move_funds_into_and_out_of_business_account
 [ok] test_save_load_preserves_business_account_state
 player business regression checks passed.
-[ok]  player_business_regression (1.98s)
+[ok]  player_business_regression (2.08s)
 [run] business_reputation_regression
       /usr/bin/python scripts/business_reputation_regression.py
 [ok] test_direct_experience_and_incident_pressure_shape_business_opinion
@@ -278,7 +278,7 @@ business reputation regression checks passed.
 [run] social_knowledge_regression
       /usr/bin/python scripts/social_knowledge_regression.py
 social_knowledge_regression: ok
-[ok]  social_knowledge_regression (0.26s)
+[ok]  social_knowledge_regression (0.27s)
 [run] keyed_property_regression
       /usr/bin/python scripts/keyed_property_regression.py
 [ok] test_owned_protected_building_syncs_lock_and_owner_key
@@ -337,7 +337,7 @@ social_knowledge_regression: ok
 [ok] test_window_entry_missing_target_logs_hint
 [ok] test_newly_registered_business_keyholder_gets_key_before_hour_rollover_and_drops_it_on_death
 keyed property regression checks passed.
-[ok]  keyed_property_regression (3.80s)
+[ok]  keyed_property_regression (3.92s)
 [run] final_operation_regression
       /usr/bin/python scripts/final_operation_regression.py
 [ok] test_high_value_retrieval_identifies_site_and_item
@@ -385,7 +385,7 @@ spatial index regression checks passed.
 [ok] test_power_cut_blocks_elevator_but_not_stairs
 [ok] test_public_service_building_spawns_linked_terminal_and_supports_intel
 infrastructure interaction regression checks passed.
-[ok]  infrastructure_interaction_regression (5.50s)
+[ok]  infrastructure_interaction_regression (5.59s)
 [run] interior_room_regression
       /usr/bin/python scripts/interior_room_regression.py
 [ok] test_shell_span_profiles_expand_non_residential_buildings
@@ -410,7 +410,7 @@ infrastructure interaction regression checks passed.
 [ok] test_event_log_announces_building_and_room_entries_without_repeating_same_room
 [ok] test_non_south_entry_uses_lobby_as_the_actual_front_room
 interior room regression checks passed.
-[ok]  interior_room_regression (1.76s)
+[ok]  interior_room_regression (1.79s)
 [run] skill_regression
       /usr/bin/python scripts/skill_regression.py
 [ok] test_explicit_skill_profile_overrides_stat_fallback
@@ -425,6 +425,8 @@ interior room regression checks passed.
 [ok] test_info_and_mobility_terms_reward_relevant_profiles
 [ok] test_skill_progression_grows_from_meaningful_practice
 [ok] test_skill_neglect_decay_respects_seeded_floor
+[ok] test_skill_decay_policy_keeps_perception_from_neglecting
+[ok] test_read_and_combat_events_exercise_perception_streetwise_and_tactics
 [ok] test_skill_neglect_waits_for_grace_and_interval
 [ok] test_fatigue_slows_practice_but_actions_still_refresh_decay
 [ok] test_skill_progression_state_survives_save_load
@@ -432,7 +434,7 @@ interior room regression checks passed.
 [ok] test_scan_action_uses_skill_terms_for_radius_and_detail
 [ok] test_site_intel_objective_awards_scale_with_detail_level
 skill regression checks passed.
-[ok]  skill_regression (0.42s)
+[ok]  skill_regression (0.46s)
 [run] gear_regression
       /usr/bin/python scripts/gear_regression.py
 [ok] test_catalogs_surface_gear
@@ -492,11 +494,11 @@ gear regression checks passed.
 [ok] test_orderly_network_spreads_trespass_reads_more_than_chaotic_network
 [ok] test_chaotic_network_spreads_anti_guard_conflict_more_than_orderly_network
 suspicion regression checks passed.
-[ok]  suspicion_regression (0.59s)
+[ok]  suspicion_regression (0.60s)
 [run] criminal_justice_regression
       /usr/bin/python scripts/criminal_justice_regression.py
 criminal_justice_regression: ok
-[ok]  criminal_justice_regression (2.24s)
+[ok]  criminal_justice_regression (2.28s)
 [run] npc_will_regression
       /usr/bin/python scripts/npc_will_regression.py
 [ok] test_off_shift_socializing_intent_no_unboundlocal
@@ -545,11 +547,11 @@ criminal_justice_regression: ok
 [ok] test_indoor_wildlife_is_relocated_outside_on_will_update
 [ok] test_wildlife_habitat_can_keep_underground_pests_inside
 npc will regression checks passed.
-[ok]  npc_will_regression (3.00s)
+[ok]  npc_will_regression (3.06s)
 [run] actor_attention_regression
       /usr/bin/python scripts/actor_attention_regression.py
 actor_attention_regression: ok
-[ok]  actor_attention_regression (0.28s)
+[ok]  actor_attention_regression (0.29s)
 [run] outfit_impression_regression
       /usr/bin/python scripts/outfit_impression_regression.py
 outfit_impression_regression: ok
@@ -557,7 +559,7 @@ outfit_impression_regression: ok
 [run] wildlife_ecology_regression
       /usr/bin/python scripts/wildlife_ecology_regression.py
 wildlife ecology regression checks passed.
-[ok]  wildlife_ecology_regression (0.24s)
+[ok]  wildlife_ecology_regression (0.25s)
 [run] animal_social_regression
       /usr/bin/python scripts/animal_social_regression.py
 animal social regression checks passed.
@@ -721,7 +723,7 @@ rival operator regression checks passed.
 [ok] test_hired_backup_command_topics_surface_orders_and_paid_hit
 [ok] test_backup_goto_wait_can_mark_a_spot_directly_from_dialog
 dialog ui regression checks passed.
-[ok]  dialog_ui_regression (6.67s)
+[ok]  dialog_ui_regression (6.78s)
 [run] dialogue_social_context_regression
       /usr/bin/python scripts/dialogue_social_context_regression.py
 [ok] test_first_contact_stranger_has_no_continuity_or_deep_access
@@ -749,12 +751,14 @@ relationship_notebook_regression: passed 7 checks
 [run] dialogue_shape_regression
       /usr/bin/python scripts/dialogue_shape_regression.py
 dialogue shape regression checks passed.
-[ok]  dialogue_shape_regression (0.03s)
+[ok]  dialogue_shape_regression (0.04s)
 [run] debug_ui_regression
       /usr/bin/python scripts/debug_ui_regression.py
 [ok] test_debug_modal_opens_scrolls_and_closes
 [ok] test_report_modal_switches_between_ops_and_known_locations
 [ok] test_keyboard_qezc_diagonals_and_punctuation_actions_emit_expected_results
+[ok] test_tactical_read_key_is_free_until_combat_pressure
+[ok] test_tactical_read_key_in_look_mode_reads_cursor_and_keeps_mode_open
 [ok] test_x_opens_view_only_overworld_map_without_consuming_turn
 [ok] test_view_only_overworld_movement_opens_browse_cursor_instead_of_travel
 [ok] test_cover_bindings_emit_cover_toggle_and_cover_hop_actions
@@ -773,6 +777,7 @@ dialogue shape regression checks passed.
 [ok] test_keypad_enter_confirms_look_inspect
 [ok] test_look_inspect_records_area_warmth_for_live_property
 [ok] test_look_inspect_surfaces_human_npc_appearance_clause
+[ok] test_focused_look_read_changes_with_perception_streetwise_and_tactics
 [ok] test_keypad_enter_confirms_manual_aim_fire
 [ok] test_f_aim_enables_manual_combat_pacing_until_closed
 [ok] test_visible_hostiles_blink_during_manual_combat_pacing
@@ -788,26 +793,30 @@ dialogue shape regression checks passed.
 [ok] test_legacy_cache_panel_state_upgrades_to_container_panel
 [ok] test_worn_container_panel_renders_shared_bag_interface
 debug UI regression checks passed.
-[ok]  debug_ui_regression (0.85s)
+[ok]  debug_ui_regression (1.00s)
 [run] curses_ui_regression
       /usr/bin/python scripts/curses_ui_regression.py
 [ok] test_constructor_initializes_terminal_state_and_palette
 [ok] test_draw_operations_clip_to_visible_bounds_and_use_color_attrs
+[ok] test_overlay_badges_add_attrs_without_replacing_curses_glyphs
 [ok] test_casino_palette_keys_register_for_curses_frontend
 [ok] test_hazard_palette_keys_register_for_curses_frontend
 [ok] test_survival_palette_keys_register_for_curses_frontend
+[ok] test_human_palette_keys_register_for_curses_frontend
+[ok] test_rich_person_header_segments_render_in_curses_frontend
 [ok] test_input_size_clear_and_refresh_passthrough
 [ok] test_layered_draws_sort_by_layer_then_priority
+[ok] test_help_overlay_includes_badge_legend
 curses frontend regression checks passed.
-[ok]  curses_ui_regression (0.02s)
+[ok]  curses_ui_regression (0.12s)
 [run] bootstrap_regression
       /usr/bin/python scripts/bootstrap_regression.py
 bootstrap regression checks passed.
-[ok]  bootstrap_regression (10.47s)
+[ok]  bootstrap_regression (10.52s)
 [run] tutorial_regression
       /usr/bin/python scripts/tutorial_regression.py
 tutorial_regression: ok (8 tests)
-[ok]  tutorial_regression (1.00s)
+[ok]  tutorial_regression (1.04s)
 [run] courier_opportunity_regression
       /usr/bin/python scripts/courier_opportunity_regression.py
 [ok] test_dialogue_angle_and_risk_call_out_item_handling
@@ -864,7 +873,7 @@ tutorial_regression: ok (8 tests)
 [ok] test_water_run_still_accepts_water_discovery_without_handoff_site
 [ok] test_accepted_multi_stage_delivery_tracks_pickup_and_handoff_sites
 courier opportunity regression checks passed.
-[ok]  courier_opportunity_regression (0.90s)
+[ok]  courier_opportunity_regression (0.91s)
 [run] opportunity_cadence_regression
       /usr/bin/python scripts/opportunity_cadence_regression.py
 [ok] test_report_open_does_not_refill_seeded_board
@@ -886,7 +895,7 @@ PASS test_world_event_reveal_waits_until_player_is_nearby
 PASS test_wilderness_roll_picks_hunter_or_campout_events
 PASS test_hunter_party_spawns_team_and_game_rack
 PASS test_campout_spawns_campfire_and_campers
-[ok]  world_event_regression (1.21s)
+[ok]  world_event_regression (1.23s)
 [run] newcomer_regression
       /usr/bin/python scripts/newcomer_regression.py
 [ok] test_newcomer_claims_nearby_lodging
@@ -900,7 +909,7 @@ PASS test_campout_spawns_campfire_and_campers
 [ok] test_unemployed_resident_does_not_relocate_to_remote_city_without_transit_access
 [ok] test_partner_household_can_relocate_together_to_a_better_city_chunk
 newcomer regression checks passed.
-[ok]  newcomer_regression (1.15s)
+[ok]  newcomer_regression (1.16s)
 [run] business_event_scene_regression
       /usr/bin/python scripts/business_event_scene_regression.py
 [ok] test_delivery_scene_spawns_vehicle_fixture_and_workers
@@ -962,7 +971,7 @@ newcomer regression checks passed.
 [ok] test_gathering_seed_fixture_and_actor_surface_scene_intel
 [ok] test_delivery_seed_escalates_into_later_inspection_followup
 business event scene regression checks passed.
-[ok]  business_event_scene_regression (5.71s)
+[ok]  business_event_scene_regression (5.79s)
 [run] local_situation_regression
       /usr/bin/python scripts/local_situation_regression.py
 [ok] test_quiet_chunk_does_not_emit_local_situation_rows
@@ -981,7 +990,7 @@ business event scene regression checks passed.
 [ok] test_report_and_look_choose_same_reported_hold_winner_for_crowded_property
 [ok] test_same_property_dedupe_prefers_concrete_scene_over_crew_activity
 local situation regression checks passed.
-[ok]  local_situation_regression (1.06s)
+[ok]  local_situation_regression (1.07s)
 [run] building_placement_regression
       /usr/bin/python scripts/building_placement_regression.py
 [ok] test_placement_profiles_are_deterministic
@@ -991,5 +1000,5 @@ local situation regression checks passed.
 [ok] test_footprints_stay_in_bounds_and_do_not_overlap
 [ok] test_entries_apertures_properties_and_structures_align
 building placement regression checks passed.
-[ok]  building_placement_regression (0.85s)
+[ok]  building_placement_regression (0.86s)
 regression run passed: 47 check(s).

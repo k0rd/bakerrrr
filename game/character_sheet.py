@@ -302,7 +302,8 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
                 limit=None,
             )
         }
-        for skill_id in tuple(profile.skill_ids() or ALL_SKILL_IDS):
+        visible_skill_ids = tuple(sorted(set(profile.skill_ids()) | set(ALL_SKILL_IDS)))
+        for skill_id in visible_skill_ids:
             key = str(skill_id or "").strip().lower()
             if not key:
                 continue

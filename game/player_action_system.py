@@ -69,6 +69,7 @@ from game.location_presentation_runtime import (
     _tile_legend_line,
 )
 from game.service_runtime import _credit_amount_label, _site_service_label
+from game.situation_read import perform_tactical_read
 from game.skills import (
     access_prep_skill_terms as _access_prep_skill_terms,
     actor_skill as _actor_skill,
@@ -1384,6 +1385,26 @@ class PlayerActionSystem(System):
 
         if action == "scan":
             self._handle_scan_action(eid=eid, pos=pos, zoom_mode=zoom_mode, radius=8)
+            return
+
+        if action == "tactical_read":
+            if zoom_mode == "overworld":
+                return
+            target = {}
+            if event.data.get("target_x") is not None and event.data.get("target_y") is not None:
+                target = {
+                    "x": event.data.get("target_x"),
+                    "y": event.data.get("target_y"),
+                    "z": event.data.get("target_z", pos.z),
+                }
+            if event.data.get("target_eid") is not None:
+                target["target_eid"] = event.data.get("target_eid")
+            perform_tactical_read(
+                self.sim,
+                eid,
+                target=target,
+                purpose=str(event.data.get("purpose", "") or ""),
+            )
             return
 
         if action == "examine_cursor":

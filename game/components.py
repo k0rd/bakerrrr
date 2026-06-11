@@ -262,6 +262,16 @@ class SkillProfile:
     """
 
     DEFAULT_FLOOR_RATIO = 0.7
+    DEFAULT_DECAY_RATE = 1.0
+    DEFAULT_DECAY_RATES = {
+        "perception": 0.0,
+        "athletics": 1.35,
+        "conversation": 0.55,
+        "streetwise": 1.0,
+        "intrusion": 0.65,
+        "mechanics": 0.55,
+        "tactics": 0.9,
+    }
 
     def __init__(
         self,
@@ -269,6 +279,8 @@ class SkillProfile:
         *,
         baselines=None,
         birth_biases=None,
+        floors=None,
+        decay_rates=None,
         practice=None,
         last_practiced=None,
         last_decay=None,
@@ -278,6 +290,8 @@ class SkillProfile:
         self.ratings = {}
         self.baselines = {}
         self.birth_biases = {}
+        self.floors = {}
+        self.decay_rates = {}
         self.practice = {}
         self.last_practiced = {}
         self.last_decay = {}
@@ -301,6 +315,22 @@ class SkillProfile:
                 if abs(delta) <= 1e-9:
                     continue
                 self.birth_biases[key] = delta
+        if isinstance(floors, dict):
+            for skill_id, value in floors.items():
+                key = self._skill_key(skill_id)
+                if not key:
+                    continue
+                self.floors[key] = _clamp_stat(value)
+        if isinstance(decay_rates, dict):
+            for skill_id, value in decay_rates.items():
+                key = self._skill_key(skill_id)
+                if not key:
+                    continue
+                try:
+                    rate = float(value)
+                except (TypeError, ValueError):
+                    continue
+                self.decay_rates[key] = max(0.0, min(3.0, rate))
         if isinstance(practice, dict):
             for skill_id, value in practice.items():
                 key = self._skill_key(skill_id)
@@ -385,7 +415,15 @@ class SkillProfile:
             self.set(skill_id, value, update_baseline=(self._skill_key(skill_id) not in self.baselines))
 
     def skill_ids(self):
-        return tuple(sorted(set(self.ratings) | set(self.baselines) | set(self.practice) | set(self.last_practiced) | set(self.last_decay)))
+        return tuple(sorted(
+            set(self.ratings)
+            | set(self.baselines)
+            | set(self.floors)
+            | set(self.decay_rates)
+            | set(self.practice)
+            | set(self.last_practiced)
+            | set(self.last_decay)
+        ))
 
     def baseline(self, skill_id, default=None):
         key = self._skill_key(skill_id)
@@ -420,16 +458,86 @@ class SkillProfile:
             self.baselines[key] = _clamp_stat(value)
         return float(self.baselines[key])
 
+    @classmethod
+    def default_floor_for_skill(cls, skill_id, baseline, default=1.0):
+        try:
+            base = _clamp_stat(baseline)
+        except (TypeError, ValueError):
+            base = _clamp_stat(default)
+        key = str(skill_id or "").strip().lower()
+        if key == "perception":
+            return base
+        if key == "athletics":
+            return 1.0
+        if key == "conversation":
+            return max(1.0, min(10.0, base - 0.8))
+        if key == "streetwise":
+            return max(1.0, min(10.0, base * 0.5))
+        if key in {"intrusion", "mechanics"}:
+            return max(1.0, min(10.0, base * 0.72))
+        if key == "tactics":
+            return max(1.0, min(10.0, base * 0.62))
+        return max(1.0, min(10.0, base * float(cls.DEFAULT_FLOOR_RATIO)))
+
+    @classmethod
+    def default_decay_rate_for_skill(cls, skill_id):
+        key = str(skill_id or "").strip().lower()
+        try:
+            return float(cls.DEFAULT_DECAY_RATES.get(key, cls.DEFAULT_DECAY_RATE))
+        except (TypeError, ValueError):
+            return float(cls.DEFAULT_DECAY_RATE)
+
+    def set_floor(self, skill_id, value):
+        key = self._skill_key(skill_id)
+        if not key:
+            return
+        self.floors[key] = _clamp_stat(value)
+
+    def ensure_floor(self, skill_id, value=None, default=1.0):
+        key = self._skill_key(skill_id)
+        if not key:
+            return None
+        if key not in self.floors:
+            if value is None:
+                value = self.ensure_baseline(key, value=self.get(key, default=default))
+            self.floors[key] = _clamp_stat(self.default_floor_for_skill(key, value, default=default))
+        return float(self.floors[key])
+
     def floor(self, skill_id, ratio=None, default=1.0):
+        key = self._skill_key(skill_id)
+        if not key:
+            return _clamp_stat(default)
+        if ratio is None and key in self.floors:
+            return float(self.floors[key])
         base = self.ensure_baseline(skill_id, value=self.get(skill_id, default=default))
         if base is None:
             return _clamp_stat(default)
+        if ratio is None:
+            return float(self.ensure_floor(key, value=base, default=default))
         try:
-            floor_ratio = float(self.DEFAULT_FLOOR_RATIO if ratio is None else ratio)
+            floor_ratio = float(ratio)
         except (TypeError, ValueError):
             floor_ratio = float(self.DEFAULT_FLOOR_RATIO)
         floor_ratio = max(0.1, min(1.0, floor_ratio))
         return max(1.0, min(10.0, float(base) * floor_ratio))
+
+    def set_decay_rate(self, skill_id, value):
+        key = self._skill_key(skill_id)
+        if not key:
+            return
+        try:
+            rate = float(value)
+        except (TypeError, ValueError):
+            rate = self.default_decay_rate_for_skill(key)
+        self.decay_rates[key] = max(0.0, min(3.0, rate))
+
+    def decay_rate(self, skill_id, default=None):
+        key = self._skill_key(skill_id)
+        if not key:
+            return float(self.DEFAULT_DECAY_RATE if default is None else default)
+        if key not in self.decay_rates:
+            self.decay_rates[key] = max(0.0, min(3.0, self.default_decay_rate_for_skill(key)))
+        return float(self.decay_rates[key])
 
     def practice_amount(self, skill_id, default=0.0):
         key = self._skill_key(skill_id)

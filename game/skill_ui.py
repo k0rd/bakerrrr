@@ -3,6 +3,7 @@ from __future__ import annotations
 from game.components import SkillProfile
 from game.skill_progression import SkillProgressionSystem
 from game.skills import (
+    ALL_SKILL_IDS,
     HUD_SKILL_IDS,
     actor_skill,
     profile_neglect_pressure,
@@ -171,7 +172,7 @@ def skill_debug_lines(sim, player_eid, *, duration_label_fn):
     birth_line = skill_birth_debug_line(profile)
     if birth_line:
         lines.append(birth_line)
-    for skill_id in tuple(profile.skill_ids() or HUD_SKILL_IDS):
+    for skill_id in tuple(sorted(set(profile.skill_ids()) | set(ALL_SKILL_IDS)) or HUD_SKILL_IDS):
         key = str(skill_id or "").strip().lower()
         if not key:
             continue

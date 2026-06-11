@@ -2734,6 +2734,114 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_actor_badge_overlay(self, x, y, color=None, attrs=0, *, kind="contact"):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.12)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        badge_r = max(3, self.cell_px // 5)
+        center = (self.cell_px - badge_r - max(1, self.cell_px // 14), badge_r + max(1, self.cell_px // 14))
+        shadow = (0, 0, 0, 150)
+        fill = (frame[0], frame[1], frame[2], 218)
+        stroke = (
+            min(255, int(frame[0] * 1.16) + 8),
+            min(255, int(frame[1] * 1.16) + 8),
+            min(255, int(frame[2] * 1.16) + 8),
+            238,
+        )
+        self.pygame.draw.circle(overlay, shadow, (center[0] + 1, center[1] + 1), badge_r)
+        self.pygame.draw.circle(overlay, fill, center, badge_r)
+        self.pygame.draw.circle(overlay, stroke, center, badge_r, max(1, self.cell_px // 24))
+
+        mark = {"threat": "!", "ally": "+", "contact": "*"}.get(kind, "*")
+        text_rgb = (24, 26, 30) if sum(frame[:3]) >= 390 else (250, 250, 245)
+        text_surface = self._marker_font.render(mark, True, text_rgb)
+        text_rect = text_surface.get_rect(center=center)
+        overlay.blit(text_surface, text_rect)
+
+        if kind == "threat":
+            arc_rect = (
+                max(1, self.cell_px // 12),
+                max(1, self.cell_px // 12),
+                self.cell_px - max(2, self.cell_px // 6),
+                self.cell_px - max(2, self.cell_px // 6),
+            )
+            self.pygame.draw.arc(
+                overlay,
+                (255, 255, 255, 118),
+                arc_rect,
+                -0.35,
+                1.45,
+                max(1, self.cell_px // 28),
+            )
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
+    def _draw_property_access_badge_overlay(self, x, y, color=None, attrs=0, *, kind="public"):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        pad = max(1, self.cell_px // 12)
+        badge_w = max(6, self.cell_px // 2)
+        badge_h = max(5, self.cell_px // 3)
+        rect = self.pygame.Rect(
+            self.cell_px - pad - badge_w,
+            self.cell_px - pad - badge_h,
+            badge_w,
+            badge_h,
+        )
+        shadow = (0, 0, 0, 138)
+        fill = (frame[0], frame[1], frame[2], 202)
+        stroke = (
+            min(255, int(frame[0] * 1.12) + 8),
+            min(255, int(frame[1] * 1.12) + 8),
+            min(255, int(frame[2] * 1.12) + 8),
+            232,
+        )
+        self.pygame.draw.rect(overlay, shadow, rect.move(1, 1), border_radius=max(1, self.cell_px // 18))
+        self.pygame.draw.rect(overlay, fill, rect, border_radius=max(1, self.cell_px // 18))
+        self.pygame.draw.rect(overlay, stroke, rect, max(1, self.cell_px // 26), border_radius=max(1, self.cell_px // 18))
+
+        mark = {
+            "owned": "*",
+            "locked": "L",
+            "restricted": "!",
+            "public": "+",
+        }.get(kind, "+")
+        text_rgb = (24, 26, 30) if sum(frame[:3]) >= 390 else (250, 250, 245)
+        text_surface = self._marker_font.render(mark, True, text_rgb)
+        text_rect = text_surface.get_rect(center=rect.center)
+        overlay.blit(text_surface, text_rect)
+
+        if kind == "locked":
+            shackle_rect = (
+                rect.left + max(1, rect.w // 4),
+                rect.top - max(2, rect.h // 3),
+                max(3, rect.w // 2),
+                max(4, rect.h),
+            )
+            self.pygame.draw.arc(
+                overlay,
+                stroke,
+                shackle_rect,
+                3.15,
+                6.25,
+                max(1, self.cell_px // 30),
+            )
+        elif kind == "restricted":
+            self.pygame.draw.line(
+                overlay,
+                (255, 255, 255, 122),
+                (rect.left + max(1, rect.w // 5), rect.bottom - 1),
+                (rect.right - max(1, rect.w // 5), rect.top + 1),
+                max(1, self.cell_px // 30),
+            )
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
     def _draw_objective_marker_overlay(self, x, y, glyph, color=None, attrs=0):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
         cell_x = int(x) * self.cell_px
@@ -3728,6 +3836,29 @@ class PygameView:
         if glyph == "*" and color_key == "floor_entertainment":
             self._draw_district_floor_overlay(x, y, color=color, attrs=attrs, kind="entertainment")
             return "floor_entertainment"
+        actor_badge_kind = {
+            "ui_actor_threat": "threat",
+            "ui_actor_ally": "ally",
+            "ui_actor_contact": "contact",
+        }.get(semantic_key)
+        if actor_badge_kind:
+            self._draw_actor_badge_overlay(x, y, color=color, attrs=attrs, kind=actor_badge_kind)
+            return semantic_key
+        property_badge_kind = {
+            "ui_property_owned": "owned",
+            "ui_property_locked": "locked",
+            "ui_property_restricted": "restricted",
+            "ui_property_public": "public",
+        }.get(semantic_key)
+        if property_badge_kind:
+            self._draw_property_access_badge_overlay(
+                x,
+                y,
+                color=color,
+                attrs=attrs,
+                kind=property_badge_kind,
+            )
+            return semantic_key
         if semantic_key == "objective":
             self._draw_objective_marker_overlay(x, y, glyph, color=color or "objective", attrs=attrs)
             return "objective_marker"

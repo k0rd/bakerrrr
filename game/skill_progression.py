@@ -36,6 +36,17 @@ class SkillProgressionSystem(System):
         self.sim.events.subscribe("insurance_policy_purchased", self.on_insurance_policy_purchased)
         self.sim.events.subscribe("site_service_used", self.on_site_service_used)
         self.sim.events.subscribe("melee_attack", self.on_melee_attack)
+        self.sim.events.subscribe("entity_moved", self.on_entity_moved)
+        self.sim.events.subscribe("cursor_examined", self.on_cursor_examined)
+        self.sim.events.subscribe("situation_read_changed", self.on_situation_read_changed)
+        self.sim.events.subscribe("tactical_read_performed", self.on_tactical_read_performed)
+        self.sim.events.subscribe("weapon_fired", self.on_weapon_fired)
+        self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
+        self.sim.events.subscribe("npc_downed", self.on_npc_downed)
+        self.sim.events.subscribe("cover_taken", self.on_cover_taken)
+        self.sim.events.subscribe("cover_shifted", self.on_cover_shifted)
+        self.sim.events.subscribe("cover_hopped", self.on_cover_hopped)
+        self.sim.events.subscribe("justice_surrender_choice", self.on_justice_surrender_choice)
 
     def _profile_for(self, eid, *, create=False):
         profiles = self.sim.ecs.get(SkillProfile)
@@ -54,6 +65,8 @@ class SkillProgressionSystem(System):
             if not key:
                 continue
             profile.ensure_baseline(key, value=profile.get(key, default=5.0))
+            profile.ensure_floor(key, value=profile.baseline(key, profile.get(key, default=5.0)))
+            profile.decay_rate(key)
             if profile.last_practiced_tick(key) is None:
                 profile.mark_last_practiced(key, tick)
             if profile.last_decay_tick(key) is None:
@@ -183,6 +196,10 @@ class SkillProgressionSystem(System):
 
         current = float(profile.get(skill_key, 5.0))
         floor = float(profile.floor(skill_key))
+        decay_rate = float(profile.decay_rate(skill_key))
+        if decay_rate <= 0.0:
+            profile.mark_last_decay(skill_key, tick)
+            return False
         if current <= floor + 1e-9:
             profile.mark_last_decay(skill_key, tick)
             return False
@@ -211,7 +228,7 @@ class SkillProgressionSystem(System):
         for _ in range(int(steps)):
             if after <= floor + 1e-9:
                 break
-            next_value = max(floor, after - float(self.NEGLECT_DECAY_STEP))
+            next_value = max(floor, after - (float(self.NEGLECT_DECAY_STEP) * decay_rate))
             if next_value >= after - 1e-9:
                 break
             total_delta += next_value - after
@@ -252,6 +269,8 @@ class SkillProgressionSystem(System):
         self._apply_practice(eid, "conversation", 0.12, reason="dialogue", cooldown_key=key, cooldown=self.DIALOG_TOPIC_COOLDOWN)
         self._apply_practice(eid, "streetwise", 0.06, reason="dialogue", cooldown_key=key, cooldown=self.DIALOG_TOPIC_COOLDOWN)
         self._apply_practice(eid, "perception", 0.05, reason="dialogue", cooldown_key=key, cooldown=self.DIALOG_TOPIC_COOLDOWN)
+        if topic_id.startswith("backup_"):
+            self._apply_practice(eid, "tactics", 0.16, reason="combat_order", cooldown_key=key, cooldown=self.DIALOG_TOPIC_COOLDOWN)
 
     def on_trade_bought(self, event):
         eid = event.data.get("eid")
@@ -320,6 +339,143 @@ class SkillProgressionSystem(System):
             cooldown_key=f"{weapon_id}:{target_key}:{int(getattr(self.sim, 'tick', 0))}",
             cooldown=0,
         )
+
+    def on_entity_moved(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        reason = str(event.data.get("reason", "move") or "move").strip().lower()
+        amount = 0.018
+        if reason == "cover_hop":
+            amount = 0.025
+        elif reason not in {"player_move", "move", "floor_change"}:
+            amount = 0.01
+        self._apply_practice(
+            eid,
+            "athletics",
+            amount,
+            reason="movement",
+            cooldown_key=reason,
+            cooldown=4,
+        )
+
+    def on_cursor_examined(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        mode = str(event.data.get("mode", "") or "").strip().lower()
+        purpose = str(event.data.get("purpose", "inspect") or "inspect").strip().lower()
+        x = event.data.get("x", event.data.get("cx", 0))
+        y = event.data.get("y", event.data.get("cy", 0))
+        z = event.data.get("z", 0)
+        key = f"{mode}:{purpose}:{x}:{y}:{z}"
+        text = str(event.data.get("text", "") or "").lower()
+        self._apply_practice(eid, "perception", 0.055, reason="look", cooldown_key=key, cooldown=12)
+        if any(token in text for token in ("read:", "npc:", "property:", "service", "locked", "private", "public")):
+            self._apply_practice(eid, "streetwise", 0.025, reason="look_read", cooldown_key=key, cooldown=12)
+        if purpose == "aim" or any(token in text for token in ("aim ", "cover", "exposed", "behind", "screened")):
+            self._apply_practice(eid, "tactics", 0.04, reason="look_tactics", cooldown_key=key, cooldown=8)
+
+    def on_situation_read_changed(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        signature = str(event.data.get("signature", "") or "").strip()
+        if not signature or not bool(event.data.get("meaningful", False)):
+            return
+        self._apply_practice(
+            eid,
+            "perception",
+            0.005,
+            reason="passive_read",
+            cooldown_key=signature,
+            cooldown=120,
+        )
+        if bool(event.data.get("has_streetwise", False)):
+            self._apply_practice(
+                eid,
+                "streetwise",
+                0.004,
+                reason="passive_read",
+                cooldown_key=signature,
+                cooldown=120,
+            )
+
+    def on_tactical_read_performed(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        signature = str(event.data.get("signature", "") or "tactical").strip()
+        self._apply_practice(eid, "tactics", 0.45, reason="tactical_read", cooldown_key=signature, cooldown=1)
+        self._apply_practice(eid, "perception", 0.08, reason="tactical_read", cooldown_key=signature, cooldown=1)
+        if bool(event.data.get("has_streetwise", False)):
+            self._apply_practice(eid, "streetwise", 0.035, reason="tactical_read", cooldown_key=signature, cooldown=1)
+
+    def on_weapon_fired(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        amount = 0.14 if bool(event.data.get("manual_aim", False)) else 0.09
+        self._apply_practice(
+            eid,
+            "tactics",
+            amount,
+            reason="weapon_fire",
+            cooldown_key=f"{event.data.get('weapon_id', '')}:{event.data.get('target_eid', '')}:{int(getattr(self.sim, 'tick', 0))}",
+            cooldown=0,
+        )
+
+    def on_entity_damaged(self, event):
+        source_eid = event.data.get("source_eid")
+        if source_eid != self.player_eid:
+            return
+        target_eid = event.data.get("target_eid")
+        if target_eid == self.player_eid:
+            return
+        self._apply_practice(
+            source_eid,
+            "tactics",
+            0.18,
+            reason="combat_hit",
+            cooldown_key=f"{target_eid}:{int(getattr(self.sim, 'tick', 0))}",
+            cooldown=0,
+        )
+
+    def on_npc_downed(self, event):
+        source_eid = event.data.get("source_eid")
+        if source_eid != self.player_eid:
+            return
+        self._apply_practice(
+            source_eid,
+            "tactics",
+            0.28,
+            reason="combat_down",
+            cooldown_key=f"{event.data.get('target_eid', '')}:{int(getattr(self.sim, 'tick', 0))}",
+            cooldown=0,
+        )
+
+    def on_cover_taken(self, event):
+        eid = event.data.get("eid")
+        if eid == self.player_eid:
+            self._apply_practice(eid, "tactics", 0.1, reason="cover_use", cooldown_key="take", cooldown=4)
+
+    def on_cover_shifted(self, event):
+        eid = event.data.get("eid")
+        if eid == self.player_eid:
+            self._apply_practice(eid, "tactics", 0.12, reason="cover_shift", cooldown_key="shift", cooldown=3)
+
+    def on_cover_hopped(self, event):
+        eid = event.data.get("eid")
+        if eid == self.player_eid:
+            self._apply_practice(eid, "tactics", 0.16, reason="cover_hop", cooldown_key=f"{event.data.get('to_x', '')}:{event.data.get('to_y', '')}", cooldown=3)
+
+    def on_justice_surrender_choice(self, event):
+        eid = event.data.get("eid")
+        if eid != self.player_eid:
+            return
+        if str(event.data.get("choice_id", "") or "").strip().lower() != "surrender":
+            return
+        self._apply_practice(eid, "tactics", 0.12, reason="surrender_choice", cooldown_key=str(event.data.get("npc_eid", "")), cooldown=24)
 
     def update(self):
         tick = int(getattr(self.sim, "tick", 0))
