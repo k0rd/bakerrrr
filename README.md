@@ -1,5 +1,7 @@
 # BAKERRRR
-[assets/screens/bakerrrr.png]
+
+binary packages for both windowos and linux are avaiable in github actions or on https://laziadri.itch.io/bakerrrr
+
 
 
 ## The Game:
