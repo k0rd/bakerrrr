@@ -780,6 +780,7 @@ class MovementThrottle:
         "leaving_property": 1,
         "chasing": 1,
         "scavenging": 2,
+        "shopping": 3,
         "following": 1,
         "holding": 1,
         "seeking_social": 2,
@@ -2666,6 +2667,7 @@ class FinancialProfile:
         withdraw_step=40,
         interest_rate=0.0,
         interest_interval=120,
+        last_income_hour=None,
     ):
         self.bank_balance = int(max(0, bank_balance))
         self.debt_balance = int(max(0, debt_balance))
@@ -2691,11 +2693,27 @@ class FinancialProfile:
         self.interest_rate = float(max(0.0, min(0.08, interest_rate)))
         self.interest_interval = int(max(20, interest_interval))
         self.next_interest_tick = 0
+        try:
+            self.last_income_hour = None if last_income_hour in {None, ""} else int(last_income_hour)
+        except (TypeError, ValueError):
+            self.last_income_hour = None
 
         # policy keys: money, item, medical
         self.policies = {}
         self.total_claims_paid = 0
         self.claim_count = 0
+
+    def ensure_income_fields(self):
+        if not hasattr(self, "last_income_hour"):
+            self.last_income_hour = None
+        elif self.last_income_hour == "":
+            self.last_income_hour = None
+        elif self.last_income_hour is not None:
+            try:
+                self.last_income_hour = int(self.last_income_hour)
+            except (TypeError, ValueError):
+                self.last_income_hour = None
+        return self
 
     def _ensure_debts(self):
         debts = getattr(self, "debts", None)

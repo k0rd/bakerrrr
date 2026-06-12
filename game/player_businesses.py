@@ -44,6 +44,7 @@ from game.system_support.ai_intent_runtime import _sync_ai_intent
 from game.system_support.actor_attention_runtime import record_actor_social_warmth as _record_actor_social_warmth
 from game.system_support.business_event_state import _business_event_actor_note
 from game.system_support.interaction_ordering import _manhattan
+from game.system_support.npc_income_runtime import grant_npc_wallet_credits, npc_hourly_wage
 from game.systems_business_reputation import business_opinion_profile, property_business_reputation_snapshot
 
 
@@ -119,10 +120,6 @@ BUSINESS_BASE_REVENUE = {
     "surplus_store": 10,
     "thrift_store": 9,
     "tool_depot": 10,
-}
-ROLE_WAGES = {
-    "manager": 4,
-    "staff": 3,
 }
 ROLE_WORK_PRACTICE_TOTAL = {
     "manager": 0.14,
@@ -869,6 +866,46 @@ def player_business_state(prop, create=False):
 def player_business_account_balance(prop):
     state = player_business_state(prop, create=False)
     return int(state.get("account_balance", 0)) if state else 0
+
+
+def player_business_record_direct_sale(sim, prop, amount, *, buyer_eid=None, item_id="", item_name=""):
+    """Credit a player-owned business for one concrete storefront sale."""
+    if sim is None or not isinstance(prop, dict):
+        return None
+    player_eid = getattr(sim, "player_eid", None)
+    if player_eid is None or not _property_owned_by_actor(sim, player_eid, prop):
+        return None
+    state = player_business_state(prop, create=True)
+    if state is None:
+        return None
+    amount = max(0, _int_or(amount, default=0))
+    if amount <= 0:
+        return None
+
+    before = int(state.get("account_balance", 0))
+    after = max(0, before + amount)
+    state["account_balance"] = int(after)
+    state["direct_sales_total"] = max(0, _int_or(state.get("direct_sales_total"), default=0)) + int(amount)
+    state["direct_sale_count"] = max(0, _int_or(state.get("direct_sale_count"), default=0)) + 1
+    summary = dict(state.get("last_summary", {})) if isinstance(state.get("last_summary"), dict) else {}
+    summary["direct_sales"] = max(0, _int_or(summary.get("direct_sales"), default=0)) + int(amount)
+    summary["direct_sale_count"] = max(0, _int_or(summary.get("direct_sale_count"), default=0)) + 1
+    summary["account_balance"] = int(after)
+    state["last_summary"] = summary
+    _touch_player_business_runtime(prop, sim=sim)
+
+    result = {
+        "property_id": _text(prop.get("id")) or None,
+        "property_name": _property_label(prop),
+        "buyer_eid": None if buyer_eid is None else _int_or(buyer_eid, default=0),
+        "item_id": _text(item_id).lower(),
+        "item_name": _text(item_name),
+        "amount": int(amount),
+        "account_before": int(before),
+        "account_after": int(after),
+    }
+    sim.emit(Event("player_business_direct_sale", **result))
+    return result
 
 
 def player_business_customer_policy(prop):
@@ -1993,6 +2030,8 @@ def player_business_status_snapshot(sim, prop):
         "last_churn_delta_pct": _int_or(last_summary.get("churn_delta_pct"), default=_int_or(summary.get("churn_delta_pct"), default=0)),
         "wages_paid": _int_or(last_summary.get("wages_paid"), default=0),
         "wages_due": _int_or(last_summary.get("wages_due"), default=0),
+        "wages_disbursed": _int_or(last_summary.get("wages_disbursed"), default=0),
+        "payroll_recipient_count": _int_or(last_summary.get("payroll_recipient_count"), default=0),
         "upkeep_paid": _int_or(last_summary.get("upkeep_paid"), default=0),
         "upkeep_due": _int_or(last_summary.get("upkeep_due"), default=0),
         "unpaid_wages": _int_or(last_summary.get("unpaid_wages"), default=0),
@@ -2823,6 +2862,91 @@ class PlayerBusinessSystem(System):
                     cooldown=0,
                 ))
 
+    def _payroll_rows_for(self, prop, state):
+        roles = dict(state.get("staff_roles", {})) if isinstance(state.get("staff_roles"), dict) else {}
+        rows = []
+        occupations = self.sim.ecs.get(Occupation)
+        ais = self.sim.ecs.get(AI)
+        for raw_eid, raw_role in sorted(roles.items(), key=lambda item: _int_or(item[0], default=0)):
+            actor_eid = _int_or(raw_eid, default=0)
+            if actor_eid <= 0 or actor_eid == _int_or(self.player_eid, default=-1):
+                continue
+            staff_role = _normalized_role(raw_role)
+            occupation = occupations.get(actor_eid)
+            ai = ais.get(actor_eid)
+            wage_due = npc_hourly_wage(
+                self.sim,
+                actor_eid,
+                role=_text(getattr(ai, "role", "")) or "worker",
+                career=_text(getattr(occupation, "career", "")),
+                workplace_prop=prop,
+                staff_role=staff_role,
+            )
+            rows.append({
+                "actor_eid": int(actor_eid),
+                "role": staff_role,
+                "wage_due": int(max(0, wage_due)),
+            })
+        return rows
+
+    def _split_payroll(self, rows, wages_paid):
+        wages_paid = max(0, _int_or(wages_paid, default=0))
+        rows = [dict(row) for row in tuple(rows or ()) if _int_or(row.get("wage_due"), default=0) > 0]
+        wages_due = sum(_int_or(row.get("wage_due"), default=0) for row in rows)
+        if wages_paid <= 0 or wages_due <= 0:
+            return [(row, 0) for row in rows]
+        wages_paid = min(wages_paid, wages_due)
+        paid_rows = []
+        paid_total = 0
+        remainders = []
+        for row in rows:
+            due = _int_or(row.get("wage_due"), default=0)
+            scaled = wages_paid * due
+            paid = min(due, scaled // wages_due)
+            remainder = scaled % wages_due
+            paid_rows.append([row, paid])
+            paid_total += paid
+            remainders.append((remainder, due, _int_or(row.get("actor_eid"), default=0), len(paid_rows) - 1))
+        leftover = max(0, wages_paid - paid_total)
+        for _remainder, _due, _eid, idx in sorted(remainders, reverse=True):
+            if leftover <= 0:
+                break
+            row, paid = paid_rows[idx]
+            due = _int_or(row.get("wage_due"), default=0)
+            if paid >= due:
+                continue
+            paid_rows[idx][1] = paid + 1
+            leftover -= 1
+        return [(row, int(paid)) for row, paid in paid_rows]
+
+    def _disburse_payroll(self, prop, rows_with_pay, hour_counter):
+        property_id = _text(prop.get("id"))
+        property_name = _property_label(prop)
+        wallet_total = 0
+        paid_count = 0
+        for row, paid in tuple(rows_with_pay or ()):
+            paid = max(0, _int_or(paid, default=0))
+            if paid <= 0:
+                continue
+            paid_count += 1
+            result = grant_npc_wallet_credits(
+                self.sim,
+                _int_or(row.get("actor_eid"), default=0),
+                paid,
+                source="player_business",
+                property_id=property_id,
+                property_name=property_name,
+                wage_due=_int_or(row.get("wage_due"), default=paid),
+                wage_paid=paid,
+                hour=hour_counter,
+            )
+            if isinstance(result, dict):
+                wallet_total += _int_or(result.get("wallet_granted"), default=0)
+        return {
+            "wages_disbursed": int(wallet_total),
+            "payroll_recipient_count": int(paid_count),
+        }
+
     def _process_business_hour(self, prop, state, hour_counter):
         previous_summary = dict(state.get("last_summary", {})) if isinstance(state.get("last_summary"), dict) else {}
         state["required_staff"] = _required_staff_for(prop)
@@ -2889,10 +3013,8 @@ class PlayerBusinessSystem(System):
             realized_revenue = max(0, gross_revenue - slippage)
             self._emit_work_practice(prop, state, hour_counter)
 
-        wages_due = 0
-        if open_now:
-            wages_due += manager_count * int(ROLE_WAGES["manager"])
-            wages_due += staff_count * int(ROLE_WAGES["staff"])
+        payroll_rows = self._payroll_rows_for(prop, state) if open_now else []
+        wages_due = sum(_int_or(row.get("wage_due"), default=0) for row in payroll_rows)
         upkeep_due = 1 + min(2, len(tuple(_finance_services_for_property(prop))) + len(tuple(_site_services_for_property(prop))))
 
         available = int(state.get("account_balance", 0)) + int(realized_revenue)
@@ -2903,6 +3025,8 @@ class PlayerBusinessSystem(System):
 
         unpaid_wages = max(0, wages_due - wages_paid)
         unpaid_upkeep = max(0, upkeep_due - upkeep_paid)
+        payroll_paid_rows = self._split_payroll(payroll_rows, wages_paid)
+        payroll_disbursement = self._disburse_payroll(prop, payroll_paid_rows, hour_counter)
         state["account_balance"] = max(0, int(available))
         state["last_cycle_hour"] = int(hour_counter + 1)
 
@@ -2941,6 +3065,8 @@ class PlayerBusinessSystem(System):
             "policy_note": policy_note,
             "wages_due": int(wages_due),
             "wages_paid": int(wages_paid),
+            "wages_disbursed": int(payroll_disbursement.get("wages_disbursed", 0)),
+            "payroll_recipient_count": int(payroll_disbursement.get("payroll_recipient_count", 0)),
             "upkeep_due": int(upkeep_due),
             "upkeep_paid": int(upkeep_paid),
             "unpaid_wages": int(unpaid_wages),
@@ -3020,6 +3146,7 @@ __all__ = [
     "hire_actor_into_player_business",
     "player_business_open_roles",
     "player_business_account_balance",
+    "player_business_record_direct_sale",
     "player_business_customer_policy",
     "player_business_customer_policy_label",
     "player_business_housing_plan",

@@ -1619,7 +1619,7 @@ class InputSystem(System):
         target_y = int(mark.get("y", player_pos.y))
         target_z = int(mark.get("z", player_pos.z))
         state["backup_cursor_pending_topic"] = str(pending_topic or "").strip().lower()
-        state["hint"] = "Mark a spot with E or Enter. Esc cancels."
+        state["hint"] = "Mark a spot for the order."
         return self._activate_look_mode_at(
             "city",
             x=target_x,

@@ -132,6 +132,7 @@ from game.skills import seed_skill_profile
 from game.situation_read import SituationReadSystem
 from game.npc_boundary_system import NPCBoundaryEnforcementSystem
 from game.npc_interaction_system import NPCInteractionSystem
+from game.npc_income_system import NPCIncomeSystem
 from game.objective_progress import ObjectiveProgressSystem
 from game.criminal_justice_system import CriminalJusticeSystem
 from game.trade_system import TradeSystem
@@ -738,6 +739,7 @@ def _register_runtime_systems(sim, view, player):
 
     property_system = PropertySystem(sim, player)
     player_business_system = PlayerBusinessSystem(sim, player)
+    npc_income_system = NPCIncomeSystem(sim)
     property_awareness_system = PropertyAwarenessSystem(sim)
     property_defense_system = PropertyDefenseSystem(sim)
     npc_boundary_system = NPCBoundaryEnforcementSystem(sim)
@@ -779,7 +781,10 @@ def _register_runtime_systems(sim, view, player):
     log_system = EventLogSystem(sim, player)
     render_system = RenderSystem(sim, view, player, hud_lines=10)
     render_system.runtime_tag = "render"
+    sim.item_system = item_system
+    sim.item_action_system = item_system.item_actions
     sim.site_service_system = site_service_system
+    sim.trade_system = trade_system
 
     _live_timeskip_stride(combat_pacing_system, 0)
     _live_timeskip_stride(situation_read_system, 0)
@@ -801,6 +806,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(lighting_system, 0)
     _live_timeskip_stride(property_system, 20)
     _live_timeskip_stride(player_business_system, 60)
+    _live_timeskip_stride(npc_income_system, 60)
     _live_timeskip_stride(property_awareness_system, 20)
     _live_timeskip_stride(property_defense_system, 20)
     _live_timeskip_stride(npc_boundary_system, 2)
@@ -866,6 +872,7 @@ def _register_runtime_systems(sim, view, player):
 
     sim.register_system(property_system)
     sim.register_system(player_business_system)
+    sim.register_system(npc_income_system)
     sim.register_system(property_awareness_system)
     sim.register_system(property_defense_system)
     sim.register_system(npc_boundary_system)

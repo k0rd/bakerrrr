@@ -460,6 +460,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("npc_affiliation_attempt_resolved", self.on_npc_affiliation_attempt_resolved)
         self.sim.events.subscribe("npc_need_critical", self.on_npc_need_critical)
         self.sim.events.subscribe("action_offense", self.on_action_offense)
+        self.sim.events.subscribe("player_action_blocked", self.on_player_action_blocked)
         self.sim.events.subscribe("npc_offended", self.on_npc_offended)
         self.sim.events.subscribe("npc_conversation_refused", self.on_npc_conversation_refused)
         self.sim.events.subscribe("npc_eject_target", self.on_npc_eject_target)
@@ -510,9 +511,11 @@ class EventLogSystem(System):
         self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
         self.sim.events.subscribe("actor_deprivation_damage", self.on_actor_deprivation_damage)
         self.sim.events.subscribe("player_downed", self.on_player_downed)
+        self.sim.events.subscribe("player_recovered_from_downed", self.on_player_recovered_from_downed)
         self.sim.events.subscribe("player_critical_saved", self.on_player_critical_saved)
         self.sim.events.subscribe("player_killed", self.on_player_killed)
         self.sim.events.subscribe("npc_downed", self.on_npc_downed)
+        self.sim.events.subscribe("npc_medical_rescue_applied", self.on_npc_medical_rescue_applied)
         self.sim.events.subscribe("npc_killed", self.on_npc_killed)
         self.sim.events.subscribe("explosion_triggered", self.on_explosion_triggered)
         self.sim.events.subscribe("combat_overlay_entered", self.on_combat_overlay_entered)
@@ -526,6 +529,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("player_business_staff_fired", self.on_player_business_staff_fired)
         self.sim.events.subscribe("property_purchase_blocked", self.on_property_purchase_blocked)
         self.sim.events.subscribe("trade_bought", self.on_trade_bought)
+        self.sim.events.subscribe("npc_item_purchased", self.on_npc_item_purchased)
         self.sim.events.subscribe("trade_buy_blocked", self.on_trade_buy_blocked)
         self.sim.events.subscribe("trade_sold", self.on_trade_sold)
         self.sim.events.subscribe("trade_sell_blocked", self.on_trade_sell_blocked)
@@ -3658,6 +3662,8 @@ class EventLogSystem(System):
             _log_player_feedback(self.sim, "No usable item in inventory.", kind="interaction")
         elif reason == "auto_only_item":
             _log_player_feedback(self.sim, f"{item_name} only triggers automatically in a critical state.", kind="interaction")
+        elif reason == "downed_requires_medical":
+            _log_player_feedback(self.sim, "You need restorative medical aid while downed.", kind="interaction")
         elif reason == "item_not_usable":
             _log_player_feedback(self.sim, f"{item_name} cannot be used.", kind="interaction")
         elif reason == "item_not_throwable":
@@ -4376,10 +4382,29 @@ class EventLogSystem(System):
     def on_player_downed(self, event):
         if event.data.get("target_eid") != self.player_eid:
             return
-        penalty = int(event.data.get("credits_penalty", 0))
-        recovered = int(event.data.get("recovered_hp", 1))
+        bleedout_ticks = int(event.data.get("bleedout_ticks", 0) or 0)
         self._log(
-            f"Downed! You recover at {recovered} HP (-{penalty} credits).",
+            f"Downed. Bleeding out in {bleedout_ticks} ticks. Use medical aid if you can.",
+            channel="combat",
+            priority="critical",
+        )
+
+    def on_player_recovered_from_downed(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "medical aid"))).strip() or "medical aid"
+        recovered = int(event.data.get("recovered_hp", 1) or 1)
+        rescuer_eid = event.data.get("rescuer_eid")
+        if rescuer_eid is not None and rescuer_eid != self.player_eid:
+            rescuer_name = self._npc_label(rescuer_eid)
+            self._log(
+                f"{rescuer_name} uses {item_name} and gets you back up at {recovered} HP.",
+                channel="combat",
+                priority="critical",
+            )
+            return
+        self._log(
+            f"{item_name} gets you back up at {recovered} HP.",
             channel="combat",
             priority="critical",
         )
@@ -4398,7 +4423,23 @@ class EventLogSystem(System):
     def on_player_killed(self, event):
         if event.data.get("target_eid") != self.player_eid:
             return
+        reason = str(event.data.get("reason", "") or "").strip().lower()
         source_name = str(event.data.get("source_name", "") or "").strip()
+        if reason == "bled_out":
+            self._log(
+                "You bled out.",
+                channel="combat",
+                priority="critical",
+            )
+            return
+        if reason == "executed_while_downed":
+            text = f"Executed by {source_name} while downed." if source_name else "Executed while downed."
+            self._log(
+                text,
+                channel="combat",
+                priority="critical",
+            )
+            return
         if source_name:
             self._log(
                 f"Killed by {source_name}.",
@@ -4412,12 +4453,48 @@ class EventLogSystem(System):
             priority="critical",
         )
 
+    def on_player_action_blocked(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if str(event.data.get("reason", "") or "").strip().lower() != "downed":
+            return
+        _log_player_feedback(
+            self.sim,
+            "You are downed. Use restorative medical aid.",
+            kind="combat",
+            dedupe_window=4,
+            dedupe_key="player_action_blocked:downed",
+        )
+
     def on_npc_downed(self, event):
         if event.data.get("source_eid") != self.player_eid:
             return
         target = event.data.get("target_eid")
         target_name = self._npc_label(target)
         self._log_npc_message(target, f"{target_name} is downed.", channel="combat", priority="high")
+
+    def on_npc_medical_rescue_applied(self, event):
+        target = event.data.get("target_eid")
+        if target == self.player_eid:
+            return
+        rescuer = event.data.get("rescuer_eid")
+        if not (
+            self._player_can_perceive_entity(rescuer)
+            or self._player_can_perceive_entity(target)
+            or self._player_can_perceive_event_position(event)
+        ):
+            return
+        rescuer_name = self._npc_label(rescuer)
+        target_name = self._npc_label(target)
+        item_name = str(event.data.get("item_name", event.data.get("item_id", "medical aid"))).strip() or "medical aid"
+        recovered = int(event.data.get("recovered_hp", 1) or 1)
+        self._log(
+            f"{rescuer_name} uses {item_name} and gets {target_name} back up at {recovered} HP.",
+            channel="combat",
+            priority="high",
+            dedupe_window=2,
+            dedupe_key=f"npc_medical_rescue:{rescuer}:{target}",
+        )
 
     def on_npc_killed(self, event):
         target = event.data.get("target_eid")
@@ -4658,6 +4735,45 @@ class EventLogSystem(System):
             self.sim.log.add(f"Bought {item_name} for {price} credits at {store}. {contact_note}.")
             return
         self.sim.log.add(f"Bought {item_name} for {price} credits at {store}.")
+
+    def on_npc_item_purchased(self, event):
+        npc_eid = event.data.get("npc_eid", event.data.get("eid"))
+        if npc_eid == self.player_eid:
+            return
+        visible = self._player_can_perceive_entity(npc_eid)
+        near = self._player_is_near_event_position(event, radius=8)
+        if not visible and not near:
+            return
+        item_name = self._event_item_label(event)
+        store = self._event_property_name(event, fallback=str(event.data.get("store_name", "store") or "store"))
+        impulse = bool(event.data.get("impulse"))
+        wallet_after = int(event.data.get("wallet_after", 0) or 0)
+        if visible:
+            name = self._npc_label(npc_eid, fallback="Someone")
+            if impulse and wallet_after <= 0:
+                self._log(
+                    f"{name} spends their last credits on {item_name} at {store}.",
+                    channel="social",
+                    priority="low",
+                    dedupe_window=4,
+                    dedupe_key=f"npc-shopping:{npc_eid}:{event.data.get('item_id')}:{event.data.get('property_id')}",
+                )
+            else:
+                self._log(
+                    f"{name} buys {item_name} at {store}.",
+                    channel="social",
+                    priority="low",
+                    dedupe_window=4,
+                    dedupe_key=f"npc-shopping:{npc_eid}:{event.data.get('item_id')}:{event.data.get('property_id')}",
+                )
+            return
+        self._log(
+            f"You hear a quick purchase at {store}.",
+            channel="social",
+            priority="low",
+            dedupe_window=4,
+            dedupe_key=f"npc-shopping-near:{event.data.get('property_id')}",
+        )
 
     def on_trade_buy_blocked(self, event):
         if event.data.get("eid") != self.player_eid:

@@ -3,7 +3,7 @@
 import random
 
 from engine.events import Event
-from game.components import AI, Inventory, JusticeProfile, PlayerAssets, Position, StatusEffects, WeaponLoadout
+from game.components import AI, Inventory, JusticeProfile, PlayerAssets, Position, StatusEffects, Vitality, WeaponLoadout
 from game.appearance_loadout import (
     equip_appearance_item,
     is_appearance_item,
@@ -23,7 +23,7 @@ from game.property_runtime import (
     property_services as _property_services,
     remember_property_lead_for_actor as _remember_property_lead_for_actor,
 )
-from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
+from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed, _recover_downed_actor_state
 from game.system_support.container_runtime import (
     _clear_inventory_container_assignments,
     _unlink_removed_item_from_gear,
@@ -80,6 +80,32 @@ class ItemActionRuntime:
             "legal_status": "legal",
             "effects": [],
         })
+
+    def _item_can_recover_downed_actor(self, item_def):
+        tags = _item_tags(item_def)
+        if "death_save" in tags or "medical" not in tags:
+            return False
+        for effect in tuple(item_def.get("effects", ()) or ()):
+            if not isinstance(effect, dict) or effect.get("type") != "restore_hp":
+                continue
+            try:
+                delta = int(round(float(effect.get("delta", 0) or 0)))
+            except (TypeError, ValueError):
+                delta = 0
+            if delta > 0:
+                return True
+        return False
+
+    def _downed_recovery_entry(self, inventory, *, instance_id=None):
+        if not inventory:
+            return None
+        if instance_id:
+            return inventory.find(instance_id=instance_id)
+        for entry in list(getattr(inventory, "items", ()) or ()):
+            item_def = self._item_def(entry.get("item_id"))
+            if self._item_can_recover_downed_actor(item_def):
+                return entry
+        return None
 
     def _item_throw_profile(self, item_def):
         profile = item_def.get("throw_profile") if isinstance(item_def, dict) else None
@@ -1072,6 +1098,72 @@ class ItemActionRuntime:
         )
         return True
 
+    def _use_downed_recovery_item(self, eid, x, y, z, *, instance_id=None, reason="manual", preferred_appearance_slot=None):
+        if int(eid) != int(self.player_eid):
+            _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+            return False
+
+        inventory = self._inventory_for(eid)
+        if not inventory:
+            self.sim.emit(Event("item_use_blocked", eid=eid, reason="no_inventory"))
+            return False
+
+        entry = self._downed_recovery_entry(inventory, instance_id=instance_id)
+        if not entry:
+            self.sim.emit(Event("item_use_blocked", eid=eid, reason="no_usable_item"))
+            return False
+
+        item_def = self._item_def(entry["item_id"])
+        item_name = self._display_name_for_actor(eid, entry)
+        if "death_save" in _item_tags(item_def):
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="auto_only_item",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
+        if not self._item_can_recover_downed_actor(item_def):
+            self.sim.emit(Event(
+                "item_use_blocked",
+                eid=eid,
+                reason="downed_requires_medical",
+                item_id=item_def["id"],
+                item_name=item_name,
+            ))
+            return False
+
+        used = self.consume_item(
+            eid,
+            x,
+            y,
+            z,
+            instance_id=entry["instance_id"],
+            reason=reason,
+            preferred_appearance_slot=preferred_appearance_slot,
+        )
+        vitality = self.sim.ecs.get(Vitality).get(eid)
+        if not used or not vitality or int(getattr(vitality, "hp", 0)) <= 0:
+            return bool(used)
+
+        _recover_downed_actor_state(
+            self.sim,
+            eid,
+            tick=self.sim.tick,
+            min_hp=int(getattr(vitality, "hp", 1) or 1),
+        )
+        self.sim.emit(Event(
+            "player_recovered_from_downed",
+            eid=eid,
+            target_eid=eid,
+            item_id=item_def["id"],
+            item_name=item_name,
+            recovered_hp=int(getattr(vitality, "hp", 0)),
+            max_hp=int(getattr(vitality, "max_hp", 0)),
+        ))
+        return True
+
     def handle_pickup(self, eid, x, y, z):
         inventory = self._inventory_for(eid)
         if not inventory:
@@ -1324,7 +1416,20 @@ class ItemActionRuntime:
             return
 
         if _entity_is_downed(self.sim, eid):
-            _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+            positions = self.sim.ecs.get(Position)
+            pos = positions.get(eid)
+            if not pos:
+                _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+                return
+            self._use_downed_recovery_item(
+                eid,
+                pos.x,
+                pos.y,
+                pos.z,
+                instance_id=event.data.get("item_instance_id"),
+                reason="downed_medical",
+                preferred_appearance_slot=event.data.get("preferred_appearance_slot"),
+            )
             return
 
         positions = self.sim.ecs.get(Position)
@@ -1401,14 +1506,31 @@ class ItemActionRuntime:
             return
 
         if action == "pickup_item":
+            if _entity_is_downed(self.sim, eid):
+                _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+                self.sim.emit(Event("item_use_blocked", eid=eid, reason="downed_requires_medical"))
+                return
             self.handle_pickup(eid, pos.x, pos.y, pos.z)
             return
 
         if action == "drop_item":
+            if _entity_is_downed(self.sim, eid):
+                _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+                self.sim.emit(Event("item_use_blocked", eid=eid, reason="downed_requires_medical"))
+                return
             self.handle_drop(eid, pos.x, pos.y, pos.z)
             return
 
         if action == "use_item":
+            if _entity_is_downed(self.sim, eid):
+                self._use_downed_recovery_item(
+                    eid,
+                    pos.x,
+                    pos.y,
+                    pos.z,
+                    reason="downed_medical",
+                )
+                return
             self.consume_item(
                 eid=eid,
                 x=pos.x,

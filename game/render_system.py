@@ -967,6 +967,7 @@ class RenderSystem(System):
             "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with space or 5.",
             "Observe: / talks, ' physically interacts, . uses the service on your tile, ; locks or unlocks a nearby door, x opens the look cursor, T takes a tactical read, and X opens the map. Vehicle interact enters or exits overworld.",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
+            "Conversation read: + marks newly surfaced topics when your character notices them; at higher Conversation, its color hints safe, neutral, or dangerous.",
             "Ingress: Shift+J door breach, Shift+W window entry, Shift+K wall breach.",
             'Features: + closed door, \' open door, " window, / breach opening, > higher stairs, < lower stairs, : stair landing, E elevator.',
             "Infrastructure: typed markers (l lamp, p pole, h hydrant, u stop, j/t utility, $ ATM, c claim terminal, r access panel).",
@@ -1040,6 +1041,9 @@ class RenderSystem(System):
             return self._hud_token_line(text, label="Heat", color="projectile")
         if lower.startswith("hp "):
             return self._hud_token_line(text, label="HP", color="survival_meter_mid")
+        if lower.startswith("downed:") or lower.startswith("downed "):
+            label = "Downed:" if lower.startswith("downed:") else "Downed"
+            return self._hud_token_line(text, label=label, color="projectile")
         if lower.startswith("cr "):
             return self._hud_token_line(text, label="Cr", color="player")
         if lower.startswith("opp "):
@@ -1254,6 +1258,7 @@ class RenderSystem(System):
             "selected_index": 0,
             "scroll": 0,
             "hint": "",
+            "conversation_read": "",
             "new_topic_ids": [],
             "close_pending": False,
         })
@@ -2252,6 +2257,19 @@ class RenderSystem(System):
         hp_text = "?"
         if vitality:
             hp_text = f"{vitality.hp}/{vitality.max_hp}"
+        downed_lines = []
+        if vitality and bool(getattr(vitality, "downed", False)):
+            try:
+                downed_tick = int(getattr(vitality, "downed_tick", self.sim.tick))
+            except (TypeError, ValueError):
+                downed_tick = int(getattr(self.sim, "tick", 0))
+            bleedout_ticks = max(1, _int_or_default(getattr(self.sim, "player_bleedout_ticks", 8), 8))
+            remaining = max(0, bleedout_ticks - max(0, int(getattr(self.sim, "tick", 0)) - downed_tick))
+            downed_lines = _wrap_display_lines(
+                self._hud_styled_chunk(f"Downed: bleeding out {remaining}t"),
+                hud_text_w,
+                max_lines=1,
+            )
 
         status_chunks = _hud_primary_status_chunks(
             self.sim,
@@ -2547,7 +2565,7 @@ class RenderSystem(System):
             opportunity_line = "Opp 0 known"
         show_opportunity_line = bool(opportunity_line)
 
-        report_hint_line = "O ops report, Y notebooks."
+        report_hint_line = ""
 
         if look_ui.get("active"):
             look_entry = look_ui.get("inspect_text", "")
@@ -2591,15 +2609,7 @@ class RenderSystem(System):
                         max_lines=1,
                     )
                 )
-            if len(quest_lines) < 2:
-                quest_lines.extend(
-                    _wrap_display_lines(
-                        report_hint_line,
-                        hud_text_w,
-                        max_lines=max(1, 2 - len(quest_lines)),
-                    )
-                )
-            quest_lines = quest_lines[:2] or [report_hint_line]
+            quest_lines = quest_lines[:2]
 
         read_state = getattr(self.sim, "situation_read_state", {})
         read_text = ""
@@ -2627,6 +2637,12 @@ class RenderSystem(System):
             {
                 "id": "mode",
                 "lines": _wrap_display_lines(mode_line, hud_text_w, max_lines=2),
+                "min_lines": 1,
+                "trim_priority": 0,
+            },
+            {
+                "id": "downed",
+                "lines": downed_lines,
                 "min_lines": 1,
                 "trim_priority": 0,
             },
@@ -3296,13 +3312,23 @@ class RenderSystem(System):
                 absolute = topic_start + idx
                 marker = ">" if absolute == selected_index else " "
                 topic_id = str(row.get("id", "")).strip().lower()
-                new_flag = "+" if topic_id in new_topic_ids else " "
+                if topic_id in new_topic_ids:
+                    if "new_marker_visible" in row:
+                        show_new_marker = bool(row.get("new_marker_visible"))
+                    else:
+                        show_new_marker = True
+                else:
+                    show_new_marker = False
+                new_flag = str(row.get("new_marker", "+") or "+")[:1] if show_new_marker else " "
+                new_color = str(row.get("new_marker_color", "") or "").strip() or (
+                    "objective" if topic_id in new_topic_ids else "player"
+                )
                 label = str(row.get("label", row.get("id", "topic"))).strip() or "topic"
                 row_attrs = getattr(curses, "A_BOLD", 0) if absolute == selected_index else 0
                 line = _rich_line(
                     (
                         _segment(marker, color="player", attrs=row_attrs),
-                        _segment(new_flag, color="objective" if topic_id in new_topic_ids else "player", attrs=row_attrs),
+                        _segment(new_flag, color=new_color, attrs=row_attrs),
                         _segment(f"{absolute + 1:02d} {label}", color="player", attrs=row_attrs),
                     ),
                     text=f"{marker}{new_flag}{absolute + 1:02d} {label}",
@@ -3315,7 +3341,7 @@ class RenderSystem(System):
                 )
 
             if not raw_topics:
-                empty_text = "(press Space to close)" if close_pending else "(no topics)"
+                empty_text = "(conversation over)" if close_pending else "(no topics)"
                 self.view.draw_text(panel_x + 2, options_y, _clip(empty_text, body_w), color="player")
 
             footer_bits = []
@@ -3326,43 +3352,7 @@ class RenderSystem(System):
             hint = str(dialog_ui.get("hint", "")).strip()
             if hint:
                 footer_bits.append(hint)
-            dialog_kind = str(dialog_ui.get("kind", "conversation") or "conversation").strip().lower()
-            dialog_topic_ids = {
-                str(row.get("id", "")).strip().lower()
-                for row in raw_topics
-                if isinstance(row, dict)
-            }
             footer = " | ".join(footer_bits) if footer_bits else ""
-            if close_pending:
-                action_tail = "Space close | Esc close | O ops | Y notebooks | L log | D debug | ? help"
-            elif dialog_kind == "justice_surrender":
-                action_tail = "E choose | Esc resist | ? help"
-            elif dialog_kind == "justice_questioning":
-                action_tail = "E choose | Esc refuse | ? help"
-            elif dialog_kind == "service_menu":
-                action_tail = "E select | Esc close | O ops | Y notebooks | ? help"
-            else:
-                if dialog_topic_ids & {"backup_orders", "backup_goto_wait", "backup_wait_return", "backup_kill"}:
-                    action_tail = "E ask | X mark | Esc close | M trade | O ops | Y notebooks | ? help"
-                else:
-                    action_tail = "E ask | Esc close | M trade | O ops | Y notebooks | ? help"
-            if footer:
-                footer = f"{footer} | {action_tail}"
-            else:
-                if close_pending:
-                    footer = action_tail
-                elif dialog_kind == "justice_surrender":
-                    footer = action_tail
-                elif dialog_kind == "justice_questioning":
-                    footer = "E choose | Esc refuse | ? help"
-                elif dialog_kind == "service_menu":
-                    footer = f"{action_tail} | L log | D debug"
-                else:
-                    if dialog_topic_ids & {"backup_orders", "backup_goto_wait", "backup_wait_return", "backup_kill"}:
-                        footer = "E ask | X mark | Esc close | M trade | O ops | Y notebooks | L log | D debug | ? help"
-                    else:
-                        footer = "E ask | Esc close | M trade | O ops | Y notebooks | L log | D debug | ? help"
-            footer = release_control_text(footer, self.sim)
             self.view.draw_text(panel_x + 2, footer_y, _clip(footer, body_w))
         elif character_ui.get("open"):
             panel_w = min(max(60, screen_w - 4), screen_w)

@@ -4,6 +4,7 @@ import random
 
 from engine.events import Event
 from engine.systems import System
+from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.components import (
     AI,
     ArmorLoadout,
@@ -14,7 +15,10 @@ from game.components import (
     ItemUseProfile,
     JusticeProfile,
     NPCNeeds,
+    NPCSocial,
     NPCTraits,
+    NPCWill,
+    Occupation,
     Position,
     Render,
     StatusEffects,
@@ -29,11 +33,13 @@ from game.checks import (
     crime_sensitivity as _crime_sensitivity,
     justice_level as _justice_level,
 )
+from game.dialogue_runtime import active_contractor_record
 from game.skills import actor_skill as _actor_skill
 from game.system_support.actor_runtime import (
     _apply_downed_actor_state,
     _detail_tick_allowed,
     _entity_is_downed,
+    _recover_downed_actor_state,
 )
 from game.system_support.combat_targeting_runtime import (
     _aim_confirm_label,
@@ -43,6 +49,7 @@ from game.system_support.combat_targeting_runtime import (
     _dir_label,
     _entity_should_blink_in_combat,
     _entity_uses_melee_aim,
+    _entity_is_weapon_targetable,
     _first_targetable_entity_at,
     _int_or_default,
     _float_or_default,
@@ -92,14 +99,26 @@ MAJOR_WILDLIFE_TAXONOMIES = frozenset({"canine", "feline", "ungulate"})
 class WeaponSystem(System):
 
     NPC_BLEEDOUT_TICKS = 18
+    PLAYER_BLEEDOUT_TICKS = 8
 
     def __init__(self, sim, player_eid):
         super().__init__(sim)
         self.player_eid = player_eid
         self.rng = random.Random(f"{sim.seed}:weapon_system")
+        setattr(self.sim, "player_bleedout_ticks", int(self.PLAYER_BLEEDOUT_TICKS))
         self.sim.events.subscribe("weapon_cycle_request", self.on_weapon_cycle_request)
         self.sim.events.subscribe("weapon_fire_request", self.on_weapon_fire_request)
         self.sim.events.subscribe("melee_attack_request", self.on_melee_attack_request)
+
+    def _first_projectile_hit_entity_at(self, x, y, z, *, exclude_eid=None, skip_downed=False):
+        for other_eid in sorted(self.sim.tilemap.entities_at(x, y, z)):
+            if other_eid == exclude_eid:
+                continue
+            if skip_downed and _entity_is_downed(self.sim, other_eid):
+                continue
+            if _entity_is_weapon_targetable(self.sim, other_eid, current_tick=self.sim.tick):
+                return other_eid
+        return None
 
     def _offense_score_for(self, action, context="ordinary"):
         base = ACTION_OFFENSE_BASE.get(action, 0)
@@ -618,12 +637,15 @@ class WeaponSystem(System):
             dx, dy = self.rng.choice(((1, 0), (-1, 0), (0, 1), (0, -1)))
         return dx, dy
 
-    def _spawn_projectiles(self, eid, pos, loadout, weapon, target):
+    def _spawn_projectiles(self, eid, pos, loadout, weapon, target, *, shot_mode="free_aim"):
         projectile_ids = []
         pellets = int(max(1, weapon.get("pellets", 1)))
         spread = int(max(0, weapon.get("spread", 0)))
         trajectory = weapon.get("trajectory", "ballistic")
         max_range = int(max(1, weapon.get("range", 1)))
+        shot_mode = str(shot_mode or "free_aim").strip().lower()
+        if shot_mode not in {"locked", "free_aim"}:
+            shot_mode = "free_aim"
 
         instance = self._weapon_instance_data(loadout, weapon["id"])
         spread_mod = int(instance.get("spread_mod", 0))
@@ -684,6 +706,7 @@ class WeaponSystem(System):
                 "aoe_falloff": float(max(0.0, min(1.0, weapon.get("aoe_falloff", 0.0)))),
                 "cover_penetration": float(max(0.0, min(1.0, weapon.get("cover_penetration", 0.0)))),
                 "projectile_glyph": weapon.get("projectile_glyph", "."),
+                "shot_mode": shot_mode,
                 "target_eid": target.get("target_eid"),
                 "target_x": target.get("x"),
                 "target_y": target.get("y"),
@@ -717,7 +740,26 @@ class WeaponSystem(System):
         if not vitality:
             return False
         if vitality.downed:
-            if target_eid != self.player_eid:
+            if target_eid == self.player_eid:
+                if getattr(vitality, "death_reported_tick", None) is not None:
+                    return False
+                setattr(vitality, "last_attacker_eid", source_eid)
+                setattr(vitality, "death_reason", "executed_while_downed")
+                setattr(vitality, "death_reported_tick", int(self.sim.tick))
+                self.sim.emit(Event(
+                    "player_killed",
+                    target_eid=target_eid,
+                    source_eid=source_eid,
+                    source_name=_entity_display_name(self.sim, source_eid, title_case=True) or "",
+                    weapon_id=weapon_id,
+                    reason="executed_while_downed",
+                    damage_kind=damage_kind,
+                    x=x,
+                    y=y,
+                    z=z,
+                ))
+                return True
+            else:
                 downed_tick = vitality.downed_tick
                 try:
                     downed_tick = int(downed_tick)
@@ -727,7 +769,6 @@ class WeaponSystem(System):
                 setattr(vitality, "last_attacker_eid", source_eid)
                 setattr(vitality, "death_reason", "executed_while_downed")
                 return True
-            return False
 
         source_pos = positions.get(source_eid)
         target_pos = positions.get(target_eid)
@@ -813,18 +854,21 @@ class WeaponSystem(System):
 
             vitality.downed = True
             vitality.downed_tick = self.sim.tick
-            setattr(vitality, "death_reason", "player_killed")
+            setattr(vitality, "death_reason", "bled_out")
+            setattr(vitality, "death_reported_tick", None)
             cover = covers.get(target_eid)
             if cover and cover.active:
                 cover.clear(tick=self.sim.tick)
-                self.sim.emit(Event("cover_left", eid=target_eid, reason="death"))
+                self.sim.emit(Event("cover_left", eid=target_eid, reason="downed"))
             self.sim.emit(Event(
-                "player_killed",
+                "player_downed",
                 target_eid=target_eid,
                 source_eid=source_eid,
                 source_name=_entity_display_name(self.sim, source_eid, title_case=True) or "",
                 weapon_id=weapon_id,
                 reason="lethal_damage",
+                bleedout_ticks=int(self.PLAYER_BLEEDOUT_TICKS),
+                bleedout_at_tick=int(self.sim.tick) + int(self.PLAYER_BLEEDOUT_TICKS),
                 damage_kind=damage_kind,
                 x=x,
                 y=y,
@@ -855,6 +899,37 @@ class WeaponSystem(System):
             z=z,
         ))
         return True
+
+    def _resolve_downed_player_death(self):
+        vitality = self.sim.ecs.get(Vitality).get(self.player_eid)
+        if not vitality or not bool(getattr(vitality, "downed", False)):
+            return
+        if getattr(vitality, "death_reported_tick", None) is not None:
+            return
+
+        downed_tick = getattr(vitality, "downed_tick", None)
+        try:
+            downed_tick = int(downed_tick)
+        except (TypeError, ValueError):
+            downed_tick = int(self.sim.tick)
+        if int(self.sim.tick) - downed_tick < int(self.PLAYER_BLEEDOUT_TICKS):
+            return
+
+        source_eid = getattr(vitality, "last_attacker_eid", None)
+        setattr(vitality, "death_reason", "bled_out")
+        setattr(vitality, "death_reported_tick", int(self.sim.tick))
+        self.sim.emit(Event(
+            "player_killed",
+            target_eid=self.player_eid,
+            source_eid=source_eid,
+            source_name=_entity_display_name(self.sim, source_eid, title_case=True) or "",
+            weapon_id=None,
+            reason="bled_out",
+            damage_kind="bleedout",
+            x=None,
+            y=None,
+            z=None,
+        ))
 
     def _resolve_downed_npc_deaths(self):
         vitalities = self.sim.ecs.get(Vitality)
@@ -1205,6 +1280,7 @@ class WeaponSystem(System):
             loadout=loadout,
             weapon=weapon,
             target=target,
+            shot_mode="free_aim" if manual_aim else "locked",
         )
         if not projectile_ids:
             self.sim.emit(Event("weapon_fire_blocked", eid=eid, reason="no_direction"))
@@ -1234,6 +1310,7 @@ class WeaponSystem(System):
             target_dist=target.get("dist"),
             target_name=target_name,
             manual_aim=manual_aim,
+            shot_mode="free_aim" if manual_aim else "locked",
             direction_short=direction_short,
             direction_label=direction_label,
             trajectory=weapon.get("trajectory", "ballistic"),
@@ -1296,6 +1373,7 @@ class WeaponSystem(System):
         self._resolve_melee_attack(event, eid=eid, source_pos=pos)
 
     def update(self):
+        self._resolve_downed_player_death()
         self._resolve_downed_npc_deaths()
         if not self.sim.projectiles:
             return
@@ -1357,13 +1435,13 @@ class WeaponSystem(System):
                     )
                     break
 
-                hit_eid = _first_targetable_entity_at(
-                    self.sim,
+                shot_mode = str(projectile.get("shot_mode", "free_aim") or "free_aim").strip().lower()
+                hit_eid = self._first_projectile_hit_entity_at(
                     nx,
                     ny,
                     z,
                     exclude_eid=projectile.get("source_eid"),
-                    current_tick=self.sim.tick,
+                    skip_downed=shot_mode == "locked",
                 )
 
                 projectile["x"] = nx
@@ -1632,10 +1710,516 @@ class StatusEffectSystem(System):
 
 
 class NPCItemUseSystem(System):
+    FIELD_RESCUE_PROFESSION_TOKENS = frozenset({
+        "biotech",
+        "clinic",
+        "clinician",
+        "doctor",
+        "medic",
+        "medical",
+        "nurse",
+        "paramedic",
+        "pharmacist",
+        "pharmacy",
+        "triage",
+        "trauma",
+    })
+    FIELD_RESCUE_HOSTILE_STATES = frozenset({
+        "attacking",
+        "chasing",
+        "ejecting_target",
+        "investigating",
+        "protecting",
+    })
+    FIELD_RESCUE_DEFER_STATES = frozenset({
+        "downed",
+        "evading_authority",
+        "fleeing",
+        "seeking_safety",
+        "surrendered",
+    })
+    FIELD_RESCUE_PROFESSIONAL_RADIUS = 8
+    FIELD_RESCUE_HERO_RADIUS = 6
 
     def __init__(self, sim):
         super().__init__(sim)
         self.catalog = ITEM_CATALOG
+        self.sim.events.subscribe("npc_help_arrived", self.on_npc_help_arrived)
+
+    def _item_can_recover_downed_actor(self, item_def):
+        tags = _item_tags(item_def)
+        if "death_save" in tags or "medical" not in tags:
+            return False
+        for effect in tuple(item_def.get("effects", ()) or ()):
+            if not isinstance(effect, dict) or effect.get("type") != "restore_hp":
+                continue
+            try:
+                delta = int(round(float(effect.get("delta", 0) or 0)))
+            except (TypeError, ValueError):
+                delta = 0
+            if delta > 0:
+                return True
+        return False
+
+    def _field_rescue_item(self, inventory):
+        if not inventory:
+            return None, None
+        for entry in list(getattr(inventory, "items", ()) or ()):
+            item_def = self.catalog.get(entry.get("item_id"))
+            if item_def and self._item_can_recover_downed_actor(item_def):
+                return entry, item_def
+        return None, None
+
+    def _occupation(self, eid):
+        return self.sim.ecs.get(Occupation).get(eid)
+
+    def _workplace_property(self, occupation):
+        workplace = getattr(occupation, "workplace", None)
+        property_id = ""
+        if isinstance(workplace, dict):
+            property_id = str(workplace.get("property_id", workplace.get("id", "")) or "").strip()
+        elif workplace:
+            property_id = str(workplace).strip()
+        if not property_id:
+            return None
+        prop = getattr(self.sim, "properties", {}).get(property_id)
+        return prop if isinstance(prop, dict) else None
+
+    def _property_has_medical_role(self, prop):
+        if not isinstance(prop, dict):
+            return False
+        metadata = prop.get("metadata", {}) if isinstance(prop.get("metadata"), dict) else {}
+        fields = [
+            prop.get("name"),
+            prop.get("kind"),
+            prop.get("category"),
+            prop.get("archetype"),
+            metadata.get("category"),
+            metadata.get("archetype"),
+            metadata.get("fixture_type"),
+            metadata.get("interaction_role"),
+        ]
+        services = []
+        for key in ("services", "site_services", "service_ids"):
+            value = prop.get(key, metadata.get(key))
+            if isinstance(value, (list, tuple, set)):
+                services.extend(str(item) for item in value)
+            elif value:
+                services.append(str(value))
+        fields.extend(services)
+        text = " ".join(str(field or "").replace("_", " ").lower() for field in fields)
+        if "medical" in {str(service).strip().lower() for service in services}:
+            return True
+        return any(token in text for token in self.FIELD_RESCUE_PROFESSION_TOKENS)
+
+    def _is_field_rescue_professional(self, eid, *, ai=None):
+        ai = ai or self.sim.ecs.get(AI).get(eid)
+        occupation = self._occupation(eid)
+        identity = self.sim.ecs.get(CreatureIdentity).get(eid)
+        prop = self._workplace_property(occupation)
+        fields = [
+            getattr(ai, "role", ""),
+            getattr(occupation, "career", ""),
+            getattr(identity, "common_name", ""),
+            getattr(identity, "creature_type", ""),
+        ]
+        text = " ".join(str(field or "").replace("_", " ").lower() for field in fields)
+        return any(token in text for token in self.FIELD_RESCUE_PROFESSION_TOKENS) or self._property_has_medical_role(prop)
+
+    def _bond_for(self, social, target_eid):
+        if social is None or target_eid is None:
+            return None
+        bonds = getattr(social, "bonds", {})
+        if not isinstance(bonds, dict):
+            return None
+        keys = [target_eid]
+        try:
+            keys.append(int(target_eid))
+        except (TypeError, ValueError):
+            pass
+        keys.append(str(target_eid))
+        for key in keys:
+            bond = bonds.get(key)
+            if isinstance(bond, dict):
+                return bond
+        return None
+
+    def _bond_rescue_score(self, social, target_eid):
+        bond = self._bond_for(social, target_eid)
+        if not isinstance(bond, dict):
+            return 0.0
+        values = []
+        for key in ("trust", "closeness", "protectiveness"):
+            try:
+                values.append(float(bond.get(key, 0.0) or 0.0))
+            except (TypeError, ValueError):
+                values.append(0.0)
+        return max(values or [0.0])
+
+    def _is_following_target(self, ai, will, target_eid):
+        for state, target in (
+            (getattr(ai, "state", None), getattr(ai, "target_eid", None)),
+            (getattr(will, "intent", None), getattr(will, "target_eid", None)),
+        ):
+            if str(state or "").strip().lower() != "following":
+                continue
+            try:
+                if int(target) == int(target_eid):
+                    return True
+            except (TypeError, ValueError):
+                if target == target_eid:
+                    return True
+        return False
+
+    def _field_rescue_tie_score(self, rescuer_eid, target_eid, *, ai=None, will=None, social=None):
+        score = self._bond_rescue_score(social, target_eid)
+        if self._is_following_target(ai, will, target_eid):
+            score = max(score, 0.85)
+        if active_contractor_record(self.sim, rescuer_eid, ally_eid=target_eid, jobs={"backup", "party"}):
+            score = max(score, 0.95)
+        return score
+
+    def _eid_equal(self, left, right):
+        if left is None or right is None:
+            return False
+        try:
+            return int(left) == int(right)
+        except (TypeError, ValueError):
+            return left == right
+
+    def _actor_targets_actor_hostile(self, source_eid, target_eid):
+        ai = self.sim.ecs.get(AI).get(source_eid)
+        will = self.sim.ecs.get(NPCWill).get(source_eid)
+        checks = (
+            (getattr(ai, "state", None), getattr(ai, "target_eid", None)),
+            (getattr(will, "intent", None), getattr(will, "target_eid", None)),
+        )
+        for state, target in checks:
+            if str(state or "").strip().lower() in self.FIELD_RESCUE_HOSTILE_STATES and self._eid_equal(target, target_eid):
+                return True
+        return False
+
+    def _is_field_rescue_non_hostile(self, rescuer_eid, target_eid, *, rescuer_tie_to_player=0.0):
+        if self._eid_equal(rescuer_eid, target_eid):
+            return False
+        if self._actor_targets_actor_hostile(rescuer_eid, target_eid):
+            return False
+        if self._actor_targets_actor_hostile(target_eid, rescuer_eid):
+            return False
+        player_eid = getattr(self.sim, "player_eid", None)
+        if player_eid is not None:
+            if self._actor_targets_actor_hostile(rescuer_eid, player_eid) and self._eid_equal(target_eid, player_eid):
+                return False
+            if rescuer_tie_to_player >= 0.55 and self._actor_targets_actor_hostile(target_eid, player_eid):
+                return False
+        return True
+
+    def _field_rescue_has_los(self, pos, target_pos):
+        if not pos or not target_pos:
+            return False
+        if int(pos.z) != int(target_pos.z):
+            return False
+        try:
+            return bool(
+                _has_line_of_sight(
+                    self.sim,
+                    int(pos.x),
+                    int(pos.y),
+                    int(pos.z),
+                    int(target_pos.x),
+                    int(target_pos.y),
+                    int(target_pos.z),
+                )
+            )
+        except Exception:  # noqa: BLE001 - malformed test maps should fail open like other local sensing
+            return True
+
+    def _field_rescue_candidate_for_target(self, rescuer_eid, target_eid, *, ai, inventory, pos, entry=None, item_def=None):
+        if self._eid_equal(rescuer_eid, target_eid):
+            return None
+        if entry is None or item_def is None:
+            entry, item_def = self._field_rescue_item(inventory)
+        if entry is None or item_def is None:
+            return None
+
+        positions = self.sim.ecs.get(Position)
+        vitalities = self.sim.ecs.get(Vitality)
+        target_pos = positions.get(target_eid)
+        target_vitality = vitalities.get(target_eid)
+        if not target_pos or not target_vitality or not bool(getattr(target_vitality, "downed", False)):
+            return None
+        if getattr(target_vitality, "death_reported_tick", None) is not None:
+            return None
+        if int(target_pos.z) != int(pos.z):
+            return None
+        distance = _manhattan(pos.x, pos.y, target_pos.x, target_pos.y)
+
+        will = self.sim.ecs.get(NPCWill).get(rescuer_eid)
+        social = self.sim.ecs.get(NPCSocial).get(rescuer_eid)
+        player_eid = getattr(self.sim, "player_eid", None)
+        tie_to_player = self._field_rescue_tie_score(
+            rescuer_eid,
+            player_eid,
+            ai=ai,
+            will=will,
+            social=social,
+        ) if player_eid is not None else 0.0
+        if not self._is_field_rescue_non_hostile(rescuer_eid, target_eid, rescuer_tie_to_player=tie_to_player):
+            return None
+
+        professional = self._is_field_rescue_professional(rescuer_eid, ai=ai)
+        tie_score = self._field_rescue_tie_score(
+            rescuer_eid,
+            target_eid,
+            ai=ai,
+            will=will,
+            social=social,
+        )
+        max_radius = self.FIELD_RESCUE_PROFESSIONAL_RADIUS if professional else self.FIELD_RESCUE_HERO_RADIUS
+        if distance > max_radius:
+            return None
+        if distance > 1 and not self._field_rescue_has_los(pos, target_pos):
+            return None
+        if not professional and tie_score < 0.55:
+            return None
+
+        age = 0
+        try:
+            age = max(0, int(getattr(self.sim, "tick", 0)) - int(getattr(target_vitality, "downed_tick", 0) or 0))
+        except (TypeError, ValueError):
+            age = 0
+        score = 30.0 if professional else 18.0 + (tie_score * 42.0)
+        if self._eid_equal(target_eid, player_eid):
+            score += 60.0
+            bleedout_ticks = int(getattr(self.sim, "player_bleedout_ticks", 0) or 0)
+            if bleedout_ticks > 0:
+                remaining = max(0, bleedout_ticks - age)
+                score += max(0.0, float(bleedout_ticks - remaining) * 3.0)
+        score += min(18.0, float(age) * 0.75)
+        score -= float(distance) * 3.0
+        return {
+            "target_eid": target_eid,
+            "target_pos": target_pos,
+            "target_vitality": target_vitality,
+            "entry": entry,
+            "item_def": item_def,
+            "distance": int(distance),
+            "professional": bool(professional),
+            "tie_score": float(tie_score),
+            "score": float(score),
+        }
+
+    def _best_field_rescue_candidate(self, rescuer_eid, *, ai, inventory, pos):
+        entry, item_def = self._field_rescue_item(inventory)
+        if entry is None or item_def is None:
+            return None
+        best = None
+        for target_eid in sorted(self.sim.ecs.get(Vitality).keys()):
+            candidate = self._field_rescue_candidate_for_target(
+                rescuer_eid,
+                target_eid,
+                ai=ai,
+                inventory=inventory,
+                pos=pos,
+                entry=entry,
+                item_def=item_def,
+            )
+            if candidate is None:
+                continue
+            if best is None or (candidate["score"], -candidate["distance"], -int(candidate["target_eid"])) > (
+                best["score"],
+                -best["distance"],
+                -int(best["target_eid"]),
+            ):
+                best = candidate
+        return best
+
+    def _clear_field_rescue_intent(self, eid, ai=None):
+        ai = ai or self.sim.ecs.get(AI).get(eid)
+        if ai and str(getattr(ai, "state", "") or "").strip().lower() == "helping_victim":
+            ai.state = "idle"
+            ai.target = None
+            ai.target_eid = None
+        will = self.sim.ecs.get(NPCWill).get(eid)
+        if will and str(getattr(will, "intent", "") or "").strip().lower() == "helping_victim":
+            will.intent = "idle"
+            will.score = 0.0
+            will.target = None
+            will.target_eid = None
+            will.last_tick = int(getattr(self.sim, "tick", 0))
+
+    def _start_field_rescue(self, rescuer_eid, candidate, *, ai, profile):
+        target_pos = candidate["target_pos"]
+        target = (int(target_pos.x), int(target_pos.y), int(target_pos.z))
+        if str(getattr(ai, "state", "") or "").strip().lower() == "helping_victim" and self._eid_equal(
+            getattr(ai, "target_eid", None),
+            candidate["target_eid"],
+        ):
+            return True
+        ai.state = "helping_victim"
+        ai.target = target
+        ai.target_eid = candidate["target_eid"]
+        will = self.sim.ecs.get(NPCWill).get(rescuer_eid)
+        if will:
+            will.intent = "helping_victim"
+            will.score = max(float(getattr(will, "score", 0.0) or 0.0), 76.0)
+            will.target = target
+            will.target_eid = candidate["target_eid"]
+            will.last_tick = int(getattr(self.sim, "tick", 0))
+        item_def = candidate["item_def"]
+        item_name = item_display_name(
+            item_def.get("id"),
+            metadata=candidate["entry"].get("metadata"),
+            item_catalog=self.catalog,
+        )
+        self.sim.emit(Event(
+            "npc_medical_rescue_started",
+            rescuer_eid=rescuer_eid,
+            target_eid=candidate["target_eid"],
+            item_id=item_def.get("id"),
+            item_name=item_name,
+            professional=bool(candidate.get("professional")),
+            distance=int(candidate.get("distance", 0)),
+            x=int(target_pos.x),
+            y=int(target_pos.y),
+            z=int(target_pos.z),
+        ))
+        return True
+
+    def _apply_field_rescue(self, rescuer_eid, candidate, *, ai=None, profile=None):
+        inventory = self.sim.ecs.get(Inventory).get(rescuer_eid)
+        if not inventory:
+            return False
+        target_eid = candidate["target_eid"]
+        target_pos = self.sim.ecs.get(Position).get(target_eid)
+        rescuer_pos = self.sim.ecs.get(Position).get(rescuer_eid)
+        if not target_pos or not rescuer_pos or int(target_pos.z) != int(rescuer_pos.z):
+            return False
+        if _manhattan(rescuer_pos.x, rescuer_pos.y, target_pos.x, target_pos.y) > 1:
+            return False
+        target_vitality = self.sim.ecs.get(Vitality).get(target_eid)
+        if not target_vitality or not bool(getattr(target_vitality, "downed", False)):
+            self._clear_field_rescue_intent(rescuer_eid, ai=ai)
+            return False
+
+        entry = inventory.find(instance_id=candidate["entry"].get("instance_id"))
+        item_def = self.catalog.get((entry or {}).get("item_id"))
+        if entry is None or not item_def or not self._item_can_recover_downed_actor(item_def):
+            self._clear_field_rescue_intent(rescuer_eid, ai=ai)
+            return False
+
+        item_name = item_display_name(
+            item_def.get("id"),
+            metadata=entry.get("metadata"),
+            item_catalog=self.catalog,
+        )
+        removed = inventory.remove_item(instance_id=entry["instance_id"], quantity=1)
+        if not removed:
+            return False
+        item_metadata = dict((removed or entry).get("metadata") or {}) if isinstance((removed or entry).get("metadata"), dict) else {}
+        applied = _apply_item_effects_to_entity(self.sim, target_eid, item_def, item_metadata=item_metadata)
+        _recover_downed_actor_state(
+            self.sim,
+            target_eid,
+            tick=self.sim.tick,
+            min_hp=int(getattr(target_vitality, "hp", 1) or 1),
+        )
+        recovered_hp = int(getattr(target_vitality, "hp", 1) or 1)
+        max_hp = int(getattr(target_vitality, "max_hp", recovered_hp) or recovered_hp)
+        if profile:
+            profile.last_use_tick = int(getattr(self.sim, "tick", 0))
+        self._clear_field_rescue_intent(rescuer_eid, ai=ai)
+
+        self.sim.emit(Event(
+            "item_used",
+            eid=rescuer_eid,
+            target_eid=target_eid,
+            item_id=item_def.get("id"),
+            item_name=item_name,
+            reason="npc_field_rescue",
+            usage_kind="field_rescue",
+            applied=applied,
+            consumed=True,
+            item_metadata=item_metadata,
+            x=int(rescuer_pos.x),
+            y=int(rescuer_pos.y),
+            z=int(rescuer_pos.z),
+        ))
+        payload = {
+            "rescuer_eid": rescuer_eid,
+            "target_eid": target_eid,
+            "item_id": item_def.get("id"),
+            "item_name": item_name,
+            "recovered_hp": int(recovered_hp),
+            "max_hp": int(max_hp),
+            "professional": bool(candidate.get("professional")),
+            "applied": applied,
+            "x": int(target_pos.x),
+            "y": int(target_pos.y),
+            "z": int(target_pos.z),
+        }
+        self.sim.emit(Event("npc_medical_rescue_applied", **payload))
+        if self._eid_equal(target_eid, getattr(self.sim, "player_eid", None)):
+            self.sim.emit(Event(
+                "player_recovered_from_downed",
+                eid=target_eid,
+                **payload,
+            ))
+        else:
+            self.sim.emit(Event("npc_recovered_from_downed", eid=target_eid, **payload))
+        return True
+
+    def _maybe_field_rescue(self, eid, profile, ai, inventory, pos):
+        state = str(getattr(ai, "state", "") or "").strip().lower()
+        if state in self.FIELD_RESCUE_DEFER_STATES:
+            return False
+        if state == "helping_victim" and getattr(ai, "target_eid", None) is not None:
+            candidate = self._field_rescue_candidate_for_target(
+                eid,
+                ai.target_eid,
+                ai=ai,
+                inventory=inventory,
+                pos=pos,
+            )
+            if candidate is None:
+                self._clear_field_rescue_intent(eid, ai=ai)
+                return False
+            if candidate["distance"] <= 1:
+                return self._apply_field_rescue(eid, candidate, ai=ai, profile=profile)
+            return True
+
+        candidate = self._best_field_rescue_candidate(eid, ai=ai, inventory=inventory, pos=pos)
+        if candidate is None:
+            return False
+        if candidate["distance"] <= 1:
+            return self._apply_field_rescue(eid, candidate, ai=ai, profile=profile)
+        return self._start_field_rescue(eid, candidate, ai=ai, profile=profile)
+
+    def on_npc_help_arrived(self, event):
+        eid = event.data.get("npc_eid")
+        target_eid = event.data.get("target_eid")
+        if eid is None or target_eid is None:
+            return
+        profile = self.sim.ecs.get(ItemUseProfile).get(eid)
+        if profile is None or not bool(getattr(profile, "auto_use", False)):
+            return
+        inventory = self.sim.ecs.get(Inventory).get(eid)
+        ai = self.sim.ecs.get(AI).get(eid)
+        pos = self.sim.ecs.get(Position).get(eid)
+        if not inventory or not ai or not pos:
+            return
+        if _entity_is_downed(self.sim, eid):
+            _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+            return
+        candidate = self._field_rescue_candidate_for_target(
+            eid,
+            target_eid,
+            ai=ai,
+            inventory=inventory,
+            pos=pos,
+        )
+        if candidate is not None and int(candidate.get("distance", 99)) <= 1:
+            self._apply_field_rescue(eid, candidate, ai=ai, profile=profile)
 
     def _status_refresh_scale(self, effects, status, duration, modifiers):
         if not effects or not status or not isinstance(getattr(effects, "active", None), dict):
@@ -1772,9 +2356,8 @@ class NPCItemUseSystem(System):
 
             ai = ais.get(eid)
             inventory = inventories.get(eid)
-            needs = needs_map.get(eid)
             pos = positions.get(eid)
-            if not ai or not inventory or not needs or not pos:
+            if not ai or not inventory or not pos:
                 continue
             if _entity_is_downed(self.sim, eid):
                 _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
@@ -1782,6 +2365,12 @@ class NPCItemUseSystem(System):
             if not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
                 continue
             if not inventory.items:
+                continue
+            if self._maybe_field_rescue(eid, profile, ai, inventory, pos):
+                continue
+
+            needs = needs_map.get(eid)
+            if not needs:
                 continue
 
             vitality = vitalities.get(eid)

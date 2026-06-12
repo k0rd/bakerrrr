@@ -213,6 +213,9 @@ from game.system_support.npc_behavior_runtime import (
     BEHAVIOR_AVOID_THREAT,
     BEHAVIOR_BUY_DESIRED_DRUG,
     BEHAVIOR_BUY_PLAYER_GOODS,
+    BEHAVIOR_BUY_PRACTICAL_GEAR,
+    BEHAVIOR_BUY_PROVISIONS,
+    BEHAVIOR_BUY_QUIRKY_ITEMS,
     BEHAVIOR_ENFORCE_JUSTICE,
     BEHAVIOR_FOLLOW_DUTY,
     BEHAVIOR_INITIATE_DIALOGUE,
@@ -231,6 +234,7 @@ from game.system_support.npc_behavior_runtime import (
     _find_authority_avoidance_target,
     _find_lodging_target,
     _find_medical_aid_target,
+    _find_shopping_target,
     _find_safe_spot_target,
     _find_scavenged_sale_target,
     _find_ground_credit_target,
@@ -243,6 +247,7 @@ from game.system_support.npc_behavior_runtime import (
     _receive_medical_aid_at_actor,
     _receive_nutrition_at_actor,
     _receive_safe_spot_at_actor,
+    _resolve_npc_shopping_at_actor,
     _resolve_street_buy_between_actors,
     _resolve_street_appraise_between_actors,
     _sell_scavenged_inventory_at_actor,
@@ -337,6 +342,7 @@ _WILL_COASTING_STATES = frozenset({
     "working",
     "lounging",
     "socializing",
+    "shopping",
     "resting",
 })
 
@@ -349,6 +355,7 @@ _WILL_COASTING_TICKS = {
     "working": 120,
     "lounging": 150,
     "socializing": 96,
+    "shopping": 84,
     "resting": 180,
 }
 
@@ -1827,6 +1834,7 @@ class NPCWillSystem(System):
             "working": "routine",
             "lounging": "routine",
             "socializing": "routine",
+            "shopping": "shopping",
             "resting": "routine",
         }
         if _entity_is_downed(self.sim, eid):
@@ -2425,6 +2433,7 @@ class NPCWillSystem(System):
             best_score = 0.0
             best_target = None
             best_target_eid = None
+            best_shopping_target = None
 
             if memory:
                 property_threat = _strongest_memory_entry(
@@ -2933,6 +2942,54 @@ class NPCWillSystem(System):
                         best_target = sale_target["target"]
                         best_target_eid = None
 
+            buy_provisions = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_BUY_PROVISIONS,
+                traits=traits,
+                needs=needs,
+                vitality=vitality,
+            )
+            buy_practical_gear = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_BUY_PRACTICAL_GEAR,
+                traits=traits,
+                needs=needs,
+                vitality=vitality,
+            )
+            buy_quirky_items = _effective_behavior_value(
+                self.sim,
+                eid,
+                BEHAVIOR_BUY_QUIRKY_ITEMS,
+                traits=traits,
+                needs=needs,
+                vitality=vitality,
+            )
+            if max(buy_provisions, buy_practical_gear, buy_quirky_items) >= 0.05:
+                shopping_target = _find_shopping_target(
+                    self.sim,
+                    eid,
+                    pos,
+                    work_active=work_active,
+                )
+                if shopping_target:
+                    motive = str(shopping_target.get("motive", "") or "").strip().lower()
+                    motive_bias = {
+                        BEHAVIOR_BUY_PROVISIONS: buy_provisions,
+                        BEHAVIOR_BUY_PRACTICAL_GEAR: buy_practical_gear,
+                        BEHAVIOR_BUY_QUIRKY_ITEMS: buy_quirky_items,
+                    }.get(motive, max(buy_provisions, buy_practical_gear, buy_quirky_items))
+                    shopping_score = float(shopping_target.get("score", 0.0) or 0.0) * (0.72 + (motive_bias * 0.48))
+                    if ai.state == "shopping" and ai.target == shopping_target.get("target"):
+                        shopping_score += 5.0
+                    if shopping_score > best_score:
+                        best_intent = "shopping"
+                        best_score = shopping_score
+                        best_target = shopping_target["target"]
+                        best_target_eid = None
+                        best_shopping_target = shopping_target
+
             street_buy_tip_data = street_buy_tip.get("data", {}) if isinstance(street_buy_tip, dict) else {}
             street_buy_tip_strength = float(street_buy_tip.get("strength", 0.0) or 0.0) if isinstance(street_buy_tip, dict) else 0.0
             if street_buy_tip is not None:
@@ -3362,6 +3419,16 @@ class NPCWillSystem(System):
                     best_target,
                     best_target_eid,
                 )
+            if best_intent == "shopping" and isinstance(best_shopping_target, dict):
+                ai.shopping_property_id = best_shopping_target.get("property_id")
+                ai.shopping_item_id = best_shopping_target.get("item_id")
+                ai.shopping_motive = best_shopping_target.get("motive")
+                ai.shopping_quirk_id = best_shopping_target.get("quirk_id")
+                ai.shopping_impulse = bool(best_shopping_target.get("impulse", False))
+            elif str(getattr(ai, "state", "") or "").strip().lower() != "shopping":
+                for attr in ("shopping_property_id", "shopping_item_id", "shopping_motive", "shopping_quirk_id", "shopping_impulse"):
+                    if hasattr(ai, attr):
+                        delattr(ai, attr)
             if live_timeskip_active and best_intent == "idle":
                 _schedule_will_rethink(
                     self.sim,
@@ -3455,6 +3522,7 @@ class NPCInvestigateSystem(System):
         "working": 3,
         "lounging": 4,
         "socializing": 3,
+        "shopping": 3,
         "resting": 4,
     }
     MOVING_STATES = {
@@ -3488,6 +3556,7 @@ class NPCInvestigateSystem(System):
         "working",
         "lounging",
         "socializing",
+        "shopping",
         "resting",
     }
 
@@ -4278,6 +4347,20 @@ class NPCInvestigateSystem(System):
                     _receive_safe_spot_at_actor(self.sim, eid, pos)
                 if ai.state == "seeking_shelter":
                     _receive_lodging_at_actor(self.sim, eid, pos)
+                if ai.state == "shopping":
+                    _resolve_npc_shopping_at_actor(
+                        self.sim,
+                        eid,
+                        pos,
+                        preferred_property_id=getattr(ai, "shopping_property_id", None),
+                        preferred_item_id=getattr(ai, "shopping_item_id", None),
+                        motive=getattr(ai, "shopping_motive", ""),
+                        quirk_id=getattr(ai, "shopping_quirk_id", ""),
+                        impulse=bool(getattr(ai, "shopping_impulse", False)),
+                    )
+                    for attr in ("shopping_property_id", "shopping_item_id", "shopping_motive", "shopping_quirk_id", "shopping_impulse"):
+                        if hasattr(ai, attr):
+                            delattr(ai, attr)
 
                 if ai.state == "reporting_incident":
                     self.sim.emit(Event(

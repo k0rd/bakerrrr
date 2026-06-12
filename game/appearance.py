@@ -436,7 +436,7 @@ def _property_access_badge_overlay(prop):
     metadata = property_metadata(prop)
     owner_tag = str(prop.get("owner_tag", "") or "").strip().lower()
     kind = str(prop.get("kind", "building") or "building").strip().lower() or "building"
-    if kind == "vehicle":
+    if kind in {"fixture", "asset", "vehicle"}:
         return ()
     if owner_tag == "player":
         return ({"glyph": "*", "color": "player", "semantic_id": "ui_property_owned"},)

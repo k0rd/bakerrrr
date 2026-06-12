@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 
 from engine.events import Event
-from game.components import AI, BehaviorProfile, CriminalDriveState, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, Position, PropertyKnowledge, StatusEffects, Vitality
+from game.components import AI, ArmorLoadout, BehaviorProfile, CriminalDriveState, FinancialProfile, Inventory, JusticeProfile, NPCNeeds, NPCRoutine, Occupation, Position, PropertyKnowledge, StatusEffects, Vitality, WeaponLoadout
 from game.item_semantics import (
     appraise_item_for_actor,
     identify_item_for_actor,
@@ -37,6 +37,10 @@ from game.system_support.opportunity_knowledge_runtime import (
     remember_opportunity_lead as _remember_opportunity_lead,
 )
 from game.system_support.item_provenance_runtime import item_entitlement_for_actor, stamp_item_provenance
+from game.system_support.npc_income_runtime import (
+    inventory_liquid_credits as _shared_inventory_liquid_credits,
+    spend_npc_wallet_credits as _shared_spend_npc_wallet_credits,
+)
 
 
 BEHAVIOR_COLLECT_GROUND_CREDITS = "collect_ground_credits"
@@ -45,6 +49,9 @@ BEHAVIOR_SELL_SCAVENGED_ITEMS = "sell_scavenged_items"
 BEHAVIOR_APPRAISE_STREET_GOODS = "appraise_street_goods"
 BEHAVIOR_BUY_DESIRED_DRUG = "buy_desired_drug"
 BEHAVIOR_BUY_PLAYER_GOODS = "buy_player_goods"
+BEHAVIOR_BUY_PROVISIONS = "buy_provisions"
+BEHAVIOR_BUY_PRACTICAL_GEAR = "buy_practical_gear"
+BEHAVIOR_BUY_QUIRKY_ITEMS = "buy_quirky_items"
 BEHAVIOR_IDENTIFY_STREET_DRUGS = "identify_street_drugs"
 BEHAVIOR_INITIATE_DIALOGUE = "initiate_dialogue"
 BEHAVIOR_AVOID_THREAT = "avoid_threat"
@@ -217,6 +224,58 @@ _STREET_BUY_DEFAULT_TAGS = frozenset({
     "communication",
     "ammo",
 })
+_SHOPPING_ROLE_GEAR_TOKENS = (
+    "guard",
+    "security",
+    "patrol",
+    "officer",
+    "scout",
+    "medic",
+    "doctor",
+    "nurse",
+    "pharmacist",
+    "mechanic",
+    "engineer",
+    "technician",
+    "courier",
+    "runner",
+    "scav",
+    "fence",
+    "dealer",
+)
+_SHOPPING_QUIRK_PROFILES = {
+    "caffeine": {
+        "tags": frozenset({"drink", "stimulant", "energy", "social"}),
+        "item_ids": frozenset({"spark_brew", "caff_shot", "focus_inhaler", "synth_focus_tabs"}),
+        "label": "caffeine",
+    },
+    "hats": {
+        "tags": frozenset({"hat", "headwear", "appearance", "cosmetic", "clothing"}),
+        "item_ids": frozenset(),
+        "label": "appearance",
+    },
+    "tools": {
+        "tags": frozenset({"tool", "device", "communication"}),
+        "item_ids": frozenset({"pocket_notebook", "burner_phone"}),
+        "label": "tools",
+    },
+    "medical_prepper": {
+        "tags": frozenset({"medical", "safety"}),
+        "item_ids": frozenset({"med_gel", "micro_medkit", "hydration_salts", "trauma_foam"}),
+        "label": "medical prep",
+    },
+    "tokens": {
+        "tags": frozenset({"token", "novelty", "game", "social"}),
+        "item_ids": frozenset({"city_pass_token", "transit_daypass", "scratch_ticket", "deck_of_cards"}),
+        "label": "novelties",
+    },
+    "weapons": {
+        "tags": frozenset({"weapon", "ammo"}),
+        "item_ids": frozenset(),
+        "label": "weapons",
+    },
+}
+_SHOPPING_QUIRK_ORDER = tuple(sorted(_SHOPPING_QUIRK_PROFILES))
 _STREET_ITEM_VALUE = {
     "weapon": 46,
     "firearm": 46,
@@ -698,6 +757,44 @@ def _roll_rare_spawn_behavior(behaviors, preferences, *, seed_token="", role="",
     return token
 
 
+def _seed_shopping_preferences(behaviors, preferences, *, seed_token="", role="", career="", archetypes=()):
+    role = _behavior_token(role) or "civilian"
+    career = _behavior_token(career)
+    archetypes = frozenset(_behavior_token(value) for value in tuple(archetypes or ()) if _behavior_token(value))
+
+    _seed_behavior(behaviors, BEHAVIOR_BUY_PROVISIONS, 0.48)
+    practical = 0.22
+    if role in {"guard", "scout", "worker"}:
+        practical += 0.18
+    if any(token in career for token in _SHOPPING_ROLE_GEAR_TOKENS):
+        practical += 0.24
+    if archetypes & (_MEDICAL_ARCHETYPES | _SALVAGE_ARCHETYPES | _THRIFT_ARCHETYPES):
+        practical += 0.16
+    if archetypes & _NIGHTLIFE_ARCHETYPES:
+        _seed_behavior(behaviors, BEHAVIOR_BUY_PROVISIONS, 0.56)
+    _seed_behavior(behaviors, BEHAVIOR_BUY_PRACTICAL_GEAR, min(0.82, practical))
+
+    clean_seed = str(seed_token or "").strip()
+    if not clean_seed:
+        return None
+    rng = random.Random(
+        "npc-shopping:"
+        f"{clean_seed}:{role}:{career}:{','.join(sorted(archetypes)) or 'none'}"
+    )
+    quirky = rng.random() < 0.12
+    impulsive = rng.random() < 0.02
+    if not quirky and not impulsive:
+        return None
+    quirk_id = _SHOPPING_QUIRK_ORDER[rng.randrange(len(_SHOPPING_QUIRK_ORDER))]
+    preferences["shopping_quirk_id"] = quirk_id
+    preferences["shopping_quirk_label"] = _SHOPPING_QUIRK_PROFILES.get(quirk_id, {}).get("label", quirk_id)
+    preferences["shopping_impulsive"] = bool(impulsive)
+    preferences["shopping_impulse_cooldown_ticks"] = 3600
+    preferences["shopping_search_radius"] = max(int(preferences.get("shopping_search_radius", 0) or 0), 10)
+    _seed_behavior(behaviors, BEHAVIOR_BUY_QUIRKY_ITEMS, 0.76 if impulsive else 0.34)
+    return quirk_id
+
+
 def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", home_archetype="", seed_token=""):
     role_key = _behavior_token(role) or "civilian"
     career_key = _behavior_token(career)
@@ -921,6 +1018,15 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
         _seed_behavior(behaviors, BEHAVIOR_AVOID_AUTHORITIES, 0.24)
         preferences.setdefault("initiate_dialogue_cooldown", 240)
         preferences.setdefault("authority_avoid_radius", 8)
+
+    _seed_shopping_preferences(
+        behaviors,
+        preferences,
+        seed_token=seed_token,
+        role=role_key,
+        career=career_key,
+        archetypes=archetypes,
+    )
 
     _roll_rare_spawn_behavior(
         behaviors,
@@ -1707,51 +1813,11 @@ def _inventory_can_accept_item(inventory, item_id, *, owner_eid, owner_tag="npc"
 
 
 def _inventory_liquid_credits(inventory):
-    if not inventory:
-        return 0
-    total = 0
-    for entry in tuple(getattr(inventory, "items", ()) or ()):
-        if not is_credstick_item(entry.get("item_id")):
-            continue
-        total += int(credstick_total_credits(
-            quantity=entry.get("quantity", 1),
-            metadata=entry.get("metadata"),
-        ))
-    return int(max(0, total))
+    return _shared_inventory_liquid_credits(inventory)
 
 
 def _spend_inventory_credits(inventory, amount):
-    if not inventory:
-        return 0
-    remaining = max(0, int(amount or 0))
-    if remaining <= 0:
-        return 0
-    spent = 0
-    for entry in tuple(getattr(inventory, "items", ()) or ()):
-        if remaining <= 0:
-            break
-        if not is_credstick_item(entry.get("item_id")):
-            continue
-        stack_total = int(credstick_total_credits(
-            quantity=entry.get("quantity", 1),
-            metadata=entry.get("metadata"),
-        ))
-        if stack_total <= 0:
-            continue
-        take = min(remaining, stack_total)
-        new_total = max(0, stack_total - take)
-        if new_total <= 0:
-            inventory.remove_item(
-                instance_id=entry.get("instance_id"),
-                quantity=max(1, int(entry.get("quantity", 1) or 1)),
-            )
-        else:
-            metadata = dict(entry.get("metadata") or {})
-            metadata["stored_credits"] = int(new_total)
-            entry["metadata"] = metadata
-        spent += take
-        remaining -= take
-    return int(spent)
+    return _shared_spend_npc_wallet_credits(inventory, amount)
 
 
 def _ground_credit_interest_score(credits, distance):
@@ -2533,6 +2599,461 @@ def _find_lodging_target_exact(sim, actor_eid, pos, *, radius=None, preferred_pr
         "result": dict(best) if isinstance(best, dict) else None,
     }
     return best
+
+
+def _shopping_cooldowns(sim):
+    state = getattr(sim, "npc_shopping_cooldowns", None)
+    if not isinstance(state, dict):
+        state = {}
+        sim.npc_shopping_cooldowns = state
+    return state
+
+
+def _shopping_ticks_per_hour(sim):
+    traits = getattr(sim, "world_traits", {})
+    clock = traits.get("clock", {}) if isinstance(traits, dict) else {}
+    if not isinstance(clock, dict):
+        clock = {}
+    try:
+        return max(60, int(clock.get("ticks_per_hour", 600) or 600))
+    except (TypeError, ValueError):
+        return 600
+
+
+def _shopping_wallet_buffer(sim, actor_eid):
+    profile = sim.ecs.get(FinancialProfile).get(actor_eid) if sim is not None else None
+    if profile is None:
+        return 24
+    try:
+        return max(0, int(getattr(profile, "wallet_buffer", 0) or 0))
+    except (TypeError, ValueError):
+        return 24
+
+
+def _shopping_actor_role_career(sim, actor_eid):
+    ai = sim.ecs.get(AI).get(actor_eid) if sim is not None else None
+    occupation = sim.ecs.get(Occupation).get(actor_eid) if sim is not None else None
+    role = _behavior_token(getattr(ai, "role", "")) or "civilian"
+    career = _behavior_token(getattr(occupation, "career", ""))
+    return role, career
+
+
+def _shopping_item_tags(item_id, row=None):
+    tags = set(row.get("tags", ())) if isinstance(row, dict) else set()
+    if not tags:
+        tags.update(_item_tags({"item_id": item_id, "metadata": {}}))
+    item_def = ITEM_CATALOG.get(str(item_id or "").strip().lower(), {})
+    tags.update(str(tag).strip().lower() for tag in item_def.get("tags", ()) if str(tag).strip())
+    category = str(item_def.get("category", "") or "").strip().lower()
+    if category:
+        tags.add(category)
+    family = str(item_def.get("appearance_family", "") or "").strip().lower()
+    if family:
+        tags.add(family)
+    if item_def.get("weapon_id"):
+        tags.add("weapon")
+    if isinstance(item_def.get("armor"), dict) and float(item_def["armor"].get("damage_reduction", 0.0) or 0.0) > 0.0:
+        tags.add("armor")
+    return frozenset(tags)
+
+
+def _shopping_restore_hp(item_def):
+    total = 0
+    for effect in tuple((item_def or {}).get("effects", ()) or ()):
+        if not isinstance(effect, dict):
+            continue
+        if str(effect.get("type", "")).strip().lower() != "restore_hp":
+            continue
+        try:
+            total += max(0, int(effect.get("delta", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+    return int(total)
+
+
+def _inventory_count_matching(inventory, *, item_id=None, tags=frozenset()):
+    if not inventory:
+        return 0
+    item_id = str(item_id or "").strip().lower()
+    tags = frozenset(str(tag).strip().lower() for tag in tuple(tags or ()) if str(tag).strip())
+    count = 0
+    for entry in tuple(getattr(inventory, "items", ()) or ()):
+        entry_item_id = str(entry.get("item_id", "") or "").strip().lower()
+        if item_id and entry_item_id != item_id:
+            continue
+        if tags:
+            entry_tags = _shopping_item_tags(entry_item_id)
+            if not entry_tags.intersection(tags):
+                continue
+        count += int(max(1, entry.get("quantity", 1) or 1))
+    return int(count)
+
+
+def _shopping_item_is_repeatable(item_id, tags):
+    item_def = ITEM_CATALOG.get(str(item_id or "").strip().lower(), {})
+    stack_max = max(1, int(item_def.get("stack_max", 1) or 1))
+    if stack_max > 1:
+        return True
+    return bool(frozenset(tags).intersection({"consumable", "food", "drink", "medical", "ammo", "token", "social"}))
+
+
+def _shopping_quirk_matches(quirk_id, item_id, tags):
+    profile = _SHOPPING_QUIRK_PROFILES.get(str(quirk_id or "").strip().lower())
+    if not isinstance(profile, dict):
+        return False
+    clean_item_id = str(item_id or "").strip().lower()
+    if clean_item_id in profile.get("item_ids", frozenset()):
+        return True
+    return bool(frozenset(tags).intersection(profile.get("tags", frozenset())))
+
+
+def _shopping_role_motivates_gear(role, career, tags):
+    role = _behavior_token(role)
+    career = _behavior_token(career)
+    tags = frozenset(tags)
+    role_text = f"{role} {career}"
+    if tags.intersection({"weapon", "armor", "ammo"}) and any(token in role_text for token in ("guard", "security", "patrol", "officer", "scout", "runner", "courier")):
+        return True
+    if tags.intersection({"medical"}) and any(token in role_text for token in ("medic", "doctor", "nurse", "pharmac", "street_doc", "clinic")):
+        return True
+    if tags.intersection({"tool", "device"}) and any(token in role_text for token in ("mechanic", "engineer", "technician", "scav", "fence", "dealer", "fixer")):
+        return True
+    return False
+
+
+def _shopping_interest_for_row(sim, actor_eid, row, *, needs=None, vitality=None, work_active=False):
+    inventory = sim.ecs.get(Inventory).get(actor_eid) if sim is not None else None
+    if inventory is None or not isinstance(row, dict):
+        return None
+    item_id = str(row.get("item_id", "") or "").strip().lower()
+    item_def = ITEM_CATALOG.get(item_id)
+    if not item_id or not isinstance(item_def, dict) or is_credstick_item(item_id):
+        return None
+    price = max(1, int(row.get("price", 0) or 0))
+    wallet = _inventory_liquid_credits(inventory)
+    if price > wallet:
+        return None
+    tags = _shopping_item_tags(item_id, row=row)
+    repeatable = _shopping_item_is_repeatable(item_id, tags)
+    if not repeatable and _inventory_count_matching(inventory, item_id=item_id) > 0:
+        return None
+    if not _inventory_can_accept_item(inventory, item_id, owner_eid=actor_eid):
+        return None
+
+    role, career = _shopping_actor_role_career(sim, actor_eid)
+    profile = _actor_behavior_profile(sim, actor_eid)
+    preferences = getattr(profile, "preferences", {}) if profile is not None else {}
+    preferences = preferences if isinstance(preferences, dict) else {}
+    wallet_buffer = max(wallet, _shopping_wallet_buffer(sim, actor_eid))
+    wallet_after = wallet - price
+    provision_behavior = _actor_behavior_value(sim, actor_eid, BEHAVIOR_BUY_PROVISIONS, 0.0)
+    practical_behavior = _actor_behavior_value(sim, actor_eid, BEHAVIOR_BUY_PRACTICAL_GEAR, 0.0)
+    quirk_behavior = _actor_behavior_value(sim, actor_eid, BEHAVIOR_BUY_QUIRKY_ITEMS, 0.0)
+
+    raw_hunger = 100.0 if needs is None else float(getattr(needs, "hunger", 100.0) or 100.0)
+    raw_thirst = 100.0 if needs is None else float(getattr(needs, "thirst", 100.0) or 100.0)
+    health_gap = 0.0
+    if vitality is not None and not bool(getattr(vitality, "downed", False)):
+        max_hp = max(1, int(getattr(vitality, "max_hp", 1) or 1))
+        hp = max(0, int(getattr(vitality, "hp", max_hp) or max_hp))
+        health_gap = _clamp_behavior_value(1.0 - (float(hp) / float(max_hp)))
+
+    candidates = []
+    food_count = _inventory_count_matching(inventory, tags={"food"})
+    drink_count = _inventory_count_matching(inventory, tags={"drink"})
+    medical_count = _inventory_count_matching(inventory, tags={"medical"})
+    restore_hp = _shopping_restore_hp(item_def)
+    if provision_behavior >= 0.05:
+        if "food" in tags and (raw_hunger < 72.0 or food_count <= 0):
+            urgent = raw_hunger < 30.0
+            if food_count < (3 if urgent else 2):
+                reserve = 0 if urgent else min(4, max(1, int(wallet_buffer * 0.08)))
+                if wallet_after >= reserve:
+                    candidates.append({
+                        "motive": BEHAVIOR_BUY_PROVISIONS,
+                        "score": (18.0 + max(0.0, 78.0 - raw_hunger) * 0.78 + provision_behavior * 18.0) * (1.25 if urgent else 1.0),
+                        "urgent": bool(urgent),
+                        "reserve": int(reserve),
+                    })
+        if "drink" in tags and (raw_thirst < 76.0 or drink_count <= 0):
+            urgent = raw_thirst < 30.0
+            if drink_count < (3 if urgent else 2):
+                reserve = 0 if urgent else min(4, max(1, int(wallet_buffer * 0.08)))
+                if wallet_after >= reserve:
+                    candidates.append({
+                        "motive": BEHAVIOR_BUY_PROVISIONS,
+                        "score": (18.0 + max(0.0, 82.0 - raw_thirst) * 0.82 + provision_behavior * 18.0) * (1.25 if urgent else 1.0),
+                        "urgent": bool(urgent),
+                        "reserve": int(reserve),
+                    })
+        if "medical" in tags and restore_hp > 0 and (health_gap >= 0.16 or medical_count <= 0):
+            urgent = health_gap >= 0.48
+            if medical_count < (3 if urgent else 2):
+                reserve = 0 if urgent else min(5, max(1, int(wallet_buffer * 0.1)))
+                if wallet_after >= reserve:
+                    candidates.append({
+                        "motive": BEHAVIOR_BUY_PROVISIONS,
+                        "score": (14.0 + health_gap * 70.0 + provision_behavior * 14.0 + min(12.0, restore_hp * 0.2)) * (1.25 if urgent else 1.0),
+                        "urgent": bool(urgent),
+                        "reserve": int(reserve),
+                    })
+
+    gear_tags = {"weapon", "armor", "tool", "device", "ammo", "medical"}
+    if practical_behavior >= 0.05 and tags.intersection(gear_tags):
+        role_motivated = _shopping_role_motivates_gear(role, career, tags)
+        reserve = max(4, int(wallet_buffer * (0.12 if role_motivated else 0.2)))
+        if wallet_after >= reserve:
+            duplicate_ok = bool(tags.intersection({"ammo", "medical"}))
+            if duplicate_ok or _inventory_count_matching(inventory, item_id=item_id) <= 0:
+                practical_score = 8.0 + practical_behavior * 26.0 + (12.0 if role_motivated else 0.0)
+                if "armor" in tags:
+                    current = sim.ecs.get(ArmorLoadout).get(actor_eid)
+                    current_reduction = float(getattr(current, "damage_reduction", 0.0) or 0.0) if current else 0.0
+                    armor = item_def.get("armor") if isinstance(item_def.get("armor"), dict) else {}
+                    new_reduction = float(armor.get("damage_reduction", 0.0) or 0.0)
+                    if new_reduction <= current_reduction and not role_motivated:
+                        practical_score -= 8.0
+                    else:
+                        practical_score += max(0.0, (new_reduction - current_reduction) * 36.0)
+                if "weapon" in tags:
+                    loadout = sim.ecs.get(WeaponLoadout).get(actor_eid)
+                    if loadout is None or not loadout.current_weapon():
+                        practical_score += 14.0
+                    elif not role_motivated:
+                        practical_score -= 8.0
+                if practical_score > 0.0:
+                    candidates.append({
+                        "motive": BEHAVIOR_BUY_PRACTICAL_GEAR,
+                        "score": practical_score,
+                        "urgent": False,
+                        "reserve": int(reserve),
+                    })
+
+    quirk_id = str(preferences.get("shopping_quirk_id", "") or "").strip().lower()
+    impulse = bool(preferences.get("shopping_impulsive", False))
+    if quirk_id and quirk_behavior >= 0.05 and _shopping_quirk_matches(quirk_id, item_id, tags):
+        cooldowns = _shopping_cooldowns(sim)
+        cooldown_key = (int(actor_eid), quirk_id)
+        cooldown_due = int(cooldowns.get(cooldown_key, 0) or 0) <= int(getattr(sim, "tick", 0) or 0)
+        comfortable_reserve = max(8, int(wallet_buffer * 0.32))
+        comfortable = wallet_after >= comfortable_reserve and wallet >= max(price * 2, price + 6)
+        can_impulse = impulse and cooldown_due
+        if comfortable or can_impulse:
+            candidates.append({
+                "motive": BEHAVIOR_BUY_QUIRKY_ITEMS,
+                "score": 7.0 + quirk_behavior * 22.0 + (12.0 if can_impulse and not comfortable else 0.0),
+                "urgent": False,
+                "reserve": 0 if can_impulse else int(comfortable_reserve),
+                "quirk_id": quirk_id,
+                "impulse": bool(can_impulse and not comfortable),
+            })
+
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda entry: (float(entry.get("score", 0.0)), -int(entry.get("reserve", 0))))
+    if bool(work_active) and not bool(best.get("urgent")):
+        return None
+    best = dict(best)
+    best["price"] = int(price)
+    best["wallet"] = int(wallet)
+    best["wallet_after"] = int(wallet_after)
+    best["item_id"] = item_id
+    best["tags"] = tuple(sorted(tags))
+    return best
+
+
+def _find_shopping_target(sim, actor_eid, pos, *, radius=None, work_active=False, preferred_property_id=None, preferred_score_bonus=0.0):
+    if sim is None or pos is None:
+        return None
+    trade_system = getattr(sim, "trade_system", None)
+    if trade_system is None or not hasattr(trade_system, "npc_purchase_options"):
+        return None
+    vitality = sim.ecs.get(Vitality).get(actor_eid)
+    if vitality is not None and bool(getattr(vitality, "downed", False)):
+        return None
+    inventory = sim.ecs.get(Inventory).get(actor_eid)
+    if inventory is None or _inventory_liquid_credits(inventory) <= 0:
+        return None
+
+    if radius is None:
+        radius = _behavior_preference(sim, actor_eid, "shopping_search_radius", 10)
+    try:
+        radius = max(2, int(radius))
+    except (TypeError, ValueError):
+        radius = 10
+
+    needs = sim.ecs.get(NPCNeeds).get(actor_eid)
+    options = trade_system.npc_purchase_options(
+        actor_eid,
+        pos,
+        radius=radius,
+        preferred_property_id=preferred_property_id,
+    )
+    best = None
+    for row in options:
+        interest = _shopping_interest_for_row(
+            sim,
+            actor_eid,
+            row,
+            needs=needs,
+            vitality=vitality,
+            work_active=work_active,
+        )
+        if not interest:
+            continue
+        distance = int(row.get("distance", 0) or 0)
+        property_id = str(row.get("property_id", "") or "").strip() or None
+        score = float(interest.get("score", 0.0) or 0.0) - (distance * 1.15)
+        score += _business_target_reputation_bonus(
+            sim,
+            actor_eid,
+            property_id,
+            purpose="shopping",
+            urgency=0.7 if interest.get("urgent") else 0.2,
+        )
+        if preferred_property_id and property_id and str(preferred_property_id).strip() == property_id:
+            score += float(max(0.0, preferred_score_bonus or 0.0))
+        candidate = {
+            "property_id": property_id,
+            "property_name": str(row.get("property_name", property_id or "store")).strip() or "store",
+            "store_name": str(row.get("store_name", row.get("property_name", "store"))).strip() or "store",
+            "archetype": str(row.get("archetype", "") or "").strip().lower(),
+            "target": tuple(row.get("target") or (int(pos.x), int(pos.y), int(pos.z))),
+            "distance": int(distance),
+            "score": float(score),
+            "item_id": str(row.get("item_id", "") or "").strip().lower(),
+            "item_name": str(row.get("item_name", row.get("item_id", "item"))).strip() or "item",
+            "price": int(row.get("price", 0) or 0),
+            "motive": str(interest.get("motive", "") or "").strip().lower(),
+            "quirk_id": str(interest.get("quirk_id", "") or "").strip().lower(),
+            "impulse": bool(interest.get("impulse", False)),
+            "urgent": bool(interest.get("urgent", False)),
+        }
+        if best is None or (
+            candidate["score"],
+            -candidate["distance"],
+            -candidate["price"],
+            candidate["item_id"],
+        ) > (
+            best["score"],
+            -best["distance"],
+            -best["price"],
+            best["item_id"],
+        ):
+            best = candidate
+    return best
+
+
+def _registered_item_action_runtime(sim):
+    runtime = getattr(sim, "item_action_system", None)
+    if runtime is not None and hasattr(runtime, "_toggle_weapon_item"):
+        return runtime
+    item_system = getattr(sim, "item_system", None)
+    runtime = getattr(item_system, "item_actions", None)
+    if runtime is not None and hasattr(runtime, "_toggle_weapon_item"):
+        return runtime
+    for system in tuple(getattr(sim, "systems", ()) or ()):
+        runtime = getattr(system, "item_actions", None)
+        if runtime is not None and hasattr(runtime, "_toggle_weapon_item"):
+            return runtime
+    return None
+
+
+def _auto_equip_npc_purchase(sim, actor_eid, purchase):
+    if not isinstance(purchase, dict):
+        return False
+    inventory = sim.ecs.get(Inventory).get(actor_eid)
+    if inventory is None:
+        return False
+    entry = inventory.find(instance_id=purchase.get("instance_id"))
+    if not entry:
+        return False
+    item_id = str(entry.get("item_id", "") or "").strip().lower()
+    item_def = ITEM_CATALOG.get(item_id)
+    if not isinstance(item_def, dict):
+        return False
+    runtime = _registered_item_action_runtime(sim)
+    if runtime is None:
+        return False
+    if item_def.get("weapon_id"):
+        loadout = sim.ecs.get(WeaponLoadout).get(actor_eid)
+        if loadout is None or not loadout.current_weapon():
+            return bool(runtime._toggle_weapon_item(actor_eid, entry, item_def, reason="npc_shopping"))
+        return False
+    armor = item_def.get("armor") if isinstance(item_def.get("armor"), dict) else None
+    if armor:
+        current = sim.ecs.get(ArmorLoadout).get(actor_eid)
+        current_reduction = float(getattr(current, "damage_reduction", 0.0) or 0.0) if current else 0.0
+        try:
+            new_reduction = float(armor.get("damage_reduction", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            new_reduction = 0.0
+        if new_reduction > current_reduction:
+            return bool(runtime._toggle_armor_item(actor_eid, entry, item_def, reason="npc_shopping"))
+    return False
+
+
+def _resolve_npc_shopping_at_actor(sim, actor_eid, pos=None, *, preferred_property_id=None, preferred_item_id=None, motive="", quirk_id="", impulse=False):
+    if pos is None:
+        pos = sim.ecs.get(Position).get(actor_eid)
+    if pos is None:
+        return None
+    target = _find_shopping_target(
+        sim,
+        actor_eid,
+        pos,
+        radius=2,
+        work_active=False,
+        preferred_property_id=preferred_property_id,
+        preferred_score_bonus=10.0,
+    )
+    if target is None:
+        return None
+    if preferred_item_id and str(target.get("item_id", "") or "").strip().lower() != str(preferred_item_id or "").strip().lower():
+        options = getattr(sim.trade_system, "npc_purchase_options", lambda *args, **kwargs: [])(
+            actor_eid,
+            pos,
+            radius=2,
+            preferred_property_id=preferred_property_id,
+        )
+        needs = sim.ecs.get(NPCNeeds).get(actor_eid)
+        vitality = sim.ecs.get(Vitality).get(actor_eid)
+        for row in options:
+            if str(row.get("item_id", "") or "").strip().lower() != str(preferred_item_id or "").strip().lower():
+                continue
+            interest = _shopping_interest_for_row(sim, actor_eid, row, needs=needs, vitality=vitality, work_active=False)
+            if interest:
+                target = {
+                    **target,
+                    "property_id": str(row.get("property_id", "") or "").strip() or target.get("property_id"),
+                    "item_id": str(row.get("item_id", "") or "").strip().lower(),
+                    "motive": str(interest.get("motive", motive or "") or "").strip().lower(),
+                    "quirk_id": str(interest.get("quirk_id", quirk_id or "") or "").strip().lower(),
+                    "impulse": bool(interest.get("impulse", impulse)),
+                }
+                break
+    property_id = str(target.get("property_id", "") or "").strip()
+    item_id = str(target.get("item_id", "") or "").strip().lower()
+    if not property_id or not item_id:
+        return None
+    purchase = sim.trade_system.npc_buy_item(
+        actor_eid,
+        property_id,
+        item_id,
+        motive=str(target.get("motive", motive or "") or "").strip().lower(),
+        quirk_id=str(target.get("quirk_id", quirk_id or "") or "").strip().lower(),
+        impulse=bool(target.get("impulse", impulse)),
+    )
+    if isinstance(purchase, dict):
+        if purchase.get("impulse"):
+            cooldown = max(
+                _shopping_ticks_per_hour(sim) * 6,
+                int(_behavior_preference(sim, actor_eid, "shopping_impulse_cooldown_ticks", _shopping_ticks_per_hour(sim) * 6) or 0),
+            )
+            key = (int(actor_eid), str(purchase.get("quirk_id", "") or "").strip().lower())
+            _shopping_cooldowns(sim)[key] = int(getattr(sim, "tick", 0) or 0) + int(cooldown)
+        purchase["auto_equipped"] = bool(_auto_equip_npc_purchase(sim, actor_eid, purchase))
+    return purchase
 
 
 def _find_safe_spot_target(sim, actor_eid, pos, *, radius=None, preferred_property_id=None, preferred_score_bonus=0.0):

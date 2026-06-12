@@ -19,7 +19,10 @@ from game.organizations import (
     property_trade_practice_bundle,
     realize_item_instance_metadata,
 )
-from game.player_businesses import player_business_markup_profile as _player_business_markup_profile
+from game.player_businesses import (
+    player_business_markup_profile as _player_business_markup_profile,
+    player_business_record_direct_sale as _player_business_record_direct_sale,
+)
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_keys import (
     PROPERTY_KEY_ITEM_ID,
@@ -31,6 +34,7 @@ from game.property_keys import (
 from game.property_runtime import (
     property_covering as _property_covering,
     property_distance as _property_distance,
+    property_focus_position as _property_focus_position,
     property_is_storefront as _property_is_storefront,
     property_is_vehicle as _property_is_vehicle,
     property_metadata as _property_metadata,
@@ -41,6 +45,7 @@ from game.property_runtime import (
 from game.service_runtime import _int_or_default, _legend_line, _storefront_service_profile
 from game.system_support.container_runtime import _unlink_removed_item_from_gear
 from game.system_support.item_provenance_runtime import CLAIM_MERCHANDISE, stamp_item_provenance
+from game.system_support.npc_income_runtime import inventory_liquid_credits, spend_npc_wallet_credits
 
 
 def _default_trade_contact_terms(_sim, _viewer_eid, _prop):
@@ -1406,6 +1411,118 @@ class TradeSystem(System):
                     return preferred, preferred_service
         return self._nearest_store(pos, radius=radius, automated_only=automated_only)
 
+    def _npc_store_accessible(self, eid, prop, *, x=None, y=None, z=None):
+        if not isinstance(prop, dict) or eid is None:
+            return False, None
+        focus = _property_focus_position(prop)
+        if focus is None:
+            return False, None
+        fx, fy, fz = int(focus[0]), int(focus[1]), int(focus[2])
+        try:
+            sx = int(x if x is not None else fx)
+            sy = int(y if y is not None else fy)
+            sz = int(z if z is not None else fz)
+        except (TypeError, ValueError):
+            sx, sy, sz = fx, fy, fz
+        if int(prop.get("z", sz) or sz) != int(sz):
+            return False, None
+        access = _evaluate_property_access(self.sim, eid, prop, x=sx, y=sy, z=sz)
+        if not access.can_use_services:
+            return False, None
+        service = _storefront_service_profile(self.sim, prop, actor_eid=eid)
+        if not isinstance(service, dict) or not bool(service.get("available")):
+            return False, service if isinstance(service, dict) else None
+        if self._trade_denial(eid, prop) is not None:
+            return False, service
+        return True, service
+
+    def npc_purchase_options(self, eid, pos, *, radius=8, max_price=None, preferred_property_id=None):
+        """Return nearby concrete store-stock rows an NPC can buy with carried credits."""
+        inventory = self._inventory_for(eid)
+        if inventory is None or pos is None:
+            return []
+        try:
+            actor_eid = int(eid)
+            radius = max(1, int(radius))
+        except (TypeError, ValueError):
+            return []
+        wallet = inventory_liquid_credits(inventory)
+        try:
+            max_price = None if max_price is None else max(0, int(max_price))
+        except (TypeError, ValueError):
+            max_price = None
+
+        props = []
+        preferred = self._storefront_by_id(preferred_property_id)
+        if preferred is not None:
+            props.append(preferred)
+        for prop in self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=radius):
+            if not isinstance(prop, dict):
+                continue
+            if preferred is not None and str(prop.get("id", "") or "").strip() == str(preferred.get("id", "") or "").strip():
+                continue
+            props.append(prop)
+
+        rows = []
+        seen = set()
+        for prop in props:
+            if not self._is_storefront(prop):
+                continue
+            metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+            if bool(metadata.get("dialogue_trade_only")):
+                continue
+            focus = _property_focus_position(prop)
+            if focus is None or int(focus[2]) != int(pos.z):
+                continue
+            distance = abs(int(pos.x) - int(focus[0])) + abs(int(pos.y) - int(focus[1]))
+            if distance > radius and (
+                preferred is None
+                or str(prop.get("id", "") or "").strip() != str(preferred.get("id", "") or "").strip()
+            ):
+                continue
+            accessible, service = self._npc_store_accessible(actor_eid, prop, x=focus[0], y=focus[1], z=focus[2])
+            if not accessible:
+                continue
+            store = self._store_state(prop)
+            terms = self._trade_terms(actor_eid, prop)
+            for entry in tuple(store.get("entries", ()) or ()):
+                item_id = str(entry.get("item_id", "") or "").strip().lower()
+                if not item_id or int(entry.get("stock", 0) or 0) <= 0:
+                    continue
+                price = self._effective_buy_price(entry.get("buy_price", 1), terms)
+                if max_price is not None and price > max_price:
+                    continue
+                if price > wallet:
+                    continue
+                key = (str(prop.get("id", "") or "").strip(), item_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                item_def = ITEM_CATALOG.get(item_id, {"name": item_id})
+                row_entry = {
+                    "item_id": item_id,
+                    "metadata": entry.get("metadata") if isinstance(entry.get("metadata"), dict) else None,
+                }
+                rows.append({
+                    "property_id": str(prop.get("id", "") or "").strip() or None,
+                    "property_name": str(prop.get("name", prop.get("id", "store")) or "store").strip() or "store",
+                    "store_name": str(prop.get("name", prop.get("id", "store")) or "store").strip() or "store",
+                    "archetype": str(metadata.get("archetype", "") or "").strip().lower(),
+                    "target": (int(focus[0]), int(focus[1]), int(focus[2])),
+                    "distance": int(distance),
+                    "service_eid": service.get("service_eid") if isinstance(service, dict) else None,
+                    "item_id": item_id,
+                    "item_name": item_display_name_for_actor(self.sim, self.player_eid, row_entry, item_catalog=ITEM_CATALOG),
+                    "category": str(item_def.get("category", "") or "").strip().lower(),
+                    "tags": tuple(_item_tags(item_id)),
+                    "price": int(price),
+                    "base_price": int(max(1, entry.get("buy_price", 1))),
+                    "stock": int(max(0, entry.get("stock", 0) or 0)),
+                    "wallet": int(wallet),
+                })
+        rows.sort(key=lambda row: (int(row.get("distance", 0)), int(row.get("price", 0)), str(row.get("item_id", ""))))
+        return rows
+
     def _trade_practice_bundle(self, prop):
         bundle = property_trade_practice_bundle(
             self.sim,
@@ -2149,6 +2266,207 @@ class TradeSystem(System):
         state["owner_transfer"] = False
         if was_open:
             self.sim.emit(Event("trade_panel_toggled", eid=self.player_eid, open=False))
+
+    def npc_buy_item(self, eid, property_id, item_id, *, motive="", quirk_id="", impulse=False):
+        """Buy one real store-stock item for an NPC using carried credstick credits."""
+        inventory = self._inventory_for(eid)
+        pos = self._position_for(eid)
+        if inventory is None:
+            self.sim.emit(Event("trade_buy_blocked", eid=eid, reason="no_inventory"))
+            return None
+        if pos is None:
+            self.sim.emit(Event("trade_buy_blocked", eid=eid, reason="no_position"))
+            return None
+        try:
+            actor_eid = int(eid)
+        except (TypeError, ValueError):
+            return None
+        item_id = str(item_id or "").strip().lower()
+        store_prop = self._storefront_by_id(property_id)
+        if not store_prop:
+            self.sim.emit(Event("trade_buy_blocked", eid=actor_eid, reason="no_store", property_id=property_id))
+            return None
+        focus = _property_focus_position(store_prop)
+        if focus is None or int(focus[2]) != int(pos.z):
+            self.sim.emit(Event("trade_buy_blocked", eid=actor_eid, reason="no_store", property_id=store_prop.get("id")))
+            return None
+        distance = abs(int(pos.x) - int(focus[0])) + abs(int(pos.y) - int(focus[1]))
+        covered = _property_covering(self.sim, pos.x, pos.y, pos.z)
+        inside_store = isinstance(covered, dict) and str(covered.get("id", "") or "").strip() == str(store_prop.get("id", "") or "").strip()
+        if distance > 2 and not inside_store:
+            self.sim.emit(Event("trade_buy_blocked", eid=actor_eid, reason="no_store", property_id=store_prop.get("id")))
+            return None
+        accessible, _service = self._npc_store_accessible(actor_eid, store_prop, x=pos.x, y=pos.y, z=pos.z)
+        if not accessible:
+            self.sim.emit(Event("trade_buy_blocked", eid=actor_eid, reason="service_unavailable", property_id=store_prop.get("id")))
+            return None
+
+        store = self._store_state(store_prop)
+        choice = self._entry_for_item(store, item_id)
+        if choice is None or int(choice.get("stock", 0) or 0) <= 0:
+            self.sim.emit(Event(
+                "trade_buy_blocked",
+                eid=actor_eid,
+                reason="item_unavailable",
+                item_id=item_id,
+                property_id=store_prop.get("id"),
+            ))
+            return None
+
+        terms = self._trade_terms(actor_eid, store_prop)
+        base_price = int(max(1, choice.get("buy_price", 1)))
+        price = self._effective_buy_price(base_price, terms)
+        wallet_before = inventory_liquid_credits(inventory)
+        if wallet_before < price:
+            self.sim.emit(Event(
+                "trade_buy_blocked",
+                eid=actor_eid,
+                reason="insufficient_funds",
+                credits=wallet_before,
+                cheapest_price=price,
+                property_id=store_prop.get("id"),
+            ))
+            return None
+
+        item_def = ITEM_CATALOG.get(item_id, {"name": item_id, "stack_max": 1})
+        item_practice = self._item_realization_bundle(store_prop, item_id)
+        source_row = next(iter(item_practice.get("rows", ())), None)
+        source_organization_eid = (source_row or {}).get("organization_eid")
+        source_organization_key = (source_row or {}).get("organization_key")
+        source_practice_key = (source_row or {}).get("entry_key")
+        if source_organization_eid in (None, 0, "0") and item_practice.get("source_organization_eid"):
+            source_organization_eid = item_practice.get("source_organization_eid")
+        if not str(source_organization_key or "").strip() and item_practice.get("source_organization_key"):
+            source_organization_key = item_practice.get("source_organization_key")
+        if not str(source_practice_key or "").strip() and item_practice.get("source_practice_key"):
+            source_practice_key = item_practice.get("source_practice_key")
+        next_sale_count = int(choice.get("sale_count", 0) or 0) + 1
+        base_metadata = dict(choice.get("metadata") or {}) if isinstance(choice.get("metadata"), dict) else {}
+        base_metadata.update({
+            "purchased_from": store_prop["id"],
+            "store_cycle": store.get("cycle_index"),
+        })
+        item_metadata = realize_item_instance_metadata(
+            item_id,
+            base_metadata,
+            practice_bundle=item_practice,
+            source_property_id=store_prop["id"],
+            source_organization_eid=source_organization_eid,
+            source_organization_key=source_organization_key,
+            source_practice_key=source_practice_key,
+            serial_seed=f"{store_prop['id']}:{store.get('cycle_index')}:{item_id}:{next_sale_count}",
+        )
+        item_metadata = stamp_item_provenance(
+            self.sim,
+            {
+                "item_id": item_id,
+                "owner_eid": store_prop.get("owner_eid"),
+                "owner_tag": store_prop.get("owner_tag"),
+                "metadata": item_metadata,
+            },
+            prop=store_prop,
+            source_context="trade_purchase",
+            claim_class=CLAIM_MERCHANDISE,
+            source_owner_eid=store_prop.get("owner_eid"),
+            source_owner_tag=store_prop.get("owner_tag"),
+            source_property_id=store_prop.get("id"),
+            source_organization_eid=source_organization_eid,
+            latent_claim_violation=False,
+            last_transfer_tick=int(getattr(self.sim, "tick", 0)),
+            last_transfer_kind="trade_purchase",
+            last_holder_eid=actor_eid,
+        )
+        added, instance_id = inventory.add_item(
+            item_id=item_id,
+            quantity=1,
+            stack_max=item_def.get("stack_max", 1),
+            instance_factory=self.sim.new_item_instance_id,
+            owner_eid=actor_eid,
+            owner_tag="npc",
+            metadata=item_metadata,
+        )
+        if not added:
+            self.sim.emit(Event(
+                "trade_buy_blocked",
+                eid=actor_eid,
+                reason="inventory_full",
+                item_id=item_id,
+                property_id=store_prop["id"],
+            ))
+            return None
+
+        spent = spend_npc_wallet_credits(inventory, price)
+        if spent < price:
+            inventory.remove_item(instance_id=instance_id, quantity=1)
+            self.sim.emit(Event(
+                "trade_buy_blocked",
+                eid=actor_eid,
+                reason="insufficient_funds",
+                credits=inventory_liquid_credits(inventory),
+                cheapest_price=price,
+                property_id=store_prop.get("id"),
+            ))
+            return None
+        wallet_after = inventory_liquid_credits(inventory)
+        choice["stock"] = max(0, int(choice.get("stock", 0)) - 1)
+        choice["sale_count"] = next_sale_count
+        item_name = item_display_name_for_actor(
+            self.sim,
+            self.player_eid,
+            {"item_id": item_id, "metadata": item_metadata, "instance_id": instance_id},
+            item_catalog=ITEM_CATALOG,
+        )
+        sale_result = _player_business_record_direct_sale(
+            self.sim,
+            store_prop,
+            price,
+            buyer_eid=actor_eid,
+            item_id=item_id,
+            item_name=item_name,
+        )
+
+        self.sim.emit(Event(
+            "trade_bought",
+            eid=actor_eid,
+            property_id=store_prop["id"],
+            store_name=store_prop.get("name", store_prop["id"]),
+            item_id=item_id,
+            item_name=item_name,
+            price=price,
+            base_price=base_price,
+            stock_left=choice["stock"],
+            credits=wallet_after,
+            instance_id=instance_id,
+            owner_transfer=False,
+            transfer_mode="",
+            contact_source_eid=terms.get("source_eid"),
+            contact_note=terms.get("note", ""),
+            practice_note=item_practice.get("note_text", ""),
+        ))
+        result = {
+            "npc_eid": actor_eid,
+            "eid": actor_eid,
+            "property_id": store_prop["id"],
+            "store_name": store_prop.get("name", store_prop["id"]),
+            "property_name": store_prop.get("name", store_prop["id"]),
+            "item_id": item_id,
+            "item_name": item_name,
+            "price": int(price),
+            "base_price": int(base_price),
+            "wallet_before": int(wallet_before),
+            "wallet_after": int(wallet_after),
+            "stock_left": int(choice["stock"]),
+            "instance_id": instance_id,
+            "motive": str(motive or "").strip().lower(),
+            "quirk_id": str(quirk_id or "").strip().lower(),
+            "impulse": bool(impulse),
+            "player_business_sale": bool(isinstance(sale_result, dict)),
+            "x": int(pos.x),
+            "y": int(pos.y),
+            "z": int(pos.z),
+        }
+        self.sim.emit(Event("npc_item_purchased", **result))
+        return result
 
     def _trade_buy(self, eid, pos, target_item_id=None):
         assets = self._assets_for(eid)

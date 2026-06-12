@@ -447,6 +447,73 @@ class NPCInteractionSystem(System):
         "leave",
     }
     MISSTEP_TOPICS = ("weird", "pry", "insult")
+    CONVERSATION_SAFE_TOPICS = {
+        "name",
+        "job",
+        "rapport",
+        "check_in",
+        "day_feel",
+        "job_feel",
+        "routine",
+        "workplace",
+        "services",
+        "service_fuel",
+        "service_repair",
+        "service_contractor",
+        "service_banking",
+        "service_insurance",
+        "service_rest",
+        "service_transit",
+        "service_rail",
+        "service_bus",
+        "service_shuttle",
+        "service_ferry",
+        "service_trade",
+        "service_used_cars",
+        "service_vehicle_fetch",
+        "service_gaming",
+        "trade",
+        "bye",
+        "leave",
+    }
+    CONVERSATION_SENSITIVE_TOPICS = {
+        "access",
+        "entry",
+        "keyholder",
+        "weak_point",
+        "security",
+        "owner",
+        "organization",
+        "supervisor",
+        "people",
+        "social_incident",
+        "social_business",
+        "social_opportunity",
+        "social_relationship",
+        "street_talk",
+        "street_appraise",
+        "street_buy",
+        "street_buy_accept",
+        "street_buy_next",
+        "payoff",
+        "fence",
+        "hire_runner",
+        "contract",
+        "backup_kill",
+        "risk",
+        "attention",
+    }
+    CONVERSATION_DANGEROUS_TOPICS = {
+        "fire",
+        "insult",
+        "pry",
+        "weird",
+        "backup_kill",
+        "contract",
+        "payoff",
+        "fence",
+        "street_buy_accept",
+    }
     MENU_REPEAT_ROW_BUDGET = 3
     REPEAT_PRESSURE_SKIP_TOPICS = {
         "bye",
@@ -690,6 +757,7 @@ class NPCInteractionSystem(System):
                 "selected_index": 0,
                 "scroll": 0,
                 "hint": "",
+                "conversation_read": "",
                 "new_topic_ids": [],
                 "close_pending": False,
                 "allow_distant": False,
@@ -730,6 +798,7 @@ class NPCInteractionSystem(System):
                 "selected_index": 0,
                 "scroll": 0,
                 "hint": "",
+                "conversation_read": "",
                 "new_topic_ids": [],
                 "close_pending": False,
                 "allow_distant": False,
@@ -746,6 +815,7 @@ class NPCInteractionSystem(System):
             state.setdefault("selected_index", 0)
             state.setdefault("scroll", 0)
             state.setdefault("hint", "")
+            state.setdefault("conversation_read", "")
             state.setdefault("new_topic_ids", [])
             state.setdefault("close_pending", False)
             state.setdefault("allow_distant", False)
@@ -9954,83 +10024,238 @@ class NPCInteractionSystem(System):
         response["npc_lines"] = npc_lines
         return response
 
-    def _dialogue_tutorial_hint(self, context):
-        pressure_tier = str(context.get("pressure_tier", "low")).strip().lower()
-        if pressure_tier in {"medium", "high"}:
-            return "Common topics unlock follow-ups as you talk. Heat is up, favors may stay cautious, and repeating yourself or pushing too hard can sour the conversation."
-        return "Common topics unlock follow-ups as you talk. New branches show with +, and repeating yourself or pushing too hard can sour the conversation."
+    def _dialogue_conversation_skill(self):
+        try:
+            value = float(_actor_skill(self.sim, self.player_eid, "conversation", default=5.0))
+        except Exception:
+            value = 5.0
+        return max(1.0, min(10.0, value))
 
-    def _dialogue_status_hint(self, context):
-        if bool(context.get("peaceful_orders_only")):
-            return "They have surrendered. Keep it simple: move them, leave them, or end it."
-        if bool(context.get("door_answering")):
-            mood = str(context.get("door_answer_mood", "neutral") or "neutral").strip().lower() or "neutral"
-            if mood == "hostile":
-                return "They answered the knock, but only barely. Say what you need or step away."
-            if mood == "irritated":
-                return "They came to the door annoyed. Keep it short and to the point."
-            if bool(context.get("door_answer_services")):
-                return "They are willing to handle a little after-hours business from the doorway."
-            return "They answered the door. Stick to the reason you knocked."
-        tone = str(context.get("tone", "neutral")).strip().lower() or "neutral"
-        pressure_tier = str(context.get("pressure_tier", "low")).strip().lower() or "low"
-        if bool(context.get("guarded")):
-            return "They are not in a friendly mood. Keep it clean or back out."
-        if pressure_tier == "high":
-            return "They are talking, but heat has them tight. One bad question could shut this down."
-        if pressure_tier == "medium":
-            return "They seem willing enough, but the heat is keeping them careful about names and favors."
-        band = str(context.get("dialogue_relationship_band", "") or "").strip().lower()
-        if band in {"friend", "family", "partner"}:
-            return "They seem comfortable and recognize you warmly. Continuity and personal questions should land better than a hard push."
-        if band == "trusted_coworker":
-            return "They trust you through the work. Practical questions are easy; personal ones still need care."
-        if band == "coworker":
-            return "They know you through work. Keep it practical before asking for the inside of things."
-        if band in {"trusted_local", "protective"}:
-            return "They seem to trust your shape here. A careful follow-up should land better than a demand."
-        bond = context.get("bond") or self._bond_snapshot(context.get("npc_eid")) or {}
-        trust = float(bond.get("trust", 0.0))
-        closeness = float(bond.get("closeness", 0.0))
-        if tone == "friendly":
-            return "They seem comfortable. A thoughtful follow-up should land better than a hard push."
-        if tone == "wary":
-            return "They are answering, but only just. Stay light or they may close off."
-        if trust >= 0.58 or closeness >= 0.56:
-            return "They seem open enough to volunteer a little if you give them something real to respond to."
-        return "They are talking, but you still need a reason for the sharper questions."
+    def _dialogue_topic_safety(self, context, row):
+        context = context if isinstance(context, dict) else {}
+        row = row if isinstance(row, dict) else {}
+        topic_id = str(row.get("id", "") or "").strip().lower()
+        if not topic_id:
+            return "neutral", 0.0, 0.0
 
-    def _dialogue_hint_text(self, context, *, new_topic_labels=None):
-        if bool(context.get("peaceful_orders_only")):
-            return "They are complying for now. Give a peaceful order or back out."
+        def _unit(value, default=0.0):
+            try:
+                return max(0.0, min(1.0, float(value)))
+            except (TypeError, ValueError):
+                return float(default)
+
+        bond = context.get("bond") if isinstance(context.get("bond"), dict) else {}
+        social_read = context.get("dialogue_social_context")
+        social_read = social_read if isinstance(social_read, dict) else {}
+        trust = _unit(bond.get("trust", social_read.get("trust", 0.0)))
+        closeness = _unit(bond.get("closeness", social_read.get("closeness", 0.0)))
+        standing = _unit(context.get("social_standing", social_read.get("score", 0.0)))
+        tone = str(context.get("tone", "neutral") or "neutral").strip().lower() or "neutral"
+        pressure_tier = str(context.get("pressure_tier", "low") or "low").strip().lower() or "low"
+        guarded = bool(context.get("guarded"))
         npc_eid = context.get("npc_eid")
-        opened_count = 0
-        total_asked = 0
-        if npc_eid is not None:
-            memory = self._dialogue_memory(npc_eid)
-            opened_count = max(0, int(memory.get("opened_count", 0)))
-            total_asked = self._dialogue_total_topics_asked(npc_eid)
-        early_tutorial = opened_count <= 1 and total_asked <= 4
-        if new_topic_labels:
-            joined = ", ".join(str(label).strip() for label in new_topic_labels if str(label).strip())
-            if not joined:
-                return self._dialogue_tutorial_hint(context) if early_tutorial else self._dialogue_status_hint(context)
-            if early_tutorial:
-                return f"New topics: {joined}."
-            tone = str(context.get("tone", "neutral")).strip().lower() or "neutral"
-            pressure_tier = str(context.get("pressure_tier", "low")).strip().lower() or "low"
-            if pressure_tier in {"medium", "high"}:
-                lead = "Even cautious, they gave you a little more."
-            elif tone == "friendly":
-                lead = "They are warming to the conversation."
-            elif tone == "wary":
-                lead = "You got a little more out of them."
+
+        score = 0.0
+        if topic_id in self.CONVERSATION_SAFE_TOPICS or topic_id.startswith("service_"):
+            score += 0.26
+        if topic_id in self.CONVERSATION_SENSITIVE_TOPICS or topic_id in self.SENSITIVE_INFO_TOPICS:
+            score -= 0.24
+        if topic_id in self.CONVERSATION_DANGEROUS_TOPICS or topic_id in self.MISSTEP_TOPICS:
+            score -= 0.58
+
+        if guarded:
+            score -= 0.34
+            if topic_id in {"purpose", "apologize", "leave"}:
+                score += 0.88
+        if topic_id == "apologize":
+            score += 0.42
+        if topic_id in {"purpose", "concern"}:
+            score += 0.18
+        if topic_id in {"street_buy_decline", "bye", "leave"}:
+            score += 0.18
+        if topic_id in {"care_about", "read_player", "roots"} and standing < 0.52:
+            score -= 0.22
+        if topic_id in self.SOCIAL_KNOWLEDGE_TOPIC_IDS and standing < 0.44:
+            score -= 0.16
+        if topic_id in self.SENSITIVE_INFO_TOPICS and trust < 0.56:
+            score -= 0.2
+        if topic_id in {"backup_kill", "contract"} and trust < 0.64:
+            score -= 0.2
+
+        if tone == "friendly":
+            score += 0.18
+        elif tone == "open":
+            score += 0.08
+        elif tone == "wary":
+            score -= 0.18
+        if pressure_tier == "medium":
+            score -= 0.1
+        elif pressure_tier == "high":
+            score -= 0.22
+
+        score += (trust * 0.3) + (closeness * 0.18) + (standing * 0.22) - 0.18
+
+        try:
+            repeat_slot = max(0, int(row.get("repeat_slot", 0) or 0))
+        except (TypeError, ValueError):
+            repeat_slot = 0
+        ask_count = self._dialogue_topic_count(npc_eid, topic_id) if npc_eid is not None else 0
+        family_count = self._dialogue_topic_family_count(npc_eid, topic_id) if npc_eid is not None else 0
+        repeat_pressure = max(0, max(ask_count, family_count) - 1) + repeat_slot
+        if repeat_pressure > 0 and topic_id not in self.REPEAT_PRESSURE_SKIP_TOPICS:
+            score -= min(0.38, 0.12 * float(repeat_pressure))
+
+        if score >= 0.22:
+            safety = "safe"
+        elif score <= -0.22:
+            safety = "danger"
+        else:
+            safety = "neutral"
+        return safety, score, min(1.0, abs(score))
+
+    def _dialogue_marker_color(self, safety):
+        safety = str(safety or "").strip().lower()
+        if safety == "safe":
+            return "player"
+        if safety == "danger":
+            return "projectile"
+        return "objective"
+
+    def _annotate_dialog_topics(self, context, topics, *, new_topic_ids=()):
+        rows = [dict(row) for row in list(topics or ()) if isinstance(row, dict)]
+        conversation = self._dialogue_conversation_skill()
+        if conversation >= 8.5:
+            rows = [
+                row
+                for row in rows
+                if max(0, int(row.get("repeat_slot", 0) or 0)) <= 0
+            ]
+
+        new_ids = {
+            str(topic_id or "").strip().lower()
+            for topic_id in tuple(new_topic_ids or ())
+            if str(topic_id or "").strip()
+        }
+        annotated = []
+        for row in rows:
+            topic_id = str(row.get("id", "") or "").strip().lower()
+            safety, score, confidence = self._dialogue_topic_safety(context, row)
+            if conversation >= 6.75:
+                marker_safety = safety
+            elif conversation >= 4.75 and confidence >= 0.36 and safety in {"safe", "danger"}:
+                marker_safety = safety
             else:
-                lead = "That got them talking."
-            return f"{lead} New topics: {joined}."
-        if early_tutorial:
-            return self._dialogue_tutorial_hint(context)
-        return self._dialogue_status_hint(context)
+                marker_safety = "neutral"
+
+            marker_visible = bool(topic_id in new_ids and conversation >= 2.5)
+            row["conversation_risk"] = safety
+            row["conversation_risk_score"] = round(float(score), 3)
+            row["conversation_marker_risk"] = marker_safety
+            row["new_marker_visible"] = marker_visible
+            row["new_marker"] = "+" if marker_visible else ""
+            row["new_marker_color"] = self._dialogue_marker_color(marker_safety)
+            annotated.append(row)
+        return annotated
+
+    def _dialogue_conversation_read_text(self, context, *, topics=None):
+        context = context if isinstance(context, dict) else {}
+        conversation = self._dialogue_conversation_skill()
+        tone = str(context.get("tone", "neutral") or "neutral").strip().lower() or "neutral"
+        pressure_tier = str(context.get("pressure_tier", "low") or "low").strip().lower() or "low"
+        guarded = bool(context.get("guarded"))
+        social_read = context.get("dialogue_social_context")
+        social_read = social_read if isinstance(social_read, dict) else {}
+        band = str(context.get("dialogue_relationship_band", social_read.get("band", "")) or "").strip().lower()
+
+        if bool(context.get("peaceful_orders_only")):
+            return "Read: standing down; short, calm orders should hold."
+        if conversation < 2.5:
+            if guarded or pressure_tier == "high":
+                return "Read: tension is obvious; the rest is hard to place."
+            return "Read: their rhythm is hard to place."
+        if conversation < 4.75:
+            if guarded:
+                return "Read: guarded."
+            if pressure_tier == "high":
+                return "Read: heat has them tight."
+            if tone == "friendly":
+                return "Read: friendly."
+            if tone == "wary":
+                return "Read: wary."
+            return "Read: talking, but not settled."
+
+        if guarded:
+            base = "guarded; apology or a clean reason feels safer than pressure"
+        elif pressure_tier == "high":
+            base = "heat has them tight; favors and names need care"
+        elif pressure_tier == "medium":
+            base = "careful under the heat; practical questions feel safer"
+        elif band in {"friend", "family", "partner"}:
+            base = "comfortable; continuity and personal follow-ups can land"
+        elif band == "trusted_coworker":
+            base = "work-trust; practical questions feel safer than personal pressure"
+        elif band == "coworker":
+            base = "work-familiar; keep it practical before pushing inside"
+        elif band in {"trusted_local", "protective"}:
+            base = "open enough; careful follow-ups should land better than demands"
+        elif tone == "friendly":
+            base = "comfortable; a thoughtful follow-up should land"
+        elif tone == "wary":
+            base = "answering, but only just; stay light"
+        else:
+            base = "talking, but sharper questions still need a reason"
+
+        if conversation >= 7.0:
+            topic_rows = [row for row in list(topics or ()) if isinstance(row, dict)]
+            risky = [
+                row for row in topic_rows
+                if str(row.get("conversation_marker_risk", "")).strip().lower() == "danger"
+            ]
+            safe = [
+                row for row in topic_rows
+                if str(row.get("conversation_marker_risk", "")).strip().lower() == "safe"
+            ]
+            if risky and safe:
+                base = f"{base}; some openings are clean, some have teeth"
+            elif risky:
+                base = f"{base}; at least one opening feels sharp"
+            elif safe:
+                base = f"{base}; the easy openings are visible"
+        return f"Read: {base}."
+
+    def _practice_dialogue_read(self, context, topics, *, read_text="", new_topic_ids=()):
+        npc_eid = context.get("npc_eid") if isinstance(context, dict) else None
+        if npc_eid is None:
+            return
+        topic_sig = ",".join(
+            str(row.get("id", "") or "").strip().lower()
+            for row in list(topics or ())[:8]
+            if isinstance(row, dict) and str(row.get("id", "") or "").strip()
+        )
+        marker_sig = ",".join(
+            f"{str(row.get('id', '') or '').strip().lower()}:{str(row.get('conversation_marker_risk', '') or '').strip().lower()}:{int(bool(row.get('new_marker_visible')))}"
+            for row in list(topics or ())[:8]
+            if isinstance(row, dict) and str(row.get("id", "") or "").strip()
+        )
+        new_sig = ",".join(
+            str(topic_id or "").strip().lower()
+            for topic_id in tuple(new_topic_ids or ())
+            if str(topic_id or "").strip()
+        )
+        cooldown_key = f"{npc_eid}:{str(read_text or '').strip().lower()}:{topic_sig}:{marker_sig}:{new_sig}"
+        amount = 0.055 if new_sig else 0.025
+        self.sim.emit(Event(
+            "skill_practice",
+            eid=self.player_eid,
+            skill_id="conversation",
+            amount=amount,
+            source="dialogue_read",
+            cooldown_key=cooldown_key,
+            cooldown=48,
+        ))
+
+    def _dialogue_hint_text(self, context, *, new_topic_labels=None, topics=None):
+        return self._dialogue_conversation_read_text(context, topics=topics)
 
     def _dialogue_line_text(self, line):
         if isinstance(line, dict):
@@ -10668,6 +10893,12 @@ class NPCInteractionSystem(System):
             current_tick=current_tick,
             reason="dialog_open",
         )
+        topics = self._prioritize_dialog_topics(
+            self._available_dialog_topics(context),
+            highlight_topic_ids=highlight_topic_ids,
+        )
+        topics = self._annotate_dialog_topics(context, topics, new_topic_ids=())
+        read_text = self._dialogue_hint_text(context, topics=topics)
         state.update({
             "open": True,
             "kind": "conversation",
@@ -10676,13 +10907,11 @@ class NPCInteractionSystem(System):
             "title": f"Conversation: {context['npc_name']}",
             "subtitle": context.get("subtitle", ""),
             "transcript": transcript,
-            "topics": self._prioritize_dialog_topics(
-                self._available_dialog_topics(context),
-                highlight_topic_ids=highlight_topic_ids,
-            ),
+            "topics": topics,
             "selected_index": 0,
             "scroll": 0,
-            "hint": self._dialogue_hint_text(context),
+            "hint": read_text,
+            "conversation_read": read_text,
             "new_topic_ids": [],
             "close_pending": False,
             "allow_distant": bool(context.get("allow_distant")),
@@ -10692,6 +10921,7 @@ class NPCInteractionSystem(System):
             "backup_cursor_mark": None,
             "backup_cursor_pending_topic": "",
         })
+        self._practice_dialogue_read(context, topics, read_text=read_text)
         memory["opened_count"] = max(0, int(memory.get("opened_count", 0))) + 1
         memory["last_tick"] = int(self.sim.tick)
         return state
@@ -10701,7 +10931,8 @@ class NPCInteractionSystem(System):
         state.update({
             "topics": [],
             "selected_index": 0,
-            "hint": "Conversation over. Press Space to close.",
+            "hint": "Conversation over.",
+            "conversation_read": "",
             "new_topic_ids": [],
             "close_pending": True,
             "street_buy_offer": None,
@@ -10726,6 +10957,7 @@ class NPCInteractionSystem(System):
             "selected_index": 0,
             "scroll": 0,
             "hint": "",
+            "conversation_read": "",
             "new_topic_ids": [],
             "close_pending": False,
             "allow_distant": False,
@@ -12606,25 +12838,30 @@ class NPCInteractionSystem(System):
         state["subtitle"] = refreshed.get("subtitle", "")
         pending_street_buy_offer = bool(refreshed.get("street_buy_offer_pending"))
         highlight_topic_ids = ("street_buy_accept", "street_buy_next", "street_buy_decline") if pending_street_buy_offer else ()
-        state["topics"] = self._prioritize_dialog_topics(
+        refreshed_topics = self._prioritize_dialog_topics(
             self._available_dialog_topics(refreshed),
             highlight_topic_ids=highlight_topic_ids,
         )
         new_topic_ids = [
             str(row.get("id", "")).strip().lower()
-            for row in list(state.get("topics", ()) or ())
+            for row in list(refreshed_topics or ())
             if str(row.get("id", "")).strip().lower() not in previous_topic_ids
         ]
         state["new_topic_ids"] = [topic for topic in new_topic_ids if topic]
-        if state["new_topic_ids"]:
-            label_map = {
-                str(row.get("id", "")).strip().lower(): str(row.get("label", row.get("id", "topic"))).strip()
-                for row in list(state.get("topics", ()) or ())
-            }
-            labels = [label_map.get(topic_id, topic_id.replace("_", " ")) for topic_id in state["new_topic_ids"][:3]]
-            state["hint"] = self._dialogue_hint_text(refreshed, new_topic_labels=labels)
-        else:
-            state["hint"] = self._dialogue_hint_text(refreshed)
+        state["topics"] = self._annotate_dialog_topics(
+            refreshed,
+            refreshed_topics,
+            new_topic_ids=state["new_topic_ids"],
+        )
+        read_text = self._dialogue_hint_text(refreshed, topics=state["topics"])
+        state["hint"] = read_text
+        state["conversation_read"] = read_text
+        self._practice_dialogue_read(
+            refreshed,
+            state["topics"],
+            read_text=read_text,
+            new_topic_ids=state["new_topic_ids"],
+        )
         preferred_row = selected_row
         if topic_id in {"street_buy", "street_buy_next"} and pending_street_buy_offer:
             preferred_row = next(

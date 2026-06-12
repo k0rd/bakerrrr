@@ -4321,6 +4321,7 @@ class PygameView:
             "debug",
             "look",
             "aim",
+            "read",
         }:
             return True
 
@@ -4347,6 +4348,7 @@ class PygameView:
             "m trade",
             "m close",
             "g go",
+            "read:",
         )
         score = sum(1 for term in action_terms if term in lower)
         if "|" in stripped and score >= 1:
@@ -4378,6 +4380,7 @@ class PygameView:
             "debug",
             "look",
             "aim",
+            "read",
         }:
             return None
         start = content.find(prefix)

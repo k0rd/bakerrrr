@@ -1297,6 +1297,17 @@ class PlayerActionSystem(System):
             return
         zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
 
+        if _entity_is_downed(self.sim, eid):
+            _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+            if action != "use_item":
+                self.sim.emit(Event(
+                    "player_action_blocked",
+                    eid=eid,
+                    action=action,
+                    reason="downed",
+                ))
+            return
+
         if action == "zoom_overworld":
             self._set_sneak_mode(eid, False, reason="zoom")
             self._set_zoom_mode(eid=eid, pos=pos, mode="overworld")
