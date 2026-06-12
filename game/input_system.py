@@ -294,6 +294,11 @@ class InputSystem(System):
             "pressed_at": 0.0,
             "last_repeat_at": 0.0,
         }
+        if not hasattr(self.sim, "aim_lock_ui"):
+            self.sim.aim_lock_ui = {
+                "active": False,
+                "target_eid": None,
+            }
 
         if not hasattr(self.sim, "inventory_ui"):
             self.sim.inventory_ui = {
@@ -345,6 +350,7 @@ class InputSystem(System):
         if not hasattr(self.sim, "help_ui"):
             self.sim.help_ui = {
                 "open": False,
+                "scroll": 0,
             }
         if not hasattr(self.sim, "character_ui"):
             self.sim.character_ui = {
@@ -522,6 +528,18 @@ class InputSystem(System):
             state.setdefault("throw_item_name", "")
         return state
 
+    def _aim_lock_state(self):
+        state = getattr(self.sim, "aim_lock_ui", None)
+        if not isinstance(state, dict):
+            state = {
+                "active": False,
+                "target_eid": None,
+            }
+            self.sim.aim_lock_ui = state
+        state.setdefault("active", False)
+        state.setdefault("target_eid", None)
+        return state
+
     def _overworld_view_only_for_player(self):
         records = getattr(self.sim, "overworld_view_only_by_eid", None)
         if not isinstance(records, dict):
@@ -536,8 +554,10 @@ class InputSystem(System):
         if state is None:
             state = {
                 "open": False,
+                "scroll": 0,
             }
             self.sim.help_ui = state
+        state.setdefault("scroll", 0)
         return state
 
     def _character_state(self):
@@ -2085,6 +2105,87 @@ class InputSystem(System):
             exclude_eid=self.player_eid,
         )
 
+    def _clear_aim_lock(self, *, release_pacing=True):
+        state = self._aim_lock_state()
+        had_lock = bool(state.get("active") or state.get("target_eid") is not None)
+        state["active"] = False
+        state["target_eid"] = None
+        state.pop("target_x", None)
+        state.pop("target_y", None)
+        state.pop("target_z", None)
+        if release_pacing:
+            _set_manual_combat_pacing(self.sim, False)
+        return had_lock
+
+    def _aim_lock_target_position(self, target_eid=None):
+        state = self._aim_lock_state()
+        if target_eid is None:
+            target_eid = state.get("target_eid")
+        try:
+            target_eid = int(target_eid)
+        except (TypeError, ValueError):
+            return None
+        positions = self.sim.ecs.get(Position)
+        target_pos = positions.get(target_eid)
+        player_pos = positions.get(self.player_eid)
+        if not target_pos or not player_pos:
+            return None
+        if int(target_pos.z) != int(player_pos.z):
+            return None
+        vitality = self.sim.ecs.get(Vitality).get(target_eid)
+        if vitality and (bool(getattr(vitality, "downed", False)) or int(getattr(vitality, "hp", 1)) <= 0):
+            return None
+        if not _entity_visible_to_player(self.sim, self.player_eid, target_eid):
+            return None
+        return target_pos
+
+    def _aim_lock_target_eid(self):
+        state = self._aim_lock_state()
+        if not bool(state.get("active")):
+            return None
+        target_eid = state.get("target_eid")
+        target_pos = self._aim_lock_target_position(target_eid)
+        if not target_pos:
+            self._clear_aim_lock()
+            return None
+        state["target_x"] = int(target_pos.x)
+        state["target_y"] = int(target_pos.y)
+        state["target_z"] = int(target_pos.z)
+        return int(target_eid)
+
+    def _set_aim_lock_target(self, target_eid):
+        target_pos = self._aim_lock_target_position(target_eid)
+        if not target_pos:
+            return False
+        state = self._aim_lock_state()
+        state["active"] = True
+        state["target_eid"] = int(target_eid)
+        state["target_x"] = int(target_pos.x)
+        state["target_y"] = int(target_pos.y)
+        state["target_z"] = int(target_pos.z)
+        _set_manual_combat_pacing(self.sim, True)
+        return True
+
+    def _emit_locked_fire(self):
+        target_eid = self._aim_lock_target_eid()
+        if target_eid is None:
+            self.sim.log.add("Aim: target lost.")
+            return True
+        target_pos = self._aim_lock_target_position(target_eid)
+        if not target_pos:
+            self.sim.log.add("Aim: target lost.")
+            self._clear_aim_lock()
+            return True
+        self._emit_turn_action(
+            "fire_weapon",
+            manual_aim=False,
+            target_eid=target_eid,
+            target_x=int(target_pos.x),
+            target_y=int(target_pos.y),
+            target_z=int(target_pos.z),
+        )
+        return True
+
     def _emit_aimed_fire(self):
         state = self._look_state()
         if str(state.get("mode", "city")).lower() != "city":
@@ -2145,6 +2246,7 @@ class InputSystem(System):
     def _aim_cycle_candidates(self):
         positions = self.sim.ecs.get(Position)
         ais = self.sim.ecs.get(AI)
+        identities = self.sim.ecs.get(CreatureIdentity)
         vitalities = self.sim.ecs.get(Vitality)
         player_pos = positions.get(self.player_eid)
         if not player_pos:
@@ -2157,23 +2259,26 @@ class InputSystem(System):
             max_range = int(max(1, weapon.get("range", 1))) if weapon else 12
 
         candidates = []
-        for other_eid in ais:
-            if not _actor_is_direct_player_hostile(self.sim, other_eid, player_eid=self.player_eid):
+        for other_eid, other_pos in positions.items():
+            if int(other_eid) == int(self.player_eid):
+                continue
+            if not (ais.get(other_eid) or identities.get(other_eid) or vitalities.get(other_eid)):
                 continue
             if not _entity_visible_to_player(self.sim, self.player_eid, other_eid):
                 continue
-            other_pos = positions.get(other_eid)
             if not other_pos or int(other_pos.z) != int(player_pos.z):
                 continue
             vitality = vitalities.get(other_eid)
-            if vitality and vitality.downed:
+            if vitality and (bool(getattr(vitality, "downed", False)) or int(getattr(vitality, "hp", 1)) <= 0):
                 continue
 
             dist = _grid_distance(player_pos.x, player_pos.y, other_pos.x, other_pos.y)
             if dist <= 0 or dist > max_range:
                 continue
 
+            threat_rank = 0 if _actor_is_direct_player_hostile(self.sim, other_eid, player_eid=self.player_eid) else 1
             candidates.append((
+                int(threat_rank),
                 int(dist),
                 int(other_pos.y),
                 int(other_pos.x),
@@ -2181,23 +2286,51 @@ class InputSystem(System):
             ))
 
         candidates.sort()
-        return [eid for _dist, _y, _x, eid in candidates]
+        return [eid for _threat, _dist, _y, _x, eid in candidates]
 
-    def _cycle_aim_target(self):
+    def _cycle_aim_target_lock(self, step=1):
+        candidates = self._aim_cycle_candidates()
+        if not candidates:
+            self.sim.log.add("Aim: no visible living target in range.")
+            self._clear_aim_lock()
+            return True
+
+        state = self._aim_lock_state()
+        current_eid = state.get("target_eid") if bool(state.get("active")) else None
+        try:
+            current_eid = int(current_eid)
+        except (TypeError, ValueError):
+            current_eid = None
+        if current_eid in candidates:
+            idx = (candidates.index(current_eid) + int(step or 1)) % len(candidates)
+        else:
+            idx = 0 if int(step or 1) >= 0 else len(candidates) - 1
+        target_eid = candidates[idx]
+
+        if not self._set_aim_lock_target(target_eid):
+            self.sim.log.add("Aim: target lost.")
+            return True
+        return True
+
+    def _cycle_aim_target(self, step=1):
         state = self._look_state()
         if str(state.get("mode", "city")).lower() != "city":
             return False
 
+        if not _entity_uses_melee_aim(self.sim, self.player_eid):
+            self._deactivate_look_mode()
+            return self._cycle_aim_target_lock(step=step)
+
         candidates = self._aim_cycle_candidates()
         if not candidates:
-            self.sim.log.add("Aim: no visible hostile target in range.")
+            self.sim.log.add("Aim: no visible living target in range.")
             return True
 
         current_eid = self._aim_target_eid_at_cursor()
         if current_eid in candidates:
-            idx = (candidates.index(current_eid) + 1) % len(candidates)
+            idx = (candidates.index(current_eid) + int(step or 1)) % len(candidates)
         else:
-            idx = 0
+            idx = 0 if int(step or 1) >= 0 else len(candidates) - 1
         target_eid = candidates[idx]
 
         target_pos = self.sim.ecs.get(Position).get(target_eid)
@@ -2209,6 +2342,22 @@ class InputSystem(System):
         state["z"] = int(target_pos.z)
         self._emit_cursor_examine(announce=True)
         return True
+
+    def _activate_firearm_free_aim(self, zoom_mode):
+        if str(zoom_mode or "city").strip().lower() != "city":
+            return self._activate_look_mode(zoom_mode=zoom_mode, purpose="aim")
+        target_eid = self._aim_lock_target_eid()
+        if target_eid is not None:
+            target_pos = self._aim_lock_target_position(target_eid)
+            if target_pos:
+                return self._activate_look_mode_at(
+                    "city",
+                    x=int(target_pos.x),
+                    y=int(target_pos.y),
+                    z=int(target_pos.z),
+                    purpose="aim",
+                )
+        return self._activate_look_mode(zoom_mode=zoom_mode, purpose="aim")
 
     def _emit_cursor_examine(self, announce=False):
         state = self._look_state()
@@ -2499,6 +2648,7 @@ class InputSystem(System):
         state["throw_item_instance_id"] = None
         state["throw_item_name"] = ""
         if was_aim:
+            self._clear_aim_lock(release_pacing=False)
             _set_manual_combat_pacing(self.sim, False)
         self.sim.emit(Event(
             "look_mode_toggled",
@@ -2615,7 +2765,10 @@ class InputSystem(System):
 
         if purpose == "aim":
             if key in (ord("f"), ord("F")):
-                self._cycle_aim_target()
+                self._cycle_aim_target(step=-1 if key == ord("F") else 1)
+                return True
+            if key == ord("\t") and not _entity_uses_melee_aim(self.sim, self.player_eid):
+                self._deactivate_look_mode()
                 return True
             if key in ENTER_KEYS:
                 self._emit_aimed_fire()
@@ -3810,6 +3963,19 @@ class InputSystem(System):
         if help_state.get("open"):
             if key in ENTER_KEYS or key in (27, ord("?"), ord("q"), ord("Q")):
                 help_state["open"] = False
+                help_state["scroll"] = 0
+            elif key in (KEY_UP, ord("k"), ord("K")):
+                help_state["scroll"] = max(0, int(help_state.get("scroll", 0)) - 1)
+            elif key in (KEY_DOWN, ord("j"), ord("J")):
+                help_state["scroll"] = int(help_state.get("scroll", 0)) + 1
+            elif (getattr(curses, "KEY_HOME", None) is not None) and key == getattr(curses, "KEY_HOME"):
+                help_state["scroll"] = 0
+            elif (getattr(curses, "KEY_END", None) is not None) and key == getattr(curses, "KEY_END"):
+                help_state["scroll"] = 10**9
+            elif (getattr(curses, "KEY_PPAGE", None) is not None) and key == getattr(curses, "KEY_PPAGE"):
+                help_state["scroll"] = max(0, int(help_state.get("scroll", 0)) - 6)
+            elif (getattr(curses, "KEY_NPAGE", None) is not None) and key == getattr(curses, "KEY_NPAGE"):
+                help_state["scroll"] = int(help_state.get("scroll", 0)) + 6
             return
 
         if key == ord("?") and not look_state.get("active"):
@@ -3842,6 +4008,10 @@ class InputSystem(System):
 
         if debug_state.get("open"):
             self._handle_debug_input(key)
+            return
+
+        if key == 27 and self._aim_lock_state().get("active"):
+            self._clear_aim_lock()
             return
 
         if key in (ord("i"), ord("I")) and not state["open"] and not trade_state.get("open"):
@@ -3886,6 +4056,14 @@ class InputSystem(System):
 
         if key == ord("x") and zoom_mode != "overworld":
             self._activate_look_mode(zoom_mode=zoom_mode, purpose="inspect")
+            return
+
+        if key == ord("\t") and zoom_mode != "overworld" and not _entity_uses_melee_aim(self.sim, self.player_eid):
+            self._activate_firearm_free_aim(zoom_mode)
+            return
+
+        if key in ENTER_KEYS and zoom_mode != "overworld" and self._aim_lock_state().get("active"):
+            self._emit_locked_fire()
             return
 
         if key == ord("T") and zoom_mode != "overworld":
@@ -4022,7 +4200,10 @@ class InputSystem(System):
             return
 
         if key in (ord("f"), ord("F")):
-            self._activate_look_mode(zoom_mode=zoom_mode, purpose="aim")
+            if not _entity_uses_melee_aim(self.sim, self.player_eid) and zoom_mode != "overworld":
+                self._cycle_aim_target_lock(step=-1 if key == ord("F") else 1)
+            else:
+                self._activate_look_mode(zoom_mode=zoom_mode, purpose="aim")
             return
 
         if key == ord("V"):

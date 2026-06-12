@@ -203,6 +203,7 @@ from game.system_support.combat_pacing_runtime import (
 )
 from game.system_support.combat_targeting_runtime import (
     _entity_uses_melee_aim,
+    _entity_visible_to_player,
     _first_targetable_entity_at,
     _manual_fire_preview,
     _target_condition_descriptor,
@@ -971,7 +972,7 @@ class RenderSystem(System):
             "Infrastructure: typed markers (l lamp, p pole, h hydrant, u stop, j/t utility, $ ATM, c claim terminal, r access panel).",
             "Local terrain: = road, : trail, , brush, ^ rock, ~ water, _ shore flats.",
             "Remote sites: relay/lookout/survey sites provide intel; camps and huts can offer shelter.",
-            f"Aim/Combat: {aim_open}, move cursor, F cycle target, {aim_confirm}, T tactical read, C cover, v cover hop, Shift+S sneak, V cycle weapon.",
+            f"Aim/Combat: {aim_open}; firearms use f/F target lock and Tab free-aim. {aim_confirm}, T tactical read, C cover, v cover hop, Shift+S sneak, V cycle weapon.",
             "Items: I inventory, , picks up nearby items, U use/equip/stow/throw, R drop.",
             "Visual classes: vehicles use '&' symbol colors only; properties use letters; items are bright symbols; humans use colored @ symbols and wildlife uses taxonomy letters.",
             "Badges: ! marks threats or restricted places, + marks allies or public services, * marks contacts or owned places, and L marks locked places.",
@@ -1267,8 +1268,13 @@ class RenderSystem(System):
             "chunk_y": 0,
             "inspect_text": "",
         })
+        aim_lock_ui = getattr(self.sim, "aim_lock_ui", {
+            "active": False,
+            "target_eid": None,
+        })
         help_ui = getattr(self.sim, "help_ui", {
             "open": False,
+            "scroll": 0,
         })
         character_ui = getattr(self.sim, "character_ui", {
             "open": False,
@@ -1303,6 +1309,23 @@ class RenderSystem(System):
         hud_w = max(1, int(screen_w))
         hud_text_w = _view_text_wrap_width(self.view, hud_w)
         live_timeskip = getattr(self.sim, "live_timeskip", {})
+
+        def _aim_lock_target_pos():
+            if not isinstance(aim_lock_ui, dict) or not bool(aim_lock_ui.get("active")):
+                return None, None
+            try:
+                target_eid = int(aim_lock_ui.get("target_eid"))
+            except (TypeError, ValueError):
+                return None, None
+            target_pos = positions.get(target_eid)
+            if not target_pos or int(target_pos.z) != int(active_z):
+                return None, None
+            vitality = vitalities.get(target_eid)
+            if vitality and (bool(getattr(vitality, "downed", False)) or int(getattr(vitality, "hp", 1)) <= 0):
+                return None, None
+            if not _entity_visible_to_player(self.sim, self.player_eid, target_eid):
+                return None, None
+            return target_eid, target_pos
         if isinstance(live_timeskip, dict) and bool(live_timeskip.get("active")):
             service = str(live_timeskip.get("service", "") or "").strip().lower()
             prop_name = str(live_timeskip.get("property_name", live_timeskip.get("property_id", "site")) or "site").strip() or "site"
@@ -2079,13 +2102,24 @@ class RenderSystem(System):
                     )
                     self._draw_appearance(sx, sy, appearance, attrs=ping_attr)
 
-            if look_ui.get("active") and look_purpose == "aim" and player_pos:
+            aim_lock_target_eid, aim_lock_target_pos = _aim_lock_target_pos()
+            if (
+                ((look_ui.get("active") and look_purpose == "aim") or aim_lock_target_pos is not None)
+                and player_pos
+            ):
+                preview_x = int(look_ui.get("x", player_pos.x))
+                preview_y = int(look_ui.get("y", player_pos.y))
+                preview_z = int(look_ui.get("z", active_z))
+                if aim_lock_target_pos is not None and not (look_ui.get("active") and look_purpose == "aim"):
+                    preview_x = int(aim_lock_target_pos.x)
+                    preview_y = int(aim_lock_target_pos.y)
+                    preview_z = int(aim_lock_target_pos.z)
                 preview = _manual_fire_preview(
                     self.sim,
                     eid=self.player_eid,
-                    x=int(look_ui.get("x", player_pos.x)),
-                    y=int(look_ui.get("y", player_pos.y)),
-                    z=int(look_ui.get("z", active_z)),
+                    x=preview_x,
+                    y=preview_y,
+                    z=preview_z,
                 )
                 projectile_glyph = str(preview.get("projectile_glyph", "."))[:1] or "."
                 dim_attr = getattr(curses, "A_DIM", 0)
@@ -2104,7 +2138,25 @@ class RenderSystem(System):
                         sx,
                         sy,
                         appearance,
-                        attrs=dim_attr,
+                            attrs=dim_attr,
+                        )
+
+            if aim_lock_target_pos is not None:
+                sx = int(aim_lock_target_pos.x) - camera_x
+                sy = int(aim_lock_target_pos.y) - camera_y
+                if 0 <= sx < map_w and 0 <= sy < map_h and _is_visible(aim_lock_target_pos.x, aim_lock_target_pos.y, active_z):
+                    appearance = self.sim.appearance.marker(
+                        "X",
+                        "X",
+                        color="projectile",
+                        layer="ui_overlay",
+                        priority=95,
+                    )
+                    self._draw_appearance(
+                        sx,
+                        sy,
+                        appearance,
+                        attrs=getattr(curses, "A_REVERSE", 0) | getattr(curses, "A_BOLD", 0),
                     )
 
             if look_ui.get("active") and str(look_ui.get("mode", "")).lower() == "city":
@@ -2211,6 +2263,19 @@ class RenderSystem(System):
             district_type=district_type,
             security=security,
         )
+        aim_lock_target_eid, aim_lock_target_pos = _aim_lock_target_pos()
+        if not bool(look_ui.get("active")) and aim_lock_target_eid is not None and aim_lock_target_pos is not None:
+            target_name = self._npc_label(aim_lock_target_eid)
+            condition = _target_condition_descriptor(
+                self.sim,
+                self.player_eid,
+                aim_lock_target_eid,
+                include_uncertainty=True,
+            )
+            lock_text = f"Aim lock {target_name}"
+            if condition:
+                lock_text = f"{lock_text} ({condition})"
+            status_chunks.append(lock_text)
         try:
             outside_pct = int(round(float(lighting_state.get("outside_ambient", 1.0)) * 100.0))
         except (TypeError, ValueError):
@@ -2548,80 +2613,12 @@ class RenderSystem(System):
                 max_lines=1,
             )
 
-        if look_ui.get("active"):
-            if look_purpose == "aim":
-                if _entity_uses_melee_aim(self.sim, self.player_eid):
-                    controls = "Aim melee: move, F target, Enter strike, x inspect, T read, Esc, ?"
-                else:
-                    controls = "Aim: move, F target, Enter fire, x inspect, T read, Esc, ?"
-            elif look_purpose == "throw":
-                item_name = str(look_ui.get("throw_item_name", "") or "item").strip() or "item"
-                controls = f"Throw {item_name}: move cursor, Enter throw, x inspect, Esc cancel, ? help"
-            elif look_purpose == "interact":
-                controls = "Interact: choose adjacent tile, '/Enter confirm, ; lock, x inspect, Esc fallback, ? help"
-            elif look_purpose == "talk":
-                controls = "Talk: choose visible person, / or Enter confirm, x inspect, Esc close, ? help"
-            elif look_purpose == "backup_order":
-                controls = "Order Mark: move cursor, E/Enter mark, x inspect, Esc cancel, ? help"
-            else:
-                controls = "Look: move, Enter/x inspect, T read, Esc, ?"
-        elif inventory_ui.get("open"):
-            if inventory_panel_kind == "container":
-                controls = (
-                    f"{inventory_container_label}: browse, U transfer, Left/Right or Tab switch "
-                    f"{inventory_container_label.lower()}/pack, E inspect, O ops, Y notebooks, "
-                    f"L log, D debug, I/Esc close, ? help"
-                )
-            else:
-                controls = "Inventory: browse, U use/equip/stow, R drop, E inspect, O ops, Y notebooks, L log, D debug, I/Esc close, ? help"
-        elif trade_ui.get("open"):
-            controls = "Trade: browse, B/S mode, E trade, X inspect, O ops, Y notebooks, L log, D debug, M/Esc close, ? help"
-        elif casino_ui.get("open"):
-            casino_mode = str(casino_ui.get("mode", "floor") or "floor").strip().lower()
-            if casino_mode in {"floor", "services", "wager"}:
-                controls = "Casino: Up/Down browse, Enter select, Tab switch page, O ops, Y notebooks, L log, D debug, Esc leave, ? help"
-            elif bool(casino_ui.get("close_pending")) or casino_mode == "result":
-                controls = "Casino result: Space return, O ops, Y notebooks, L log, D debug, Esc return, ? help"
-            else:
-                controls = "Casino live: arrows move focus, Space stage, Backspace pull chip, Enter resolve, O ops, Y notebooks, L log, D debug, Esc back, ? help"
-        elif dialog_ui.get("open"):
-            dialog_topic_ids = {
-                str(row.get("id", "")).strip().lower()
-                for row in list(dialog_ui.get("topics", ()) or ())
-                if isinstance(row, dict)
-            }
-            if dialog_topic_ids & {"backup_orders", "backup_goto_wait", "backup_wait_return", "backup_kill"}:
-                controls = "Dialog: Up/Down choose, E ask, X mark spot, PgUp/PgDn scroll, M trade, O ops, Y notebooks, L log, D debug, Esc close, ? help"
-            else:
-                controls = "Dialog: Up/Down choose, E ask, PgUp/PgDn scroll, M trade, O ops, Y notebooks, L log, D debug, Esc close, ? help"
-        elif character_ui.get("open"):
-            controls = "Sheet: Left/Right or Tab pages, 1-4 jump, Up/Down browse, PgUp/PgDn jump, +/Esc close, O ops, Y notebooks, L log, D debug, ? help"
-        elif report_ui.get("open"):
-            report_kind = str(report_ui.get("kind", "progress")).strip().lower() or "progress"
-            if report_kind == "known_locations":
-                controls = "Places Notebook: Up/Down choose, Enter inspect, G go, M mark, R hide/restore, H hidden view, Tab people notebook, O ops, Y close, L log, D debug, ? help"
-            else:
-                controls = "People Notebook: Up/Down browse, PgUp/PgDn jump, Tab places notebook, O ops, Y close, L log, D debug, Esc close, ? help"
-        elif log_ui.get("open"):
-            controls = "Log: Up/Down browse, PgUp/PgDn jump, T filter, H set HUD filter, O ops, Y notebooks, D debug, L/Esc close, ? help"
-        elif debug_ui.get("open"):
-            controls = "Debug: Up/Down browse, O ops, Y notebooks, L log, D/Esc close, ? help"
-        elif overlay.get("active"):
-            controls = f"Combat: move/act, {_aim_open_label(self.sim, self.player_eid)}, T read, C cover, v hop, ?"
-        elif zoom_mode == "overworld":
-            if bool(getattr(self.sim, "overworld_view_only_by_eid", {}).get(int(self.player_eid), False)):
-                controls = "Map: move browse chunks, Enter/x inspect selected chunk, M/l/N markers, + sheet, t return on-foot, ? help"
-            else:
-                controls = "In-vehicle: move, G drive marker, M/l/N markers, O ops, Y notebooks, L log, + sheet, t exit on-foot, center icons UPPER=loaded lower=distant, ? help"
-        else:
-            controls = f"Move: arrows/WASD, {_aim_open_label(self.sim, self.player_eid)}, T read, / talk, . service, ' interact, ? help"
-
-        controls = release_control_text(controls, self.sim)
         mode_line = _mode_line(
             mode_state=player_modes,
             cover=player_cover,
             look_active=bool(look_ui.get("active")) and look_purpose != "aim",
-            aim_active=bool(look_ui.get("active")) and look_purpose == "aim",
+            aim_active=(bool(look_ui.get("active")) and look_purpose == "aim")
+            or (isinstance(aim_lock_ui, dict) and bool(aim_lock_ui.get("active"))),
             turn_mode=_combat_turn_pacing_active(self.sim),
             stealth_state=getattr(self.sim, "player_stealth_state", None),
             intrusion_state=getattr(self.sim, "player_intrusion_state", None),
@@ -2658,16 +2655,10 @@ class RenderSystem(System):
                 "trim_priority": 3,
             },
             {
-                "id": "controls",
-                "lines": _wrap_display_lines(controls, hud_text_w, max_lines=2),
-                "min_lines": 1,
-                "trim_priority": 5,
-            },
-            {
                 "id": "streamed",
                 "lines": streamed_lines,
                 "min_lines": 1,
-                "trim_priority": 6,
+                "trim_priority": 5,
             },
         ]
         desired_log_rows = 3 if hud_lines >= 9 else (2 if hud_lines >= 6 else 1)
@@ -3560,6 +3551,12 @@ class RenderSystem(System):
                 body_lines.extend(_wrap_text_lines(line, max(8, panel_w - 4)))
             panel_h = min(max(8, len(body_lines) + 2), map_h)
             panel_y = max(0, (map_h - panel_h) // 2)
+            raw_body_h = max(0, panel_h - 2)
+            needs_scroll_footer = len(body_lines) > raw_body_h
+            body_h = max(0, panel_h - (3 if needs_scroll_footer else 2))
+            max_scroll = max(0, len(body_lines) - body_h)
+            scroll = max(0, min(int(help_ui.get("scroll", 0)), max_scroll))
+            help_ui["scroll"] = scroll
 
             if panel_w >= 2 and panel_h >= 2:
                 top = "+" + ("-" * (panel_w - 2)) + "+"
@@ -3571,9 +3568,19 @@ class RenderSystem(System):
                     self.view.draw_text(panel_x, panel_y + row, mid)
                 self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
 
-            visible_lines = body_lines[: max(0, panel_h - 2)]
+            visible_lines = body_lines[scroll: scroll + body_h]
             for idx, line in enumerate(visible_lines):
                 self.view.draw_text(panel_x + 2, panel_y + 1 + idx, line[: max(0, panel_w - 4)])
+            if needs_scroll_footer:
+                footer_bits = []
+                if scroll > 0:
+                    footer_bits.append("more above")
+                if scroll + body_h < len(body_lines):
+                    footer_bits.append("more below")
+                footer_bits.append("Up/Down scroll")
+                footer_bits.append("?/Esc close")
+                footer = " | ".join(footer_bits)
+                self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, footer[: max(0, panel_w - 4)])
 
         visible_hud_rows = max(0, int(screen_h) - int(hud_y))
         log_budget = max(0, min(visible_hud_rows, int(hud_lines) - (int(hud_y) - int(map_h))))
