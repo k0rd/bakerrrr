@@ -34,6 +34,8 @@ from game.components import (
     Position,
 )
 from game.incident_runtime import incident_propagation_allowed, incident_record
+from game.organizations import actor_org_memberships
+from game.property_runtime import property_covering as _property_covering
 from game.system_support.social_knowledge_runtime import hydrate_incident_social_knowledge
 
 
@@ -170,6 +172,7 @@ class ObservedIncidentConsequenceSystem(System):
         stats.setdefault("urgent_cues", 0)
         stats.setdefault("looked_away", 0)
         stats.setdefault("sought_shelter", 0)
+        stats.setdefault("civic_contact_shares", 0)
 
     # ------------------------------------------------------------------
     # Public update pass
@@ -263,8 +266,132 @@ class ObservedIncidentConsequenceSystem(System):
             ranked.append((bond_score + jitter, to_eid))
 
         if not ranked:
+            return self._pick_civic_contact_listener(from_eid, incident_id, source_record, source_pos, shared_with)
+        ranked.sort(reverse=True)
+        return ranked[0][1]
+
+    def _workplace_property_id(self, eid):
+        occupation = self.sim.ecs.get(Occupation).get(eid)
+        workplace = getattr(occupation, "workplace", None)
+        if not isinstance(workplace, dict):
+            return ""
+        return _text(workplace.get("property_id"))
+
+    def _current_property_id(self, pos):
+        if pos is None:
+            return ""
+        prop = _property_covering(self.sim, int(pos.x), int(pos.y), int(pos.z))
+        return _text((prop or {}).get("id")) if isinstance(prop, dict) else ""
+
+    def _active_org_ids(self, eid, *, site_property_id=""):
+        rows = actor_org_memberships(self.sim, eid, active_only=True)
+        site_property_id = _text(site_property_id)
+        org_ids = set()
+        for row in tuple(rows or ()):
+            if site_property_id:
+                row_site = _text(row.get("site_property_id"))
+                if row_site and row_site != site_property_id:
+                    continue
+            org_id = _int(row.get("organization_eid"), 0)
+            if org_id > 0:
+                org_ids.add(org_id)
+        return org_ids
+
+    def _civic_contact_score(self, from_eid, to_eid, source_record, incident, source_pos, target_pos):
+        social_interest = _clamp(source_record.get("social_interest"), default=0.0)
+        if social_interest < 0.32:
+            return None
+
+        incident_property_id = _text(incident.get("property_id") or source_record.get("property_id"))
+        source_work = self._workplace_property_id(from_eid)
+        target_work = self._workplace_property_id(to_eid)
+        source_current = self._current_property_id(source_pos)
+        target_current = self._current_property_id(target_pos)
+
+        score = 0.0
+        contact_kind = ""
+        if source_work and source_work == target_work:
+            score = max(score, 0.72)
+            contact_kind = "coworker"
+        if incident_property_id:
+            if source_current == incident_property_id and target_current == incident_property_id:
+                score = max(score, 0.66)
+                contact_kind = contact_kind or "same_site"
+            if source_current == incident_property_id and target_work == incident_property_id:
+                score = max(score, 0.64)
+                contact_kind = contact_kind or "site_worker"
+            if source_work == incident_property_id and target_current == incident_property_id:
+                score = max(score, 0.62)
+                contact_kind = contact_kind or "site_regular"
+        elif source_current and source_current == target_current:
+            score = max(score, 0.44)
+            contact_kind = "same_site"
+
+        site_for_org = incident_property_id or source_work or target_work or source_current
+        source_orgs = self._active_org_ids(from_eid, site_property_id=site_for_org)
+        target_orgs = self._active_org_ids(to_eid, site_property_id=site_for_org)
+        if source_orgs and target_orgs and source_orgs.intersection(target_orgs):
+            score = max(score, 0.7)
+            contact_kind = contact_kind or "organization"
+
+        if score <= 0.0:
+            return None
+
+        source_role = _key(getattr(self.sim.ecs.get(AI).get(from_eid), "role", ""))
+        target_role = _key(getattr(self.sim.ecs.get(AI).get(to_eid), "role", ""))
+        civic_pair = source_role in CIVIC_ROLES or target_role in CIVIC_ROLES
+        official_pair = source_role in PEACE_ROLES or target_role in PEACE_ROLES
+        org_pair = contact_kind == "organization"
+        if not (civic_pair or official_pair or org_pair):
+            return None
+
+        distance = _manhattan(source_pos, target_pos)
+        if contact_kind == "same_site" and social_interest < 0.45:
+            return None
+        return score + (social_interest * 0.36) - (distance / float(SOCIAL_SHARE_RANGE + 1)) * 0.18
+
+    def _pick_civic_contact_listener(self, from_eid, incident_id, source_record, source_pos, shared_with):
+        if not self._socially_available(from_eid):
+            return None
+
+        positions = self.sim.ecs.get(Position)
+        knowledge_map = self.sim.ecs.get(IncidentKnowledge)
+        incident = incident_record(self.sim, incident_id)
+        if not isinstance(incident, dict):
+            return None
+
+        now = getattr(self.sim, "tick", 0)
+        ranked = []
+        for to_eid, target_pos in tuple(positions.items()):
+            try:
+                to_eid = int(to_eid)
+            except (TypeError, ValueError):
+                continue
+            if to_eid == int(from_eid) or to_eid in shared_with:
+                continue
+            if not target_pos or int(target_pos.z) != int(source_pos.z):
+                continue
+            if _manhattan(source_pos, target_pos) > SOCIAL_SHARE_RANGE:
+                continue
+            if not self._socially_available(to_eid):
+                continue
+            target_knowledge = knowledge_map.get(to_eid)
+            if target_knowledge and incident_id in target_knowledge.records:
+                shared_with.add(to_eid)
+                continue
+            cooldown_key = (from_eid, to_eid, incident_id, "social")
+            if now - self._last_social_attempt.get(cooldown_key, -10_000) < SOCIAL_SHARE_COOLDOWN_TICKS:
+                continue
+            score = self._civic_contact_score(from_eid, to_eid, source_record, incident, source_pos, target_pos)
+            if score is None:
+                continue
+            jitter = _unit_roll(getattr(self.sim, "seed", ""), "civic_contact_listener", from_eid, to_eid, incident_id) * 0.06
+            ranked.append((score + jitter, to_eid))
+
+        if not ranked:
             return None
         ranked.sort(reverse=True)
+        self.sim.observed_incident_stats["civic_contact_shares"] += 1
         return ranked[0][1]
 
     def _socially_available(self, eid):

@@ -2,14 +2,30 @@ from __future__ import annotations
 
 import random
 
-from game.components import Inventory, PlayerAssets, Position
+from game.components import (
+    AI,
+    Collider,
+    CreatureIdentity,
+    Inventory,
+    NPCNeeds,
+    NPCSocial,
+    NPCTraits,
+    NPCWill,
+    Occupation,
+    PlayerAssets,
+    Position,
+    Render,
+    Vitality,
+)
 from game.incident_runtime import incident_records
 from game.items import ITEM_CATALOG
 
 RUN_ECHOES_ARCHIVE_LIMIT = 64
 RUN_ECHOES_MAX_INCIDENTS_PER_RUN = 3
+RUN_ECHOES_MAX_BUSINESSES_PER_RUN = 2
 RUN_ECHOES_MAX_REMNANTS_PER_RUN = 1
 RUN_ECHOES_MAX_INCIDENT_SPAWNS_PER_RUN = 2
+RUN_ECHOES_MAX_BUSINESS_SPAWNS_PER_RUN = 1
 RUN_ECHOES_MAX_REMNANT_SPAWNS_PER_RUN = 1
 RUN_ECHOES_SPAWN_CHANCE = 0.12
 _CARDINAL_STEPS = ((1, 0), (-1, 0), (0, 1), (0, -1))
@@ -233,6 +249,132 @@ def _incident_summary_text(record):
     return f"A case around {subject} still echoes locally."
 
 
+def _player_business_owner_name(sim):
+    character_name = _text(getattr(sim, "character_name", "")) or _text(getattr(sim, "world_traits", {}).get("character_name"))
+    return character_name or "the prior owner"
+
+
+def _property_owned_by_player(sim, prop, player_eid):
+    if sim is None or player_eid is None or not isinstance(prop, dict):
+        return False
+    try:
+        if prop.get("owner_eid") is not None and int(prop.get("owner_eid")) == int(player_eid):
+            return True
+    except (TypeError, ValueError):
+        pass
+    if _text(prop.get("owner_tag")).lower() == "player":
+        return True
+    assets = sim.ecs.get(PlayerAssets).get(player_eid)
+    return bool(assets and _text(prop.get("id")) in getattr(assets, "owned_property_ids", set()))
+
+
+def _business_echo_score(snapshot):
+    if not isinstance(snapshot, dict):
+        return 0
+    score = 22
+    signal = _text(snapshot.get("owner_signal_kind")).lower()
+    if signal:
+        score += {
+            "closed_off": 30,
+            "screened": 24,
+            "thin": 26,
+            "expensive": 24,
+            "strained": 28,
+            "loyal": 22,
+        }.get(signal, 16)
+    if _safe_int(snapshot.get("staff_total"), default=0) <= 0:
+        score += 12
+    if _safe_int(snapshot.get("unpaid_wages"), default=0) > 0:
+        score += 18
+    if _safe_int(snapshot.get("unpaid_upkeep"), default=0) > 0:
+        score += 10
+    score += min(14, abs(_safe_int(snapshot.get("last_footfall_delta_pct"), default=0)) // 2)
+    score += min(14, abs(_safe_int(snapshot.get("last_churn_delta_pct"), default=0)) // 2)
+    score += min(12, _safe_int(snapshot.get("last_reputation_awareness"), default=0) * 2)
+    score += min(12, _safe_int(snapshot.get("direct_sale_count"), default=0) * 2)
+    if _safe_int(snapshot.get("account_balance"), default=0) > 0:
+        score += min(10, _safe_int(snapshot.get("account_balance"), default=0) // 25)
+    return int(score)
+
+
+def _actor_display_name(sim, actor_eid):
+    try:
+        actor_eid = int(actor_eid)
+    except (TypeError, ValueError):
+        return ""
+    identity = sim.ecs.get(CreatureIdentity).get(actor_eid)
+    if identity is not None:
+        return _text(identity.display_name())
+    ai = sim.ecs.get(AI).get(actor_eid)
+    return _text(getattr(ai, "role", ""))
+
+
+def _business_staff_snapshot(sim, state, *, limit=3):
+    if not isinstance(state, dict):
+        return ()
+    roles = state.get("staff_roles")
+    roles = roles if isinstance(roles, dict) else {}
+    rows = []
+    for raw_eid in tuple(state.get("staff_roster", ()) or ()):
+        actor_eid = _safe_int(raw_eid, default=0)
+        if actor_eid <= 0:
+            continue
+        name = _actor_display_name(sim, actor_eid)
+        if not name:
+            continue
+        role = _text(roles.get(str(actor_eid))).lower() or "staff"
+        occupation = sim.ecs.get(Occupation).get(actor_eid)
+        career = _text(getattr(occupation, "career", "")) or role
+        rows.append({
+            "name": name,
+            "role": role,
+            "career": career,
+        })
+        if len(rows) >= int(limit):
+            break
+    return tuple(rows)
+
+
+def _business_echo_line(record, *, mode="summary"):
+    owner_name = _text(record.get("owner_name")) or "the prior owner"
+    business_name = _text(record.get("business_name")) or _text(record.get("property_name")) or "a business"
+    cue = _text(record.get("player_business_cue"))
+    reason = _text(record.get("owner_signal_reason"))
+    note = _text(record.get("business_note"))
+    if mode == "bulletin":
+        detail = reason or cue or note or "old owner choices still color the storefront"
+        staff_rows = tuple(row for row in tuple(record.get("staff_rows", ()) or ()) if isinstance(row, dict))
+        if staff_rows:
+            names = ", ".join(_text(row.get("name")) for row in staff_rows[:2] if _text(row.get("name")))
+            if names:
+                detail = f"{detail} Former staff still named in the talk: {names}"
+        return f"A note about {business_name} still points back to {owner_name}: {detail}."
+    if mode == "rumor":
+        if cue:
+            return f"People still talk about {business_name} running {cue} under {owner_name}."
+        return f"People still bring up how {business_name} ran under {owner_name}."
+    if cue:
+        return f"{owner_name}'s {business_name} stayed {cue}."
+    if note:
+        return f"{owner_name}'s {business_name} left a {note} read behind."
+    return f"{owner_name}'s {business_name} stayed in local business talk."
+
+
+def _dedupe_business_echo_records(records):
+    unique = []
+    seen = set()
+    for record in tuple(records or ()):
+        if not isinstance(record, dict):
+            continue
+        key = _text(record.get("property_id")) or _text(record.get("business_name")).casefold()
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        unique.append(record)
+    return tuple(unique)
+
+
 def _incident_echo_summary_key(record):
     summary = " ".join(_text((record or {}).get("summary")).split()).casefold()
     if summary:
@@ -386,6 +528,78 @@ def _build_incident_echo_records(sim, *, outcome=""):
     return records
 
 
+def _build_business_echo_records(sim, player_eid, *, outcome=""):
+    if sim is None or player_eid is None:
+        return []
+    try:
+        from game.player_businesses import player_business_state, player_business_status_snapshot
+    except Exception:
+        return []
+
+    ranked = []
+    owner_name = _player_business_owner_name(sim)
+    for prop in tuple(getattr(sim, "properties", {}).values()):
+        if not isinstance(prop, dict) or not _property_owned_by_player(sim, prop, player_eid):
+            continue
+        snapshot = player_business_status_snapshot(sim, prop)
+        if not isinstance(snapshot, dict):
+            continue
+        state = player_business_state(prop, create=False)
+        score = _business_echo_score(snapshot)
+        if score < 24:
+            continue
+        ranked.append((score, _text(prop.get("id")), prop, snapshot))
+
+    ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    records = []
+    for score, _property_id, prop, snapshot in ranked[:RUN_ECHOES_MAX_BUSINESSES_PER_RUN]:
+        x = prop.get("x")
+        y = prop.get("y")
+        chunk_key = None
+        if x is not None and y is not None:
+            try:
+                chunk_key = sim.chunk_coords(int(x), int(y))
+            except Exception:
+                chunk_key = None
+        area = _record_area_profile(sim, chunk_key)
+        metadata = _property_metadata(prop)
+        property_archetype = _text(metadata.get("archetype", prop.get("kind"))).lower()
+        organization_name = _text(metadata.get("organization_name")) or _text(metadata.get("business_name"))
+        record = {
+            "echo_id": f"business:{getattr(sim, 'seed', 'seed')}:{_text(prop.get('id'))}:{_safe_int(getattr(sim, 'tick', 0), default=0)}",
+            "family": "business_echo",
+            "summary": "",
+            "bulletin_text": "",
+            "rumor_text": "",
+            "property_id": _text(prop.get("id")),
+            "property_name": _text(prop.get("name")),
+            "property_archetype": property_archetype,
+            "organization_name": organization_name,
+            "business_name": _text(snapshot.get("business_name")) or _text(metadata.get("business_name")) or _text(prop.get("name")),
+            "owner_name": owner_name,
+            "player_business_cue": _text(snapshot.get("player_business_cue")),
+            "owner_signal_kind": _text(snapshot.get("owner_signal_kind")),
+            "owner_signal_reason": _text(snapshot.get("owner_signal_reason")),
+            "business_note": _text(snapshot.get("note")),
+            "staff_rows": _business_staff_snapshot(sim, state),
+            "customer_policy": _text(snapshot.get("customer_policy")),
+            "hours_mode": _text(snapshot.get("hours_mode")),
+            "markup_mode": _text(snapshot.get("markup_mode")),
+            "staff_total": _safe_int(snapshot.get("staff_total"), default=0),
+            "required_staff": _safe_int(snapshot.get("required_staff"), default=0),
+            "account_balance": _safe_int(snapshot.get("account_balance"), default=0),
+            "run_outcome": _text(outcome).lower(),
+            "tick": _safe_int(getattr(sim, "tick", 0), default=0),
+            "caution_bias": max(2, min(10, int(round(float(score) / 18.0)))),
+            **area,
+        }
+        record["summary"] = _business_echo_line(record, mode="summary")
+        record["bulletin_text"] = _business_echo_line(record, mode="bulletin")
+        record["rumor_text"] = _business_echo_line(record, mode="rumor")
+        records.append(record)
+    return records
+
+
 def _build_successful_remnant_echo_record(sim, player_eid, *, outcome="", objective_title=""):
     if _text(outcome).lower() == "failed":
         return None
@@ -440,6 +654,7 @@ def archive_run_echoes(sim, player_eid, *, outcome="", reason="", objective_titl
     runtime = prime_run_echoes_runtime(sim)
     archive_path = runtime.get("archive_path")
     incident_records_to_archive = _dedupe_incident_echo_records(_build_incident_echo_records(sim, outcome=outcome))
+    business_records_to_archive = _dedupe_business_echo_records(_build_business_echo_records(sim, player_eid, outcome=outcome))
     remnant_records = []
     remnant = _build_successful_remnant_echo_record(
         sim,
@@ -450,7 +665,11 @@ def archive_run_echoes(sim, player_eid, *, outcome="", reason="", objective_titl
     if isinstance(remnant, dict):
         remnant_records.append(remnant)
     archived = []
-    for record in [*incident_records_to_archive[:RUN_ECHOES_MAX_INCIDENTS_PER_RUN], *remnant_records[:RUN_ECHOES_MAX_REMNANTS_PER_RUN]]:
+    for record in [
+        *incident_records_to_archive[:RUN_ECHOES_MAX_INCIDENTS_PER_RUN],
+        *business_records_to_archive[:RUN_ECHOES_MAX_BUSINESSES_PER_RUN],
+        *remnant_records[:RUN_ECHOES_MAX_REMNANTS_PER_RUN],
+    ]:
         append_run_echo_record(record, archive_path=archive_path, max_records=RUN_ECHOES_ARCHIVE_LIMIT)
         archived.append(record)
     if archived:
@@ -471,9 +690,11 @@ def archive_run_echoes(sim, player_eid, *, outcome="", reason="", objective_titl
         lines.append(f"  Strongest incident echo: {_text(strongest.get('summary'))}")
         for record in incident_records_to_archive[1:]:
             lines.append(f"  Incident echo: {_text(record.get('summary'))}")
+    for record in business_records_to_archive:
+        lines.append(f"  Business echo: {_text(record.get('summary'))}")
     if remnant_records:
         lines.append(f"  Remnant echo: {_text(remnant_records[0].get('summary'))}")
-    if not incident_records_to_archive and not remnant_records:
+    if not incident_records_to_archive and not business_records_to_archive and not remnant_records:
         lines.append("  Nothing strong enough will echo forward this time.")
     lines.append(
         "  Failed-run bones: "
@@ -483,6 +704,7 @@ def archive_run_echoes(sim, player_eid, *, outcome="", reason="", objective_titl
         "records": tuple(archived),
         "lines": tuple(lines),
         "incident_records": tuple(incident_records_to_archive),
+        "business_records": tuple(business_records_to_archive),
         "remnant_record": remnant_records[0] if remnant_records else None,
     }
 
@@ -501,6 +723,9 @@ def prime_run_echoes_runtime(sim, *, archive_path=None):
     runtime.setdefault("attempted_chunks", set())
     runtime.setdefault("spawned_echo_ids", set())
     runtime.setdefault("spawn_counts", {"incident_echo": 0, "remnant_echo": 0})
+    runtime["spawn_counts"].setdefault("incident_echo", 0)
+    runtime["spawn_counts"].setdefault("business_echo", 0)
+    runtime["spawn_counts"].setdefault("remnant_echo", 0)
     runtime.setdefault("active_spawns_by_chunk", {})
     if not isinstance(runtime.get("records"), list):
         runtime["records"] = load_run_echoes_archive(archive_path=runtime.get("archive_path"))
@@ -646,6 +871,124 @@ def _seed_incident_notice(sim, chunk_key, record, rng):
     }
 
 
+def _business_notice_name(record):
+    business_name = _text(record.get("business_name")) or _text(record.get("property_name"))
+    if business_name:
+        return f"{business_name} Callback"
+    return "Old Business Notice"
+
+
+def _spawn_business_echo_staff_actor(sim, chunk_key, record, rng, *, target_prop=None):
+    staff_rows = [row for row in tuple(record.get("staff_rows", ()) or ()) if isinstance(row, dict)]
+    if not staff_rows:
+        return None
+    anchor = _pick_chunk_open_tile(sim, chunk_key, rng)
+    if anchor is None:
+        return None
+    staff = rng.choice(staff_rows)
+    name = _text(staff.get("name")) or "former staffer"
+    role = _text(staff.get("role")).lower() or "staff"
+    career = _text(staff.get("career")) or ("manager" if role == "manager" else "worker")
+    workplace = {
+        "property_id": _text((target_prop or {}).get("id")) or _text(record.get("property_id")),
+        "business_name": _text(record.get("business_name")),
+        "prior_business_name": _text(record.get("business_name")),
+        "prior_owner_name": _text(record.get("owner_name")),
+        "run_echo_id": _text(record.get("echo_id")),
+        "run_echo_family": "business_echo",
+        "former_role": role,
+    }
+    eid = sim.ecs.create()
+    pos = Position(anchor[0], anchor[1], anchor[2])
+    for component in (
+        pos,
+        Render("w", color="npc", semantic_id="human", priority=2),
+        CreatureIdentity(
+            taxonomy_class="hominid",
+            species="homo sapiens",
+            creature_type="human",
+            common_name="former staff",
+            personal_name=name,
+        ),
+        AI("worker"),
+        Collider(blocks=True),
+        Occupation(career=career, workplace=workplace),
+        NPCNeeds(energy=78, safety=70, social=72),
+        NPCTraits(bravery=0.48, empathy=0.58, loyalty=0.62, discipline=0.56),
+        NPCWill(),
+        NPCSocial(),
+        Vitality(max_hp=72),
+    ):
+        sim.ecs.add(eid, component)
+    sim.tilemap.add_entity(eid, pos.x, pos.y, pos.z)
+    return {
+        "eid": eid,
+        "name": name,
+        "role": role,
+        "career": career,
+        "x": pos.x,
+        "y": pos.y,
+        "z": pos.z,
+    }
+
+
+def _seed_business_notice(sim, chunk_key, record, rng):
+    target_prop, _score = _best_target_property(sim, chunk_key, record)
+    anchor = _anchor_near_property(sim, target_prop) if isinstance(target_prop, dict) else None
+    if anchor is None:
+        anchor = _pick_chunk_open_tile(sim, chunk_key, rng)
+    if anchor is None:
+        return None
+    metadata = {
+        "archetype": "run_echo_notice",
+        "fixture_type": "run_echo_notice",
+        "interaction_role": "run_echo_notice",
+        "chunk": chunk_key,
+        "public": True,
+        "display_glyph": "!",
+        "display_color": "property_fixture",
+        "container_kind": "container",
+        "container_label": "Business Notice",
+        "container_note_text": _text(record.get("bulletin_text")),
+        "run_echo_id": _text(record.get("echo_id")),
+        "run_echo_family": "business_echo",
+        "run_echo_summary": _text(record.get("summary")),
+        "run_echo_rumor_text": _text(record.get("rumor_text")),
+        "run_echo_caution_bias": _safe_int(record.get("caution_bias"), default=0),
+        "run_echo_target_property_id": _text((target_prop or {}).get("id")) or _text(record.get("property_id")),
+        "run_echo_target_archetype": _text(record.get("property_archetype")).lower(),
+        "run_echo_organization_name": _text(record.get("organization_name")),
+        "run_echo_business_name": _text(record.get("business_name")),
+        "run_echo_owner_name": _text(record.get("owner_name")),
+    }
+    prop_id = sim.register_property(
+        _business_notice_name(record),
+        "fixture",
+        anchor[0],
+        anchor[1],
+        anchor[2],
+        owner_tag="public",
+        metadata=metadata,
+    )
+    _append_chunk_property_record(sim, chunk_key, prop_id, "fixture", anchor[0], anchor[1], anchor[2], "run_echo_notice")
+    staff_spawn = _spawn_business_echo_staff_actor(sim, chunk_key, record, rng, target_prop=target_prop)
+    return {
+        "echo_id": _text(record.get("echo_id")),
+        "family": "business_echo",
+        "spawn_property_id": prop_id,
+        "spawn_actor_eid": (staff_spawn or {}).get("eid"),
+        "spawn_actor_name": _text((staff_spawn or {}).get("name")),
+        "target_property_id": _text(metadata.get("run_echo_target_property_id")),
+        "target_archetype": _text(metadata.get("run_echo_target_archetype")),
+        "organization_name": _text(metadata.get("run_echo_organization_name")),
+        "business_name": _text(record.get("business_name")),
+        "owner_name": _text(record.get("owner_name")),
+        "summary": _text(record.get("summary")),
+        "rumor_text": _text(record.get("rumor_text")),
+        "caution_bias": _safe_int(record.get("caution_bias"), default=0),
+    }
+
+
 def _seed_remnant_stash(sim, chunk_key, record, rng):
     anchor = _pick_chunk_open_tile(sim, chunk_key, rng)
     if anchor is None:
@@ -721,7 +1064,10 @@ def maybe_seed_run_echo_for_chunk(sim, chunk, *, force=False):
     if not records:
         return None
     used_ids = runtime.setdefault("spawned_echo_ids", set())
-    spawn_counts = runtime.setdefault("spawn_counts", {"incident_echo": 0, "remnant_echo": 0})
+    spawn_counts = runtime.setdefault("spawn_counts", {"incident_echo": 0, "business_echo": 0, "remnant_echo": 0})
+    spawn_counts.setdefault("incident_echo", 0)
+    spawn_counts.setdefault("business_echo", 0)
+    spawn_counts.setdefault("remnant_echo", 0)
     rng = random.Random(f"{getattr(sim, 'seed', 'seed')}:run_echo:{chunk_key[0]}:{chunk_key[1]}")
     if not force and rng.random() > RUN_ECHOES_SPAWN_CHANCE:
         return None
@@ -730,6 +1076,7 @@ def maybe_seed_run_echo_for_chunk(sim, chunk, *, force=False):
     chunk_data = sim.world.get_chunk(chunk_key[0], chunk_key[1]) if getattr(sim, "world", None) is not None else {}
     for family, limit, seeder in (
         ("incident_echo", RUN_ECHOES_MAX_INCIDENT_SPAWNS_PER_RUN, _seed_incident_notice),
+        ("business_echo", RUN_ECHOES_MAX_BUSINESS_SPAWNS_PER_RUN, _seed_business_notice),
         ("remnant_echo", RUN_ECHOES_MAX_REMNANT_SPAWNS_PER_RUN, _seed_remnant_stash),
     ):
         if _safe_int(spawn_counts.get(family), default=0) >= int(limit):

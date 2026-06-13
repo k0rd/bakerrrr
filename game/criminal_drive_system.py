@@ -303,12 +303,14 @@ class CriminalDriveSystem(System):
             return None
         instability = organization_instability_profile(self.sim, organization_eid=organization_eid, ensure=True)
         pressure = _safe_float((instability or {}).get("operational_pressure"), default=0.0)
+        staging_prop = self._linked_staging_property(organization_eid)
         if family == "criminal_network":
             min_pressure = 0.16
         else:
             min_pressure = 0.28
         if pressure < min_pressure and len(members) < 2:
-            return None
+            if not (family in CRIMINAL_FAMILIES and staging_prop is not None and len(members) >= 1):
+                return None
         kind = self._pick_plan_kind(organization_eid, instability=instability)
         method_key = crime_plan_method_for_family(family, kind)
         required = 2 if kind == "burglary" else 1
@@ -316,7 +318,6 @@ class CriminalDriveSystem(System):
             return None
         leader = members[0]
         target = choose_crime_target(self.sim, leader["actor_eid"], plan_kind=kind)
-        staging_prop = self._linked_staging_property(organization_eid)
         if kind in {"petty_theft", "burglary"} and not isinstance(target, dict):
             return None
         if kind in {"covert_sale", "fence_run"} and staging_prop is None:
