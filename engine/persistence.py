@@ -51,6 +51,7 @@ _EXCLUDED_SIM_STATE_KEYS = {
     "mutators",
     "appearance",
     "npc_social_dynamics_system",
+    "social_knowledge_influence_system",
     "run_epilogue_ledger",
     "property_anchor_index",
     "property_cover_index",
@@ -70,8 +71,39 @@ def _is_module_pickle_error(exc):
     return "module" in text and ("pickle" in text or "copy" in text)
 
 
+def _is_runtime_snapshot_object(value):
+    cls = type(value)
+    module = str(getattr(cls, "__module__", "") or "").strip().lower()
+    name = str(getattr(cls, "__name__", "") or "").strip().lower()
+    if module.startswith("_curses") or module.startswith("curses"):
+        return True
+    if module.startswith("pygame"):
+        return True
+    return name in {"window"} and "curses" in module
+
+
+def _is_runtime_pickle_error(exc):
+    text = str(exc or "").strip().lower()
+    if "cannot pickle" not in text:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "_curses.window",
+            "curses.window",
+            "pygame.",
+            "pygame surface",
+            "pygame.surface",
+        )
+    )
+
+
+def _is_snapshot_skip_error(exc):
+    return _is_module_pickle_error(exc) or _is_runtime_pickle_error(exc)
+
+
 def _strip_module_refs(value, memo=None):
-    if isinstance(value, types.ModuleType):
+    if isinstance(value, types.ModuleType) or _is_runtime_snapshot_object(value):
         return _SKIP_SNAPSHOT_VALUE
     memo = {} if memo is None else memo
     value_id = id(value)
@@ -119,13 +151,13 @@ def _strip_module_refs(value, memo=None):
     try:
         return copy.deepcopy(value)
     except TypeError as exc:
-        if _is_module_pickle_error(exc):
+        if _is_snapshot_skip_error(exc):
             return _SKIP_SNAPSHOT_VALUE
         raise
 
 
 def _snapshot_value_or_skip(key, value):
-    if isinstance(value, types.ModuleType):
+    if isinstance(value, types.ModuleType) or _is_runtime_snapshot_object(value):
         return _SKIP_SNAPSHOT_VALUE
     if key == "log" and hasattr(value, "default_tick_source"):
         # Avoid deep-copying bound runtime callbacks (they recurse back into sim state).
@@ -151,7 +183,7 @@ def _snapshot_value_or_skip(key, value):
     try:
         return copy.deepcopy(value)
     except TypeError as exc:
-        if _is_module_pickle_error(exc):
+        if _is_snapshot_skip_error(exc):
             return _strip_module_refs(value)
         raise
 
