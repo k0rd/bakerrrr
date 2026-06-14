@@ -1,6 +1,15 @@
 # BAKERRRR
 
 binary packages for both windows and linux are avaiable in github actions or on https://laziadri.itch.io/bakerrrr
+<img width="1920" height="1068" alt="Screenshot_20260518_233736" src="https://github.com/user-attachments/assets/b30fb754-fac2-451d-a4ea-c10d37ef7554" />
+<img width="1541" height="876" alt="Screenshot_20260610_002447" src="https://github.com/user-attachments/assets/472fc0fa-7090-4711-91bc-ebfe41016d0a" />
+<img width="1541" height="969" alt="Screenshot_20260610_002814" src="https://github.com/user-attachments/assets/2701dc90-9414-4638-ab90-4b8b65f7af49" />
+<img width="1538" height="996" alt="Screenshot_20260610_202800-1" src="https://github.com/user-attachments/assets/10830b05-90fb-4e57-9608-1d9628ac1add" />
+<img width="1547" height="956" alt="Screenshot_20260610_225301-1" src="https://github.com/user-attachments/assets/6902360f-c63d-41e2-bcf9-adc8115f2c09" />
+<img width="1537" height="835" alt="Screenshot_20260610_230624-1" src="https://github.com/user-attachments/assets/8d2c4840-2b41-4b15-8f9e-71e555ce4677" />
+<img width="1535" height="984" alt="Screenshot_20260610_230624" src="https://github.com/user-attachments/assets/fd14d6c1-f6e1-4ebc-b5ce-27f4cc449391" />
+<img width="1535" height="984" alt="Screenshot_20260610_202530" src="https://github.com/user-attachments/assets/699b8868-2b5e-4d9e-b1ec-7dd88de36a6f" />
+<img width="1535" height="984" alt="Screenshot_20260612_184556" src="https://github.com/user-attachments/assets/4632eed4-c3cb-43cc-814b-a17cfb327b8f" />
 
 
 
