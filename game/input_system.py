@@ -549,6 +549,10 @@ class InputSystem(System):
         except (TypeError, ValueError):
             return False
 
+    def _player_in_vehicle(self):
+        state = self.sim.ecs.get(VehicleState).get(self.player_eid)
+        return bool(state and state.in_vehicle)
+
     def _help_state(self):
         state = getattr(self.sim, "help_ui", None)
         if state is None:
@@ -2434,6 +2438,12 @@ class InputSystem(System):
             return False
 
         current_chunk = self.sim.chunk_coords(pos.x, pos.y)
+        state = self._look_state()
+        if bool(state.get("active")) and str(state.get("mode", "")).strip().lower() == "overworld":
+            current_chunk = (
+                int(state.get("chunk_x", current_chunk[0])),
+                int(state.get("chunk_y", current_chunk[1])),
+            )
         return self._activate_look_mode_at(
             "overworld",
             chunk_x=int(current_chunk[0]) + int(dx),
@@ -4124,9 +4134,14 @@ class InputSystem(System):
 
             return
 
+        if key == ord("t") and self._player_in_vehicle():
+            self._emit_turn_action("zoom_city_enter")
+            return
+
         if key in self.movement_keys:
             dx, dy = self.movement_keys[key]
-            self._emit_turn_action("move", dx=dx, dy=dy)
+            action = "vehicle_move" if self._player_in_vehicle() else "move"
+            self._emit_turn_action(action, dx=dx, dy=dy)
             return
 
         if key in (ord(">"), ord("]")):

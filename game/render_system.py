@@ -2,6 +2,7 @@
 
 import curses
 import re
+from dataclasses import replace
 from engine.systems import System
 from game.casino_ui_runtime import ensure_casino_ui_state
 from game.appearance import (
@@ -250,6 +251,11 @@ from game.service_runtime import (
     _transit_service_title,
     _transit_token_amount_label,
     _vehicle_sale_stats_text,
+)
+from game.vehicle_motion import (
+    ensure_vehicle_motion_state,
+    vehicle_heading_glyph,
+    vehicle_heading_label,
 )
 
 
@@ -513,6 +519,16 @@ def _appearance_prefers_floor_underlay(*args, **kwargs):
 
 def _appearance_with_effect(*args, **kwargs):
     return _facade()._appearance_with_effect(*args, **kwargs)
+
+def _vehicle_appearance_with_heading(appearance, state):
+    state = ensure_vehicle_motion_state(state)
+    if appearance is None or state is None:
+        return appearance
+    return replace(
+        appearance,
+        glyph=vehicle_heading_glyph(state),
+        semantic_id=f"property_vehicle_heading_{vehicle_heading_label(state).lower()}",
+    )
 
 def _clip(*args, **kwargs):
     return _facade()._clip(*args, **kwargs)
@@ -965,7 +981,8 @@ class RenderSystem(System):
             "",
             f"World seed: {self.sim.seed}",
             "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with space or 5.",
-            "Observe: / talks, ' physically interacts, . uses the service on your tile, ; locks or unlocks a nearby door, x opens the look cursor, T takes a tactical read, and X opens the map. Vehicle interact enters or exits overworld.",
+            "Observe: / talks, ' physically interacts, . uses the service on your tile, ; locks or unlocks a nearby door, x opens the look cursor, T takes a tactical read, and X opens the map.",
+            "Vehicles: ' enters a vehicle. Local driving uses forward to accelerate, left/right to turn, back to brake or reverse from rest. Land vehicles use X for map travel from a road or trail; boats stay local. Press t to get out.",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
             "Conversation read: + marks newly surfaced topics when your character notices them; at higher Conversation, its color hints safe, neutral, or dangerous.",
             "Ingress: Shift+J door breach, Shift+W window entry, Shift+K wall breach.",
@@ -992,7 +1009,7 @@ class RenderSystem(System):
                 lines.append("Map view: move to browse chunks, Enter or x inspect the selected chunk, and t return on-foot.")
                 lines.append("Map tools: X opens the map from on foot, M adds a marker here, l lists markers, N jumps to the nearest marker, O ops, Y notebooks, L log.")
             else:
-                lines.append("In-vehicle map: move travels chunks, G drives to the last marker, M adds a marker, l lists markers, N jumps to the nearest marker, and t exits on-foot.")
+                lines.append("In-vehicle map: move travels chunks, G drives to the last marker, M adds a marker, l lists markers, N jumps to the nearest marker, and t returns to local driving.")
             lines.append("Overworld POIs: stronger non-city chunks can replace the center glyph with a site initial.")
             lines.append("Overworld centers: each chunk keeps its district or terrain icon; bright means loaded and dim means distant.")
             lines.append("Overworld regions: soft boundary lines separate major outside regions.")
@@ -1211,6 +1228,12 @@ class RenderSystem(System):
         vehicle_states = self.sim.ecs.get(VehicleState)
         player_pos = positions.get(self.player_eid)
         active_z = player_pos.z if player_pos else 0
+        player_vehicle_state = vehicle_states.get(self.player_eid)
+        active_vehicle_prop = None
+        if player_vehicle_state and player_vehicle_state.active_vehicle_id:
+            maybe_vehicle = self.sim.properties.get(player_vehicle_state.active_vehicle_id)
+            if _property_is_vehicle(maybe_vehicle):
+                active_vehicle_prop = maybe_vehicle
         inventory_ui = getattr(self.sim, "inventory_ui", {
             "open": False,
             "selected_index": 0,
@@ -1438,9 +1461,21 @@ class RenderSystem(System):
 
         if zoom_mode == "overworld":
             if player_pos:
-                center_cx, center_cy = self.sim.chunk_coords(player_pos.x, player_pos.y)
+                player_cx, player_cy = self.sim.chunk_coords(player_pos.x, player_pos.y)
             else:
-                center_cx, center_cy = 0, 0
+                player_cx, player_cy = 0, 0
+            view_only = bool(getattr(self.sim, "overworld_view_only_by_eid", {}).get(int(self.player_eid), False))
+            cursor_active = bool(look_ui.get("active")) and str(look_ui.get("mode", "")).lower() == "overworld"
+            cursor_chunk = None
+            if cursor_active:
+                cursor_chunk = (
+                    int(look_ui.get("chunk_x", player_cx)),
+                    int(look_ui.get("chunk_y", player_cy)),
+                )
+            if view_only and cursor_chunk is not None:
+                center_cx, center_cy = cursor_chunk
+            else:
+                center_cx, center_cy = player_cx, player_cy
 
             legend_top_rows = 1 if map_h >= 4 else 0
             legend_bottom_rows = 1 if map_h >= 4 else 0
@@ -1453,11 +1488,11 @@ class RenderSystem(System):
             origin_y = legend_top_rows + max(0, (usable_map_h - (grid_h * cell_h)) // 2)
             half_w = grid_w // 2
             half_h = grid_h // 2
-            loaded = {(center_cx, center_cy)}
+            loaded = {(player_cx, player_cy)}
             knowledge = _overworld_chunk_knowledge(
                 self.sim,
                 self.player_eid,
-                current_chunk=(center_cx, center_cy),
+                current_chunk=(player_cx, player_cy),
             )
             region_dim_attr = getattr(curses, "A_DIM", 0)
             fill_attrs = getattr(curses, "A_DIM", 0)
@@ -1479,16 +1514,9 @@ class RenderSystem(System):
                     ),
                 )
                 nearest_marker_id = nearest["id"]
-            cursor_active = bool(look_ui.get("active")) and str(look_ui.get("mode", "")).lower() == "overworld"
-            cursor_chunk = None
-            if cursor_active:
-                cursor_chunk = (
-                    int(look_ui.get("chunk_x", center_cx)),
-                    int(look_ui.get("chunk_y", center_cy)),
-                )
-            badge_chunks = {(center_cx, center_cy)}
+            badge_chunks = {(player_cx, player_cy)}
             badge_chunks.update(tuple(marker["chunk"]) for marker in markers)
-            if cursor_chunk is not None and cursor_chunk != (center_cx, center_cy):
+            if cursor_chunk is not None and cursor_chunk != (player_cx, player_cy):
                 badge_chunks.add(cursor_chunk)
 
             def _overworld_cell_slots(cell_origin_x, cell_origin_y, *, reserve_badge=False):
@@ -1753,11 +1781,11 @@ class RenderSystem(System):
                                         priority=-320,
                                     )
 
-                    if (cx, cy) == (center_cx, center_cy):
+                    if (cx, cy) == (player_cx, player_cy):
                         focus_attr = getattr(curses, "A_BOLD", 0)
                         _draw_overworld_frame(cell_origin_x, cell_origin_y, "player", focus_attr, "overworld_focus", priority_base=-60)
 
-                    if cursor_chunk is not None and (cx, cy) == cursor_chunk and (cx, cy) != (center_cx, center_cy):
+                    if cursor_chunk is not None and (cx, cy) == cursor_chunk and (cx, cy) != (player_cx, player_cy):
                         selector_attr = getattr(curses, "A_BOLD", 0)
                         _draw_overworld_frame(cell_origin_x, cell_origin_y, "player", selector_attr, "overworld_selector", priority_base=-40)
 
@@ -1824,30 +1852,33 @@ class RenderSystem(System):
                     priority=40 if is_nearest else 30,
                 )
 
-            player_cell_origin_x = origin_x + (half_w * cell_w)
-            player_cell_origin_y = origin_y + (half_h * cell_h)
-            _player_icon_x, _player_icon_y, player_screen_x, player_screen_y = _overworld_cell_slots(
-                player_cell_origin_x,
-                player_cell_origin_y,
-                reserve_badge=True,
-            )
-            if 0 <= player_screen_x < map_w and 0 <= player_screen_y < map_h:
-                self._draw(
-                    player_screen_x,
-                    player_screen_y,
-                    "@",
-                    color="player",
-                    semantic_id="overworld_player",
-                    layer="ui_overlay",
-                    priority=50,
+            player_gx = half_w + (int(player_cx) - int(center_cx))
+            player_gy = half_h + (int(player_cy) - int(center_cy))
+            if 0 <= player_gx < grid_w and 0 <= player_gy < grid_h:
+                player_cell_origin_x = origin_x + (player_gx * cell_w)
+                player_cell_origin_y = origin_y + (player_gy * cell_h)
+                _player_icon_x, _player_icon_y, player_screen_x, player_screen_y = _overworld_cell_slots(
+                    player_cell_origin_x,
+                    player_cell_origin_y,
+                    reserve_badge=True,
                 )
+                if 0 <= player_screen_x < map_w and 0 <= player_screen_y < map_h:
+                    self._draw(
+                        player_screen_x,
+                        player_screen_y,
+                        "@",
+                        color="player",
+                        semantic_id="overworld_player",
+                        layer="ui_overlay",
+                        priority=50,
+                    )
 
             if legend_top_rows or legend_bottom_rows:
-                current_desc = self.sim.world.overworld_descriptor(center_cx, center_cy)
-                current_interest = self.sim.world.overworld_interest(center_cx, center_cy, descriptor=current_desc)
+                current_desc = self.sim.world.overworld_descriptor(player_cx, player_cy)
+                current_interest = self.sim.world.overworld_interest(player_cx, player_cy, descriptor=current_desc)
                 edge_header, edge_footer = _overworld_edge_legend_lines(
                     self.sim,
-                    (center_cx, center_cy),
+                    (player_cx, player_cy),
                     desc=current_desc,
                     interest=current_interest,
                     markers=markers,
@@ -2062,7 +2093,17 @@ class RenderSystem(System):
                 drawables.append((pos.z, eid, pos, render, screen_x, screen_y))
 
             for _, eid, _pos, render, screen_x, screen_y in sorted(drawables, key=lambda item: (item[0], item[1])):
-                appearance = _entity_render_style(self.sim, eid, player_eid=self.player_eid)
+                if (
+                    eid == self.player_eid
+                    and zoom_mode != "overworld"
+                    and player_vehicle_state
+                    and player_vehicle_state.in_vehicle
+                    and active_vehicle_prop
+                ):
+                    appearance = self.sim.appearance.property(active_vehicle_prop)
+                    appearance = _vehicle_appearance_with_heading(appearance, player_vehicle_state)
+                else:
+                    appearance = _entity_render_style(self.sim, eid, player_eid=self.player_eid)
                 attrs = _ambient_attr(_pos.x, _pos.y, _pos.z)
                 if _entity_should_blink_in_combat(self.sim, eid, player_eid=self.player_eid):
                     appearance = _appearance_with_effect(appearance, "blink")
@@ -2227,13 +2268,7 @@ class RenderSystem(System):
         active_status_summary = _active_status_summary(status_effects, max_names=1, title=True)
         player_cover = covers.get(self.player_eid)
         player_modes = modes.get(self.player_eid)
-        player_vehicle_state = vehicle_states.get(self.player_eid)
         active_disguise = getattr(self.sim, "disguise_state", None)
-        active_vehicle_prop = None
-        if player_vehicle_state and player_vehicle_state.active_vehicle_id:
-            maybe_vehicle = self.sim.properties.get(player_vehicle_state.active_vehicle_id)
-            if _property_is_vehicle(maybe_vehicle):
-                active_vehicle_prop = maybe_vehicle
         weapon_name = "none"
         ammo_text = "-"
         if loadout and loadout.current_weapon():
@@ -2356,8 +2391,12 @@ class RenderSystem(System):
         if active_vehicle_prop:
             vehicle_name = _vehicle_label(active_vehicle_prop)
             fuel, fuel_capacity = _vehicle_fuel_values(active_vehicle_prop)
-            mode_text = "driving" if (player_vehicle_state and player_vehicle_state.in_vehicle) else "parked"
+            in_vehicle = bool(player_vehicle_state and player_vehicle_state.in_vehicle)
+            mode_text = "driving" if in_vehicle else "parked"
             vehicle_bits = [f"Vehicle {vehicle_name} {mode_text} F{fuel}/{fuel_capacity}"]
+            if in_vehicle:
+                vehicle_bits.append(f"H{vehicle_heading_label(player_vehicle_state)}")
+                vehicle_bits.append(f"S{int(getattr(player_vehicle_state, 'speed', 0) or 0)}")
             if player_pos and not (player_vehicle_state and player_vehicle_state.in_vehicle):
                 vehicle_chunk = self.sim.chunk_coords(
                     int(active_vehicle_prop.get("x", player_pos.x)),

@@ -278,6 +278,50 @@
         118
       ],
       "base_price": 980
+    },
+    {
+      "name": "Skiff",
+      "vehicle_class": "skiff",
+      "vehicle_medium": "water",
+      "power": [
+        3,
+        6
+      ],
+      "durability": [
+        4,
+        7
+      ],
+      "fuel_efficiency": [
+        6,
+        9
+      ],
+      "fuel_capacity": [
+        38,
+        58
+      ],
+      "base_price": 460
+    },
+    {
+      "name": "Launch",
+      "vehicle_class": "launch",
+      "vehicle_medium": "water",
+      "power": [
+        5,
+        8
+      ],
+      "durability": [
+        6,
+        9
+      ],
+      "fuel_efficiency": [
+        4,
+        7
+      ],
+      "fuel_capacity": [
+        58,
+        84
+      ],
+      "base_price": 760
     }
   ],
   "quality_profiles": {
@@ -317,6 +361,7 @@
       "freight_depot",
       "relay_post",
       "roadhouse",
+      "service_station",
       "dock_shack",
       "pump_house",
       "survey_post",
@@ -345,9 +390,12 @@
       "auto_garage",
       "breaker_yard",
       "chop_shop",
+      "dock_shack",
       "drydock_yard",
+      "ferry_post",
       "junk_market",
       "roadhouse",
+      "service_station",
       "salvage_camp",
       "truck_stop",
       "work_shed",

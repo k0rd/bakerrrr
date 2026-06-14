@@ -3983,7 +3983,10 @@ class PygameView:
         if semantic_key == "item_objective":
             self._draw_item_overlay(x, y, color=color or "objective", attrs=attrs, kind="objective")
             return "item_objective"
-        if color_key.startswith("vehicle_") and glyph in {"&", "V", "v"}:
+        if (
+            semantic_key.startswith("property_vehicle")
+            or (color_key.startswith("vehicle_") and glyph in {"&", "V", "v", "^", ">", "<", "7", "J", "L", "F"})
+        ):
             self._draw_vehicle_overlay(x, y, color=color, attrs=attrs)
             return "vehicle"
         if color_key == "property_service":

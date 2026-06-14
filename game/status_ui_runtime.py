@@ -2,6 +2,7 @@
 
 import re
 
+from game.components import VehicleState
 from game.service_runtime import _int_or_default
 from game.system_support.status_runtime import (
     SURVIVAL_CRITICAL_LEVEL,
@@ -59,6 +60,12 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
     floor_text = _floor_label(active_z, long=True)
 
     view_only = False
+    local_in_vehicle = False
+    try:
+        vehicle_state = sim.ecs.get(VehicleState).get(int(getattr(sim, "player_eid", 0) or 0))
+        local_in_vehicle = bool(vehicle_state and vehicle_state.in_vehicle and zoom_mode != "overworld")
+    except (AttributeError, TypeError, ValueError):
+        local_in_vehicle = False
     if zoom_mode == "overworld":
         records = getattr(sim, "overworld_view_only_by_eid", {})
         try:
@@ -67,8 +74,8 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
             view_only = False
 
     status_chunks = [
-        "Map View" if zoom_mode == "overworld" and view_only else "In Vehicle" if zoom_mode == "overworld" else "On Foot",
-        "Overworld Map" if zoom_mode == "overworld" and view_only else "Overworld" if zoom_mode == "overworld" else floor_text,
+        "Map View" if zoom_mode == "overworld" and view_only else "In Vehicle" if zoom_mode == "overworld" or local_in_vehicle else "On Foot",
+        "Overworld Map" if zoom_mode == "overworld" and view_only else "Overworld" if zoom_mode == "overworld" else "Local Driving" if local_in_vehicle else floor_text,
         f"Chunk {chunk_text}",
         f"Area {area_label}",
     ]

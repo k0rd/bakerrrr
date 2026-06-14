@@ -142,12 +142,12 @@ TUTORIAL_STAGES = (
     {
         "id": "vehicle_travel",
         "gate": "vehicle_travel",
-        "hint": "Tutorial: in the vehicle map, move once to travel a chunk.",
+        "hint": "Tutorial: from a road tile, open the vehicle map and move once to travel a chunk.",
     },
     {
         "id": "vehicle_exit",
         "gate": "vehicle_exit",
-        "hint": "Tutorial: press t on the map to step back onto the street.",
+        "hint": "Tutorial: press t on the map to return to local driving, then t again to get out.",
     },
     {
         "id": "cover",
@@ -255,8 +255,8 @@ def tutorial_guide_line(sim):
         "trade": "The shop counter opens the buy/sell panel. You do not have to buy to learn the surface.",
         "log_help": "The log catches what the HUD drops. Help is there when the key soup gets loud.",
         "map": "Open the map. The city is bigger than the block under your feet.",
-        "vehicle_travel": "Travel once from the vehicle map. Browsing becomes movement when you are in the ride.",
-        "vehicle_exit": "Now come back to the street. Big-map travel still resolves into local trouble.",
+        "vehicle_travel": "Travel once from the vehicle map. Local driving becomes chunk travel after you open the route map.",
+        "vehicle_exit": "Now come back to local driving. Big-map travel still resolves into street-level trouble.",
         "cover": "Try cover. If it feels slow, that is the point: it buys angles, not magic.",
         "safe_aim": "Open aim mode. You are practicing pacing and target selection, not starting a real fight.",
         "final_retrieval": "Last step: recover the Training Retrieval Case from the marked locker. Picking it up finishes the run.",
@@ -436,6 +436,7 @@ def _remember_tutorial_places(sim, player_eid, *property_ids):
 
 def _ensure_tutorial_vehicle(sim, player_eid, pos, rng):
     vx, vy, vz = _nearby_position(sim, pos, -2, 1, pos[2])
+    _make_walkable(sim, pos[0], pos[1], pos[2], glyph="=")
     profile = roll_vehicle_profile(rng, quality="used")
     profile["fuel"] = max(18, int(profile.get("fuel_capacity", profile.get("fuel", 60)) or 60))
     vehicle_name = f"Tutorial {profile.get('make', 'Street')} {profile.get('model', 'Runner')}"
@@ -472,6 +473,8 @@ def _ensure_tutorial_vehicle(sim, player_eid, pos, rng):
         ensure_actor_has_property_key(sim, player_eid, vehicle, owner_tag="player")
     vehicle_state = sim.ecs.get(VehicleState).get(player_eid)
     if vehicle_state is not None:
+        sim.move_property(vehicle_id, int(pos[0]), int(pos[1]), int(pos[2]))
+        metadata["chunk"] = sim.chunk_coords(int(pos[0]), int(pos[1]))
         vehicle_state.set_active_vehicle(vehicle_id, tick=int(getattr(sim, "tick", 0)))
         vehicle_state.set_in_vehicle(True, tick=int(getattr(sim, "tick", 0)))
     return vehicle_id
@@ -716,6 +719,7 @@ class TutorialSystem(System):
         self.sim.events.subscribe("trade_panel_toggled", self.on_trade_panel_toggled)
         self.sim.events.subscribe("item_picked_up", self.on_item_picked_up)
         self.sim.events.subscribe("item_used", self.on_item_used)
+        self.sim.events.subscribe("vehicle_exited", self.on_vehicle_exited)
         self.sim.events.subscribe("final_operation_completed", self.on_final_operation_completed)
 
     def _matches_player(self, event):
@@ -735,7 +739,6 @@ class TutorialSystem(System):
             "use_item": "inventory_use",
             "zoom_overworld": "map",
             "overworld_travel": "vehicle_travel",
-            "zoom_city_enter": "vehicle_exit",
             "toggle_cover": "cover",
             "cover_hop": "cover",
             "fire_weapon": "safe_aim",
@@ -770,6 +773,10 @@ class TutorialSystem(System):
     def on_item_used(self, event):
         if self._matches_player(event):
             record_tutorial_gate(self.sim, "inventory_use")
+
+    def on_vehicle_exited(self, event):
+        if self._matches_player(event):
+            record_tutorial_gate(self.sim, "vehicle_exit")
 
     def on_final_operation_completed(self, event):
         if not self._matches_player(event):

@@ -194,6 +194,17 @@ from game.system_support.opportunity_knowledge_runtime import (
     schedule_will_rethink as _schedule_will_rethink,
     will_rethink_due as _will_rethink_due,
 )
+from game.vehicle_motion import (
+    active_vehicle_property as _active_vehicle_property_for_state,
+    ensure_vehicle_motion_state as _ensure_vehicle_motion_state,
+    local_route_accessible_at as _vehicle_route_accessible_at,
+    set_vehicle_heading as _set_vehicle_heading,
+    set_vehicle_speed as _set_vehicle_speed,
+    sync_vehicle_property_position as _sync_vehicle_property_position,
+    try_vehicle_step as _try_vehicle_step,
+    vehicle_heading_label as _vehicle_heading_label,
+    vehicle_heading_tuple as _vehicle_heading_tuple,
+)
 from game.system_support.social_knowledge_runtime import hydrate_relationship_social_knowledge
 from game.system_support.access_runtime import _attempt_locked_property_entry_with_sim
 from game.system_support.criminal_drive_runtime import (
@@ -4008,6 +4019,95 @@ class NPCInvestigateSystem(System):
         self._schedule_move_due(eid, int(getattr(self.sim, "tick", 0) or 0) + 120)
         return True
 
+    def _try_npc_vehicle_route_step(self, eid, pos, step):
+        if not step:
+            return None
+        state = _ensure_vehicle_motion_state(self.sim.ecs.get(VehicleState).get(eid))
+        if not state or not bool(getattr(state, "in_vehicle", False)):
+            return None
+        vehicle_prop = _active_vehicle_property_for_state(self.sim, state)
+        if not _property_is_vehicle(vehicle_prop):
+            return None
+
+        medium = str(getattr(state, "medium", "land") or "land").strip().lower() or "land"
+        if medium != "land":
+            return None
+
+        nx, ny = int(step[0]), int(step[1])
+        origin_x = int(pos.x)
+        origin_y = int(pos.y)
+        origin_z = int(pos.z)
+        vehicle_id = vehicle_prop.get("id")
+        if not _vehicle_route_accessible_at(
+            self.sim,
+            origin_x,
+            origin_y,
+            origin_z,
+            ignore_property_id=vehicle_id,
+            medium="land",
+        ):
+            _set_vehicle_speed(state, 0, tick=self.sim.tick)
+            return False, "route_required", origin_x, origin_y, origin_z
+        if not _vehicle_route_accessible_at(
+            self.sim,
+            nx,
+            ny,
+            origin_z,
+            ignore_property_id=vehicle_id,
+            medium="land",
+        ):
+            _set_vehicle_speed(state, 0, tick=self.sim.tick)
+            return False, "route_required", origin_x, origin_y, origin_z
+
+        fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
+        if int(fuel) <= 0:
+            _set_vehicle_speed(state, 0, tick=self.sim.tick)
+            return False, "out_of_fuel", origin_x, origin_y, origin_z
+
+        dx = 1 if nx > origin_x else -1 if nx < origin_x else 0
+        dy = 1 if ny > origin_y else -1 if ny < origin_y else 0
+        if dx == 0 and dy == 0:
+            return False, "blocked_tile", origin_x, origin_y, origin_z
+
+        _set_vehicle_heading(state, dx, dy, tick=self.sim.tick)
+        _set_vehicle_speed(state, 1, tick=self.sim.tick)
+        _sync_vehicle_property_position(self.sim, vehicle_prop, origin_x, origin_y, origin_z)
+        moved, blocked_reason = _try_vehicle_step(
+            self.sim,
+            eid,
+            vehicle_prop,
+            nx,
+            ny,
+            origin_z,
+            speed=1,
+            reason="npc_vehicle_move",
+        )
+        if not moved:
+            _set_vehicle_speed(state, 0, tick=self.sim.tick)
+            return False, blocked_reason or "blocked_tile", origin_x, origin_y, origin_z
+
+        heading_dx, heading_dy = _vehicle_heading_tuple(state)
+        self.sim.emit(Event(
+            "vehicle_local_moved",
+            eid=eid,
+            npc_eid=eid,
+            vehicle_id=vehicle_id,
+            vehicle_name=_vehicle_label(vehicle_prop),
+            old_x=origin_x,
+            old_y=origin_y,
+            old_z=origin_z,
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+            fuel=fuel,
+            fuel_capacity=fuel_capacity,
+            heading_dx=heading_dx,
+            heading_dy=heading_dy,
+            heading=_vehicle_heading_label(state),
+            speed=int(getattr(state, "speed", 0) or 0),
+        ))
+        return True, None, origin_x, origin_y, origin_z
+
     def update(self):
         ais = self.sim.ecs.get(AI)
         positions = self.sim.ecs.get(Position)
@@ -4872,19 +4972,25 @@ class NPCInvestigateSystem(System):
 
             moved = False
             blocked_reason = None
+            vehicle_step = False
             if step:
                 nx, ny = step
                 origin_x = int(pos.x)
                 origin_y = int(pos.y)
                 origin_z = int(pos.z)
-                moved, blocked_reason = try_move_entity(
-                    self.sim,
-                    eid=eid,
-                    new_x=nx,
-                    new_y=ny,
-                    new_z=pos.z,
-                    reason="npc_step",
-                )
+                vehicle_result = self._try_npc_vehicle_route_step(eid, pos, step)
+                if vehicle_result is None:
+                    moved, blocked_reason = try_move_entity(
+                        self.sim,
+                        eid=eid,
+                        new_x=nx,
+                        new_y=ny,
+                        new_z=pos.z,
+                        reason="npc_step",
+                    )
+                else:
+                    moved, blocked_reason, origin_x, origin_y, origin_z = vehicle_result
+                    vehicle_step = True
 
             cooldown = hold_cooldown
             if not moved:
@@ -4984,6 +5090,8 @@ class NPCInvestigateSystem(System):
 
             profile = noise_profiles.get(eid)
             noise_radius = int(max(1, getattr(profile, "move_radius", 4)))
+            if vehicle_step:
+                noise_radius = max(noise_radius, 6)
             self.sim.emit(Event(
                 "noise",
                 source_eid=eid,
@@ -4991,7 +5099,7 @@ class NPCInvestigateSystem(System):
                 y=int(pos.y),
                 z=int(pos.z),
                 radius=noise_radius,
-                cause="move",
+                cause="vehicle_move" if vehicle_step else "move",
             ))
             _emit_move_access_events(
                 self.sim,

@@ -26,6 +26,19 @@ from game.system_support.interaction_ordering import (
     _manhattan,
     _normalized_direction,
 )
+from game.vehicle_motion import (
+    emit_vehicle_blocked as _emit_vehicle_blocked_event,
+    ensure_vehicle_motion_state,
+    local_route_accessible_at as _vehicle_route_accessible_at,
+    rotate_vehicle_heading,
+    set_vehicle_speed,
+    sync_vehicle_property_position,
+    try_vehicle_step,
+    vehicle_heading_label,
+    vehicle_heading_tuple,
+    vehicle_local_block_reason as _vehicle_local_block_reason_for,
+    vehicle_medium_for_property,
+)
 
 
 def _clamp(value, lo=0.0, hi=100.0):
@@ -63,6 +76,9 @@ class PlayerTravelRuntime:
         "shore": 1.08,
         "shoals": 1.22,
         "lake": 1.34,
+        "waterway": 1.18,
+        "island": 1.20,
+        "ocean": 1.38,
         "ruins": 1.16,
     }
     VEHICLE_ROUGH_TERRAINS = {
@@ -76,6 +92,9 @@ class PlayerTravelRuntime:
         "ruins",
         "salt_flats",
         "shoals",
+        "waterway",
+        "island",
+        "ocean",
     }
 
     def __init__(self, action_system):
@@ -83,7 +102,7 @@ class PlayerTravelRuntime:
         self.sim = action_system.sim
 
     def _vehicle_state_for(self, eid):
-        return self.sim.ecs.get(VehicleState).get(eid)
+        return ensure_vehicle_motion_state(self.sim.ecs.get(VehicleState).get(eid))
 
     def _overworld_view_only_records(self):
         records = getattr(self.sim, "overworld_view_only_by_eid", None)
@@ -167,13 +186,183 @@ class PlayerTravelRuntime:
         return candidates[0][1]
 
     def _sync_vehicle_property_position(self, prop, x, y, z=0):
-        if not _property_is_vehicle(prop):
-            return
-        property_id = str(prop.get("id", "")).strip()
-        if property_id:
-            self.sim.move_property(property_id, x, y, z)
-        metadata = _property_metadata(prop)
-        metadata["chunk"] = self.sim.chunk_coords(int(x), int(y))
+        sync_vehicle_property_position(self.sim, prop, x, y, z)
+
+    def _local_route_accessible_at(self, x, y, z=0, *, ignore_property_id=None):
+        prop = self._vehicle_property_by_id(ignore_property_id) if ignore_property_id else None
+        medium = vehicle_medium_for_property(prop) if prop else "land"
+        return _vehicle_route_accessible_at(
+            self.sim,
+            x,
+            y,
+            z,
+            ignore_property_id=ignore_property_id,
+            medium=medium,
+        )
+
+    def _find_route_access_near(self, x, y, z=0, radius=10, *, ignore_property_id=None):
+        if self._local_route_accessible_at(x, y, z, ignore_property_id=ignore_property_id):
+            return int(x), int(y), int(z)
+        for r in range(1, max(1, int(radius)) + 1):
+            for dy in range(-r, r + 1):
+                for dx in range(-r, r + 1):
+                    if abs(dx) != r and abs(dy) != r:
+                        continue
+                    nx = int(x) + int(dx)
+                    ny = int(y) + int(dy)
+                    if self._local_route_accessible_at(nx, ny, z, ignore_property_id=ignore_property_id):
+                        return nx, ny, int(z)
+        return None
+
+    def _vehicle_local_block_reason(self, eid, vehicle_prop, x, y, z=0):
+        return _vehicle_local_block_reason_for(self.sim, eid, vehicle_prop, x, y, z)
+
+    def _emit_vehicle_blocked(self, eid, vehicle_prop=None, *, reason="blocked", **extra):
+        _emit_vehicle_blocked_event(self.sim, eid, vehicle_prop, reason=reason, **extra)
+
+    def _vehicle_drive_command(self, dx, dy):
+        step_x = 1 if dx > 0 else -1 if dx < 0 else 0
+        step_y = 1 if dy > 0 else -1 if dy < 0 else 0
+        if step_x == 0 and step_y == 0:
+            return None, None
+        turn = -1 if step_x < 0 else 1 if step_x > 0 else 0
+        thrust = "accelerate" if step_y < 0 else "brake" if step_y > 0 else None
+        return turn, thrust
+
+    def _emit_vehicle_motion_event(self, event_type, eid, vehicle_prop, state, **payload):
+        fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
+        heading_dx, heading_dy = vehicle_heading_tuple(state)
+        data = {
+            "eid": eid,
+            "vehicle_id": vehicle_prop.get("id"),
+            "vehicle_name": _vehicle_label(vehicle_prop),
+            "fuel": fuel,
+            "fuel_capacity": fuel_capacity,
+            "heading_dx": heading_dx,
+            "heading_dy": heading_dy,
+            "heading": vehicle_heading_label(state),
+            "speed": int(getattr(state, "speed", 0) or 0),
+        }
+        data.update(payload)
+        self.sim.emit(Event(event_type, **data))
+
+    def _can_enter_overworld_from_local_vehicle(self, eid, pos):
+        state = self._vehicle_state_for(eid)
+        vehicle_prop = self._active_vehicle_property(eid)
+        if not state or not state.in_vehicle or not vehicle_prop:
+            return True
+        if vehicle_medium_for_property(vehicle_prop) == "water":
+            self._emit_vehicle_blocked(eid, vehicle_prop, reason="water_map_unavailable")
+            return False
+        if self._local_route_accessible_at(
+            pos.x,
+            pos.y,
+            pos.z,
+            ignore_property_id=vehicle_prop.get("id"),
+        ):
+            return True
+        self._emit_vehicle_blocked(
+            eid,
+            vehicle_prop,
+            reason="route_required",
+        )
+        return False
+
+    def _handle_local_vehicle_move(self, eid, pos, dx, dy):
+        state = self._vehicle_state_for(eid)
+        vehicle_prop = self._active_vehicle_property(eid)
+        if not state or not state.in_vehicle or not vehicle_prop:
+            self._emit_vehicle_blocked(eid, vehicle_prop, reason="vehicle_required")
+            return False
+
+        turn, thrust = self._vehicle_drive_command(dx, dy)
+        if turn is None and thrust is None:
+            return False
+
+        fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
+        if int(fuel) <= 0:
+            set_vehicle_speed(state, 0, tick=self.sim.tick)
+            self._emit_vehicle_blocked(
+                eid,
+                vehicle_prop,
+                reason="out_of_fuel",
+                fuel_needed=1,
+                chunk=self.sim.chunk_coords(pos.x, pos.y),
+            )
+            return False
+
+        if turn:
+            rotate_vehicle_heading(state, turn, tick=self.sim.tick)
+
+        old_speed = int(getattr(state, "speed", 0) or 0)
+        move_dx = 0
+        move_dy = 0
+        move_steps = 0
+        action = "turn"
+        if thrust == "accelerate":
+            action = "accelerate"
+            new_speed = set_vehicle_speed(state, min(2, old_speed + 1), tick=self.sim.tick)
+            move_steps = int(new_speed)
+            move_dx, move_dy = vehicle_heading_tuple(state)
+        elif thrust == "brake":
+            action = "brake"
+            if old_speed > 0:
+                set_vehicle_speed(state, max(0, old_speed - 1), tick=self.sim.tick)
+            else:
+                heading_dx, heading_dy = vehicle_heading_tuple(state)
+                move_dx, move_dy = -heading_dx, -heading_dy
+                move_steps = 1
+
+        if move_steps <= 0:
+            self._emit_vehicle_motion_event(
+                "vehicle_local_controlled",
+                eid,
+                vehicle_prop,
+                state,
+                action=action,
+                x=int(pos.x),
+                y=int(pos.y),
+                z=int(pos.z),
+            )
+            return True
+
+        moved_any = False
+        for _step_index in range(int(move_steps)):
+            target_x = int(pos.x) + int(move_dx)
+            target_y = int(pos.y) + int(move_dy)
+            target_z = int(pos.z)
+            old_x, old_y, old_z = int(pos.x), int(pos.y), int(pos.z)
+            moved, move_reason = try_vehicle_step(
+                self.sim,
+                eid,
+                vehicle_prop,
+                target_x,
+                target_y,
+                target_z,
+                speed=max(1, int(getattr(state, "speed", 0) or 0)),
+                reason="vehicle_move",
+            )
+            if not moved:
+                set_vehicle_speed(state, 0, tick=self.sim.tick)
+                if move_reason != "collision":
+                    self._emit_vehicle_blocked(eid, vehicle_prop, reason=move_reason or "blocked_tile")
+                return moved_any
+
+            moved_any = True
+            self.action_system._clear_cover(eid, reason="vehicle_move")
+            self._emit_vehicle_motion_event(
+                "vehicle_local_moved",
+                eid,
+                vehicle_prop,
+                state,
+                old_x=old_x,
+                old_y=old_y,
+                old_z=old_z,
+                x=target_x,
+                y=target_y,
+                z=target_z,
+            )
+        return moved_any
 
     def _vehicle_fuel_cost_for_chunk(self, vehicle_prop, desc):
         profile = _vehicle_profile_from_property(vehicle_prop)
@@ -258,13 +447,11 @@ class PlayerTravelRuntime:
 
         state.set_active_vehicle(vehicle_id, tick=self.sim.tick)
         state.set_in_vehicle(True, tick=self.sim.tick)
+        state.medium = vehicle_medium_for_property(vehicle_prop)
+        set_vehicle_speed(state, 0, tick=self.sim.tick)
 
-        vx = int(vehicle_prop.get("x", pos.x))
-        vy = int(vehicle_prop.get("y", pos.y))
-        vz = int(vehicle_prop.get("z", pos.z))
-        if (vx, vy, vz) != (int(pos.x), int(pos.y), int(pos.z)):
-            if self.sim.tilemap.is_walkable(vx, vy, vz):
-                self._teleport_entity(eid, pos, vx, vy, vz, reason="enter_vehicle")
+        self._sync_vehicle_property_position(vehicle_prop, pos.x, pos.y, pos.z)
+        self.sim.city_anchor_by_chunk[self.sim.chunk_coords(pos.x, pos.y)] = (pos.x, pos.y, pos.z)
 
         fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
         self.sim.emit(Event(
@@ -277,7 +464,6 @@ class PlayerTravelRuntime:
             entry_method=entry_method,
             stolen=entry_method == "hotwire",
         ))
-        self._set_zoom_mode(eid=eid, pos=pos, mode="overworld")
         return True
 
     def _exit_vehicle(self, eid, pos):
@@ -286,6 +472,7 @@ class PlayerTravelRuntime:
         self._set_zoom_mode(eid=eid, pos=pos, mode="city")
         if state:
             state.set_in_vehicle(False, tick=self.sim.tick)
+            set_vehicle_speed(state, 0, tick=self.sim.tick)
 
         park_x = int(pos.x)
         park_y = int(pos.y)
@@ -329,7 +516,9 @@ class PlayerTravelRuntime:
             tile = self.sim.tilemap.tile_at(tx, ty, tz)
             if not tile or not tile.walkable:
                 continue
-            inside = self.sim.structure_at(tx, ty, tz) is not None
+            inside = self.sim.structure_at(tx, ty, tz) is not None or self.sim.property_covering(tx, ty, tz) is not None
+            if inside:
+                continue
             score = (1 if inside else 0, chebyshev, manhattan, abs(ty - int(y)), abs(tx - int(x)), ty, tx)
             if best is None or score < best[0]:
                 best = (score, (tx, ty, tz))
@@ -432,10 +621,15 @@ class PlayerTravelRuntime:
             state = self._vehicle_state_for(eid)
             vehicle_prop = self._active_vehicle_property(eid)
             view_only = not bool(state and state.in_vehicle and vehicle_prop)
+            if not view_only and vehicle_medium_for_property(vehicle_prop) == "water":
+                self._emit_vehicle_blocked(eid, vehicle_prop, reason="water_map_unavailable")
+                return
 
             self.sim.city_anchor_by_chunk[current_chunk] = (pos.x, pos.y, pos.z)
             self.sim.zoom_mode = "overworld"
             self._set_overworld_view_only(eid, view_only)
+            if state:
+                set_vehicle_speed(state, 0, tick=self.sim.tick)
             tx, ty = self._chunk_center(current_chunk)
             self.sim.stream_world(tx, ty)
             self.sim.ensure_loaded_chunk_terrain()
@@ -486,6 +680,9 @@ class PlayerTravelRuntime:
         chunk = self.sim.world.get_chunk(current_chunk[0], current_chunk[1])
         district = chunk.get("district", {})
         area_type = str(district.get("area_type", "city")).lower()
+        state = self._vehicle_state_for(eid)
+        vehicle_prop = self._active_vehicle_property(eid)
+        vehicle_medium = vehicle_medium_for_property(vehicle_prop) if vehicle_prop else "land"
         self.sim.zoom_mode = "city"
         self._set_overworld_view_only(eid, False)
         anchor = self.sim.city_anchor_by_chunk.get(current_chunk)
@@ -496,8 +693,26 @@ class PlayerTravelRuntime:
         tx, ty, tz = int(anchor[0]), int(anchor[1]), int(anchor[2])
         self.sim.stream_world(tx, ty)
         self.sim.ensure_loaded_chunk_terrain()
-        tx, ty = self._find_walkable_near(tx, ty, z=tz, radius=8)
+        if (
+            state
+            and state.in_vehicle
+            and vehicle_prop
+            and not self._local_route_accessible_at(tx, ty, tz, ignore_property_id=vehicle_prop.get("id"))
+        ):
+            route_anchor = self._find_route_access_near(
+                tx,
+                ty,
+                z=tz,
+                radius=10,
+                ignore_property_id=vehicle_prop.get("id"),
+            )
+            if route_anchor:
+                tx, ty, tz = route_anchor
+        if not (state and state.in_vehicle and vehicle_prop and vehicle_medium == "water"):
+            tx, ty = self._find_walkable_near(tx, ty, z=tz, radius=8)
         self._teleport_entity(eid, pos, tx, ty, tz, reason="zoom_city")
+        if state and state.in_vehicle and vehicle_prop:
+            self._sync_vehicle_property_position(vehicle_prop, tx, ty, tz)
         self.action_system._clear_cover(eid, reason="zoom")
         self.sim.emit(Event(
             "zoom_mode_changed",
@@ -516,6 +731,9 @@ class PlayerTravelRuntime:
                 eid=eid,
                 reason="vehicle_required",
             ))
+            return
+        if vehicle_medium_for_property(vehicle_prop) == "water":
+            self._emit_vehicle_blocked(eid, vehicle_prop, reason="water_map_unavailable")
             return
 
         step_x = 1 if dx > 0 else -1 if dx < 0 else 0
@@ -569,8 +787,10 @@ class PlayerTravelRuntime:
         self.sim.stream_world(tx, ty)
         self.sim.ensure_loaded_chunk_terrain()
         tx, ty = self._find_walkable_near(tx, ty, z=0, radius=6)
+        self.sim.city_anchor_by_chunk[target_chunk] = (int(tx), int(ty), 0)
         self._teleport_entity(eid, pos, tx, ty, 0, reason="overworld_travel")
         self._sync_vehicle_property_position(vehicle_prop, tx, ty, 0)
+        set_vehicle_speed(state, 0, tick=self.sim.tick)
         self.action_system._clear_cover(eid, reason="zoom")
 
         chunk = self.sim.world.get_chunk(target_chunk[0], target_chunk[1])

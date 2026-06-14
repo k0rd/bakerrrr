@@ -1188,6 +1188,12 @@ class PlayerActionSystem(System):
     def _handle_overworld_travel(self, eid, pos, dx, dy):
         return self.player_travel._handle_overworld_travel(eid, pos, dx, dy)
 
+    def _handle_local_vehicle_move(self, eid, pos, dx, dy):
+        return self.player_travel._handle_local_vehicle_move(eid, pos, dx, dy)
+
+    def _can_enter_overworld_from_local_vehicle(self, eid, pos):
+        return self.player_travel._can_enter_overworld_from_local_vehicle(eid, pos)
+
     def _overworld_view_only_for(self, eid):
         return self.player_travel._overworld_view_only_for(eid)
 
@@ -1310,16 +1316,21 @@ class PlayerActionSystem(System):
 
         if action == "zoom_overworld":
             self._set_sneak_mode(eid, False, reason="zoom")
+            if not self._can_enter_overworld_from_local_vehicle(eid, pos):
+                return
             self._set_zoom_mode(eid=eid, pos=pos, mode="overworld")
             return
 
         if action == "zoom_city_enter":
+            vehicle_state = self._vehicle_state_for(eid)
             if zoom_mode == "overworld":
-                vehicle_state = self._vehicle_state_for(eid)
                 if vehicle_state and vehicle_state.in_vehicle and not self._overworld_view_only_for(eid):
-                    self._exit_vehicle(eid=eid, pos=pos)
+                    self._set_zoom_mode(eid=eid, pos=pos, mode="city")
                 else:
                     self._set_zoom_mode(eid=eid, pos=pos, mode="city")
+                return
+            if vehicle_state and vehicle_state.in_vehicle:
+                self._exit_vehicle(eid=eid, pos=pos)
                 return
             self._set_zoom_mode(eid=eid, pos=pos, mode="city")
             return
@@ -1347,7 +1358,27 @@ class PlayerActionSystem(System):
         if action == "move":
             if zoom_mode == "overworld":
                 return
+            vehicle_state = self._vehicle_state_for(eid)
+            if vehicle_state and vehicle_state.in_vehicle:
+                self._handle_local_vehicle_move(
+                    eid,
+                    pos,
+                    dx=int(event.data.get("dx", 0)),
+                    dy=int(event.data.get("dy", 0)),
+                )
+                return
             self.player_movement.handle_move_action(
+                eid,
+                pos,
+                dx=int(event.data.get("dx", 0)),
+                dy=int(event.data.get("dy", 0)),
+            )
+            return
+
+        if action == "vehicle_move":
+            if zoom_mode == "overworld":
+                return
+            self._handle_local_vehicle_move(
                 eid,
                 pos,
                 dx=int(event.data.get("dx", 0)),

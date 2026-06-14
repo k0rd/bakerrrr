@@ -549,6 +549,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("vehicle_entered", self.on_vehicle_entered)
         self.sim.events.subscribe("vehicle_exited", self.on_vehicle_exited)
         self.sim.events.subscribe("vehicle_action_blocked", self.on_vehicle_action_blocked)
+        self.sim.events.subscribe("vehicle_collision", self.on_vehicle_collision)
         self.sim.events.subscribe("overworld_travelled", self.on_overworld_travelled)
         self.sim.events.subscribe("overworld_discovery_found", self.on_overworld_discovery_found)
         self.sim.events.subscribe("overworld_marker_added", self.on_overworld_marker_added)
@@ -5123,6 +5124,24 @@ class EventLogSystem(System):
         if reason == "vehicle_required":
             self.sim.log.add("You need a usable vehicle for overworld travel.")
             return
+        if reason == "route_required":
+            self.sim.log.add("Drive onto a road or trail before opening map travel.")
+            return
+        if reason == "water_route_required":
+            self.sim.log.add("You need a usable shore, dock, or waterway access point for that boat route.")
+            return
+        if reason == "water_map_unavailable":
+            self.sim.log.add("Boats stay in local water for now.")
+            return
+        if reason == "property_tile":
+            self.sim.log.add("The vehicle cannot drive through property grounds or building tiles.")
+            return
+        if reason in {"blocked_tile", "closed_door", "locked_door", "locked_property", "closed_property", "door_access_denied", "active_fire"}:
+            self.sim.log.add("The vehicle cannot pass that way.")
+            return
+        if reason.startswith("blocked_entity"):
+            self.sim.log.add("Something is blocking the vehicle.")
+            return
         if reason == "no_vehicle_state":
             self.sim.log.add("You are not linked to a usable vehicle right now.")
             return
@@ -5160,6 +5179,16 @@ class EventLogSystem(System):
             self.sim.log.add(f"{name} does not respond to your controls right now.")
             return
         self.sim.log.add("No vehicle responds to your controls right now.")
+
+    def on_vehicle_collision(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        target_name = str(event.data.get("target_name", "") or "").strip() or "someone"
+        damage = _int_or_default(event.data.get("damage"), 0)
+        if damage > 0:
+            self.sim.log.add(f"The vehicle hits {target_name} and stops.")
+            return
+        self.sim.log.add("The vehicle hits something hard and stops.")
 
     def on_overworld_travelled(self, event):
         if event.data.get("eid") != self.player_eid:

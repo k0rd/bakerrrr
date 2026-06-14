@@ -256,8 +256,8 @@ BUILDING_SHELL_SPANS = {
 }
 
 BUILDING_SHELL_SPAN_OPTIONS = {
-    "building": ((5, 5), (7, 5), (5, 7)),
-    "residential": ((5, 5), (7, 5), (5, 7)),
+    "building": ((5, 5), (7, 5), (5, 7), (7, 7)),
+    "residential": ((5, 5), (7, 5), (5, 7), (7, 7)),
     "storefront": ((7, 5), (9, 5), (7, 7), (9, 7)),
     "industrial": ((7, 7), (9, 7), (7, 9), (9, 9)),
     "corporate": ((7, 7), (9, 7), (7, 9), (9, 9)),
@@ -279,9 +279,10 @@ BUILDING_LARGE_PARCEL_SPAN_OPTIONS = {
 
 BUILDING_SHAPE_WEIGHTS = {
     "building": {
-        "rect": 5,
+        "rect": 4,
         "setback": 2,
         "deep_setback": 1,
+        "side_setback": 1,
         "rear_court": 1,
         "triple_rear_courts": 1,
         "stepped_rear_court": 1,
@@ -295,7 +296,7 @@ BUILDING_SHAPE_WEIGHTS = {
         "offset_c_shape": 1,
     },
     "residential": {
-        "rect": 4,
+        "rect": 3,
         "setback": 2,
         "deep_setback": 1,
         "side_setback": 1,

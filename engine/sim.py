@@ -1950,10 +1950,18 @@ class Simulation:
             self._scatter_local_tiles(ox, oy, size, rng, "^", count=max(4, size // 4), walkable=False, transparent=False)
             if terrain in {"marsh", "lake"}:
                 self._scatter_local_tiles(ox, oy, size, rng, "~", count=max(8, size // 2), walkable=False, transparent=True)
+            if terrain == "waterway":
+                self._stamp_local_band(ox, oy, size, rng, "~", width=2, walkable=False, transparent=True)
+                self._stamp_local_band(ox, oy, size, rng, "_", width=1, walkable=True, transparent=True)
             if terrain in {"forest"}:
                 self._scatter_local_tiles(ox, oy, size, rng, "#", count=max(3, size // 6), walkable=False, transparent=False)
         elif area_type == "coastal":
-            self._stamp_local_band(ox, oy, size, rng, "~", width=3, walkable=False, transparent=True)
+            water_width = 3
+            if terrain == "ocean":
+                water_width = max(5, size // 3)
+            elif terrain == "island":
+                water_width = max(4, size // 4)
+            self._stamp_local_band(ox, oy, size, rng, "~", width=water_width, walkable=False, transparent=True)
             self._stamp_local_band(ox, oy, size, rng, "_", width=1, walkable=True, transparent=True)
             self._scatter_local_tiles(ox, oy, size, rng, ",", count=max(4, size // 4), walkable=True, transparent=True)
             if terrain in {"cliffs"}:

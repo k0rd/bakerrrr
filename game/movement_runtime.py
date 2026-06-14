@@ -98,7 +98,7 @@ def _closed_door_move_block_reason(sim, eid, x, y, z):
 
 def _movement_allows_auto_open(sim, eid, *, reason="move"):
     reason_key = str(reason or "").strip().lower()
-    if reason_key == "player_move":
+    if reason_key in {"player_move", "vehicle_move", "npc_vehicle_move"}:
         return False
     return True
 

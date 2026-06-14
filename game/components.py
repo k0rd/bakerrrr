@@ -2594,14 +2594,70 @@ class PlayerAssets:
 
 
 class VehicleState:
-    def __init__(self, active_vehicle_id=None, in_vehicle=False):
+    def __init__(
+        self,
+        active_vehicle_id=None,
+        in_vehicle=False,
+        *,
+        heading_dx=0,
+        heading_dy=-1,
+        speed=0,
+        medium="land",
+    ):
         vehicle_id = str(active_vehicle_id).strip() if active_vehicle_id else ""
         self.active_vehicle_id = vehicle_id or None
         self.in_vehicle = bool(in_vehicle)
         self.last_vehicle_id = self.active_vehicle_id
         self.last_changed_tick = -1
+        self.heading_dx, self.heading_dy = self._normalized_heading(heading_dx, heading_dy)
+        self.speed = max(0, min(2, int(speed or 0)))
+        self.medium = str(medium or "land").strip().lower() or "land"
+
+    @staticmethod
+    def _normalized_heading(dx, dy):
+        step_x = 1 if dx > 0 else -1 if dx < 0 else 0
+        step_y = 1 if dy > 0 else -1 if dy < 0 else 0
+        if step_x == 0 and step_y == 0:
+            return 0, -1
+        return step_x, step_y
+
+    def ensure_motion_defaults(self):
+        self.heading_dx, self.heading_dy = self._normalized_heading(
+            getattr(self, "heading_dx", 0),
+            getattr(self, "heading_dy", -1),
+        )
+        try:
+            speed = int(getattr(self, "speed", 0) or 0)
+        except (TypeError, ValueError):
+            speed = 0
+        self.speed = max(0, min(2, speed))
+        self.medium = str(getattr(self, "medium", "land") or "land").strip().lower() or "land"
+        return self
+
+    def heading(self):
+        self.ensure_motion_defaults()
+        return int(self.heading_dx), int(self.heading_dy)
+
+    def set_heading(self, dx, dy, tick=0):
+        self.heading_dx, self.heading_dy = self._normalized_heading(dx, dy)
+        self.last_changed_tick = int(tick)
+        return self.heading()
+
+    def set_speed(self, speed, tick=0):
+        try:
+            speed = int(speed or 0)
+        except (TypeError, ValueError):
+            speed = 0
+        self.speed = max(0, min(2, speed))
+        self.last_changed_tick = int(tick)
+        return int(self.speed)
+
+    def reset_motion(self, tick=0):
+        self.set_speed(0, tick=tick)
+        return self
 
     def set_active_vehicle(self, vehicle_id, tick=0):
+        self.ensure_motion_defaults()
         vehicle_id = str(vehicle_id).strip() if vehicle_id else ""
         self.active_vehicle_id = vehicle_id or None
         if self.active_vehicle_id:
@@ -2610,7 +2666,10 @@ class VehicleState:
         return self.active_vehicle_id
 
     def set_in_vehicle(self, active, tick=0):
+        self.ensure_motion_defaults()
         self.in_vehicle = bool(active)
+        if not self.in_vehicle:
+            self.speed = 0
         self.last_changed_tick = int(tick)
         return self.in_vehicle
 

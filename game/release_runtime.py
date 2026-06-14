@@ -32,13 +32,14 @@ def _truthy(value, default=False):
 
 def game_build_label(env=None):
     env = os.environ if env is None else env
+    version = str(env.get("BAKERRRR_BUILD_VERSION", "") or "").strip() or GAME_VERSION
     label = str(env.get("BAKERRRR_BUILD_LABEL", "") or "").strip()
     sha = str(env.get("GITHUB_SHA", "") or "").strip()
     if not label and sha:
         label = sha[:7]
     if label:
-        return f"bakerrrr {GAME_VERSION} ({label})"
-    return f"bakerrrr {GAME_VERSION}"
+        return f"bakerrrr {version} ({label})"
+    return f"bakerrrr {version}"
 
 
 def debug_mode_from_options(argv=None, env=None):

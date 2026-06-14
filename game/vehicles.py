@@ -26,11 +26,22 @@ DEFAULT_CATALOG = {
         {
             "name": "Runner",
             "vehicle_class": "sedan",
+            "vehicle_medium": "land",
             "power": (4, 7),
             "durability": (5, 8),
             "fuel_efficiency": (6, 9),
             "fuel_capacity": (56, 74),
             "base_price": 560,
+        },
+        {
+            "name": "Skiff",
+            "vehicle_class": "skiff",
+            "vehicle_medium": "water",
+            "power": (3, 6),
+            "durability": (4, 7),
+            "fuel_efficiency": (6, 9),
+            "fuel_capacity": (38, 58),
+            "base_price": 460,
         },
     ),
     "quality_profiles": {
@@ -52,6 +63,7 @@ DEFAULT_CATALOG = {
             "freight_depot",
             "relay_post",
             "roadhouse",
+            "service_station",
             "dock_shack",
             "pump_house",
             "survey_post",
@@ -77,8 +89,11 @@ DEFAULT_CATALOG = {
         "used_sales": (
             "auto_garage",
             "chop_shop",
+            "dock_shack",
+            "ferry_post",
             "junk_market",
             "roadhouse",
+            "service_station",
             "salvage_camp",
             "work_shed",
             "survey_post",
@@ -161,6 +176,7 @@ def load_vehicle_catalog(path=VEHICLE_DATA_PATH):
         model = {
             "name": name,
             "vehicle_class": str(entry.get("vehicle_class", fallback["vehicle_class"])) or fallback["vehicle_class"],
+            "vehicle_medium": str(entry.get("vehicle_medium", entry.get("medium", fallback.get("vehicle_medium", "land"))) or "land").strip().lower() or "land",
             "power": _int_pair(entry.get("power"), fallback["power"]),
             "durability": _int_pair(entry.get("durability"), fallback["durability"]),
             "fuel_efficiency": _int_pair(entry.get("fuel_efficiency"), fallback["fuel_efficiency"]),
@@ -284,11 +300,19 @@ def _roll_float(rng, float_range):
     return float(rng.uniform(lo, hi))
 
 
-def roll_vehicle_profile(rng, quality="used", catalog=None):
+def roll_vehicle_profile(rng, quality="used", catalog=None, medium="land"):
     source = catalog if isinstance(catalog, dict) else CATALOG
     models = list(source.get("models", ()))
     if not models:
         models = list(DEFAULT_CATALOG["models"])
+    medium_key = str(medium or "").strip().lower()
+    if medium_key:
+        filtered_models = [
+            model for model in models
+            if str(model.get("vehicle_medium", model.get("medium", "land")) or "land").strip().lower() == medium_key
+        ]
+        if filtered_models:
+            models = filtered_models
 
     model = dict(rng.choice(models))
     make = rng.choice(tuple(source.get("makes", DEFAULT_CATALOG["makes"])))
@@ -320,6 +344,7 @@ def roll_vehicle_profile(rng, quality="used", catalog=None):
         "make": str(make),
         "model": str(model.get("name", "Runner")),
         "vehicle_class": str(model.get("vehicle_class", "sedan")),
+        "vehicle_medium": str(model.get("vehicle_medium", model.get("medium", "land")) or "land").strip().lower() or "land",
         "power": power,
         "durability": durability,
         "fuel_efficiency": fuel_efficiency,
@@ -354,6 +379,7 @@ def vehicle_metadata(
         "vehicle_make": str(data.get("make", "Unknown")).strip() or "Unknown",
         "vehicle_model": str(data.get("model", "Vehicle")).strip() or "Vehicle",
         "vehicle_class": str(data.get("vehicle_class", "sedan")).strip().lower() or "sedan",
+        "vehicle_medium": str(data.get("vehicle_medium", data.get("medium", "land")) or "land").strip().lower() or "land",
         "power": _clamp_int(data.get("power", 5), 1, 10, 5),
         "durability": _clamp_int(data.get("durability", 5), 1, 10, 5),
         "fuel_efficiency": _clamp_int(data.get("fuel_efficiency", 5), 1, 10, 5),
@@ -423,6 +449,37 @@ def _vehicle_candidate_tiles(sim, origin_x, origin_y, chunk_size):
     return tiles
 
 
+def _water_vehicle_candidate_tiles(sim, origin_x, origin_y, chunk_size):
+    tiles = []
+    for y in range(int(origin_y) + 1, int(origin_y) + int(chunk_size) - 1):
+        for x in range(int(origin_x) + 1, int(origin_x) + int(chunk_size) - 1):
+            if sim.property_at(x, y, 0):
+                continue
+            if sim.structure_at(x, y, 0):
+                continue
+            tile = sim.tilemap.tile_at(x, y, 0)
+            if not tile or str(getattr(tile, "glyph", "") or "")[:1] != "~":
+                continue
+
+            shore_score = 0
+            for ny in range(y - 1, y + 2):
+                for nx in range(x - 1, x + 2):
+                    if nx == x and ny == y:
+                        continue
+                    neighbor = sim.tilemap.tile_at(nx, ny, 0)
+                    neighbor_glyph = str(getattr(neighbor, "glyph", "") or "")[:1]
+                    if neighbor and bool(getattr(neighbor, "walkable", False)):
+                        shore_score = max(shore_score, 2)
+                    if neighbor_glyph == "_":
+                        shore_score = max(shore_score, 3)
+                    elif neighbor_glyph in {"=", ":"}:
+                        shore_score = max(shore_score, 4)
+            if shore_score <= 0:
+                continue
+            tiles.append((shore_score, x, y))
+    return tiles
+
+
 def generate_chunk_vehicle_records(
     sim,
     chunk,
@@ -443,23 +500,18 @@ def generate_chunk_vehicle_records(
             target_count = 1 if rng.random() < 0.55 else 0
 
     target_count = max(0, int(target_count))
-    if target_count <= 0:
-        return []
-
     candidates = _vehicle_candidate_tiles(sim, origin_x=origin_x, origin_y=origin_y, chunk_size=chunk_size)
-    if not candidates:
-        return []
-
-    rng.shuffle(candidates)
-    candidates.sort(key=lambda row: (-int(row[0]), int(row[2]), int(row[1])))
 
     selected = []
-    for _score, x, y in candidates:
-        if len(selected) >= target_count:
-            break
-        if any(abs(x - sx) + abs(y - sy) < 4 for sx, sy in selected):
-            continue
-        selected.append((x, y))
+    if candidates:
+        rng.shuffle(candidates)
+        candidates.sort(key=lambda row: (-int(row[0]), int(row[2]), int(row[1])))
+        for _score, x, y in candidates:
+            if len(selected) >= target_count:
+                break
+            if any(abs(x - sx) + abs(y - sy) < 4 for sx, sy in selected):
+                continue
+            selected.append((x, y))
 
     records = []
     chunk_coord = (int(chunk.get("cx", 0)), int(chunk.get("cy", 0)))
@@ -474,7 +526,7 @@ def generate_chunk_vehicle_records(
         if area_type == "city" and near_road and rng.random() < 0.28:
             quality = "new"
 
-        profile = roll_vehicle_profile(rng, quality=quality, catalog=source)
+        profile = roll_vehicle_profile(rng, quality=quality, catalog=source, medium="land")
         paint_key = roll_vehicle_paint_key(rng, quality=quality)
         profile["paint"] = paint_key
         vehicle_token = f"veh:{chunk_coord[0]}:{chunk_coord[1]}:{index}"
@@ -502,5 +554,52 @@ def generate_chunk_vehicle_records(
             "owner_tag": owner_tag,
             "metadata": metadata,
         })
+
+    descriptor = sim.world.overworld_descriptor(chunk_coord[0], chunk_coord[1]) if getattr(sim, "world", None) is not None else {}
+    terrain = str((descriptor or {}).get("terrain", "") or "").strip().lower()
+    waterish = area_type == "coastal" or terrain in {"lake", "shore", "shoals", "waterway", "island", "ocean"}
+    water_models = [
+        model for model in source.get("models", ())
+        if str(model.get("vehicle_medium", model.get("medium", "land")) or "land").strip().lower() == "water"
+    ]
+    if waterish and water_models and rng.random() < 0.62:
+        water_candidates = _water_vehicle_candidate_tiles(
+            sim,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+        )
+        if water_candidates:
+            rng.shuffle(water_candidates)
+            water_candidates.sort(key=lambda row: (-int(row[0]), int(row[2]), int(row[1])))
+            _score, x, y = water_candidates[0]
+            quality = "used"
+            profile = roll_vehicle_profile(rng, quality=quality, catalog=source, medium="water")
+            paint_key = roll_vehicle_paint_key(rng, quality=quality)
+            profile["paint"] = paint_key
+            water_index = len(records)
+            vehicle_token = f"veh:{chunk_coord[0]}:{chunk_coord[1]}:water:{water_index}"
+            owner_tag = "public" if rng.random() < 0.28 else "private"
+            locked = owner_tag != "public"
+            metadata = vehicle_metadata(
+                profile,
+                chunk=chunk_coord,
+                owner_tag=owner_tag,
+                display_color=paint_key,
+                locked=locked,
+                key_id=vehicle_token,
+                key_label=f"{profile['make']} {profile['model']}",
+                lock_tier=2,
+            )
+            metadata["vehicle_id"] = vehicle_token
+            records.append({
+                "name": f"{profile['make']} {profile['model']}",
+                "kind": "vehicle",
+                "x": int(x),
+                "y": int(y),
+                "z": 0,
+                "owner_tag": owner_tag,
+                "metadata": metadata,
+            })
 
     return records

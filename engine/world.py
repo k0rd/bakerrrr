@@ -7,7 +7,7 @@ from pathlib import Path
 from engine.sites import site_gameplay_profile
 from game.content_warnings import warn_content_fallback
 from game.npc_names import CATALOG as NPC_NAME_CATALOG, DEFAULT_NAME_CATALOG
-from game.property_access import default_site_services_for_archetype
+from game.property_access import FINANCE_SERVICE_FALLBACKS, default_site_services_for_archetype
 
 
 BUSINESS_NAME_DATA_PATH = Path(__file__).resolve().parent.parent / "game" / "business_names.json"
@@ -86,8 +86,8 @@ class World:
     OVERWORLD_TERRAIN_VARIANTS = {
         "city": ("urban", "urban", "park", "industrial_waste"),
         "frontier": ("scrub", "plains", "badlands", "hills"),
-        "wilderness": ("forest", "forest", "hills", "marsh", "plains"),
-        "coastal": ("shore", "shoals", "dunes", "cliffs", "salt_flats"),
+        "wilderness": ("forest", "forest", "hills", "marsh", "plains", "lake", "waterway"),
+        "coastal": ("shore", "shoals", "dunes", "cliffs", "salt_flats", "island", "ocean"),
     }
     OVERWORLD_LANDMARK_TEMPLATES = (
         {
@@ -347,6 +347,73 @@ class World:
         "wilderness": 0.028,
         "coastal": 0.04,
     }
+    NON_CITY_DENSE_SITE_CHANCE_BY_AREA = {
+        "frontier": 0.05,
+        "wilderness": 0.035,
+        "coastal": 0.05,
+    }
+    NON_CITY_COMPOUND_SERVICE_CHANCE_BY_AREA = {
+        "frontier": 0.62,
+        "wilderness": 0.42,
+        "coastal": 0.56,
+    }
+    NON_CITY_RURAL_COUNTERPART_ARCHETYPES = {
+        "auto_garage",
+        "bar",
+        "bookshop",
+        "corner_store",
+        "flophouse",
+        "hardware_store",
+        "hotel",
+        "outfitter",
+        "pawn_shop",
+        "pharmacy",
+        "restaurant",
+        "service_station",
+        "surplus_store",
+        "tavern",
+        "tool_depot",
+    }
+    NON_CITY_RURAL_COUNTERPART_WEIGHTS = (
+        "restaurant",
+        "restaurant",
+        "tavern",
+        "tavern",
+        "service_station",
+        "service_station",
+        "hardware_store",
+        "pharmacy",
+        "corner_store",
+        "outfitter",
+        "surplus_store",
+        "auto_garage",
+        "tool_depot",
+        "pawn_shop",
+        "hotel",
+        "bar",
+        "bookshop",
+        "flophouse",
+    )
+    NON_CITY_COMPOUND_SERVICE_WEIGHTS = (
+        "service_station",
+        "service_station",
+        "restaurant",
+        "restaurant",
+        "tavern",
+        "hardware_store",
+        "pawn_shop",
+        "bank",
+        "bank",
+        "brokerage",
+        "casino",
+        "casino",
+        "gaming_hall",
+        "hotel",
+        "pharmacy",
+        "auto_garage",
+        "courier_office",
+        "contractor_office",
+    )
 
     OVERWORLD_TRAVEL_BASE = {
         "city": {"energy": 0, "safety": 0, "social": 0, "risk": 0},
@@ -429,8 +496,8 @@ class World:
         "fuel": ("services",),
         "intel": ("intel",),
         "repair": ("services",),
-        "rest": ("shelter",),
-        "shelter": ("shelter",),
+        "rest": ("services", "shelter"),
+        "shelter": ("services", "shelter"),
         "shuttle_transit": ("services",),
     }
     NON_CITY_SPECIALTY_ALIASES = {
@@ -876,6 +943,10 @@ class World:
         ("solo_edge_south", 0.54, 0.76),
         ("solo_edge_west", 0.24, 0.48),
         ("solo_edge_east", 0.76, 0.52),
+        ("solo_offset_northwest", 0.34, 0.20),
+        ("solo_offset_northeast", 0.66, 0.20),
+        ("solo_offset_southwest", 0.34, 0.80),
+        ("solo_offset_southeast", 0.66, 0.80),
         ("solo_corner_nw", 0.24, 0.24),
         ("solo_corner_ne", 0.76, 0.25),
         ("solo_corner_sw", 0.25, 0.76),
@@ -890,13 +961,19 @@ class World:
         ("pair_broken_row", ((0.22, 0.38), (0.78, 0.62))),
         ("pair_broken_column", ((0.38, 0.22), (0.62, 0.78))),
         ("pair_offset_fronts", ((0.24, 0.76), (0.76, 0.26))),
+        ("pair_side_yard", ((0.18, 0.36), (0.82, 0.64))),
+        ("pair_back_alley", ((0.35, 0.18), (0.65, 0.82))),
     )
 
     CITY_PLACEMENT_CLUSTER_PATTERNS = (
         ("cluster_broken_row", ((0.22, 0.22), (0.78, 0.22), (0.22, 0.78), (0.78, 0.78))),
-        ("cluster_broken_column", ((0.22, 0.22), (0.22, 0.78), (0.78, 0.22), (0.78, 0.78))),
-        ("cluster_courtyard", ((0.22, 0.22), (0.78, 0.22), (0.22, 0.78), (0.78, 0.78))),
+        ("cluster_broken_column", ((0.22, 0.22), (0.22, 0.78), (0.78, 0.78), (0.78, 0.22))),
+        ("cluster_courtyard", ((0.78, 0.22), (0.22, 0.78), (0.78, 0.78), (0.22, 0.22))),
         ("cluster_zigzag", ((0.22, 0.78), (0.78, 0.22), (0.22, 0.22), (0.78, 0.78))),
+        ("cluster_front_court", ((0.22, 0.22), (0.78, 0.22), (0.50, 0.78), (0.78, 0.78))),
+        ("cluster_side_court", ((0.22, 0.22), (0.22, 0.78), (0.78, 0.50), (0.78, 0.78))),
+        ("cluster_rear_court", ((0.22, 0.78), (0.78, 0.78), (0.50, 0.22), (0.78, 0.22))),
+        ("cluster_lane", ((0.22, 0.22), (0.78, 0.50), (0.22, 0.78), (0.78, 0.78))),
     )
 
     CITY_PLACEMENT_ROOMY_PAIR_ARCHETYPES = {
@@ -1583,12 +1660,65 @@ class World:
             if terrain in {"hills"} or landmark_id == "radio_spire":
                 options.extend(("firewatch_tower", "weather_station", "outfitter"))
         elif area_type == "coastal":
-            if terrain in {"shore", "shoals", "lake"}:
+            if terrain in {"shore", "shoals", "lake", "island", "ocean", "waterway"}:
                 options.extend(("dock_shack", "ferry_post", "net_house", "bait_shop", "drydock_yard"))
             if path:
                 options.extend(("ferry_post", "tide_station", "coast_watch"))
 
         return tuple(options or self.NON_CITY_SITE_POOLS["frontier"])
+
+    def _non_city_dense_site_count(self, descriptor, rng, count):
+        count = max(0, int(count))
+        if count < 2:
+            return count
+
+        descriptor = descriptor if isinstance(descriptor, dict) else {}
+        area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
+        terrain = str(descriptor.get("terrain", "")).strip().lower()
+        path = str(descriptor.get("path", "")).strip().lower()
+        district_type = str(descriptor.get("district_type", "")).strip().lower()
+        landmark = descriptor.get("landmark") or descriptor.get("nearest_landmark") or {}
+        landmark_id = str(landmark.get("id", "") or "").strip().lower()
+        try:
+            landmark_dist = int(landmark.get("distance", 99))
+        except (TypeError, ValueError):
+            landmark_dist = 99
+
+        affinity = 0.0
+        if area_type == "frontier":
+            if path in {"road", "freeway"}:
+                affinity += 0.9
+            if terrain in {"badlands", "ruins", "industrial_waste"}:
+                affinity += 0.6
+            if district_type in {"industrial", "military"}:
+                affinity += 0.5
+            if landmark_dist <= 2:
+                affinity += 0.5
+        elif area_type == "wilderness":
+            if path in {"trail", "road", "freeway"}:
+                affinity += 0.7
+            if terrain in {"ruins", "forest", "marsh", "hills"}:
+                affinity += 0.5
+            if landmark_id in {"radio_spire", "shatter_ruins", "ancient_grove", "glass_marsh"}:
+                affinity += 0.8
+            elif landmark_dist <= 1:
+                affinity += 0.5
+        elif area_type == "coastal":
+            if path in {"road", "freeway", "trail"}:
+                affinity += 0.7
+            if terrain in {"shore", "shoals", "lake", "cliffs", "island", "ocean", "waterway"}:
+                affinity += 0.6
+            if landmark_dist <= 2:
+                affinity += 0.5
+
+        if affinity <= 0.0:
+            return min(2, count)
+
+        chance = float(self.NON_CITY_DENSE_SITE_CHANCE_BY_AREA.get(area_type, 0.0))
+        chance = min(0.16, chance * min(2.0, affinity))
+        if chance > 0.0 and rng.random() < chance:
+            return min(3, count + 1)
+        return min(2, count)
 
     def _non_city_site_count(self, descriptor, rng):
         area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
@@ -1619,7 +1749,7 @@ class World:
 
             if path in {"road", "freeway"} and landmark_dist <= 2 and rng.random() < 0.35:
                 count += 1
-            return max(0, min(2, count))
+            return max(0, self._non_city_dense_site_count(descriptor, rng, count))
 
         if area_type == "wilderness":
             if terrain in {"forest", "marsh"}:
@@ -1643,10 +1773,10 @@ class World:
             elif landmark_dist <= 2 and rng.random() < 0.30:
                 count += 1
 
-            return max(0, min(2, count))
+            return max(0, self._non_city_dense_site_count(descriptor, rng, count))
 
         if area_type == "coastal":
-            if terrain in {"shore", "shoals", "lake"}:
+            if terrain in {"shore", "shoals", "lake", "island", "ocean", "waterway"}:
                 if rng.random() < 0.34:
                     count += 1
             elif rng.random() < 0.16:
@@ -1662,13 +1792,13 @@ class World:
             elif landmark_dist <= 2 and rng.random() < 0.45:
                 count += 1
 
-            return max(0, min(2, count))
+            return max(0, self._non_city_dense_site_count(descriptor, rng, count))
 
         if path:
             count += 1
         if landmark_dist <= 2:
             count += 1
-        return max(0, min(2, count))
+        return max(0, self._non_city_dense_site_count(descriptor, rng, count))
 
     def _build_non_city_site_record(self, descriptor, kind, idx, used_site_names=None):
         kind = str(kind or "").strip().lower()
@@ -1695,6 +1825,27 @@ class World:
             "business_founder_last_name": business_founder.get("last_name") if business_founder else None,
             "public": kind in self.PUBLIC_NON_CITY_SITE_KINDS,
         }
+
+    def _non_city_weighted_city_service_candidates(self, *, existing_kinds=(), weights=()):
+        existing = {
+            str(kind).strip().lower()
+            for kind in tuple(existing_kinds or ())
+            if str(kind).strip()
+        }
+        archetypes = {
+            str(kind).strip().lower()
+            for kind in tuple(self.building_archetypes or ())
+            if str(kind).strip()
+        }
+        candidates = []
+        for raw_kind in tuple(weights or ()):
+            key = str(raw_kind).strip().lower()
+            if not key or key in existing:
+                continue
+            if key not in archetypes and key not in self.NAMED_BUSINESS_ARCHETYPES:
+                continue
+            candidates.append(key)
+        return tuple(candidates)
 
     def _non_city_outsider_site_candidates(self, descriptor, *, existing_kinds=()):
         descriptor = descriptor if isinstance(descriptor, dict) else {}
@@ -1723,6 +1874,11 @@ class World:
                 continue
             cross_area.append(kind)
 
+        rural_like = list(self._non_city_weighted_city_service_candidates(
+            existing_kinds=tuple(existing | native_kinds),
+            weights=self.NON_CITY_RURAL_COUNTERPART_WEIGHTS,
+        ))
+
         city_like = []
         for kind in tuple(self.building_archetypes or ()):
             key = str(kind).strip().lower()
@@ -1731,12 +1887,15 @@ class World:
             if key in self.STOREFRONT_ARCHETYPES or key in self.PUBLIC_BUILDING_ARCHETYPES:
                 city_like.append(key)
                 continue
+            if key in FINANCE_SERVICE_FALLBACKS:
+                city_like.append(key)
+                continue
             if default_site_services_for_archetype(key):
                 city_like.append(key)
 
-        # Bias toward true outsider buildings while still allowing cross-area
-        # site kinds from other non-city biomes to show up once in a while.
-        return tuple(cross_area + city_like + city_like)
+        # Bias toward rural counterparts first, while still allowing cross-area
+        # site kinds and the wider service-building pool to show up once in a while.
+        return tuple(cross_area + rural_like + city_like)
 
     def _build_non_city_outsider_site_record(self, descriptor, kind, idx, used_site_names=None):
         descriptor = descriptor if isinstance(descriptor, dict) else {}
@@ -1750,15 +1909,21 @@ class World:
                 f"non-city-outsider:{self.seed}:{descriptor.get('cx')}:{descriptor.get('cy')}:"
                 f"{descriptor.get('area_type', '')}:{descriptor.get('district_type', '')}:{idx}:{key}"
             )
+            finance_services = list(FINANCE_SERVICE_FALLBACKS.get(key, ()))
+            if finance_services:
+                site["finance_services"] = list(finance_services)
             site_services = list(default_site_services_for_archetype(key, seed_token=seed_token))
             if site_services:
                 site["site_services"] = list(site_services)
             if key in self.STOREFRONT_ARCHETYPES:
                 site["is_storefront"] = True
+            if key in self.NON_CITY_RURAL_COUNTERPART_ARCHETYPES:
+                site["rural_counterpart"] = True
             site["public"] = bool(
                 site.get("public")
                 or key in self.STOREFRONT_ARCHETYPES
                 or key in self.PUBLIC_BUILDING_ARCHETYPES
+                or finance_services
                 or site_services
             )
             site["outsider_source"] = "city_building"
@@ -1806,6 +1971,48 @@ class World:
             prepared.append(outsider_site)
         return prepared
 
+    def _apply_non_city_compound_service_sites(self, descriptor, rng, sites):
+        prepared = [dict(site) for site in tuple(sites or ()) if isinstance(site, dict)]
+        if len(prepared) < 3:
+            return prepared
+
+        descriptor = descriptor if isinstance(descriptor, dict) else {}
+        area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
+        chance = float(self.NON_CITY_COMPOUND_SERVICE_CHANCE_BY_AREA.get(area_type, 0.0))
+        if chance <= 0.0 or rng.random() >= chance:
+            return prepared
+
+        replace_index = len(prepared) - 1
+        existing_kinds = [
+            str(site.get("kind", "") or "").strip().lower()
+            for index, site in enumerate(prepared)
+            if index != replace_index and str(site.get("kind", "") or "").strip()
+        ]
+        candidates = list(self._non_city_weighted_city_service_candidates(
+            existing_kinds=existing_kinds,
+            weights=self.NON_CITY_COMPOUND_SERVICE_WEIGHTS,
+        ))
+        if not candidates:
+            return prepared
+
+        used_site_names = {
+            str(site.get("name", "")).strip()
+            for index, site in enumerate(prepared)
+            if index != replace_index and str(site.get("name", "")).strip()
+        }
+        service_kind = str(rng.choice(candidates)).strip().lower()
+        service_site = self._build_non_city_outsider_site_record(
+            descriptor,
+            service_kind,
+            replace_index,
+            used_site_names,
+        )
+        if service_site:
+            service_site["compound_service"] = True
+            service_site["city_weighted_service"] = True
+            prepared[replace_index] = service_site
+        return prepared
+
     def _generate_non_city_sites_base(self, descriptor, rng):
         area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
         if area_type == "city":
@@ -1832,6 +2039,7 @@ class World:
             used_kinds.add(kind)
             sites.append(self._build_non_city_site_record(descriptor, kind, idx, used_site_names))
 
+        sites = self._apply_non_city_compound_service_sites(descriptor, rng, sites)
         return self._apply_non_city_outsider_sites(descriptor, rng, sites)
 
     def generate_non_city_sites(self, descriptor, rng):
@@ -2084,10 +2292,20 @@ class World:
                         for site in prepared
                         if str(site.get("name", "")).strip()
                     }
-                    bonus_kind = bonus_rng.choice(available_bonus)
-                    prepared.append(
-                        self._build_non_city_site_record(descriptor, bonus_kind, len(prepared), used_site_names)
-                    )
+                    bonus_rng.shuffle(available_bonus)
+                    for bonus_kind in available_bonus:
+                        if len(current_focus) >= minimum_focus_sites:
+                            break
+                        prepared.append(
+                            self._build_non_city_site_record(descriptor, bonus_kind, len(prepared), used_site_names)
+                        )
+                        used_kinds.add(bonus_kind)
+                        current_focus.add(bonus_kind)
+                        used_site_names = {
+                            str(site.get("name", "")).strip()
+                            for site in prepared
+                            if str(site.get("name", "")).strip()
+                        }
 
         enriched = []
         for site in prepared:
