@@ -5,6 +5,15 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      create_release:
+        description: "Create a GitHub release with zipped Windows/Linux builds and PLAYER_GUIDE"
+        type: boolean
+        default: false
+      release_version:
+        description: "Optional version number, e.g. 0.1.0 or v0.1.0-playtest; defaults to source GAME_VERSION"
+        type: string
+        required: false
 
 jobs:
   build-windows:
@@ -24,6 +33,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pygame-ce pyinstaller windows-curses
 
+      - name: Resolve packaged build version
+        env:
+          BAKERRRR_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: python build_tools/resolve_build_version.py --write-runtime-hook build/build_version_runtime.py --print-env
+
       - name: Build pygame executable
         run: >
           python -m PyInstaller
@@ -33,6 +47,7 @@ jobs:
           --name bakerrrr
           --icon assets/icons/bakerrrr.ico
           --runtime-hook build_tools/pyinstaller_pygame_runtime.py
+          --runtime-hook build/build_version_runtime.py
           --collect-submodules engine
           --collect-submodules game
           --collect-submodules ui
@@ -73,6 +88,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pygame-ce pyinstaller
 
+      - name: Resolve packaged build version
+        env:
+          BAKERRRR_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: python build_tools/resolve_build_version.py --write-runtime-hook build/build_version_runtime.py --print-env
+
       - name: Build pygame executable
         run: >
           python -m PyInstaller
@@ -81,6 +101,7 @@ jobs:
           --windowed
           --name bakerrrr
           --runtime-hook build_tools/pyinstaller_pygame_runtime.py
+          --runtime-hook build/build_version_runtime.py
           --collect-submodules engine
           --collect-submodules game
           --collect-submodules ui
@@ -95,3 +116,70 @@ jobs:
           path: dist/bakerrrr
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-linux]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.create_release }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v6
+
+      - name: Download packaged binaries
+        uses: actions/download-artifact@v7
+        with:
+          path: release-input
+
+      - name: Resolve release version
+        env:
+          BAKERRRR_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+          python build_tools/resolve_build_version.py --print-env > build-version.env
+          cat build-version.env
+          . ./build-version.env
+          echo "RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Prepare release zips
+        run: |
+          set -euo pipefail
+          mkdir -p release/staging/windows release/staging/linux release/staging/player-guide release/assets
+
+          cp release-input/bakerrrr-windows/bakerrrr.exe release/staging/windows/
+          cp README.md LICENSE LICENSE-ASSETS WINDOWS_INSTRUCTIONS.md release/staging/windows/
+
+          cp release-input/bakerrrr-linux/bakerrrr release/staging/linux/
+          chmod +x release/staging/linux/bakerrrr
+          cp README.md LICENSE LICENSE-ASSETS release/staging/linux/
+
+          cp -R PLAYER_GUIDE release/staging/player-guide/
+
+          (
+            cd release/staging/windows
+            zip -r "../../assets/bakerrrr-windows-${RELEASE_TAG}.zip" .
+          )
+          (
+            cd release/staging/linux
+            zip -r "../../assets/bakerrrr-linux-${RELEASE_TAG}.zip" .
+          )
+          (
+            cd release/staging/player-guide
+            zip -r "../../assets/PLAYER_GUIDE-${RELEASE_TAG}.zip" PLAYER_GUIDE
+          )
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" \
+            "release/assets/bakerrrr-windows-${RELEASE_TAG}.zip" \
+            "release/assets/bakerrrr-linux-${RELEASE_TAG}.zip" \
+            "release/assets/PLAYER_GUIDE-${RELEASE_TAG}.zip" \
+            --target "$GITHUB_SHA" \
+            --title "bakerrrr ${RELEASE_TAG}" \
+            --notes "Packaged Windows/Linux builds and PLAYER_GUIDE for bakerrrr ${RELEASE_VERSION}."
