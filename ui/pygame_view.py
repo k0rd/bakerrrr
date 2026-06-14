@@ -1,4 +1,5 @@
 import curses
+import math
 import sys
 import time
 from collections import deque
@@ -8,6 +9,49 @@ from game.semantic_catalog import DEFAULT_RENDER_SEMANTICS_PATH, get_runtime_sem
 from ui.input_keys import KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_UP
 
 _DEFAULT_RENDER_SEMANTICS_PATH = DEFAULT_RENDER_SEMANTICS_PATH
+
+_PYGAME_VEHICLE_HEADING_BY_KEY = {
+    "n": (0, -1),
+    "north": (0, -1),
+    "ne": (1, -1),
+    "northeast": (1, -1),
+    "north_east": (1, -1),
+    "e": (1, 0),
+    "east": (1, 0),
+    "se": (1, 1),
+    "southeast": (1, 1),
+    "south_east": (1, 1),
+    "s": (0, 1),
+    "south": (0, 1),
+    "sw": (-1, 1),
+    "southwest": (-1, 1),
+    "south_west": (-1, 1),
+    "w": (-1, 0),
+    "west": (-1, 0),
+    "nw": (-1, -1),
+    "northwest": (-1, -1),
+    "north_west": (-1, -1),
+}
+_PYGAME_VEHICLE_HEADING_BY_GLYPH = {
+    "^": (0, -1),
+    "7": (1, -1),
+    ">": (1, 0),
+    "J": (1, 1),
+    "v": (0, 1),
+    "L": (-1, 1),
+    "<": (-1, 0),
+    "F": (-1, -1),
+}
+_PYGAME_VEHICLE_HEADING_LABELS = {
+    (0, -1): "n",
+    (1, -1): "ne",
+    (1, 0): "e",
+    (1, 1): "se",
+    (0, 1): "s",
+    (-1, 1): "sw",
+    (-1, 0): "w",
+    (-1, -1): "nw",
+}
 
 
 def _resource_path(*parts):
@@ -1478,23 +1522,57 @@ class PygameView:
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
-    def _draw_vehicle_overlay(self, x, y, color=None, attrs=0):
+    def _vehicle_heading_from_render(self, glyph, semantic_key):
+        semantic_key = str(semantic_key or "").strip().lower()
+        prefix = "property_vehicle_heading_"
+        if semantic_key.startswith(prefix):
+            direction_key = semantic_key.removeprefix(prefix).replace("-", "_")
+            heading = _PYGAME_VEHICLE_HEADING_BY_KEY.get(direction_key)
+            if heading is not None:
+                return heading
+        return _PYGAME_VEHICLE_HEADING_BY_GLYPH.get(str(glyph or "")[:1])
+
+    def _normalized_vehicle_heading(self, heading):
+        if not heading:
+            return 0, -1
+        try:
+            dx, dy = heading
+        except (TypeError, ValueError):
+            return 0, -1
+        dx = 1 if dx > 0 else -1 if dx < 0 else 0
+        dy = 1 if dy > 0 else -1 if dy < 0 else 0
+        if dx == 0 and dy == 0:
+            return 0, -1
+        return dx, dy
+
+    def _draw_vehicle_overlay(self, x, y, color=None, attrs=0, *, heading=None):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
         color_key = str(color or "").strip().lower()
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
         overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
 
-        inset_x = max(2, self.cell_px // 6)
-        inset_y = max(1, self.cell_px // 8)
-        body_rect = self.pygame.Rect(
-            inset_x,
-            inset_y,
-            max(4, self.cell_px - (inset_x * 2)),
-            max(6, self.cell_px - (inset_y * 2)),
-        )
-        corner_r = max(2, self.cell_px // 6)
+        heading = self._normalized_vehicle_heading(heading)
+        heading_len = math.hypot(heading[0], heading[1]) or 1.0
+        forward_x = heading[0] / heading_len
+        forward_y = heading[1] / heading_len
+        right_x = -forward_y
+        right_y = forward_x
+        mid_x = (self.cell_px - 1) / 2.0
+        mid_y = (self.cell_px - 1) / 2.0
+
+        def oriented_point(along, across):
+            return (
+                int(round(mid_x + (forward_x * float(along)) + (right_x * float(across)))),
+                int(round(mid_y + (forward_y * float(along)) + (right_y * float(across)))),
+            )
+
         stroke_w = max(1, self.cell_px // 18)
+        front_len = max(3.0, self.cell_px * 0.34)
+        rear_len = max(3.0, self.cell_px * 0.32)
+        nose_len = max(1.0, self.cell_px * 0.08)
+        front_half_w = max(1.5, self.cell_px * 0.15)
+        rear_half_w = max(2.0, self.cell_px * 0.21)
 
         body_fill = (frame[0], frame[1], frame[2], 170)
         body_stroke = (
@@ -1510,79 +1588,81 @@ class PygameView:
             min(255, int(frame[2] * 1.08) + 24),
             144,
         )
+        headlight = (255, 244, 178, 178)
 
-        self.pygame.draw.rect(overlay, body_fill, body_rect, border_radius=corner_r)
-        self.pygame.draw.rect(overlay, body_stroke, body_rect, stroke_w, border_radius=corner_r)
+        body_points = [
+            oriented_point(front_len, -front_half_w),
+            oriented_point(front_len + nose_len, 0),
+            oriented_point(front_len, front_half_w),
+            oriented_point(-rear_len, rear_half_w),
+            oriented_point(-rear_len, -rear_half_w),
+        ]
+        self.pygame.draw.polygon(overlay, body_fill, body_points)
+        self.pygame.draw.polygon(overlay, body_stroke, body_points, stroke_w)
 
-        windshield_rect = self.pygame.Rect(
-            body_rect.left + max(1, self.cell_px // 8),
-            body_rect.top + max(1, self.cell_px // 6),
-            max(2, body_rect.w - max(2, self.cell_px // 4)),
-            max(2, self.cell_px // 5),
-        )
-        rear_window_rect = self.pygame.Rect(
-            windshield_rect.left,
-            body_rect.bottom - max(2, self.cell_px // 6) - max(2, self.cell_px // 5),
-            windshield_rect.w,
-            max(2, self.cell_px // 5),
-        )
-        self.pygame.draw.rect(overlay, glass, windshield_rect, border_radius=max(1, corner_r - 1))
-        self.pygame.draw.rect(overlay, glass, rear_window_rect, border_radius=max(1, corner_r - 1))
+        windshield_points = [
+            oriented_point(front_len * 0.52, -front_half_w * 0.72),
+            oriented_point(front_len * 0.52, front_half_w * 0.72),
+            oriented_point(front_len * 0.12, front_half_w * 0.62),
+            oriented_point(front_len * 0.12, -front_half_w * 0.62),
+        ]
+        rear_window_points = [
+            oriented_point(-rear_len * 0.10, -rear_half_w * 0.58),
+            oriented_point(-rear_len * 0.10, rear_half_w * 0.58),
+            oriented_point(-rear_len * 0.56, rear_half_w * 0.70),
+            oriented_point(-rear_len * 0.56, -rear_half_w * 0.70),
+        ]
+        self.pygame.draw.polygon(overlay, glass, windshield_points)
+        self.pygame.draw.polygon(overlay, glass, rear_window_points)
 
-        mid_y = body_rect.centery
         self.pygame.draw.line(
             overlay,
             shadow,
-            (body_rect.left + max(1, self.cell_px // 7), mid_y),
-            (body_rect.right - max(2, self.cell_px // 7), mid_y),
+            oriented_point(-rear_len * 0.82, 0),
+            oriented_point(front_len * 0.68, 0),
             max(1, self.cell_px // 22),
         )
 
-        wheel_w = max(1, self.cell_px // 10)
-        wheel_h = max(2, self.cell_px // 5)
-        wheel_offsets = (
-            (body_rect.left - max(1, wheel_w // 2), body_rect.top + max(1, self.cell_px // 7)),
-            (body_rect.right - max(1, wheel_w // 2), body_rect.top + max(1, self.cell_px // 7)),
-            (body_rect.left - max(1, wheel_w // 2), body_rect.bottom - wheel_h - max(1, self.cell_px // 7)),
-            (body_rect.right - max(1, wheel_w // 2), body_rect.bottom - wheel_h - max(1, self.cell_px // 7)),
-        )
-        for wheel_x, wheel_y in wheel_offsets:
-            wheel = self.pygame.Rect(wheel_x, wheel_y, wheel_w, wheel_h)
-            self.pygame.draw.rect(overlay, shadow, wheel, border_radius=max(1, wheel_w // 2))
+        wheel_r = max(1, self.cell_px // 11)
+        for wheel_along in (-rear_len * 0.58, front_len * 0.46):
+            for wheel_across in (-rear_half_w - wheel_r * 0.35, rear_half_w + wheel_r * 0.35):
+                self.pygame.draw.circle(overlay, shadow, oriented_point(wheel_along, wheel_across), wheel_r)
 
-        nose_y = body_rect.top + max(1, self.cell_px // 16)
+        nose_across = max(1.0, front_half_w * 0.56)
         self.pygame.draw.line(
             overlay,
             body_stroke,
-            (body_rect.left + max(2, self.cell_px // 4), nose_y),
-            (body_rect.right - max(2, self.cell_px // 4), nose_y),
+            oriented_point(front_len + nose_len * 0.18, -nose_across),
+            oriented_point(front_len + nose_len * 0.18, nose_across),
             max(1, self.cell_px // 24),
         )
+        light_r = max(1, self.cell_px // 24)
+        self.pygame.draw.circle(overlay, headlight, oriented_point(front_len + nose_len * 0.28, -nose_across), light_r)
+        self.pygame.draw.circle(overlay, headlight, oriented_point(front_len + nose_len * 0.28, nose_across), light_r)
 
         if color_key == "vehicle_player":
             ring_r = max(2, self.cell_px // 8)
             self.pygame.draw.circle(
                 overlay,
                 (84, 226, 255, 196),
-                (body_rect.centerx, body_rect.centery),
+                (int(round(mid_x)), int(round(mid_y))),
                 ring_r + max(1, self.cell_px // 18),
                 max(1, stroke_w),
             )
         elif color_key == "vehicle_new":
-            stripe_y = body_rect.top + max(2, self.cell_px // 4)
             self.pygame.draw.line(
                 overlay,
                 (250, 232, 162, 188),
-                (body_rect.left + max(2, self.cell_px // 5), stripe_y),
-                (body_rect.right - max(2, self.cell_px // 5), stripe_y),
+                oriented_point(-rear_len * 0.68, -rear_half_w * 0.34),
+                oriented_point(front_len * 0.66, -front_half_w * 0.34),
                 max(1, self.cell_px // 22),
             )
         elif color_key == "vehicle_parked":
             self.pygame.draw.line(
                 overlay,
                 shadow,
-                (body_rect.left + max(1, self.cell_px // 6), body_rect.bottom - max(2, self.cell_px // 5)),
-                (body_rect.right - max(2, self.cell_px // 6), body_rect.bottom - max(2, self.cell_px // 5)),
+                oriented_point(-rear_len * 0.68, -rear_half_w * 0.34),
+                oriented_point(-rear_len * 0.68, rear_half_w * 0.34),
                 max(1, self.cell_px // 28),
             )
 
@@ -3987,8 +4067,10 @@ class PygameView:
             semantic_key.startswith("property_vehicle")
             or (color_key.startswith("vehicle_") and glyph in {"&", "V", "v", "^", ">", "<", "7", "J", "L", "F"})
         ):
-            self._draw_vehicle_overlay(x, y, color=color, attrs=attrs)
-            return "vehicle"
+            heading = self._vehicle_heading_from_render(glyph, semantic_key)
+            self._draw_vehicle_overlay(x, y, color=color, attrs=attrs, heading=heading)
+            heading_label = _PYGAME_VEHICLE_HEADING_LABELS.get(self._normalized_vehicle_heading(heading))
+            return f"vehicle_{heading_label}" if heading_label and heading is not None else "vehicle"
         if color_key == "property_service":
             self._draw_property_marker_overlay(x, y, glyph, color=color, attrs=attrs, kind="service")
             return "property_service"

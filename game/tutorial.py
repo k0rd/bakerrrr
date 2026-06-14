@@ -50,7 +50,7 @@ TUTORIAL_PROFILE = NormalRunBootstrapProfile(
     profile_id="tutorial",
     objective_visible=True,
     bootstrap_player_opportunity_intel=True,
-    vehicle_seed_chance=1.0,
+    vehicle_seed_chance=0.0,
     starter_melee_weapon_chance=1.0,
     starter_firearm_chance=0.0,
     starter_armor_chance=0.0,
@@ -135,9 +135,14 @@ TUTORIAL_STAGES = (
         "hint": "Tutorial: press L for the event log, or ? for help.",
     },
     {
+        "id": "vehicle_entry",
+        "gate": "vehicle_entry",
+        "hint": "Tutorial: stand beside the staged vehicle and press ' to get in.",
+    },
+    {
         "id": "map",
         "gate": "map",
-        "hint": "Tutorial: press X to open the map.",
+        "hint": "Tutorial: press X from local driving to open the vehicle map.",
     },
     {
         "id": "vehicle_travel",
@@ -254,7 +259,8 @@ def tutorial_guide_line(sim):
         "service_menu": "Service surfaces use the dot key. Same key whether someone is attending or not.",
         "trade": "The shop counter opens the buy/sell panel. You do not have to buy to learn the surface.",
         "log_help": "The log catches what the HUD drops. Help is there when the key soup gets loud.",
-        "map": "Open the map. The city is bigger than the block under your feet.",
+        "vehicle_entry": "Now get into the staged car. It is yours for this disposable run, but you still start on foot.",
+        "map": "Open the vehicle map from local driving. The city is bigger than the block under your feet.",
         "vehicle_travel": "Travel once from the vehicle map. Local driving becomes chunk travel after you open the route map.",
         "vehicle_exit": "Now come back to local driving. Big-map travel still resolves into street-level trouble.",
         "cover": "Try cover. If it feels slow, that is the point: it buys angles, not magic.",
@@ -435,8 +441,10 @@ def _remember_tutorial_places(sim, player_eid, *property_ids):
 
 
 def _ensure_tutorial_vehicle(sim, player_eid, pos, rng):
-    vx, vy, vz = _nearby_position(sim, pos, -2, 1, pos[2])
+    vx, vy, vz = _nearby_position(sim, pos, -2, 0, pos[2])
     _make_walkable(sim, pos[0], pos[1], pos[2], glyph="=")
+    _make_walkable(sim, pos[0] - 1, pos[1], pos[2], glyph="=")
+    _make_walkable(sim, vx, vy, vz, glyph="=")
     profile = roll_vehicle_profile(rng, quality="used")
     profile["fuel"] = max(18, int(profile.get("fuel_capacity", profile.get("fuel", 60)) or 60))
     vehicle_name = f"Tutorial {profile.get('make', 'Street')} {profile.get('model', 'Runner')}"
@@ -473,10 +481,8 @@ def _ensure_tutorial_vehicle(sim, player_eid, pos, rng):
         ensure_actor_has_property_key(sim, player_eid, vehicle, owner_tag="player")
     vehicle_state = sim.ecs.get(VehicleState).get(player_eid)
     if vehicle_state is not None:
-        sim.move_property(vehicle_id, int(pos[0]), int(pos[1]), int(pos[2]))
-        metadata["chunk"] = sim.chunk_coords(int(pos[0]), int(pos[1]))
         vehicle_state.set_active_vehicle(vehicle_id, tick=int(getattr(sim, "tick", 0)))
-        vehicle_state.set_in_vehicle(True, tick=int(getattr(sim, "tick", 0)))
+        vehicle_state.set_in_vehicle(False, tick=int(getattr(sim, "tick", 0)))
     return vehicle_id
 
 
@@ -611,8 +617,8 @@ def bootstrap_tutorial_run(sim, character_name, rng, gender_identity="nonbinary"
             "source_context": "tutorial",
         },
     )
-    _ensure_tutorial_vehicle(sim, player_eid, anchor, rng)
-    _remember_tutorial_places(sim, player_eid, service_id, shop_id, cover_id, locker_id)
+    vehicle_id = _ensure_tutorial_vehicle(sim, player_eid, anchor, rng)
+    _remember_tutorial_places(sim, player_eid, service_id, shop_id, cover_id, locker_id, vehicle_id)
 
     final_state = prime_tutorial_final_operation(
         sim,
@@ -636,6 +642,7 @@ def bootstrap_tutorial_run(sim, character_name, rng, gender_identity="nonbinary"
             "shop": shop_id,
             "cover": cover_id,
             "locker": locker_id,
+            "vehicle": vehicle_id,
         },
         "target_item_instance_id": target_instance_id,
         "target_ground_item_id": target_ground_id,
@@ -719,6 +726,7 @@ class TutorialSystem(System):
         self.sim.events.subscribe("trade_panel_toggled", self.on_trade_panel_toggled)
         self.sim.events.subscribe("item_picked_up", self.on_item_picked_up)
         self.sim.events.subscribe("item_used", self.on_item_used)
+        self.sim.events.subscribe("vehicle_entered", self.on_vehicle_entered)
         self.sim.events.subscribe("vehicle_exited", self.on_vehicle_exited)
         self.sim.events.subscribe("final_operation_completed", self.on_final_operation_completed)
 
@@ -773,6 +781,10 @@ class TutorialSystem(System):
     def on_item_used(self, event):
         if self._matches_player(event):
             record_tutorial_gate(self.sim, "inventory_use")
+
+    def on_vehicle_entered(self, event):
+        if self._matches_player(event):
+            record_tutorial_gate(self.sim, "vehicle_entry")
 
     def on_vehicle_exited(self, event):
         if self._matches_player(event):

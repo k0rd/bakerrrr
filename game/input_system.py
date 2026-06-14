@@ -726,7 +726,7 @@ class InputSystem(System):
             )
         return True
 
-    def _sync_local_drive_after_vehicle_command(self):
+    def _sync_local_drive_after_vehicle_command(self, *, brake_tapped=False):
         state = self._local_drive_state()
         vehicle_state = self._player_vehicle_state()
         if self._local_drive_controls_blocked():
@@ -739,6 +739,9 @@ class InputSystem(System):
             speed = int(getattr(vehicle_state, "speed", 0) or 0)
         except (TypeError, ValueError):
             speed = 0
+        if brake_tapped:
+            self._stop_local_drive(reason="stopped", announce=False)
+            return False
         if speed <= 0:
             self._stop_local_drive(reason="stopped", announce=False)
             return False
@@ -4328,7 +4331,7 @@ class InputSystem(System):
             action = "vehicle_move" if self._player_in_vehicle() else "move"
             self._emit_turn_action(action, dx=dx, dy=dy)
             if action == "vehicle_move":
-                self._sync_local_drive_after_vehicle_command()
+                self._sync_local_drive_after_vehicle_command(brake_tapped=dy > 0)
             return
 
         if key in (ord(">"), ord("]")):
