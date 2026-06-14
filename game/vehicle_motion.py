@@ -7,6 +7,7 @@ from engine.events import Event
 from game.components import Collider, Position, Render, VehicleState, Vitality
 from game.movement_runtime import _entity_blocks, try_move_entity
 from game.property_runtime import (
+    property_enclosing_structure as _property_enclosing_structure,
     property_is_vehicle as _property_is_vehicle,
     property_metadata as _property_metadata,
     vehicle_fuel_values as _vehicle_fuel_values,
@@ -15,9 +16,26 @@ from game.property_runtime import (
 )
 from game.system_support.actor_runtime import _apply_downed_actor_state
 from game.system_support.entity_naming import _entity_display_name
+from game.system_support.building_repair_runtime import record_building_damage as _record_building_damage
 from game.system_support.fire_runtime import fire_cell_state
 from game.system_support.offense_runtime import _emit_action_offense_event
 
+
+MAX_VEHICLE_SPEED = 4
+VEHICLE_CLASS_TOP_SPEED = {
+    "micro": 2,
+    "skiff": 2,
+    "compact": 3,
+    "hatchback": 3,
+    "sedan": 3,
+    "wagon": 3,
+    "van": 3,
+    "launch": 3,
+    "coupe": 4,
+    "pickup": 4,
+    "suv": 4,
+    "utility": 4,
+}
 
 VEHICLE_DIRECTIONS = (
     (0, -1),
@@ -77,9 +95,46 @@ def ensure_vehicle_motion_state(state):
         speed = int(getattr(state, "speed", 0) or 0)
     except (TypeError, ValueError):
         speed = 0
-    state.speed = max(0, min(2, speed))
+    state.speed = max(0, min(MAX_VEHICLE_SPEED, speed))
     state.medium = str(getattr(state, "medium", "land") or "land").strip().lower() or "land"
     return state
+
+
+def _int_or_default(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def vehicle_top_speed(vehicle_prop):
+    profile = _vehicle_profile_from_property(vehicle_prop) or {}
+    vehicle_class = str(profile.get("vehicle_class", "sedan") or "sedan").strip().lower() or "sedan"
+    top_speed = int(VEHICLE_CLASS_TOP_SPEED.get(vehicle_class, 3))
+    power = max(1, min(10, _int_or_default(profile.get("power"), 5)))
+    durability = max(1, min(10, _int_or_default(profile.get("durability"), 5)))
+
+    if power <= 2:
+        top_speed -= 1
+    elif power >= 8 and top_speed < MAX_VEHICLE_SPEED:
+        top_speed += 1
+
+    if durability <= 2:
+        top_speed -= 2
+    elif durability <= 4:
+        top_speed -= 1
+    elif durability >= 9 and power >= 7 and top_speed < MAX_VEHICLE_SPEED:
+        top_speed += 1
+
+    return max(1, min(MAX_VEHICLE_SPEED, int(top_speed)))
+
+
+def clamp_vehicle_speed(vehicle_prop, speed):
+    try:
+        speed = int(speed or 0)
+    except (TypeError, ValueError):
+        speed = 0
+    return max(0, min(vehicle_top_speed(vehicle_prop), speed))
 
 
 def vehicle_heading_tuple(state):
@@ -100,17 +155,21 @@ def set_vehicle_heading(state, dx, dy, tick=0):
     return int(state.heading_dx), int(state.heading_dy)
 
 
-def set_vehicle_speed(state, speed, tick=0):
+def set_vehicle_speed(state, speed, tick=0, vehicle_prop=None):
     state = ensure_vehicle_motion_state(state)
     if state is None:
         return 0
-    if hasattr(state, "set_speed"):
-        return state.set_speed(speed, tick=tick)
     try:
         speed = int(speed or 0)
     except (TypeError, ValueError):
         speed = 0
-    state.speed = max(0, min(2, speed))
+    if _property_is_vehicle(vehicle_prop):
+        speed = clamp_vehicle_speed(vehicle_prop, speed)
+    else:
+        speed = max(0, min(MAX_VEHICLE_SPEED, speed))
+    if hasattr(state, "set_speed"):
+        return state.set_speed(speed, tick=tick)
+    state.speed = speed
     state.last_changed_tick = int(tick)
     return int(state.speed)
 
@@ -260,7 +319,7 @@ def _vehicle_collision_damage(vehicle_prop, speed):
         durability = int(profile.get("durability", 5) or 5)
     except (TypeError, ValueError):
         durability = 5
-    speed = max(1, min(2, int(speed or 1)))
+    speed = max(1, min(vehicle_top_speed(vehicle_prop), int(speed or 1)))
     raw = (4 + max(1, min(10, power))) * speed
     if speed > 1:
         raw += max(0, min(10, durability)) // 2
@@ -338,9 +397,194 @@ def _apply_vehicle_collision_damage(sim, driver_eid, target_eid, vehicle_prop, s
     return final_damage, downed
 
 
+def _vehicle_durability(vehicle_prop):
+    metadata = _property_metadata(vehicle_prop)
+    return max(1, min(10, _int_or_default(metadata.get("durability"), 5)))
+
+
+def apply_vehicle_durability_loss(sim, vehicle_prop, amount=1, *, cause="vehicle_crash"):
+    del sim
+    if not _property_is_vehicle(vehicle_prop):
+        return 0, 0, 0
+    loss = max(0, int(amount or 0))
+    before = _vehicle_durability(vehicle_prop)
+    after = max(1, before - loss)
+    metadata = _property_metadata(vehicle_prop)
+    metadata["durability"] = int(after)
+    metadata["last_vehicle_damage_cause"] = str(cause or "vehicle_crash")
+    return int(before), int(after), max(0, int(before) - int(after))
+
+
+def _driver_crash_damage_amount(vehicle_prop, speed):
+    speed = max(0, int(speed or 0))
+    durability = _vehicle_durability(vehicle_prop)
+    if speed < 2 and durability >= 4:
+        return 0
+    damage = max(1, speed - 1)
+    if durability <= 3:
+        damage += 1
+    if durability <= 1:
+        damage += 1
+    return max(0, min(6, int(damage)))
+
+
+def _apply_driver_crash_damage(sim, driver_eid, vehicle_prop, speed, x, y, z):
+    damage = _driver_crash_damage_amount(vehicle_prop, speed)
+    if damage <= 0 or driver_eid is None:
+        return 0, False
+    vitalities = sim.ecs.get(Vitality)
+    vitality = vitalities.get(driver_eid)
+    if vitality is None or bool(getattr(vitality, "downed", False)):
+        return 0, bool(vitality and getattr(vitality, "downed", False))
+    vitality.hp = max(0, int(vitality.hp) - int(damage))
+    sim.emit(Event(
+        "entity_damaged",
+        target_eid=driver_eid,
+        source_eid=driver_eid,
+        weapon_id="vehicle_crash",
+        damage_kind="vehicle_crash",
+        raw_damage=int(damage),
+        damage=int(damage),
+        cover_absorb=0.0,
+        armor_absorb=0.0,
+        armor_name=None,
+        hp=vitality.hp,
+        max_hp=vitality.max_hp,
+        x=int(x),
+        y=int(y),
+        z=int(z),
+    ))
+    downed = int(vitality.hp) <= 0
+    if downed:
+        vitality.downed_count += 1
+        vitality.downed = True
+        vitality.downed_tick = int(getattr(sim, "tick", 0))
+        setattr(vitality, "last_attacker_eid", driver_eid)
+        setattr(vitality, "death_reason", "vehicle_crash")
+        if driver_eid == getattr(sim, "player_eid", None):
+            sim.emit(Event(
+                "player_downed",
+                target_eid=driver_eid,
+                source_eid=driver_eid,
+                source_name="",
+                weapon_id="vehicle_crash",
+                reason="vehicle_crash",
+                damage_kind="vehicle_crash",
+                x=int(x),
+                y=int(y),
+                z=int(z),
+            ))
+        else:
+            _apply_downed_actor_state(sim, driver_eid, tick=getattr(sim, "tick", 0))
+    return int(damage), bool(downed)
+
+
+def _vehicle_crash_repair_kind(block_reason):
+    reason = str(block_reason or "").strip().lower()
+    if "window" in reason:
+        return "window"
+    if "door" in reason:
+        return "door"
+    return "wall"
+
+
+def _record_vehicle_infrastructure_damage(sim, driver_eid, x, y, z, block_reason):
+    prop = _property_enclosing_structure(sim, int(x), int(y), int(z))
+    if not isinstance(prop, dict):
+        return None
+    record = _record_building_damage(
+        sim,
+        prop,
+        int(x),
+        int(y),
+        int(z),
+        kind=_vehicle_crash_repair_kind(block_reason),
+        cause="vehicle_crash",
+        offender_eid=driver_eid,
+    )
+    if record is None:
+        return None
+    return prop
+
+
+def apply_vehicle_crash(sim, driver_eid, vehicle_prop, speed, x, y, z, *, block_reason="blocked"):
+    if not _property_is_vehicle(vehicle_prop):
+        return None
+    impact_speed = max(1, min(vehicle_top_speed(vehicle_prop), int(speed or 1)))
+    durability_loss = max(1, min(3, impact_speed - 1))
+    before, after, lost = apply_vehicle_durability_loss(
+        sim,
+        vehicle_prop,
+        durability_loss,
+        cause="vehicle_crash",
+    )
+    driver_damage, driver_downed = _apply_driver_crash_damage(
+        sim,
+        driver_eid,
+        vehicle_prop,
+        impact_speed,
+        x,
+        y,
+        z,
+    )
+    damaged_prop = _record_vehicle_infrastructure_damage(
+        sim,
+        driver_eid,
+        x,
+        y,
+        z,
+        block_reason,
+    )
+    sim.emit(Event(
+        "vehicle_crash",
+        eid=driver_eid,
+        driver_eid=driver_eid,
+        vehicle_id=vehicle_prop.get("id"),
+        vehicle_name=_vehicle_label(vehicle_prop),
+        speed=int(impact_speed),
+        top_speed=vehicle_top_speed(vehicle_prop),
+        impact_kind=str(block_reason or "blocked"),
+        durability_before=int(before),
+        durability_after=int(after),
+        durability_lost=int(lost),
+        driver_damage=int(driver_damage),
+        driver_downed=bool(driver_downed),
+        damaged_property_id=(damaged_prop or {}).get("id") if isinstance(damaged_prop, dict) else None,
+        x=int(x),
+        y=int(y),
+        z=int(z),
+    ))
+    sim.emit(Event(
+        "noise",
+        source_eid=driver_eid,
+        x=int(x),
+        y=int(y),
+        z=int(z),
+        radius=6 + (2 * int(impact_speed)),
+        cause="vehicle_crash",
+    ))
+    return {
+        "speed": int(impact_speed),
+        "durability_before": int(before),
+        "durability_after": int(after),
+        "durability_lost": int(lost),
+        "driver_damage": int(driver_damage),
+        "driver_downed": bool(driver_downed),
+        "damaged_property_id": (damaged_prop or {}).get("id") if isinstance(damaged_prop, dict) else None,
+    }
+
+
 def apply_vehicle_collision(sim, driver_eid, target_eid, vehicle_prop, speed, x, y, z):
+    impact_speed = max(1, min(vehicle_top_speed(vehicle_prop), int(speed or 1)))
+    wear_loss = 0 if impact_speed < 2 else 1 if impact_speed < 4 else 2
+    durability_before, durability_after, durability_lost = apply_vehicle_durability_loss(
+        sim,
+        vehicle_prop,
+        wear_loss,
+        cause="vehicle_collision",
+    )
     target_name = _entity_display_name(sim, target_eid, title_case=False) or "someone"
-    damage, downed = _apply_vehicle_collision_damage(sim, driver_eid, target_eid, vehicle_prop, speed, x, y, z)
+    damage, downed = _apply_vehicle_collision_damage(sim, driver_eid, target_eid, vehicle_prop, impact_speed, x, y, z)
     sim.emit(Event(
         "vehicle_collision",
         eid=driver_eid,
@@ -349,7 +593,11 @@ def apply_vehicle_collision(sim, driver_eid, target_eid, vehicle_prop, speed, x,
         target_name=target_name,
         vehicle_id=(vehicle_prop or {}).get("id") if isinstance(vehicle_prop, dict) else None,
         vehicle_name=_vehicle_label(vehicle_prop) if _property_is_vehicle(vehicle_prop) else "vehicle",
-        speed=max(1, min(2, int(speed or 1))),
+        speed=int(impact_speed),
+        top_speed=vehicle_top_speed(vehicle_prop) if _property_is_vehicle(vehicle_prop) else MAX_VEHICLE_SPEED,
+        durability_before=int(durability_before),
+        durability_after=int(durability_after),
+        durability_lost=int(durability_lost),
         damage=damage,
         target_downed=downed,
         x=int(x),
@@ -362,13 +610,13 @@ def apply_vehicle_collision(sim, driver_eid, target_eid, vehicle_prop, speed, x,
         x=int(x),
         y=int(y),
         z=int(z),
-        radius=5 + (2 * max(1, min(2, int(speed or 1)))),
+        radius=5 + (2 * int(impact_speed)),
         cause="vehicle_collision",
         target_eid=target_eid,
     ))
     if damage > 0:
-        context = "unarmed_assault" if int(speed or 1) <= 1 else "melee_assault"
-        score = 28 if int(speed or 1) <= 1 else 48
+        context = "unarmed_assault" if int(impact_speed) <= 1 else "melee_assault"
+        score = 28 if int(impact_speed) <= 1 else 48
         _emit_action_offense_event(
             sim,
             driver_eid,
@@ -423,6 +671,18 @@ def try_vehicle_step(sim, eid, vehicle_prop, target_x, target_y, target_z=0, *, 
                     target_z,
                 )
                 return False, "collision"
+        elif int(speed or 0) > 0 and block_reason != "out_of_bounds":
+            apply_vehicle_crash(
+                sim,
+                eid,
+                vehicle_prop,
+                speed,
+                target_x,
+                target_y,
+                target_z,
+                block_reason=block_reason,
+            )
+            return False, "crash"
         return False, block_reason
 
     if medium == "water":

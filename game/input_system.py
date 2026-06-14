@@ -400,11 +400,18 @@ class InputSystem(System):
                 "marker_id": None,
                 "last_step_at": 0.0,
             }
+        if not hasattr(self.sim, "local_drive_ui"):
+            self.sim.local_drive_ui = {
+                "active": False,
+                "last_step_at": 0.0,
+            }
 
         self.sim.events.subscribe("move_blocked", self.on_move_blocked)
         self.sim.events.subscribe("zoom_mode_changed", self.on_zoom_mode_changed)
         self.sim.events.subscribe("combat_overlay_entered", self.on_combat_overlay_entered)
         self.sim.events.subscribe("vehicle_action_blocked", self.on_vehicle_action_blocked)
+        self.sim.events.subscribe("vehicle_collision", self.on_vehicle_hard_stop)
+        self.sim.events.subscribe("vehicle_crash", self.on_vehicle_hard_stop)
         self.sim.events.subscribe("chunk_loaded", self.on_chunk_stream_changed)
         self.sim.events.subscribe("chunk_unloaded", self.on_chunk_stream_changed)
         self.sim.events.subscribe("chunk_focus_changed", self.on_chunk_stream_changed)
@@ -656,6 +663,88 @@ class InputSystem(System):
             state.setdefault("marker_id", None)
             state.setdefault("last_step_at", 0.0)
         return state
+
+    def _local_drive_state(self):
+        state = getattr(self.sim, "local_drive_ui", None)
+        if not isinstance(state, dict):
+            state = {
+                "active": False,
+                "last_step_at": 0.0,
+            }
+            self.sim.local_drive_ui = state
+        else:
+            state.setdefault("active", False)
+            state.setdefault("last_step_at", 0.0)
+        return state
+
+    def _player_vehicle_state(self):
+        return self.sim.ecs.get(VehicleState).get(self.player_eid)
+
+    def _local_drive_repeat_interval(self):
+        state = self._player_vehicle_state()
+        try:
+            speed = int(getattr(state, "speed", 0) or 0)
+        except (TypeError, ValueError):
+            speed = 0
+        speed = max(1, min(4, speed))
+        return float(max(0.08, min(0.24, 0.30 - (0.055 * speed))))
+
+    def _local_drive_controls_blocked(self, *, zoom_mode=None):
+        mode = str(zoom_mode if zoom_mode is not None else getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
+        if mode == "overworld":
+            return True
+        if callable(getattr(self.sim, "is_time_paused", None)) and self.sim.is_time_paused():
+            return True
+        overlay = getattr(self.sim, "combat_overlay", {})
+        return bool(getattr(self.sim, "turn_based", False)) or bool(isinstance(overlay, dict) and overlay.get("active"))
+
+    def _stop_local_drive(self, *, reason="stopped", announce=False, zero_speed=True):
+        state = self._local_drive_state()
+        if not state.get("active"):
+            return False
+        state["active"] = False
+        state["last_step_at"] = 0.0
+        if zero_speed:
+            vehicle_state = self._player_vehicle_state()
+            if vehicle_state is not None:
+                if hasattr(vehicle_state, "set_speed"):
+                    vehicle_state.set_speed(0, tick=getattr(self.sim, "tick", 0))
+                else:
+                    vehicle_state.speed = 0
+        if announce:
+            message = "Stopped driving."
+            if reason == "combat":
+                message = "Driving falls back to careful turns."
+            elif reason == "blocked":
+                message = "The vehicle stops."
+            _log_player_feedback(
+                self.sim,
+                message,
+                kind="movement",
+                dedupe_window=2,
+                dedupe_key=f"local_drive:{reason}",
+            )
+        return True
+
+    def _sync_local_drive_after_vehicle_command(self):
+        state = self._local_drive_state()
+        vehicle_state = self._player_vehicle_state()
+        if self._local_drive_controls_blocked():
+            self._stop_local_drive(reason="stopped", announce=False, zero_speed=False)
+            return False
+        if not vehicle_state or not bool(getattr(vehicle_state, "in_vehicle", False)):
+            self._stop_local_drive(reason="stopped", announce=False)
+            return False
+        try:
+            speed = int(getattr(vehicle_state, "speed", 0) or 0)
+        except (TypeError, ValueError):
+            speed = 0
+        if speed <= 0:
+            self._stop_local_drive(reason="stopped", announce=False)
+            return False
+        state["active"] = True
+        state["last_step_at"] = time.monotonic()
+        return True
 
     def _auto_walk_target_label(self):
         state = self._auto_walk_state()
@@ -1098,6 +1187,63 @@ class InputSystem(System):
 
         state["last_step_at"] = float(now)
         self._emit_turn_action("overworld_travel", dx=dx, dy=dy)
+        return True
+
+    def _maybe_continue_local_drive(
+        self,
+        *,
+        zoom_mode,
+        look_state=None,
+        help_state=None,
+        dialog_state=None,
+        character_state=None,
+        report_state=None,
+        log_state=None,
+        debug_state=None,
+        inventory_state=None,
+        trade_state=None,
+    ):
+        state = self._local_drive_state()
+        if not state.get("active"):
+            return False
+
+        if (
+            (help_state and help_state.get("open"))
+            or (dialog_state and dialog_state.get("open"))
+            or (character_state and character_state.get("open"))
+            or (report_state and report_state.get("open"))
+            or (log_state and log_state.get("open"))
+            or (debug_state and debug_state.get("open"))
+            or (inventory_state and inventory_state.get("open"))
+            or (trade_state and trade_state.get("open"))
+            or (look_state and look_state.get("active"))
+        ):
+            return False
+
+        if self._local_drive_controls_blocked(zoom_mode=zoom_mode):
+            self._stop_local_drive(reason="combat", announce=False, zero_speed=False)
+            return False
+
+        vehicle_state = self._player_vehicle_state()
+        if not vehicle_state or not bool(getattr(vehicle_state, "in_vehicle", False)):
+            self._stop_local_drive(reason="stopped", announce=False)
+            return False
+        try:
+            speed = int(getattr(vehicle_state, "speed", 0) or 0)
+        except (TypeError, ValueError):
+            speed = 0
+        if speed <= 0:
+            self._stop_local_drive(reason="stopped", announce=False)
+            return False
+
+        now = time.monotonic()
+        if (float(now) - float(state.get("last_step_at", 0.0))) < self._local_drive_repeat_interval():
+            return False
+
+        state["last_step_at"] = float(now)
+        self._emit_turn_action("vehicle_momentum")
+        if int(getattr(vehicle_state, "speed", 0) or 0) <= 0:
+            self._stop_local_drive(reason="stopped", announce=False)
         return True
 
     def _scroll_panel_body_dimensions(self):
@@ -3889,18 +4035,30 @@ class InputSystem(System):
             self._stop_auto_walk(reason="stopped", announce=False)
         if self._auto_drive_state().get("active") and mode != "overworld":
             self._stop_auto_drive(reason="stopped", announce=False)
+        if self._local_drive_state().get("active") and mode == "overworld":
+            self._stop_local_drive(reason="stopped", announce=False)
 
     def on_combat_overlay_entered(self, event):
         if self._auto_walk_state().get("active"):
             self._stop_auto_walk(reason="combat", announce=True)
         if self._auto_drive_state().get("active"):
             self._stop_auto_drive(reason="combat", announce=True)
+        if self._local_drive_state().get("active"):
+            self._stop_local_drive(reason="combat", announce=True, zero_speed=False)
 
     def on_vehicle_action_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
             return
         if self._auto_drive_state().get("active"):
             self._stop_auto_drive(reason="blocked", announce=False)
+        if self._local_drive_state().get("active"):
+            self._stop_local_drive(reason="blocked", announce=False)
+
+    def on_vehicle_hard_stop(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        if self._local_drive_state().get("active"):
+            self._stop_local_drive(reason="blocked", announce=False)
 
     def on_chunk_stream_changed(self, event):
         del event
@@ -3956,6 +4114,19 @@ class InputSystem(System):
                 trade_state=trade_state,
             ):
                 return
+            if self._maybe_continue_local_drive(
+                zoom_mode=zoom_mode,
+                look_state=look_state,
+                help_state=help_state,
+                dialog_state=dialog_state,
+                character_state=character_state,
+                report_state=report_state,
+                log_state=log_state,
+                debug_state=debug_state,
+                inventory_state=state,
+                trade_state=trade_state,
+            ):
+                return
             if self._maybe_continue_auto_drive(
                 zoom_mode=zoom_mode,
                 look_state=look_state,
@@ -3975,6 +4146,14 @@ class InputSystem(System):
             self._stop_auto_walk(reason="interrupted", announce=True)
         if self._auto_drive_state().get("active"):
             self._stop_auto_drive(reason="interrupted", announce=True)
+        local_vehicle_key = (
+            key in self.movement_keys
+            and zoom_mode != "overworld"
+            and self._player_in_vehicle()
+            and not self._local_drive_controls_blocked(zoom_mode=zoom_mode)
+        )
+        if self._local_drive_state().get("active") and not local_vehicle_key:
+            self._stop_local_drive(reason="interrupted", announce=False)
 
         if help_state.get("open"):
             if key in ENTER_KEYS or key in (27, ord("?"), ord("q"), ord("Q")):
@@ -4148,6 +4327,8 @@ class InputSystem(System):
             dx, dy = self.movement_keys[key]
             action = "vehicle_move" if self._player_in_vehicle() else "move"
             self._emit_turn_action(action, dx=dx, dy=dy)
+            if action == "vehicle_move":
+                self._sync_local_drive_after_vehicle_command()
             return
 
         if key in (ord(">"), ord("]")):

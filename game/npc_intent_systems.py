@@ -196,6 +196,7 @@ from game.system_support.opportunity_knowledge_runtime import (
 )
 from game.vehicle_motion import (
     active_vehicle_property as _active_vehicle_property_for_state,
+    clamp_vehicle_speed as _clamp_vehicle_speed,
     ensure_vehicle_motion_state as _ensure_vehicle_motion_state,
     local_route_accessible_at as _vehicle_route_accessible_at,
     set_vehicle_heading as _set_vehicle_heading,
@@ -204,6 +205,7 @@ from game.vehicle_motion import (
     try_vehicle_step as _try_vehicle_step,
     vehicle_heading_label as _vehicle_heading_label,
     vehicle_heading_tuple as _vehicle_heading_tuple,
+    vehicle_top_speed as _vehicle_top_speed,
 )
 from game.system_support.social_knowledge_runtime import hydrate_relationship_social_knowledge
 from game.system_support.access_runtime import _attempt_locked_property_entry_with_sim
@@ -308,6 +310,13 @@ def _facade():
 
         _FACADE_MODULE = facade
     return _FACADE_MODULE
+
+
+def _int_or_default(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def _wildlife_module():
@@ -4029,6 +4038,35 @@ class NPCInvestigateSystem(System):
         self._schedule_move_due(eid, int(getattr(self.sim, "tick", 0) or 0) + 120)
         return True
 
+    def _npc_vehicle_should_miss_turn(self, eid, pos, vehicle_prop, *, speed=0, turning=False):
+        forced = getattr(self.sim, "npc_vehicle_force_crash_eids", set())
+        if isinstance(forced, (set, frozenset, list, tuple)) and eid in forced:
+            return True
+        try:
+            override = getattr(self.sim, "npc_vehicle_crash_chance_override")
+        except AttributeError:
+            override = None
+        if override is not None:
+            try:
+                chance = max(0.0, min(1.0, float(override)))
+            except (TypeError, ValueError):
+                chance = 0.0
+        else:
+            profile = _vehicle_profile_from_property(vehicle_prop) or {}
+            durability = max(1, min(10, _int_or_default(profile.get("durability"), 5)))
+            speed = max(0, int(speed or 0))
+            chance = 0.0008 + (0.0010 * max(0, speed - 1))
+            if turning:
+                chance += 0.0025
+            if durability <= 4:
+                chance += (5 - durability) * 0.001
+        if chance <= 0.0:
+            return False
+        roll = random.Random(
+            f"{getattr(self.sim, 'seed', 0)}:npc_vehicle_miss:{int(eid)}:{int(getattr(self.sim, 'tick', 0))}:{int(getattr(pos, 'x', 0))}:{int(getattr(pos, 'y', 0))}"
+        ).random()
+        return roll < chance
+
     def _try_npc_vehicle_route_step(self, eid, pos, step):
         if not step:
             return None
@@ -4079,24 +4117,71 @@ class NPCInvestigateSystem(System):
         if dx == 0 and dy == 0:
             return False, "blocked_tile", origin_x, origin_y, origin_z
 
-        _set_vehicle_heading(state, dx, dy, tick=self.sim.tick)
-        _set_vehicle_speed(state, 1, tick=self.sim.tick)
+        top_speed = _vehicle_top_speed(vehicle_prop)
+        current_speed = _clamp_vehicle_speed(vehicle_prop, getattr(state, "speed", 0))
+        _set_vehicle_speed(state, current_speed, tick=self.sim.tick, vehicle_prop=vehicle_prop)
+        current_heading = _vehicle_heading_tuple(state)
+        desired_heading = (dx, dy)
+        turning = current_heading != desired_heading
+        if turning and current_speed > 1:
+            _set_vehicle_heading(state, dx, dy, tick=self.sim.tick)
+            _set_vehicle_speed(state, current_speed - 1, tick=self.sim.tick, vehicle_prop=vehicle_prop)
+            self.sim.emit(Event(
+                "vehicle_local_controlled",
+                eid=eid,
+                npc_eid=eid,
+                vehicle_id=vehicle_id,
+                vehicle_name=_vehicle_label(vehicle_prop),
+                action="brake_turn",
+                x=origin_x,
+                y=origin_y,
+                z=origin_z,
+                fuel=fuel,
+                fuel_capacity=fuel_capacity,
+                heading_dx=dx,
+                heading_dy=dy,
+                heading=_vehicle_heading_label(state),
+                speed=int(getattr(state, "speed", 0) or 0),
+                top_speed=int(top_speed),
+                cruise_active=int(getattr(state, "speed", 0) or 0) > 0,
+            ))
+            return True, None, origin_x, origin_y, origin_z
+
+        miss_turn = self._npc_vehicle_should_miss_turn(
+            eid,
+            pos,
+            vehicle_prop,
+            speed=current_speed,
+            turning=turning,
+        )
+        if not miss_turn:
+            _set_vehicle_heading(state, dx, dy, tick=self.sim.tick)
+        elif current_speed <= 0:
+            _set_vehicle_heading(state, dx, dy, tick=self.sim.tick)
+
+        if current_speed <= 0:
+            current_speed = 1
+        elif not turning and current_speed < top_speed:
+            current_speed += 1
+        _set_vehicle_speed(state, current_speed, tick=self.sim.tick, vehicle_prop=vehicle_prop)
         _sync_vehicle_property_position(self.sim, vehicle_prop, origin_x, origin_y, origin_z)
+        heading_dx, heading_dy = _vehicle_heading_tuple(state)
+        drive_target_x = origin_x + int(heading_dx)
+        drive_target_y = origin_y + int(heading_dy)
         moved, blocked_reason = _try_vehicle_step(
             self.sim,
             eid,
             vehicle_prop,
-            nx,
-            ny,
+            drive_target_x,
+            drive_target_y,
             origin_z,
-            speed=1,
+            speed=max(1, int(getattr(state, "speed", 0) or 0)),
             reason="npc_vehicle_move",
         )
         if not moved:
             _set_vehicle_speed(state, 0, tick=self.sim.tick)
             return False, blocked_reason or "blocked_tile", origin_x, origin_y, origin_z
 
-        heading_dx, heading_dy = _vehicle_heading_tuple(state)
         self.sim.emit(Event(
             "vehicle_local_moved",
             eid=eid,
@@ -4115,6 +4200,9 @@ class NPCInvestigateSystem(System):
             heading_dy=heading_dy,
             heading=_vehicle_heading_label(state),
             speed=int(getattr(state, "speed", 0) or 0),
+            top_speed=int(top_speed),
+            cruise_active=int(getattr(state, "speed", 0) or 0) > 0,
+            reason="npc_vehicle_move",
         ))
         return True, None, origin_x, origin_y, origin_z
 

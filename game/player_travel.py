@@ -29,6 +29,7 @@ from game.system_support.interaction_ordering import (
 from game.vehicle_motion import (
     emit_vehicle_blocked as _emit_vehicle_blocked_event,
     ensure_vehicle_motion_state,
+    clamp_vehicle_speed,
     local_route_accessible_at as _vehicle_route_accessible_at,
     rotate_vehicle_heading,
     set_vehicle_speed,
@@ -38,6 +39,7 @@ from game.vehicle_motion import (
     vehicle_heading_tuple,
     vehicle_local_block_reason as _vehicle_local_block_reason_for,
     vehicle_medium_for_property,
+    vehicle_top_speed,
 )
 
 
@@ -242,6 +244,7 @@ class PlayerTravelRuntime:
             "heading_dy": heading_dy,
             "heading": vehicle_heading_label(state),
             "speed": int(getattr(state, "speed", 0) or 0),
+            "top_speed": vehicle_top_speed(vehicle_prop),
         }
         data.update(payload)
         self.sim.emit(Event(event_type, **data))
@@ -268,7 +271,67 @@ class PlayerTravelRuntime:
         )
         return False
 
-    def _handle_local_vehicle_move(self, eid, pos, dx, dy):
+    def _local_vehicle_discrete_controls(self):
+        overlay = getattr(self.sim, "combat_overlay", {})
+        return bool(getattr(self.sim, "turn_based", False)) or bool(isinstance(overlay, dict) and overlay.get("active"))
+
+    def _local_vehicle_has_fuel(self, eid, pos, vehicle_prop):
+        fuel, _fuel_capacity = _vehicle_fuel_values(vehicle_prop)
+        if int(fuel) > 0:
+            return True
+        state = self._vehicle_state_for(eid)
+        set_vehicle_speed(state, 0, tick=self.sim.tick, vehicle_prop=vehicle_prop)
+        self._emit_vehicle_blocked(
+            eid,
+            vehicle_prop,
+            reason="out_of_fuel",
+            fuel_needed=1,
+            chunk=self.sim.chunk_coords(pos.x, pos.y),
+        )
+        return False
+
+    def _move_local_vehicle_steps(self, eid, pos, vehicle_prop, state, move_dx, move_dy, move_steps=1, *, reason="vehicle_move"):
+        moved_any = False
+        for _step_index in range(int(max(0, move_steps))):
+            target_x = int(pos.x) + int(move_dx)
+            target_y = int(pos.y) + int(move_dy)
+            target_z = int(pos.z)
+            old_x, old_y, old_z = int(pos.x), int(pos.y), int(pos.z)
+            moved, move_reason = try_vehicle_step(
+                self.sim,
+                eid,
+                vehicle_prop,
+                target_x,
+                target_y,
+                target_z,
+                speed=max(1, int(getattr(state, "speed", 0) or 0)),
+                reason=reason,
+            )
+            if not moved:
+                set_vehicle_speed(state, 0, tick=self.sim.tick, vehicle_prop=vehicle_prop)
+                if move_reason not in {"collision", "crash"}:
+                    self._emit_vehicle_blocked(eid, vehicle_prop, reason=move_reason or "blocked_tile")
+                return moved_any
+
+            moved_any = True
+            self.action_system._clear_cover(eid, reason=reason)
+            self._emit_vehicle_motion_event(
+                "vehicle_local_moved",
+                eid,
+                vehicle_prop,
+                state,
+                old_x=old_x,
+                old_y=old_y,
+                old_z=old_z,
+                x=target_x,
+                y=target_y,
+                z=target_z,
+                cruise_active=int(getattr(state, "speed", 0) or 0) > 0,
+                reason=reason,
+            )
+        return moved_any
+
+    def _handle_local_vehicle_move_discrete(self, eid, pos, dx, dy):
         state = self._vehicle_state_for(eid)
         vehicle_prop = self._active_vehicle_property(eid)
         if not state or not state.in_vehicle or not vehicle_prop:
@@ -279,35 +342,28 @@ class PlayerTravelRuntime:
         if turn is None and thrust is None:
             return False
 
-        fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
-        if int(fuel) <= 0:
-            set_vehicle_speed(state, 0, tick=self.sim.tick)
-            self._emit_vehicle_blocked(
-                eid,
-                vehicle_prop,
-                reason="out_of_fuel",
-                fuel_needed=1,
-                chunk=self.sim.chunk_coords(pos.x, pos.y),
-            )
+        if not self._local_vehicle_has_fuel(eid, pos, vehicle_prop):
             return False
 
         if turn:
             rotate_vehicle_heading(state, turn, tick=self.sim.tick)
 
-        old_speed = int(getattr(state, "speed", 0) or 0)
+        discrete_top_speed = min(2, vehicle_top_speed(vehicle_prop))
+        old_speed = max(0, min(discrete_top_speed, int(getattr(state, "speed", 0) or 0)))
+        set_vehicle_speed(state, old_speed, tick=self.sim.tick, vehicle_prop=vehicle_prop)
         move_dx = 0
         move_dy = 0
         move_steps = 0
         action = "turn"
         if thrust == "accelerate":
             action = "accelerate"
-            new_speed = set_vehicle_speed(state, min(2, old_speed + 1), tick=self.sim.tick)
+            new_speed = set_vehicle_speed(state, min(discrete_top_speed, old_speed + 1), tick=self.sim.tick, vehicle_prop=vehicle_prop)
             move_steps = int(new_speed)
             move_dx, move_dy = vehicle_heading_tuple(state)
         elif thrust == "brake":
             action = "brake"
             if old_speed > 0:
-                set_vehicle_speed(state, max(0, old_speed - 1), tick=self.sim.tick)
+                set_vehicle_speed(state, max(0, old_speed - 1), tick=self.sim.tick, vehicle_prop=vehicle_prop)
             else:
                 heading_dx, heading_dy = vehicle_heading_tuple(state)
                 move_dx, move_dy = -heading_dx, -heading_dy
@@ -323,46 +379,120 @@ class PlayerTravelRuntime:
                 x=int(pos.x),
                 y=int(pos.y),
                 z=int(pos.z),
+                cruise_active=False,
             )
             return True
 
-        moved_any = False
-        for _step_index in range(int(move_steps)):
-            target_x = int(pos.x) + int(move_dx)
-            target_y = int(pos.y) + int(move_dy)
-            target_z = int(pos.z)
-            old_x, old_y, old_z = int(pos.x), int(pos.y), int(pos.z)
-            moved, move_reason = try_vehicle_step(
-                self.sim,
-                eid,
-                vehicle_prop,
-                target_x,
-                target_y,
-                target_z,
-                speed=max(1, int(getattr(state, "speed", 0) or 0)),
-                reason="vehicle_move",
-            )
-            if not moved:
-                set_vehicle_speed(state, 0, tick=self.sim.tick)
-                if move_reason != "collision":
-                    self._emit_vehicle_blocked(eid, vehicle_prop, reason=move_reason or "blocked_tile")
-                return moved_any
+        return self._move_local_vehicle_steps(
+            eid,
+            pos,
+            vehicle_prop,
+            state,
+            move_dx,
+            move_dy,
+            move_steps,
+            reason="vehicle_move",
+        )
 
-            moved_any = True
-            self.action_system._clear_cover(eid, reason="vehicle_move")
+    def _handle_local_vehicle_move(self, eid, pos, dx, dy):
+        if self._local_vehicle_discrete_controls():
+            return self._handle_local_vehicle_move_discrete(eid, pos, dx, dy)
+
+        state = self._vehicle_state_for(eid)
+        vehicle_prop = self._active_vehicle_property(eid)
+        if not state or not state.in_vehicle or not vehicle_prop:
+            self._emit_vehicle_blocked(eid, vehicle_prop, reason="vehicle_required")
+            return False
+
+        turn, thrust = self._vehicle_drive_command(dx, dy)
+        if turn is None and thrust is None:
+            return False
+        if not self._local_vehicle_has_fuel(eid, pos, vehicle_prop):
+            return False
+
+        if turn:
+            rotate_vehicle_heading(state, turn, tick=self.sim.tick)
+
+        old_speed = clamp_vehicle_speed(vehicle_prop, getattr(state, "speed", 0))
+        set_vehicle_speed(state, old_speed, tick=self.sim.tick, vehicle_prop=vehicle_prop)
+        move_dx = 0
+        move_dy = 0
+        move_steps = 0
+        action = "turn"
+        if thrust == "accelerate":
+            action = "accelerate"
+            set_vehicle_speed(state, old_speed + 1, tick=self.sim.tick, vehicle_prop=vehicle_prop)
+            move_steps = 1
+            move_dx, move_dy = vehicle_heading_tuple(state)
+        elif thrust == "brake":
+            action = "brake"
+            if old_speed > 0:
+                set_vehicle_speed(state, old_speed - 1, tick=self.sim.tick, vehicle_prop=vehicle_prop)
+            else:
+                heading_dx, heading_dy = vehicle_heading_tuple(state)
+                move_dx, move_dy = -heading_dx, -heading_dy
+                move_steps = 1
+
+        if move_steps <= 0:
             self._emit_vehicle_motion_event(
-                "vehicle_local_moved",
+                "vehicle_local_controlled",
                 eid,
                 vehicle_prop,
                 state,
-                old_x=old_x,
-                old_y=old_y,
-                old_z=old_z,
-                x=target_x,
-                y=target_y,
-                z=target_z,
+                action=action,
+                x=int(pos.x),
+                y=int(pos.y),
+                z=int(pos.z),
+                cruise_active=int(getattr(state, "speed", 0) or 0) > 0,
             )
+            return True
+
+        moved_any = self._move_local_vehicle_steps(
+            eid,
+            pos,
+            vehicle_prop,
+            state,
+            move_dx,
+            move_dy,
+            move_steps,
+            reason="vehicle_move",
+        )
+        self._emit_vehicle_motion_event(
+            "vehicle_local_controlled",
+            eid,
+            vehicle_prop,
+            state,
+            action=action,
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+            cruise_active=int(getattr(state, "speed", 0) or 0) > 0,
+        )
         return moved_any
+
+    def _handle_local_vehicle_momentum(self, eid, pos):
+        state = self._vehicle_state_for(eid)
+        vehicle_prop = self._active_vehicle_property(eid)
+        if not state or not state.in_vehicle or not vehicle_prop:
+            self._emit_vehicle_blocked(eid, vehicle_prop, reason="vehicle_required")
+            return False
+        if self._local_vehicle_discrete_controls():
+            return False
+        if not self._local_vehicle_has_fuel(eid, pos, vehicle_prop):
+            return False
+        if int(getattr(state, "speed", 0) or 0) <= 0:
+            return False
+        move_dx, move_dy = vehicle_heading_tuple(state)
+        return self._move_local_vehicle_steps(
+            eid,
+            pos,
+            vehicle_prop,
+            state,
+            move_dx,
+            move_dy,
+            1,
+            reason="vehicle_momentum",
+        )
 
     def _vehicle_fuel_cost_for_chunk(self, vehicle_prop, desc):
         profile = _vehicle_profile_from_property(vehicle_prop)

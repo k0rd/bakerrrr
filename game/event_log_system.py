@@ -550,6 +550,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("vehicle_exited", self.on_vehicle_exited)
         self.sim.events.subscribe("vehicle_action_blocked", self.on_vehicle_action_blocked)
         self.sim.events.subscribe("vehicle_collision", self.on_vehicle_collision)
+        self.sim.events.subscribe("vehicle_crash", self.on_vehicle_crash)
         self.sim.events.subscribe("overworld_travelled", self.on_overworld_travelled)
         self.sim.events.subscribe("overworld_discovery_found", self.on_overworld_discovery_found)
         self.sim.events.subscribe("overworld_marker_added", self.on_overworld_marker_added)
@@ -5190,10 +5191,23 @@ class EventLogSystem(System):
             return
         target_name = str(event.data.get("target_name", "") or "").strip() or "someone"
         damage = _int_or_default(event.data.get("damage"), 0)
+        durability_lost = _int_or_default(event.data.get("durability_lost"), 0)
+        condition = ""
+        if durability_lost > 0:
+            condition = f" Condition {int(event.data.get('durability_after', 0) or 0)}/10."
         if damage > 0:
-            self.sim.log.add(f"The vehicle hits {target_name} and stops.")
+            self.sim.log.add(f"The vehicle hits {target_name} and stops.{condition}")
             return
-        self.sim.log.add("The vehicle hits something hard and stops.")
+        self.sim.log.add(f"The vehicle hits something hard and stops.{condition}")
+
+    def on_vehicle_crash(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        impact_kind = str(event.data.get("impact_kind", "blocked") or "blocked").replace("_", " ")
+        durability_after = _int_or_default(event.data.get("durability_after"), 0)
+        driver_damage = _int_or_default(event.data.get("driver_damage"), 0)
+        hurt_text = f" You are jolted for {driver_damage} harm." if driver_damage > 0 else ""
+        self.sim.log.add(f"The vehicle crashes into {impact_kind} and stops. Condition {durability_after}/10.{hurt_text}")
 
     def on_overworld_travelled(self, event):
         if event.data.get("eid") != self.player_eid:

@@ -2610,7 +2610,7 @@ class VehicleState:
         self.last_vehicle_id = self.active_vehicle_id
         self.last_changed_tick = -1
         self.heading_dx, self.heading_dy = self._normalized_heading(heading_dx, heading_dy)
-        self.speed = max(0, min(2, int(speed or 0)))
+        self.speed = max(0, min(4, int(speed or 0)))
         self.medium = str(medium or "land").strip().lower() or "land"
 
     @staticmethod
@@ -2630,7 +2630,7 @@ class VehicleState:
             speed = int(getattr(self, "speed", 0) or 0)
         except (TypeError, ValueError):
             speed = 0
-        self.speed = max(0, min(2, speed))
+        self.speed = max(0, min(4, speed))
         self.medium = str(getattr(self, "medium", "land") or "land").strip().lower() or "land"
         return self
 
@@ -2648,7 +2648,7 @@ class VehicleState:
             speed = int(speed or 0)
         except (TypeError, ValueError):
             speed = 0
-        self.speed = max(0, min(2, speed))
+        self.speed = max(0, min(4, speed))
         self.last_changed_tick = int(tick)
         return int(self.speed)
 

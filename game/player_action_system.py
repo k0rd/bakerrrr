@@ -1191,6 +1191,9 @@ class PlayerActionSystem(System):
     def _handle_local_vehicle_move(self, eid, pos, dx, dy):
         return self.player_travel._handle_local_vehicle_move(eid, pos, dx, dy)
 
+    def _handle_local_vehicle_momentum(self, eid, pos):
+        return self.player_travel._handle_local_vehicle_momentum(eid, pos)
+
     def _can_enter_overworld_from_local_vehicle(self, eid, pos):
         return self.player_travel._can_enter_overworld_from_local_vehicle(eid, pos)
 
@@ -1384,6 +1387,12 @@ class PlayerActionSystem(System):
                 dx=int(event.data.get("dx", 0)),
                 dy=int(event.data.get("dy", 0)),
             )
+            return
+
+        if action == "vehicle_momentum":
+            if zoom_mode == "overworld":
+                return
+            self._handle_local_vehicle_momentum(eid, pos)
             return
 
         if action == "side_entry":

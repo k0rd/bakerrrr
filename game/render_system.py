@@ -256,6 +256,7 @@ from game.vehicle_motion import (
     ensure_vehicle_motion_state,
     vehicle_heading_glyph,
     vehicle_heading_label,
+    vehicle_top_speed,
 )
 
 
@@ -2367,6 +2368,13 @@ class RenderSystem(System):
                     prop,
                     active_quest_target=active_quest_target,
                 )
+                if (
+                    active_vehicle_prop
+                    and str(prop.get("id", "") or "").strip() == str(active_vehicle_prop.get("id", "") or "").strip()
+                    and player_vehicle_state
+                    and player_vehicle_state.in_vehicle
+                ):
+                    appearance = _vehicle_appearance_with_heading(appearance, player_vehicle_state)
                 if visible_now:
                     attrs = _ambient_attr(display_pos[0], display_pos[1], active_z)
                 else:
@@ -2788,7 +2796,7 @@ class RenderSystem(System):
             vehicle_bits = [f"Vehicle {vehicle_name} {mode_text} F{fuel}/{fuel_capacity}"]
             if in_vehicle:
                 vehicle_bits.append(f"H{vehicle_heading_label(player_vehicle_state)}")
-                vehicle_bits.append(f"S{int(getattr(player_vehicle_state, 'speed', 0) or 0)}")
+                vehicle_bits.append(f"S{int(getattr(player_vehicle_state, 'speed', 0) or 0)}/{vehicle_top_speed(active_vehicle_prop)}")
             if player_pos and not (player_vehicle_state and player_vehicle_state.in_vehicle):
                 vehicle_chunk = self.sim.chunk_coords(
                     int(active_vehicle_prop.get("x", player_pos.x)),
