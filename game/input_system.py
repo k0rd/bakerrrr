@@ -203,6 +203,10 @@ from game.ui_text_runtime import (
     _log_display_line,
     _log_filter_label,
     _log_filter_spec,
+    _modal_body_widths,
+    _modal_panel_width,
+    _rich_line,
+    _segment,
     _tick_duration_label,
     _wrap_display_lines,
     _wrap_text_lines,
@@ -1107,11 +1111,11 @@ class InputSystem(System):
             hud_lines = 10
         hud_lines = max(1, hud_lines)
         map_h = max(1, min(self.sim.tilemap.height, screen_h - hud_lines))
-        panel_w = min(max(56, screen_w - 4), screen_w)
-        panel_w = max(28, panel_w)
-        panel_h = min(max(12, map_h - 1), map_h)
-        panel_h = max(8, panel_h)
-        body_w = max(8, int(_report_debug_ui.view_text_wrap_width(self.view, panel_w - 4)))
+        map_w = max(1, min(int(getattr(self.sim.tilemap, "width", screen_w) or screen_w), int(screen_w)))
+        panel_w = _modal_panel_width(map_w, fraction=0.75, min_width=48)
+        panel_h = min(max(14, map_h - 1), map_h)
+        panel_h = max(10, panel_h)
+        _body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
         body_h = max(1, panel_h - 6)
         return body_w, body_h
 
@@ -1490,7 +1494,9 @@ class InputSystem(System):
         body_w, _body_h = self._character_panel_body_dimensions()
         display_lines = []
         for raw in raw_lines:
-            wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
+            layout_text = str(raw).replace(" | ", "   |   ")
+            layout_line = _rich_line((_segment(layout_text),), text=layout_text)
+            wrapped = _wrap_display_lines(layout_line, body_w) if layout_text.strip() else [""]
             display_lines.extend(wrapped)
         return display_lines or ["No character data."]
 

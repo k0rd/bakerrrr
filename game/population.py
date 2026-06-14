@@ -348,6 +348,8 @@ WILDLIFE_COUNT_RANGE_BY_AREA = {
     "coastal": (2, 4),
 }
 
+WILDLIFE_WATER_EDGE_GLYPHS = {"~"}
+
 AMBIENT_CREATURE_PROFILES = (
     {
         "id": "stray_dog",
@@ -371,7 +373,7 @@ AMBIENT_CREATURE_PROFILES = (
             "scavenger_score": 38.0,
             "territorial_score": 34.0,
             "pack_score": 58.0,
-            "flee_bias": 38.0,
+            "flee_bias": 32.0,
             "chase_bias": 60.0,
         },
         "social_profile": {
@@ -556,7 +558,7 @@ AMBIENT_CREATURE_PROFILES = (
             "scavenger_score": 4.0,
             "territorial_score": 24.0,
             "pack_score": 62.0,
-            "flee_bias": 82.0,
+            "flee_bias": 74.0,
             "chase_bias": 4.0,
         },
         "social_profile": {
@@ -567,6 +569,307 @@ AMBIENT_CREATURE_PROFILES = (
             "companionship_drive": 36.0,
             "follow_drive": 4.0,
         },
+    },
+    {
+        "id": "black_bear",
+        "taxonomy_class": "other",
+        "species": "ursus americanus",
+        "common_names": ("black bear", "ridge bear", "forage bear"),
+        "areas": {"wilderness": 0.22, "frontier": 0.08},
+        "districts": {},
+        "terrains": {"forest": 0.28, "hills": 0.16, "scrub": 0.08, "marsh": 0.06},
+        "spawn_zones": ("street", "perimeter"),
+        "archetypes": ("ranger_hut", "field_camp", "survey_post", "firewatch_tower", "ruin_shelter"),
+        "color": "other",
+        "max_hp": (74, 108),
+        "speed": (0.86, 1.02),
+        "noise_radius": 5,
+        "home_radius": 8,
+        "flee_radius": 7,
+        "flock_radius": 3,
+        "activity_period": "crepuscular",
+        "rest_bias": 0.2,
+        "physical_profile": {"size_score": 88.0, "speed_score": 46.0},
+        "ecology_profile": {
+            "species": "black_bear",
+            "predator_score": 68.0,
+            "prey_score": 4.0,
+            "scavenger_score": 70.0,
+            "territorial_score": 62.0,
+            "pack_score": 6.0,
+            "flee_bias": 18.0,
+            "chase_bias": 42.0,
+        },
+        "animal_context": {"hunger": 62.0, "territorial_context": True},
+        "social_profile": {
+            "sociability": 8.0,
+            "same_species_affinity": 8.0,
+            "human_affinity": 0.0,
+            "domesticity": 0.0,
+            "companionship_drive": 0.0,
+            "follow_drive": 0.0,
+        },
+    },
+    {
+        "id": "cougar",
+        "taxonomy_class": "feline",
+        "species": "puma concolor",
+        "common_names": ("cougar", "mountain lion", "brush cat"),
+        "areas": {"wilderness": 0.16, "frontier": 0.05},
+        "districts": {},
+        "terrains": {"hills": 0.22, "forest": 0.2, "scrub": 0.12, "badlands": 0.08},
+        "spawn_zones": ("street", "perimeter"),
+        "archetypes": ("ranger_hut", "field_camp", "survey_post", "lookout_post", "ruin_shelter"),
+        "color": "feline",
+        "max_hp": (54, 76),
+        "speed": (1.04, 1.22),
+        "noise_radius": 2,
+        "home_radius": 9,
+        "flee_radius": 8,
+        "flock_radius": 2,
+        "activity_period": "crepuscular",
+        "rest_bias": 0.18,
+        "physical_profile": {"size_score": 68.0, "speed_score": 74.0},
+        "ecology_profile": {
+            "species": "cougar",
+            "predator_score": 82.0,
+            "prey_score": 4.0,
+            "scavenger_score": 12.0,
+            "territorial_score": 58.0,
+            "pack_score": 0.0,
+            "flee_bias": 24.0,
+            "chase_bias": 76.0,
+        },
+        "animal_context": {"hunger": 70.0, "territorial_context": True},
+    },
+    {
+        "id": "gray_wolf",
+        "taxonomy_class": "canine",
+        "species": "canis lupus",
+        "common_names": ("gray wolf", "timber wolf", "wild wolf"),
+        "areas": {"wilderness": 0.2, "frontier": 0.06},
+        "districts": {},
+        "terrains": {"forest": 0.18, "plains": 0.12, "hills": 0.12, "scrub": 0.08},
+        "spawn_zones": ("street", "perimeter"),
+        "archetypes": ("ranger_hut", "field_camp", "survey_post", "lookout_post"),
+        "color": "canine",
+        "max_hp": (48, 68),
+        "speed": (1.02, 1.18),
+        "noise_radius": 3,
+        "home_radius": 9,
+        "flee_radius": 8,
+        "flock_radius": 6,
+        "flocking": True,
+        "activity_period": "crepuscular",
+        "rest_bias": 0.18,
+        "physical_profile": {"size_score": 64.0, "speed_score": 66.0},
+        "ecology_profile": {
+            "species": "wolf",
+            "predator_score": 76.0,
+            "prey_score": 8.0,
+            "scavenger_score": 34.0,
+            "territorial_score": 52.0,
+            "pack_score": 78.0,
+            "flee_bias": 22.0,
+            "chase_bias": 72.0,
+        },
+        "animal_context": {"hunger": 68.0, "territorial_context": True},
+    },
+    {
+        "id": "coyote",
+        "taxonomy_class": "canine",
+        "species": "canis latrans",
+        "common_names": ("coyote", "brush coyote", "field coyote"),
+        "areas": {"frontier": 0.28, "wilderness": 0.18, "coastal": 0.08, "city": 0.04},
+        "districts": {"industrial": 0.02, "slums": 0.02},
+        "terrains": {"scrub": 0.24, "plains": 0.2, "badlands": 0.16, "dunes": 0.08, "shore": 0.04},
+        "spawn_zones": ("street", "perimeter"),
+        "archetypes": ("field_camp", "truck_stop", "roadhouse", "survey_post", "work_shed"),
+        "color": "canine",
+        "max_hp": (30, 44),
+        "speed": (1.04, 1.22),
+        "noise_radius": 3,
+        "home_radius": 7,
+        "flee_radius": 7,
+        "flock_radius": 5,
+        "flocking": True,
+        "activity_period": "crepuscular",
+        "rest_bias": 0.18,
+        "physical_profile": {"size_score": 42.0, "speed_score": 68.0},
+        "ecology_profile": {
+            "species": "coyote",
+            "predator_score": 58.0,
+            "prey_score": 14.0,
+            "scavenger_score": 48.0,
+            "territorial_score": 38.0,
+            "pack_score": 54.0,
+            "flee_bias": 30.0,
+            "chase_bias": 62.0,
+        },
+        "animal_context": {"hunger": 66.0},
+    },
+    {
+        "id": "feral_boar",
+        "taxonomy_class": "ungulate",
+        "species": "sus scrofa",
+        "common_names": ("feral boar", "wild hog", "brush hog"),
+        "areas": {"wilderness": 0.26, "frontier": 0.18, "coastal": 0.06},
+        "districts": {},
+        "terrains": {"forest": 0.18, "scrub": 0.18, "marsh": 0.18, "plains": 0.08},
+        "spawn_zones": ("street", "perimeter"),
+        "archetypes": ("field_camp", "ranger_hut", "survey_post", "herbalist_camp", "ruin_shelter"),
+        "color": "ungulate",
+        "max_hp": (46, 68),
+        "speed": (0.92, 1.08),
+        "noise_radius": 4,
+        "home_radius": 6,
+        "flee_radius": 6,
+        "flock_radius": 4,
+        "flocking": True,
+        "activity_period": "crepuscular",
+        "rest_bias": 0.22,
+        "physical_profile": {"size_score": 66.0, "speed_score": 46.0},
+        "ecology_profile": {
+            "species": "boar",
+            "predator_score": 12.0,
+            "prey_score": 28.0,
+            "scavenger_score": 46.0,
+            "territorial_score": 64.0,
+            "pack_score": 36.0,
+            "flee_bias": 34.0,
+            "chase_bias": 26.0,
+        },
+        "animal_context": {"hunger": 60.0, "territorial_context": True},
+    },
+    {
+        "id": "red_tailed_hawk",
+        "taxonomy_class": "avian",
+        "species": "buteo jamaicensis",
+        "common_names": ("red-tailed hawk", "road hawk", "field hawk"),
+        "areas": {"wilderness": 0.32, "frontier": 0.26, "coastal": 0.08},
+        "districts": {},
+        "terrains": {"plains": 0.22, "scrub": 0.18, "hills": 0.16, "forest": 0.08, "shore": 0.06},
+        "spawn_zones": ("street", "perimeter"),
+        "archetypes": ("ranger_hut", "field_camp", "survey_post", "lookout_post", "beacon_house"),
+        "color": "avian",
+        "max_hp": (22, 32),
+        "speed": (1.08, 1.28),
+        "noise_radius": 2,
+        "home_radius": 8,
+        "flee_radius": 8,
+        "flock_radius": 3,
+        "activity_period": "day",
+        "rest_bias": 0.16,
+        "physical_profile": {"size_score": 18.0, "speed_score": 78.0},
+        "ecology_profile": {
+            "species": "hawk",
+            "predator_score": 58.0,
+            "prey_score": 20.0,
+            "scavenger_score": 10.0,
+            "territorial_score": 32.0,
+            "pack_score": 4.0,
+            "flee_bias": 48.0,
+            "chase_bias": 68.0,
+        },
+        "animal_context": {"hunger": 64.0},
+    },
+    {
+        "id": "alligator",
+        "taxonomy_class": "reptile",
+        "species": "alligator mississippiensis",
+        "common_names": ("alligator", "marsh alligator", "water gator"),
+        "areas": {"coastal": 0.18, "wilderness": 0.12, "frontier": 0.04},
+        "districts": {},
+        "terrains": {"marsh": 0.38, "lake": 0.2, "waterway": 0.18, "shore": 0.12, "shoals": 0.08, "salt_flats": 0.04},
+        "spawn_zones": ("street", "perimeter"),
+        "archetypes": ("tide_station", "dock_shack", "ferry_post", "bait_shop", "net_house", "ruin_shelter"),
+        "requires_water_edge": True,
+        "color": "reptile",
+        "max_hp": (68, 98),
+        "speed": (0.76, 0.94),
+        "noise_radius": 3,
+        "home_radius": 5,
+        "flee_radius": 5,
+        "flock_radius": 2,
+        "activity_period": "crepuscular",
+        "rest_bias": 0.3,
+        "physical_profile": {"size_score": 84.0, "speed_score": 34.0},
+        "ecology_profile": {
+            "species": "alligator",
+            "predator_score": 76.0,
+            "prey_score": 2.0,
+            "scavenger_score": 34.0,
+            "territorial_score": 70.0,
+            "pack_score": 0.0,
+            "flee_bias": 18.0,
+            "chase_bias": 42.0,
+        },
+        "animal_context": {"hunger": 66.0, "territorial_context": True},
+    },
+    {
+        "id": "water_moccasin",
+        "taxonomy_class": "reptile",
+        "species": "agkistrodon piscivorus",
+        "common_names": ("water moccasin", "cottonmouth", "marsh snake"),
+        "areas": {"coastal": 0.24, "wilderness": 0.14, "frontier": 0.06},
+        "districts": {},
+        "terrains": {"marsh": 0.36, "waterway": 0.18, "lake": 0.14, "shore": 0.12, "shoals": 0.08, "salt_flats": 0.06},
+        "spawn_zones": ("street", "perimeter"),
+        "archetypes": ("tide_station", "dock_shack", "bait_shop", "herbalist_camp", "field_camp"),
+        "requires_water_edge": True,
+        "color": "reptile",
+        "max_hp": (14, 24),
+        "speed": (0.86, 1.04),
+        "noise_radius": 1,
+        "home_radius": 3,
+        "flee_radius": 3,
+        "flock_radius": 1,
+        "activity_period": "crepuscular",
+        "rest_bias": 0.34,
+        "physical_profile": {"size_score": 14.0, "speed_score": 36.0},
+        "ecology_profile": {
+            "species": "water_moccasin",
+            "predator_score": 28.0,
+            "prey_score": 44.0,
+            "scavenger_score": 4.0,
+            "territorial_score": 48.0,
+            "pack_score": 0.0,
+            "flee_bias": 46.0,
+            "chase_bias": 18.0,
+        },
+        "animal_context": {"hunger": 44.0, "territorial_context": True},
+    },
+    {
+        "id": "rattlesnake",
+        "taxonomy_class": "reptile",
+        "species": "crotalus horridus",
+        "common_names": ("rattlesnake", "timber rattler", "scrub rattler"),
+        "areas": {"frontier": 0.22, "wilderness": 0.18, "coastal": 0.04},
+        "districts": {},
+        "terrains": {"scrub": 0.28, "badlands": 0.24, "hills": 0.18, "plains": 0.08, "salt_flats": 0.06},
+        "spawn_zones": ("street", "perimeter"),
+        "archetypes": ("field_camp", "survey_post", "work_shed", "inspection_shed", "ruin_shelter"),
+        "color": "reptile",
+        "max_hp": (14, 24),
+        "speed": (0.84, 1.02),
+        "noise_radius": 1,
+        "home_radius": 3,
+        "flee_radius": 3,
+        "flock_radius": 1,
+        "activity_period": "crepuscular",
+        "rest_bias": 0.34,
+        "physical_profile": {"size_score": 13.0, "speed_score": 34.0},
+        "ecology_profile": {
+            "species": "rattlesnake",
+            "predator_score": 30.0,
+            "prey_score": 42.0,
+            "scavenger_score": 2.0,
+            "territorial_score": 50.0,
+            "pack_score": 0.0,
+            "flee_bias": 48.0,
+            "chase_bias": 16.0,
+        },
+        "animal_context": {"hunger": 42.0, "territorial_context": True},
     },
     {
         "id": "tree_frog",
@@ -676,7 +979,7 @@ AMBIENT_CREATURE_PROFILES = (
             "scavenger_score": 72.0,
             "territorial_score": 40.0,
             "pack_score": 18.0,
-            "flee_bias": 58.0,
+            "flee_bias": 50.0,
             "chase_bias": 18.0,
         },
         "social_profile": {
@@ -710,7 +1013,7 @@ AMBIENT_CREATURE_PROFILES = (
             "scavenger_score": 68.0,
             "territorial_score": 18.0,
             "pack_score": 10.0,
-            "flee_bias": 70.0,
+            "flee_bias": 60.0,
             "chase_bias": 8.0,
         },
         "social_profile": {
@@ -1631,6 +1934,45 @@ def _wildlife_anchor_properties(sim, property_records, profile):
     return building_props
 
 
+def _tile_adjacent_to_glyph(sim, tile, glyphs):
+    if not isinstance(tile, (list, tuple)) or len(tile) < 3:
+        return False
+    glyph_set = {str(value)[:1] for value in tuple(glyphs or ()) if str(value)}
+    if not glyph_set:
+        return False
+    x, y, z = int(tile[0]), int(tile[1]), int(tile[2])
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dx == 0 and dy == 0:
+                continue
+            neighbor = sim.tilemap.tile_at(x + dx, y + dy, z)
+            if neighbor is None:
+                continue
+            if str(getattr(neighbor, "glyph", "") or "")[:1] in glyph_set:
+                return True
+    return False
+
+
+def _wildlife_profile_has_tile_requirements(profile):
+    profile = profile if isinstance(profile, dict) else {}
+    return bool(profile.get("requires_water_edge", False))
+
+
+def _wildlife_tile_matches_profile(sim, tile, profile):
+    profile = profile if isinstance(profile, dict) else {}
+    if bool(profile.get("requires_water_edge", False)) and not _tile_adjacent_to_glyph(sim, tile, WILDLIFE_WATER_EDGE_GLYPHS):
+        return False
+    return True
+
+
+def _filter_wildlife_tiles_for_profile(sim, tiles, profile):
+    return [
+        tile
+        for tile in _unique_positions(tiles)
+        if _wildlife_tile_matches_profile(sim, tile, profile)
+    ]
+
+
 def _wildlife_tile_candidates(sim, chunk, property_records, profile, outdoor_tiles):
     zones = tuple(profile.get("spawn_zones", ("street",))) or ("street",)
     props = _wildlife_anchor_properties(sim, property_records, profile)
@@ -1646,11 +1988,13 @@ def _wildlife_tile_candidates(sim, chunk, property_records, profile, outdoor_til
         exterior_candidates.append((x, y, z))
     candidates = exterior_candidates
     if candidates:
+        filtered = _filter_wildlife_tiles_for_profile(sim, candidates, profile)
+        if filtered or _wildlife_profile_has_tile_requirements(profile):
+            return filtered
         return candidates
 
-    if outdoor_tiles:
-        return list(outdoor_tiles)
-    return _chunk_outdoor_tiles(sim, chunk)
+    fallback = list(outdoor_tiles) if outdoor_tiles else _chunk_outdoor_tiles(sim, chunk)
+    return _filter_wildlife_tiles_for_profile(sim, fallback, profile)
 
 
 def _loot_spawn_profile(prop, rng):

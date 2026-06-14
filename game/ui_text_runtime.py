@@ -766,6 +766,24 @@ def _view_text_wrap_width(view, width):
     return width
 
 
+def _modal_panel_width(available_width, *, fraction=0.75, min_width=48):
+    available_width = max(1, int(available_width or 0))
+    try:
+        ratio = float(fraction)
+    except (TypeError, ValueError):
+        ratio = 0.75
+    ratio = max(0.1, min(1.0, ratio))
+    target = int(round(float(available_width) * ratio))
+    floor = max(1, int(min_width or 1))
+    return max(1, min(available_width, max(floor, target)))
+
+
+def _modal_body_widths(view, panel_width, *, horizontal_padding=4, min_width=8):
+    cell_width = max(int(min_width or 1), int(panel_width or 0) - int(horizontal_padding or 0))
+    text_width = max(int(min_width or 1), _view_text_wrap_width(view, cell_width))
+    return cell_width, text_width
+
+
 def _flow_text_chunks(chunks, width, gap="  ", max_lines=None):
     width = max(1, int(width))
     lines = []

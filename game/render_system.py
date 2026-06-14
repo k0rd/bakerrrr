@@ -471,6 +471,8 @@ from game.ui_text_runtime import (
     _log_filter_label,
     _log_filter_spec,
     _log_prefix,
+    _modal_body_widths,
+    _modal_panel_width,
     _mode_line,
     _rich_line,
     _segment,
@@ -479,6 +481,375 @@ from game.ui_text_runtime import (
     _wrap_display_lines,
     _wrap_text_lines,
 )
+
+_HELP_SECTION_COLORS = (
+    "human_slate",
+    "human_olive",
+    "human_denim",
+    "human_wine",
+    "human_rust",
+    "human_charcoal",
+)
+_HELP_COMMAND_COLOR = "player"
+_HELP_EMPHASIS_COLOR = "objective"
+_HELP_MUTED_COLOR = "building_edge"
+_HELP_COMMAND_TOKENS = (
+    "Shift+J",
+    "Shift+W",
+    "Shift+K",
+    "Shift+S",
+    "Left/Right",
+    "Up/Down",
+    "q/e/z/c",
+    "numpad 1-9",
+    "WASD",
+    "HJKL",
+    "f/F",
+    "j/t",
+    "1-9",
+    "1-4",
+    "arrows",
+    "space",
+    "forward",
+    "left/right",
+    "back",
+    "Enter",
+    "Esc",
+    "Tab",
+)
+_HELP_COMMAND_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    + "|".join(re.escape(token) for token in sorted(_HELP_COMMAND_TOKENS, key=len, reverse=True))
+    + r"|[A-Z]|[xltvfc]|[/?'.,;+><:!*$&@\"_^~=5]"
+    + r")(?![A-Za-z0-9])"
+)
+_HELP_EMPHASIS_PHRASES = (
+    "newly surfaced topics",
+    "public services",
+    "restricted places",
+    "owned places",
+    "locked places",
+    "one-time log warnings",
+    "confirmation popups",
+    "Combat turn mode",
+    "Dangerous actions",
+    "World seed",
+    "tactical read",
+    "topic menu",
+    "follow-up branches",
+    "property access",
+    "objective state",
+    "safe",
+    "neutral",
+    "dangerous",
+    "threats",
+    "allies",
+    "contacts",
+    "intel",
+    "shelter",
+    "loaded",
+    "distant",
+    "lighting",
+    "stealth",
+    "pressure",
+    "banking",
+    "insurance",
+    "terminals",
+    "transit",
+    "storefront counters",
+    "trade",
+    "rumors",
+    "inventory",
+    "character sheet",
+    "event log history",
+    "Places notebook",
+    "People notebook",
+)
+_HELP_EMPHASIS_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    + "|".join(re.escape(phrase) for phrase in sorted(_HELP_EMPHASIS_PHRASES, key=len, reverse=True))
+    + r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_CHARACTER_SECTION_COLORS = (
+    "objective",
+    "player",
+    "human_olive",
+    "human_denim",
+    "human_wine",
+    "human_rust",
+)
+_CHARACTER_LABEL_PREFIXES = (
+    "Biological sex",
+    "Inventory slots",
+    "Active effects",
+    "Owned props",
+    "Needs Energy",
+    "Pronouns",
+    "Identity",
+    "Species",
+    "Credits",
+    "Bank",
+    "Debt",
+    "HP",
+    "Heat",
+    "Status",
+    "Safety",
+    "Social",
+    "Survival",
+    "Weapon",
+    "Ammo",
+    "Armor",
+    "Tick",
+    "Seed",
+    "Chunk",
+    "Tile",
+    "Insurance",
+    "Rumors",
+    "Brawn",
+    "Ath",
+    "Dex",
+    "Access",
+    "Charm",
+    "Sense",
+    "base",
+    "floor",
+    "recent",
+    "neglect",
+)
+_INVENTORY_KEY_ITEM_COLOR = "objective"
+_INVENTORY_KEY_ITEM_IDS = frozenset(("property_key", "access_badge", "manager_badge"))
+
+
+def _help_section_color(index):
+    return _HELP_SECTION_COLORS[int(index or 0) % len(_HELP_SECTION_COLORS)]
+
+
+def _character_section_color(index):
+    return _CHARACTER_SECTION_COLORS[int(index or 0) % len(_CHARACTER_SECTION_COLORS)]
+
+
+def _looks_like_character_section_header(text):
+    stripped = str(text or "").strip()
+    return bool(stripped and stripped.upper() == stripped and any(ch.isalpha() for ch in stripped))
+
+
+def _character_metric_segments(chunk, *, section_color):
+    text = str(chunk or "")
+    if not text:
+        return []
+    leading = text[: len(text) - len(text.lstrip())]
+    trailing_len = len(text) - len(text.rstrip())
+    trailing = text[len(text) - trailing_len:] if trailing_len else ""
+    core = text.strip()
+    if not core:
+        return [_segment(text)]
+
+    bold = getattr(curses, "A_BOLD", 0)
+    segments = []
+    if leading:
+        segments.append(_segment(leading, color="human"))
+
+    if ":" in core:
+        label, value = core.split(":", 1)
+        segments.append(_segment(f"{label.strip()}:", color=section_color, attrs=bold))
+        if value:
+            segments.append(_segment(value, color="human"))
+    else:
+        matched_prefix = ""
+        for prefix in sorted(_CHARACTER_LABEL_PREFIXES, key=len, reverse=True):
+            if core.lower().startswith(prefix.lower() + " ") or core.lower() == prefix.lower():
+                matched_prefix = core[: len(prefix)]
+                break
+        if matched_prefix and len(core) > len(matched_prefix):
+            segments.append(_segment(matched_prefix, color=section_color, attrs=bold))
+            segments.append(_segment(core[len(matched_prefix):], color="human"))
+        elif core.startswith("-"):
+            segments.append(_segment("-", color=section_color, attrs=bold))
+            segments.append(_segment(core[1:], color="human"))
+        else:
+            segments.append(_segment(core, color="human"))
+
+    if trailing:
+        segments.append(_segment(trailing, color="human"))
+    return segments
+
+
+def _character_sheet_rich_line(text, section_index=0):
+    text = str(text or "")
+    if not text:
+        return ""
+
+    bold = getattr(curses, "A_BOLD", 0)
+    section_color = _character_section_color(section_index)
+    if _looks_like_character_section_header(text):
+        return _rich_line((_segment(text, color=section_color, attrs=bold),), text=text)
+
+    parts = text.split(" | ")
+    if len(parts) <= 1:
+        return _rich_line(_character_metric_segments(text, section_color=section_color), text=text)
+
+    segments = []
+    for idx, part in enumerate(parts):
+        if idx > 0:
+            segments.append(_segment("   |   ", color="building_edge"))
+        segments.extend(_character_metric_segments(part, section_color=section_color))
+    return _rich_line(segments, text="   |   ".join(parts))
+
+
+def _character_sheet_control_line(text):
+    text = str(text or "")
+    if not text:
+        return ""
+
+    bold = getattr(curses, "A_BOLD", 0)
+    style = [["building_edge", 0] for _char in text]
+
+    def apply_range(start, end, color, attrs=0):
+        start = max(0, min(int(start), len(text)))
+        end = max(0, min(int(end), len(text)))
+        if end <= start:
+            return
+        for idx in range(start, end):
+            style[idx] = [color, int(attrs or 0)]
+
+    for match in _HELP_COMMAND_TOKEN_RE.finditer(text):
+        apply_range(match.start(), match.end(), "objective", bold)
+    for match in re.finditer(r"\b(?:Summary|Skills|Loadout|Appearance|pages|jump|close|ops|notebooks|log|debug|help)\b", text):
+        apply_range(match.start(), match.end(), "player", 0)
+
+    segments = []
+    current_text = []
+    current_color = None
+    current_attrs = 0
+    for char, (color, attrs) in zip(text, style):
+        if current_text and (color != current_color or attrs != current_attrs):
+            segments.append(_segment("".join(current_text), color=current_color, attrs=current_attrs))
+            current_text = [char]
+            current_color = color
+            current_attrs = attrs
+            continue
+        if not current_text:
+            current_color = color
+            current_attrs = attrs
+        current_text.append(char)
+    if current_text:
+        segments.append(_segment("".join(current_text), color=current_color, attrs=current_attrs))
+    return _rich_line(segments, text=text)
+
+
+def _character_sheet_nav_line(pages, page_index):
+    bold = getattr(curses, "A_BOLD", 0)
+    segments = []
+    plain_parts = []
+    for idx, page in enumerate(list(pages or ())[:9]):
+        label = str(page.get("label", f"Page {idx + 1}")).strip() or f"Page {idx + 1}"
+        selected = idx == int(page_index or 0)
+        if idx > 0:
+            segments.append(_segment(" | ", color="building_edge"))
+        if selected:
+            segments.append(_segment("[", color="objective", attrs=bold))
+        segments.append(_segment(str(idx + 1), color="objective", attrs=bold))
+        segments.append(_segment(f" {label}", color="player", attrs=bold if selected else 0))
+        if selected:
+            segments.append(_segment("]", color="objective", attrs=bold))
+        plain_parts.append(f"[{idx + 1} {label}]" if selected else f"{idx + 1} {label}")
+    if not plain_parts:
+        return _character_sheet_control_line("[1 Summary]")
+    return _rich_line(segments, text=" | ".join(plain_parts))
+
+
+def _inventory_entry_is_key_item(entry, item_def=None):
+    if not isinstance(entry, dict):
+        return False
+    item_id = str(entry.get("item_id", "") or "").strip().lower()
+    if item_id in _INVENTORY_KEY_ITEM_IDS:
+        return True
+    data = item_def if isinstance(item_def, dict) else {}
+    tags = {str(tag).strip().lower() for tag in data.get("tags", ()) if str(tag).strip()}
+    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+    return (
+        "key" in tags
+        or bool(str(metadata.get("property_key_id", "") or "").strip())
+        or bool(str(metadata.get("property_credential_kind", "") or "").strip())
+    )
+
+
+def _character_sheet_display_lines(raw_lines):
+    display_lines = []
+    section_index = 0
+    current_section = 0
+    for raw in raw_lines or ():
+        text = _line_text(raw)
+        if not text:
+            display_lines.append("")
+            continue
+        if _looks_like_character_section_header(text):
+            current_section = section_index
+            section_index += 1
+            display_lines.append(_character_sheet_rich_line(text, section_index=current_section))
+            continue
+        display_lines.append(_character_sheet_rich_line(text, section_index=current_section))
+    return display_lines
+
+
+def _help_overlay_rich_line(text, section_index=0):
+    text = str(text or "")
+    if not text:
+        return ""
+
+    bold = getattr(curses, "A_BOLD", 0)
+    stripped = text.strip()
+    if stripped == "Help":
+        return _rich_line((_segment(text, color=_HELP_EMPHASIS_COLOR, attrs=bold),), text=text)
+
+    section_color = _help_section_color(section_index)
+    base_color = _HELP_MUTED_COLOR if stripped.startswith("? or Esc closes") else section_color
+    style = [[base_color, 0] for _char in text]
+
+    def apply_range(start, end, color, attrs=0):
+        start = max(0, min(int(start), len(text)))
+        end = max(0, min(int(end), len(text)))
+        if end <= start:
+            return
+        for idx in range(start, end):
+            style[idx] = [color, int(attrs or 0)]
+
+    if ":" in text and not stripped.startswith("? or Esc closes"):
+        apply_range(0, text.index(":") + 1, section_color, bold)
+
+    for match in _HELP_EMPHASIS_RE.finditer(text):
+        apply_range(match.start(), match.end(), _HELP_EMPHASIS_COLOR, 0)
+    for match in _HELP_COMMAND_TOKEN_RE.finditer(text):
+        apply_range(match.start(), match.end(), _HELP_COMMAND_COLOR, bold)
+
+    segments = []
+    current_text = []
+    current_color = None
+    current_attrs = 0
+    for char, (color, attrs) in zip(text, style):
+        if current_text and (color != current_color or attrs != current_attrs):
+            segments.append(_segment("".join(current_text), color=current_color, attrs=current_attrs))
+            current_text = [char]
+            current_color = color
+            current_attrs = attrs
+            continue
+        if not current_text:
+            current_color = color
+            current_attrs = attrs
+        current_text.append(char)
+    if current_text:
+        segments.append(_segment("".join(current_text), color=current_color, attrs=current_attrs))
+
+    return _rich_line(segments, text=text)
+
+
+def _append_help_section(lines, text):
+    if lines and lines[-1] != "":
+        lines.append("")
+    lines.append(str(text))
+
+
 from game.run_objectives import evaluate_visible_run_objective
 from game.skill_ui import (
     skill_change_reason_label as _skill_change_reason_label,
@@ -980,6 +1351,8 @@ class RenderSystem(System):
             "? or Esc closes this panel.",
             "",
             f"World seed: {self.sim.seed}",
+        ]
+        for line in (
             "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with space or 5.",
             "Observe: / talks, ' physically interacts, . uses the service on your tile, ; locks or unlocks a nearby door, x opens the look cursor, T takes a tactical read, and X opens the map.",
             "Vehicles: ' enters a vehicle. Local driving uses forward to accelerate, left/right to turn, back to brake or reverse from rest. Land vehicles use X for map travel from a road or trail; boats stay local. Press t to get out.",
@@ -998,25 +1371,44 @@ class RenderSystem(System):
             "Log modal: T cycles filters; H sets the current modal filter as the live HUD filter.",
             "Services: . uses the service on your tile, including banking, insurance, terminals, transit, and storefront counters. P buy property.",
             "Character: + opens the character sheet. Tab or Left/Right switch pages.",
-        ]
+        ):
+            _append_help_section(lines, line)
         if debug_mode_enabled(self.sim):
-            lines.insert(
-                -2,
-                "Debug: D live telemetry for lighting, stealth, pressure, property access, and objective state.",
-            )
+            debug_line = "Debug: D live telemetry for lighting, stealth, pressure, property access, and objective state."
+            character_line = lines.pop()
+            if lines and lines[-1] == "":
+                lines.pop()
+            _append_help_section(lines, debug_line)
+            _append_help_section(lines, character_line)
         if zoom_mode == "overworld":
             if view_only:
-                lines.append("Map view: move to browse chunks, Enter or x inspect the selected chunk, and t return on-foot.")
-                lines.append("Map tools: X opens the map from on foot, M adds a marker here, l lists markers, N jumps to the nearest marker, O ops, Y notebooks, L log.")
+                _append_help_section(lines, "Map view: move to browse chunks, Enter or x inspect the selected chunk, and t return on-foot.")
+                _append_help_section(lines, "Map tools: X opens the map from on foot, M adds a marker here, l lists markers, N jumps to the nearest marker, O ops, Y notebooks, L log.")
             else:
-                lines.append("In-vehicle map: move travels chunks, G drives to the last marker, M adds a marker, l lists markers, N jumps to the nearest marker, and t returns to local driving.")
-            lines.append("Overworld POIs: stronger non-city chunks can replace the center glyph with a site initial.")
-            lines.append("Overworld centers: each chunk keeps its district or terrain icon; bright means loaded and dim means distant.")
-            lines.append("Overworld regions: soft boundary lines separate major outside regions.")
+                _append_help_section(lines, "In-vehicle map: move travels chunks, G drives to the last marker, M adds a marker, l lists markers, N jumps to the nearest marker, and t returns to local driving.")
+            _append_help_section(lines, "Overworld POIs: stronger non-city chunks can replace the center glyph with a site initial.")
+            _append_help_section(lines, "Overworld centers: each chunk keeps its district or terrain icon; bright means loaded and dim means distant.")
+            _append_help_section(lines, "Overworld regions: soft boundary lines separate major outside regions.")
         if overlay_active:
-            lines.append("Combat turn mode: each action consumes a turn until danger settles.")
-        lines.append("Dangerous actions teach through one-time log warnings, not confirmation popups.")
+            _append_help_section(lines, "Combat turn mode: each action consumes a turn until danger settles.")
+        _append_help_section(lines, "Dangerous actions teach through one-time log warnings, not confirmation popups.")
         return lines
+
+    def _help_overlay_display_lines(self, raw_lines):
+        display_lines = []
+        section_index = 0
+        for raw in raw_lines or ():
+            text = _line_text(raw)
+            if not text:
+                display_lines.append("")
+                continue
+            stripped = str(text).strip()
+            if stripped == "Help" or stripped.startswith("? or Esc closes"):
+                display_lines.append(_help_overlay_rich_line(text, section_index=section_index))
+                continue
+            display_lines.append(_help_overlay_rich_line(text, section_index=section_index))
+            section_index += 1
+        return display_lines
 
     def _draw_display_line(self, x, y, line, max_width, attrs=0):
         segments = _line_segments(line)
@@ -2963,6 +3355,8 @@ class RenderSystem(System):
                     worn_suffix = " [worn]"
                     if row_color is None:
                         row_color = "inventory_equipped_clothing"
+                if _inventory_entry_is_key_item(entry, item_def):
+                    row_color = _INVENTORY_KEY_ITEM_COLOR
                 label = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} {name} x{entry['quantity']}{ammo_suffix}{worn_suffix}{storage_suffix}"
                 self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2), color=row_color)
 
@@ -3394,21 +3788,11 @@ class RenderSystem(System):
             footer = " | ".join(footer_bits) if footer_bits else ""
             self.view.draw_text(panel_x + 2, footer_y, _clip(footer, body_w))
         elif character_ui.get("open"):
-            panel_w = min(max(60, screen_w - 4), screen_w)
-            panel_w = max(32, panel_w)
+            panel_w = _modal_panel_width(map_w, fraction=0.75, min_width=48)
             panel_h = min(max(14, map_h - 1), map_h)
             panel_h = max(10, panel_h)
-            panel_x = max(0, (screen_w - panel_w) // 2)
+            panel_x = max(0, (map_w - panel_w) // 2)
             panel_y = max(0, (map_h - panel_h) // 2)
-
-            def _clip(text, width):
-                if width <= 0:
-                    return ""
-                if len(text) <= width:
-                    return text
-                if width <= 3:
-                    return text[:width]
-                return text[: width - 3] + "..."
 
             if panel_w >= 2 and panel_h >= 2:
                 top = "+" + ("-" * (panel_w - 2)) + "+"
@@ -3431,23 +3815,38 @@ class RenderSystem(System):
             page_label = str(character_ui.get("page_label", current_page.get("label", "Summary"))).strip() or "Summary"
             title = str(character_ui.get("title", "Character Sheet")).strip() or "Character Sheet"
             title_text = f" {title} | {page_label} {page_index + 1}/{max(1, len(pages) or 1)} "
-            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(title_text, panel_w - 4))
+            body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
+            title_line = _rich_line(
+                (
+                    _segment(f" {title}", color="objective", attrs=getattr(curses, "A_BOLD", 0)),
+                    _segment("   |   ", color="building_edge"),
+                    _segment(page_label, color="player", attrs=getattr(curses, "A_BOLD", 0)),
+                    _segment(f" {page_index + 1}/{max(1, len(pages) or 1)} ", color="human"),
+                ),
+                text=title_text,
+            )
+            self._draw_display_line(
+                panel_x + 2,
+                panel_y + 1,
+                _clip_display_line(title_line, body_w),
+                body_cell_w,
+            )
 
-            nav_bits = []
-            for idx, page in enumerate(pages[:9]):
-                label = str(page.get("label", f"Page {idx + 1}")).strip() or f"Page {idx + 1}"
-                bit = f"{idx + 1} {label}"
-                if idx == page_index:
-                    bit = f"[{bit}]"
-                nav_bits.append(bit)
-            nav_line = " | ".join(nav_bits) if nav_bits else "[1 Summary]"
-            self.view.draw_text(panel_x + 2, panel_y + 2, _clip(nav_line, panel_w - 4))
+            nav_line = _character_sheet_nav_line(pages, page_index)
+            self._draw_display_line(
+                panel_x + 2,
+                panel_y + 2,
+                _clip_display_line(nav_line, body_w),
+                body_cell_w,
+            )
 
-            body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
             body_h = max(1, panel_h - 6)
             display_lines = []
-            for raw in list(character_ui.get("lines", ()) or ()) or ["No character data."]:
-                wrapped = _wrap_text_lines(raw, body_w) if str(raw).strip() else [""]
+            sheet_lines = _character_sheet_display_lines(
+                list(character_ui.get("lines", ()) or ()) or ["No character data."]
+            )
+            for raw in sheet_lines:
+                wrapped = _wrap_display_lines(raw, body_w) if _line_text(raw).strip() else [""]
                 display_lines.extend(wrapped)
             display_lines = display_lines or ["No character data."]
             max_scroll = max(0, len(display_lines) - body_h)
@@ -3456,7 +3855,12 @@ class RenderSystem(System):
             visible_lines = display_lines[scroll: scroll + body_h]
 
             for idx, line in enumerate(visible_lines[:body_h]):
-                self.view.draw_text(panel_x + 2, panel_y + 3 + idx, _clip(line, body_w))
+                self._draw_display_line(
+                    panel_x + 2,
+                    panel_y + 3 + idx,
+                    _clip_display_line(line, body_w),
+                    body_cell_w,
+                )
 
             footer_bits = []
             if scroll > 0:
@@ -3470,12 +3874,19 @@ class RenderSystem(System):
             else:
                 footer = action_tail
             footer = release_control_text(footer, self.sim)
-            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, panel_w - 4))
+            footer_line = _character_sheet_control_line(footer)
+            self._draw_display_line(
+                panel_x + 2,
+                panel_y + panel_h - 2,
+                _clip_display_line(footer_line, body_w),
+                body_cell_w,
+            )
         elif report_ui.get("open"):
             _report_debug_ui.draw_report_modal(
                 self.view,
                 report_ui,
                 screen_w=screen_w,
+                map_w=map_w,
                 map_h=map_h,
                 view_text_wrap_width_fn=_view_text_wrap_width,
                 draw_display_line_fn=self._draw_display_line,
@@ -3489,11 +3900,10 @@ class RenderSystem(System):
                 sim=self.sim,
             )
         elif log_ui.get("open"):
-            panel_w = min(max(56, screen_w - 4), screen_w)
-            panel_w = max(28, panel_w)
+            panel_w = _modal_panel_width(map_w, fraction=0.75, min_width=48)
             panel_h = min(max(12, map_h - 1), map_h)
             panel_h = max(8, panel_h)
-            panel_x = max(0, (screen_w - panel_w) // 2)
+            panel_x = max(0, (map_w - panel_w) // 2)
             panel_y = max(0, (map_h - panel_h) // 2)
 
             def _clip(text, width):
@@ -3522,9 +3932,9 @@ class RenderSystem(System):
             total_count = len(list(log_ui.get("lines", ()) or ()))
             pending_count = len(self._hud_queue)
             title_text = f" {title}: {filter_label} ({entry_count}/{total_count}) | HUD {hud_filter_label} | queue {pending_count} "
-            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(title_text, panel_w - 4))
+            body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
+            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(title_text, body_w))
 
-            body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
             body_h = max(1, panel_h - 4)
             display_lines = []
             for raw in filtered_lines or [f"No {filter_label.lower()} log entries yet."]:
@@ -3542,7 +3952,7 @@ class RenderSystem(System):
                     panel_x + 2,
                     panel_y + 2 + idx,
                     _clip_display_line(line, body_w),
-                    body_w,
+                    body_cell_w,
                 )
 
             footer_bits = []
@@ -3556,12 +3966,13 @@ class RenderSystem(System):
             else:
                 footer = "T cycle filter | H set HUD filter | L close | O ops | Y notebooks | D debug | Up/Down scroll | ? help"
             footer = release_control_text(footer, self.sim)
-            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, panel_w - 4))
+            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, body_w))
         elif debug_ui.get("open"):
             _report_debug_ui.draw_debug_modal(
                 self.view,
                 debug_ui,
                 screen_w=screen_w,
+                map_w=map_w,
                 map_h=map_h,
                 view_text_wrap_width_fn=_view_text_wrap_width,
                 draw_display_line_fn=self._draw_display_line,
@@ -3571,13 +3982,14 @@ class RenderSystem(System):
             )
 
         if help_ui.get("open"):
-            panel_w = min(max(48, map_w - 2), map_w)
-            panel_w = max(24, panel_w)
+            panel_w = _modal_panel_width(map_w, fraction=0.75, min_width=48)
             panel_x = max(0, (map_w - panel_w) // 2)
             raw_lines = self._help_overlay_lines(zoom_mode, overlay_active=_combat_turn_pacing_active(self.sim))
+            display_lines = self._help_overlay_display_lines(raw_lines)
+            body_w, text_w = _modal_body_widths(self.view, panel_w)
             body_lines = []
-            for line in raw_lines:
-                body_lines.extend(_wrap_text_lines(line, max(8, panel_w - 4)))
+            for line in display_lines:
+                body_lines.extend(_wrap_display_lines(line, text_w))
             panel_h = min(max(8, len(body_lines) + 2), map_h)
             panel_y = max(0, (map_h - panel_h) // 2)
             raw_body_h = max(0, panel_h - 2)
@@ -3599,7 +4011,12 @@ class RenderSystem(System):
 
             visible_lines = body_lines[scroll: scroll + body_h]
             for idx, line in enumerate(visible_lines):
-                self.view.draw_text(panel_x + 2, panel_y + 1 + idx, line[: max(0, panel_w - 4)])
+                self._draw_display_line(
+                    panel_x + 2,
+                    panel_y + 1 + idx,
+                    _clip_display_line(line, text_w),
+                    body_w,
+                )
             if needs_scroll_footer:
                 footer_bits = []
                 if scroll > 0:
@@ -3609,7 +4026,13 @@ class RenderSystem(System):
                 footer_bits.append("Up/Down scroll")
                 footer_bits.append("?/Esc close")
                 footer = " | ".join(footer_bits)
-                self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, footer[: max(0, panel_w - 4)])
+                footer_line = _help_overlay_rich_line(footer, section_index=len(display_lines))
+                self._draw_display_line(
+                    panel_x + 2,
+                    panel_y + panel_h - 2,
+                    _clip_display_line(footer_line, text_w),
+                    body_w,
+                )
 
         visible_hud_rows = max(0, int(screen_h) - int(hud_y))
         log_budget = max(0, min(visible_hud_rows, int(hud_lines) - (int(hud_y) - int(map_h))))

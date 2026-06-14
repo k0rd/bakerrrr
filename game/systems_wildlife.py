@@ -69,6 +69,62 @@ _WILDLIFE_SOCIAL_DEFAULTS = {
     "other": {"sociability": 20.0, "same_species_affinity": 18.0, "human_affinity": 2.0, "domesticity": 4.0, "companionship_drive": 10.0, "follow_drive": 4.0},
 }
 
+_DEFENSIVE_HUMAN_AGGRESSION_SPECIES = {
+    "alligator",
+    "bear",
+    "black_bear",
+    "boar",
+    "cougar",
+    "coyote",
+    "rattlesnake",
+    "water_moccasin",
+    "wolf",
+}
+
+_VENOMOUS_CREATURE_PROFILES = {
+    "water_moccasin": {
+        "status": "venom",
+        "source_item": "water_moccasin_venom",
+        "duration": 28,
+        "chance": 0.24,
+        "cooldown": 42,
+        "chip_damage": 1,
+        "safety_hit": -3.2,
+        "energy_hit": -1.4,
+        "modifiers": {
+            "safety_tick_delta": -0.12,
+            "energy_tick_delta": -0.08,
+            "move_speed_mult": -0.1,
+        },
+    },
+    "rattlesnake": {
+        "status": "venom",
+        "source_item": "rattlesnake_venom",
+        "duration": 32,
+        "chance": 0.2,
+        "cooldown": 46,
+        "chip_damage": 1,
+        "safety_hit": -3.6,
+        "energy_hit": -1.6,
+        "modifiers": {
+            "safety_tick_delta": -0.14,
+            "energy_tick_delta": -0.09,
+            "move_speed_mult": -0.12,
+        },
+    },
+}
+
+_VENOMOUS_CREATURE_ALIASES = {
+    "agkistrodon_piscivorus": "water_moccasin",
+    "cottonmouth": "water_moccasin",
+    "marsh_snake": "water_moccasin",
+    "water_moccasin": "water_moccasin",
+    "crotalus_horridus": "rattlesnake",
+    "rattlesnake": "rattlesnake",
+    "scrub_rattler": "rattlesnake",
+    "timber_rattler": "rattlesnake",
+}
+
 
 def _actor_is_human(identity):
     if not identity:
@@ -283,6 +339,7 @@ class CreatureHazardSystem(System):
         self.player_eid = player_eid
         self.rng = random.Random(f"{sim.seed}:creature_hazards")
         self.contact_cooldowns = {}
+        self.venom_cooldowns = {}
         self.condition_cooldowns = {}
         self.runs_without_turn = True
         self.sim.events.subscribe("entity_moved", self.on_entity_moved)
@@ -306,6 +363,22 @@ class CreatureHazardSystem(System):
         except (TypeError, ValueError):
             ticks = 18
         return max(3, min(120, ticks))
+
+    def _snake_venom_contact_chance(self, venom_profile):
+        traits = getattr(self.sim, "world_traits", {}) or {}
+        try:
+            chance = float(traits.get("snake_venom_contact_chance", venom_profile.get("chance", 0.22)))
+        except (TypeError, ValueError):
+            chance = float(venom_profile.get("chance", 0.22) or 0.22)
+        return max(0.01, min(0.9, chance))
+
+    def _snake_venom_cooldown_ticks(self, venom_profile):
+        traits = getattr(self.sim, "world_traits", {}) or {}
+        try:
+            ticks = int(traits.get("snake_venom_contact_cooldown", venom_profile.get("cooldown", 44)))
+        except (TypeError, ValueError):
+            ticks = int(venom_profile.get("cooldown", 44) or 44)
+        return max(6, min(180, ticks))
 
     def _world_conditions(self):
         traits = getattr(self.sim, "world_traits", {}) or {}
@@ -421,6 +494,37 @@ class CreatureHazardSystem(System):
         coat = str(identity.coat_variant or "").strip().lower()
         return bool(coat and toxic_coat and coat == toxic_coat)
 
+    def _venom_species_key(self, eid, identity):
+        ecology = self.sim.ecs.get(EcologyProfile).get(eid)
+        tokens = {
+            str(getattr(ecology, "species", "") or ""),
+            str(getattr(identity, "species", "") or "") if identity is not None else "",
+            str(getattr(identity, "common_name", "") or "") if identity is not None else "",
+        }
+        for raw in tokens:
+            token = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+            if not token:
+                continue
+            if token in _VENOMOUS_CREATURE_ALIASES:
+                return _VENOMOUS_CREATURE_ALIASES[token]
+        return None
+
+    def _venom_profile_for_entity(self, eid, identity):
+        species_key = self._venom_species_key(eid, identity)
+        if not species_key:
+            return None
+        profile = _VENOMOUS_CREATURE_PROFILES.get(species_key)
+        if not profile:
+            return None
+        payload = dict(profile)
+        payload["species_key"] = species_key
+        return payload
+
+    def _same_creature_species(self, left_eid, left_identity, right_eid, right_identity):
+        left_ecology = self.sim.ecs.get(EcologyProfile).get(left_eid)
+        right_ecology = self.sim.ecs.get(EcologyProfile).get(right_eid)
+        return _species_key(left_identity, left_ecology) == _species_key(right_identity, right_ecology)
+
     def _apply_toxin(self, source_eid, target_eid, source_pos, target_pos, toxic_coat):
         statuses = self.sim.ecs.get(StatusEffects)
         needs_map = self.sim.ecs.get(NPCNeeds)
@@ -478,12 +582,135 @@ class CreatureHazardSystem(System):
             "creature_hazard_triggered",
             source_eid=source_eid,
             target_eid=target_eid,
+            hazard_kind="toxic_cat",
             coat_variant=toxic_coat,
             x=target_pos.x,
             y=target_pos.y,
             z=target_pos.z,
         ))
         return True
+
+    def _apply_venom(self, source_eid, target_eid, source_pos, target_pos, venom_profile):
+        statuses = self.sim.ecs.get(StatusEffects)
+        needs_map = self.sim.ecs.get(NPCNeeds)
+        vitalities = self.sim.ecs.get(Vitality)
+
+        target_status = statuses.get(target_eid)
+        if not target_status:
+            return False
+
+        status_name = str(venom_profile.get("status", "venom") or "venom").strip().lower() or "venom"
+        duration = int(max(4, int(venom_profile.get("duration", 28) or 28)))
+        modifiers = dict(venom_profile.get("modifiers", {}) or {})
+        source_tag = str(venom_profile.get("source_item", "snake_venom") or "snake_venom").strip() or "snake_venom"
+        species_key = str(venom_profile.get("species_key", "snake") or "snake").strip().lower() or "snake"
+
+        is_new = target_status.add(
+            status=status_name,
+            duration=duration,
+            modifiers=modifiers,
+            source_item=source_tag,
+        )
+        self.sim.emit(Event(
+            "status_applied",
+            eid=target_eid,
+            status=status_name,
+            duration=duration,
+            modifiers=modifiers,
+            source_item=source_tag,
+            new=is_new,
+        ))
+
+        needs = needs_map.get(target_eid)
+        if needs:
+            needs.safety = _clamp(needs.safety + float(venom_profile.get("safety_hit", -3.2) or 0.0))
+            needs.energy = _clamp(needs.energy + float(venom_profile.get("energy_hit", -1.4) or 0.0))
+
+        vitality = vitalities.get(target_eid)
+        chip_damage = int(max(0, int(venom_profile.get("chip_damage", 1) or 0)))
+        if vitality and chip_damage > 0:
+            vitality.hp = max(1, vitality.hp - chip_damage)
+            self.sim.emit(Event(
+                "entity_damaged",
+                target_eid=target_eid,
+                source_eid=source_eid,
+                weapon_id=f"{species_key}_venom_contact",
+                damage_kind="venom",
+                raw_damage=chip_damage,
+                damage=chip_damage,
+                cover_absorb=0.0,
+                hp=vitality.hp,
+                max_hp=vitality.max_hp,
+                x=target_pos.x,
+                y=target_pos.y,
+                z=target_pos.z,
+            ))
+
+        self.sim.emit(Event(
+            "creature_hazard_triggered",
+            source_eid=source_eid,
+            target_eid=target_eid,
+            hazard_kind="venom",
+            species=species_key,
+            status=status_name,
+            x=target_pos.x,
+            y=target_pos.y,
+            z=target_pos.z,
+        ))
+        return True
+
+    def _maybe_apply_venom_contact(self, moved_eid, moved_pos, identities, vitalities):
+        moved_identity = identities.get(moved_eid)
+        moved_profile = self._venom_profile_for_entity(moved_eid, moved_identity)
+        positions = self.sim.ecs.get(Position)
+
+        for other_eid, other_pos in positions.items():
+            if other_eid == moved_eid:
+                continue
+            if other_pos.z != moved_pos.z:
+                continue
+            if _manhattan(moved_pos.x, moved_pos.y, other_pos.x, other_pos.y) > 1:
+                continue
+
+            other_vitality = vitalities.get(other_eid)
+            if other_vitality and other_vitality.downed:
+                continue
+
+            other_identity = identities.get(other_eid)
+            other_profile = self._venom_profile_for_entity(other_eid, other_identity)
+
+            if moved_profile and not self._same_creature_species(moved_eid, moved_identity, other_eid, other_identity):
+                source_eid = moved_eid
+                source_pos = moved_pos
+                target_eid = other_eid
+                target_pos = other_pos
+                venom_profile = moved_profile
+            elif other_profile and not self._same_creature_species(other_eid, other_identity, moved_eid, moved_identity):
+                source_eid = other_eid
+                source_pos = other_pos
+                target_eid = moved_eid
+                target_pos = moved_pos
+                venom_profile = other_profile
+            else:
+                continue
+
+            key = (source_eid, target_eid)
+            if self.sim.tick < self.venom_cooldowns.get(key, -10_000):
+                continue
+            if self.rng.random() > self._snake_venom_contact_chance(venom_profile):
+                continue
+
+            if self._apply_venom(
+                source_eid=source_eid,
+                target_eid=target_eid,
+                source_pos=source_pos,
+                target_pos=target_pos,
+                venom_profile=venom_profile,
+            ):
+                self.venom_cooldowns[key] = self.sim.tick + self._snake_venom_cooldown_ticks(venom_profile)
+                return True
+
+        return False
 
     def on_entity_moved(self, event):
         moved_eid = event.data.get("eid")
@@ -556,6 +783,8 @@ class CreatureHazardSystem(System):
                     self.contact_cooldowns[key] = self.sim.tick + cooldown_ticks
                     break
 
+        self._maybe_apply_venom_contact(moved_eid, moved_pos, identities, vitalities)
+
         for condition in self._world_conditions():
             if not self._entity_matches_condition(moved_eid, condition, identities, ais):
                 continue
@@ -583,13 +812,18 @@ class CreatureHazardSystem(System):
                 break
 
     def update(self):
-        if not self.contact_cooldowns and not self.condition_cooldowns:
+        if not self.contact_cooldowns and not self.venom_cooldowns and not self.condition_cooldowns:
             return
         if self.sim.tick % 30 != 0:
             return
         self.contact_cooldowns = {
             key: tick
             for key, tick in self.contact_cooldowns.items()
+            if tick > self.sim.tick
+        }
+        self.venom_cooldowns = {
+            key: tick
+            for key, tick in self.venom_cooldowns.items()
             if tick > self.sim.tick
         }
         self.condition_cooldowns = {
@@ -1010,6 +1244,77 @@ def _wildlife_pack_support(sim, eid, pos, identity, ecology, behavior):
     return min(3, count)
 
 
+def _wildlife_defensive_human_attack_intent(sim, eid, pos, identity, ecology, physical, context, behavior, best_threat):
+    if not best_threat or str(best_threat.get("kind", "") or "").strip().lower() != "human":
+        return None
+
+    species = _species_key(identity, ecology)
+    if species not in _DEFENSIVE_HUMAN_AGGRESSION_SPECIES:
+        return None
+
+    target_eid = best_threat.get("eid")
+    target_pos = best_threat.get("pos")
+    if target_eid is None or not isinstance(target_pos, (list, tuple)) or len(target_pos) < 3:
+        return None
+
+    try:
+        distance = int(best_threat.get("distance", _grid_distance(pos.x, pos.y, target_pos[0], target_pos[1])))
+    except (TypeError, ValueError):
+        distance = _grid_distance(pos.x, pos.y, target_pos[0], target_pos[1])
+
+    guardian_bonus = _wildlife_guardian_bonus(sim, eid, pos, identity, ecology, behavior)
+    pack_support = _wildlife_pack_support(sim, eid, pos, identity, ecology, behavior)
+    hunger = max(0.0, min(100.0, float(getattr(context, "hunger", 50.0) or 50.0)))
+    territorial = bool(getattr(context, "territorial_context", False))
+    cornered = bool(getattr(context, "cornered", False))
+    regard = _animal_memory_regard(_animal_memory_for_actor(sim, eid), target_eid)
+
+    trigger = (
+        distance <= 1
+        or cornered
+        or guardian_bonus > 0.0
+        or (territorial and distance <= 3)
+        or (hunger >= 82.0 and distance <= 2)
+        or regard <= -0.35
+    )
+    if not trigger:
+        return None
+    if distance > max(3, int(getattr(behavior, "flee_radius", 5))) and not cornered:
+        return None
+
+    drive = (
+        float(getattr(ecology, "predator_score", 0.0) or 0.0) * 0.42
+        + float(getattr(ecology, "territorial_score", 0.0) or 0.0) * 0.36
+        + float(getattr(ecology, "chase_bias", 0.0) or 0.0) * 0.18
+        + float(getattr(physical, "size_score", 0.0) or 0.0) * 0.12
+        + hunger * 0.18
+        + guardian_bonus
+        + pack_support * 5.0
+    )
+    drive -= float(getattr(ecology, "flee_bias", 0.0) or 0.0) * 0.16
+    drive -= _actor_injury_score(sim, eid, physical) * 0.34
+    if distance <= 1:
+        drive += 16.0
+    if cornered:
+        drive += 28.0
+    if territorial and distance <= 3:
+        drive += 14.0
+    if regard <= -0.35:
+        drive += 12.0
+    if bool(getattr(physical, "juvenile", False)):
+        drive -= 24.0
+
+    if drive < 48.0:
+        return None
+
+    return {
+        "intent": "protecting",
+        "score": min(96.0, max(54.0, drive)),
+        "target": (int(target_pos[0]), int(target_pos[1]), int(target_pos[2])),
+        "target_eid": target_eid,
+    }
+
+
 def _wildlife_social_target_score(sim, self_eid, other_eid, *, pos, other_pos, identity, ecology, social_profile, needs):
     if other_eid == self_eid or other_pos is None or int(other_pos.z) != int(pos.z):
         return None
@@ -1201,6 +1506,7 @@ def _wildlife_ecology_intent(sim, eid, pos, routine, behavior, identity, needs):
             best_threat = {
                 "eid": other_eid,
                 "pos": (other_pos.x, other_pos.y, other_pos.z),
+                "distance": distance,
                 **threat,
             }
 
@@ -1223,6 +1529,19 @@ def _wildlife_ecology_intent(sim, eid, pos, routine, behavior, identity, needs):
 
     scavenge = _wildlife_best_scavenge_target(sim, pos, ecology, context)
     group_alarm = _wildlife_group_alarm_target(sim, eid, pos, identity, ecology, behavior)
+    defensive_attack = _wildlife_defensive_human_attack_intent(
+        sim,
+        eid,
+        pos,
+        identity,
+        ecology,
+        physical,
+        context,
+        behavior,
+        best_threat,
+    )
+    if defensive_attack:
+        return defensive_attack
 
     if best_threat and best_threat["score"] >= 34.0:
         guardian_bonus = _wildlife_guardian_bonus(sim, eid, pos, identity, ecology, behavior)

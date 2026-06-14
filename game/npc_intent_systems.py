@@ -2119,8 +2119,18 @@ class NPCWillSystem(System):
                 _relocate_indoor_wildlife_outdoors(self.sim, eid, pos, routine)
                 home = _wildlife_home_position(pos, routine)
                 if ai.state == "seeking_safety" and ai.target:
-                    self._set_intent(eid, ai, will, "seeking_safety", 86.0, ai.target, None)
-                    continue
+                    try:
+                        safety_age = int(self.sim.tick) - int(getattr(will, "last_tick", -1) or -1)
+                    except (TypeError, ValueError):
+                        safety_age = 0
+                    target = ai.target if isinstance(ai.target, (tuple, list)) and len(ai.target) >= 2 else None
+                    near_target = bool(target and _manhattan(pos.x, pos.y, int(target[0]), int(target[1])) <= 1)
+                    if not near_target and safety_age < 12:
+                        self._set_intent(eid, ai, will, "seeking_safety", 86.0, ai.target, None)
+                        continue
+                    ai.state = "idle"
+                    ai.target = None
+                    ai.target_eid = None
 
                 ecology_intent = _wildlife_ecology_intent(
                     self.sim,

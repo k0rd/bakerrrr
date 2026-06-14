@@ -1942,6 +1942,11 @@ class EventLogSystem(System):
     def on_creature_hazard_triggered(self, event):
         if event.data.get("target_eid") != self.player_eid:
             return
+        hazard_kind = str(event.data.get("hazard_kind", "toxic_cat") or "toxic_cat").strip().lower()
+        if hazard_kind == "venom":
+            species = str(event.data.get("species", "snake") or "snake").replace("_", " ")
+            self._log(f"Venom contact: {species} bite burns.", channel="status", priority="high")
+            return
         coat = str(event.data.get("coat_variant", "unknown")).replace("_", " ")
         self._log(f"Toxic contact: {coat} cat venom burns.", channel="status", priority="high")
 

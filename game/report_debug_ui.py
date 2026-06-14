@@ -3,6 +3,7 @@ from __future__ import annotations
 import curses
 
 from game.release_runtime import release_control_text
+from game.ui_text_runtime import _modal_body_widths, _modal_panel_width
 from ui.input_keys import ENTER_KEYS, KEY_DOWN, KEY_UP
 
 
@@ -76,11 +77,11 @@ def scroll_panel_body_dimensions(view, sim):
         hud_lines = 10
     hud_lines = max(1, hud_lines)
     map_h = max(1, min(sim.tilemap.height, screen_h - hud_lines))
-    panel_w = min(max(56, screen_w - 4), screen_w)
-    panel_w = max(28, panel_w)
+    map_w = max(1, min(int(getattr(sim.tilemap, "width", screen_w) or screen_w), int(screen_w)))
+    panel_w = _modal_panel_width(map_w, fraction=0.75, min_width=48)
     panel_h = min(max(12, map_h - 1), map_h)
     panel_h = max(8, panel_h)
-    body_w = max(8, int(view_text_wrap_width(view, panel_w - 4)))
+    _body_cell_w, body_w = _modal_body_widths(view, panel_w)
     body_h = max(1, panel_h - 4)
     return body_w, body_h
 
@@ -663,12 +664,12 @@ def _draw_box(view, panel_x, panel_y, panel_w, panel_h):
     view.draw_text(panel_x, panel_y + panel_h - 1, bot)
 
 
-def _centered_scroll_panel_geometry(screen_w, map_h):
-    panel_w = min(max(56, screen_w - 4), screen_w)
-    panel_w = max(28, panel_w)
+def _centered_scroll_panel_geometry(available_w, map_h):
+    available_w = max(1, int(available_w or 0))
+    panel_w = _modal_panel_width(available_w, fraction=0.75, min_width=48)
     panel_h = min(max(12, map_h - 1), map_h)
     panel_h = max(8, panel_h)
-    panel_x = max(0, (screen_w - panel_w) // 2)
+    panel_x = max(0, (available_w - panel_w) // 2)
     panel_y = max(0, (map_h - panel_h) // 2)
     return panel_x, panel_y, panel_w, panel_h
 
@@ -678,6 +679,7 @@ def draw_report_modal(
     report_ui,
     *,
     screen_w,
+    map_w,
     map_h,
     view_text_wrap_width_fn,
     draw_display_line_fn,
@@ -690,13 +692,13 @@ def draw_report_modal(
     known_person_detail_lines_fn,
     sim=None,
 ):
-    panel_x, panel_y, panel_w, panel_h = _centered_scroll_panel_geometry(screen_w, map_h)
+    panel_x, panel_y, panel_w, panel_h = _centered_scroll_panel_geometry(map_w, map_h)
     _draw_box(view, panel_x, panel_y, panel_w, panel_h)
 
     title = str(report_ui.get("title", "Operations Report")).strip() or "Operations Report"
-    view.draw_text(panel_x + 2, panel_y + 1, _clip_text(f" {title} ", panel_w - 4))
+    body_cell_w, body_w = _modal_body_widths(view, panel_w)
+    view.draw_text(panel_x + 2, panel_y + 1, _clip_text(f" {title} ", body_w))
 
-    body_w = max(8, int(view_text_wrap_width_fn(view, panel_w - 4)))
     body_h = max(1, panel_h - 4)
     report_kind = str(report_ui.get("kind", "progress")).strip().lower() or "progress"
     if report_kind == "known_locations":
@@ -721,7 +723,7 @@ def draw_report_modal(
         mode_label = "hidden" if filter_mode == "hidden" else "active"
         count_label = f"{len(rows)} {mode_label}"
         recency_label = "sorted by last revised"
-        view.draw_text(panel_x + 2, panel_y + 2, _clip_text(f"{count_label} | {recency_label}", panel_w - 4))
+        view.draw_text(panel_x + 2, panel_y + 2, _clip_text(f"{count_label} | {recency_label}", body_w))
 
         list_y = panel_y + 3
         visible_rows = rows[scroll: scroll + list_h]
@@ -735,13 +737,13 @@ def draw_report_modal(
             draw_display_line_fn(
                 panel_x + 1,
                 list_y + idx,
-                clip_display_line_fn(entry_line, panel_w - 2),
-                panel_w - 2,
+                clip_display_line_fn(entry_line, body_w),
+                body_cell_w,
             )
 
         if not rows:
             empty_text = "(no hidden locations)" if filter_mode == "hidden" else "(no known locations)"
-            view.draw_text(panel_x + 2, list_y, _clip_text(empty_text, panel_w - 4))
+            view.draw_text(panel_x + 2, list_y, _clip_text(empty_text, body_w))
 
         detail_y = list_y + list_h + 1
         detail_h = max(1, (panel_y + panel_h - 2) - detail_y)
@@ -755,15 +757,15 @@ def draw_report_modal(
 
         display_detail_lines = []
         for raw in detail_lines:
-            wrapped = wrap_display_lines_fn(raw, panel_w - 4) if line_text_fn(raw).strip() else [""]
+            wrapped = wrap_display_lines_fn(raw, body_w) if line_text_fn(raw).strip() else [""]
             display_detail_lines.extend(wrapped)
         visible_detail_lines = display_detail_lines[:detail_h]
         for idx, line in enumerate(visible_detail_lines):
             draw_display_line_fn(
                 panel_x + 2,
                 detail_y + idx,
-                clip_display_line_fn(line, panel_w - 4),
-                panel_w - 4,
+                clip_display_line_fn(line, body_w),
+                body_cell_w,
             )
 
         footer_bits = []
@@ -794,7 +796,7 @@ def draw_report_modal(
         report_ui["scroll"] = scroll
 
         count_label = f"{len(rows)} tracked"
-        view.draw_text(panel_x + 2, panel_y + 2, _clip_text(f"{count_label} | sorted by last contact", panel_w - 4))
+        view.draw_text(panel_x + 2, panel_y + 2, _clip_text(f"{count_label} | sorted by last contact", body_w))
 
         list_y = panel_y + 3
         visible_rows = rows[scroll: scroll + list_h]
@@ -808,12 +810,12 @@ def draw_report_modal(
             draw_display_line_fn(
                 panel_x + 1,
                 list_y + idx,
-                clip_display_line_fn(entry_line, panel_w - 2),
-                panel_w - 2,
+                clip_display_line_fn(entry_line, body_w),
+                body_cell_w,
             )
 
         if not rows:
-            view.draw_text(panel_x + 2, list_y, _clip_text("(no known people)", panel_w - 4))
+            view.draw_text(panel_x + 2, list_y, _clip_text("(no known people)", body_w))
 
         detail_y = list_y + list_h + 1
         detail_h = max(1, (panel_y + panel_h - 2) - detail_y)
@@ -827,15 +829,15 @@ def draw_report_modal(
 
         display_detail_lines = []
         for raw in detail_lines:
-            wrapped = wrap_display_lines_fn(raw, panel_w - 4) if line_text_fn(raw).strip() else [""]
+            wrapped = wrap_display_lines_fn(raw, body_w) if line_text_fn(raw).strip() else [""]
             display_detail_lines.extend(wrapped)
         visible_detail_lines = display_detail_lines[:detail_h]
         for idx, line in enumerate(visible_detail_lines):
             draw_display_line_fn(
                 panel_x + 2,
                 detail_y + idx,
-                clip_display_line_fn(line, panel_w - 4),
-                panel_w - 4,
+                clip_display_line_fn(line, body_w),
+                body_cell_w,
             )
 
         footer_bits = []
@@ -875,7 +877,7 @@ def draw_report_modal(
         footer = f"{footer} | {action_tail}" if footer else f"{action_tail} | Up/Down scroll"
 
     footer = release_control_text(footer, sim)
-    view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip_text(footer, panel_w - 4))
+    view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip_text(footer, body_w))
 
 
 def draw_debug_modal(
@@ -883,6 +885,7 @@ def draw_debug_modal(
     debug_ui,
     *,
     screen_w,
+    map_w,
     map_h,
     view_text_wrap_width_fn,
     draw_display_line_fn,
@@ -890,13 +893,13 @@ def draw_debug_modal(
     wrap_display_lines_fn,
     line_text_fn,
 ):
-    panel_x, panel_y, panel_w, panel_h = _centered_scroll_panel_geometry(screen_w, map_h)
+    panel_x, panel_y, panel_w, panel_h = _centered_scroll_panel_geometry(map_w, map_h)
     _draw_box(view, panel_x, panel_y, panel_w, panel_h)
 
     title = str(debug_ui.get("title", "Debug Overlay")).strip() or "Debug Overlay"
-    view.draw_text(panel_x + 2, panel_y + 1, _clip_text(f" {title} ", panel_w - 4))
+    body_cell_w, body_w = _modal_body_widths(view, panel_w)
+    view.draw_text(panel_x + 2, panel_y + 1, _clip_text(f" {title} ", body_w))
 
-    body_w = max(8, int(view_text_wrap_width_fn(view, panel_w - 4)))
     body_h = max(1, panel_h - 4)
     display_lines = debug_display_lines(
         debug_ui,
@@ -914,7 +917,7 @@ def draw_debug_modal(
             panel_x + 2,
             panel_y + 2 + idx,
             clip_display_line_fn(line, body_w),
-            body_w,
+            body_cell_w,
         )
 
     footer_bits = []
@@ -928,4 +931,4 @@ def draw_debug_modal(
         if footer
         else "D close | O ops | Y notebooks | L log | Up/Down scroll | ? help"
     )
-    view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip_text(footer, panel_w - 4))
+    view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip_text(footer, body_w))

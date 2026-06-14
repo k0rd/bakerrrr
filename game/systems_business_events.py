@@ -5391,7 +5391,7 @@ class BusinessPulseAftermathSystem(System):
         if x is None or y is None or z is None:
             return
         reason = str(event.data.get("reason", "killed") or "killed").strip().lower() or "killed"
-        incident_kind = "hazard" if reason in {"burned", "creature_hazard", "toxin", "condition"} else "violence"
+        incident_kind = "hazard" if reason in {"burned", "creature_hazard", "toxin", "venom", "condition"} else "violence"
         self._record(
             x=x,
             y=y,
@@ -5410,7 +5410,7 @@ class BusinessPulseAftermathSystem(System):
         if x is None or y is None or z is None:
             return
         damage_kind = str(event.data.get("damage_kind", "lethal_damage") or "lethal_damage").strip().lower() or "lethal_damage"
-        incident_kind = "hazard" if damage_kind in {"condition", "toxin"} else "violence"
+        incident_kind = "hazard" if damage_kind in {"condition", "toxin", "venom"} else "violence"
         self._record(
             x=x,
             y=y,

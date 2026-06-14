@@ -752,7 +752,13 @@ class NPCMemorySystem(System):
         hy = event.data.get("y")
         hz = event.data.get("z")
         coat_variant = str(event.data.get("coat_variant", "")).strip().lower()
-        if hx is None or hy is None or hz is None or not coat_variant:
+        hazard_kind = str(event.data.get("hazard_kind", "toxic_cat") or "toxic_cat").strip().lower()
+        species = str(event.data.get("species", "") or "").strip().lower()
+        if hx is None or hy is None or hz is None:
+            return
+        if hazard_kind == "toxic_cat" and not coat_variant:
+            return
+        if hazard_kind == "venom" and not species:
             return
 
         positions = self.sim.ecs.get(Position)
@@ -775,11 +781,13 @@ class NPCMemorySystem(System):
                 strength=min(1.0, intensity * 0.82),
                 source_eid=source_eid,
                 target_eid=target_eid,
-                action="toxic_contact",
+                action="venom_contact" if hazard_kind == "venom" else "toxic_contact",
                 x=hx,
                 y=hy,
                 z=hz,
             )
+            if hazard_kind == "venom":
+                continue
             memory.remember(
                 tick=self.sim.tick,
                 kind="world_trait",
