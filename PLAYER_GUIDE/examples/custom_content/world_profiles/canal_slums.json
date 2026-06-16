@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "schema_version": 1
+  },
+  "canal_slums": {
+    "label": "Canal Slums",
+    "selection_weight": 2.0,
+    "area_types": ["city"],
+    "district_types": ["slums", "industrial"],
+    "population_density": "high",
+    "building_density": "medium",
+    "water": "medium",
+    "building_weights": {
+      "tenement": 2.0,
+      "flophouse": 1.6,
+      "pawn_shop": 1.2,
+      "soup_kitchen": 1.1
+    },
+    "service_building_weights": {
+      "soup_kitchen": 1.5,
+      "street_kitchen": 1.3
+    }
+  }
+}

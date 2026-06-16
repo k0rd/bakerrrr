@@ -1,0 +1,26 @@
+{
+  "_meta": {
+    "schema_version": 1
+  },
+  "morning_glory_seeds": {
+    "name": "Morning Glory Seeds",
+    "glyph": "*",
+    "stack_max": 2,
+    "tags": ["consumable", "drug", "hallucinogen", "seed"],
+    "category": "consumable",
+    "legal_status": "illegal",
+    "effects": [
+      {
+        "type": "status",
+        "status": "tripping",
+        "duration": 60,
+        "modifiers": {
+          "toxicity_tick_delta": 0.1,
+          "hallucination_intensity": 1.0,
+          "hallucination_read_chance": 0.45,
+          "movement_misdirect_chance": 0.04
+        }
+      }
+    ]
+  }
+}
