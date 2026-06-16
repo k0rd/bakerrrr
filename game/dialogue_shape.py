@@ -9,13 +9,42 @@ from __future__ import annotations
 
 import random
 
-from game.components import AI, CreatureIdentity, IncidentKnowledge, NPCMemory, NPCNeeds, NPCSocial, NPCTraits, Occupation, Position
+from game.components import AI, CreatureIdentity, IncidentKnowledge, NPCMemory, NPCNeeds, NPCSocial, NPCTraits, Occupation, Position, SkillProfile
 from game.human_identity import is_human_identity, normalize_gender_identity, pronoun_format_slots
 from game.incident_runtime import incident_record
 
 
 _AUTHORITY_ROLES = {"guard", "security", "officer", "police", "deputy", "marshal"}
 _SERVICE_ROLES = {"clerk", "cashier", "merchant", "shopkeeper", "manager", "worker"}
+_TRADE_ROLES = {
+    "bartender",
+    "barista",
+    "broker",
+    "cashier",
+    "clerk",
+    "contractor",
+    "doctor",
+    "mechanic",
+    "merchant",
+    "server",
+    "shopkeeper",
+    "vendor",
+    "worker",
+}
+_MANAGEMENT_ROLES = {"boss", "manager", "owner", "supervisor"}
+_LOGISTICS_ROLES = {"courier", "driver", "hauler", "rail_worker", "transit_worker"}
+_DIALOGUE_KNOWLEDGE_DOMAINS = (
+    "local_economy",
+    "business_reputation",
+    "services",
+    "security",
+    "opportunities",
+    "social_graph",
+    "incident",
+    "workplace",
+)
+_DIALOGUE_COMPETENCE_TIERS = ("none", "rumor", "familiar", "skilled")
+_DIALOGUE_COMPETENCE_RANK = {name: index for index, name in enumerate(_DIALOGUE_COMPETENCE_TIERS)}
 _RAPPORT_REACTION_TOPICS = {"rapport", "check_in", "day_feel", "job_feel", "roots", "off_shift", "care_about", "read_player"}
 _MISSTEP_REACTION_TOPICS = {"pry", "insult", "weird"}
 _SOCIAL_ACCESS_REACTION_TOPICS = {"contacts", "introduction", "vouch"}
@@ -56,6 +85,33 @@ def _int(value, default=0):
 
 def _clamp01(value):
     return max(0.0, min(1.0, _float(value, 0.0)))
+
+
+def _tier_at_least(current, candidate):
+    current = _text(current, "none").lower() or "none"
+    candidate = _text(candidate, "none").lower() or "none"
+    if _DIALOGUE_COMPETENCE_RANK.get(candidate, 0) > _DIALOGUE_COMPETENCE_RANK.get(current, 0):
+        return candidate
+    return current
+
+
+def dialogue_knowledge_domains():
+    return tuple(_DIALOGUE_KNOWLEDGE_DOMAINS)
+
+
+def dialogue_competence_tiers():
+    return tuple(_DIALOGUE_COMPETENCE_TIERS)
+
+
+def dialogue_persona_domain_competence(persona_agenda, domain):
+    persona_agenda = persona_agenda if isinstance(persona_agenda, dict) else {}
+    domain = _text(domain).lower()
+    if not domain:
+        return "none"
+    domains = persona_agenda.get("domain_competence")
+    domains = domains if isinstance(domains, dict) else {}
+    tier = _text(domains.get(domain, "none"), "none").lower()
+    return tier if tier in _DIALOGUE_COMPETENCE_RANK else "none"
 
 
 def _seeded_unit(seed_text):
@@ -418,6 +474,169 @@ def build_rapport_shape(sim, npc_eid, *, context=None):
         "local_attachment": local_attachment,
         "playfulness": playfulness,
         "day_mood": day_mood,
+        "work_attitude": work_attitude,
+    }
+
+
+def _skill_rating(sim, npc_eid, skill_id):
+    profile = sim.ecs.get(SkillProfile).get(npc_eid) if sim is not None else None
+    ratings = getattr(profile, "ratings", None)
+    if isinstance(ratings, dict):
+        return _float(ratings.get(skill_id), 0.0)
+    return 0.0
+
+
+def build_dialogue_persona_agenda(sim, npc_eid, *, context=None):
+    """Return deterministic agenda and knowledge reads for dialogue routing.
+
+    This is deliberately a read model, not a life-sim state machine.  It
+    projects enough occupation, role, needs, and pressure texture for dialogue
+    to feel self-interested without persisting new per-NPC goals.
+    """
+    context = dict(context or {})
+    identity = sim.ecs.get(CreatureIdentity).get(npc_eid) if sim is not None else None
+    if not is_human_identity(identity):
+        return {}
+
+    ai = context.get("ai") or sim.ecs.get(AI).get(npc_eid)
+    occupation = context.get("occupation") or sim.ecs.get(Occupation).get(npc_eid)
+    needs = context.get("npc_needs") or sim.ecs.get(NPCNeeds).get(npc_eid) or NPCNeeds()
+    traits = context.get("npc_traits") or sim.ecs.get(NPCTraits).get(npc_eid) or NPCTraits()
+    role_id = _text(getattr(ai, "role", context.get("role_id", "local"))).lower() or "local"
+    career_text = _text(getattr(occupation, "career", context.get("career_text", ""))).lower()
+    organization_role = _text(context.get("organization_role", "")).lower()
+    area_type, district_type = _rapport_chunk_profile(sim, npc_eid, context)
+
+    role_tokens = {
+        token
+        for source in (role_id, career_text, organization_role)
+        for token in str(source or "").replace("-", "_").split("_")
+        if token
+    }
+    domain_competence = {domain: "none" for domain in _DIALOGUE_KNOWLEDGE_DOMAINS}
+
+    def raise_domain(domain, tier):
+        if domain in domain_competence:
+            domain_competence[domain] = _tier_at_least(domain_competence.get(domain), tier)
+
+    if career_text or context.get("workplace_name") or context.get("workplace_prop"):
+        raise_domain("workplace", "familiar")
+        raise_domain("services", "rumor")
+    if organization_role in _MANAGEMENT_ROLES or role_id in _MANAGEMENT_ROLES or "owner" in role_tokens:
+        raise_domain("workplace", "skilled")
+        raise_domain("local_economy", "skilled")
+        raise_domain("business_reputation", "skilled")
+        raise_domain("services", "familiar")
+    if role_id in _SERVICE_ROLES or role_id in _TRADE_ROLES or career_text in _TRADE_ROLES or role_tokens & _TRADE_ROLES:
+        raise_domain("local_economy", "familiar")
+        raise_domain("business_reputation", "familiar")
+        raise_domain("services", "skilled" if role_id in {"clerk", "merchant", "shopkeeper", "cashier"} else "familiar")
+        raise_domain("workplace", "familiar")
+    if role_id in _AUTHORITY_ROLES or career_text in _AUTHORITY_ROLES or role_tokens & _AUTHORITY_ROLES:
+        raise_domain("security", "skilled")
+        raise_domain("incident", "familiar")
+        raise_domain("business_reputation", "rumor")
+        raise_domain("local_economy", "rumor")
+    if role_id in _LOGISTICS_ROLES or career_text in _LOGISTICS_ROLES or role_tokens & _LOGISTICS_ROLES:
+        raise_domain("services", "familiar")
+        raise_domain("opportunities", "rumor")
+        raise_domain("local_economy", "rumor")
+    if role_id in {"resident", "neighbor", "local", "civilian"} or context.get("home_name"):
+        raise_domain("local_economy", "rumor")
+        raise_domain("business_reputation", "rumor")
+        raise_domain("social_graph", "rumor")
+    if context.get("social_leads"):
+        raise_domain("social_graph", "familiar")
+    if context.get("opportunity_rows") or context.get("primary_opportunity_title"):
+        raise_domain("opportunities", "familiar" if context.get("is_rival_operator") else "rumor")
+    if context.get("is_rival_operator"):
+        raise_domain("opportunities", "skilled")
+        raise_domain("security", "familiar")
+        raise_domain("business_reputation", "rumor")
+
+    incident = _best_incident_context(sim, npc_eid) if sim is not None else None
+    if incident:
+        raise_domain("incident", "skilled" if incident.get("firsthand") else "familiar")
+
+    if _skill_rating(sim, npc_eid, "streetwise") >= 7.0:
+        raise_domain("business_reputation", "familiar")
+        raise_domain("opportunities", "familiar")
+        raise_domain("local_economy", "familiar")
+    if _skill_rating(sim, npc_eid, "mechanics") >= 7.0:
+        raise_domain("services", "familiar")
+    if _skill_rating(sim, npc_eid, "tactics") >= 7.0:
+        raise_domain("security", "familiar")
+
+    rapport_shape = context.get("rapport_shape") if isinstance(context.get("rapport_shape"), dict) else build_rapport_shape(sim, npc_eid, context=context)
+    privacy = _clamp01(rapport_shape.get("privacy", 0.5))
+    local_attachment = _clamp01(rapport_shape.get("local_attachment", 0.5))
+    work_attitude = _text(rapport_shape.get("work_attitude", "practical")).lower() or "practical"
+    pressure_tier = _text(context.get("pressure_tier", "low")).lower() or "low"
+    state_text = _text(context.get("state_text", "")).lower()
+    safety_need = _float(getattr(needs, "safety", 70.0), 70.0)
+    social_need = _float(getattr(needs, "social", 55.0), 55.0)
+    discipline = _clamp01(getattr(traits, "discipline", 0.5))
+    empathy = _clamp01(getattr(traits, "empathy", 0.5))
+
+    if bool(context.get("guarded")) or pressure_tier == "high" or safety_need < 36:
+        agenda_kind = "avoid_heat"
+    elif role_id in _AUTHORITY_ROLES or "protect" in state_text:
+        agenda_kind = "keep_order"
+    elif context.get("owner_place_name") and (local_attachment >= 0.6 or discipline >= 0.62):
+        agenda_kind = "protect_place"
+    elif context.get("trade_available") or role_id in _TRADE_ROLES or role_tokens & _TRADE_ROLES:
+        agenda_kind = "keep_trade_moving"
+    elif context.get("player_business_hire_option") or social_need < 28:
+        agenda_kind = "find_work_or_contact"
+    elif work_attitude in {"restless", "improvised"}:
+        agenda_kind = "look_for_angle"
+    elif empathy >= 0.68 and local_attachment >= 0.52:
+        agenda_kind = "watch_for_neighbors"
+    else:
+        agenda_kind = "get_through_shift"
+
+    bias_by_agenda = {
+        "avoid_heat": "safety",
+        "keep_order": "safety",
+        "protect_place": "protect_place",
+        "keep_trade_moving": "trade",
+        "find_work_or_contact": "work",
+        "look_for_angle": "opportunity",
+        "watch_for_neighbors": "reputation",
+        "get_through_shift": "practical",
+    }
+    self_interest_bias = bias_by_agenda.get(agenda_kind, "practical")
+    if privacy >= 0.72 and self_interest_bias in {"practical", "reputation", "opportunity", "work"}:
+        self_interest_bias = "privacy"
+
+    role_family = "local"
+    if role_id in _AUTHORITY_ROLES or role_tokens & _AUTHORITY_ROLES:
+        role_family = "authority"
+    elif organization_role in _MANAGEMENT_ROLES or role_id in _MANAGEMENT_ROLES:
+        role_family = "management"
+    elif role_id in _TRADE_ROLES or role_tokens & _TRADE_ROLES:
+        role_family = "trade"
+    elif role_id in _LOGISTICS_ROLES or role_tokens & _LOGISTICS_ROLES:
+        role_family = "logistics"
+
+    known_domains = tuple(
+        domain
+        for domain in _DIALOGUE_KNOWLEDGE_DOMAINS
+        if _DIALOGUE_COMPETENCE_RANK.get(domain_competence.get(domain, "none"), 0) > 0
+    )
+    return {
+        "agenda_kind": agenda_kind,
+        "self_interest_bias": self_interest_bias,
+        "role_family": role_family,
+        "role_id": role_id,
+        "career_text": career_text,
+        "organization_role": organization_role,
+        "area_type": area_type,
+        "district_type": district_type,
+        "knowledge_domains": known_domains,
+        "domain_competence": dict(domain_competence),
+        "privacy": privacy,
+        "local_attachment": local_attachment,
         "work_attitude": work_attitude,
     }
 

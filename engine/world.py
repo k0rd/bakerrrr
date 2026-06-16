@@ -41,6 +41,7 @@ class World:
         "buildings_by_district",
         "building_archetypes",
         "career_pool",
+        "custom_world_profiles",
         "_overworld_region_cache",
     }
 
@@ -1302,6 +1303,7 @@ class World:
 
         self.building_archetypes = self._all_building_archetypes()
         self.career_pool = self._all_careers()
+        self.custom_world_profiles = {}
         missing_career_mappings = [
             archetype
             for archetype in self.building_archetypes
@@ -1326,6 +1328,23 @@ class World:
         self.buildings_by_district = self._build_district_building_pools()
         self.building_archetypes = self._all_building_archetypes()
         self.career_pool = self._all_careers()
+        self.custom_world_profiles = {}
+
+    def set_custom_world_profiles(self, profiles=None):
+        parsed = {}
+        if isinstance(profiles, dict):
+            iterable = profiles.items()
+        else:
+            iterable = ()
+        for profile_id, profile in iterable:
+            key = str(profile_id or "").strip().lower()
+            if not key or not isinstance(profile, dict):
+                continue
+            clean = dict(profile)
+            clean["id"] = key
+            parsed[key] = clean
+        self.custom_world_profiles = parsed
+        return len(parsed)
 
     def __getstate__(self):
         state = dict(self.__dict__)
@@ -2879,6 +2898,107 @@ class World:
             return buildings
         return self.CORE_BUILDINGS_BY_DISTRICT.get(district_type, ())
 
+    def _custom_world_profile_candidates(self, *, area_type, district_type):
+        profiles = getattr(self, "custom_world_profiles", {}) or {}
+        if not isinstance(profiles, dict) or not profiles:
+            return ()
+        area_type = str(area_type or "").strip().lower()
+        district_type = str(district_type or "").strip().lower()
+        candidates = []
+        for profile_id, profile in sorted(profiles.items()):
+            if not isinstance(profile, dict):
+                continue
+            area_types = {
+                str(value).strip().lower()
+                for value in profile.get("area_types", ()) or ()
+                if str(value).strip()
+            }
+            if area_types and area_type not in area_types:
+                continue
+            district_types = {
+                str(value).strip().lower()
+                for value in profile.get("district_types", ()) or ()
+                if str(value).strip()
+            }
+            if district_types and district_type not in district_types:
+                continue
+            try:
+                weight = float(profile.get("selection_weight", 1.0) or 1.0)
+            except (TypeError, ValueError):
+                weight = 1.0
+            if weight <= 0.0:
+                continue
+            candidates.append((str(profile_id), profile, weight))
+        return tuple(candidates)
+
+    def _select_custom_world_profile(self, cx, cy, *, area_type, district_type):
+        candidates = self._custom_world_profile_candidates(area_type=area_type, district_type=district_type)
+        if not candidates:
+            return None
+        token = ",".join(profile_id for profile_id, _profile, _weight in candidates)
+        rng = random.Random(f"{self.seed}:custom_world_profile:{cx}:{cy}:{area_type}:{district_type}:{token}")
+        # Keep custom styles as a bias, not a hard replacement for every eligible chunk.
+        if rng.random() >= 0.42:
+            return None
+        total = sum(weight for _profile_id, _profile, weight in candidates)
+        pick = rng.uniform(0.0, total)
+        running = 0.0
+        for _profile_id, profile, weight in candidates:
+            running += weight
+            if pick <= running:
+                return profile
+        return candidates[-1][1]
+
+    @staticmethod
+    def _density_from_level(level, rng, fallback):
+        level = str(level or "none").strip().lower()
+        if level == "low":
+            return rng.randint(2, 4)
+        if level == "medium":
+            return rng.randint(5, 7)
+        if level == "high":
+            return rng.randint(8, 10)
+        return fallback
+
+    def _choose_building_archetype(self, options, rng, district):
+        options = [str(option).strip().lower() for option in options if str(option).strip()]
+        if not options:
+            return "house"
+        profile_id = str((district or {}).get("custom_world_profile_id", "") or "").strip().lower()
+        profile = (getattr(self, "custom_world_profiles", {}) or {}).get(profile_id)
+        if not isinstance(profile, dict):
+            return rng.choice(options)
+        weights = profile.get("building_weights") if isinstance(profile.get("building_weights"), dict) else {}
+        service_weights = (
+            profile.get("service_building_weights")
+            if isinstance(profile.get("service_building_weights"), dict)
+            else {}
+        )
+        weighted = []
+        for archetype in options:
+            weight = 1.0
+            if archetype in weights:
+                try:
+                    weight *= max(0.01, float(weights.get(archetype, 1.0) or 1.0))
+                except (TypeError, ValueError):
+                    pass
+            if archetype in service_weights:
+                try:
+                    weight *= max(0.01, float(service_weights.get(archetype, 1.0) or 1.0))
+                except (TypeError, ValueError):
+                    pass
+            weighted.append((archetype, weight))
+        total = sum(weight for _archetype, weight in weighted)
+        if total <= 0.0:
+            return rng.choice(options)
+        pick = rng.uniform(0.0, total)
+        running = 0.0
+        for archetype, weight in weighted:
+            running += weight
+            if pick <= running:
+                return archetype
+        return weighted[-1][0]
+
     def _business_suffix(self, archetype, rng):
         options = self.BUSINESS_SUFFIX_BY_ARCHETYPE.get(archetype, ("Works",))
         return rng.choice(options)
@@ -2981,6 +3101,39 @@ class World:
             population_density = max(1, population_density - rng.randint(2, 4))
             crime_rate = min(10, max(1, crime_rate + rng.randint(0, 2)))
 
+        custom_profile = self._select_custom_world_profile(
+            cx,
+            cy,
+            area_type=area_type,
+            district_type=district_type,
+        )
+        custom_profile_id = ""
+        custom_profile_label = ""
+        custom_water_level = "none"
+        custom_building_density_level = "none"
+        custom_population_density_level = "none"
+        if isinstance(custom_profile, dict):
+            profile_rng = random.Random(
+                f"{self.seed}:custom_world_profile_apply:{cx}:{cy}:{custom_profile.get('id', '')}"
+            )
+            custom_profile_id = str(custom_profile.get("id", "") or "").strip().lower()
+            custom_profile_label = str(custom_profile.get("label", "") or "").strip()
+            profile_districts = [
+                str(value).strip().lower()
+                for value in custom_profile.get("district_types", ()) or ()
+                if str(value).strip().lower() in self.DISTRICT_TYPES
+            ]
+            if profile_districts:
+                district_type = profile_rng.choice(profile_districts)
+            custom_population_density_level = str(custom_profile.get("population_density", "none") or "none").strip().lower()
+            population_density = self._density_from_level(
+                custom_population_density_level,
+                profile_rng,
+                population_density,
+            )
+            custom_building_density_level = str(custom_profile.get("building_density", "none") or "none").strip().lower()
+            custom_water_level = str(custom_profile.get("water", "none") or "none").strip().lower()
+
         return {
             "area_type": area_type,
             "district_type": district_type,
@@ -2992,6 +3145,11 @@ class World:
             "building_archetypes": list(self._buildings_for_district(district_type)),
             "region_name": descriptor.get("region_name"),
             "settlement_name": descriptor.get("settlement_name"),
+            "custom_world_profile_id": custom_profile_id,
+            "custom_world_profile_label": custom_profile_label,
+            "custom_water_level": custom_water_level,
+            "custom_population_density_level": custom_population_density_level,
+            "custom_building_density_level": custom_building_density_level,
         }
 
     @staticmethod
@@ -3164,7 +3322,7 @@ class World:
         ]
         if preferred:
             options = preferred
-        archetype = rng.choice(options)
+        archetype = self._choose_building_archetype(options, rng, district)
         wealth = int(district.get("wealth", 5))
         density = int(district.get("population_density", 5))
         floors = 1
@@ -3368,6 +3526,18 @@ class World:
             if district_type in {"downtown", "corporate", "slums"}:
                 min_buildings = min(max_buildings, min_buildings + 1)
             empty_block_chance = max(0.0, empty_block_chance - 0.15)
+
+        custom_building_density = str(district.get("custom_building_density_level", "none") or "none").strip().lower()
+        if custom_building_density == "low":
+            min_buildings = 0
+            max_buildings = max(1, min(max_buildings, 1))
+            empty_block_chance = max(empty_block_chance, 0.45)
+        elif custom_building_density == "medium":
+            empty_block_chance = max(0.0, empty_block_chance - 0.06)
+        elif custom_building_density == "high":
+            max_buildings = max(max_buildings, 3)
+            min_buildings = min(max_buildings, max(min_buildings, 2))
+            empty_block_chance = max(0.0, empty_block_chance - 0.22)
 
         self._reserve_large_city_parcel(
             blocks_by_coord,

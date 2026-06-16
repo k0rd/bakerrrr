@@ -113,6 +113,7 @@ from game.movement_runtime import (
     _movement_allows_auto_open,
     try_move_entity,
 )
+from game.system_support.altered_state_runtime import bonus_move_available, control_lapse_active, spend_bonus_move
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
     building_id_from_structure as _building_id_from_structure,
@@ -3589,6 +3590,17 @@ class NPCInvestigateSystem(System):
         "shopping",
         "resting",
     }
+    BONUS_MOVE_STATES = {
+        "chasing",
+        "protecting",
+        "ejecting_target",
+        "leaving_property",
+        "seeking_safety",
+        "reporting_incident",
+        "helping_victim",
+        "warning",
+        "evading_authority",
+    }
 
     def __init__(self, sim):
         super().__init__(sim)
@@ -3604,6 +3616,75 @@ class NPCInvestigateSystem(System):
     def _live_timeskip_active(self):
         state = getattr(self.sim, "live_timeskip", None)
         return isinstance(state, dict) and bool(state.get("active"))
+
+    def _try_bonus_move_step(self, eid, ai, *, target, positions, noise_profiles, vehicle_step=False):
+        if vehicle_step:
+            return False
+        if str(getattr(ai, "state", "") or "").strip().lower() not in self.BONUS_MOVE_STATES:
+            return False
+        if not bonus_move_available(self.sim, eid):
+            return False
+        pos = positions.get(eid)
+        if not pos:
+            return False
+        try:
+            tx, ty, tz = int(target[0]), int(target[1]), int(target[2])
+        except (TypeError, ValueError, IndexError):
+            return False
+        if int(pos.z) != tz:
+            return False
+        if int(pos.x) == tx and int(pos.y) == ty:
+            return False
+        step = _path_next_step(
+            self.sim,
+            eid,
+            sx=int(pos.x),
+            sy=int(pos.y),
+            tx=tx,
+            ty=ty,
+            z=int(pos.z),
+            max_nodes=256,
+        )
+        if not step:
+            return False
+        spend_bonus_move(self.sim, eid, source="npc_move")
+        origin_x = int(pos.x)
+        origin_y = int(pos.y)
+        origin_z = int(pos.z)
+        moved, _blocked_reason = try_move_entity(
+            self.sim,
+            eid=eid,
+            new_x=int(step[0]),
+            new_y=int(step[1]),
+            new_z=int(pos.z),
+            reason="npc_bonus_step",
+        )
+        if not moved:
+            return False
+        profile = noise_profiles.get(eid)
+        noise_radius = int(max(1, getattr(profile, "move_radius", 4)))
+        self.sim.emit(Event(
+            "noise",
+            source_eid=eid,
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+            radius=noise_radius,
+            cause="move",
+        ))
+        _emit_move_access_events(
+            self.sim,
+            eid=eid,
+            action="move",
+            origin_x=origin_x,
+            origin_y=origin_y,
+            origin_z=origin_z,
+            target_x=int(pos.x),
+            target_y=int(pos.y),
+            target_z=int(pos.z),
+            emit_clear_offense=False,
+        )
+        return True
 
     def _normalize_due_tick(self, value):
         try:
@@ -4261,6 +4342,13 @@ class NPCInvestigateSystem(System):
                 if live_timeskip_active:
                     self._unschedule_move_due(eid)
                 continue
+            throttle = move_throttles.get(eid)
+            if control_lapse_active(self.sim, eid):
+                if throttle:
+                    throttle.next_move_tick = max(throttle.next_move_tick, int(self.sim.tick) + 1)
+                else:
+                    self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), int(self.sim.tick) + 1)
+                continue
 
             if global_stride > 1 and ((stride_phase_tick + eid) % global_stride != 0):
                 continue
@@ -4270,7 +4358,6 @@ class NPCInvestigateSystem(System):
                     self._schedule_move_due(eid, int(getattr(self.sim, "tick", 0)) + 1)
                 continue
 
-            throttle = move_throttles.get(eid)
             status_speed_mult = _entity_status_move_speed_multiplier(self.sim, eid)
 
             next_move_tick = throttle.next_move_tick if throttle else self.next_move_tick.get(eid, 0)
@@ -5220,6 +5307,25 @@ class NPCInvestigateSystem(System):
                     tick=self.sim.tick,
                     min_effect=0.16,
                 )
+            bonus_moved = self._try_bonus_move_step(
+                eid,
+                ai,
+                target=(tx, ty, tz),
+                positions=positions,
+                noise_profiles=noise_profiles,
+                vehicle_step=vehicle_step,
+            )
+            if bonus_moved and ai.state == "protecting" and threat_focus:
+                bonus_pos = positions.get(eid)
+                if bonus_pos:
+                    _sync_npc_cover_against_threat(
+                        self.sim,
+                        eid,
+                        bonus_pos,
+                        threat_focus,
+                        tick=self.sim.tick,
+                        min_effect=0.16,
+                    )
 
             if throttle:
                 throttle.next_move_tick = self.sim.tick + cooldown

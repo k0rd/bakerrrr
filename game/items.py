@@ -284,15 +284,27 @@ def _normalize_throw_profile(value):
     explosion_radius = max(0, _int_or_default(value.get("explosion_radius"), 0))
     fire_intensity = max(0, _int_or_default(value.get("fire_intensity"), 0))
     smoke_intensity = max(0, _int_or_default(value.get("smoke_intensity"), 0))
+    cloud_radius = max(0, _int_or_default(value.get("cloud_radius"), explosion_radius))
+    cloud_duration = max(0, _int_or_default(value.get("cloud_duration"), 0))
+    aerosol_duration = max(0, _int_or_default(value.get("aerosol_duration"), 0))
+    aerosol_exposure_cooldown = max(1, _int_or_default(value.get("aerosol_exposure_cooldown"), 6))
     cover_penetration = max(0.0, min(1.0, _float_or_default(value.get("cover_penetration"), 0.0)))
     aoe_falloff = max(0.0, min(1.0, _float_or_default(value.get("aoe_falloff"), 0.5)))
     speed = max(0.1, _float_or_default(value.get("speed"), 0.9))
     trajectory = str(value.get("trajectory", "lobbed") or "lobbed").strip().lower()
     if trajectory not in {"ballistic", "lobbed", "beam"}:
         trajectory = "lobbed"
+    aerosol_status = str(value.get("aerosol_status", "") or "").strip().lower()
+    aerosol_modifiers = value.get("aerosol_modifiers") if isinstance(value.get("aerosol_modifiers"), dict) else {}
+    aerosol_modifiers = {
+        str(k).strip(): _float_or_default(v, 0.0)
+        for k, v in aerosol_modifiers.items()
+        if str(k).strip()
+    }
+    aerosol_label = str(value.get("aerosol_label", "") or "").strip()
     if damage <= 0 and explosion_radius <= 0 and fire_intensity <= 0 and smoke_intensity <= 0:
         return None
-    return {
+    profile = {
         "range": range_,
         "trajectory": trajectory,
         "projectile_glyph": str(value.get("projectile_glyph", "*") or "*")[:1] or "*",
@@ -307,6 +319,18 @@ def _normalize_throw_profile(value):
         "consume_on_throw": bool(value.get("consume_on_throw", True)),
         "shatter": bool(value.get("shatter", False)),
     }
+    if cloud_radius > 0:
+        profile["cloud_radius"] = cloud_radius
+    if cloud_duration > 0:
+        profile["cloud_duration"] = cloud_duration
+    if aerosol_status and aerosol_duration > 0:
+        profile["aerosol_status"] = aerosol_status
+        profile["aerosol_duration"] = aerosol_duration
+        profile["aerosol_modifiers"] = aerosol_modifiers
+        profile["aerosol_exposure_cooldown"] = aerosol_exposure_cooldown
+        if aerosol_label:
+            profile["aerosol_label"] = aerosol_label
+    return profile
 
 
 def normalize_item_quality(value, default="standard"):
@@ -1078,15 +1102,8 @@ def _read_json(path, fallback_desc=None):
         return None
 
 
-def load_item_catalog(path=ITEMS_PATH):
-    raw = _read_json(path, fallback_desc="built-in item catalog defaults")
-    if raw is not None and not isinstance(raw, dict):
-        warn_content_fallback(path, "built-in item catalog defaults", problem="top-level JSON must be an object")
-    source = dict(DEFAULT_ITEM_CATALOG)
-    if isinstance(raw, dict):
-        payload, _metadata = split_object_document(raw)
-        if isinstance(payload, dict):
-            source.update(payload)
+def _normalize_item_catalog_source(source):
+    source = source if isinstance(source, dict) else {}
     parsed = {}
 
     for item_id, item in source.items():
@@ -1150,12 +1167,32 @@ def load_item_catalog(path=ITEMS_PATH):
             ),
         }
 
+    return parsed
+
+
+def load_item_catalog(path=ITEMS_PATH, extra_items=None):
+    raw = _read_json(path, fallback_desc="built-in item catalog defaults")
+    if raw is not None and not isinstance(raw, dict):
+        warn_content_fallback(path, "built-in item catalog defaults", problem="top-level JSON must be an object")
+    source = dict(DEFAULT_ITEM_CATALOG)
+    if isinstance(raw, dict):
+        payload, _metadata = split_object_document(raw)
+        if isinstance(payload, dict):
+            source.update(payload)
+    if isinstance(extra_items, dict):
+        source.update(extra_items)
+    parsed = _normalize_item_catalog_source(source)
+
     if not parsed:
         return {
             item_id: {**item, "id": item_id}
             for item_id, item in DEFAULT_ITEM_CATALOG.items()
         }
     return parsed
+
+
+def normalize_item_definitions(items):
+    return _normalize_item_catalog_source(items)
 
 
 def load_loot_tables(path=LOOT_TABLES_PATH, item_catalog=None):
@@ -1508,3 +1545,13 @@ def roll_loot(rng, table_key="default", count=1, loot_tables=None):
 
 ITEM_CATALOG = load_item_catalog()
 LOOT_TABLES = load_loot_tables(item_catalog=ITEM_CATALOG)
+
+
+def refresh_item_runtime(custom_items=None):
+    parsed = load_item_catalog(extra_items=custom_items if isinstance(custom_items, dict) else None)
+    ITEM_CATALOG.clear()
+    ITEM_CATALOG.update(parsed)
+    loot_tables = load_loot_tables(item_catalog=ITEM_CATALOG)
+    LOOT_TABLES.clear()
+    LOOT_TABLES.update(loot_tables)
+    return ITEM_CATALOG

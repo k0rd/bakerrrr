@@ -18,6 +18,7 @@ The best habit is simple: press `?` whenever you feel lost. The in-game help pan
 
 - [Getting Started](GETTING_STARTED.md)
 - [Controls And Help](CONTROLS_AND_HELP.md)
+- [Custom Content](CUSTOM_CONTENT.md)
 - [Packaged Builds](PACKAGED_BUILDS.md)
 - [Reporting Bugs](REPORTING_BUGS.md)
 - [Project README](../README.md)

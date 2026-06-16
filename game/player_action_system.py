@@ -84,6 +84,7 @@ from game.system_support.access_runtime import (
     _lock_override_required_for_prop,
 )
 from game.system_support.actor_runtime import _apply_downed_actor_state, _entity_is_downed
+from game.system_support.altered_state_runtime import control_lapse_active, maybe_misdirect_move
 from game.system_support.combat_targeting_runtime import _manual_fire_preview, _target_condition_descriptor
 from game.system_support.interaction_ordering import (
     _interaction_target_order_key,
@@ -103,6 +104,30 @@ from game.ui_text_runtime import _line_with_suffix
 
 STAKEOUT_REVEAL_INTERVAL = 8
 STAKEOUT_MAX_REVEALS = 4
+CONTROL_LAPSE_TURN_ACTIONS = {
+    "move",
+    "vehicle_move",
+    "vehicle_momentum",
+    "overworld_travel",
+    "zoom_city_enter",
+    "floor_change",
+    "wait",
+    "toggle_sneak",
+    "toggle_door_lock",
+    "scan",
+    "tactical_read",
+    "interact",
+    "side_entry",
+    "window_entry",
+    "forced_breach",
+    "pickup_item",
+    "drop_item",
+    "use_item",
+    "purchase_property",
+    "cover_hop",
+    "toggle_cover",
+    "cycle_weapon",
+}
 
 
 def _facade():
@@ -1317,6 +1342,15 @@ class PlayerActionSystem(System):
                 ))
             return
 
+        if action in CONTROL_LAPSE_TURN_ACTIONS and control_lapse_active(self.sim, eid):
+            self.sim.emit(Event(
+                "player_action_blocked",
+                eid=eid,
+                action=action,
+                reason="control_lapse",
+            ))
+            return
+
         if action == "zoom_overworld":
             self._set_sneak_mode(eid, False, reason="zoom")
             if not self._can_enter_overworld_from_local_vehicle(eid, pos):
@@ -1370,11 +1404,17 @@ class PlayerActionSystem(System):
                     dy=int(event.data.get("dy", 0)),
                 )
                 return
+            dx, dy, _misdirected = maybe_misdirect_move(
+                self.sim,
+                eid,
+                int(event.data.get("dx", 0)),
+                int(event.data.get("dy", 0)),
+            )
             self.player_movement.handle_move_action(
                 eid,
                 pos,
-                dx=int(event.data.get("dx", 0)),
-                dy=int(event.data.get("dy", 0)),
+                dx=dx,
+                dy=dy,
             )
             return
 

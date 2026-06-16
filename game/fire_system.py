@@ -196,6 +196,7 @@ class FireSystem(System):
         self._loaded_chunk_cache = None
         self._fire_behavior_cache = None
         self.sim.events.subscribe("explosion_triggered", self.on_explosion_triggered)
+        self.sim.events.subscribe("smoke_cloud_released", self.on_smoke_cloud_released)
 
     def _begin_update_caches(self):
         self._loaded_chunk_cache = set(_loaded_chunk_keys(self.sim))
@@ -268,6 +269,66 @@ class FireSystem(System):
                     spread_from=origin if is_spread else None,
                     intensity=max(2, (source_intensity or 4) - distance),
                     sync_protected=False,
+                )
+
+    def on_smoke_cloud_released(self, event):
+        x = event.data.get("x")
+        y = event.data.get("y")
+        z = event.data.get("z", 0)
+        if x is None or y is None:
+            return
+        origin = _coord_key(x, y, z)
+        if origin is None:
+            return
+        radius = max(0, _safe_int(event.data.get("radius"), 0))
+        base_smoke = max(1, _safe_int(event.data.get("smoke_intensity"), 1))
+        cloud_duration = max(0, _safe_int(event.data.get("cloud_duration"), 0))
+        aerosol_status = _text(event.data.get("aerosol_status")).lower()
+        aerosol_modifiers = event.data.get("aerosol_modifiers")
+        aerosol_modifiers = dict(aerosol_modifiers) if isinstance(aerosol_modifiers, dict) else {}
+        source_kind = "aerosol" if aerosol_status else "smoke_throw"
+        now = _safe_int(getattr(self.sim, "tick", 0), 0)
+
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                distance = abs(dx) + abs(dy)
+                if distance > radius:
+                    continue
+                tx = int(origin[0]) + dx
+                ty = int(origin[1]) + dy
+                tz = int(origin[2])
+                behavior = self._behavior_for_cell(tx, ty, tz)
+                tile = self.sim.tilemap.tile_at(tx, ty, tz)
+                if tile is None:
+                    continue
+                if not bool(behavior.get("can_carry_smoke")) and not bool(getattr(tile, "walkable", False)):
+                    continue
+                smoke_intensity = max(1, base_smoke - distance, cloud_duration - distance)
+                upsert_fire_cell(
+                    self.sim,
+                    tx,
+                    ty,
+                    tz,
+                    fire_intensity=0,
+                    smoke_intensity=smoke_intensity,
+                    source_kind=source_kind,
+                    source_eid=event.data.get("source_eid"),
+                    property_id=behavior.get("property_id"),
+                    building_id=behavior.get("building_id"),
+                    burn_tier=behavior.get("burn_tier"),
+                    burn_budget=0,
+                    started_tick=now,
+                    last_advanced_tick=now,
+                    sync_protected=False,
+                    behavior=behavior,
+                    advance_interval=FIRE_SPREAD_INTERVAL,
+                    aerosol_status=aerosol_status,
+                    aerosol_duration=max(0, _safe_int(event.data.get("aerosol_duration"), 0)),
+                    aerosol_modifiers=aerosol_modifiers,
+                    aerosol_exposure_cooldown=max(1, _safe_int(event.data.get("aerosol_exposure_cooldown"), 6)),
+                    aerosol_label=_text(event.data.get("aerosol_label")),
+                    aerosol_source_item_id=_text(event.data.get("thrown_item_id")),
+                    aerosol_source_item_name=_text(event.data.get("thrown_item_name")),
                 )
 
     def _ignite_cell(
@@ -585,6 +646,46 @@ class FireSystem(System):
         )
         return True
 
+    def _apply_aerosol_to_entity(self, eid, coord, cell, cooldowns):
+        status_name = _text(cell.get("aerosol_status")).lower()
+        if not status_name:
+            return False
+        duration = max(1, _safe_int(cell.get("aerosol_duration"), 1))
+        cooldown_ticks = max(1, _safe_int(cell.get("aerosol_exposure_cooldown"), SMOKE_DAMAGE_INTERVAL))
+        key = ("aerosol", status_name, coord, int(eid))
+        tick = _safe_int(getattr(self.sim, "tick", 0), 0)
+        if tick < _safe_int(cooldowns.get(key), -1):
+            return False
+        effects = self.sim.ecs.get(StatusEffects).get(eid)
+        if effects is None:
+            return False
+        label = _text(cell.get("aerosol_label")) or status_name.replace("_", " ")
+        modifiers = dict(cell.get("aerosol_modifiers", {}) or {})
+        effects.add(
+            status=status_name,
+            duration=duration,
+            modifiers=modifiers,
+            source_item=f"aerosol:{_text(cell.get('aerosol_source_item_id')) or status_name}",
+        )
+        cooldowns[key] = tick + cooldown_ticks
+        self.sim.emit(
+            Event(
+                "aerosol_exposure_triggered",
+                eid=eid,
+                target_eid=eid,
+                status=status_name,
+                duration=duration,
+                modifiers=modifiers,
+                aerosol_label=label,
+                item_id=_text(cell.get("aerosol_source_item_id")),
+                item_name=_text(cell.get("aerosol_source_item_name")),
+                x=int(coord[0]),
+                y=int(coord[1]),
+                z=int(coord[2]),
+            )
+        )
+        return True
+
     def _apply_entity_exposure(self):
         state = fire_state(self.sim)
         cooldowns = state.get("contact_cooldowns", {})
@@ -617,6 +718,8 @@ class FireSystem(System):
                             property_name=_text(cell.get("property_name")) or _text(cell.get("property_id")),
                         )
                         cooldowns[key] = _safe_int(getattr(self.sim, "tick", 0), 0) + SMOKE_DAMAGE_INTERVAL
+                if smoke_intensity > 0:
+                    self._apply_aerosol_to_entity(eid, coord, cell, cooldowns)
 
     def _mark_structural_damage(self, coord, cell, behavior):
         if not bool(behavior.get("structural_damage_kind")):

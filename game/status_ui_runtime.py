@@ -152,9 +152,29 @@ def _status_modifier_brief_label(key, value):
         return f"steady {value * 100.0:+.0f}%"
     if key == "move_speed_mult":
         return f"speed {value * 100.0:+.0f}%"
+    if key == "movement_misdirect_chance":
+        return f"misstep {value * 100.0:+.0f}%"
+    if key == "hallucination_intensity":
+        return f"visions {value * 100.0:+.0f}%"
+    if key == "hallucination_read_chance":
+        return f"false reads {value * 100.0:+.0f}%"
+    if key == "control_lapse_chance":
+        return f"lapse {value * 100.0:+.0f}%"
+    if key == "control_lapse_ticks":
+        return f"stun {int(round(value)):+d}t"
+    if key == "blackout_chance":
+        return f"blackout {value * 100.0:+.0f}%"
+    if key == "blackout_min_ticks":
+        return f"blackout min {int(round(value))}t"
+    if key == "blackout_max_ticks":
+        return f"blackout max {int(round(value))}t"
+    if key == "blackout_cooldown_ticks":
+        return f"blackout cd {int(round(value))}t"
     if key == "hp_tick_delta":
         label = "regen" if value > 0.0 else "bleed"
         return f"{label} {value:+.2f}/t"
+    if key == "toxicity_tick_delta":
+        return f"toxin {value:+.2f}/t"
     if key == "assault_bias_delta":
         return f"push {value * 100.0:+.0f}%"
     if key == "retreat_bias_delta":
@@ -176,7 +196,14 @@ def _status_modifier_summary_text(modifiers, *, limit=3):
         "incoming_damage_mult",
         "suppression_resist_mult",
         "move_speed_mult",
+        "movement_misdirect_chance",
+        "hallucination_intensity",
+        "hallucination_read_chance",
+        "control_lapse_chance",
+        "control_lapse_ticks",
+        "blackout_chance",
         "hp_tick_delta",
+        "toxicity_tick_delta",
         "armor_absorb_bonus",
         "cover_absorb_bonus",
         "assault_bias_delta",

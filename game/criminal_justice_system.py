@@ -875,6 +875,35 @@ class CriminalJusticeSystem(System):
         hold_for_release = bool(objective_protected or ((weapon or restricted) and not (illegal or stolen or incident_evidence)))
         forfeit = bool((illegal or stolen or incident_evidence) and not objective_protected)
         seized = bool(weapon or contraband or stolen or incident_evidence or objective_protected)
+        if forfeit:
+            disposition = "forfeit"
+            disposition_label = "forfeited/confiscated"
+        elif hold_for_release:
+            disposition = "hold_for_release"
+            disposition_label = "held for release"
+        else:
+            disposition = "ignore_for_now"
+            disposition_label = "left with you"
+
+        reason_labels = []
+        if objective_protected:
+            reason_labels.append("required objective item")
+        if incident_evidence and not objective_protected:
+            reason_labels.append("reported incident evidence")
+        if stolen and not objective_protected:
+            reason_labels.append("officially matched stolen property")
+        if illegal and not objective_protected:
+            reason_labels.append("illegal contraband")
+        if restricted and not (illegal or stolen or incident_evidence):
+            reason_labels.append("restricted but releasable gear")
+        if weapon and not (illegal or stolen or incident_evidence):
+            reason_labels.append("legal weapon held for release")
+        if not reason_labels:
+            if latent_claim:
+                reason_labels.append("suspicious property without an official match")
+            else:
+                reason_labels.append("lawful personal property")
+        reason_labels = tuple(dict.fromkeys(label for label in reason_labels if str(label).strip()))
         return {
             "item_id": item_id,
             "weapon": weapon,
@@ -888,7 +917,23 @@ class CriminalJusticeSystem(System):
             "hold_for_release": hold_for_release,
             "forfeit": forfeit,
             "seized": seized,
+            "disposition": disposition,
+            "disposition_label": disposition_label,
+            "reason_labels": reason_labels,
+            "reason_text": ", ".join(reason_labels),
         }
+
+    def _label_list_text(self, labels, *, limit=3):
+        cleaned = [str(label).strip() for label in list(labels or ()) if str(label).strip()]
+        if not cleaned:
+            return ""
+        return ", ".join(tuple(dict.fromkeys(cleaned))[:max(1, int(limit or 1))])
+
+    def _reason_list_text(self, labels, *, limit=3):
+        cleaned = [str(label).strip() for label in list(labels or ()) if str(label).strip()]
+        if not cleaned:
+            return ""
+        return ", ".join(tuple(dict.fromkeys(cleaned))[:max(1, int(limit or 1))])
 
     def _inventory_can_accept_entry(self, inventory, entry):
         if inventory is None or not isinstance(entry, dict):
@@ -1191,6 +1236,63 @@ class CriminalJusticeSystem(System):
         }.get(tier, 1.0)
         return int(max(base, min(240, round(base + (score * per_score)))) + restitution_due)
 
+    def _player_base_fine_amount(self, snapshot):
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        tier = str(snapshot.get("wanted_tier", "clear")).strip().lower() or "clear"
+        score = max(0, int(snapshot.get("active_score", 0) or 0))
+        base = {
+            "questioning": 10,
+            "wanted": 30,
+            "arrest_on_sight": 72,
+        }.get(tier, 12)
+        per_score = {
+            "questioning": 0.8,
+            "wanted": 1.4,
+            "arrest_on_sight": 2.1,
+        }.get(tier, 1.0)
+        return int(max(base, min(240, round(base + (score * per_score)))))
+
+    def _player_penalty_breakdown(self, snapshot, *, fine_due=0, fine_result=None, evidence_surcharge=0, multiplier=1.0, disposition=""):
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        fine_result = fine_result if isinstance(fine_result, dict) else {}
+        base_fine = int(self._player_base_fine_amount(snapshot))
+        restitution_due = max(0, int(snapshot.get("restitution_due", 0) or 0))
+        fine_due = int(max(0, fine_due or 0))
+        return {
+            "disposition": str(disposition or "").strip().lower(),
+            "base_fine": int(base_fine),
+            "fine_multiplier": float(round(float(multiplier or 0.0), 3)),
+            "restitution_due": int(restitution_due),
+            "evidence_surcharge": int(max(0, evidence_surcharge or 0)),
+            "fine_due": int(fine_due),
+            "fine_paid": int(fine_result.get("fine_paid", 0) or 0),
+            "cash_paid": int(fine_result.get("cash_fine_paid", 0) or 0),
+            "wallet_paid": int(fine_result.get("wallet_fine_paid", 0) or 0),
+            "bank_paid": int(fine_result.get("bank_fine_paid", 0) or 0),
+            "debt_added": int(fine_result.get("debt_added", 0) or 0),
+            "fine_outstanding": int(fine_result.get("fine_outstanding", 0) or 0),
+            "debt_balance_before": int(fine_result.get("debt_balance_before", self._player_justice_debt_balance()) or 0),
+            "debt_balance_after": int(fine_result.get("debt_balance_after", self._player_justice_debt_balance()) or 0),
+        }
+
+    def _payment_result_text(self, fine_result):
+        fine_result = fine_result if isinstance(fine_result, dict) else {}
+        paid = int(fine_result.get("fine_paid", 0) or 0)
+        debt_added = int(fine_result.get("debt_added", 0) or 0)
+        payment_bits = []
+        if int(fine_result.get("cash_fine_paid", 0) or 0) > 0:
+            payment_bits.append(f"{int(fine_result.get('cash_fine_paid', 0) or 0)}c carried")
+        if int(fine_result.get("wallet_fine_paid", 0) or 0) > 0:
+            payment_bits.append(f"{int(fine_result.get('wallet_fine_paid', 0) or 0)}c wallet")
+        if int(fine_result.get("bank_fine_paid", 0) or 0) > 0:
+            payment_bits.append(f"{int(fine_result.get('bank_fine_paid', 0) or 0)}c bank")
+        pieces = []
+        if paid > 0:
+            pieces.append(f"paid {paid}c" + (f" ({', '.join(payment_bits)})" if payment_bits else ""))
+        if debt_added > 0:
+            pieces.append(f"{debt_added}c filed as justice debt")
+        return "; ".join(pieces)
+
     def _player_booking_anchor(self, fallback_pos):
         if fallback_pos is None:
             return None
@@ -1253,23 +1355,33 @@ class CriminalJusticeSystem(System):
 
     def _confiscation_summary_text(self, manifest):
         manifest = manifest if isinstance(manifest, dict) else {}
-        weapon_units = int(manifest.get("weapon_units", 0) or 0)
-        contraband_units = int(manifest.get("contraband_units", 0) or 0)
-        stolen_units = int(manifest.get("stolen_units", 0) or 0)
-        labels = [str(label).strip() for label in list(manifest.get("labels", ()) or ()) if str(label).strip()]
-        if weapon_units <= 0 and contraband_units <= 0 and stolen_units <= 0:
-            return "Any weapons, contraband, or stolen goods on you will be seized during booking."
+        held_units = int(manifest.get("held_units", 0) or 0)
+        forfeited_units = int(manifest.get("forfeited_units", 0) or 0)
+        held_labels = self._label_list_text(manifest.get("held_labels", ()))
+        forfeited_labels = self._label_list_text(manifest.get("forfeited_labels", ()))
+        held_reasons = self._reason_list_text(manifest.get("held_reason_labels", ()))
+        forfeited_reasons = self._reason_list_text(manifest.get("forfeited_reason_labels", ()))
+        if held_units <= 0 and forfeited_units <= 0:
+            return "Legal belongings stay with you unless a search finds contraband, reported stolen property, or evidence."
 
-        seized_bits = []
-        if weapon_units > 0:
-            seized_bits.append(f"{weapon_units} weapon" + ("s" if weapon_units != 1 else ""))
-        if contraband_units > 0:
-            seized_bits.append(f"{contraband_units} contraband item" + ("s" if contraband_units != 1 else ""))
-        if stolen_units > 0:
-            seized_bits.append(f"{stolen_units} stolen item" + ("s" if stolen_units != 1 else ""))
-        summary = "Booking seizure preview: " + ", ".join(seized_bits) + "."
-        if labels:
-            summary += f" Likely taken: {', '.join(labels[:3])}."
+        parts = []
+        if held_units > 0:
+            text = f" held for release: {held_units} item(s)"
+            if held_labels:
+                text += f" ({held_labels})"
+            if held_reasons:
+                text += f" because {held_reasons}"
+            parts.append(text.strip())
+        if forfeited_units > 0:
+            text = f" forfeited/confiscated: {forfeited_units} item(s)"
+            if forfeited_labels:
+                text += f" ({forfeited_labels})"
+            if forfeited_reasons:
+                text += f" because {forfeited_reasons}"
+            parts.append(text.strip())
+        summary = "Booking seizure preview: " + "; ".join(parts) + "."
+        if held_units > 0:
+            summary += " Held property can be reclaimed at the booking desk once any justice debt is clear."
         return summary
 
     def _inspection_match_labels(self, inspection):
@@ -1382,16 +1494,43 @@ class CriminalJusticeSystem(System):
             offender_eid=self.player_eid,
         )
 
-    def _remove_inventory_rows(self, eid, rows, *, reason="confiscated"):
+    def _questioning_hold_property(self, source_prop=None):
+        source_prop = source_prop if isinstance(source_prop, dict) else None
+        if self._booking_property_allowed(source_prop):
+            return source_prop
+        player_pos = self._position_for(self.player_eid)
+        if player_pos is None:
+            return source_prop if self._booking_property_allowed(source_prop) else None
+        anchor = self._player_booking_anchor(player_pos)
+        origin_x = int((anchor or {}).get("x", player_pos.x) or player_pos.x)
+        origin_y = int((anchor or {}).get("y", player_pos.y) or player_pos.y)
+        return self._find_booking_property(source_prop=source_prop, origin_x=origin_x, origin_y=origin_y)
+
+    def _remove_inventory_rows(self, eid, rows, *, reason="confiscated", held_prop=None):
         inventory = self.sim.ecs.get(Inventory).get(eid)
         if inventory is None:
             return {
                 "entries": (),
                 "labels": (),
                 "count": 0,
+                "held_entries": (),
+                "held_labels": (),
+                "held_count": 0,
+                "forfeited_entries": (),
+                "forfeited_labels": (),
+                "forfeited_count": 0,
+                "held_reason_labels": (),
+                "forfeited_reason_labels": (),
+                "reason_labels": (),
             }
         removed_entries = []
         labels = []
+        held_entries = []
+        held_labels = []
+        forfeited_entries = []
+        forfeited_labels = []
+        held_reason_labels = []
+        forfeited_reason_labels = []
         for row in tuple(rows or ()):
             if not isinstance(row, dict):
                 continue
@@ -1399,17 +1538,57 @@ class CriminalJusticeSystem(System):
             removed = inventory.remove_item(instance_id=row.get("instance_id"), quantity=quantity)
             if not removed:
                 continue
+            item_id = str(removed.get("item_id", "") or "").strip().lower()
+            metadata = removed.get("metadata") if isinstance(removed.get("metadata"), dict) else {}
+            item_name = item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG)
+            policy = self._justice_item_hold_policy(removed)
+            entry_payload = {
+                "instance_id": removed.get("instance_id"),
+                "item_id": item_id,
+                "quantity": max(1, int(removed.get("quantity", 1) or 1)),
+                "owner_eid": removed.get("owner_eid"),
+                "owner_tag": removed.get("owner_tag"),
+                "metadata": dict(metadata),
+            }
             removed_entries.append(dict(removed))
-            labels.append(item_display_name(
-                removed.get("item_id"),
-                metadata=removed.get("metadata"),
-                item_catalog=ITEM_CATALOG,
-            ))
+            labels.append(item_name)
+            if bool(policy.get("hold_for_release")):
+                held_entries.append(entry_payload)
+                held_labels.append(item_name)
+                held_reason_labels.extend(tuple(policy.get("reason_labels", ()) or ()))
+            elif bool(policy.get("forfeit")):
+                forfeited_entries.append(entry_payload)
+                forfeited_labels.append(item_name)
+                forfeited_reason_labels.extend(tuple(policy.get("reason_labels", ()) or ()))
             self._emit_removed_gear_events(eid, removed, reason=reason)
+        if eid == self.player_eid and held_entries:
+            _store_justice_held_property(
+                self.sim,
+                self.player_eid,
+                property_id=(held_prop or {}).get("id") if isinstance(held_prop, dict) else None,
+                property_name=(held_prop or {}).get("name") if isinstance(held_prop, dict) else None,
+                entries=held_entries,
+            )
+        held_count = int(sum(max(1, int(entry.get("quantity", 1) or 1)) for entry in held_entries))
+        forfeited_count = int(sum(max(1, int(entry.get("quantity", 1) or 1)) for entry in forfeited_entries))
+        reason_labels = tuple(dict.fromkeys(
+            str(label).strip()
+            for label in list(held_reason_labels) + list(forfeited_reason_labels)
+            if str(label).strip()
+        ))
         return {
             "entries": tuple(removed_entries),
             "labels": tuple(dict.fromkeys(label for label in labels if str(label).strip()))[:4],
             "count": int(sum(max(1, int(entry.get("quantity", 1) or 1)) for entry in removed_entries)),
+            "held_entries": tuple(held_entries),
+            "held_labels": tuple(dict.fromkeys(label for label in held_labels if str(label).strip()))[:4],
+            "held_count": int(held_count),
+            "forfeited_entries": tuple(forfeited_entries),
+            "forfeited_labels": tuple(dict.fromkeys(label for label in forfeited_labels if str(label).strip()))[:4],
+            "forfeited_count": int(forfeited_count),
+            "held_reason_labels": tuple(dict.fromkeys(label for label in held_reason_labels if str(label).strip()))[:4],
+            "forfeited_reason_labels": tuple(dict.fromkeys(label for label in forfeited_reason_labels if str(label).strip()))[:4],
+            "reason_labels": reason_labels[:4],
         }
 
     def _open_player_questioning_prompt(self, npc_eid=None, *, snapshot=None, source_prop=None):
@@ -1538,7 +1717,23 @@ class CriminalJusticeSystem(System):
         )
         disposition = "release_warning"
         kept_contraband_count = 0
-        confiscation = {"entries": (), "labels": (), "count": 0}
+        confiscation = {
+            "entries": (),
+            "labels": (),
+            "count": 0,
+            "held_entries": (),
+            "held_labels": (),
+            "held_count": 0,
+            "forfeited_entries": (),
+            "forfeited_labels": (),
+            "forfeited_count": 0,
+            "held_reason_labels": (),
+            "forfeited_reason_labels": (),
+            "reason_labels": (),
+        }
+        held_prop = self._questioning_hold_property(source_prop)
+        held_prop_name = str((held_prop or {}).get("name", "Justice Office") if isinstance(held_prop, dict) else "Justice Office").strip() or "Justice Office"
+        fine_multiplier = 0.0
 
         if severity_bucket == "violent_evidence":
             disposition = "full_booking"
@@ -1551,12 +1746,96 @@ class CriminalJusticeSystem(System):
                 kept_contraband_count = int(counts.get("contraband", 0) or 0)
             elif cooperation_score >= 0.76 and profile.get("citation_pref"):
                 disposition = "citation_confiscation"
-                confiscation = self._remove_inventory_rows(self.player_eid, contraband_rows, reason="citation_confiscated")
+                confiscation = self._remove_inventory_rows(self.player_eid, contraband_rows, reason="citation_confiscated", held_prop=held_prop)
             else:
                 disposition = "fine_confiscation"
-                confiscation = self._remove_inventory_rows(self.player_eid, contraband_rows, reason="fine_confiscated")
+                confiscation = self._remove_inventory_rows(self.player_eid, contraband_rows, reason="fine_confiscated", held_prop=held_prop)
         elif int(counts.get("latent_claim_violation", 0) or 0) > 0:
             disposition = "release_warning" if cooperation_score >= 0.75 else "fine_confiscation"
+
+        if disposition == "full_booking":
+            _record_justice_questioning_resolution(
+                self.sim,
+                self.player_eid,
+                disposition=disposition,
+                inspected_counts=counts,
+                kept_contraband_count=kept_contraband_count,
+                match_summaries=inspection.get("match_summaries", ()),
+                match_labels=match_labels,
+                match_reasons=match_reasons,
+                evidence_surcharge=evidence_surcharge,
+            )
+            self.sim.emit(Event(
+                "justice_questioning_resolved",
+                eid=self.player_eid,
+                outcome=disposition,
+                cooperation_score=round(float(cooperation_score), 2),
+                severity_bucket=severity_bucket,
+                contraband_count=int(counts.get("contraband", 0) or 0),
+                latent_claim_count=int(counts.get("latent_claim_violation", 0) or 0),
+                reported_stolen_count=int(counts.get("reported_stolen", 0) or 0),
+                incident_evidence_count=int(counts.get("incident_evidence", 0) or 0),
+                kept_contraband_count=int(kept_contraband_count),
+                confiscated_item_count=0,
+                confiscated_labels=(),
+                penalty_breakdown=self._player_penalty_breakdown(
+                    snapshot,
+                    fine_due=0,
+                    evidence_surcharge=evidence_surcharge,
+                    multiplier=0.0,
+                    disposition=disposition,
+                ),
+                match_summaries=tuple(inspection.get("match_summaries", ()) or ()),
+                incident_match_labels=match_labels,
+                incident_match_reasons=match_reasons,
+                evidence_surcharge=evidence_surcharge,
+                protective_posture_label=str((protective or {}).get("state_label", "") or "").strip(),
+            ))
+            return self._book_player(
+                by_eid=by_eid,
+                source_prop=source_prop,
+                inspection=inspection,
+                questioning_disposition=disposition,
+            )
+
+        fine_due = 0
+        current_debt_balance = int(self._player_justice_debt_balance())
+        fine_result = {
+            "fine_paid": 0,
+            "cash_fine_paid": 0,
+            "wallet_fine_paid": 0,
+            "bank_fine_paid": 0,
+            "debt_added": 0,
+            "fine_outstanding": 0,
+            "wallet_credits_before": 0,
+            "wallet_credits_after": 0,
+            "asset_credits_before": 0,
+            "asset_credits_after": 0,
+            "bank_balance_before": 0,
+            "bank_balance_after": 0,
+            "debt_balance_before": current_debt_balance,
+            "debt_balance_after": current_debt_balance,
+        }
+        if disposition in {"citation_confiscation", "fine_confiscation"} or int(counts.get("reported_stolen", 0) or 0) > 0:
+            base_fine = int(self._player_fine_amount(snapshot))
+            if disposition == "citation_confiscation":
+                fine_multiplier = 0.25
+                fine_due = max(10, int(round(base_fine * 0.25)))
+            elif disposition == "fine_confiscation":
+                fine_multiplier = 0.5
+                fine_due = max(20, int(round(base_fine * 0.5)))
+            else:
+                fine_multiplier = 0.6
+                fine_due = max(30, int(round(base_fine * 0.6)))
+            fine_result = self._collect_player_fine(fine_due)
+        penalty_breakdown = self._player_penalty_breakdown(
+            snapshot,
+            fine_due=fine_due,
+            fine_result=fine_result,
+            evidence_surcharge=evidence_surcharge,
+            multiplier=fine_multiplier,
+            disposition=disposition,
+        )
 
         _record_justice_questioning_resolution(
             self.sim,
@@ -1582,47 +1861,26 @@ class CriminalJusticeSystem(System):
             kept_contraband_count=int(kept_contraband_count),
             confiscated_item_count=int(confiscation.get("count", 0) or 0),
             confiscated_labels=tuple(confiscation.get("labels", ()) or ()),
+            held_item_count=int(confiscation.get("held_count", 0) or 0),
+            held_labels=tuple(confiscation.get("held_labels", ()) or ()),
+            forfeited_item_count=int(confiscation.get("forfeited_count", 0) or 0),
+            forfeited_labels=tuple(confiscation.get("forfeited_labels", ()) or ()),
+            held_reason_labels=tuple(confiscation.get("held_reason_labels", ()) or ()),
+            forfeited_reason_labels=tuple(confiscation.get("forfeited_reason_labels", ()) or ()),
+            penalty_breakdown=penalty_breakdown,
+            fine_due=int(fine_due),
+            fine_paid=int(fine_result.get("fine_paid", 0) or 0),
+            cash_fine_paid=int(fine_result.get("cash_fine_paid", 0) or 0),
+            wallet_fine_paid=int(fine_result.get("wallet_fine_paid", 0) or 0),
+            bank_fine_paid=int(fine_result.get("bank_fine_paid", 0) or 0),
+            debt_added=int(fine_result.get("debt_added", 0) or 0),
+            fine_outstanding=int(fine_result.get("fine_outstanding", 0) or 0),
             match_summaries=tuple(inspection.get("match_summaries", ()) or ()),
             incident_match_labels=match_labels,
             incident_match_reasons=match_reasons,
             evidence_surcharge=evidence_surcharge,
             protective_posture_label=str((protective or {}).get("state_label", "") or "").strip(),
         ))
-
-        if disposition == "full_booking":
-            return self._book_player(
-                by_eid=by_eid,
-                source_prop=source_prop,
-                inspection=inspection,
-                questioning_disposition=disposition,
-            )
-
-        fine_due = 0
-        fine_result = {
-            "fine_paid": 0,
-            "cash_fine_paid": 0,
-            "wallet_fine_paid": 0,
-            "bank_fine_paid": 0,
-            "debt_added": 0,
-            "fine_outstanding": 0,
-            "wallet_credits_before": 0,
-            "wallet_credits_after": 0,
-            "asset_credits_before": 0,
-            "asset_credits_after": 0,
-            "bank_balance_before": 0,
-            "bank_balance_after": 0,
-            "debt_balance_before": 0,
-            "debt_balance_after": 0,
-        }
-        if disposition in {"citation_confiscation", "fine_confiscation"} or int(counts.get("reported_stolen", 0) or 0) > 0:
-            base_fine = int(self._player_fine_amount(snapshot))
-            if disposition == "citation_confiscation":
-                fine_due = max(10, int(round(base_fine * 0.25)))
-            elif disposition == "fine_confiscation":
-                fine_due = max(20, int(round(base_fine * 0.5)))
-            else:
-                fine_due = max(30, int(round(base_fine * 0.6)))
-            fine_result = self._collect_player_fine(fine_due)
 
         player_pos = self._position_for(self.player_eid)
         release_change = _release_justice_from_custody(
@@ -1640,7 +1898,7 @@ class CriminalJusticeSystem(System):
         if strongest_match:
             lines.append(f"Recorded match: {strongest_match}.")
         if evidence_surcharge > 0:
-            lines.append(f"Placeholder evidence surcharge on booking: {evidence_surcharge}c.")
+            lines.append(f"Evidence surcharge if booked: {evidence_surcharge}c.")
         protective_label = str((protective or {}).get("state_label", "") or "").strip()
         protective_summary = str((protective or {}).get("summary", "") or "").strip()
         if protective_label:
@@ -1653,9 +1911,31 @@ class CriminalJusticeSystem(System):
         elif disposition == "release_warning":
             lines.append("You are warned and released.")
         elif disposition == "citation_confiscation":
-            lines.append(f"Citation issued for {fine_due}c and the contraband is confiscated.")
+            payment_text = self._payment_result_text(fine_result)
+            lines.append(f"Citation issued for {fine_due}c" + (f"; {payment_text}." if payment_text else "."))
         elif disposition == "fine_confiscation":
-            lines.append(f"Fine issued for {fine_due}c and the contraband is confiscated.")
+            payment_text = self._payment_result_text(fine_result)
+            lines.append(f"Fine issued for {fine_due}c" + (f"; {payment_text}." if payment_text else "."))
+        held_count = int(confiscation.get("held_count", 0) or 0)
+        forfeited_count = int(confiscation.get("forfeited_count", 0) or 0)
+        if held_count > 0:
+            held_label_text = self._label_list_text(confiscation.get("held_labels", ()))
+            held_reason_text = self._reason_list_text(confiscation.get("held_reason_labels", ()))
+            line = f"Held for release at {held_prop_name}: {held_count} item(s)"
+            if held_label_text:
+                line += f" ({held_label_text})"
+            if held_reason_text:
+                line += f" because {held_reason_text}"
+            lines.append(line + ".")
+        if forfeited_count > 0:
+            forfeited_label_text = self._label_list_text(confiscation.get("forfeited_labels", ()))
+            forfeited_reason_text = self._reason_list_text(confiscation.get("forfeited_reason_labels", ()))
+            line = f"Forfeited/confiscated: {forfeited_count} item(s)"
+            if forfeited_label_text:
+                line += f" ({forfeited_label_text})"
+            if forfeited_reason_text:
+                line += f" because {forfeited_reason_text}"
+            lines.append(line + ".")
         self._present_justice_result(
             "Questioning Resolved",
             lines,
@@ -2562,11 +2842,16 @@ class CriminalJusticeSystem(System):
                 "stolen_units": 0,
                 "incident_evidence_units": 0,
                 "weapon_units": 0,
+                "ignored_units": 0,
                 "held_entries": (),
                 "forfeited_entries": (),
                 "labels": (),
                 "held_labels": (),
                 "forfeited_labels": (),
+                "ignored_labels": (),
+                "held_reason_labels": (),
+                "forfeited_reason_labels": (),
+                "ignored_reason_labels": (),
             }
 
         confiscated_units = 0
@@ -2578,9 +2863,14 @@ class CriminalJusticeSystem(System):
         stolen_units = 0
         incident_evidence_units = 0
         weapon_units = 0
+        ignored_units = 0
         labels = []
         held_labels = []
         forfeited_labels = []
+        ignored_labels = []
+        held_reason_labels = []
+        forfeited_reason_labels = []
+        ignored_reason_labels = []
         held_entries = []
         forfeited_entries = []
         inspection = inspection if isinstance(inspection, dict) else (
@@ -2595,14 +2885,26 @@ class CriminalJusticeSystem(System):
         for entry in list(getattr(inventory, "items", ()) or ()):
             hold_policy = self._justice_item_hold_policy(entry)
             bucket_name = bucket_by_instance.get(str(entry.get("instance_id", "") or "").strip(), "")
+            quantity = max(1, int(entry.get("quantity", 1) or 1))
+            item_id = str(entry.get("item_id", "") or "").strip().lower()
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            item_name = item_display_name(item_id, metadata=metadata, item_catalog=ITEM_CATALOG)
             if bucket_name == "latent_claim_violation" and not hold_policy.get("objective_protected"):
+                ignored_units += quantity
+                ignored_labels.append(item_name)
+                ignored_reason_labels.extend(tuple(hold_policy.get("reason_labels", ()) or ()))
                 continue
             if keep_contraband and bucket_name == "contraband" and not hold_policy.get("stolen") and not hold_policy.get("incident_evidence"):
+                ignored_units += quantity
+                ignored_labels.append(item_name)
+                ignored_reason_labels.append("released under local questioning policy")
                 continue
             if not bool(hold_policy.get("seized")):
+                ignored_units += quantity
+                ignored_labels.append(item_name)
+                ignored_reason_labels.extend(tuple(hold_policy.get("reason_labels", ()) or ()))
                 continue
 
-            quantity = max(1, int(entry.get("quantity", 1) or 1))
             removed = entry
             if remove:
                 removed = inventory.remove_item(instance_id=entry.get("instance_id"), quantity=quantity)
@@ -2624,6 +2926,7 @@ class CriminalJusticeSystem(System):
                     "metadata": dict(metadata),
                 })
                 held_labels.append(item_name)
+                held_reason_labels.extend(tuple(hold_policy.get("reason_labels", ()) or ()))
             if bool(hold_policy.get("forfeit")):
                 forfeited_units += removed_qty
                 forfeited_entries.append({
@@ -2635,6 +2938,7 @@ class CriminalJusticeSystem(System):
                     "metadata": dict(metadata),
                 })
                 forfeited_labels.append(item_name)
+                forfeited_reason_labels.extend(tuple(hold_policy.get("reason_labels", ()) or ()))
             if bool(hold_policy.get("illegal")):
                 illegal_units += removed_qty
             if bool(hold_policy.get("restricted")):
@@ -2654,6 +2958,10 @@ class CriminalJusticeSystem(System):
         deduped_labels = tuple(dict.fromkeys(label for label in labels if str(label).strip()))
         deduped_held_labels = tuple(dict.fromkeys(label for label in held_labels if str(label).strip()))
         deduped_forfeited_labels = tuple(dict.fromkeys(label for label in forfeited_labels if str(label).strip()))
+        deduped_ignored_labels = tuple(dict.fromkeys(label for label in ignored_labels if str(label).strip()))
+        deduped_held_reasons = tuple(dict.fromkeys(label for label in held_reason_labels if str(label).strip()))
+        deduped_forfeited_reasons = tuple(dict.fromkeys(label for label in forfeited_reason_labels if str(label).strip()))
+        deduped_ignored_reasons = tuple(dict.fromkeys(label for label in ignored_reason_labels if str(label).strip()))
         return {
             "confiscated_units": confiscated_units,
             "held_units": held_units,
@@ -2664,11 +2972,16 @@ class CriminalJusticeSystem(System):
             "stolen_units": stolen_units,
             "incident_evidence_units": incident_evidence_units,
             "weapon_units": weapon_units,
+            "ignored_units": ignored_units,
             "held_entries": tuple(held_entries),
             "forfeited_entries": tuple(forfeited_entries),
             "labels": deduped_labels[:4],
             "held_labels": deduped_held_labels[:4],
             "forfeited_labels": deduped_forfeited_labels[:4],
+            "ignored_labels": deduped_ignored_labels[:4],
+            "held_reason_labels": deduped_held_reasons[:4],
+            "forfeited_reason_labels": deduped_forfeited_reasons[:4],
+            "ignored_reason_labels": deduped_ignored_reasons[:4],
         }
 
     def _confiscate_player_inventory(self, *, booking_prop=None, inspection=None, keep_contraband=False):
@@ -2769,6 +3082,94 @@ class CriminalJusticeSystem(System):
             "property_name": str(held.get("property_name", "") or "").strip(),
         }
 
+    def _booking_result_lines(
+        self,
+        *,
+        booking_prop=None,
+        hold_ticks=0,
+        fine_due=0,
+        fine_result=None,
+        penalty_breakdown=None,
+        confiscation=None,
+        restitution_due=0,
+        restitution_property_count=0,
+        evidence_surcharge=0,
+    ):
+        booking_name = str((booking_prop or {}).get("name", "Justice Office") if isinstance(booking_prop, dict) else "Justice Office").strip() or "Justice Office"
+        fine_result = fine_result if isinstance(fine_result, dict) else {}
+        penalty_breakdown = penalty_breakdown if isinstance(penalty_breakdown, dict) else {}
+        confiscation = confiscation if isinstance(confiscation, dict) else {}
+        hold_hours = round(float(hold_ticks) / float(self._ticks_per_hour()), 2) if int(hold_ticks or 0) > 0 else 0.0
+        lines = [f"Processed at {booking_name}."]
+        if hold_hours > 0:
+            lines.append(f"Custody time served: about {hold_hours:g}h.")
+
+        fine_due = int(max(0, fine_due or 0))
+        if fine_due > 0:
+            penalty_parts = []
+            base_fine = int(penalty_breakdown.get("base_fine", 0) or 0)
+            if base_fine > 0:
+                penalty_parts.append(f"{base_fine}c base fine")
+            restitution_due = int(max(0, restitution_due or 0))
+            if restitution_due > 0:
+                penalty_parts.append(f"{restitution_due}c restitution")
+            evidence_surcharge = int(max(0, evidence_surcharge or 0))
+            if evidence_surcharge > 0:
+                penalty_parts.append(f"{evidence_surcharge}c evidence surcharge")
+            lines.append(f"Penalty assessed: {fine_due}c" + (f" ({', '.join(penalty_parts)})." if penalty_parts else "."))
+            payment_text = self._payment_result_text(fine_result)
+            if payment_text:
+                lines.append(payment_text[0].upper() + payment_text[1:] + ".")
+            debt_after = int(fine_result.get("debt_balance_after", 0) or 0)
+            if debt_after > 0:
+                lines.append(f"Current justice debt: {debt_after}c.")
+
+        restitution_due = int(max(0, restitution_due or 0))
+        if restitution_due > 0:
+            site_word = "site" if int(restitution_property_count or 0) == 1 else "sites"
+            lines.append(f"Restitution is based on exact recorded repair cost across {int(restitution_property_count or 0)} damaged {site_word}.")
+
+        held_count = int(confiscation.get("held_units", 0) or 0)
+        forfeited_count = int(confiscation.get("forfeited_units", 0) or 0)
+        ignored_count = int(confiscation.get("ignored_units", 0) or 0)
+        if held_count > 0:
+            held_labels = self._label_list_text(confiscation.get("held_labels", ()))
+            held_reasons = self._reason_list_text(confiscation.get("held_reason_labels", ()))
+            line = f"Held for release at {booking_name}: {held_count} item(s)"
+            if held_labels:
+                line += f" ({held_labels})"
+            if held_reasons:
+                line += f" because {held_reasons}"
+            lines.append(line + ".")
+        if forfeited_count > 0:
+            forfeited_labels = self._label_list_text(confiscation.get("forfeited_labels", ()))
+            forfeited_reasons = self._reason_list_text(confiscation.get("forfeited_reason_labels", ()))
+            line = f"Forfeited/confiscated: {forfeited_count} item(s)"
+            if forfeited_labels:
+                line += f" ({forfeited_labels})"
+            if forfeited_reasons:
+                line += f" because {forfeited_reasons}"
+            lines.append(line + ".")
+        if ignored_count > 0:
+            ignored_labels = self._label_list_text(confiscation.get("ignored_labels", ()))
+            ignored_reasons = self._reason_list_text(confiscation.get("ignored_reason_labels", ()))
+            line = f"Left with you after search: {ignored_count} item(s)"
+            if ignored_labels:
+                line += f" ({ignored_labels})"
+            if ignored_reasons:
+                line += f" because {ignored_reasons}"
+            lines.append(line + ".")
+        if held_count <= 0 and forfeited_count <= 0:
+            lines.append("No property was held or forfeited.")
+
+        if held_count > 0:
+            debt_after = int(fine_result.get("debt_balance_after", 0) or 0)
+            if debt_after > 0:
+                lines.append(f"Settle {debt_after}c justice debt before reclaiming held property at {booking_name}.")
+            else:
+                lines.append(f"Return to {booking_name} to reclaim held property.")
+        return lines
+
     def _book_player(self, *, by_eid=None, source_prop=None, inspection=None, questioning_disposition=""):
         snapshot = self._player_bookable_snapshot()
         player_pos = self._position_for(self.player_eid)
@@ -2846,6 +3247,14 @@ class CriminalJusticeSystem(System):
         restitution_due = int(snapshot.get("restitution_due", 0) or 0)
         restitution_property_count = int(snapshot.get("restitution_property_count", 0) or 0)
         fine_result = self._collect_player_fine(fine_due)
+        penalty_breakdown = self._player_penalty_breakdown(
+            snapshot,
+            fine_due=fine_due,
+            fine_result=fine_result,
+            evidence_surcharge=evidence_surcharge,
+            multiplier=1.0,
+            disposition="booking",
+        )
         hold_ticks = self._advance_time_for_booking(
             self._hours_to_ticks(self.BOOKING_HOURS_BY_TIER.get(starting_tier, 1.0)),
             property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
@@ -2924,9 +3333,18 @@ class CriminalJusticeSystem(System):
             incident_match_labels=match_labels,
             incident_match_reasons=match_reasons,
             evidence_surcharge=int(evidence_surcharge),
+            penalty_breakdown=penalty_breakdown,
             protective_posture_label=str((protective or {}).get("state_label", "") or "").strip(),
             held_property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
             held_property_name=str((booking_prop or {}).get("name", "Justice Office") if isinstance(booking_prop, dict) else "Justice Office").strip() or "Justice Office",
+            held_entries=tuple(confiscation.get("held_entries", ()) or ()),
+            forfeited_entries=tuple(confiscation.get("forfeited_entries", ()) or ()),
+            seized_entries=tuple(confiscation.get("held_entries", ()) or ()) + tuple(confiscation.get("forfeited_entries", ()) or ()),
+            held_reason_labels=tuple(confiscation.get("held_reason_labels", ()) or ()),
+            forfeited_reason_labels=tuple(confiscation.get("forfeited_reason_labels", ()) or ()),
+            ignored_item_count=int(confiscation.get("ignored_units", 0) or 0),
+            ignored_labels=tuple(confiscation.get("ignored_labels", ()) or ()),
+            ignored_reason_labels=tuple(confiscation.get("ignored_reason_labels", ()) or ()),
             booking_anchor_x=int(anchor_x),
             booking_anchor_y=int(anchor_y),
             booking_anchor_fallback=bool((anchor or {}).get("fallback", False)),
@@ -2936,6 +3354,22 @@ class CriminalJusticeSystem(System):
             y=booking_y,
             z=booking_z,
         ))
+        self._present_justice_result(
+            "Booking Complete",
+            self._booking_result_lines(
+                booking_prop=booking_prop,
+                hold_ticks=hold_ticks,
+                fine_due=fine_due,
+                fine_result=fine_result,
+                penalty_breakdown=penalty_breakdown,
+                confiscation=confiscation,
+                restitution_due=restitution_due,
+                restitution_property_count=restitution_property_count,
+                evidence_surcharge=evidence_surcharge,
+            ),
+            property_id=(booking_prop or {}).get("id") if isinstance(booking_prop, dict) else None,
+            subtitle=str((booking_prop or {}).get("name", "Justice Office") if isinstance(booking_prop, dict) else "Justice Office").strip() or "Justice Office",
+        )
         return True
 
     def _find_detaining_enforcer(self, offender_eid):
@@ -3216,17 +3650,19 @@ class CriminalJusticeSystem(System):
             ]
             if held_property_name:
                 if debt_balance > 0:
-                    lines.append(f"Settle the debt, then report to {held_property_name} for release.")
+                    lines.append(f"The correct property locker is at {held_property_name}, but release is blocked until {debt_balance}c justice debt is cleared.")
                 else:
-                    lines.append(f"Report to {held_property_name} for release.")
+                    lines.append(f"The correct property locker is at {held_property_name}.")
             self._present_justice_result(title, lines, property_id=prop.get("id"))
             return
 
         if held_count > 0 and debt_balance > 0:
             lines = [
-                "Release is blocked until your justice debt is cleared.",
+                f"Release is blocked until your {debt_balance}c justice debt is cleared.",
                 *self._justice_status_lines(current_prop=prop),
             ]
+            if held_property_name:
+                lines.append(f"Your held property is logged at {held_property_name}.")
             self._present_justice_result(title, lines, property_id=prop.get("id"))
             return
 

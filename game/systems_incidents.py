@@ -120,6 +120,7 @@ class IncidentKnowledgeSystem(System):
         self.sim.events.subscribe("fire_started", self.on_fire_event)
         self.sim.events.subscribe("fire_spread", self.on_fire_event)
         self.sim.events.subscribe("rumor_shared", self.on_rumor_shared)
+        self.sim.events.subscribe("street_deal_transaction", self.on_street_deal_transaction)
         if not hasattr(self.sim, "incident_stats"):
             self.sim.incident_stats = {
                 "active": 0,
@@ -194,6 +195,18 @@ class IncidentKnowledgeSystem(System):
         if str(source_kind or "").strip().lower() == "camera":
             interest *= 0.45
         return _clamp_unit(interest, default=0.0)
+
+    def _observer_reports_street_deal(self, eid):
+        role = self._observer_role(eid)
+        justice = self.sim.ecs.get(JusticeProfile).get(eid)
+        return bool(
+            role in {"guard", "scout", "officer", "police", "deputy", "marshal"}
+            or (justice and (
+                justice.enforce_all
+                or float(getattr(justice, "justice", 0.0) or 0.0) >= 0.78
+                or float(getattr(justice, "crime_sensitivity", 0.0) or 0.0) >= 0.86
+            ))
+        )
 
     def _learn_incident(
         self,
@@ -860,6 +873,43 @@ class IncidentKnowledgeSystem(System):
         witnesses = tuple(observation.get("accountable_observer_eids", ()))
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
+    def on_street_deal_transaction(self, event):
+        buyer_eid = event.data.get("buyer_eid", event.data.get("eid"))
+        seller_eid = event.data.get("seller_eid", event.data.get("npc_eid", event.data.get("contact_eid")))
+        event.data.setdefault("offender_eid", buyer_eid)
+        event.data.setdefault("action", "street_deal")
+        event.data.setdefault("context", "contraband_transaction")
+        event.data.setdefault("item_id", event.data.get("item_id"))
+        event.data.setdefault("item_name", event.data.get("item_name"))
+        observation = self._event_accountability(event, strict=True)
+        witnesses = tuple(observation.get("accountable_observer_eids", ()))
+        official_reportable = any(self._observer_reports_street_deal(observer_eid) for observer_eid in witnesses)
+        severity = max(12, min(44, int(event.data.get("severity_score", 28) or 28)))
+        item_id = _text(event.data.get("item_id")).lower()
+        item_name = _text(event.data.get("item_name")) or item_id.replace("_", " ")
+        vendor_kind = _text(event.data.get("vendor_kind")).lower()
+        incident = self._create_incident(
+            event,
+            kind="street_deal",
+            severity=severity,
+            merge_subject=f"{vendor_kind}:{item_id}",
+            official_reportable=official_reportable,
+            note=f"street deal/{item_name}",
+            tags=("street_deal", "contraband", "drug_deal", vendor_kind, item_id),
+        )
+        self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
+        if seller_eid is not None and seller_eid != buyer_eid:
+            self._learn_incident(
+                seller_eid,
+                int(incident.get("id", 0) or 0),
+                source_kind="self",
+                source_eid=seller_eid,
+                firsthand=True,
+                confidence=1.0,
+                propagation_depth=0,
+                queue=False,
+            )
+
     def on_property_trespass(self, event):
         severity = int(event.data.get("severity_score", 0) or 0)
         if severity <= 0:
@@ -985,6 +1035,8 @@ class IncidentKnowledgeSystem(System):
             severity = 40
         building_id = str(event.data.get("building_id", "") or "").strip().lower()
         property_id = str(event.data.get("property_id", "") or "").strip().lower()
+        if not property_id and ":site:" in building_id:
+            building_id = ""
         try:
             z = int(event.data.get("z", 0) or 0)
         except (TypeError, ValueError):

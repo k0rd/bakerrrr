@@ -26,6 +26,7 @@ from engine.tilemap import Tile
 from game.systems_observed_events import ObservedIncidentConsequenceSystem
 from game.systems_observed_response import ObservedIncidentResponseSystem
 from game.systems_observed_dispatch import ObservedIncidentDispatchSystem
+from game.system_support.altered_state_runtime import AlteredStateSystem
 from game.components import (
     AI,
     ArmorLoadout,
@@ -66,6 +67,12 @@ from game.components import (
 from game.bones import maybe_seed_bones_for_chunk, prime_bones_runtime
 from game.economy import chunk_economy_profile, pick_career_for_workplace, workplace_archetype_weight
 from game.finance_services import FinanceSystem
+from game.custom_content import (
+    apply_custom_content,
+    load_custom_content_for_new_run,
+    validate_custom_content_for_resume,
+)
+from game.final_notice import show_final_notice, show_run_end_notice
 from game.items import ITEM_CATALOG
 from game.npc_names import (
     generate_human_household_names,
@@ -751,6 +758,7 @@ def _register_runtime_systems(sim, view, player):
     npc_needs_system = NPCNeedsSystem(sim)
     npc_settlement_system = NPCSettlementSystem(sim)
     status_effect_system = StatusEffectSystem(sim)
+    altered_state_system = AlteredStateSystem(sim, player)
     npc_item_use_system = NPCItemUseSystem(sim)
     npc_social_system = NPCSocialDynamicsSystem(sim)
     eavesdrop_system = EavesdropSystem(sim, player)
@@ -817,6 +825,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(npc_needs_system, 10)
     _live_timeskip_stride(npc_settlement_system, 600)
     _live_timeskip_stride(status_effect_system, 5)
+    _live_timeskip_stride(altered_state_system, 0)
     _live_timeskip_stride(npc_item_use_system, 5)
     _live_timeskip_stride(npc_social_system, 10)
     _live_timeskip_stride(eavesdrop_system, 0)
@@ -884,6 +893,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(npc_needs_system)
     sim.register_system(npc_settlement_system)
     sim.register_system(status_effect_system)
+    sim.register_system(altered_state_system)
     sim.register_system(npc_item_use_system)
     sim.register_system(npc_social_system)
     sim.register_system(eavesdrop_system)
@@ -2749,11 +2759,20 @@ def _run_new_game_legacy(view, character_name):
     return _run_loop(sim, view, character_name)
 
 
-def _run_new_game(view, character_name, gender_identity, *, debug_mode=False):
+def _show_custom_content_notices(view, content_result):
+    for notice in list(getattr(content_result, "notices", ()) or ()):
+        if isinstance(notice, dict):
+            show_final_notice(view, wait=True, **notice)
+
+
+def _run_new_game(view, character_name, gender_identity, *, debug_mode=False, custom_content_result=None):
     screen_w, screen_h = view.size()
 
     map_width = max(24, min(96, screen_w))
     map_height = max(14, min(40, screen_h - 10))
+
+    if custom_content_result is not None:
+        apply_custom_content(custom_content_result)
 
     sim = Simulation(
         seed=_resolve_run_seed(),
@@ -2762,6 +2781,8 @@ def _run_new_game(view, character_name, gender_identity, *, debug_mode=False):
         max_floors=3,
         chunk_size=24,
     )
+    if custom_content_result is not None:
+        apply_custom_content(custom_content_result, sim=sim)
     sim.character_name = character_name
     sim.world_traits["character_name"] = character_name
     sim.world_traits["clock"] = {
@@ -2922,6 +2943,23 @@ def _run_tutorial_game(view, character_name, gender_identity, *, debug_mode=Fals
 
 def _run_loaded_game(view, character_name, *, debug_mode=False):
     sim = load_character_run(character_name, delete_on_load=False)
+    content_result = validate_custom_content_for_resume(getattr(sim, "custom_content_manifest", None))
+    _show_custom_content_notices(view, content_result)
+    if bool(getattr(content_result, "blocking", False)):
+        return {
+            "show_post_curses": False,
+            "outcome": "blocked",
+            "reason": "custom_content_mismatch",
+            "objective_title": character_name,
+            "tick": int(getattr(sim, "tick", 0) or 0),
+            "summary_lines": [
+                "Saved run could not resume because required custom content did not match.",
+                "The save file was not deleted.",
+            ],
+            "saved": True,
+            "final_notice_printed": True,
+        }
+    apply_custom_content(content_result, sim=sim)
     sim.character_name = normalize_character_name(character_name) or getattr(sim, "character_name", None)
     prime_bones_runtime(sim)
     prime_run_echoes_runtime(sim)
@@ -2980,6 +3018,8 @@ def _run_character_session(view, character_name, gender_identity=None, *, tutori
         return _run_tutorial_game(view, character_name, resolved_identity, debug_mode=debug_mode)
     if character_save_exists(character_name):
         return _run_loaded_game(view, character_name, debug_mode=debug_mode)
+    custom_content_result = load_custom_content_for_new_run()
+    _show_custom_content_notices(view, custom_content_result)
     resolved_identity = (
         normalize_gender_identity(gender_identity, default="nonbinary")
         if str(gender_identity or "").strip()
@@ -2993,7 +3033,13 @@ def _run_character_session(view, character_name, gender_identity=None, *, tutori
         )
         if not resolved_identity:
             return None
-    return _run_new_game(view, character_name, resolved_identity, debug_mode=debug_mode)
+    return _run_new_game(
+        view,
+        character_name,
+        resolved_identity,
+        debug_mode=debug_mode,
+        custom_content_result=custom_content_result,
+    )
 
 
 def _run_curses(stdscr, tutorial=False, *, debug_mode=False):
@@ -3009,7 +3055,9 @@ def _run_curses(stdscr, tutorial=False, *, debug_mode=False):
         if not selected_identity:
             return None
     view = CursesView(stdscr)
-    return _run_character_session(view, character_name, selected_identity, tutorial=tutorial, debug_mode=debug_mode)
+    run_end = _run_character_session(view, character_name, selected_identity, tutorial=tutorial, debug_mode=debug_mode)
+    show_run_end_notice(view, run_end, wait=True, print_notice=True)
+    return run_end
 
 
 def _run_pygame(tutorial=False, *, debug_mode=False):
@@ -3071,7 +3119,9 @@ def _run_pygame(tutorial=False, *, debug_mode=False):
             if not selected_identity:
                 return None
         view.pygame.display.set_caption(f"bakerrrr - {character_name}")
-        return _run_character_session(view, character_name, selected_identity, tutorial=tutorial, debug_mode=debug_mode)
+        run_end = _run_character_session(view, character_name, selected_identity, tutorial=tutorial, debug_mode=debug_mode)
+        show_run_end_notice(view, run_end, wait=True, print_notice=True)
+        return run_end
     finally:
         view.close()
 
@@ -3092,6 +3142,8 @@ def _record_tutorial_run_if_needed(run_end):
 def _print_post_run_summary(run_end):
     if not isinstance(run_end, dict) or not bool(run_end.get("show_post_curses")):
         return
+    if bool(run_end.get("final_notice_printed")):
+        return
     outcome = str(run_end.get("outcome", "unknown")).strip().upper()
     reason = str(run_end.get("reason", "")).strip().replace("_", " ")
     objective_title = str(run_end.get("objective_title", "Run")).strip() or "Run"
@@ -3104,6 +3156,46 @@ def _print_post_run_summary(run_end):
         line = str(raw).strip()
         if line:
             print(f"- {line}")
+
+
+def _show_crash_notice_modal(backend, title, lines):
+    backend = str(backend or "").strip().lower()
+    try:
+        if backend == "pygame":
+            view = PygameView(
+                width_cells=72,
+                height_cells=20,
+                cell_px=_resolve_pygame_tile_px(),
+                title="bakerrrr - notice",
+            )
+            try:
+                show_final_notice(
+                    view,
+                    title=title,
+                    lines=lines,
+                    severity="error",
+                    stream="stderr",
+                    print_notice=False,
+                    wait=True,
+                )
+            finally:
+                view.close()
+            return True
+        if backend == "curses":
+            return curses.wrapper(
+                lambda stdscr: show_final_notice(
+                    CursesView(stdscr),
+                    title=title,
+                    lines=lines,
+                    severity="error",
+                    stream="stderr",
+                    print_notice=False,
+                    wait=True,
+                )
+            )
+    except Exception:
+        return False
+    return False
 
 
 def _run_entrypoint(argv=None):
@@ -3150,9 +3242,25 @@ def main(argv=None):
                 backend=backend,
                 tutorial=tutorial,
             )
-            print(f"bakerrrr crashed. Crash report written: {crash_path}", file=sys.stderr)
+            crash_lines = (f"Crash report written: {crash_path}",)
+            show_final_notice(
+                None,
+                title="bakerrrr crashed",
+                lines=crash_lines,
+                severity="error",
+                stream="stderr",
+            )
+            _show_crash_notice_modal(backend, "bakerrrr crashed", crash_lines)
         except Exception:
-            print("bakerrrr crashed before a crash report could be written.", file=sys.stderr)
+            crash_lines = ("A crash report could not be written.",)
+            show_final_notice(
+                None,
+                title="bakerrrr crashed",
+                lines=crash_lines,
+                severity="error",
+                stream="stderr",
+            )
+            _show_crash_notice_modal(backend, "bakerrrr crashed", crash_lines)
         return 1
 
 

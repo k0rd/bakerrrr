@@ -190,7 +190,9 @@ from game.system_support.item_runtime import (
     _item_weapon_id,
     _weapon_uses_ammo,
 )
+from game.system_support.altered_state_runtime import bonus_move_available, spend_bonus_move
 from game.system_support.player_feedback import _log_player_feedback
+from game.system_support.throwable_runtime import throwable_summary_text
 from game.status_ui_runtime import (
     _entity_status_move_speed_multiplier,
     _status_effect_label,
@@ -2399,7 +2401,8 @@ class InputSystem(System):
         state = self._look_state()
         state["throw_item_instance_id"] = str(entry.get("instance_id", "") or "").strip()
         state["throw_item_name"] = item_name
-        state["inspect_text"] = f"Throwing {item_name}. Enter throws; Esc cancels."
+        summary = throwable_summary_text(throw_profile, include_consumed=True)
+        state["inspect_text"] = f"Throwing {item_name}: {summary}. Enter throws; Esc cancels."
         return True
 
     def _aim_cycle_candidates(self):
@@ -3428,23 +3431,30 @@ class InputSystem(System):
 
         mode = str(state.get("mode", "buy"))
         if mode == "buy":
+            interest_text = str(row.get("interest_label", "") or "").strip()
+            risk_text = str(row.get("risk_label", "") or "").strip()
+            extra_bits = [bit for bit in (interest_text, risk_text) if bit]
+            extra_text = f"; {'; '.join(extra_bits)}" if extra_bits else ""
             state["inspect_text"] = _item_legend_line(
                 row.get("item_id"),
                 (
                     f"{row.get('item_name', row.get('item_id', 'item'))} "
                     f"price {int(row.get('price', 0))} credits "
                     f"stock {int(row.get('stock', 0))}"
+                    f"{extra_text}"
                 ),
             )
             return
 
         listed_text = "listed" if row.get("listed") else "unlisted"
+        interest_text = str(row.get("interest_label", "") or "").strip()
+        read_text = f"; {interest_text}" if interest_text else ""
         state["inspect_text"] = _item_legend_line(
             row.get("item_id"),
             (
                 f"{row.get('item_name', row.get('item_id', 'item'))} "
                 f"offer {int(row.get('price', 0))} credits ({listed_text}) "
-                f"you carry {int(row.get('quantity', 0))}"
+                f"you carry {int(row.get('quantity', 0))}{read_text}"
             ),
         )
 
@@ -3585,7 +3595,7 @@ class InputSystem(System):
         if armor:
             armor_loadout = self.sim.ecs.get(ArmorLoadout).get(self.player_eid)
             reduction = int(round(float(armor.get("damage_reduction", 0.0)) * 100.0))
-            armor_label = f"armor {reduction}%"
+            armor_label = f"armor reduction {reduction}%"
             if armor_loadout and entry_instance_id and armor_loadout.is_equipped(entry_instance_id):
                 armor_label += " equipped"
             effect_labels.append(armor_label)
@@ -3645,15 +3655,7 @@ class InputSystem(System):
 
         throw_profile = item_def.get("throw_profile", {}) if isinstance(item_def.get("throw_profile"), dict) else {}
         if throw_profile:
-            throw_bits = [f"throw rng {int(throw_profile.get('range', 1))}"]
-            damage = int(max(0, _int_or_default(throw_profile.get("damage"), 0)))
-            if damage > 0:
-                throw_bits.append(f"impact {damage}")
-            if int(max(0, _int_or_default(throw_profile.get("explosion_radius"), 0))) > 0:
-                throw_bits.append(f"blast r{int(throw_profile.get('explosion_radius', 0))}")
-            if int(max(0, _int_or_default(throw_profile.get("fire_intensity"), 0))) > 0:
-                throw_bits.append("fire")
-            effect_labels.append(" ".join(throw_bits))
+            effect_labels.append(throwable_summary_text(throw_profile, include_consumed=True))
 
         effect_text = ", ".join(effect_labels) if effect_labels else "no active effect"
         state["inspect_text"] = _item_legend_line(
@@ -4329,7 +4331,11 @@ class InputSystem(System):
         if key in self.movement_keys:
             dx, dy = self.movement_keys[key]
             action = "vehicle_move" if self._player_in_vehicle() else "move"
-            self._emit_turn_action(action, dx=dx, dy=dy)
+            consume_turn = True
+            if action == "move" and bonus_move_available(self.sim, self.player_eid):
+                spend_bonus_move(self.sim, self.player_eid, source="player_move")
+                consume_turn = False
+            self._emit_player_action(action, consume_turn=consume_turn, dx=dx, dy=dy)
             if action == "vehicle_move":
                 self._sync_local_drive_after_vehicle_command(brake_tapped=dy > 0)
             return

@@ -47,6 +47,7 @@ TOPIC_FAMILIES = {
     "street_talk": "local_intel",
     "social_incident": "local_intel",
     "social_business": "local_intel",
+    "local_economy": "local_intel",
     "social_opportunity": "local_intel",
     "social_relationship": "local_intel",
     "concern": "local_intel",

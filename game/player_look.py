@@ -40,6 +40,12 @@ from game.property_runtime import (
 from game.service_runtime import _int_or_default, _legend_line
 from game.situation_read import build_focus_read
 from game.system_support.actor_attention_runtime import record_area_warmth
+from game.system_support.altered_state_runtime import (
+    hallucinated_entity_label,
+    hallucinated_item_label,
+    hallucinated_tile_label,
+)
+from game.system_support.fire_runtime import fire_cell_state
 from game.system_support.crime_plan_runtime import (
     CRIME_PLAN_OBSERVATION_SCAN,
     crime_plan_surface_rows,
@@ -170,6 +176,7 @@ class PlayerLookRuntime:
         else:
             walk_text = "walkable"
             tile_text = "open ground"
+        tile_text = hallucinated_tile_label(self.sim, eid, x, y, z, tile_text)
 
         bits = [f"({x},{y},{z}) {tile_text} {walk_text} chunk:{chunk}"]
 
@@ -205,13 +212,14 @@ class PlayerLookRuntime:
         ground_items = self.sim.ground_items_at(x, y, z=z)
         if ground_items:
             labels = []
-            for ground in ground_items[:2]:
+            for idx, ground in enumerate(ground_items[:2]):
                 item_name = item_display_name_for_actor(
                     self.sim,
                     eid,
                     ground,
                     item_catalog=ITEM_CATALOG,
                 )
+                item_name = hallucinated_item_label(self.sim, eid, x, y, z, idx, item_name)
                 qty = int(max(1, ground.get("quantity", 1)))
                 labels.append(f"{item_name}x{qty}")
             remaining = len(ground_items) - len(labels)
@@ -230,6 +238,21 @@ class PlayerLookRuntime:
         if projectiles:
             bits.append(f"projectiles:{len(projectiles)}")
 
+        fire_cell = fire_cell_state(self.sim, x, y, z)
+        if isinstance(fire_cell, dict):
+            fire_intensity = int(fire_cell.get("fire_intensity", 0) or 0)
+            smoke_intensity = int(fire_cell.get("smoke_intensity", 0) or 0)
+            hazard_bits = []
+            if fire_intensity > 0:
+                hazard_bits.append(f"fire:{fire_intensity}")
+            if smoke_intensity > 0:
+                hazard_bits.append(f"smoke:{smoke_intensity}")
+            aerosol_label = str(fire_cell.get("aerosol_label", "") or "").strip()
+            if aerosol_label:
+                hazard_bits.append("aerosol:" + aerosol_label)
+            if hazard_bits:
+                bits.append("hazard:" + " ".join(hazard_bits))
+
         entities = sorted(self.sim.tilemap.entities_at(x, y, z))
         non_player_entities = [target_eid for target_eid in entities if target_eid != eid]
         if entities:
@@ -246,6 +269,7 @@ class PlayerLookRuntime:
                         name = "entity"
                 else:
                     name = "entity"
+                name = hallucinated_entity_label(self.sim, eid, target_eid, x, y, z, name)
                 labels.append(f"{name}#{target_eid}")
             remaining = len(entities) - len(labels)
             entity_text = ", ".join(labels)

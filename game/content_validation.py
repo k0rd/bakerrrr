@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from game.json_metadata import METADATA_KEY, SCHEMA_VERSION, split_object_document
+from game.public_content import PUBLIC_STATUS_MODIFIERS
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -711,12 +712,30 @@ def _validate_items(path, report):
             for key in ("damage", "noise_radius", "explosion_radius", "fire_intensity", "smoke_intensity"):
                 if key in throw_profile:
                     _validate_int(report, source, item_path + ["throw_profile", key], throw_profile.get(key), minimum=0, field_name=key)
+            for key in ("cloud_radius", "cloud_duration", "aerosol_duration", "aerosol_exposure_cooldown"):
+                if key in throw_profile:
+                    _validate_int(report, source, item_path + ["throw_profile", key], throw_profile.get(key), minimum=0 if key != "aerosol_exposure_cooldown" else 1, field_name=key)
             for key in ("aoe_falloff", "cover_penetration"):
                 if key in throw_profile:
                     _validate_number(report, source, item_path + ["throw_profile", key], throw_profile.get(key), minimum=0.0, maximum=1.0, field_name=key)
             for key in ("consume_on_throw", "shatter"):
                 if key in throw_profile and not isinstance(throw_profile.get(key), bool):
                     report.error(source, item_path + ["throw_profile", key], f"{key} must be boolean")
+            if "aerosol_status" in throw_profile:
+                _validate_identifier(report, source, item_path + ["throw_profile", "aerosol_status"], throw_profile.get("aerosol_status"), field_name="aerosol_status")
+            if "aerosol_label" in throw_profile:
+                _validate_non_empty_string(report, source, item_path + ["throw_profile", "aerosol_label"], throw_profile.get("aerosol_label"), field_name="aerosol_label")
+            if "aerosol_modifiers" in throw_profile:
+                modifiers = throw_profile.get("aerosol_modifiers")
+                if _expect_type(report, source, item_path + ["throw_profile", "aerosol_modifiers"], modifiers, dict, "an object"):
+                    for mod_key, mod_value in modifiers.items():
+                        clean_key = str(mod_key or "").strip()
+                        if clean_key not in PUBLIC_STATUS_MODIFIERS:
+                            report.error(source, item_path + ["throw_profile", "aerosol_modifiers", mod_key], f"unknown public status modifier {mod_key!r}")
+                            continue
+                        _validate_number(report, source, item_path + ["throw_profile", "aerosol_modifiers", mod_key], mod_value, field_name=clean_key)
+            if ("aerosol_status" in throw_profile or "aerosol_modifiers" in throw_profile) and "aerosol_duration" not in throw_profile:
+                report.error(source, item_path + ["throw_profile", "aerosol_duration"], "aerosol payloads require aerosol_duration")
 
     if not item_ids:
         report.error(source, [], "item catalog must contain at least one valid item")

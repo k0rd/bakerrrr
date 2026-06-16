@@ -223,22 +223,72 @@ def _generate_human_personal_name(*args, **kwargs):
     return facade.generate_human_personal_name(*args, **kwargs)
 
 
-_UNDERPASS_CACHE_CONTENT_ROWS = (
-    ("transit_daypass", 10, 1, 1),
-    ("city_pass_token", 7, 1, 2),
-    ("battery_pack", 9, 1, 1),
-    ("scrap_circuit", 9, 1, 2),
-    ("energy_bar", 8, 1, 2),
-    ("bottled_water", 8, 1, 2),
-    ("hydration_salts", 6, 1, 1),
-    ("signal_jammer", 4, 1, 1),
-    ("lockpick_kit", 4, 1, 1),
-    ("med_gel", 6, 1, 1),
-    ("micro_medkit", 3, 1, 1),
-    ("credstick_chip", 8, 1, 1),
-    ("pocket_notebook", 2, 1, 1),
-    ("spark_brew", 2, 1, 1),
-)
+_UNDERGROUND_CACHE_CONTENT_ROWS_BY_PROFILE = {
+    "maintenance": (
+        ("transit_daypass", 10, 1, 1),
+        ("city_pass_token", 7, 1, 2),
+        ("battery_pack", 9, 1, 1),
+        ("scrap_circuit", 9, 1, 2),
+        ("energy_bar", 8, 1, 2),
+        ("bottled_water", 8, 1, 2),
+        ("hydration_salts", 6, 1, 1),
+        ("signal_jammer", 4, 1, 1),
+        ("lockpick_kit", 4, 1, 1),
+        ("med_gel", 6, 1, 1),
+        ("micro_medkit", 3, 1, 1),
+        ("credstick_chip", 8, 1, 1),
+        ("pocket_notebook", 2, 1, 1),
+        ("spark_brew", 2, 1, 1),
+    ),
+    "survival": (
+        ("bottled_water", 12, 1, 2),
+        ("energy_bar", 10, 1, 2),
+        ("street_ration", 8, 1, 2),
+        ("hydration_salts", 7, 1, 1),
+        ("water_purifier_tabs", 6, 1, 1),
+        ("emergency_blanket", 5, 1, 1),
+        ("bandage_roll", 6, 1, 1),
+        ("med_gel", 4, 1, 1),
+        ("cheap_whiskey", 2, 1, 1),
+        ("credstick_chip", 4, 1, 1),
+    ),
+    "drain": (
+        ("glass_bottle", 8, 1, 2),
+        ("brick", 6, 1, 2),
+        ("scrap_circuit", 8, 1, 2),
+        ("battery_pack", 5, 1, 1),
+        ("bottled_water", 5, 1, 1),
+        ("energy_bar", 5, 1, 1),
+        ("lockpick_kit", 3, 1, 1),
+        ("pocket_multitool", 3, 1, 1),
+        ("credstick_chip", 5, 1, 1),
+        ("spark_brew", 3, 1, 1),
+    ),
+    "contraband_light": (
+        ("credstick_chip", 9, 1, 1),
+        ("lockpick_kit", 6, 1, 1),
+        ("signal_jammer", 5, 1, 1),
+        ("black_market_stim", 5, 1, 1),
+        ("cocaine_bindle", 3, 1, 1),
+        ("lsd_blotter", 2, 1, 1),
+        ("shiver_patch", 1, 1, 1),
+        ("shiv_knife", 4, 1, 1),
+        ("holdout_pistol", 1, 1, 1),
+    ),
+}
+_UNDERGROUND_CACHE_NOTES = {
+    "maintenance": "A maintenance stash tucked behind conduit panels.",
+    "survival": "A dry pack of useful supplies tucked away from street traffic.",
+    "drain": "A damp cache balanced above the runoff.",
+    "contraband_light": "A hidden stash wrapped for a quick underground handoff.",
+}
+
+_UNDERGROUND_CACHE_ARCHETYPES = {
+    "maintenance": "underpass_cache",
+    "survival": "underground_survival_cache",
+    "drain": "storm_drain_cache",
+    "contraband_light": "underground_contraband_cache",
+}
 
 class WorldStreamingSystem(System):
 
@@ -315,7 +365,7 @@ class WorldStreamingSystem(System):
         })
         return property_id
 
-    def _seed_underpass_cache_contents(self, property_id, *, seed_token=""):
+    def _seed_underground_cache_contents(self, property_id, *, seed_token="", cache_profile="maintenance"):
         cache_items = _property_runtime_container_entries(
             self.sim,
             property_id,
@@ -324,11 +374,17 @@ class WorldStreamingSystem(System):
         if cache_items:
             return len(cache_items)
 
+        cache_profile = str(cache_profile or "maintenance").strip().lower() or "maintenance"
+        rows_source = _UNDERGROUND_CACHE_CONTENT_ROWS_BY_PROFILE.get(cache_profile)
+        if not rows_source:
+            cache_profile = "maintenance"
+            rows_source = _UNDERGROUND_CACHE_CONTENT_ROWS_BY_PROFILE["maintenance"]
+
         rng = random.Random(
-            f"{self.sim.seed}:underpass_cache:{str(seed_token or '').strip() or property_id}:{property_id}"
+            f"{self.sim.seed}:underground_cache:{cache_profile}:{str(seed_token or '').strip() or property_id}:{property_id}"
         )
         rows = [
-            row for row in _UNDERPASS_CACHE_CONTENT_ROWS
+            row for row in rows_source
             if ITEM_CATALOG.get(str(row[0]).strip().lower())
         ]
         if not rows:
@@ -361,6 +417,13 @@ class WorldStreamingSystem(System):
             })
         return len(cache_items)
 
+    def _seed_underpass_cache_contents(self, property_id, *, seed_token=""):
+        return self._seed_underground_cache_contents(
+            property_id,
+            seed_token=seed_token,
+            cache_profile="maintenance",
+        )
+
     def _register_underground_cache_asset(
         self,
         records,
@@ -372,10 +435,14 @@ class WorldStreamingSystem(System):
         z,
         linked_property_id=None,
         seed_token="",
+        cache_profile="maintenance",
     ):
         self._ensure_property_anchor(x, y, z)
+        cache_profile = str(cache_profile or "maintenance").strip().lower() or "maintenance"
+        if cache_profile not in _UNDERGROUND_CACHE_CONTENT_ROWS_BY_PROFILE:
+            cache_profile = "maintenance"
         metadata = {
-            "archetype": "underpass_cache",
+            "archetype": _UNDERGROUND_CACHE_ARCHETYPES.get(cache_profile, "underpass_cache"),
             "fixture_type": "maintenance_cache_box",
             "display_glyph": "c",
             "display_color": "property_fixture",
@@ -385,7 +452,8 @@ class WorldStreamingSystem(System):
             "fixture_kind": "cache",
             "container_kind": "cache",
             "container_label": "Cache",
-            "container_note_text": "A maintenance stash tucked behind conduit panels.",
+            "container_note_text": _UNDERGROUND_CACHE_NOTES.get(cache_profile, _UNDERGROUND_CACHE_NOTES["maintenance"]),
+            "cache_profile": cache_profile,
             "public": True,
             "chunk": key,
         }
@@ -401,7 +469,11 @@ class WorldStreamingSystem(System):
             owner_tag="city",
             metadata=metadata,
         )
-        self._seed_underpass_cache_contents(property_id, seed_token=seed_token)
+        self._seed_underground_cache_contents(
+            property_id,
+            seed_token=seed_token,
+            cache_profile=cache_profile,
+        )
         records.append({
             "id": property_id,
             "kind": "asset",
@@ -860,6 +932,7 @@ class WorldStreamingSystem(System):
                         f"{int(cache_spec.get('x', x))}:{int(cache_spec.get('y', y))}:{int(cache_spec.get('z', z))}:"
                         f"{cache_index}"
                     ),
+                    cache_profile=str(cache_spec.get("cache_profile", cache_spec.get("kind", "maintenance")) or "maintenance").strip().lower() or "maintenance",
                 )
             for service_spec in tuple(plan.get("service_sites", ()) or ()):
                 if not isinstance(service_spec, dict):

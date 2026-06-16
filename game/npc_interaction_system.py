@@ -87,6 +87,7 @@ from game.system_support.social_knowledge_runtime import (
     social_knowledge_payload_for_record,
 )
 from game.system_support.actor_attention_runtime import record_actor_social_warmth as _record_actor_social_warmth
+from game.system_support.store_purchase_runtime import store_purchase_policy_summary
 from game.social_boundary_runtime import (
     BOUNDARY_REFUSAL_TICKS,
     BOUNDARY_REFUSAL_VIOLENCE_THRESHOLD,
@@ -146,6 +147,7 @@ from game.opportunities import (
     stage_active_opportunities,
 )
 from game.run_echoes import strongest_active_run_echo_for_chunk
+from game.economy import chunk_economy_profile
 from engine.systems import System
 from game.skills import (
     access_prep_skill_terms as _access_prep_skill_terms,
@@ -174,7 +176,9 @@ from game.run_pressure import (
 )
 from game.dialogue_shape import (
     build_dialogue_shape as _build_dialogue_shape,
+    build_dialogue_persona_agenda as _build_dialogue_persona_agenda,
     build_rapport_shape as _build_rapport_shape,
+    dialogue_persona_domain_competence as _dialogue_persona_domain_competence,
     relationship_anchor_episode as _relationship_anchor_episode,
     relationship_episode_records as _relationship_episode_records,
     relationship_read_profile as _relationship_read_profile,
@@ -318,6 +322,7 @@ from game.system_support.npc_behavior_runtime import (
     _street_item_price,
     _street_item_value,
 )
+from game.system_support.street_vendor_trade_runtime import STREET_TRADE_SOURCE_KIND, street_vendor_contact_profile
 from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
     ACTION_OFFENSE_CONTEXT_BONUS,
@@ -436,11 +441,9 @@ class NPCInteractionSystem(System):
         "hire",
         "fire",
         "trade",
+        "store_buy_policy",
         "street_appraise",
         "street_buy",
-        "street_buy_accept",
-        "street_buy_next",
-        "street_buy_decline",
         "bye",
         "purpose",
         "apologize",
@@ -457,6 +460,8 @@ class NPCInteractionSystem(System):
         "routine",
         "workplace",
         "services",
+        "local_economy",
+        "store_buy_policy",
         "service_fuel",
         "service_repair",
         "service_contractor",
@@ -493,8 +498,6 @@ class NPCInteractionSystem(System):
         "street_talk",
         "street_appraise",
         "street_buy",
-        "street_buy_accept",
-        "street_buy_next",
         "payoff",
         "fence",
         "hire_runner",
@@ -512,7 +515,6 @@ class NPCInteractionSystem(System):
         "contract",
         "payoff",
         "fence",
-        "street_buy_accept",
     }
     MENU_REPEAT_ROW_BUDGET = 3
     REPEAT_PRESSURE_SKIP_TOPICS = {
@@ -543,9 +545,6 @@ class NPCInteractionSystem(System):
         "backup_wait_return",
         "backup_kill",
         "street_buy",
-        "street_buy_accept",
-        "street_buy_next",
-        "street_buy_decline",
     }
     PAYOFF_BASE_COST = 40
     PAYOFF_COOLDOWN_TICKS = 800
@@ -3685,11 +3684,150 @@ class NPCInteractionSystem(System):
     def _social_knowledge_topic_available(self, context, topic_id):
         topic_id = str(topic_id or "").strip().lower()
         if topic_id == self.SOCIAL_KNOWLEDGE_ROOT_TOPIC:
-            return bool(self._social_knowledge_dialogue_candidates(context))
+            return bool(self._social_knowledge_dialogue_candidates(context)) or self._local_economy_topic_available(context)
         domain = self.SOCIAL_KNOWLEDGE_TOPICS.get(topic_id)
         if domain:
             return bool(self._social_knowledge_dialogue_candidates(context, domain=domain))
         return False
+
+    def _dialogue_knowledge_competence(self, context, domain):
+        context = context if isinstance(context, dict) else {}
+        persona = context.get("dialogue_persona_agenda")
+        tier = _dialogue_persona_domain_competence(persona, domain)
+        return tier if tier in {"none", "rumor", "familiar", "skilled"} else "none"
+
+    def _dialogue_competence_at_least(self, tier, minimum):
+        rank = {"none": 0, "rumor": 1, "familiar": 2, "skilled": 3}
+        return rank.get(str(tier or "none").strip().lower(), 0) >= rank.get(str(minimum or "none").strip().lower(), 0)
+
+    def _local_economy_topic_available(self, context):
+        context = context if isinstance(context, dict) else {}
+        if bool(context.get("door_answering")) or bool(context.get("peaceful_orders_only")):
+            return False
+        profile = context.get("local_economy_profile")
+        return isinstance(profile, dict) and bool(profile)
+
+    def _local_economy_pressure_bits(self, profile):
+        profile = profile if isinstance(profile, dict) else {}
+        try:
+            stock_mult = float(profile.get("stock_mult", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            stock_mult = 1.0
+        try:
+            price_mult = float(profile.get("price_mult", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            price_mult = 1.0
+
+        if stock_mult <= 0.86:
+            stock_text = "shelves look thin"
+        elif stock_mult >= 1.14:
+            stock_text = "supply looks better than usual"
+        else:
+            stock_text = "supply looks ordinary"
+
+        if price_mult >= 1.12:
+            price_text = "prices are running tight"
+        elif price_mult <= 0.92:
+            price_text = "prices are softer than usual"
+        else:
+            price_text = "prices are ordinary"
+        return stock_text, price_text
+
+    def _local_economy_business_note(self, context, *, tier="none"):
+        context = context if isinstance(context, dict) else {}
+        scene_note = context.get("scene_note") if isinstance(context.get("scene_note"), dict) else {}
+        scene_line = str(context.get("scene_local_line", "") or scene_note.get("local_line", "") or "").strip()
+        if scene_line and self._dialogue_competence_at_least(tier, "familiar"):
+            return f"The live scene around here says this too: {_dialogue_lower_start(scene_line)}"
+        if not self._dialogue_competence_at_least(tier, "familiar"):
+            return ""
+        candidates = self._social_knowledge_dialogue_candidates(context, domain="business")
+        if not candidates:
+            return ""
+        record = candidates[0]
+        summary = str(record.get("summary", "") or "").strip()
+        if not summary:
+            return ""
+        return f"The named reputation thread is this: {_dialogue_lower_start(summary)}"
+
+    def _local_economy_summary(self, context, *, tier="none"):
+        context = context if isinstance(context, dict) else {}
+        profile = context.get("local_economy_profile")
+        profile = profile if isinstance(profile, dict) else {}
+        if not profile:
+            return ""
+        context_label = str(profile.get("context_label", "") or profile.get("store_note", "") or "mixed city blocks").strip()
+        pressure_note = str(profile.get("pressure_note", "") or "").strip()
+        workplace_name = str(context.get("workplace_name", "") or "").strip()
+        owner_place_name = str(context.get("owner_place_name", "") or "").strip()
+        stock_text, price_text = self._local_economy_pressure_bits(profile)
+        tier = str(tier or "none").strip().lower() or "none"
+        if tier == "skilled":
+            anchor = workplace_name or owner_place_name or "the work side"
+            summary = f"{anchor} reads like {context_label}; {stock_text}, and {price_text}"
+        elif tier == "familiar":
+            anchor = workplace_name or owner_place_name or "this block"
+            summary = f"{anchor} reads like {context_label}; {stock_text}, and {price_text}"
+        elif tier == "rumor":
+            summary = f"{context_label} is the broad shape; {stock_text}, and {price_text}"
+        else:
+            return ""
+        if pressure_note:
+            summary = f"{summary}. The pressure people mention is {pressure_note}"
+        note = self._local_economy_business_note(context, tier=tier)
+        if note:
+            summary = f"{summary}. {note}"
+        return summary.rstrip(".") + "."
+
+    def _local_economy_agenda_line(self, context):
+        context = context if isinstance(context, dict) else {}
+        persona = context.get("dialogue_persona_agenda")
+        persona = persona if isinstance(persona, dict) else {}
+        bias = str(persona.get("self_interest_bias", "") or "").strip().lower()
+        agenda = str(persona.get("agenda_kind", "") or "").strip().lower()
+        if bias == "protect_place" or agenda == "protect_place":
+            return "I am giving you the weather, not painting a target on a single counter."
+        if bias == "trade":
+            return "If you are buying, keep it clean; counters remember who wastes their time."
+        if bias == "safety":
+            return "Keep the question broad. Specific names make people start watching."
+        if bias == "work":
+            return "If you are asking because you need work, thin staffing matters more than gossip."
+        if bias == "opportunity":
+            return "If you are hunting an angle, follow shortages, not speeches."
+        if bias == "reputation":
+            return "People here remember who leaves a place steadier than they found it."
+        if bias == "privacy":
+            return "That is as far as I would take the read without putting someone's business in the street."
+        return ""
+
+    def _resolve_local_economy_dialogue_topic(self, context, *, ask_count=1):
+        tier = self._dialogue_knowledge_competence(context, "local_economy")
+        bank_id = f"local_economy_{tier}" if tier in {"skilled", "familiar", "rumor"} else "local_economy_none"
+        summary = self._local_economy_summary(context, tier=tier)
+        lines = [
+            self._say(
+                bank_id,
+                context,
+                topic_id="local_economy",
+                count=ask_count,
+                local_economy_summary=summary,
+                local_economy_summary_lc=_dialogue_lower_start(summary),
+            )
+        ]
+        agenda_line = self._local_economy_agenda_line(context)
+        if agenda_line and tier in {"skilled", "familiar", "rumor"}:
+            lines.append(
+                self._say(
+                    "local_economy_self_interest",
+                    context,
+                    topic_id="local_economy",
+                    count=ask_count,
+                    salt="agenda",
+                    local_economy_agenda_line=agenda_line,
+                )
+            )
+        return {"npc_lines": [line for line in lines if str(line or "").strip()]}
 
     def _remember_dialogue_social_knowledge_gain(self, context, payload, record):
         if not isinstance(payload, dict):
@@ -3738,6 +3876,8 @@ class NPCInteractionSystem(System):
         domain = self.SOCIAL_KNOWLEDGE_TOPICS.get(topic_id)
         candidates = self._social_knowledge_dialogue_candidates(context, domain=domain)
         if not candidates:
+            if topic_id == self.SOCIAL_KNOWLEDGE_ROOT_TOPIC and self._local_economy_topic_available(context):
+                return {"npc_lines": [self._say("street_talk_local_economy_intro", context, topic_id=topic_id, count=ask_count)]}
             return {"npc_lines": [self._say("social_knowledge_none", context, topic_id=topic_id, count=ask_count)]}
         record = candidates[0]
         payload = social_knowledge_payload_for_record(
@@ -5182,12 +5322,43 @@ class NPCInteractionSystem(System):
 
     def _resolve_street_buy_topic(self, context, *, topic_id, ask_count):
         npc_eid = context.get("npc_eid")
-        offer = self._build_street_buy_offer(npc_eid, context)
-        if not offer:
+        profile = context.get("street_trade_profile") if isinstance(context, dict) else {}
+        if not isinstance(profile, dict) or not bool(profile.get("available")):
             self._clear_street_buy_offer()
-            return {"npc_lines": ["Not tonight. You are not carrying anything I want to move."]}
-        self._dialog_ui_state()["street_buy_offer"] = offer
-        return {"npc_lines": [self._street_buy_offer_line(offer)]}
+            if isinstance(profile, dict) and profile.get("vendor_kind") == "drug_pusher":
+                reason = str(profile.get("pusher_refusal_reason", "") or "").strip().lower()
+                if reason == "too_hot":
+                    return {"npc_lines": ["Not with that much attention on you. Keep walking."]}
+                if reason == "wary_heat":
+                    return {"npc_lines": ["Not right now. You are drawing too many eyes for me."]}
+                return {"npc_lines": ["Not right now. I am keeping my hands empty."]}
+            return {"npc_lines": ["Not tonight. I am not opening that kind of trade right now."]}
+        modes = tuple(str(mode).strip().lower() for mode in tuple(profile.get("available_modes", ()) or ()) if str(mode).strip())
+        if modes == ("buy",):
+            line = "I can show you what I am carrying. Keep it quick."
+        elif modes == ("sell",):
+            line = "I can look over what you are carrying. If it moves, we make it quick."
+        else:
+            line = "We can do street trade. Buy, sell, or both, but keep it clean."
+        note = str(profile.get("contact_note", "") or "").strip()
+        if note:
+            line = f"{line} {note}."
+        return {
+            "npc_lines": [line],
+            "open_street_trade": True,
+            "street_trade_contact_eid": npc_eid,
+            "street_trade_mode": str(profile.get("default_mode", "sell") or "sell").strip().lower(),
+            "street_trade_context": {
+                "pressure_tier": context.get("pressure_tier"),
+                "pressure_attention": context.get("pressure_attention"),
+                "contact_standing": context.get("contact_standing"),
+                "social_standing": context.get("social_standing"),
+                "rapport": context.get("rapport"),
+                "district_type": context.get("district_type"),
+                "career": context.get("career_text"),
+                "guarded": context.get("guarded"),
+            },
+        }
 
     def _fence_illegal_items(self, player_eid):
         inventory = self.sim.ecs.get(Inventory).get(player_eid)
@@ -5956,6 +6127,7 @@ class NPCInteractionSystem(System):
             district = {}
         area_type = str(district.get("area_type", "city")).strip().lower() or "city"
         district_type = str(district.get("district_type", "unknown")).strip().lower() or "unknown"
+        local_economy_profile = chunk_economy_profile(self.sim, chunk if isinstance(chunk, dict) else None)
         owner_name, owner_source = self._owner_label_for(owner_place)
         service_summary = self._service_summary_for(owner_place)
         controller = _property_access_controller(self.sim, owner_place) if owner_place else {}
@@ -6121,28 +6293,44 @@ class NPCInteractionSystem(System):
             )
             detail_line = f"Try {other_name}. {other_slots['other_subject_cap']} {other_hear} more than I do."
         trade_context = self._trade_context(npc_eid, workplace_prop, current_prop)
+        store_purchase_summary = ""
+        if isinstance(trade_context, dict):
+            trade_prop = trade_context.get("prop")
+            store_purchase_summary = store_purchase_policy_summary(trade_prop)
         street_context = {
             "npc_eid": npc_eid,
             "occupation": occupation,
             "district_type": district_type,
+            "career": career_text,
             "guarded": guarded,
+            "pressure_tier": pressure_tier,
+            "pressure_attention": int(pressure.get("attention", 0)),
+            "contact_standing": contact_standing,
+            "social_standing": social_standing,
+            "rapport": rapport,
         }
         street_appraise_available = self._street_appraise_available_for(npc_eid, street_context)
         street_appraise_preview = self._street_appraise_preview(npc_eid) if street_appraise_available else ""
-        street_buy_available = self._street_buy_available_for(npc_eid, street_context)
-        street_buy_preview = self._street_buy_preview(npc_eid, street_context) if street_buy_available else ""
-        street_buy_terms = self._street_buy_terms_for(npc_eid, street_context) if street_buy_available else None
-        street_buy_rows = self._street_buy_candidate_rows(npc_eid, street_context) if street_buy_available else []
+        street_trade_profile = street_vendor_contact_profile(self.sim, npc_eid, self.player_eid, context=street_context)
+        street_buy_available = bool(
+            street_trade_profile.get("available")
+            or (
+                street_trade_profile.get("vendor_kind") == "drug_pusher"
+                and street_trade_profile.get("blocked_reason")
+            )
+        )
+        street_buy_preview = str(street_trade_profile.get("contact_note", "") or "").strip()
+        street_buy_terms = street_trade_profile.get("sell_terms") if street_buy_available else None
+        street_buy_rows = self._street_buy_candidate_rows(npc_eid, street_context) if street_buy_available and isinstance(street_buy_terms, dict) else []
         street_buy_hint = ""
         if isinstance(street_buy_terms, dict):
             desired_item_id = str(street_buy_terms.get("desired_item_id", "") or "").strip().lower()
             if desired_item_id and any(bool(row.get("desired")) for row in street_buy_rows):
                 street_buy_hint = item_display_name(desired_item_id, item_catalog=ITEM_CATALOG)
-        street_buy_offer = self._street_buy_offer_state(npc_eid)
-        street_buy_offer_pending = isinstance(street_buy_offer, dict)
-        street_buy_offer_accept_label = self._street_buy_offer_accept_label(street_buy_offer) if street_buy_offer_pending else ""
-        street_buy_offer_next_available = self._street_buy_offer_next_available(street_buy_offer) if street_buy_offer_pending else False
-        street_buy_offer_next_label = self._street_buy_offer_next_label(street_buy_offer) if street_buy_offer_next_available else ""
+        street_buy_offer_pending = False
+        street_buy_offer_accept_label = ""
+        street_buy_offer_next_available = False
+        street_buy_offer_next_label = ""
         contractor = self._active_backup_contract(npc_eid)
         peaceful_contract = self._active_peaceful_surrender(npc_eid) if peaceful_orders_only else None
         order_rec = contractor or peaceful_contract
@@ -6215,6 +6403,7 @@ class NPCInteractionSystem(System):
             "subtitle": " | ".join(bit for bit in subtitle_bits if bit),
             "area_type": area_type,
             "district_type": district_type,
+            "local_economy_profile": dict(local_economy_profile) if isinstance(local_economy_profile, dict) else {},
             "speech_style": speech_style,
             "pressure_attention": int(pressure.get("attention", 0)),
             "pressure_tier": pressure_tier,
@@ -6234,6 +6423,7 @@ class NPCInteractionSystem(System):
             "street_appraise_preview": street_appraise_preview,
             "street_buy_available": street_buy_available,
             "street_buy_preview": street_buy_preview,
+            "street_trade_profile": dict(street_trade_profile) if isinstance(street_trade_profile, dict) else {},
             "street_buy_hint": street_buy_hint,
             "street_buy_offer_pending": street_buy_offer_pending,
             "street_buy_offer_accept_label": street_buy_offer_accept_label,
@@ -6347,6 +6537,7 @@ class NPCInteractionSystem(System):
             "has_local_detail": bool(detail_line),
             "trade_available": bool(trade_context),
             "trade_context": trade_context,
+            "store_purchase_summary": store_purchase_summary,
             "vouch_place": workplace_prop or owned_prop,
             "backup_orders_available": bool(contractor or peaceful_orders_only),
             "backup_status_hint": contractor_status,
@@ -6447,6 +6638,7 @@ class NPCInteractionSystem(System):
         })
         context["dialogue_shape"] = _build_dialogue_shape(self.sim, npc_eid, context=context)
         context["rapport_shape"] = _build_rapport_shape(self.sim, npc_eid, context=context)
+        context["dialogue_persona_agenda"] = _build_dialogue_persona_agenda(self.sim, npc_eid, context=context)
         return context
 
     def _active_run_echo_for_dialogue_context(self, npc_pos, *, current_prop=None):
@@ -10205,6 +10397,23 @@ class NPCInteractionSystem(System):
         else:
             base = "talking, but sharper questions still need a reason"
 
+        persona = context.get("dialogue_persona_agenda")
+        persona = persona if isinstance(persona, dict) else {}
+        if conversation >= 7.0 and persona:
+            agenda = str(persona.get("agenda_kind", "") or "").strip().lower()
+            agenda_reads = {
+                "avoid_heat": "they seem more interested in staying clear of heat than being helpful",
+                "keep_order": "they are guarding the order of the place as much as answering",
+                "protect_place": "they are protecting the place while they talk",
+                "keep_trade_moving": "trade talk looks cleaner to them than loose gossip",
+                "find_work_or_contact": "work or useful contacts seem to matter to them right now",
+                "look_for_angle": "they are listening for angles too",
+                "watch_for_neighbors": "local reputation seems to matter to them",
+            }
+            agenda_line = agenda_reads.get(agenda, "")
+            if agenda_line:
+                base = f"{base}; {agenda_line}"
+
         if conversation >= 7.0:
             topic_rows = [row for row in list(topics or ()) if isinstance(row, dict)]
             risky = [
@@ -10704,11 +10913,15 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id in self.SOCIAL_KNOWLEDGE_TOPIC_IDS and not self._social_knowledge_topic_available(context, topic_id):
                 continue
+            if topic_id == "local_economy" and not self._local_economy_topic_available(context):
+                continue
             if topic_id in self.SERVICE_LOCATOR_TOPICS and not self._service_locator_topic_available(context, topic_id):
                 continue
             if topic_id in guarded_only and not context.get("guarded"):
                 continue
             if topic_id == "trade" and not context.get("trade_available"):
+                continue
+            if topic_id == "store_buy_policy" and not context.get("trade_available"):
                 continue
             if topic_id == "street_appraise" and not context.get("street_appraise_available"):
                 continue
@@ -11207,6 +11420,8 @@ class NPCInteractionSystem(System):
             return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
         if topic_id in self.SOCIAL_KNOWLEDGE_TOPIC_IDS:
             return self._resolve_social_knowledge_dialogue_topic(context, topic_id, ask_count=ask_count)
+        if topic_id == "local_economy":
+            return self._resolve_local_economy_dialogue_topic(context, ask_count=ask_count)
         if topic_id == "workplace":
             workplace_prop = context.get("workplace_prop")
             if workplace_prop:
@@ -11901,6 +12116,22 @@ class NPCInteractionSystem(System):
                 line = self._say(bank_id, context, topic_id=topic_id, count=ask_count)
                 return {"npc_lines": [line], "open_trade": True, "trade_property_id": context["trade_context"].get("property_id")}
             return {"npc_lines": [self._say("trade_no", context, topic_id=topic_id, count=ask_count)]}
+        if topic_id == "store_buy_policy":
+            summary = str(context.get("store_purchase_summary", "") or "").strip()
+            if summary:
+                return {
+                    "npc_lines": [
+                        self._say(
+                            "store_buy_policy",
+                            context,
+                            topic_id=topic_id,
+                            count=ask_count,
+                            store_purchase_summary=summary,
+                            store_purchase_summary_lc=_dialogue_lower_start(summary),
+                        )
+                    ]
+                }
+            return {"npc_lines": [self._say("store_buy_policy_no", context, topic_id=topic_id, count=ask_count)]}
         if topic_id == "street_appraise":
             return self._resolve_street_appraise_topic(context, topic_id=topic_id, ask_count=ask_count)
         if topic_id == "street_buy":
@@ -12878,6 +13109,17 @@ class NPCInteractionSystem(System):
             fallback_index=previous_index,
         )
         state["scroll"] = max(0, len(list(state.get("transcript", ()) or ())) - 1)
+        if response.get("open_street_trade"):
+            self._close_dialog()
+            self.sim.emit(Event(
+                "trade_panel_open_request",
+                eid=self.player_eid,
+                source_kind=STREET_TRADE_SOURCE_KIND,
+                contact_eid=response.get("street_trade_contact_eid", npc_eid),
+                mode=str(response.get("street_trade_mode", "sell") or "sell").strip().lower(),
+                street_context=response.get("street_trade_context"),
+            ))
+            return
         if response.get("open_trade"):
             self._close_dialog()
             trade_property_id = str(response.get("trade_property_id", "") or "").strip()

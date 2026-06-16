@@ -1119,13 +1119,47 @@ class WeaponSystem(System):
         ))
         return hit_count
 
+    def _release_projectile_cloud(self, projectile, x, y, z):
+        smoke_intensity = int(max(0, projectile.get("smoke_intensity", 0) or 0))
+        cloud_radius = int(max(0, projectile.get("cloud_radius", 0) or 0))
+        cloud_duration = int(max(0, projectile.get("cloud_duration", 0) or 0))
+        aerosol_status = str(projectile.get("aerosol_status", "") or "").strip().lower()
+        aerosol_modifiers = projectile.get("aerosol_modifiers") if isinstance(projectile.get("aerosol_modifiers"), dict) else {}
+        if smoke_intensity <= 0 and not aerosol_status:
+            return False
+        radius = max(0, cloud_radius)
+        payload = {
+            "source_eid": projectile.get("source_eid"),
+            "weapon_id": projectile.get("weapon_id"),
+            "x": int(x),
+            "y": int(y),
+            "z": int(z),
+            "radius": radius,
+            "smoke_intensity": max(1, smoke_intensity),
+            "cloud_duration": cloud_duration,
+            "thrown_item_id": projectile.get("thrown_item_id"),
+            "thrown_item_name": projectile.get("thrown_item_name"),
+        }
+        if aerosol_status:
+            payload.update({
+                "aerosol_status": aerosol_status,
+                "aerosol_duration": int(max(1, projectile.get("aerosol_duration", 1) or 1)),
+                "aerosol_modifiers": dict(aerosol_modifiers),
+                "aerosol_exposure_cooldown": int(max(1, projectile.get("aerosol_exposure_cooldown", 6) or 6)),
+                "aerosol_label": str(projectile.get("aerosol_label", "") or "").strip(),
+            })
+        self.sim.emit(Event("smoke_cloud_released", **payload))
+        if aerosol_status:
+            self.sim.emit(Event("aerosol_cloud_released", **payload))
+        return True
+
     def _impact_projectile(self, projectile_id, projectile, x, y, z, hit_eid=None, reason="impact"):
         hit_count = 0
         source_eid = projectile.get("source_eid")
         weapon_id = projectile.get("weapon_id")
         cover_penetration = float(max(0.0, min(1.0, projectile.get("cover_penetration", 0.0))))
 
-        if hit_eid is not None:
+        if hit_eid is not None and int(max(0, projectile.get("damage", 0) or 0)) > 0:
             if self._damage_entity(
                 target_eid=hit_eid,
                 source_eid=source_eid,
@@ -1140,6 +1174,7 @@ class WeaponSystem(System):
 
         if int(projectile.get("explosion_radius", 0)) > 0:
             hit_count += self._explode(projectile, x=x, y=y, z=z)
+        cloud_released = self._release_projectile_cloud(projectile, x, y, z)
 
         self.sim.emit(Event(
             "projectile_impact",
@@ -1155,6 +1190,8 @@ class WeaponSystem(System):
             shatter=bool(projectile.get("shatter", False)),
             thrown_item_id=projectile.get("thrown_item_id"),
             thrown_item_name=projectile.get("thrown_item_name"),
+            smoke_cloud=bool(cloud_released),
+            aerosol_status=str(projectile.get("aerosol_status", "") or "").strip().lower(),
         ))
         self.sim.remove_projectile(projectile_id)
 
@@ -1664,6 +1701,11 @@ class StatusEffectSystem(System):
                     vitality.hp = min(vitality.max_hp, vitality.hp + hp_step)
                 elif hp_step < 0 and vitality.hp > 1:
                     vitality.hp = max(1, vitality.hp + hp_step)
+            toxicity_tick_delta = max(0.0, _float_or_default(modifiers.get("toxicity_tick_delta", 0.0), 0.0))
+            if vitality and not vitality.downed and toxicity_tick_delta:
+                toxin_step = _status_tick_step(effects, "toxicity_tick_delta", toxicity_tick_delta)
+                if toxin_step > 0 and vitality.hp > 1:
+                    vitality.hp = max(1, vitality.hp - toxin_step)
 
             expired = effects.tick()
             for status in expired:
@@ -2195,6 +2237,92 @@ class NPCItemUseSystem(System):
             return self._apply_field_rescue(eid, candidate, ai=ai, profile=profile)
         return self._start_field_rescue(eid, candidate, ai=ai, profile=profile)
 
+    def _tactical_throw_score(self, eid, ai, item_def, throw_profile, *, dist, profile, traits, justice, workplace_prop=None):
+        role = str(getattr(ai, "role", "") or "").strip().lower()
+        archetype = str(((workplace_prop or {}).get("metadata", {}) or {}).get("archetype", "") or "").strip().lower()
+        tags = {str(tag).strip().lower() for tag in item_def.get("tags", ()) if str(tag).strip()}
+        qualified = role in {"guard", "thief"} or archetype in {
+            "checkpoint",
+            "police_precinct",
+            "military_post",
+            "armory",
+            "chop_shop",
+            "junk_market",
+            "warehouse",
+            "factory",
+        }
+        if not qualified:
+            return 0.0
+        max_range = max(1, _int_or_default(throw_profile.get("range"), 5))
+        cloud_radius = max(0, _int_or_default(throw_profile.get("cloud_radius"), 0))
+        if int(dist) <= max(1, cloud_radius) or int(dist) > max_range:
+            return 0.0
+        score = float(profile.risk_tolerance) + (float(getattr(traits, "discipline", 0.0) or 0.0) * 0.18)
+        if int(throw_profile.get("smoke_intensity", 0) or 0) > 0:
+            score += 0.22
+        if str(throw_profile.get("aerosol_status", "") or "").strip():
+            score += 0.2
+        legal_status = str(item_def.get("legal_status", "")).strip().lower()
+        if role == "guard" and legal_status == "restricted":
+            score += 0.16
+        if int(throw_profile.get("fire_intensity", 0) or 0) > 0 or int(throw_profile.get("explosion_radius", 0) or 0) > 0:
+            score += 0.1 if profile.risk_tolerance >= 0.62 else -0.28
+        if "illegal" in tags or legal_status == "illegal":
+            justice_severity = (
+                (_justice_level(justice, default=0.4) * 0.7)
+                + (_crime_sensitivity(justice, default=0.4) * 0.3)
+            )
+            score -= (0.38 + (justice_severity * 0.22)) * (1.0 - profile.risk_tolerance)
+        return max(0.0, score)
+
+    def _maybe_tactical_throw(self, eid, profile, ai, inventory, pos, target_pos, *, traits, justice):
+        if not ai or not inventory or not pos or not target_pos:
+            return False
+        dist = _grid_distance(pos.x, pos.y, target_pos.x, target_pos.y)
+        occupation = self._occupation(eid)
+        workplace_prop = self._workplace_property(occupation)
+        best_entry = None
+        best_score = 0.0
+        for entry in list(inventory.items):
+            item_def = self.catalog.get(entry.get("item_id"))
+            if not isinstance(item_def, dict):
+                continue
+            throw_profile = item_def.get("throw_profile") if isinstance(item_def.get("throw_profile"), dict) else None
+            if not throw_profile:
+                continue
+            score = self._tactical_throw_score(
+                eid,
+                ai,
+                item_def,
+                throw_profile,
+                dist=dist,
+                profile=profile,
+                traits=traits,
+                justice=justice,
+                workplace_prop=workplace_prop,
+            )
+            if score > best_score:
+                best_score = score
+                best_entry = entry
+        if not best_entry or best_score < 0.58:
+            return False
+        roll = random.Random(
+            f"{getattr(self.sim, 'seed', 0)}:npc_tactical_throw:{getattr(self.sim, 'tick', 0)}:{eid}:{best_entry.get('instance_id')}"
+        ).random()
+        if roll > min(0.72, best_score):
+            return False
+        profile.last_use_tick = int(getattr(self.sim, "tick", 0))
+        self.sim.emit(Event(
+            "throw_item_request",
+            eid=eid,
+            item_instance_id=best_entry.get("instance_id"),
+            target_x=int(target_pos.x),
+            target_y=int(target_pos.y),
+            target_z=int(target_pos.z),
+            reason="npc_tactical_throw",
+        ))
+        return True
+
     def on_npc_help_arrived(self, event):
         eid = event.data.get("npc_eid")
         target_eid = event.data.get("target_eid")
@@ -2395,6 +2523,18 @@ class NPCItemUseSystem(System):
             loadout = loadouts.get(eid)
             weapon = weapon_by_id(loadout.current_weapon()) if loadout and loadout.current_weapon() else None
             combat_dist = _grid_distance(pos.x, pos.y, target_pos.x, target_pos.y) if combat_active else None
+
+            if combat_active and self._maybe_tactical_throw(
+                eid,
+                profile,
+                ai,
+                inventory,
+                pos,
+                target_pos,
+                traits=traits,
+                justice=justice,
+            ):
+                continue
 
             best_entry = None
             best_score = 0.0

@@ -480,6 +480,11 @@ class EventLogSystem(System):
         self.sim.events.subscribe("camera_alerted", self.on_camera_alerted)
         self.sim.events.subscribe("status_applied", self.on_status_applied)
         self.sim.events.subscribe("status_expired", self.on_status_expired)
+        self.sim.events.subscribe("movement_misdirected", self.on_movement_misdirected)
+        self.sim.events.subscribe("bonus_move_used", self.on_bonus_move_used)
+        self.sim.events.subscribe("control_lapse_started", self.on_control_lapse_started)
+        self.sim.events.subscribe("drug_blackout_started", self.on_drug_blackout_started)
+        self.sim.events.subscribe("drug_blackout_resolved", self.on_drug_blackout_resolved)
         self.sim.events.subscribe("inventory_panel_toggled", self.on_inventory_panel_toggled)
         self.sim.events.subscribe("inventory_inspected", self.on_inventory_inspected)
         self.sim.events.subscribe("trade_panel_toggled", self.on_trade_panel_toggled)
@@ -508,6 +513,9 @@ class EventLogSystem(System):
         self.sim.events.subscribe("melee_attack", self.on_melee_attack)
         self.sim.events.subscribe("weapon_fire_blocked", self.on_weapon_fire_blocked)
         self.sim.events.subscribe("projectile_impact", self.on_projectile_impact)
+        self.sim.events.subscribe("smoke_cloud_released", self.on_smoke_cloud_released)
+        self.sim.events.subscribe("aerosol_cloud_released", self.on_aerosol_cloud_released)
+        self.sim.events.subscribe("aerosol_exposure_triggered", self.on_aerosol_exposure_triggered)
         self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
         self.sim.events.subscribe("actor_deprivation_damage", self.on_actor_deprivation_damage)
         self.sim.events.subscribe("player_downed", self.on_player_downed)
@@ -529,6 +537,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("player_business_staff_fired", self.on_player_business_staff_fired)
         self.sim.events.subscribe("property_purchase_blocked", self.on_property_purchase_blocked)
         self.sim.events.subscribe("trade_bought", self.on_trade_bought)
+        self.sim.events.subscribe("street_vendor_purchase", self.on_street_vendor_purchase)
         self.sim.events.subscribe("npc_item_purchased", self.on_npc_item_purchased)
         self.sim.events.subscribe("trade_buy_blocked", self.on_trade_buy_blocked)
         self.sim.events.subscribe("trade_sold", self.on_trade_sold)
@@ -3812,6 +3821,58 @@ class EventLogSystem(System):
         status = _humanize_slug(event.data.get("status", "effect"), title=True) or "Effect"
         self._log(f"Status expired: {status}.", channel="status", priority="high")
 
+    def on_movement_misdirected(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        _log_player_feedback(
+            self.sim,
+            "Your step slips sideways.",
+            kind="movement",
+            dedupe_window=3,
+            dedupe_key="movement_misdirected",
+        )
+
+    def on_bonus_move_used(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        _log_player_feedback(
+            self.sim,
+            "You move before the moment closes.",
+            kind="movement",
+            dedupe_window=2,
+            dedupe_key=f"bonus_move:{int(getattr(self.sim, 'tick', 0))}",
+        )
+
+    def on_control_lapse_started(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        _log_player_feedback(
+            self.sim,
+            "Your body goes distant for a beat.",
+            kind="status",
+            dedupe_window=4,
+            dedupe_key="control_lapse_started",
+        )
+
+    def on_drug_blackout_started(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        ticks = int(event.data.get("duration_ticks", 0) or 0)
+        duration = _tick_duration_label(self.sim, ticks) if ticks > 0 else "a while"
+        self._log(f"You nod off. Time slips for {duration}.", channel="status", priority="high")
+
+    def on_drug_blackout_resolved(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        ticks = int(event.data.get("time_advanced_ticks", 0) or 0)
+        duration = _tick_duration_label(self.sim, ticks) if ticks > 0 else "a moment"
+        if bool(event.data.get("interrupted")):
+            reason = str(event.data.get("interruption_reason", "") or "").replace("_", " ").strip()
+            suffix = f" ({reason})" if reason else ""
+            self._log(f"You come back after {duration}{suffix}.", channel="status", priority="high")
+            return
+        self._log(f"You come back after {duration}.", channel="status", priority="high")
+
     def on_inventory_panel_toggled(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -3871,6 +3932,12 @@ class EventLogSystem(System):
             return
         if reason == "no_machine_store":
             self.sim.log.add("No unattended machine nearby. Use E at a staffed counter.")
+            return
+        if reason == "no_street_vendor":
+            self.sim.log.add("That street contact is not close enough to trade.")
+            return
+        if reason == "street_vendor_no_trade":
+            self.sim.log.add("That street contact is not opening trade right now.")
             return
         if reason == "no_staff":
             self.sim.log.add(f"{store_name} has no clerk on the counter right now.")
@@ -4252,6 +4319,29 @@ class EventLogSystem(System):
             self._log(profile["miss"], channel="combat", priority="high", dedupe_window=2)
             return
 
+    def on_smoke_cloud_released(self, event):
+        if event.data.get("source_eid") != self.player_eid:
+            return
+        if not self._player_can_perceive_event_position(event):
+            return
+        name = str(event.data.get("thrown_item_name", "") or "").strip() or "The canister"
+        radius = int(event.data.get("radius", 0) or 0)
+        self._log(f"{name} vents smoke r={radius}.", channel="combat", priority="high", dedupe_window=2)
+
+    def on_aerosol_cloud_released(self, event):
+        if event.data.get("source_eid") != self.player_eid:
+            return
+        if not self._player_can_perceive_event_position(event):
+            return
+        label = str(event.data.get("aerosol_label", "") or "").strip() or "aerosol"
+        self._log(f"{label.capitalize()} spreads through the smoke.", channel="combat", priority="high", dedupe_window=2)
+
+    def on_aerosol_exposure_triggered(self, event):
+        if event.data.get("target_eid") != self.player_eid:
+            return
+        label = str(event.data.get("aerosol_label", "") or "").strip() or str(event.data.get("status", "aerosol") or "aerosol").replace("_", " ")
+        self._log(f"Hazard: {label} gets into your lungs and eyes.", channel="status", priority="high", dedupe_window=3)
+
     def on_weapon_fire_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -4463,7 +4553,17 @@ class EventLogSystem(System):
     def on_player_action_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
             return
-        if str(event.data.get("reason", "") or "").strip().lower() != "downed":
+        reason = str(event.data.get("reason", "") or "").strip().lower()
+        if reason == "control_lapse":
+            _log_player_feedback(
+                self.sim,
+                "You cannot make your body answer yet.",
+                kind="status",
+                dedupe_window=3,
+                dedupe_key="player_action_blocked:control_lapse",
+            )
+            return
+        if reason != "downed":
             return
         _log_player_feedback(
             self.sim,
@@ -4743,6 +4843,16 @@ class EventLogSystem(System):
             return
         self.sim.log.add(f"Bought {item_name} for {price} credits at {store}.")
 
+    def on_street_vendor_purchase(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        item_name = event.data.get("item_name", event.data.get("item_id", "item"))
+        price = int(event.data.get("price", 0) or 0)
+        npc_name = self._npc_label(event.data.get("npc_eid"), fallback="the street contact")
+        risk = str(event.data.get("risk_label", "") or "").strip()
+        suffix = f" {risk}." if risk else ""
+        self.sim.log.add(f"Bought {item_name} for {price} credits from {npc_name}.{suffix}")
+
     def on_npc_item_purchased(self, event):
         npc_eid = event.data.get("npc_eid", event.data.get("eid"))
         if npc_eid == self.player_eid:
@@ -4791,6 +4901,12 @@ class EventLogSystem(System):
         if reason == "no_store":
             self.sim.log.add("No storefront nearby to buy from.")
             return
+        if reason == "no_street_vendor":
+            self.sim.log.add("That street contact is not close enough to buy from.")
+            return
+        if reason == "street_vendor_empty":
+            self.sim.log.add("That street contact has nothing to sell right now.")
+            return
         if reason == "no_assets":
             self.sim.log.add("Cannot buy right now: your wallet is not accessible.")
             return
@@ -4837,6 +4953,9 @@ class EventLogSystem(System):
         if reason == "no_store":
             self.sim.log.add("No storefront nearby to sell to.")
             return
+        if reason == "no_street_vendor":
+            self.sim.log.add("That street contact is not close enough to sell to.")
+            return
         if reason == "no_assets":
             self.sim.log.add("Cannot sell right now: your wallet is not accessible.")
             return
@@ -4851,6 +4970,15 @@ class EventLogSystem(System):
             return
         if reason == "item_not_found":
             self.sim.log.add(f"That sale item is no longer available in your inventory.")
+            return
+        if reason == "unwanted_item_warning":
+            self.sim.log.add(f"{store_name} does not usually buy {item_name}. The worker waves it off.")
+            return
+        if reason == "unwanted_item_firm":
+            self.sim.log.add(f"{store_name} is not taking {item_name}. The worker tells you to stop putting it on the counter.")
+            return
+        if reason == "unwanted_item_eject":
+            self.sim.log.add(f"{store_name} is done with that offer. The worker tells you to leave.")
             return
         if reason == "vehicle_not_in_chunk":
             vehicle_name = str(event.data.get("vehicle_name", "vehicle") or "vehicle").strip()
@@ -6088,6 +6216,12 @@ class EventLogSystem(System):
         labels = [str(label).strip() for label in list(event.data.get("confiscated_labels", ()) or ()) if str(label).strip()]
         held_labels = [str(label).strip() for label in list(event.data.get("held_labels", ()) or ()) if str(label).strip()]
         forfeited_labels = [str(label).strip() for label in list(event.data.get("forfeited_labels", ()) or ()) if str(label).strip()]
+        held_reason_labels = [str(label).strip() for label in list(event.data.get("held_reason_labels", ()) or ()) if str(label).strip()]
+        forfeited_reason_labels = [str(label).strip() for label in list(event.data.get("forfeited_reason_labels", ()) or ()) if str(label).strip()]
+        ignored_count = int(event.data.get("ignored_item_count", 0) or 0)
+        ignored_labels = [str(label).strip() for label in list(event.data.get("ignored_labels", ()) or ()) if str(label).strip()]
+        ignored_reason_labels = [str(label).strip() for label in list(event.data.get("ignored_reason_labels", ()) or ()) if str(label).strip()]
+        penalty_breakdown = event.data.get("penalty_breakdown") if isinstance(event.data.get("penalty_breakdown"), dict) else {}
         held_property_name = str(event.data.get("held_property_name", property_name)).strip() or property_name
         status_text = {
             "questioning": "wanted for questioning",
@@ -6099,6 +6233,7 @@ class EventLogSystem(System):
         if hold_hours > 0:
             summary += f" Held about {hold_hours:g}h."
         if fine_due > 0:
+            base_fine = int(penalty_breakdown.get("base_fine", 0) or 0)
             if fine_paid > 0:
                 summary += f" Fine {fine_paid}c paid"
                 payment_bits = []
@@ -6119,6 +6254,8 @@ class EventLogSystem(System):
                 summary += f" Fine converted to {debt_added}c debt."
             else:
                 summary += f" Fine assessed: {fine_due}c."
+            if base_fine > 0:
+                summary += f" Base fine {base_fine}c."
         if evidence_surcharge > 0:
             summary += f" Evidence surcharge {evidence_surcharge}c."
         if restitution_due > 0:
@@ -6148,11 +6285,22 @@ class EventLogSystem(System):
             summary += f" Held for release at {held_property_name}: {held_count} item(s)"
             if held_labels:
                 summary += f" ({', '.join(held_labels[:3])})"
+            if held_reason_labels:
+                summary += f" because {', '.join(held_reason_labels[:3])}"
             summary += "."
         if forfeited_count > 0:
             summary += f" Forfeited as evidence/contraband: {forfeited_count} item(s)"
             if forfeited_labels:
                 summary += f" ({', '.join(forfeited_labels[:3])})"
+            if forfeited_reason_labels:
+                summary += f" because {', '.join(forfeited_reason_labels[:3])}"
+            summary += "."
+        if ignored_count > 0:
+            summary += f" Left with you after search: {ignored_count} item(s)"
+            if ignored_labels:
+                summary += f" ({', '.join(ignored_labels[:3])})"
+            if ignored_reason_labels:
+                summary += f" because {', '.join(ignored_reason_labels[:3])}"
             summary += "."
         if match_labels:
             summary += f" Strongest evidence: {match_labels[0]}."
@@ -6197,6 +6345,15 @@ class EventLogSystem(System):
         evidence_surcharge = int(event.data.get("evidence_surcharge", 0) or 0)
         match_labels = [str(label).strip() for label in list(event.data.get("incident_match_labels", ()) or ()) if str(label).strip()]
         posture_label = str(event.data.get("protective_posture_label", "") or "").strip()
+        fine_due = int(event.data.get("fine_due", 0) or 0)
+        fine_paid = int(event.data.get("fine_paid", 0) or 0)
+        debt_added = int(event.data.get("debt_added", 0) or 0)
+        held_count = int(event.data.get("held_item_count", 0) or 0)
+        forfeited_count = int(event.data.get("forfeited_item_count", 0) or 0)
+        held_labels = [str(label).strip() for label in list(event.data.get("held_labels", ()) or ()) if str(label).strip()]
+        forfeited_labels = [str(label).strip() for label in list(event.data.get("forfeited_labels", ()) or ()) if str(label).strip()]
+        held_reason_labels = [str(label).strip() for label in list(event.data.get("held_reason_labels", ()) or ()) if str(label).strip()]
+        forfeited_reason_labels = [str(label).strip() for label in list(event.data.get("forfeited_reason_labels", ()) or ()) if str(label).strip()]
         if outcome == "custody_escalation":
             text = "Questioning breaks down and justice escalates to custody."
         elif outcome == "release_keep_items":
@@ -6213,6 +6370,26 @@ class EventLogSystem(System):
             text += f" Match: {match_labels[0]}."
         if evidence_surcharge > 0:
             text += f" Evidence surcharge {evidence_surcharge}c."
+        if fine_due > 0:
+            text += f" Fine {fine_due}c."
+            if fine_paid > 0:
+                text += f" Paid {fine_paid}c."
+            if debt_added > 0:
+                text += f" Debt {debt_added}c filed."
+        if held_count > 0:
+            text += f" Held for release: {held_count} item(s)"
+            if held_labels:
+                text += f" ({', '.join(held_labels[:3])})"
+            if held_reason_labels:
+                text += f" because {', '.join(held_reason_labels[:3])}"
+            text += "."
+        if forfeited_count > 0:
+            text += f" Forfeited/confiscated: {forfeited_count} item(s)"
+            if forfeited_labels:
+                text += f" ({', '.join(forfeited_labels[:3])})"
+            if forfeited_reason_labels:
+                text += f" because {', '.join(forfeited_reason_labels[:3])}"
+            text += "."
         if posture_label:
             text += f" {posture_label} stays in effect."
         self._log(text, channel="mission", priority="high", dedupe_window=8, dedupe_key=f"justice-questioning:{outcome}")

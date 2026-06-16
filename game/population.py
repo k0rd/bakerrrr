@@ -2030,6 +2030,50 @@ def _loot_spawn_profile(prop, rng):
     return chance, count
 
 
+USEFUL_LOOT_TAGS = {
+    "ammo",
+    "credential",
+    "drink",
+    "food",
+    "illegal",
+    "medical",
+    "restricted",
+    "stimulant",
+    "token",
+    "tool",
+    "weapon",
+}
+USEFUL_LOOT_CATEGORIES = {"armor", "disguise", "throwable", "weapon"}
+
+
+def _is_useful_loot_item(item_id):
+    item_def = ITEM_CATALOG.get(str(item_id or "").strip().lower(), {})
+    if not isinstance(item_def, dict):
+        return False
+    if str(item_def.get("category", "") or "").strip().lower() in USEFUL_LOOT_CATEGORIES:
+        return True
+    tags = {str(tag).strip().lower() for tag in item_def.get("tags", ()) if str(tag).strip()}
+    return bool(tags.intersection(USEFUL_LOOT_TAGS))
+
+
+def _contextual_useful_loot_candidate(prop, rng):
+    archetype = _property_archetype(prop)
+    if archetype in MEDICAL_ARCHETYPES:
+        rows = (("bandage_roll", 6), ("field_dressing", 5), ("med_gel", 4), ("hydration_salts", 3))
+    elif archetype in SECURITY_ARCHETYPES:
+        rows = (("pocket_light_rounds", 5), ("field_dressing", 3), ("smoke_grenade", 2), ("security_vest", 1))
+    elif archetype in SALVAGE_ARCHETYPES or archetype in INDUSTRIAL_ARCHETYPES:
+        rows = (("pocket_multitool", 5), ("battery_pack", 5), ("prybar", 3), ("brick", 2), ("smoke_grenade", 1))
+    elif archetype in NIGHTLIFE_ARCHETYPES:
+        rows = (("spark_brew", 5), ("caff_shot", 4), ("bottled_water", 3), ("glass_bottle", 2))
+    elif archetype in STOREFRONT_ARCHETYPES or archetype in TRANSIT_ARCHETYPES:
+        rows = (("city_pass_token", 5), ("street_ration", 4), ("bottled_water", 4), ("field_dressing", 2))
+    else:
+        rows = (("street_ration", 4), ("bottled_water", 4), ("bandage_roll", 2), ("city_pass_token", 2))
+    candidate = _weighted_choice(rng, rows)
+    return candidate if candidate in ITEM_CATALOG else None
+
+
 def seed_chunk_items(sim, chunk, property_records):
     ground_records, _population_records = ensure_chunk_population_state(sim)
     key = (int(chunk.get("cx", 0)), int(chunk.get("cy", 0)))
@@ -2046,7 +2090,12 @@ def seed_chunk_items(sim, chunk, property_records):
         if chance <= 0.0 or rng.random() > chance:
             continue
         table_key = loot_table_for_property(kind=record.get("kind"), archetype=record.get("archetype"))
-        for item_id in roll_loot(rng, table_key=table_key, count=count):
+        rolled_items = list(roll_loot(rng, table_key=table_key, count=count))
+        if rolled_items and not any(_is_useful_loot_item(item_id) for item_id in rolled_items):
+            useful_item = _contextual_useful_loot_candidate(prop, rng)
+            if useful_item:
+                rolled_items[-1] = useful_item
+        for item_id in rolled_items:
             item_def = ITEM_CATALOG.get(item_id)
             if not item_def:
                 continue
@@ -2320,7 +2369,7 @@ def _inventory_pool_for(role, workplace_prop=None, home_prop=None):
         return (
             "city_pass_token",
             "scratch_ticket",
-            "burner_phone",
+            "phone",
             "lockpick_kit",
             "glass_cutter",
             "hotwire_leads",
@@ -2426,6 +2475,11 @@ def _gear_pool_for(role, workplace_prop=None, home_prop=None):
                 ("riot_plates", 14),
                 ("courier_mesh", 8),
             ),
+            "throwable_chance": 0.1,
+            "throwable_pool": (
+                ("smoke_grenade", 8),
+                ("tear_gas_canister", 5),
+            ),
         }
     if role == "thief":
         return {
@@ -2445,6 +2499,13 @@ def _gear_pool_for(role, workplace_prop=None, home_prop=None):
                 ("stab_vest", 12),
                 ("padded_jacket", 14),
                 ("security_vest", 8),
+            ),
+            "throwable_chance": 0.12,
+            "throwable_pool": (
+                ("glass_bottle", 8),
+                ("brick", 6),
+                ("molotov_cocktail", 2),
+                ("toxic_aerosol_canister", 1),
             ),
         }
     if role == "drunk":
@@ -2481,6 +2542,12 @@ def _gear_pool_for(role, workplace_prop=None, home_prop=None):
                 ("courier_mesh", 10),
                 ("stab_vest", 8),
             ),
+            "throwable_chance": 0.06,
+            "throwable_pool": (
+                ("glass_bottle", 6),
+                ("brick", 5),
+                ("smoke_grenade", 1),
+            ),
         }
     if role == "worker" or archetype in INDUSTRIAL_ARCHETYPES:
         return {
@@ -2498,6 +2565,11 @@ def _gear_pool_for(role, workplace_prop=None, home_prop=None):
                 ("cutproof_apron", 10),
                 ("armored_motor_jacket", 6),
             ),
+            "throwable_chance": 0.04,
+            "throwable_pool": (
+                ("glass_bottle", 5),
+                ("brick", 4),
+            ),
         }
     return {
         "weapon_chance": 0.04,
@@ -2511,6 +2583,8 @@ def _gear_pool_for(role, workplace_prop=None, home_prop=None):
             ("padded_jacket", 8),
             ("stab_vest", 5),
         ),
+        "throwable_chance": 0.0,
+        "throwable_pool": (),
     }
 
 
@@ -2525,6 +2599,10 @@ def _seed_npc_gear(sim, eid, rng, role, workplace_prop=None, home_prop=None):
         item_id = _weighted_choice(rng, profile.get("armor_pool", ()))
         if item_id:
             _equip_npc_armor(sim, eid, item_id)
+    if rng.random() < float(profile.get("throwable_chance", 0.0)):
+        item_id = _weighted_choice(rng, profile.get("throwable_pool", ()))
+        if item_id and item_id in ITEM_CATALOG:
+            _give_item(sim, eid, item_id, quantity=1)
 
 
 def _seed_npc_inventory(sim, eid, rng, role, workplace_prop=None, home_prop=None):
@@ -3078,31 +3156,142 @@ UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS = (
         "bonus_items": (("spark_brew", 1),),
     },
 )
+UNDERGROUND_MAINTENANCE_ENCOUNTER_ROWS = (
+    {
+        "profile_id": "utility_tech",
+        "weight": 5,
+        "role": "worker",
+        "career": "utility_maintenance",
+        "assign_workplace": True,
+        "bonus_items": (("battery_pack", 1), ("pocket_multitool", 1)),
+    },
+    {
+        "profile_id": "service_runner",
+        "weight": 3,
+        "role": "worker",
+        "career": "service_runner",
+        "assign_workplace": True,
+        "bonus_items": (("city_pass_token", 1),),
+    },
+    {
+        "profile_id": "off_shift_tech",
+        "weight": 2,
+        "role": "civilian",
+        "career": "maintenance",
+        "assign_workplace": False,
+        "bonus_items": (("energy_bar", 1),),
+    },
+)
+UNDERGROUND_SCAVENGER_ENCOUNTER_ROWS = (
+    {
+        "profile_id": "tunnel_scavenger",
+        "weight": 6,
+        "role": "thief",
+        "career": "scavenger",
+        "assign_workplace": False,
+        "bonus_items": (("scrap_circuit", 1), ("lockpick_kit", 1)),
+    },
+    {
+        "profile_id": "drain_picker",
+        "weight": 4,
+        "role": "civilian",
+        "career": "scrapper",
+        "assign_workplace": False,
+        "bonus_items": (("glass_bottle", 1), ("energy_bar", 1)),
+    },
+    {
+        "profile_id": "tunnel_lookout",
+        "weight": 2,
+        "role": "thief",
+        "career": "lookout",
+        "assign_workplace": False,
+        "bonus_items": (("spark_brew", 1),),
+    },
+)
+UNDERGROUND_SHELTER_ENCOUNTER_ROWS = (
+    {
+        "profile_id": "shelter_drifter",
+        "weight": 5,
+        "role": "civilian",
+        "career": "drifter",
+        "assign_workplace": False,
+        "bonus_items": (("bottled_water", 1),),
+    },
+    {
+        "profile_id": "basement_sleeper",
+        "weight": 3,
+        "role": "civilian",
+        "career": "drifter",
+        "assign_workplace": False,
+        "bonus_items": (("emergency_blanket", 1),),
+    },
+    {
+        "profile_id": "burned_out_vagrant",
+        "weight": 2,
+        "role": "drunk",
+        "career": "drifter",
+        "assign_workplace": False,
+        "bonus_items": (("cheap_whiskey", 1),),
+    },
+)
+UNDERGROUND_SHADY_ENCOUNTER_ROWS = (
+    {
+        "profile_id": "tunnel_dealer",
+        "weight": 3,
+        "role": "thief",
+        "career": "dealer",
+        "assign_workplace": False,
+        "bonus_items": (("black_market_stim", 1),),
+    },
+    {
+        "profile_id": "handoff_runner",
+        "weight": 3,
+        "role": "thief",
+        "career": "runner",
+        "assign_workplace": False,
+        "bonus_items": (("credstick_chip", 1),),
+    },
+    {
+        "profile_id": "lost_partier",
+        "weight": 2,
+        "role": "drunk",
+        "career": "partier",
+        "assign_workplace": False,
+        "bonus_items": (("cocaine_bindle", 1),),
+    },
+)
+UNDERGROUND_ENCOUNTER_ROWS_BY_PROFILE = {
+    "underground_transient": UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS,
+    "underground_maintenance": UNDERGROUND_MAINTENANCE_ENCOUNTER_ROWS,
+    "underground_scavengers": UNDERGROUND_SCAVENGER_ENCOUNTER_ROWS,
+    "underground_shelter": UNDERGROUND_SHELTER_ENCOUNTER_ROWS,
+    "underground_shady": UNDERGROUND_SHADY_ENCOUNTER_ROWS,
+}
 
 ROOM_BONUS_LOOT_ROWS = {
     "archive": (
         ("pocket_notebook", 5),
         ("credstick_chip", 4),
-        ("burner_phone", 2),
+        ("phone", 2),
         ("battery_pack", 1),
     ),
     "clerk_office": (
         ("pocket_notebook", 5),
         ("credstick_chip", 4),
         ("city_pass_token", 2),
-        ("burner_phone", 2),
+        ("phone", 2),
     ),
     "front_desk": (
         ("meal_voucher", 4),
         ("scratch_ticket", 4),
-        ("burner_phone", 3),
+        ("phone", 3),
         ("credstick_chip", 3),
     ),
     "guest_lounge": (
         ("spark_brew", 4),
         ("cheap_whiskey", 3),
         ("scratch_ticket", 4),
-        ("burner_phone", 2),
+        ("phone", 2),
     ),
     "housekeeping": (
         ("bandage_roll", 4),
@@ -3132,11 +3321,12 @@ ROOM_BONUS_LOOT_ROWS = {
         ("battery_pack", 4),
         ("scrap_circuit", 4),
         ("lockpick_kit", 2),
+        ("smoke_grenade", 1),
         ("bottled_water", 2),
     ),
     "boardroom": (
         ("credstick_chip", 4),
-        ("burner_phone", 3),
+        ("phone", 3),
         ("caff_shot", 3),
         ("pocket_notebook", 3),
     ),
@@ -3144,23 +3334,24 @@ ROOM_BONUS_LOOT_ROWS = {
         ("forged_badge", 3),
         ("signal_jammer", 2),
         ("lockpick_kit", 2),
+        ("tear_gas_canister", 1),
         ("credstick_chip", 2),
     ),
     "green_room": (
         ("spark_brew", 4),
         ("cheap_whiskey", 3),
-        ("burner_phone", 2),
+        ("phone", 2),
         ("scratch_ticket", 2),
     ),
     "balcony": (
         ("scratch_ticket", 4),
         ("spark_brew", 3),
-        ("burner_phone", 2),
+        ("phone", 2),
         ("city_pass_token", 1),
     ),
     "screening_room": (
         ("battery_pack", 3),
-        ("burner_phone", 3),
+        ("phone", 3),
         ("pocket_notebook", 3),
         ("spark_brew", 2),
     ),
@@ -3206,6 +3397,25 @@ ROOM_CURIOSITY_ENCOUNTER_ROWS = (
         ),
     },
     {
+        "profile_id": "afterhours_pusher",
+        "weight": 0.75,
+        "archetypes": ("flophouse", "nightclub", "music_venue", "gaming_hall", "casino"),
+        "room_kinds": ("guest_lounge", "service_office", "green_room", "backstage", "vip_lounge", "linen_closet"),
+        "role": "civilian",
+        "career_rows": (
+            ("dealer", 3),
+            ("street_pusher", 2),
+            ("runner", 1),
+        ),
+        "assign_workplace": False,
+        "bonus_item_rows": (
+            ("cocaine_bindle", 3),
+            ("mdma_capsule", 2),
+            ("lsd_blotter", 2),
+            ("phone", 1),
+        ),
+    },
+    {
         "profile_id": "backstage_worker",
         "weight": 3,
         "archetypes": ("theater", "music_venue", "nightclub", "casino", "gaming_hall"),
@@ -3221,7 +3431,7 @@ ROOM_CURIOSITY_ENCOUNTER_ROWS = (
         "assign_workplace": True,
         "bonus_item_rows": (
             ("spark_brew", 3),
-            ("burner_phone", 2),
+            ("phone", 2),
             ("battery_pack", 2),
         ),
     },
@@ -3242,7 +3452,7 @@ ROOM_CURIOSITY_ENCOUNTER_ROWS = (
         "bonus_item_rows": (
             ("pocket_notebook", 4),
             ("credstick_chip", 3),
-            ("burner_phone", 2),
+            ("phone", 2),
         ),
     },
     {
@@ -3261,7 +3471,7 @@ ROOM_CURIOSITY_ENCOUNTER_ROWS = (
             "lead_item_id": "backroom_card",
         },
         "bonus_item_rows": (
-            ("burner_phone", 4),
+            ("phone", 4),
             ("credstick_chip", 3),
             ("signal_jammer", 2),
         ),
@@ -3284,7 +3494,7 @@ ROOM_CURIOSITY_ENCOUNTER_ROWS = (
         "bonus_item_rows": (
             ("field_dressing", 4),
             ("med_gel", 4),
-            ("burner_phone", 2),
+            ("phone", 2),
         ),
     },
 )
@@ -3302,7 +3512,7 @@ _HIDDEN_STOREFRONT_PROFILES = {
             "trade_unlisted_sell_ratio_delta": 0.12,
             "trade_stock_mult": 0.72,
             "trade_item_weight_mults": {
-                "burner_phone": 1.35,
+                "phone": 1.35,
                 "signal_jammer": 1.25,
                 "forged_badge": 1.4,
                 "credstick_chip": 0.74,
@@ -3592,6 +3802,19 @@ UNDERGROUND_PEST_WILDLIFE_ROWS = (
     {"profile_id": "roach_swarm", "weight": 5},
     {"profile_id": "wharf_rat", "weight": 1},
 )
+UNDERGROUND_WILDLIFE_ROWS_BY_PROFILE = {
+    "underground_pests": UNDERGROUND_PEST_WILDLIFE_ROWS,
+    "basement_pests": (
+        {"profile_id": "roach_swarm", "weight": 6},
+        {"profile_id": "sewer_rat", "weight": 4},
+    ),
+    "drain_wildlife": (
+        {"profile_id": "sewer_rat", "weight": 6},
+        {"profile_id": "wharf_rat", "weight": 4},
+        {"profile_id": "roach_swarm", "weight": 3},
+        {"profile_id": "stray_dog", "weight": 1},
+    ),
+}
 
 
 def _ambient_creature_profile(profile_id):
@@ -3605,6 +3828,8 @@ def _ambient_creature_profile(profile_id):
 
 
 def _spawn_underground_transient_encounter(sim, chunk, prop, rng, *, economy_profile=None):
+    encounter_profile = _ambient_encounter_profile(prop) or "underground_transient"
+    encounter_rows = UNDERGROUND_ENCOUNTER_ROWS_BY_PROFILE.get(encounter_profile, UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS)
     candidates = _ambient_encounter_spawn_points(sim, prop)
     if not candidates:
         candidates = _tile_candidates_for_property(sim, prop, "interior")
@@ -3614,7 +3839,7 @@ def _spawn_underground_transient_encounter(sim, chunk, prop, rng, *, economy_pro
 
     choice = _weighted_choice(
         rng,
-        [(row, float(row.get("weight", 0.0) or 0.0)) for row in UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS],
+        [(row, float(row.get("weight", 0.0) or 0.0)) for row in encounter_rows],
     )
     if not isinstance(choice, dict):
         return None
@@ -3622,7 +3847,8 @@ def _spawn_underground_transient_encounter(sim, chunk, prop, rng, *, economy_pro
     role = str(choice.get("role", "civilian") or "civilian").strip().lower() or "civilian"
     career = str(choice.get("career", "drifter") or "drifter").strip().lower() or "drifter"
     assign_workplace = bool(choice.get("assign_workplace"))
-    shift_window = _shift_window_for("metro_exchange", role, rng) if assign_workplace and role == "worker" else None
+    archetype = _property_archetype(prop) or "metro_exchange"
+    shift_window = _shift_window_for(archetype, role, rng) if assign_workplace and role == "worker" else None
     workplace = None
     work_anchor = None
     workplace_prop = prop if assign_workplace else None
@@ -3784,6 +4010,8 @@ def _spawn_room_curiosity_encounter(sim, chunk, prop, rng, *, economy_profile=No
 
 
 def _spawn_underground_pest_wildlife(sim, chunk, prop, rng):
+    wildlife_profile = _ambient_wildlife_profile(prop) or "underground_pests"
+    wildlife_rows = UNDERGROUND_WILDLIFE_ROWS_BY_PROFILE.get(wildlife_profile, UNDERGROUND_PEST_WILDLIFE_ROWS)
     spawn_points = list(_ambient_wildlife_spawn_points(sim, prop))
     if not spawn_points:
         spawn_points = list(_tile_candidates_for_property(sim, prop, "interior"))
@@ -3801,7 +4029,7 @@ def _spawn_underground_pest_wildlife(sim, chunk, prop, rng):
     profile_counts = {}
     while spawn_points and len(spawned) < target_count:
         weighted = []
-        for row in UNDERGROUND_PEST_WILDLIFE_ROWS:
+        for row in wildlife_rows:
             profile_id = str(row.get("profile_id", "") or "").strip().lower()
             profile = _ambient_creature_profile(profile_id)
             if not profile:
@@ -3846,7 +4074,7 @@ def spawn_chunk_special_population(sim, chunk, property_records):
     building_props.sort(key=lambda row: str(row.get("id", "")))
     for prop in building_props:
         encounter_profile = _ambient_encounter_profile(prop)
-        if encounter_profile == "underground_transient":
+        if encounter_profile in UNDERGROUND_ENCOUNTER_ROWS_BY_PROFILE:
             eid = _spawn_underground_transient_encounter(
                 sim,
                 chunk,
@@ -3859,7 +4087,7 @@ def spawn_chunk_special_population(sim, chunk, property_records):
         if eid is not None:
             spawned.append(eid)
         wildlife_profile = _ambient_wildlife_profile(prop)
-        if wildlife_profile == "underground_pests":
+        if wildlife_profile in UNDERGROUND_WILDLIFE_ROWS_BY_PROFILE:
             spawned.extend(_spawn_underground_pest_wildlife(sim, chunk, prop, rng))
 
     room_curiosity_props.sort(key=lambda row: str(row.get("id", "")))

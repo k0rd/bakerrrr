@@ -6,7 +6,16 @@ from collections import deque
 from pathlib import Path
 
 from game.semantic_catalog import DEFAULT_RENDER_SEMANTICS_PATH, get_runtime_semantic_catalog
-from ui.input_keys import KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_UP
+from ui.input_keys import (
+    KEY_DOWN,
+    KEY_END,
+    KEY_HOME,
+    KEY_LEFT,
+    KEY_PAGE_DOWN,
+    KEY_PAGE_UP,
+    KEY_RIGHT,
+    KEY_UP,
+)
 
 _DEFAULT_RENDER_SEMANTICS_PATH = DEFAULT_RENDER_SEMANTICS_PATH
 
@@ -4758,6 +4767,14 @@ class PygameView:
             return KEY_LEFT
         if key == self.pygame.K_RIGHT:
             return KEY_RIGHT
+        if key == self.pygame.K_PAGEUP:
+            return KEY_PAGE_UP
+        if key == self.pygame.K_PAGEDOWN:
+            return KEY_PAGE_DOWN
+        if key == self.pygame.K_HOME:
+            return KEY_HOME
+        if key == self.pygame.K_END:
+            return KEY_END
         if key in (self.pygame.K_RETURN, keypad_enter):
             return 10
         if key == self.pygame.K_ESCAPE:

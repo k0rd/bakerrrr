@@ -769,6 +769,13 @@ def upsert_fire_cell(
     sync_protected=True,
     behavior=None,
     advance_interval=None,
+    aerosol_status="",
+    aerosol_duration=0,
+    aerosol_modifiers=None,
+    aerosol_exposure_cooldown=0,
+    aerosol_label="",
+    aerosol_source_item_id="",
+    aerosol_source_item_name="",
 ):
     key = _coord_key(x, y, z)
     if key is None:
@@ -806,6 +813,17 @@ def upsert_fire_cell(
                 ),
             ),
         }
+        aerosol_status = _text(aerosol_status).lower()
+        if aerosol_status and _safe_int(aerosol_duration, 0) > 0:
+            cell.update({
+                "aerosol_status": aerosol_status,
+                "aerosol_duration": max(1, _safe_int(aerosol_duration, 1)),
+                "aerosol_modifiers": dict(aerosol_modifiers or {}) if isinstance(aerosol_modifiers, dict) else {},
+                "aerosol_exposure_cooldown": max(1, _safe_int(aerosol_exposure_cooldown, 6)),
+                "aerosol_label": _text(aerosol_label) or aerosol_status.replace("_", " "),
+                "aerosol_source_item_id": _text(aerosol_source_item_id),
+                "aerosol_source_item_name": _text(aerosol_source_item_name),
+            })
         cells[key] = cell
         _index_fire_cell(sim, key, cell)
         if advance_interval is not None:
@@ -829,6 +847,15 @@ def upsert_fire_cell(
     existing["building_id"] = _text(building_id) or existing.get("building_id") or behavior.get("building_id")
     existing["burn_tier"] = _text(burn_tier).lower() or _text(existing.get("burn_tier")).lower() or behavior.get("burn_tier") or "none"
     existing["burn_budget"] = max(_safe_int(existing.get("burn_budget"), 0), _safe_int(burn_budget, existing.get("burn_budget", 0)))
+    aerosol_status = _text(aerosol_status).lower()
+    if aerosol_status and _safe_int(aerosol_duration, 0) > 0:
+        existing["aerosol_status"] = aerosol_status
+        existing["aerosol_duration"] = max(_safe_int(existing.get("aerosol_duration"), 0), _safe_int(aerosol_duration, 1))
+        existing["aerosol_modifiers"] = dict(aerosol_modifiers or {}) if isinstance(aerosol_modifiers, dict) else {}
+        existing["aerosol_exposure_cooldown"] = max(1, _safe_int(aerosol_exposure_cooldown, existing.get("aerosol_exposure_cooldown", 6)))
+        existing["aerosol_label"] = _text(aerosol_label) or existing.get("aerosol_label") or aerosol_status.replace("_", " ")
+        existing["aerosol_source_item_id"] = _text(aerosol_source_item_id) or existing.get("aerosol_source_item_id", "")
+        existing["aerosol_source_item_name"] = _text(aerosol_source_item_name) or existing.get("aerosol_source_item_name", "")
     if started_tick is not None:
         existing["started_tick"] = min(_safe_int(existing.get("started_tick"), started_tick), _safe_int(started_tick, 0))
     if last_advanced_tick is not None:

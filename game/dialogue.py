@@ -64,6 +64,7 @@ TOPIC_ORDER = (
     "street_talk",
     "social_incident",
     "social_business",
+    "local_economy",
     "social_opportunity",
     "social_relationship",
     "concern",
@@ -91,6 +92,7 @@ TOPIC_ORDER = (
     "introduction",
     "vouch",
     "trade",
+    "store_buy_policy",
     "street_appraise",
     "street_buy",
     "street_buy_accept",
@@ -238,6 +240,7 @@ TOPIC_DEFS = {
             "service_vehicle_fetch",
             "service_gaming",
             "trade",
+            "store_buy_policy",
         ),
     },
     "service_fuel": {
@@ -424,7 +427,7 @@ TOPIC_DEFS = {
     "street_talk": {
         "label": "What's the street saying?",
         "root": True,
-        "unlocks": ("social_incident", "social_business", "social_opportunity", "social_relationship", "detail"),
+        "unlocks": ("social_incident", "social_business", "local_economy", "social_opportunity", "social_relationship", "detail"),
     },
     "social_incident": {
         "label": "What trouble are people talking about?",
@@ -435,6 +438,11 @@ TOPIC_DEFS = {
         "label": "Who's got a reputation right now?",
         "root": False,
         "unlocks": ("where_place",),
+    },
+    "local_economy": {
+        "label": "How are local businesses doing?",
+        "root": False,
+        "unlocks": ("services", "social_business", "where_place"),
     },
     "social_opportunity": {
         "label": "Any rumor worth acting on?",
@@ -576,6 +584,11 @@ TOPIC_DEFS = {
     "trade": {
         "label": "Let's trade.",
         "root": True,
+        "unlocks": ("store_buy_policy",),
+    },
+    "store_buy_policy": {
+        "label": "What does this place buy?",
+        "root": True,
         "unlocks": (),
     },
     "street_appraise": {
@@ -584,23 +597,23 @@ TOPIC_DEFS = {
         "unlocks": (),
     },
     "street_buy": {
-        "label": "I have some stock you might want.",
+        "label": "Can we do some street trade?",
         "root": True,
         "unlocks": (),
     },
     "street_buy_accept": {
         "label": "Sell it.",
-        "root": True,
+        "root": False,
         "unlocks": (),
     },
     "street_buy_next": {
         "label": "What about the next item?",
-        "root": True,
+        "root": False,
         "unlocks": (),
     },
     "street_buy_decline": {
         "label": "Not this time.",
-        "root": True,
+        "root": False,
         "unlocks": (),
     },
     "bye": {
@@ -1279,6 +1292,12 @@ PLAYER_TOPIC_BANKS = {
         "What place are people talking about?",
         "Any business I should read differently?",
     ),
+    "local_economy": (
+        "How are local businesses doing?",
+        "What is the business weather on this block?",
+        "Are the shops around here steady or hurting?",
+        "What is the local money mood like?",
+    ),
     "social_opportunity": (
         "Any rumor worth acting on?",
         "Anything in that talk I can actually use?",
@@ -1440,6 +1459,12 @@ PLAYER_TOPIC_BANKS = {
         "What are you willing to move?",
         "Can we make a clean trade?",
     ),
+    "store_buy_policy": (
+        "What does this place usually buy?",
+        "What should I put on this counter if I am selling?",
+        "What kinds of goods do you take here?",
+        "What is this shop actually looking to buy?",
+    ),
     "street_appraise": (
         "Can you look over this stock for me?",
         "What do you make of what I am carrying?",
@@ -1447,10 +1472,10 @@ PLAYER_TOPIC_BANKS = {
         "I need a read on this stock. Interested?",
     ),
     "street_buy": (
-        "I have some stock you might want.",
-        "Are you buying today?",
-        "I might have what you are looking for.",
-        "Want first look at what I am carrying?",
+        "Can we do some street trade?",
+        "Are you buying or selling today?",
+        "Can we make a quiet trade?",
+        "Do you have anything moving right now?",
     ),
     "street_buy_accept": (
         "Sell it.",
@@ -1790,10 +1815,10 @@ PLAYER_CONTEXT_MENU_BANKS = {
         "Is just you the usual staffing plan?",
     ),
     "street_buy_requested": (
-        "I might have some {street_buy_hint}.",
-        "Are you still buying {street_buy_hint}?",
-        "Is {street_buy_hint} what you are looking for?",
-        "Want a look at my {street_buy_hint}?",
+        "I might have some {street_buy_hint}. Can we trade?",
+        "Are you still buying {street_buy_hint}, or are you moving other stock too?",
+        "Is {street_buy_hint} still what you are looking for?",
+        "Want to open trade and look at my {street_buy_hint}?",
     ),
 }
 
@@ -2972,6 +2997,41 @@ DIALOGUE_BANKS = {
         "The day is quiet in the way that makes people check twice.",
         "No useful story has separated itself from the static.",
     ),
+    "street_talk_local_economy_intro": (
+        "I do not have a clean rumor to hand you, but the business weather is readable if that is what you need.",
+        "Nothing I would call a street lead. If you mean the local shops, I can give you the broad read.",
+        "The useful talk today is mostly business weather. Ask that straight and I can keep it clean.",
+        "No sharp gossip from me. The block's money mood is the part I can speak to.",
+    ),
+    "local_economy_skilled": (
+        "From the work side, {local_economy_summary}",
+        "If you want the counter read, {local_economy_summary_lc}",
+        "Business-wise, {local_economy_summary_lc}",
+        "The practical read is this: {local_economy_summary_lc}",
+    ),
+    "local_economy_familiar": (
+        "From being around here, {local_economy_summary_lc}",
+        "The local read is this: {local_economy_summary_lc}",
+        "I would call it like this: {local_economy_summary_lc}",
+        "Broadly, {local_economy_summary_lc}",
+    ),
+    "local_economy_rumor": (
+        "I only have the customer read, but {local_economy_summary_lc}",
+        "I would not pretend to know the books, but {local_economy_summary_lc}",
+        "Loose read? {local_economy_summary}",
+        "From the outside, {local_economy_summary_lc}",
+    ),
+    "local_economy_none": (
+        "I do not know this block well enough to read the businesses cleanly.",
+        "That is not my lane. Ask somebody who works a counter here.",
+        "I would be guessing, and bad business guesses waste everybody's time.",
+        "Not from me. I do not have a clean read on this block's money.",
+    ),
+    "local_economy_self_interest": (
+        "{local_economy_agenda_line}",
+        "{local_economy_agenda_line}",
+        "{local_economy_agenda_line}",
+    ),
     "social_knowledge": (
         "Since it is you: {social_knowledge_summary}",
         "I would not hand this to everyone, but {social_knowledge_summary_lc}",
@@ -3605,6 +3665,18 @@ DIALOGUE_BANKS = {
         "If you are shopping, you found the wrong person.",
         "Nothing I am carrying belongs in a trade window.",
     ),
+    "store_buy_policy": (
+        "{store_purchase_summary}",
+        "For this counter, {store_purchase_summary_lc}",
+        "Here, the practical answer is: {store_purchase_summary_lc}",
+        "If you are selling to this place, {store_purchase_summary_lc}",
+    ),
+    "store_buy_policy_no": (
+        "I am not on that counter, so I would not trust my answer.",
+        "Ask whoever is working the shop. I do not want to misprice their business.",
+        "I am not the person who decides what that place takes.",
+        "Wrong person for that. The worker at the counter would know.",
+    ),
     "contract_offer": (
         "Word came down about a problem that needs handling. {target_description} Keep it quiet and you walk with {reward_hint}.",
         "Between you and me, someone has credits on a name. {target_description} Clean and quiet, that is {reward_hint}.",
@@ -4088,7 +4160,7 @@ def topic_label(topic_id, context=None):
     if topic_id == "read_player":
         return "How do you read me?"
     if topic_id == "street_buy" and context.get("street_buy_hint"):
-        return f"I might have some {context['street_buy_hint']}."
+        return f"I might have some {context['street_buy_hint']}. Can we trade?"
     if topic_id == "street_buy_accept" and context.get("street_buy_offer_accept_label"):
         return str(context["street_buy_offer_accept_label"]).strip()
     if topic_id == "street_buy_next" and context.get("street_buy_offer_next_label"):

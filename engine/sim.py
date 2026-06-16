@@ -1837,6 +1837,82 @@ class Simulation:
                 for y in range(oy, oy + size):
                     self._place_local_tile(x, y, glyph, walkable=walkable, transparent=transparent, z=0, overwrite=True)
 
+    def _custom_profile_water_safe(self, x, y):
+        x = int(x)
+        y = int(y)
+        if self.structure_at(x, y, 0) is not None:
+            return False
+        tile = self.tilemap.tile_at(x, y, 0)
+        if tile is None:
+            return False
+        glyph = str(getattr(tile, "glyph", "") or "")[:1]
+        if glyph not in {".", ","}:
+            return False
+        for ny in range(y - 1, y + 2):
+            for nx in range(x - 1, x + 2):
+                if self.structure_at(nx, ny, 0) is not None:
+                    return False
+        return True
+
+    def _place_custom_profile_water_tile(self, x, y, glyph):
+        if not self._custom_profile_water_safe(x, y):
+            return False
+        return self._place_local_tile(
+            int(x),
+            int(y),
+            glyph,
+            walkable=str(glyph)[:1] == "_",
+            transparent=True,
+            z=0,
+            overwrite=True,
+        )
+
+    def _apply_custom_world_profile_water(self, chunk, rng, ox, oy, size):
+        district = chunk.get("district", {}) if isinstance(chunk, dict) else {}
+        level = str(district.get("custom_water_level", "none") or "none").strip().lower()
+        if level not in {"low", "medium", "high"}:
+            return 0
+
+        placed = 0
+        if level == "low":
+            target = max(3, int(size) // 4)
+            for _ in range(target * 6):
+                if placed >= target:
+                    break
+                x = rng.randint(ox + 1, ox + size - 2)
+                y = rng.randint(oy + 1, oy + size - 2)
+                if self._place_custom_profile_water_tile(x, y, "~"):
+                    placed += 1
+            return placed
+
+        width = 2 if level == "medium" else max(3, int(size) // 5)
+        edge = rng.choice(("north", "south", "east", "west"))
+        cells = []
+        if edge == "north":
+            for y in range(oy, min(oy + size, oy + width)):
+                cells.extend((x, y, "~") for x in range(ox, ox + size))
+            shore_y = min(oy + size - 1, oy + width)
+            cells.extend((x, shore_y, "_") for x in range(ox, ox + size))
+        elif edge == "south":
+            for y in range(max(oy, oy + size - width), oy + size):
+                cells.extend((x, y, "~") for x in range(ox, ox + size))
+            shore_y = max(oy, oy + size - width - 1)
+            cells.extend((x, shore_y, "_") for x in range(ox, ox + size))
+        elif edge == "west":
+            for x in range(ox, min(ox + size, ox + width)):
+                cells.extend((x, y, "~") for y in range(oy, oy + size))
+            shore_x = min(ox + size - 1, ox + width)
+            cells.extend((shore_x, y, "_") for y in range(oy, oy + size))
+        else:
+            for x in range(max(ox, ox + size - width), ox + size):
+                cells.extend((x, y, "~") for y in range(oy, oy + size))
+            shore_x = max(ox, ox + size - width - 1)
+            cells.extend((shore_x, y, "_") for y in range(oy, oy + size))
+        for x, y, glyph in cells:
+            if self._place_custom_profile_water_tile(x, y, glyph):
+                placed += 1
+        return placed
+
     def _realize_non_city_sites(self, chunk, ox, oy, size):
         sites = chunk.get("sites", ())
         area_type = str(chunk.get("district", {}).get("area_type", "frontier")).strip().lower() or "frontier"
@@ -2256,6 +2332,7 @@ class Simulation:
         else:
             self._realize_non_city_chunk(chunk, rng, ox, oy, size)
 
+        self._apply_custom_world_profile_water(chunk, rng, ox, oy, size)
         self.realized_chunks.add(key)
         return True
 

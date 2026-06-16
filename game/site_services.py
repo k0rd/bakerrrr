@@ -165,9 +165,13 @@ def _service_rehydrate_lead_kinds(service):
 def _default_live_timeskip_state():
     return {
         "active": False,
+        "owner": "site_service",
+        "kind": "",
         "service": "",
         "property_id": None,
         "property_name": "",
+        "title": "",
+        "footer": "",
         "started_tick": 0,
         "target_end_tick": 0,
         "elapsed_ticks": 0,
@@ -199,6 +203,7 @@ def _default_live_timeskip_state():
         "well_rested_ticks": 0,
         "well_rested_granted": False,
         "practice_note": "",
+        "source_status": "",
         "result_pending": False,
     }
 
@@ -415,9 +420,13 @@ class SiteServiceSystem(System):
         )
         state.update({
             "active": True,
+            "owner": "site_service",
+            "kind": "lodging",
             "service": str(service or "").strip().lower(),
             "property_id": prop.get("id"),
             "property_name": prop.get("name", prop.get("id", "site")),
+            "title": "",
+            "footer": "The city keeps moving without you.",
             "started_tick": started_tick,
             "target_end_tick": started_tick + max(1, int(stay_ticks)),
             "elapsed_ticks": 0,
@@ -452,6 +461,7 @@ class SiteServiceSystem(System):
             "well_rested_ticks": int(well_rested_ticks),
             "well_rested_granted": False,
             "practice_note": str(practice_note or "").strip(),
+            "source_status": "",
             "result_pending": False,
         })
         self.sim.emit(Event(
@@ -582,6 +592,22 @@ class SiteServiceSystem(System):
         if vitality and (bool(vitality.downed) or int(vitality.hp) <= 0):
             self._reset_live_timeskip_state()
             return False
+        owner = str(state.get("owner", "site_service") or "site_service").strip().lower()
+        kind = str(state.get("kind", "") or "").strip().lower()
+        if owner == "altered_state" or kind == "drug_blackout":
+            self.sim.emit(Event(
+                "drug_blackout_resolved",
+                eid=self.player_eid,
+                source_status=str(state.get("source_status", "") or "").strip(),
+                duration_ticks=int(state.get("total_ticks", 0) or 0),
+                time_advanced_ticks=int(state.get("elapsed_ticks", 0) or 0),
+                completed=bool(state.get("completed")),
+                interrupted=bool(state.get("interrupted")),
+                interruption_reason=str(state.get("interruption_reason", "") or "").strip().lower(),
+                wake_cause=str(state.get("wake_cause", "") or "").strip().lower(),
+            ))
+            self._reset_live_timeskip_state()
+            return True
         effects = self.sim.ecs.get(StatusEffects).get(self.player_eid)
         if bool(state.get("completed")) and str(state.get("service", "")).strip().lower() == "rest" and effects:
             effects.add(

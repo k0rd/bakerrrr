@@ -131,7 +131,8 @@
           "ranged_accuracy_mult": -0.18,
           "melee_damage_mult": 0.06,
           "retreat_bias_delta": -0.06,
-          "hp_tick_delta": 0.03
+          "hp_tick_delta": 0.03,
+          "movement_misdirect_chance": 0.1
         }
       }
     ]
@@ -488,7 +489,11 @@
           "weapon_cooldown_mult": 0.16,
           "ranged_accuracy_mult": -0.16,
           "incoming_damage_mult": -0.08,
-          "retreat_bias_delta": 0.08
+          "retreat_bias_delta": 0.08,
+          "blackout_chance": 0.05,
+          "blackout_min_ticks": 45,
+          "blackout_max_ticks": 180,
+          "blackout_cooldown_ticks": 300
         }
       }
     ],
@@ -572,7 +577,11 @@
           "move_speed_mult": -0.26,
           "weapon_cooldown_mult": 0.18,
           "ranged_accuracy_mult": -0.14,
-          "retreat_bias_delta": 0.14
+          "retreat_bias_delta": 0.14,
+          "blackout_chance": 0.04,
+          "blackout_min_ticks": 30,
+          "blackout_max_ticks": 150,
+          "blackout_cooldown_ticks": 260
         }
       }
     ],
@@ -628,7 +637,11 @@
           "ranged_accuracy_mult": -0.26,
           "incoming_damage_mult": -0.1,
           "melee_damage_mult": 0.08,
-          "retreat_bias_delta": 0.06
+          "retreat_bias_delta": 0.06,
+          "control_lapse_chance": 0.14,
+          "control_lapse_ticks": 2,
+          "hallucination_intensity": 0.25,
+          "hallucination_read_chance": 0.12
         }
       }
     ],
@@ -976,7 +989,8 @@
           "ranged_accuracy_mult": -0.14,
           "move_speed_mult": -0.06,
           "weapon_cooldown_mult": 0.08,
-          "retreat_bias_delta": 0.08
+          "retreat_bias_delta": 0.08,
+          "movement_misdirect_chance": 0.04
         }
       }
     ],
@@ -1148,7 +1162,10 @@
           "projectile_spread_mod": 2,
           "suppression_resist_mult": -0.12,
           "assault_bias_delta": -0.06,
-          "retreat_bias_delta": 0.1
+          "retreat_bias_delta": 0.1,
+          "movement_misdirect_chance": 0.08,
+          "hallucination_intensity": 1.0,
+          "hallucination_read_chance": 0.55
         }
       }
     ]
@@ -1964,6 +1981,19 @@
     "legal_status": "legal",
     "effects": []
   },
+  "phone": {
+    "name": "Phone",
+    "glyph": "=",
+    "stack_max": 1,
+    "tags": [
+      "token",
+      "phone",
+      "communication",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
   "burner_phone": {
     "name": "Phone",
     "glyph": "=",
@@ -2047,7 +2077,8 @@
           "ranged_accuracy_mult": -0.18,
           "melee_damage_mult": 0.06,
           "retreat_bias_delta": -0.06,
-          "hp_tick_delta": 0.03
+          "hp_tick_delta": 0.03,
+          "movement_misdirect_chance": 0.12
         }
       }
     ]
@@ -3511,8 +3542,188 @@
       "cover_penetration": 0.08,
       "fire_intensity": 4,
       "smoke_intensity": 2,
+      "cloud_radius": 1,
+      "cloud_duration": 3,
       "consume_on_throw": true,
       "shatter": true
+    }
+  },
+  "smoke_grenade": {
+    "name": "Smoke Grenade",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "throwable",
+      "restricted",
+      "smoke",
+      "tactical"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "throw_profile": {
+      "range": 6,
+      "trajectory": "lobbed",
+      "projectile_glyph": "o",
+      "speed": 0.85,
+      "damage": 0,
+      "noise_radius": 6,
+      "smoke_intensity": 4,
+      "cloud_radius": 2,
+      "cloud_duration": 4,
+      "consume_on_throw": true,
+      "shatter": false
+    }
+  },
+  "tear_gas_canister": {
+    "name": "Tear Gas Canister",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "throwable",
+      "restricted",
+      "smoke",
+      "aerosol",
+      "tactical"
+    ],
+    "legal_status": "restricted",
+    "effects": [],
+    "throw_profile": {
+      "range": 6,
+      "trajectory": "lobbed",
+      "projectile_glyph": "o",
+      "speed": 0.85,
+      "damage": 0,
+      "noise_radius": 7,
+      "smoke_intensity": 4,
+      "cloud_radius": 2,
+      "cloud_duration": 4,
+      "aerosol_status": "tear_gassed",
+      "aerosol_duration": 14,
+      "aerosol_modifiers": {
+        "move_speed_mult": -0.14,
+        "ranged_accuracy_mult": -0.24,
+        "projectile_spread_mod": 2,
+        "safety_tick_delta": -0.16
+      },
+      "aerosol_exposure_cooldown": 6,
+      "aerosol_label": "tear gas",
+      "consume_on_throw": true,
+      "shatter": false
+    }
+  },
+  "toxic_aerosol_canister": {
+    "name": "Toxic Aerosol Canister",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "throwable",
+      "illegal",
+      "smoke",
+      "aerosol",
+      "toxin"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "throw_profile": {
+      "range": 5,
+      "trajectory": "lobbed",
+      "projectile_glyph": "o",
+      "speed": 0.8,
+      "damage": 0,
+      "noise_radius": 6,
+      "smoke_intensity": 3,
+      "cloud_radius": 1,
+      "cloud_duration": 4,
+      "aerosol_status": "toxin_exposure",
+      "aerosol_duration": 16,
+      "aerosol_modifiers": {
+        "move_speed_mult": -0.08,
+        "ranged_accuracy_mult": -0.1,
+        "toxicity_tick_delta": 0.12,
+        "safety_tick_delta": -0.12
+      },
+      "aerosol_exposure_cooldown": 7,
+      "aerosol_label": "toxic aerosol",
+      "consume_on_throw": true,
+      "shatter": false
+    }
+  },
+  "dissociative_aerosol": {
+    "name": "Dissociative Aerosol",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "throwable",
+      "illegal",
+      "smoke",
+      "aerosol",
+      "drug"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "throw_profile": {
+      "range": 5,
+      "trajectory": "lobbed",
+      "projectile_glyph": "o",
+      "speed": 0.8,
+      "damage": 0,
+      "noise_radius": 6,
+      "smoke_intensity": 3,
+      "cloud_radius": 1,
+      "cloud_duration": 3,
+      "aerosol_status": "dissociated",
+      "aerosol_duration": 12,
+      "aerosol_modifiers": {
+        "move_speed_mult": -0.18,
+        "ranged_accuracy_mult": -0.18,
+        "control_lapse_chance": 0.22,
+        "control_lapse_ticks": 2,
+        "retreat_bias_delta": 0.12
+      },
+      "aerosol_exposure_cooldown": 8,
+      "aerosol_label": "dissociative aerosol",
+      "consume_on_throw": true,
+      "shatter": false
+    }
+  },
+  "hallucinogen_aerosol": {
+    "name": "Hallucinogen Aerosol",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "throwable",
+      "illegal",
+      "smoke",
+      "aerosol",
+      "drug",
+      "hallucinogen"
+    ],
+    "legal_status": "illegal",
+    "effects": [],
+    "throw_profile": {
+      "range": 5,
+      "trajectory": "lobbed",
+      "projectile_glyph": "o",
+      "speed": 0.8,
+      "damage": 0,
+      "noise_radius": 6,
+      "smoke_intensity": 3,
+      "cloud_radius": 1,
+      "cloud_duration": 3,
+      "aerosol_status": "tripping",
+      "aerosol_duration": 16,
+      "aerosol_modifiers": {
+        "move_speed_mult": 0.02,
+        "ranged_accuracy_mult": -0.2,
+        "projectile_spread_mod": 2,
+        "movement_misdirect_chance": 0.08,
+        "hallucination_intensity": 0.85,
+        "hallucination_read_chance": 0.45
+      },
+      "aerosol_exposure_cooldown": 8,
+      "aerosol_label": "hallucinogen aerosol",
+      "consume_on_throw": true,
+      "shatter": false
     }
   }
 }

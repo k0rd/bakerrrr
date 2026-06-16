@@ -7,7 +7,7 @@ from engine.events import Event
 from engine.systems import System
 from game.appearance import ground_item_color as _ground_item_color, item_display_glyph as _appearance_item_display_glyph
 from game.appearance_loadout import cosmetic_variant_metadata, is_appearance_item
-from game.components import Inventory, PlayerAssets, Position, VehicleState
+from game.components import Inventory, NPCSocial, PlayerAssets, Position, VehicleState
 from game.economy import item_market_bias, store_supply_profile
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
@@ -43,9 +43,27 @@ from game.property_runtime import (
     vehicle_label as _vehicle_label,
 )
 from game.service_runtime import _int_or_default, _legend_line, _storefront_service_profile
+from game.skills import actor_skill as _actor_skill
 from game.system_support.container_runtime import _unlink_removed_item_from_gear
 from game.system_support.item_provenance_runtime import CLAIM_MERCHANDISE, stamp_item_provenance
 from game.system_support.npc_income_runtime import inventory_liquid_credits, spend_npc_wallet_credits
+from game.system_support.offense_runtime import _emit_action_offense_event
+from game.system_support.awareness_runtime import observation_payload_for_position
+from game.system_support.store_purchase_runtime import (
+    INTEREST_ADJACENT,
+    INTEREST_REFUSED,
+    INTEREST_UNUSUAL,
+    canonical_store_item_id,
+    classify_store_purchase_interest,
+)
+from game.system_support.street_vendor_trade_runtime import (
+    STREET_TRADE_SOURCE_KIND,
+    ensure_street_vendor_stock,
+    street_vendor_buy_rows,
+    street_vendor_contact_profile,
+    street_vendor_sell_rows,
+)
+from game.system_support.throwable_runtime import throwable_summary_text
 
 
 def _default_trade_contact_terms(_sim, _viewer_eid, _prop):
@@ -69,6 +87,41 @@ def _item_legend_line(item_id, text):
         color=_ground_item_color(item_def),
         attrs=getattr(curses, "A_BOLD", 0),
     )
+
+
+def _item_trade_trait_text(item_id):
+    item_def = ITEM_CATALOG.get(str(item_id or "").strip().lower(), {})
+    if not isinstance(item_def, dict):
+        return ""
+    bits = []
+    armor = item_def.get("armor") if isinstance(item_def.get("armor"), dict) else {}
+    if armor:
+        try:
+            bits.append(f"armor reduction {int(round(float(armor.get('damage_reduction', 0.0)) * 100.0))}%")
+        except (TypeError, ValueError):
+            bits.append("armor")
+    disguise = item_def.get("disguise") if isinstance(item_def.get("disguise"), dict) else {}
+    role_id = str(disguise.get("role_id", "") or "").strip().replace("_", " ")
+    if role_id:
+        try:
+            strength_pct = int(round(max(0.0, float(disguise.get("strength", 1.0))) * 100.0))
+        except (TypeError, ValueError):
+            strength_pct = 100
+        bits.append(f"cover {role_id} {strength_pct}%")
+    throw_text = throwable_summary_text(item_def.get("throw_profile"), include_consumed=False)
+    if throw_text:
+        bits.append(throw_text)
+    legal_status = str(item_def.get("legal_status", "legal") or "legal").strip().lower()
+    if legal_status in {"restricted", "illegal"}:
+        bits.append(legal_status)
+    return "; ".join(bits)
+
+
+def _trade_item_line(row, base_text):
+    trait_text = _item_trade_trait_text(row.get("item_id"))
+    if trait_text:
+        return f"{base_text} - {trait_text}"
+    return base_text
 
 
 def _metadata_float(metadata, key, default=0.0):
@@ -261,6 +314,7 @@ class TradeSystem(System):
         "scratch_ticket": 6,
         "pocket_notebook": 5,
         "deck_of_cards": 7,
+        "phone": 22,
         "burner_phone": 22,
         "forged_badge": 40,
         "energy_bar": 9,
@@ -306,6 +360,11 @@ class TradeSystem(System):
         "improvised_launcher": 284,
         "grenade_launcher": 308,
         "recoilless_launcher": 356,
+        "smoke_grenade": 64,
+        "tear_gas_canister": 82,
+        "toxic_aerosol_canister": 96,
+        "dissociative_aerosol": 112,
+        "hallucinogen_aerosol": 108,
         "courier_mesh": 42,
         "padded_jacket": 54,
         "field_vest": 74,
@@ -488,7 +547,7 @@ class TradeSystem(System):
             "sell_ratio": 0.58,
             "unlisted_sell_ratio": 0.38,
             "item_pool": (
-                ("burner_phone", 12),
+                ("phone", 12),
                 ("lockpick_kit", 16),
                 ("glass_cutter", 12),
                 ("hotwire_leads", 10),
@@ -518,6 +577,11 @@ class TradeSystem(System):
                 ("light_ammo_box", 8),
                 ("pocket_light_rounds", 8),
                 ("molotov_cocktail", 3),
+                ("smoke_grenade", 3),
+                ("tear_gas_canister", 2),
+                ("toxic_aerosol_canister", 1),
+                ("dissociative_aerosol", 1),
+                ("hallucinogen_aerosol", 1),
             ),
         },
         "nightclub": {
@@ -532,7 +596,7 @@ class TradeSystem(System):
                 ("lsd_blotter", 6),
                 ("mint_strip", 12),
                 ("deck_of_cards", 10),
-                ("burner_phone", 8),
+                ("phone", 8),
                 ("caff_shot", 20),
                 ("synth_focus_tabs", 10),
                 ("credstick_chip", 12),
@@ -708,6 +772,8 @@ class TradeSystem(System):
                 ("light_ammo_box", 10),
                 ("shell_bandolier", 7),
                 ("rifle_mag_crate", 6),
+                ("smoke_grenade", 2),
+                ("tear_gas_canister", 1),
                 ("bandage_roll", 10),
                 ("city_pass_token", 12),
                 ("street_ration", 10),
@@ -848,6 +914,8 @@ class TradeSystem(System):
                 ("machine_carbine", 8),
                 ("grenade_launcher", 4),
                 ("recoilless_launcher", 2),
+                ("smoke_grenade", 6),
+                ("tear_gas_canister", 4),
                 ("padded_jacket", 10),
                 ("field_vest", 12),
                 ("courier_mesh", 8),
@@ -991,12 +1059,17 @@ class TradeSystem(System):
                 ("glass_bottle", 6),
                 ("brick", 6),
                 ("molotov_cocktail", 3),
+                ("smoke_grenade", 4),
+                ("tear_gas_canister", 3),
+                ("toxic_aerosol_canister", 2),
+                ("dissociative_aerosol", 1),
+                ("hallucinogen_aerosol", 1),
                 ("cutproof_apron", 5),
                 ("maintenance_vest", 5),
                 ("security_vest", 10),
                 ("riot_plates", 8),
                 ("ceramic_plate_rig", 6),
-                ("burner_phone", 10),
+                ("phone", 10),
                 ("smoke_tab", 10),
                 ("city_pass_token", 16),
                 ("caff_shot", 14),
@@ -1026,7 +1099,7 @@ class TradeSystem(System):
                 ("scrap_circuit", 14),
                 ("signal_jammer", 10),
                 ("forged_badge", 8),
-                ("burner_phone", 10),
+                ("phone", 10),
                 ("lucky_charm", 12),
                 ("deck_of_cards", 10),
                 ("spark_brew", 14),
@@ -1262,9 +1335,12 @@ class TradeSystem(System):
     def __init__(self, sim, player_eid, *, trade_contact_terms=None):
         super().__init__(sim)
         self.player_eid = player_eid
+        self.sim.trade_system = self
         self._trade_contact_terms = trade_contact_terms or _default_trade_contact_terms
         if not hasattr(self.sim, "stores"):
             self.sim.stores = {}
+        if not hasattr(self.sim, "trade_unwanted_sale_pressure"):
+            self.sim.trade_unwanted_sale_pressure = {}
         if not hasattr(self.sim, "trade_ui"):
             self.sim.trade_ui = {
                 "open": False,
@@ -1279,6 +1355,10 @@ class TradeSystem(System):
                 "service_note": "",
                 "service_eid": None,
                 "owner_transfer": False,
+                "source_kind": "storefront",
+                "contact_eid": None,
+                "available_modes": ("buy", "sell"),
+                "vendor_kind": "",
             }
         self.sim.events.subscribe("player_action", self.on_player_action)
         self.sim.events.subscribe("property_interact", self.on_property_interact)
@@ -1338,8 +1418,18 @@ class TradeSystem(System):
                 "contact_note": "",
                 "service_note": "",
                 "service_eid": None,
+                "source_kind": "storefront",
+                "contact_eid": None,
+                "available_modes": ("buy", "sell"),
+                "vendor_kind": "",
             }
             self.sim.trade_ui = state
+        else:
+            state.setdefault("source_kind", "storefront")
+            state.setdefault("contact_eid", None)
+            state.setdefault("available_modes", ("buy", "sell"))
+            state.setdefault("vendor_kind", "")
+            state.setdefault("owner_transfer", False)
         return state
 
     def _store_profile(self, archetype):
@@ -1790,8 +1880,9 @@ class TradeSystem(System):
         return state
 
     def _entry_for_item(self, state, item_id):
+        item_key = canonical_store_item_id(item_id)
         for entry in state.get("entries", []):
-            if entry.get("item_id") == item_id:
+            if entry.get("item_id") == item_id or canonical_store_item_id(entry.get("item_id")) == item_key:
                 return entry
         return None
 
@@ -1816,14 +1907,21 @@ class TradeSystem(System):
                 return entry, cheapest
         return None, cheapest
 
-    def _sell_quote(self, item_id, state, terms=None):
+    def _sell_quote(self, item_id, state, terms=None, interest=None):
         terms = terms or {"sell_mult": 1.0}
         listed = self._entry_for_item(state, item_id)
+        price_mult = 1.0
+        if isinstance(interest, dict):
+            try:
+                price_mult = max(0.0, float(interest.get("price_mult", 1.0)))
+            except (TypeError, ValueError):
+                price_mult = 1.0
         if listed:
-            return self._effective_sell_price(listed.get("sell_price", 1), terms), True
+            base_price = max(1, int(round(int(listed.get("sell_price", 1)) * price_mult)))
+            return self._effective_sell_price(base_price, terms), True
         base = int(max(1, self.ITEM_BASE_VALUES.get(item_id, 10)))
         ratio = float(max(0.1, min(0.85, state.get("unlisted_sell_ratio", 0.3))))
-        return self._effective_sell_price(max(1, int(round(base * ratio))), terms), False
+        return self._effective_sell_price(max(1, int(round(base * ratio * price_mult))), terms), False
 
     def _store_accepts_vehicle_trade_in(self, store_prop):
         if not isinstance(store_prop, dict):
@@ -1955,11 +2053,12 @@ class TradeSystem(System):
         ))
         return True
 
-    def _trade_sell_candidates(self, inventory, store, terms=None, owner_transfer=False):
+    def _trade_sell_candidates(self, inventory, store, terms=None, owner_transfer=False, actor_eid=None, service_eid=None):
         candidates = []
         if not inventory:
             return candidates
         store_prop = self.sim.properties.get(store.get("property_id")) if isinstance(store, dict) else None
+        actor_eid = self.player_eid if actor_eid is None else actor_eid
 
         for entry in inventory.items:
             item_id = entry.get("item_id")
@@ -1970,7 +2069,30 @@ class TradeSystem(System):
             )
             if action_label is None:
                 continue
-            quote, listed = self._sell_quote(item_id, store, terms=terms)
+            interest = {
+                "purchase_interest": "wanted",
+                "interest_actual": "wanted",
+                "interest_known": True,
+                "interest_label": "wanted here",
+                "actual_label": "wanted here",
+                "row_color": "property_service",
+                "price_mult": 1.0,
+                "accepted": True,
+                "pressure_weight": 0,
+                "can_attempt": True,
+            }
+            if not owner_transfer and action_label != "trade-in":
+                interest = classify_store_purchase_interest(
+                    self.sim,
+                    actor_eid,
+                    store_prop,
+                    store,
+                    entry,
+                    service_eid=service_eid,
+                )
+                if str(interest.get("interest_actual", "") or "").strip().lower() == INTEREST_REFUSED:
+                    continue
+            quote, listed = self._sell_quote(item_id, store, terms=terms, interest=interest)
             item_def = ITEM_CATALOG.get(item_id, {"name": item_id, "glyph": "*"})
             display_name = item_display_name_for_actor(self.sim, self.player_eid, entry, item_catalog=ITEM_CATALOG)
             candidates.append({
@@ -1983,12 +2105,31 @@ class TradeSystem(System):
                 "price": 0 if owner_transfer else int(max(1, quote)),
                 "listed": bool(listed and not owner_transfer),
                 "action_label": "stock" if owner_transfer else action_label,
+                "purchase_interest": interest.get("purchase_interest"),
+                "interest_label": interest.get("interest_label"),
+                "interest_known": bool(interest.get("interest_known", True)),
+                "interest_actual": interest.get("interest_actual"),
+                "actual_label": interest.get("actual_label"),
+                "row_color": interest.get("row_color"),
+                "interest_reason": interest.get("reason", ""),
+                "interest_profile_summary": interest.get("profile_summary", ""),
+                "interest_price_mult": float(max(0.0, interest.get("price_mult", 1.0) or 1.0)),
+                "interest_accepted": bool(interest.get("accepted", True)),
+                "interest_pressure_weight": int(max(0, interest.get("pressure_weight", 0) or 0)),
             })
 
         if owner_transfer:
             candidates.sort(key=lambda row: (row["item_id"], row["instance_id"]))
         else:
-            candidates.sort(key=lambda row: (-row["price"], row["item_id"], row["instance_id"]))
+            rank = {INTEREST_ADJACENT: 2, INTEREST_UNUSUAL: 1}
+            candidates.sort(
+                key=lambda row: (
+                    -rank.get(str(row.get("interest_actual", "") or "").strip().lower(), 3),
+                    -row["price"],
+                    row["item_id"],
+                    row["instance_id"],
+                )
+            )
         return candidates
 
     def _trade_buy_rows(self, store, terms=None, owner_transfer=False):
@@ -2014,9 +2155,16 @@ class TradeSystem(System):
             })
         return rows
 
-    def _trade_sell_rows(self, inventory, store, terms=None, owner_transfer=False):
+    def _trade_sell_rows(self, inventory, store, terms=None, owner_transfer=False, actor_eid=None, service_eid=None):
         rows = []
-        for row in self._trade_sell_candidates(inventory, store, terms=terms, owner_transfer=owner_transfer):
+        for row in self._trade_sell_candidates(
+            inventory,
+            store,
+            terms=terms,
+            owner_transfer=owner_transfer,
+            actor_eid=actor_eid,
+            service_eid=service_eid,
+        ):
             rows.append({
                 "instance_id": row["instance_id"],
                 "item_id": row["item_id"],
@@ -2026,6 +2174,14 @@ class TradeSystem(System):
                 "price": row["price"],
                 "listed": row["listed"],
                 "action_label": row.get("action_label", ""),
+                "purchase_interest": row.get("purchase_interest"),
+                "interest_label": row.get("interest_label"),
+                "interest_known": bool(row.get("interest_known", True)),
+                "interest_actual": row.get("interest_actual"),
+                "interest_actual_label": row.get("actual_label"),
+                "row_color": row.get("row_color"),
+                "interest_reason": row.get("interest_reason", ""),
+                "interest_price_mult": float(max(0.0, row.get("interest_price_mult", 1.0) or 1.0)),
             })
         return rows
 
@@ -2045,18 +2201,23 @@ class TradeSystem(System):
             if action_label:
                 state["inspect_text"] = _item_legend_line(
                     row.get("item_id"),
-                    (
+                    _trade_item_line(row, (
                         f"{row.get('item_name', row.get('item_id', 'item'))} "
                         f"{action_label} from shelf stock {int(row.get('stock', 0))}"
-                    ),
+                    )),
                 )
             else:
+                interest_text = str(row.get("interest_label", "") or "").strip()
+                risk_text = str(row.get("risk_label", "") or "").strip()
+                extra_bits = [bit for bit in (interest_text, risk_text) if bit]
+                extra_text = f"; {'; '.join(extra_bits)}" if extra_bits else ""
                 state["inspect_text"] = _item_legend_line(
                     row.get("item_id"),
-                    (
+                    _trade_item_line(row, (
                         f"{row.get('item_name', row.get('item_id', 'item'))} "
                         f"{int(row.get('price', 0))} credits stock {int(row.get('stock', 0))}"
-                    ),
+                        f"{extra_text}"
+                    )),
                 )
             return
 
@@ -2064,30 +2225,225 @@ class TradeSystem(System):
             if action_label == "trade-in":
                 state["inspect_text"] = _item_legend_line(
                     row.get("item_id"),
-                    (
+                    _trade_item_line(row, (
                         f"{row.get('item_name', row.get('item_id', 'item'))} "
                         f"trade-in quote {int(row.get('price', 0))} credits "
                         f"qty {int(row.get('quantity', 0))}"
-                    ),
+                    )),
                 )
             else:
                 state["inspect_text"] = _item_legend_line(
                     row.get("item_id"),
-                    (
+                    _trade_item_line(row, (
                         f"{row.get('item_name', row.get('item_id', 'item'))} "
                         f"{action_label} into shelf stock qty {int(row.get('quantity', 0))}"
-                    ),
+                    )),
                 )
             return
         listed_text = "listed" if row.get("listed") else "unlisted"
+        interest_text = str(row.get("interest_label", "") or "").strip()
+        read_text = ""
+        if interest_text:
+            read_text = f"; {interest_text}"
+            if not bool(row.get("interest_known", True)):
+                read_text += " (your read)"
         state["inspect_text"] = _item_legend_line(
             row.get("item_id"),
-            (
+            _trade_item_line(row, (
                 f"{row.get('item_name', row.get('item_id', 'item'))} "
                 f"offer {int(row.get('price', 0))} credits ({listed_text}) "
-                f"qty {int(row.get('quantity', 0))}"
-            ),
+                f"qty {int(row.get('quantity', 0))}{read_text}"
+            )),
         )
+
+    def _contact_trade_available(self, contact_eid):
+        if contact_eid is None:
+            return False
+        player_pos = self._position_for(self.player_eid)
+        contact_pos = self._position_for(contact_eid)
+        if player_pos is None or contact_pos is None:
+            return False
+        if int(player_pos.z) != int(contact_pos.z):
+            return False
+        return abs(int(player_pos.x) - int(contact_pos.x)) + abs(int(player_pos.y) - int(contact_pos.y)) <= 3
+
+    def _reset_trade_ui_closed(self, *, blocked_reason=None, emit_toggle=False):
+        state = self._trade_ui_state()
+        was_open = bool(state.get("open"))
+        state["open"] = False
+        state["rows"] = []
+        state["selected_index"] = 0
+        state["inspect_text"] = ""
+        state["store_name"] = ""
+        state["property_id"] = None
+        state["supply_note"] = ""
+        state["contact_note"] = ""
+        state["service_note"] = ""
+        state["service_eid"] = None
+        state["owner_transfer"] = False
+        state["source_kind"] = "storefront"
+        state["contact_eid"] = None
+        state["available_modes"] = ("buy", "sell")
+        state["vendor_kind"] = ""
+        state["street_context"] = {}
+        if emit_toggle and was_open:
+            self.sim.emit(Event("trade_panel_toggled", eid=self.player_eid, open=False))
+        if blocked_reason:
+            self.sim.emit(Event("trade_panel_blocked", eid=self.player_eid, reason=str(blocked_reason)))
+        return False
+
+    def _street_vendor_profile(self, contact_eid, *, context=None):
+        return street_vendor_contact_profile(self.sim, contact_eid, self.player_eid, context=context)
+
+    def _refresh_street_vendor_trade_ui(
+        self,
+        mode=None,
+        keep_selection=True,
+        preferred_item_id=None,
+        preferred_instance_id=None,
+        contact_eid=None,
+        profile_context=None,
+        emit_toggle=False,
+    ):
+        state = self._trade_ui_state()
+        if contact_eid is None:
+            contact_eid = state.get("contact_eid")
+        if contact_eid is None or not self._contact_trade_available(contact_eid):
+            return self._reset_trade_ui_closed(blocked_reason="no_street_vendor", emit_toggle=emit_toggle)
+
+        if profile_context is None:
+            profile_context = state.get("street_context")
+        if not isinstance(profile_context, dict):
+            profile_context = {}
+
+        profile = self._street_vendor_profile(contact_eid, context=profile_context)
+        if profile.get("blocked_reason"):
+            return self._reset_trade_ui_closed(blocked_reason=profile.get("blocked_reason"), emit_toggle=emit_toggle)
+        ensure_street_vendor_stock(self.sim, contact_eid, self.player_eid, profile=profile)
+        profile = self._street_vendor_profile(contact_eid, context=profile_context)
+        if profile.get("blocked_reason"):
+            return self._reset_trade_ui_closed(blocked_reason=profile.get("blocked_reason"), emit_toggle=emit_toggle)
+        available_modes = tuple(
+            str(value).strip().lower()
+            for value in tuple(profile.get("available_modes", ()) or ())
+            if str(value).strip()
+        )
+        if not available_modes:
+            return self._reset_trade_ui_closed(blocked_reason="street_vendor_no_trade", emit_toggle=emit_toggle)
+
+        wanted_mode = str(mode or state.get("mode") or profile.get("default_mode", "sell")).strip().lower()
+        if wanted_mode not in available_modes:
+            wanted_mode = str(profile.get("default_mode", "") or "").strip().lower()
+        if wanted_mode not in available_modes:
+            wanted_mode = available_modes[0]
+
+        rows = (
+            street_vendor_buy_rows(self.sim, contact_eid, self.player_eid, profile=profile)
+            if wanted_mode == "buy"
+            else street_vendor_sell_rows(self.sim, contact_eid, self.player_eid, profile=profile)
+        )
+        if not rows and len(available_modes) > 1:
+            alternate = "buy" if wanted_mode == "sell" else "sell"
+            if alternate in available_modes:
+                wanted_mode = alternate
+                rows = (
+                    street_vendor_buy_rows(self.sim, contact_eid, self.player_eid, profile=profile)
+                    if wanted_mode == "buy"
+                    else street_vendor_sell_rows(self.sim, contact_eid, self.player_eid, profile=profile)
+                )
+
+        prev_index = int(state.get("selected_index", 0))
+        selected_index = 0
+        if rows:
+            if wanted_mode == "buy" and preferred_item_id:
+                for idx, row in enumerate(rows):
+                    if row.get("item_id") == preferred_item_id:
+                        selected_index = idx
+                        break
+                else:
+                    selected_index = prev_index if keep_selection else 0
+            elif wanted_mode == "sell" and preferred_instance_id:
+                for idx, row in enumerate(rows):
+                    if row.get("instance_id") == preferred_instance_id:
+                        selected_index = idx
+                        break
+                else:
+                    selected_index = prev_index if keep_selection else 0
+            else:
+                selected_index = prev_index if keep_selection else 0
+            selected_index = max(0, min(selected_index, len(rows) - 1))
+
+        state["open"] = True
+        state["mode"] = wanted_mode
+        state["rows"] = rows
+        state["selected_index"] = selected_index
+        state["store_name"] = f"Street Trade: {profile.get('contact_name', 'contact')}"
+        state["property_id"] = None
+        state["supply_note"] = str(profile.get("stock_note" if wanted_mode == "buy" else "sell_note", "") or "").strip()
+        state["contact_note"] = str(profile.get("contact_note", "") or "").strip()
+        state["service_note"] = ""
+        state["service_eid"] = contact_eid
+        state["owner_transfer"] = False
+        state["source_kind"] = STREET_TRADE_SOURCE_KIND
+        state["contact_eid"] = contact_eid
+        state["available_modes"] = available_modes
+        state["vendor_kind"] = str(profile.get("vendor_kind", "") or "").strip().lower()
+        state["street_context"] = dict(profile_context)
+        self._refresh_trade_inspect_text(state)
+
+        if emit_toggle:
+            self.sim.emit(Event(
+                "trade_panel_toggled",
+                eid=self.player_eid,
+                open=True,
+                mode=wanted_mode,
+                source_kind=STREET_TRADE_SOURCE_KIND,
+                contact_eid=contact_eid,
+                store_name=state["store_name"],
+                supply_note=state.get("supply_note", ""),
+                contact_note=state.get("contact_note", ""),
+                service_note=state.get("service_note", ""),
+                service_eid=state.get("service_eid"),
+                rows=len(rows),
+            ))
+        return True
+
+    def _street_deal_observation_payload(self, buyer_eid, seller_eid):
+        pos = self._position_for(buyer_eid) or self._position_for(seller_eid)
+        if pos is None:
+            return {}
+        payload = observation_payload_for_position(
+            self.sim,
+            pos.x,
+            pos.y,
+            pos.z,
+            exclude_eid=buyer_eid,
+            offender_eid=buyer_eid,
+            observation_channels=("actor_witness",),
+        )
+        filtered = {}
+        seller_id = None
+        try:
+            seller_id = int(seller_eid) if seller_eid is not None else None
+        except (TypeError, ValueError):
+            seller_id = None
+        for key in ("observer_eids", "accountable_observer_eids", "witnesses"):
+            values = []
+            for raw in tuple(payload.get(key, ()) or ()):
+                try:
+                    eid = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                if seller_id is not None and eid == seller_id:
+                    continue
+                values.append(eid)
+            filtered[key] = tuple(values)
+        filtered["observer_count"] = len(filtered.get("observer_eids", ()))
+        filtered["accountable_observer_count"] = len(filtered.get("accountable_observer_eids", ()))
+        filtered["witness_count"] = len(filtered.get("accountable_observer_eids", ()))
+        filtered["witnessed"] = bool(filtered.get("accountable_observer_eids"))
+        filtered["observation_channels"] = tuple(payload.get("observation_channels", ()) or ("actor_witness",))
+        return filtered
 
     def _refresh_trade_ui(
         self,
@@ -2095,11 +2451,25 @@ class TradeSystem(System):
         keep_selection=True,
         preferred_item_id=None,
         preferred_instance_id=None,
+        contact_eid=None,
         target_property_id=None,
         emit_toggle=False,
         automated_only=False,
     ):
         state = self._trade_ui_state()
+        if (
+            str(state.get("source_kind", "storefront") or "storefront").strip().lower() == STREET_TRADE_SOURCE_KIND
+            and contact_eid is None
+        ):
+            return self._refresh_street_vendor_trade_ui(
+                mode=mode,
+                keep_selection=keep_selection,
+                preferred_item_id=preferred_item_id,
+                preferred_instance_id=preferred_instance_id,
+                contact_eid=state.get("contact_eid"),
+                profile_context=state.get("street_context"),
+                emit_toggle=emit_toggle,
+            )
         if mode in {"buy", "sell"}:
             state["mode"] = mode
 
@@ -2197,7 +2567,14 @@ class TradeSystem(System):
         rows = (
             self._trade_buy_rows(store, terms=terms, owner_transfer=owner_transfer)
             if mode == "buy"
-            else self._trade_sell_rows(inventory, store, terms=terms, owner_transfer=owner_transfer)
+            else self._trade_sell_rows(
+                inventory,
+                store,
+                terms=terms,
+                owner_transfer=owner_transfer,
+                actor_eid=self.player_eid,
+                service_eid=service.get("service_eid") if isinstance(service, dict) else None,
+            )
         )
 
         prev_index = int(state.get("selected_index", 0))
@@ -2264,6 +2641,10 @@ class TradeSystem(System):
         state["service_note"] = ""
         state["service_eid"] = None
         state["owner_transfer"] = False
+        state["source_kind"] = "storefront"
+        state["contact_eid"] = None
+        state["available_modes"] = ("buy", "sell")
+        state["vendor_kind"] = ""
         if was_open:
             self.sim.emit(Event("trade_panel_toggled", eid=self.player_eid, open=False))
 
@@ -2468,6 +2849,259 @@ class TradeSystem(System):
         self.sim.emit(Event("npc_item_purchased", **result))
         return result
 
+    def _emit_removed_gear_events(self, eid, gear_changes, *, reason):
+        if gear_changes.get("armor_name"):
+            self.sim.emit(Event(
+                "armor_removed",
+                eid=eid,
+                item_id=gear_changes.get("armor_item_id"),
+                armor_name=gear_changes["armor_name"],
+                reason=reason,
+            ))
+        if gear_changes.get("weapon_id"):
+            self.sim.emit(Event(
+                "weapon_removed",
+                eid=eid,
+                weapon_id=gear_changes["weapon_id"],
+                weapon_name=gear_changes["weapon_name"],
+                reason=reason,
+            ))
+        if gear_changes.get("disguise_name"):
+            self.sim.emit(Event(
+                "disguise_removed",
+                eid=eid,
+                item_id=gear_changes.get("disguise_item_id"),
+                item_name=gear_changes["disguise_name"],
+                reason=reason,
+            ))
+        if gear_changes.get("container_name"):
+            self.sim.emit(Event(
+                "container_removed",
+                eid=eid,
+                item_id=gear_changes.get("container_item_id"),
+                item_name=gear_changes["container_name"],
+                reason=reason,
+            ))
+
+    def _street_vendor_buy(self, eid, target_instance_id=None, target_item_id=None):
+        assets = self._assets_for(eid)
+        player_inventory = self._inventory_for(eid)
+        if not assets:
+            self.sim.emit(Event("trade_buy_blocked", eid=eid, reason="no_assets"))
+            return False
+        if not player_inventory:
+            self.sim.emit(Event("trade_buy_blocked", eid=eid, reason="no_inventory"))
+            return False
+        state = self._trade_ui_state()
+        contact_eid = state.get("contact_eid")
+        if contact_eid is None or not self._contact_trade_available(contact_eid):
+            self.sim.emit(Event("trade_buy_blocked", eid=eid, reason="no_street_vendor"))
+            return False
+        contact_inventory = self._inventory_for(contact_eid)
+        if not contact_inventory:
+            self.sim.emit(Event("trade_buy_blocked", eid=eid, reason="street_vendor_empty"))
+            return False
+        profile = self._street_vendor_profile(contact_eid, context=state.get("street_context"))
+        rows = street_vendor_buy_rows(self.sim, contact_eid, eid, profile=profile)
+        choice = None
+        for row in rows:
+            if target_instance_id and row.get("instance_id") == target_instance_id:
+                choice = row
+                break
+            if not target_instance_id and target_item_id and row.get("item_id") == target_item_id:
+                choice = row
+                break
+        if choice is None and not target_instance_id and not target_item_id:
+            choice = rows[0] if rows else None
+        if choice is None:
+            self.sim.emit(Event("trade_buy_blocked", eid=eid, reason="item_unavailable", item_id=target_item_id))
+            return False
+
+        price = int(max(1, choice.get("price", 1) or 1))
+        if assets.credits < price:
+            self.sim.emit(Event(
+                "trade_buy_blocked",
+                eid=eid,
+                reason="insufficient_funds",
+                credits=assets.credits,
+                cheapest_price=price,
+                item_id=choice.get("item_id"),
+            ))
+            return False
+
+        removed = contact_inventory.remove_item(instance_id=choice.get("instance_id"), quantity=1)
+        if not removed:
+            self.sim.emit(Event("trade_buy_blocked", eid=eid, reason="item_unavailable", item_id=choice.get("item_id")))
+            return False
+
+        item_id = str(removed.get("item_id", "") or "").strip().lower()
+        item_def = ITEM_CATALOG.get(item_id, {"stack_max": 1})
+        metadata = dict(removed.get("metadata") or {}) if isinstance(removed.get("metadata"), dict) else {}
+        metadata.update({
+            "purchased_from_contact_eid": contact_eid,
+            "last_transfer_tick": int(getattr(self.sim, "tick", 0)),
+            "last_transfer_kind": "street_vendor_purchase",
+            "last_holder_eid": eid,
+        })
+        added, instance_id = player_inventory.add_item(
+            item_id=item_id,
+            quantity=1,
+            stack_max=max(1, int(item_def.get("stack_max", 1) or 1)),
+            instance_factory=self.sim.new_item_instance_id,
+            owner_eid=eid,
+            owner_tag="player",
+            metadata=metadata,
+        )
+        if not added:
+            contact_inventory.add_item(
+                item_id=item_id,
+                quantity=max(1, int(removed.get("quantity", 1) or 1)),
+                stack_max=max(1, int(item_def.get("stack_max", 1) or 1)),
+                instance_id=removed.get("instance_id"),
+                instance_factory=self.sim.new_item_instance_id,
+                owner_eid=contact_eid,
+                owner_tag="npc",
+                metadata=removed.get("metadata"),
+            )
+            self.sim.emit(Event("trade_buy_blocked", eid=eid, reason="inventory_full", item_id=item_id))
+            return False
+
+        assets.credits -= price
+        item_name = item_display_name_for_actor(
+            self.sim,
+            self.player_eid,
+            {"item_id": item_id, "metadata": metadata, "instance_id": instance_id},
+            item_catalog=ITEM_CATALOG,
+        )
+        vendor_kind = str(state.get("vendor_kind") or profile.get("vendor_kind", "") or "").strip().lower()
+        self.sim.emit(Event(
+            "street_vendor_purchase",
+            eid=eid,
+            npc_eid=contact_eid,
+            contact_eid=contact_eid,
+            vendor_kind=vendor_kind,
+            item_id=item_id,
+            item_name=item_name,
+            price=price,
+            base_price=int(max(1, choice.get("base_price", price) or price)),
+            stock_left=max(0, int((contact_inventory.find(instance_id=choice.get("instance_id")) or {}).get("quantity", 0) or 0)),
+            credits=assets.credits,
+            instance_id=instance_id,
+            illegal=bool(choice.get("illegal")),
+            hot=bool(choice.get("hot")),
+            risk_label=str(choice.get("risk_label", "") or "").strip(),
+        ))
+        pusher_drug_deal = (
+            vendor_kind == "drug_pusher"
+            and bool(choice.get("illegal"))
+            and "drug" in _item_tags(item_id)
+        )
+        if pusher_drug_deal:
+            pos = self._position_for(eid) or self._position_for(contact_eid)
+            observation = self._street_deal_observation_payload(eid, contact_eid)
+            self.sim.emit(Event(
+                "street_deal_transaction",
+                eid=eid,
+                buyer_eid=eid,
+                seller_eid=contact_eid,
+                npc_eid=contact_eid,
+                contact_eid=contact_eid,
+                vendor_kind=vendor_kind,
+                item_id=item_id,
+                item_name=item_name,
+                price=price,
+                x=getattr(pos, "x", None),
+                y=getattr(pos, "y", None),
+                z=getattr(pos, "z", 0) if pos is not None else 0,
+                illegal=True,
+                severity_score=28,
+                **observation,
+            ))
+        elif bool(choice.get("illegal")):
+            pos = self._position_for(eid)
+            if pos:
+                _emit_action_offense_event(
+                    self.sim,
+                    eid,
+                    "trade_buy",
+                    pos.x,
+                    pos.y,
+                    pos.z,
+                    context="contraband_use",
+                    score=16,
+                )
+        return True
+
+    def _street_vendor_sell(self, eid, target_instance_id=None):
+        assets = self._assets_for(eid)
+        inventory = self._inventory_for(eid)
+        if not assets:
+            self.sim.emit(Event("trade_sell_blocked", eid=eid, reason="no_assets"))
+            return False
+        if not inventory:
+            self.sim.emit(Event("trade_sell_blocked", eid=eid, reason="no_inventory"))
+            return False
+        state = self._trade_ui_state()
+        contact_eid = state.get("contact_eid")
+        if contact_eid is None or not self._contact_trade_available(contact_eid):
+            self.sim.emit(Event("trade_sell_blocked", eid=eid, reason="no_street_vendor"))
+            return False
+        profile = self._street_vendor_profile(contact_eid, context=state.get("street_context"))
+        rows = street_vendor_sell_rows(self.sim, contact_eid, eid, profile=profile)
+        choice = None
+        for row in rows:
+            if target_instance_id and row.get("instance_id") == target_instance_id:
+                choice = row
+                break
+        if choice is None and not target_instance_id:
+            choice = rows[0] if rows else None
+        if choice is None:
+            self.sim.emit(Event("trade_sell_blocked", eid=eid, reason="no_sellable_item"))
+            return False
+
+        quantity = int(max(1, choice.get("quantity", 1) or 1))
+        removed = inventory.remove_item(instance_id=choice.get("instance_id"), quantity=quantity)
+        if not removed:
+            self.sim.emit(Event("trade_sell_blocked", eid=eid, reason="remove_failed"))
+            return False
+        gear_changes = _unlink_removed_item_from_gear(self.sim, eid, removed, item_catalog=ITEM_CATALOG)
+        self._emit_removed_gear_events(eid, gear_changes, reason="street_sold")
+
+        payout = int(max(1, choice.get("price", 1) or 1))
+        assets.credits += payout
+        illegal_units = quantity if bool(choice.get("illegal")) else 0
+        if illegal_units > 0:
+            pos = self._position_for(eid)
+            if pos:
+                score = min(28, 10 + (illegal_units * 4) + (6 if bool(choice.get("desired")) else 0))
+                _emit_action_offense_event(
+                    self.sim,
+                    eid,
+                    "trade_sell",
+                    pos.x,
+                    pos.y,
+                    pos.z,
+                    context="contraband_use",
+                    score=score,
+                )
+
+        item_id = str(removed.get("item_id", choice.get("item_id", "")) or "").strip().lower()
+        self.sim.emit(Event(
+            "street_buy_transaction",
+            eid=eid,
+            npc_eid=contact_eid,
+            payout=payout,
+            item_count=1,
+            illegal_units=int(illegal_units),
+            desired_item_id=str((profile.get("sell_terms") or {}).get("desired_item_id", "") or "").strip().lower(),
+            sold_items=({
+                "item_id": item_id,
+                "quantity": int(max(1, removed.get("quantity", quantity) or quantity)),
+            },),
+            credits=int(getattr(assets, "credits", 0) or 0),
+        ))
+        return True
+
     def _trade_buy(self, eid, pos, target_item_id=None):
         assets = self._assets_for(eid)
         inventory = self._inventory_for(eid)
@@ -2645,6 +3279,88 @@ class TradeSystem(System):
         ))
         return True
 
+    def _unwanted_sale_pressure_key(self, eid, store_prop, service=None):
+        property_id = str((store_prop or {}).get("id", "") or "").strip()
+        service_eid = None
+        if isinstance(service, dict):
+            service_eid = service.get("service_eid")
+        enforcer = service_eid if service_eid is not None else (store_prop or {}).get("owner_eid")
+        return f"{property_id}:{enforcer if enforcer is not None else 'counter'}:{eid}"
+
+    def _unwanted_sale_pressure_threshold(self, eid, store_prop, service=None):
+        threshold = 3
+        if self._actor_owns_property(eid, store_prop):
+            return 99
+        service_eid = service.get("service_eid") if isinstance(service, dict) else None
+        if service_eid is not None:
+            social = self.sim.ecs.get(NPCSocial).get(service_eid)
+            bond = social.bonds.get(eid) if social and isinstance(getattr(social, "bonds", None), dict) else None
+            if isinstance(bond, dict):
+                trust = _clamp_float(bond.get("trust"), 0.0, 1.0, default=0.0)
+                closeness = _clamp_float(bond.get("closeness"), 0.0, 1.0, default=0.0)
+                if max(trust, closeness) >= 0.72:
+                    threshold += 2
+                elif max(trust, closeness) >= 0.48:
+                    threshold += 1
+        streetwise = float(_actor_skill(self.sim, eid, "streetwise", default=5.0))
+        if streetwise >= 7.5:
+            threshold += 1
+        return int(threshold)
+
+    def _handle_unwanted_sale_attempt(self, eid, store_prop, service, row):
+        pressure_store = getattr(self.sim, "trade_unwanted_sale_pressure", None)
+        if not isinstance(pressure_store, dict):
+            pressure_store = {}
+            self.sim.trade_unwanted_sale_pressure = pressure_store
+        key = self._unwanted_sale_pressure_key(eid, store_prop, service)
+        weight = int(max(1, row.get("interest_pressure_weight", 1) or 1))
+        pressure = int(max(0, pressure_store.get(key, 0))) + weight
+        pressure_store[key] = pressure
+
+        threshold = self._unwanted_sale_pressure_threshold(eid, store_prop, service)
+        if pressure >= threshold:
+            reason = "unwanted_item_eject"
+        elif pressure >= max(2, threshold - 1):
+            reason = "unwanted_item_firm"
+        else:
+            reason = "unwanted_item_warning"
+
+        self.sim.emit(Event(
+            "trade_sell_blocked",
+            eid=eid,
+            reason=reason,
+            property_id=store_prop.get("id"),
+            store_name=store_prop.get("name", store_prop.get("id", "store")),
+            item_id=row.get("item_id"),
+            item_name=row.get("item_name"),
+            purchase_interest=row.get("interest_actual"),
+            interest_label=row.get("actual_label") or row.get("interest_label", ""),
+            pressure=pressure,
+            threshold=threshold,
+        ))
+
+        if reason != "unwanted_item_eject":
+            return False
+
+        self._close_trade_ui()
+        enforcer = service.get("service_eid") if isinstance(service, dict) else None
+        if enforcer is None:
+            enforcer = store_prop.get("owner_eid")
+        if enforcer is not None:
+            self.sim.emit(Event(
+                "npc_boundary_violation",
+                npc_eid=enforcer,
+                target_eid=eid,
+                property_id=store_prop.get("id"),
+                context="unwanted_trade",
+                source_kind="trade_refusal",
+                offense_score=24 + min(12, pressure * 3),
+                perceived=0.72,
+                violation_count=pressure,
+                violence_eligible=False,
+            ))
+        return False
+
     def _trade_sell(self, eid, pos, target_instance_id=None):
         assets = self._assets_for(eid)
         inventory = self._inventory_for(eid)
@@ -2659,7 +3375,7 @@ class TradeSystem(System):
             return False
 
         state = self._trade_ui_state()
-        store_prop, _service = self._resolve_store(pos, preferred_property_id=state.get("property_id"), radius=2)
+        store_prop, service = self._resolve_store(pos, preferred_property_id=state.get("property_id"), radius=2)
         if not store_prop:
             self.sim.emit(Event("trade_sell_blocked", eid=eid, reason="no_store"))
             return False
@@ -2679,7 +3395,14 @@ class TradeSystem(System):
         terms = self._trade_terms(eid, store_prop)
         owner_transfer = self._owner_transfer_enabled(eid, store_prop)
 
-        candidates = self._trade_sell_candidates(inventory, store, terms=terms, owner_transfer=owner_transfer)
+        candidates = self._trade_sell_candidates(
+            inventory,
+            store,
+            terms=terms,
+            owner_transfer=owner_transfer,
+            actor_eid=eid,
+            service_eid=service.get("service_eid") if isinstance(service, dict) else None,
+        )
         if target_instance_id:
             best = None
             for row in candidates:
@@ -2701,6 +3424,13 @@ class TradeSystem(System):
         if not best:
             self.sim.emit(Event("trade_sell_blocked", eid=eid, reason="no_sellable_item"))
             return False
+
+        if (
+            not owner_transfer
+            and str(best.get("interest_actual", "") or "").strip().lower() == INTEREST_UNUSUAL
+            and not bool(best.get("interest_accepted", True))
+        ):
+            return self._handle_unwanted_sale_attempt(eid, store_prop, service, best)
 
         if (
             not owner_transfer
@@ -2756,7 +3486,12 @@ class TradeSystem(System):
 
         item_id = removed["item_id"]
         item_def = ITEM_CATALOG.get(item_id, {"name": item_id})
-        base_payout, _ = self._sell_quote(item_id, store, terms={"sell_mult": 1.0})
+        base_payout, _ = self._sell_quote(
+            item_id,
+            store,
+            terms={"sell_mult": 1.0},
+            interest={"price_mult": 1.0 if owner_transfer else best.get("interest_price_mult", 1.0)},
+        )
         payout = 0 if owner_transfer else int(max(1, best["price"]))
         if not owner_transfer:
             assets.credits += payout
@@ -2812,6 +3547,26 @@ class TradeSystem(System):
         mode = str(event.data.get("mode", "buy")).lower()
         if mode not in {"buy", "sell"}:
             mode = "buy"
+        source_kind = str(event.data.get("source_kind", "storefront") or "storefront").strip().lower()
+        if source_kind == STREET_TRADE_SOURCE_KIND:
+            street_context = event.data.get("street_context")
+            if not isinstance(street_context, dict):
+                street_context = {
+                    key: event.data.get(key)
+                    for key in ("pressure_tier", "pressure_attention", "contact_standing", "social_standing", "rapport")
+                    if key in event.data
+                }
+            self._refresh_street_vendor_trade_ui(
+                mode=mode,
+                keep_selection=False,
+                contact_eid=event.data.get("contact_eid"),
+                profile_context=street_context,
+                emit_toggle=True,
+            )
+            return
+        state = self._trade_ui_state()
+        state["source_kind"] = "storefront"
+        state["contact_eid"] = None
         automated_only = bool(event.data.get("automated_only"))
         self._refresh_trade_ui(
             mode=mode,
@@ -2835,6 +3590,16 @@ class TradeSystem(System):
         mode = str(event.data.get("mode", state.get("mode", "buy"))).lower()
         if mode not in {"buy", "sell"}:
             return
+        if str(state.get("source_kind", "storefront") or "storefront").strip().lower() == STREET_TRADE_SOURCE_KIND:
+            if mode not in set(state.get("available_modes", ("buy", "sell")) or ("buy", "sell")):
+                return
+            self._refresh_street_vendor_trade_ui(
+                mode=mode,
+                keep_selection=False,
+                contact_eid=state.get("contact_eid"),
+                profile_context=state.get("street_context"),
+            )
+            return
         self._refresh_trade_ui(mode=mode, keep_selection=False)
 
     def on_trade_execute_request(self, event):
@@ -2849,6 +3614,30 @@ class TradeSystem(System):
         item_id = event.data.get("item_id")
         instance_id = event.data.get("instance_id")
         success = False
+        state = self._trade_ui_state()
+        if str(state.get("source_kind", "storefront") or "storefront").strip().lower() == STREET_TRADE_SOURCE_KIND:
+            if mode == "buy":
+                success = self._street_vendor_buy(self.player_eid, target_instance_id=instance_id, target_item_id=item_id)
+                if bool(self._trade_ui_state().get("open")):
+                    self._refresh_street_vendor_trade_ui(
+                        mode="buy",
+                        keep_selection=True,
+                        preferred_item_id=item_id if success else None,
+                        contact_eid=state.get("contact_eid"),
+                        profile_context=state.get("street_context"),
+                    )
+                return
+            if mode == "sell":
+                success = self._street_vendor_sell(self.player_eid, target_instance_id=instance_id)
+                if bool(self._trade_ui_state().get("open")):
+                    self._refresh_street_vendor_trade_ui(
+                        mode="sell",
+                        keep_selection=True,
+                        preferred_instance_id=instance_id if not success else None,
+                        contact_eid=state.get("contact_eid"),
+                        profile_context=state.get("street_context"),
+                    )
+                return
         if mode == "buy":
             success = self._trade_buy(self.player_eid, pos, target_item_id=item_id)
             self._refresh_trade_ui(
@@ -2859,11 +3648,12 @@ class TradeSystem(System):
             return
         if mode == "sell":
             success = self._trade_sell(self.player_eid, pos, target_instance_id=instance_id)
-            self._refresh_trade_ui(
-                mode="sell",
-                keep_selection=True,
-                preferred_instance_id=instance_id if not success else None,
-            )
+            if bool(self._trade_ui_state().get("open")):
+                self._refresh_trade_ui(
+                    mode="sell",
+                    keep_selection=True,
+                    preferred_instance_id=instance_id if not success else None,
+                )
 
     def on_property_interact(self, event):
         if event.data.get("eid") != self.player_eid:

@@ -202,6 +202,7 @@ from game.system_support.combat_pacing_runtime import (
     _combat_turn_pacing_active,
     _set_manual_combat_pacing,
 )
+from game.system_support.altered_state_runtime import hallucinated_tile_visual
 from game.system_support.combat_targeting_runtime import (
     _entity_uses_melee_aim,
     _entity_visible_to_player,
@@ -1750,7 +1751,10 @@ class RenderSystem(System):
         if isinstance(live_timeskip, dict) and bool(live_timeskip.get("active")):
             service = str(live_timeskip.get("service", "") or "").strip().lower()
             prop_name = str(live_timeskip.get("property_name", live_timeskip.get("property_id", "site")) or "site").strip() or "site"
-            title = "Sleeping..." if service == "rest" else "Laying low..."
+            title = str(live_timeskip.get("title", "") or "").strip()
+            if not title:
+                title = "Sleeping..." if service == "rest" else "Laying low..."
+            footer = str(live_timeskip.get("footer", "") or "").strip() or "The city keeps moving without you."
             started_tick = int(live_timeskip.get("started_tick", 0) or 0)
             total_ticks = max(0, int(live_timeskip.get("total_ticks", 0) or 0))
             elapsed_ticks = max(
@@ -1785,7 +1789,7 @@ class RenderSystem(System):
             if total_ticks > 0:
                 progress = f"{_tick_duration_label(self.sim, elapsed_ticks)} / {_tick_duration_label(self.sim, total_ticks)}"
                 self.view.draw_text(panel_x + 2, panel_y + 4, _clip(progress, body_w), color="default")
-            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip("The city keeps moving without you.", body_w), color="default")
+            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, body_w), color="default")
             return
         camera_x = (player_pos.x - (map_w // 2)) if player_pos else 0
         camera_y = (player_pos.y - (map_h // 2)) if player_pos else 0
@@ -2340,6 +2344,20 @@ class RenderSystem(System):
                             priority=-1000,
                         )
                     self._draw_appearance(sx, sy, appearance, attrs=attrs)
+                    if visible_now:
+                        hallucination = hallucinated_tile_visual(self.sim, self.player_eid, wx, wy, active_z)
+                        if hallucination:
+                            self._draw(
+                                sx,
+                                sy,
+                                hallucination.get("glyph", "?"),
+                                color=hallucination.get("color", "objective"),
+                                attrs=attrs | getattr(curses, "A_BOLD", 0),
+                                semantic_id=hallucination.get("semantic_id", "hallucinated_tile"),
+                                effects=("shimmer",),
+                                layer="terrain",
+                                priority=-850,
+                            )
 
             active_quest_target = active_final_operation_target_property_id(self.sim)
 
@@ -3487,10 +3505,12 @@ class RenderSystem(System):
                 action_label = str(row.get("action_label", "")).strip().lower()
                 if mode == "buy":
                     stock = int(row.get("stock", 0))
+                    badge = str(row.get("row_badge", "") or "").strip()
+                    badge_text = f" {badge}" if badge else ""
                     if action_label:
-                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {action_label} stk {stock}"
+                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {action_label} stk {stock}{badge_text}"
                     else:
-                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c stk {stock}"
+                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c stk {stock}{badge_text}"
                 else:
                     qty = int(row.get("quantity", 0))
                     if action_label:
@@ -3500,8 +3520,19 @@ class RenderSystem(System):
                             label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {action_label} x{qty}"
                     else:
                         listed = "L" if row.get("listed") else "U"
-                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c x{qty} {listed}"
-                self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2))
+                        interest = str(row.get("purchase_interest", "") or "").strip().lower()
+                        interest_marker = {
+                            "wanted": "W",
+                            "adjacent": "A",
+                            "unusual": "?",
+                            "refused": "!",
+                        }.get(interest, listed)
+                        label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c x{qty} {listed}/{interest_marker}"
+                row_color = row.get("row_color")
+                if row_color:
+                    self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2), color=row_color)
+                else:
+                    self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2))
 
             if not rows:
                 self.view.draw_text(panel_x + 2, list_y, _clip("(no offers)", panel_w - 4))
@@ -3549,12 +3580,18 @@ class RenderSystem(System):
                             )
                     else:
                         listed_text = "listed" if selected.get("listed") else "unlisted"
+                        interest_text = str(selected.get("interest_label", "") or "").strip()
+                        read_text = ""
+                        if interest_text:
+                            read_text = f"; {interest_text}"
+                            if not bool(selected.get("interest_known", True)):
+                                read_text += " (your read)"
                         inspect_text = _item_legend_line(
                             selected.get("item_id"),
                             (
                                 f"{selected.get('item_name', selected.get('item_id', 'item'))} "
                                 f"offer {int(selected.get('price', 0))} credits ({listed_text}) "
-                                f"qty {int(selected.get('quantity', 0))}"
+                                f"qty {int(selected.get('quantity', 0))}{read_text}"
                             ),
                         )
 

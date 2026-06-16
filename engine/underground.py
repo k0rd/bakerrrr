@@ -10,11 +10,54 @@ from engine.sites import site_entry_front_cell
 
 UNDERGROUND_ACCESS_SERVICE = "underground_access"
 METRO_UNDERPASS_KIND = "metro_underpass"
+UTILITY_CORRIDOR_KIND = "utility_corridor"
+STORM_DRAIN_KIND = "storm_drain"
+SERVICE_BASEMENT_KIND = "service_basement"
+CANONICAL_UNDERGROUND_KINDS = (
+    METRO_UNDERPASS_KIND,
+    UTILITY_CORRIDOR_KIND,
+    STORM_DRAIN_KIND,
+    SERVICE_BASEMENT_KIND,
+)
+MAX_UNDERGROUND_PLANS_PER_CHUNK = 3
 UNDERGROUND_HAZARD_ROWS = (
     ("live_wire", "Live Wire", 4.0),
     ("steam_leak", "Steam Leak", 4.0),
     ("foul_drain", "Foul Drain", 3.0),
 )
+
+UTILITY_CORRIDOR_ARCHETYPES = {
+    "bank",
+    "brokerage",
+    "cold_storage",
+    "co_working_hub",
+    "courier_office",
+    "data_center",
+    "factory",
+    "freight_depot",
+    "lab",
+    "machine_shop",
+    "office",
+    "pump_house",
+    "recycling_plant",
+    "relay_post",
+    "server_hub",
+    "service_station",
+    "tower",
+    "warehouse",
+}
+STORM_DRAIN_ARCHETYPES = {
+    "bar",
+    "factory",
+    "flophouse",
+    "junk_market",
+    "laundromat",
+    "pawn_shop",
+    "recycling_plant",
+    "soup_kitchen",
+    "tenement",
+    "warehouse",
+}
 
 
 def _text(value):
@@ -120,6 +163,50 @@ def _shape_excluded_cells(cells):
     return tuple(excluded)
 
 
+def _footprints_overlap(left, right, top, bottom, other, *, buffer=0):
+    if not isinstance(other, dict):
+        return False
+    try:
+        other_left = int(other.get("left")) - int(buffer)
+        other_right = int(other.get("right")) + int(buffer)
+        other_top = int(other.get("top")) - int(buffer)
+        other_bottom = int(other.get("bottom")) + int(buffer)
+    except (TypeError, ValueError):
+        return False
+    return not (
+        int(right) < other_left
+        or int(left) > other_right
+        or int(bottom) < other_top
+        or int(top) > other_bottom
+    )
+
+
+def _plan_overlaps_existing(plan, accepted):
+    if not isinstance(plan, dict):
+        return True
+    footprint = plan.get("footprint")
+    if not isinstance(footprint, dict):
+        return True
+    try:
+        z = int(plan.get("z", 0))
+        left = int(footprint.get("left"))
+        right = int(footprint.get("right"))
+        top = int(footprint.get("top"))
+        bottom = int(footprint.get("bottom"))
+    except (TypeError, ValueError):
+        return True
+    for other in tuple(accepted or ()):
+        try:
+            other_z = int(other.get("z", 0))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if other_z != z:
+            continue
+        if _footprints_overlap(left, right, top, bottom, other.get("footprint"), buffer=1):
+            return True
+    return False
+
+
 def _edge_buffer_axes(axis_min, axis_max, *, buffer=2):
     axis_min = int(axis_min)
     axis_max = int(axis_max)
@@ -131,6 +218,24 @@ def _edge_buffer_axes(axis_min, axis_max, *, buffer=2):
     if interior_min > interior_max:
         return ()
     return tuple(sorted({int(interior_min), int(interior_max)}))
+
+
+def _interior_axis_value(axis_min, axis_max, preferred):
+    axis_min = int(axis_min)
+    axis_max = int(axis_max)
+    if axis_max - axis_min <= 1:
+        return int(preferred)
+    return max(axis_min + 1, min(axis_max - 1, int(preferred)))
+
+
+def _is_drain_friendly_district(district):
+    if not isinstance(district, dict):
+        return False
+    district_type = _text(district.get("district_type")).lower()
+    if district_type in {"industrial", "slums"}:
+        return True
+    terrain = _text(district.get("terrain")).lower()
+    return terrain in {"shore", "industrial_waste", "waterfront"}
 
 
 def _underpass_hazard_specs(
@@ -397,6 +502,7 @@ def _metro_underpass_plan(
                 "y": int(midpoint_axis),
                 "z": int(tunnel_z),
                 "kind": "utility_cache",
+                "cache_profile": "maintenance",
             },
         )
         encounter_spawns = (
@@ -459,6 +565,7 @@ def _metro_underpass_plan(
                     "y": int(midpoint_axis),
                     "z": int(tunnel_z),
                     "kind": "utility_cache",
+                    "cache_profile": "maintenance",
                 },
             )
             encounter_spawns = tuple(encounter_spawns) + (
@@ -537,6 +644,7 @@ def _metro_underpass_plan(
                 "y": int(tunnel_start[1]),
                 "z": int(tunnel_z),
                 "kind": "utility_cache",
+                "cache_profile": "maintenance",
             },
         )
         encounter_spawns = (
@@ -599,6 +707,7 @@ def _metro_underpass_plan(
                     "y": int(branch_cache_y),
                     "z": int(tunnel_z),
                     "kind": "utility_cache",
+                    "cache_profile": "maintenance",
                 },
             )
             encounter_spawns = tuple(encounter_spawns) + (
@@ -779,6 +888,509 @@ def _metro_underpass_plan(
     }
 
 
+def _generic_corridor_plan(
+    chunk,
+    building,
+    layout,
+    *,
+    kind,
+    chunk_x,
+    chunk_y,
+    chunk_size,
+    origin_x,
+    origin_y,
+    occupied_footprints,
+    tunnel_z,
+):
+    entry = dict(layout.get("entry", {}))
+    surface_entry = site_entry_front_cell(entry)
+    if surface_entry is None:
+        return None
+
+    surface_x, surface_y, _surface_z = surface_entry
+    side = _text(entry.get("side") or "south").lower() or "south"
+    if side in {"north", "south"}:
+        surface_exit = _surface_exit_for_vertical(
+            surface_x,
+            surface_y,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+            occupied=occupied_footprints,
+        )
+        if surface_exit is None:
+            return None
+        tunnel_x = int(surface_exit[0])
+        tunnel_start = (tunnel_x, int(surface_y), int(tunnel_z))
+        tunnel_end = (tunnel_x, int(surface_exit[1]), int(tunnel_z))
+        footprint = {
+            "left": int(tunnel_x) - 1,
+            "right": int(tunnel_x) + 1,
+            "top": min(int(surface_y), int(surface_exit[1])),
+            "bottom": max(int(surface_y), int(surface_exit[1])),
+        }
+    else:
+        surface_exit = _surface_exit_for_horizontal(
+            surface_x,
+            surface_y,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+            occupied=occupied_footprints,
+        )
+        if surface_exit is None:
+            return None
+        tunnel_y = int(surface_exit[1])
+        tunnel_start = (int(surface_x), tunnel_y, int(tunnel_z))
+        tunnel_end = (int(surface_exit[0]), tunnel_y, int(tunnel_z))
+        footprint = {
+            "left": min(int(surface_x), int(surface_exit[0])),
+            "right": max(int(surface_x), int(surface_exit[0])),
+            "top": int(tunnel_y) - 1,
+            "bottom": int(tunnel_y) + 1,
+        }
+
+    kind = _text(kind).lower()
+    building_name = _text(building.get("business_name")) or _text(building.get("archetype")).replace("_", " ").title() or "Building"
+    source_building_id = world_building_id(chunk_x, chunk_y, building)
+    local_building_id = _text(building.get("building_id")) or _text(building.get("archetype")) or "site"
+
+    if kind == UTILITY_CORRIDOR_KIND:
+        site_label = "Utility Corridor"
+        site_suffix = "utility"
+        rooms = ("utility_corridor", "maintenance_tunnel", "service_room")
+        cache_profile = "maintenance"
+        encounter_profile = "underground_maintenance"
+        wildlife_profile = "basement_pests"
+        source_return_name = f"{building_name} Service Stairs"
+        street_return_name = "Utility Hatch"
+        street_surface_name = f"{building_name} Utility Hatch"
+    elif kind == STORM_DRAIN_KIND:
+        site_label = "Storm Drain"
+        site_suffix = "storm_drain"
+        rooms = ("storm_drain", "drain_junction", "overflow_channel")
+        cache_profile = "drain"
+        encounter_profile = "underground_scavengers"
+        wildlife_profile = "drain_wildlife"
+        source_return_name = f"{building_name} Drain Ladder"
+        street_return_name = "Drain Grate"
+        street_surface_name = "Street Drain Grate"
+    elif kind == SERVICE_BASEMENT_KIND:
+        site_label = "Service Basement"
+        site_suffix = "service_basement"
+        rooms = ("service_basement", "utility_room", "storage")
+        cache_profile = "survival"
+        encounter_profile = "underground_shelter"
+        wildlife_profile = "basement_pests"
+        source_return_name = f"{building_name} Basement Stairs"
+        street_return_name = "Service Hatch"
+        street_surface_name = f"{building_name} Service Hatch"
+    else:
+        return None
+
+    site_name = f"{building_name} {site_label}"
+    plan_building_id = f"{source_building_id}:{site_suffix}"
+    footprint_excluded_cells = ()
+    branch_return = None
+    service_sites = ()
+    layout_variant = "straight_corridor"
+
+    if side in {"north", "south"}:
+        start_axis = int(tunnel_start[1])
+        end_axis = int(tunnel_end[1])
+        axis_min = min(start_axis, end_axis)
+        axis_max = max(start_axis, end_axis)
+        midpoint_axis = (axis_min + axis_max) // 2
+        encounter_axis = _interior_axis_value(axis_min, axis_max, midpoint_axis + (2 if end_axis >= start_axis else -2))
+        cache_axis = _interior_axis_value(axis_min, axis_max, midpoint_axis)
+        corridor_cells = _corridor_cells_vertical(int(tunnel_start[0]), axis_min, axis_max)
+        wildlife_axes = _edge_buffer_axes(axis_min, axis_max, buffer=2)
+        cache_sites = (
+            {
+                "name": "Maintenance Locker" if cache_profile == "maintenance" else "Stashed Pack",
+                "x": int(tunnel_start[0]),
+                "y": int(cache_axis),
+                "z": int(tunnel_z),
+                "kind": "utility_cache",
+                "cache_profile": cache_profile,
+            },
+        )
+        encounter_spawns = (
+            {
+                "x": int(tunnel_start[0]),
+                "y": int(encounter_axis),
+                "z": int(tunnel_z),
+                "profile": encounter_profile,
+            },
+        )
+        wildlife_spawns = tuple(
+            {
+                "x": int(tunnel_start[0]),
+                "y": int(axis_value),
+                "z": int(tunnel_z),
+                "profile": wildlife_profile,
+            }
+            for axis_value in wildlife_axes
+        )
+        hazard_sites = _underpass_hazard_specs(
+            chunk_x=chunk_x,
+            chunk_y=chunk_y,
+            source_building_id=f"{source_building_id}:{site_suffix}",
+            tunnel_z=tunnel_z,
+            orientation="vertical",
+            fixed_axis=int(tunnel_start[0]),
+            axis_min=axis_min,
+            axis_max=axis_max,
+            reserved_axes={
+                int(cache_axis),
+                int(encounter_axis),
+                *(int(axis_value) for axis_value in wildlife_axes),
+            },
+        )
+        branch_surface = _surface_exit_aligned_horizontal(
+            int(tunnel_start[0]),
+            int(cache_axis),
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+            occupied=occupied_footprints,
+        )
+        if branch_surface is not None:
+            branch_end_x = int(branch_surface[0])
+            branch_axis_min = min(int(tunnel_start[0]), branch_end_x)
+            branch_axis_max = max(int(tunnel_start[0]), branch_end_x)
+            branch_cache_x = _advance_axis_value(branch_end_x, int(tunnel_start[0]), 2)
+            branch_encounter_x = _advance_axis_value(int(tunnel_start[0]), branch_end_x, 2)
+            branch_wildlife_x = _advance_axis_value(int(tunnel_start[0]), branch_end_x, max(1, abs(branch_end_x - int(tunnel_start[0])) // 2))
+            corridor_cells.update(_corridor_cells_horizontal(int(cache_axis), branch_axis_min, branch_axis_max))
+            maybe_footprint = _shape_bounds(corridor_cells)
+            if isinstance(maybe_footprint, dict):
+                footprint = maybe_footprint
+                footprint_excluded_cells = _shape_excluded_cells(corridor_cells)
+            cache_sites = tuple(cache_sites) + (
+                {
+                    "name": "Hidden Cache" if kind == STORM_DRAIN_KIND else "Service Locker",
+                    "x": int(branch_cache_x),
+                    "y": int(cache_axis),
+                    "z": int(tunnel_z),
+                    "kind": "utility_cache",
+                    "cache_profile": "contraband_light" if kind == STORM_DRAIN_KIND else cache_profile,
+                },
+            )
+            encounter_spawns = tuple(encounter_spawns) + (
+                {
+                    "x": int(branch_encounter_x),
+                    "y": int(cache_axis),
+                    "z": int(tunnel_z),
+                    "profile": "underground_shady" if kind == STORM_DRAIN_KIND else encounter_profile,
+                },
+            )
+            wildlife_spawns = tuple(wildlife_spawns) + (
+                {
+                    "x": int(branch_wildlife_x),
+                    "y": int(cache_axis),
+                    "z": int(tunnel_z),
+                    "profile": wildlife_profile,
+                },
+            )
+            hazard_sites = tuple(hazard_sites) + tuple(_underpass_hazard_specs(
+                chunk_x=chunk_x,
+                chunk_y=chunk_y,
+                source_building_id=f"{source_building_id}:{site_suffix}:branch",
+                tunnel_z=tunnel_z,
+                orientation="horizontal",
+                fixed_axis=int(cache_axis),
+                axis_min=branch_axis_min,
+                axis_max=branch_axis_max,
+                reserved_axes={
+                    int(tunnel_start[0]),
+                    int(branch_end_x),
+                    int(branch_cache_x),
+                    int(branch_encounter_x),
+                },
+            ))
+            branch_return = {
+                "name": "Service Hatch",
+                "x": int(branch_end_x),
+                "y": int(cache_axis),
+                "z": int(tunnel_z),
+                "destination": {
+                    "x": int(branch_surface[0]),
+                    "y": int(branch_surface[1]),
+                    "z": 0,
+                    "destination_name": "service hatch",
+                    "travel_ticks": 1,
+                },
+            }
+            service_sites = (
+                {
+                    "name": "Signal Relay",
+                    "x": int(branch_encounter_x),
+                    "y": int(cache_axis),
+                    "z": int(tunnel_z),
+                    "site_services": ("intel",),
+                    "fixture_type": "service_terminal",
+                    "lead_mode": "hidden_contact_note",
+                },
+            )
+            layout_variant = "branched_service_spur"
+    else:
+        start_axis = int(tunnel_start[0])
+        end_axis = int(tunnel_end[0])
+        axis_min = min(start_axis, end_axis)
+        axis_max = max(start_axis, end_axis)
+        midpoint_axis = (axis_min + axis_max) // 2
+        encounter_axis = _interior_axis_value(axis_min, axis_max, midpoint_axis + (2 if end_axis >= start_axis else -2))
+        cache_axis = _interior_axis_value(axis_min, axis_max, midpoint_axis)
+        corridor_cells = _corridor_cells_horizontal(int(tunnel_start[1]), axis_min, axis_max)
+        wildlife_axes = _edge_buffer_axes(axis_min, axis_max, buffer=2)
+        cache_sites = (
+            {
+                "name": "Maintenance Locker" if cache_profile == "maintenance" else "Stashed Pack",
+                "x": int(cache_axis),
+                "y": int(tunnel_start[1]),
+                "z": int(tunnel_z),
+                "kind": "utility_cache",
+                "cache_profile": cache_profile,
+            },
+        )
+        encounter_spawns = (
+            {
+                "x": int(encounter_axis),
+                "y": int(tunnel_start[1]),
+                "z": int(tunnel_z),
+                "profile": encounter_profile,
+            },
+        )
+        wildlife_spawns = tuple(
+            {
+                "x": int(axis_value),
+                "y": int(tunnel_start[1]),
+                "z": int(tunnel_z),
+                "profile": wildlife_profile,
+            }
+            for axis_value in wildlife_axes
+        )
+        hazard_sites = _underpass_hazard_specs(
+            chunk_x=chunk_x,
+            chunk_y=chunk_y,
+            source_building_id=f"{source_building_id}:{site_suffix}",
+            tunnel_z=tunnel_z,
+            orientation="horizontal",
+            fixed_axis=int(tunnel_start[1]),
+            axis_min=axis_min,
+            axis_max=axis_max,
+            reserved_axes={
+                int(cache_axis),
+                int(encounter_axis),
+                *(int(axis_value) for axis_value in wildlife_axes),
+            },
+        )
+        branch_surface = _surface_exit_aligned_vertical(
+            int(cache_axis),
+            int(tunnel_start[1]),
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+            occupied=occupied_footprints,
+        )
+        if branch_surface is not None:
+            branch_end_y = int(branch_surface[1])
+            branch_axis_min = min(int(tunnel_start[1]), branch_end_y)
+            branch_axis_max = max(int(tunnel_start[1]), branch_end_y)
+            branch_cache_y = _advance_axis_value(branch_end_y, int(tunnel_start[1]), 2)
+            branch_encounter_y = _advance_axis_value(int(tunnel_start[1]), branch_end_y, 2)
+            branch_wildlife_y = _advance_axis_value(int(tunnel_start[1]), branch_end_y, max(1, abs(branch_end_y - int(tunnel_start[1])) // 2))
+            corridor_cells.update(_corridor_cells_vertical(int(cache_axis), branch_axis_min, branch_axis_max))
+            maybe_footprint = _shape_bounds(corridor_cells)
+            if isinstance(maybe_footprint, dict):
+                footprint = maybe_footprint
+                footprint_excluded_cells = _shape_excluded_cells(corridor_cells)
+            cache_sites = tuple(cache_sites) + (
+                {
+                    "name": "Hidden Cache" if kind == STORM_DRAIN_KIND else "Service Locker",
+                    "x": int(cache_axis),
+                    "y": int(branch_cache_y),
+                    "z": int(tunnel_z),
+                    "kind": "utility_cache",
+                    "cache_profile": "contraband_light" if kind == STORM_DRAIN_KIND else cache_profile,
+                },
+            )
+            encounter_spawns = tuple(encounter_spawns) + (
+                {
+                    "x": int(cache_axis),
+                    "y": int(branch_encounter_y),
+                    "z": int(tunnel_z),
+                    "profile": "underground_shady" if kind == STORM_DRAIN_KIND else encounter_profile,
+                },
+            )
+            wildlife_spawns = tuple(wildlife_spawns) + (
+                {
+                    "x": int(cache_axis),
+                    "y": int(branch_wildlife_y),
+                    "z": int(tunnel_z),
+                    "profile": wildlife_profile,
+                },
+            )
+            hazard_sites = tuple(hazard_sites) + tuple(_underpass_hazard_specs(
+                chunk_x=chunk_x,
+                chunk_y=chunk_y,
+                source_building_id=f"{source_building_id}:{site_suffix}:branch",
+                tunnel_z=tunnel_z,
+                orientation="vertical",
+                fixed_axis=int(cache_axis),
+                axis_min=branch_axis_min,
+                axis_max=branch_axis_max,
+                reserved_axes={
+                    int(tunnel_start[1]),
+                    int(branch_end_y),
+                    int(branch_cache_y),
+                    int(branch_encounter_y),
+                },
+            ))
+            branch_return = {
+                "name": "Service Hatch",
+                "x": int(cache_axis),
+                "y": int(branch_end_y),
+                "z": int(tunnel_z),
+                "destination": {
+                    "x": int(branch_surface[0]),
+                    "y": int(branch_surface[1]),
+                    "z": 0,
+                    "destination_name": "service hatch",
+                    "travel_ticks": 1,
+                },
+            }
+            service_sites = (
+                {
+                    "name": "Signal Relay",
+                    "x": int(cache_axis),
+                    "y": int(branch_encounter_y),
+                    "z": int(tunnel_z),
+                    "site_services": ("intel",),
+                    "fixture_type": "service_terminal",
+                    "lead_mode": "hidden_contact_note",
+                },
+            )
+            layout_variant = "branched_service_spur"
+
+    anchor_x = (int(footprint["left"]) + int(footprint["right"])) // 2
+    anchor_y = (int(footprint["top"]) + int(footprint["bottom"])) // 2
+    station_destination = {
+        "x": int(tunnel_start[0]),
+        "y": int(tunnel_start[1]),
+        "z": int(tunnel_start[2]),
+        "destination_name": site_name,
+        "travel_ticks": 2,
+    }
+    street_destination = {
+        "x": int(tunnel_end[0]),
+        "y": int(tunnel_end[1]),
+        "z": int(tunnel_end[2]),
+        "destination_name": site_name,
+        "travel_ticks": 2,
+    }
+    return {
+        "site_id": f"{chunk_x}:{chunk_y}:{site_suffix}:{local_building_id}",
+        "kind": kind,
+        "layout_variant": layout_variant,
+        "name": site_name,
+        "building_id": plan_building_id,
+        "source_building_id": source_building_id,
+        "source_building_name": building_name,
+        "anchor": {"x": int(anchor_x), "y": int(anchor_y), "z": int(tunnel_z)},
+        "z": int(tunnel_z),
+        "floors": 1,
+        "rooms": rooms,
+        "ambient_encounter_profile": encounter_profile,
+        "ambient_encounter_spawns": encounter_spawns,
+        "ambient_wildlife_profile": wildlife_profile,
+        "ambient_wildlife_spawns": wildlife_spawns,
+        "ambient_hazard_profile": "transit_hazards" if hazard_sites else "",
+        "ambient_hazard_spawns": hazard_sites,
+        "cache_sites": cache_sites,
+        "service_sites": service_sites,
+        "footprint": footprint,
+        "footprint_excluded_cells": footprint_excluded_cells,
+        "entry": {
+            "x": int(tunnel_start[0]),
+            "y": int(tunnel_start[1]),
+            "z": int(tunnel_start[2]),
+            "kind": "door",
+            "ordinary": True,
+            "side": side,
+        },
+        "apertures": [
+            {
+                "x": int(tunnel_start[0]),
+                "y": int(tunnel_start[1]),
+                "z": int(tunnel_start[2]),
+                "kind": "door",
+                "ordinary": True,
+            },
+            {
+                "x": int(tunnel_end[0]),
+                "y": int(tunnel_end[1]),
+                "z": int(tunnel_end[2]),
+                "kind": "door",
+                "ordinary": True,
+            },
+        ] + (
+            [
+                {
+                    "x": int(branch_return["x"]),
+                    "y": int(branch_return["y"]),
+                    "z": int(branch_return["z"]),
+                    "kind": "door",
+                    "ordinary": True,
+                },
+            ]
+            if isinstance(branch_return, dict) else []
+        ),
+        "station_surface": {
+            "origin_x": int(surface_x),
+            "origin_y": int(surface_y),
+            "origin_z": 0,
+            "destination": station_destination,
+        },
+        "street_surface": {
+            "name": street_surface_name,
+            "x": int(surface_exit[0]),
+            "y": int(surface_exit[1]),
+            "z": 0,
+            "destination": street_destination,
+        },
+        "underground_returns": (
+            {
+                "name": source_return_name,
+                "x": int(tunnel_start[0]),
+                "y": int(tunnel_start[1]),
+                "z": int(tunnel_start[2]),
+                "destination": {
+                    "x": int(surface_x),
+                    "y": int(surface_y),
+                    "z": 0,
+                    "destination_name": building_name,
+                    "travel_ticks": 1,
+                },
+            },
+            {
+                "name": street_return_name,
+                "x": int(tunnel_end[0]),
+                "y": int(tunnel_end[1]),
+                "z": int(tunnel_end[2]),
+                "destination": {
+                    "x": int(surface_exit[0]),
+                    "y": int(surface_exit[1]),
+                    "z": 0,
+                    "destination_name": "street level",
+                    "travel_ticks": 1,
+                },
+            },
+        ) + ((branch_return,) if isinstance(branch_return, dict) else ()),
+    }
+
+
 def chunk_underground_site_plans(chunk, *, origin_x, origin_y, chunk_size):
     """Return deterministic underground site plans for a chunk."""
 
@@ -790,15 +1402,17 @@ def chunk_underground_site_plans(chunk, *, origin_x, origin_y, chunk_size):
         return ()
 
     occupied = _building_footprints(chunk, origin_x=origin_x, origin_y=origin_y, chunk_size=chunk_size)
-    candidates = []
+    accepted = []
+    used_sources = set()
     chunk_x = int(chunk.get("cx", 0))
     chunk_y = int(chunk.get("cy", 0))
+    building_rows = []
     for block in chunk.get("blocks", ()):
         bx = int(block.get("grid_x", 0))
         by = int(block.get("grid_y", 0))
         buildings = tuple(block.get("buildings", ()) or ())
         for building_index, building in enumerate(buildings):
-            if _text((building or {}).get("archetype")).lower() != "metro_exchange":
+            if not isinstance(building, dict):
                 continue
             layout = layout_chunk_building(
                 origin_x=origin_x,
@@ -812,21 +1426,127 @@ def chunk_underground_site_plans(chunk, *, origin_x, origin_y, chunk_size):
             )
             if not isinstance(layout, dict):
                 continue
-            plan = _metro_underpass_plan(
-                chunk,
-                building,
-                layout,
-                chunk_x=chunk_x,
-                chunk_y=chunk_y,
-                chunk_size=chunk_size,
-                origin_x=origin_x,
-                origin_y=origin_y,
-                occupied_footprints=occupied,
-            )
-            if plan is not None:
-                candidates.append(plan)
+            source_id = world_building_id(chunk_x, chunk_y, building)
+            archetype = _text((building or {}).get("archetype")).lower()
+            building_rows.append((source_id, archetype, building, layout))
 
-    if not candidates:
+    def append_plan(plan):
+        if not isinstance(plan, dict):
+            return False
+        if len(accepted) >= MAX_UNDERGROUND_PLANS_PER_CHUNK:
+            return False
+        source_id = _text(plan.get("source_building_id"))
+        if source_id and source_id in used_sources:
+            return False
+        if _plan_overlaps_existing(plan, accepted):
+            return False
+        accepted.append(plan)
+        if source_id:
+            used_sources.add(source_id)
+        return True
+
+    def ranked(kind, rows):
+        def rank(row):
+            source_id = str(row[0])
+            rng = random.Random(f"{chunk_x}:{chunk_y}:{kind}:{source_id}")
+            return (rng.random(), source_id)
+        return tuple(sorted(rows, key=rank))
+
+    metro_rows = tuple(
+        row for row in building_rows
+        if str(row[1]) == "metro_exchange"
+    )
+    for source_id, _archetype, building, layout in ranked(METRO_UNDERPASS_KIND, metro_rows):
+        plan = _metro_underpass_plan(
+            chunk,
+            building,
+            layout,
+            chunk_x=chunk_x,
+            chunk_y=chunk_y,
+            chunk_size=chunk_size,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            occupied_footprints=occupied,
+        )
+        if append_plan(plan):
+            break
+
+    utility_rows = tuple(
+        row for row in building_rows
+        if row[0] not in used_sources and str(row[1]) in UTILITY_CORRIDOR_ARCHETYPES
+    )
+    for source_id, _archetype, building, layout in ranked(UTILITY_CORRIDOR_KIND, utility_rows):
+        tunnel_z = -max(1, int((building or {}).get("basement_levels", 0) or 0))
+        plan = _generic_corridor_plan(
+            chunk,
+            building,
+            layout,
+            kind=UTILITY_CORRIDOR_KIND,
+            chunk_x=chunk_x,
+            chunk_y=chunk_y,
+            chunk_size=chunk_size,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            occupied_footprints=occupied,
+            tunnel_z=tunnel_z,
+        )
+        if append_plan(plan):
+            break
+
+    storm_rows = ()
+    if _is_drain_friendly_district(district):
+        storm_rows = tuple(
+            row for row in building_rows
+            if row[0] not in used_sources and str(row[1]) in STORM_DRAIN_ARCHETYPES
+        )
+        if not storm_rows:
+            storm_rows = tuple(row for row in building_rows if row[0] not in used_sources)
+    for source_id, _archetype, building, layout in ranked(STORM_DRAIN_KIND, storm_rows):
+        plan = _generic_corridor_plan(
+            chunk,
+            building,
+            layout,
+            kind=STORM_DRAIN_KIND,
+            chunk_x=chunk_x,
+            chunk_y=chunk_y,
+            chunk_size=chunk_size,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            occupied_footprints=occupied,
+            tunnel_z=-1,
+        )
+        if append_plan(plan):
+            break
+
+    basement_rows = tuple(
+        row for row in building_rows
+        if row[0] not in used_sources
+        and int((row[2] or {}).get("basement_levels", 0) or 0) > 0
+        and str(row[1]) != "metro_exchange"
+    )
+    for source_id, _archetype, building, layout in ranked(SERVICE_BASEMENT_KIND, basement_rows):
+        basement_levels = int((building or {}).get("basement_levels", 0) or 0)
+        plan = _generic_corridor_plan(
+            chunk,
+            building,
+            layout,
+            kind=SERVICE_BASEMENT_KIND,
+            chunk_x=chunk_x,
+            chunk_y=chunk_y,
+            chunk_size=chunk_size,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            occupied_footprints=occupied,
+            tunnel_z=-max(2, basement_levels + 1),
+        )
+        if append_plan(plan):
+            break
+
+    if not accepted:
         return ()
-    candidates.sort(key=lambda row: (_text(row.get("source_building_id")), _text(row.get("site_id"))))
-    return (candidates[0],)
+    accepted.sort(key=lambda row: (
+        0 if _text(row.get("kind")).lower() == METRO_UNDERPASS_KIND else 1,
+        _text(row.get("source_building_id")),
+        _text(row.get("site_id")),
+    ))
+    return tuple(accepted[:MAX_UNDERGROUND_PLANS_PER_CHUNK])

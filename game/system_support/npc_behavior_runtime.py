@@ -173,6 +173,11 @@ _STREET_BUY_CAREER_TOKENS = (
     "fixer",
     "street_doc",
 )
+_PUSHER_CAREER_TOKENS = (
+    "dealer",
+    "pusher",
+    "street_dealer",
+)
 _STREET_BUY_ARCHETYPES = frozenset({
     "pawn_shop",
     "junk_market",
@@ -256,7 +261,7 @@ _SHOPPING_QUIRK_PROFILES = {
     },
     "tools": {
         "tags": frozenset({"tool", "device", "communication"}),
-        "item_ids": frozenset({"pocket_notebook", "burner_phone"}),
+        "item_ids": frozenset({"pocket_notebook", "phone", "burner_phone"}),
         "label": "tools",
     },
     "medical_prepper": {
@@ -275,6 +280,32 @@ _SHOPPING_QUIRK_PROFILES = {
         "label": "weapons",
     },
 }
+
+
+def _seed_pusher_vendor_preferences(behaviors, preferences, *, seed_token="", role="", career="", archetypes=frozenset()):
+    career_key = _behavior_token(career)
+    role_key = _behavior_token(role)
+    explicit_pusher = any(token in career_key for token in _PUSHER_CAREER_TOKENS)
+    rare_context = bool(archetypes & (_NIGHTLIFE_ARCHETYPES | frozenset({"backroom_market", "flophouse"})))
+    rare_roll = 1.0
+    if rare_context and role_key not in _AUTHORITY_ROLES:
+        rng = random.Random(f"{seed_token}:street-pusher:{role_key}:{career_key}:{','.join(sorted(archetypes))}")
+        rare_roll = rng.random()
+    if not explicit_pusher and not (rare_context and rare_roll < 0.075):
+        return
+    _seed_behavior(behaviors, BEHAVIOR_BUY_DESIRED_DRUG, 0.76 if explicit_pusher else 0.64)
+    _seed_behavior(behaviors, BEHAVIOR_INITIATE_DIALOGUE, 0.34)
+    _seed_behavior(behaviors, BEHAVIOR_AVOID_AUTHORITIES, 0.54)
+    _seed_behavior(behaviors, BEHAVIOR_APPRAISE_STREET_GOODS, 0.44)
+    preferences.setdefault("street_vendor_kind", "drug_pusher")
+    preferences.setdefault("street_vendor_modes", ("buy",))
+    preferences.setdefault("street_stock_theme", "drugs")
+    preferences.setdefault("street_stock_count", 3 if explicit_pusher else 2)
+    preferences.setdefault("heat_tolerance", "low")
+    preferences.setdefault("authority_avoid_radius", 9)
+    preferences.setdefault("initiate_dialogue_cooldown", 300)
+
+
 _SHOPPING_QUIRK_ORDER = tuple(sorted(_SHOPPING_QUIRK_PROFILES))
 _STREET_ITEM_VALUE = {
     "weapon": 46,
@@ -1018,6 +1049,15 @@ def behavior_profile_for_spawn(*, role="", career="", workplace_archetype="", ho
         _seed_behavior(behaviors, BEHAVIOR_AVOID_AUTHORITIES, 0.24)
         preferences.setdefault("initiate_dialogue_cooldown", 240)
         preferences.setdefault("authority_avoid_radius", 8)
+
+    _seed_pusher_vendor_preferences(
+        behaviors,
+        preferences,
+        seed_token=seed_token,
+        role=role_key,
+        career=career_key,
+        archetypes=archetypes,
+    )
 
     _seed_shopping_preferences(
         behaviors,

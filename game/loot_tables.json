@@ -574,7 +574,7 @@
       "weight": 7
     },
     {
-      "item_id": "burner_phone",
+      "item_id": "phone",
       "weight": 8
     },
     {
@@ -914,6 +914,14 @@
       "weight": 2
     },
     {
+      "item_id": "smoke_grenade",
+      "weight": 5
+    },
+    {
+      "item_id": "tear_gas_canister",
+      "weight": 4
+    },
+    {
       "item_id": "padded_jacket",
       "weight": 10
     },
@@ -1020,6 +1028,10 @@
     {
       "item_id": "molotov_cocktail",
       "weight": 2
+    },
+    {
+      "item_id": "toxic_aerosol_canister",
+      "weight": 1
     }
   ],
   "archetype:outfitter": [
@@ -1218,6 +1230,14 @@
       "weight": 3
     },
     {
+      "item_id": "smoke_grenade",
+      "weight": 6
+    },
+    {
+      "item_id": "tear_gas_canister",
+      "weight": 4
+    },
+    {
       "item_id": "padded_jacket",
       "weight": 10
     },
@@ -1344,7 +1364,7 @@
       "weight": 10
     },
     {
-      "item_id": "burner_phone",
+      "item_id": "phone",
       "weight": 8
     },
     {
@@ -1664,7 +1684,7 @@
       "weight": 8
     },
     {
-      "item_id": "burner_phone",
+      "item_id": "phone",
       "weight": 4
     },
     {
@@ -2784,6 +2804,26 @@
     {
       "item_id": "molotov_cocktail",
       "weight": 3
+    },
+    {
+      "item_id": "smoke_grenade",
+      "weight": 4
+    },
+    {
+      "item_id": "tear_gas_canister",
+      "weight": 3
+    },
+    {
+      "item_id": "toxic_aerosol_canister",
+      "weight": 2
+    },
+    {
+      "item_id": "dissociative_aerosol",
+      "weight": 1
+    },
+    {
+      "item_id": "hallucinogen_aerosol",
+      "weight": 1
     },
     {
       "item_id": "cutproof_apron",
