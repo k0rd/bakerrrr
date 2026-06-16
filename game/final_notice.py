@@ -58,14 +58,34 @@ def _wrap_notice_lines(lines, width):
     return wrapped
 
 
-def _draw_modal(view, title, lines, *, scroll=0):
-    width, height = _view_size(view)
-    panel_w = max(32, min(width - 4, 82))
-    panel_h = max(9, min(height - 2, height))
+def _notice_modal_geometry(width, height):
+    width = max(24, int(width))
+    height = max(10, int(height))
+    panel_w = max(32, min(width - 4, int(round(width * 0.75))))
+    panel_h = max(9, min(height - 2, int(round(height * 0.75))))
     left = max(0, (width - panel_w) // 2)
     top = max(0, (height - panel_h) // 2)
     body_w = max(20, panel_w - 4)
     body_h = max(1, panel_h - 5)
+    return {
+        "panel_w": panel_w,
+        "panel_h": panel_h,
+        "left": left,
+        "top": top,
+        "body_w": body_w,
+        "body_h": body_h,
+    }
+
+
+def _draw_modal(view, title, lines, *, scroll=0):
+    width, height = _view_size(view)
+    geometry = _notice_modal_geometry(width, height)
+    panel_w = geometry["panel_w"]
+    panel_h = geometry["panel_h"]
+    left = geometry["left"]
+    top = geometry["top"]
+    body_w = geometry["body_w"]
+    body_h = geometry["body_h"]
     wrapped = _wrap_notice_lines(lines, body_w)
     max_scroll = max(0, len(wrapped) - body_h)
     scroll = max(0, min(int(scroll), max_scroll))

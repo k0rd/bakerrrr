@@ -5281,6 +5281,12 @@ class EventLogSystem(System):
         if reason == "water_route_required":
             self.sim.log.add("You need a usable shore, dock, or waterway access point for that boat route.")
             return
+        if reason == "water_access_required":
+            self.sim.log.add("That boat needs usable water before you can board it.")
+            return
+        if reason == "shore_exit_required":
+            self.sim.log.add("Bring the boat alongside a shore or dock before getting out.")
+            return
         if reason == "water_map_unavailable":
             self.sim.log.add("Boats stay in local water for now.")
             return

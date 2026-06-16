@@ -96,6 +96,61 @@ def _closed_door_move_block_reason(sim, eid, x, y, z):
     return "closed_door"
 
 
+def _closed_door_is_plannable_transition(sim, eid, from_x, from_y, to_x, to_y, z):
+    state = _operable_door_state_at(sim, to_x, to_y, z)
+    if state is None or bool(state.get("open", False)):
+        return False
+    if _actor_is_animal_or_wildlife(sim, eid):
+        return False
+    positions = sim.ecs.get(Position)
+    actor_pos = positions.get(eid)
+    if actor_pos is None:
+        return False
+
+    if eid != getattr(sim, "player_eid", None):
+        ai = sim.ecs.get(AI).get(eid) if eid is not None else None
+        if ai is not None:
+            fire_cell = fire_cell_state(sim, to_x, to_y, z)
+            if isinstance(fire_cell, dict) and int(fire_cell.get("fire_intensity", 0) or 0) > 0:
+                return False
+
+    prop = _door_property_at(sim, to_x, to_y, z, state=state)
+    if prop:
+        ingress = _property_ingress_context(
+            prop,
+            from_x=from_x,
+            from_y=from_y,
+            from_z=z,
+            to_x=to_x,
+            to_y=to_y,
+            to_z=z,
+        )
+        actor_prop = _property_covering(sim, int(actor_pos.x), int(actor_pos.y), int(actor_pos.z))
+        actor_inside_same_prop = bool(
+            isinstance(actor_prop, dict)
+            and str(actor_prop.get("id", "") or "").strip() == str(prop.get("id", "") or "").strip()
+        )
+        if ingress and ingress.from_inside and actor_inside_same_prop:
+            return True
+
+        access = _evaluate_property_access(
+            sim,
+            eid,
+            prop,
+            x=to_x,
+            y=to_y,
+            z=z,
+            breach_severity=float(getattr(ingress, "breach_severity", 0.0) or 0.0),
+        )
+        if access.permitted:
+            return True
+
+        lock_state = property_lock_state(prop)
+        return not bool(lock_state.get("locked"))
+
+    return not bool(state.get("locked", False))
+
+
 def _movement_allows_auto_open(sim, eid, *, reason="move"):
     reason_key = str(reason or "").strip().lower()
     if reason_key in {"player_move", "vehicle_move", "vehicle_momentum", "npc_vehicle_move"}:
@@ -158,7 +213,11 @@ def _is_traversable_for(sim, moving_eid, x, y, z):
 def _can_step_transition_for(sim, moving_eid, from_x, from_y, to_x, to_y, z):
     traversable, reason = _is_traversable_for(sim, moving_eid, to_x, to_y, z)
     if not traversable:
-        return False, reason
+        if not (
+            str(reason or "").strip().lower() == "blocked_tile"
+            and _closed_door_is_plannable_transition(sim, moving_eid, from_x, from_y, to_x, to_y, z)
+        ):
+            return False, reason
     animal_transition_reason = _animal_npc_cannot_cross_doorway(
         sim,
         moving_eid,

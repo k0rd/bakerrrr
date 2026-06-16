@@ -38,7 +38,7 @@ content validation passed: 9 file(s) checked, 0 warning(s).
 [ok] test_city_large_parcel_layouts_expand_without_overlap
 [ok] test_vehicle_profiles_are_seed_stable_but_varied
 content regression checks passed.
-[ok]  content_regression (7.24s)
+[ok]  content_regression (7.21s)
 [run] player_guide_regression
       /usr/bin/python scripts/player_guide_regression.py
 player_guide_regression: ok (6 tests)
@@ -84,11 +84,11 @@ crash_report_regression: ok (1 tests)
 [ok] test_identified_final_operation_target_survives_unload_and_save_resume
 [ok] test_opportunity_tracked_target_survives_unload_and_save_resume
 save/load regression checks passed.
-[ok]  save_load_regression (24.31s)
+[ok]  save_load_regression (24.39s)
 [run] incident_knowledge_regression
       /usr/bin/python scripts/incident_knowledge_regression.py
 incident_knowledge_regression: ok
-[ok]  incident_knowledge_regression (0.17s)
+[ok]  incident_knowledge_regression (0.16s)
 [run] lighting_regression
       /usr/bin/python scripts/lighting_regression.py
 [ok] test_phase4_notice_ranges
@@ -102,7 +102,7 @@ incident_knowledge_regression: ok
 [ok] test_phase2_explored_tiles_hold_last_seen_feature_state
 [ok] test_power_cut_suppresses_night_aperture_glow_immediately
 lighting regression checks passed.
-[ok]  lighting_regression (0.35s)
+[ok]  lighting_regression (0.36s)
 [run] vehicle_regression
       /usr/bin/python scripts/vehicle_regression.py
 [ok] test_zoom_on_foot_opens_view_only_overworld_map
@@ -124,6 +124,9 @@ lighting regression checks passed.
 [ok] test_multitool_can_support_exceptional_ignition_override
 [ok] test_hotwire_fumble_can_break_last_durability_tool
 [ok] test_interact_enters_vehicle_and_stays_in_local_mode
+[ok] test_interact_boards_water_vehicle_without_dragging_boat_ashore
+[ok] test_water_vehicle_exit_keeps_boat_on_water_and_places_player_on_shore
+[ok] test_water_vehicle_exit_blocks_when_no_shore_is_nearby
 [ok] test_local_vehicle_move_syncs_property_and_preserves_fuel
 [ok] test_local_vehicle_movement_blocks_property_tiles
 [ok] test_local_vehicle_movement_does_not_auto_open_closed_doors
@@ -143,6 +146,9 @@ lighting regression checks passed.
 [ok] test_npc_route_driver_forced_miss_can_crash
 [ok] test_vehicle_collision_damages_target_and_emits_offense
 [ok] test_water_vehicle_moves_on_water_and_blocks_land
+[ok] test_water_vehicle_tap_cruise_continues_without_held_key
+[ok] test_water_vehicle_brake_tap_stops_cruise
+[ok] test_water_vehicle_tap_cruise_stops_at_land_block
 [ok] test_water_vehicle_zoom_out_opens_view_only_map_even_at_water_access
 [ok] test_local_vehicle_zoom_out_requires_route_tile
 [ok] test_local_vehicle_enters_quick_travel_by_driving_onto_ramp
@@ -174,7 +180,7 @@ lighting regression checks passed.
 [ok] test_overworld_cursor_reveals_adjacent_chunk_identity_but_hides_distant_chunk
 [ok] test_overworld_scan_reveals_adjacent_neighbors
 vehicle regression checks passed.
-[ok]  vehicle_regression (4.53s)
+[ok]  vehicle_regression (4.65s)
 [run] organization_regression
       /usr/bin/python scripts/organization_regression.py
 [ok] test_property_organization_is_created_and_surfaced

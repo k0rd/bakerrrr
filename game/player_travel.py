@@ -608,13 +608,23 @@ class PlayerTravelRuntime:
                 ))
                 return False
 
+        medium = vehicle_medium_for_property(vehicle_prop)
+        board_tile = (int(pos.x), int(pos.y), int(pos.z))
+        if medium == "water":
+            board_tile = self._best_water_vehicle_board_tile(vehicle_prop, pos)
+            if board_tile is None:
+                self._emit_vehicle_blocked(eid, vehicle_prop, reason="water_access_required")
+                return False
+
         state.set_active_vehicle(vehicle_id, tick=self.sim.tick)
         state.set_in_vehicle(True, tick=self.sim.tick)
-        state.medium = vehicle_medium_for_property(vehicle_prop)
+        state.medium = medium
         set_vehicle_speed(state, 0, tick=self.sim.tick)
 
-        self._sync_vehicle_property_position(vehicle_prop, pos.x, pos.y, pos.z)
-        self.sim.city_anchor_by_chunk[self.sim.chunk_coords(pos.x, pos.y)] = (pos.x, pos.y, pos.z)
+        if medium == "water" and board_tile != (int(pos.x), int(pos.y), int(pos.z)):
+            self._teleport_entity(eid, pos, board_tile[0], board_tile[1], board_tile[2], reason="enter_vehicle")
+        self._sync_vehicle_property_position(vehicle_prop, board_tile[0], board_tile[1], board_tile[2])
+        self.sim.city_anchor_by_chunk[self.sim.chunk_coords(board_tile[0], board_tile[1])] = board_tile
 
         fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
         self.sim.emit(Event(
@@ -632,23 +642,49 @@ class PlayerTravelRuntime:
     def _exit_vehicle(self, eid, pos):
         state = self._vehicle_state_for(eid)
         vehicle_prop = self._active_vehicle_property(eid)
+        vehicle_medium = vehicle_medium_for_property(vehicle_prop) if vehicle_prop else "land"
+        if vehicle_prop and vehicle_medium == "water":
+            park_x, park_y, park_z = self._best_vehicle_exit_vehicle_tile(
+                pos.x,
+                pos.y,
+                pos.z,
+                vehicle_prop=vehicle_prop,
+            )
+            exit_tile = self._best_water_vehicle_exit_player_tile(park_x, park_y, park_z)
+            if exit_tile is None:
+                self._emit_vehicle_blocked(eid, vehicle_prop, reason="shore_exit_required")
+                return False
+        else:
+            park_x = int(pos.x)
+            park_y = int(pos.y)
+            park_z = int(pos.z)
+            if vehicle_prop:
+                park_x, park_y, park_z = self._best_vehicle_exit_vehicle_tile(
+                    pos.x,
+                    pos.y,
+                    pos.z,
+                    vehicle_prop=vehicle_prop,
+                )
+            exit_tile = self._best_vehicle_exit_player_tile(
+                park_x,
+                park_y,
+                park_z,
+                vehicle_prop=vehicle_prop,
+            )
+
         self._set_zoom_mode(eid=eid, pos=pos, mode="city")
         if state:
             state.set_in_vehicle(False, tick=self.sim.tick)
             set_vehicle_speed(state, 0, tick=self.sim.tick)
 
-        park_x = int(pos.x)
-        park_y = int(pos.y)
-        park_z = int(pos.z)
         if vehicle_prop:
-            park_x, park_y, park_z = self._best_vehicle_exit_vehicle_tile(pos.x, pos.y, pos.z)
             self._sync_vehicle_property_position(vehicle_prop, park_x, park_y, park_z)
             fuel, fuel_capacity = _vehicle_fuel_values(vehicle_prop)
         else:
             fuel = 0
             fuel_capacity = 0
 
-        exit_x, exit_y, exit_z = self._best_vehicle_exit_player_tile(park_x, park_y, park_z)
+        exit_x, exit_y, exit_z = exit_tile
         if (exit_x, exit_y, exit_z) != (int(pos.x), int(pos.y), int(pos.z)):
             self._teleport_entity(eid, pos, exit_x, exit_y, exit_z, reason="exit_vehicle")
 
@@ -673,7 +709,92 @@ class PlayerTravelRuntime:
                         continue
                     yield int(x + dx), int(y + dy), int(z), chebyshev, abs(dx) + abs(dy)
 
-    def _best_vehicle_exit_vehicle_tile(self, x, y, z=0):
+    def _water_vehicle_tile_usable(self, vehicle_prop, x, y, z=0):
+        if self.sim.detail_for_xy(int(x), int(y)) == "unloaded":
+            return False
+        if not self.sim.tilemap.in_bounds(int(x), int(y)):
+            return False
+        tile = self.sim.tilemap.tile_at(int(x), int(y), int(z))
+        if not tile or str(getattr(tile, "glyph", "") or "")[:1] != "~":
+            return False
+        if self.sim.structure_at(int(x), int(y), int(z)) is not None:
+            return False
+        active_vehicle_id = str((vehicle_prop or {}).get("id", "")).strip()
+        covering = self.sim.property_covering(int(x), int(y), int(z))
+        if (
+            isinstance(covering, dict)
+            and str(covering.get("id", "")).strip() != active_vehicle_id
+        ):
+            return False
+        return True
+
+    def _best_water_vehicle_tile_near(self, vehicle_prop, x, y, z=0, *, max_radius=3):
+        for tx, ty, tz, _chebyshev, _manhattan in self._vehicle_exit_tile_candidates(
+            x,
+            y,
+            z,
+            max_radius=max_radius,
+        ):
+            if self._water_vehicle_tile_usable(vehicle_prop, tx, ty, tz):
+                return tx, ty, tz
+        return None
+
+    def _best_water_vehicle_board_tile(self, vehicle_prop, pos):
+        seeds = (
+            (
+                int((vehicle_prop or {}).get("x", getattr(pos, "x", 0)) or 0),
+                int((vehicle_prop or {}).get("y", getattr(pos, "y", 0)) or 0),
+                int((vehicle_prop or {}).get("z", getattr(pos, "z", 0)) or 0),
+            ),
+            (int(pos.x), int(pos.y), int(pos.z)),
+        )
+        seen = set()
+        for sx, sy, sz in seeds:
+            key = (sx, sy, sz)
+            if key in seen:
+                continue
+            seen.add(key)
+            tile = self._best_water_vehicle_tile_near(vehicle_prop, sx, sy, sz, max_radius=3)
+            if tile is not None:
+                return tile
+        return None
+
+    def _best_water_vehicle_exit_player_tile(self, vehicle_x, vehicle_y, vehicle_z=0):
+        best = None
+        for tx, ty, tz, chebyshev, manhattan in self._vehicle_exit_tile_candidates(
+            vehicle_x,
+            vehicle_y,
+            vehicle_z,
+            max_radius=2,
+        ):
+            if chebyshev == 0:
+                continue
+            tile = self.sim.tilemap.tile_at(tx, ty, tz)
+            if not tile or not tile.walkable:
+                continue
+            inside = self.sim.structure_at(tx, ty, tz) is not None
+            score = (
+                1 if inside else 0,
+                chebyshev,
+                manhattan,
+                abs(ty - int(vehicle_y)),
+                abs(tx - int(vehicle_x)),
+                ty,
+                tx,
+            )
+            if best is None or score < best[0]:
+                best = (score, (tx, ty, tz))
+        if best:
+            return best[1]
+        return None
+
+    def _best_vehicle_exit_vehicle_tile(self, x, y, z=0, *, vehicle_prop=None):
+        if vehicle_prop and vehicle_medium_for_property(vehicle_prop) == "water":
+            tile = self._best_water_vehicle_tile_near(vehicle_prop, x, y, z, max_radius=3)
+            if tile is not None:
+                return tile
+            return int(x), int(y), int(z)
+
         best = None
         for tx, ty, tz, chebyshev, manhattan in self._vehicle_exit_tile_candidates(x, y, z, max_radius=8):
             tile = self.sim.tilemap.tile_at(tx, ty, tz)
@@ -691,7 +812,14 @@ class PlayerTravelRuntime:
             return best[1]
         return int(x), int(y), int(z)
 
-    def _best_vehicle_exit_player_tile(self, vehicle_x, vehicle_y, vehicle_z=0):
+    def _best_vehicle_exit_player_tile(self, vehicle_x, vehicle_y, vehicle_z=0, *, vehicle_prop=None):
+        if vehicle_prop and vehicle_medium_for_property(vehicle_prop) == "water":
+            return self._best_water_vehicle_exit_player_tile(vehicle_x, vehicle_y, vehicle_z) or (
+                int(vehicle_x),
+                int(vehicle_y),
+                int(vehicle_z),
+            )
+
         preferred = (
             (0, 1),
             (1, 0),
