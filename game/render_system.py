@@ -3203,10 +3203,12 @@ class RenderSystem(System):
         )
 
         if inventory_ui.get("open"):
-            panel_w = min(max(36, screen_w - 4), screen_w)
+            panel_w = _modal_panel_width(screen_w, fraction=0.75, min_width=48)
             panel_x = max(0, (screen_w - panel_w) // 2)
-            panel_y = 0
-            panel_h = max(8, min(map_h, map_h - 1))
+            panel_h = max(8, min(map_h, int(round(map_h * 0.75))))
+            panel_y = max(0, (map_h - panel_h) // 2)
+            body_w = max(8, panel_w - 4)
+            row_w = max(8, panel_w - 2)
 
             def _clip(text, width):
                 if width <= 0:
@@ -3264,7 +3266,7 @@ class RenderSystem(System):
                 selected_index = 0
 
             header = f" {panel_title} "
-            self.view.draw_text(panel_x + 2, panel_y, _clip(header, panel_w - 4))
+            self.view.draw_text(panel_x + 2, panel_y, _clip(header, body_w))
 
             if panel_kind == "container":
                 container_count = 0
@@ -3312,7 +3314,7 @@ class RenderSystem(System):
             else:
                 cap = inv.capacity if inv else 0
                 slot_line = f"Slots {inv.slot_count(entries=entries) if inv else 0}/{cap}"
-            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(slot_line, panel_w - 4))
+            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(slot_line, body_w))
 
             list_y = panel_y + 2
             list_h = max(1, panel_h - 6)
@@ -3392,13 +3394,13 @@ class RenderSystem(System):
                 if _inventory_entry_is_key_item(entry, item_def):
                     row_color = _INVENTORY_KEY_ITEM_COLOR
                 label = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} {name} x{entry['quantity']}{ammo_suffix}{worn_suffix}{storage_suffix}"
-                self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2), color=row_color)
+                self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, row_w), color=row_color)
 
             if not entries:
                 empty_label = "(empty)"
                 if panel_kind == "container":
                     empty_label = f"({container_label.lower()} empty)" if container_view == "container" else "(pack empty)"
-                self.view.draw_text(panel_x + 2, list_y, _clip(empty_label, panel_w - 4))
+                self.view.draw_text(panel_x + 2, list_y, _clip(empty_label, body_w))
 
             inspect_text = inventory_ui.get("inspect_text", "")
             if panel_kind == "container" and note_text and not inspect_text:
@@ -3438,8 +3440,8 @@ class RenderSystem(System):
             self._draw_display_line(
                 panel_x + 2,
                 panel_y + panel_h - 3,
-                _clip_display_line(inspect_text, panel_w - 4),
-                panel_w - 4,
+                _clip_display_line(inspect_text, body_w),
+                body_w,
             )
             if panel_kind == "container":
                 hint = (
@@ -3449,12 +3451,14 @@ class RenderSystem(System):
             else:
                 hint = "U use/equip/stow  R drop  E inspect  O ops  Y notebooks  L log  D debug  I close"
             hint = release_control_text(hint, self.sim)
-            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, panel_w - 4))
+            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, body_w))
         elif trade_ui.get("open"):
-            panel_w = min(max(52, screen_w - 4), screen_w)
+            panel_w = _modal_panel_width(screen_w, fraction=0.75, min_width=52)
             panel_x = max(0, (screen_w - panel_w) // 2)
-            panel_y = 0
-            panel_h = max(8, min(map_h, map_h - 1))
+            panel_h = max(8, min(map_h, int(round(map_h * 0.75))))
+            panel_y = max(0, (map_h - panel_h) // 2)
+            body_w = max(8, panel_w - 4)
+            row_w = max(8, panel_w - 2)
 
             def _clip(text, width):
                 if width <= 0:
@@ -3494,8 +3498,8 @@ class RenderSystem(System):
             store_line = store_name if not panel_bits else f"{store_name} [{' | '.join(panel_bits)}]"
 
             header = f" Trade {mode_label} "
-            self.view.draw_text(panel_x + 2, panel_y, _clip(header, panel_w - 4))
-            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(store_line, panel_w - 4))
+            self.view.draw_text(panel_x + 2, panel_y, _clip(header, body_w))
+            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(store_line, body_w))
 
             list_y = panel_y + 2
             list_h = max(1, panel_h - 6)
@@ -3538,12 +3542,12 @@ class RenderSystem(System):
                         label = f"{marker}{absolute + 1:02d} {glyph} {item_name} {price}c x{qty} {listed}/{interest_marker}"
                 row_color = row.get("row_color")
                 if row_color:
-                    self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2), color=row_color)
+                    self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, row_w), color=row_color)
                 else:
-                    self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, panel_w - 2))
+                    self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, row_w))
 
             if not rows:
-                self.view.draw_text(panel_x + 2, list_y, _clip("(no offers)", panel_w - 4))
+                self.view.draw_text(panel_x + 2, list_y, _clip("(no offers)", body_w))
 
             inspect_text = trade_ui.get("inspect_text", "")
             if rows and not inspect_text:
@@ -3606,12 +3610,12 @@ class RenderSystem(System):
             self._draw_display_line(
                 panel_x + 2,
                 panel_y + panel_h - 3,
-                _clip_display_line(inspect_text, panel_w - 4),
-                panel_w - 4,
+                _clip_display_line(inspect_text, body_w),
+                body_w,
             )
             hint = "E trade  B buy  S sell  X inspect  O ops  Y notebooks  L log  D debug  M/Esc close"
             hint = release_control_text(hint, self.sim)
-            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, panel_w - 4))
+            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, body_w))
         elif casino_ui.get("open"):
             panel_w = min(max(78, map_w - 4), map_w)
             panel_w = max(42, panel_w)

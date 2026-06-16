@@ -276,8 +276,8 @@ def _resolve_ui_backend(argv=None):
 
 def _resolve_tutorial_flag(argv=None, config=None):
     args = list(sys.argv[1:] if argv is None else argv)
-    explicit = "BAKERRRR_TUTORIAL" in os.environ
-    tutorial = _env_flag("BAKERRRR_TUTORIAL", False) if explicit else False
+    explicit = False
+    tutorial = False
     for raw in args:
         value = str(raw).strip().lower()
         if value == "--tutorial":
@@ -286,8 +286,6 @@ def _resolve_tutorial_flag(argv=None, config=None):
         elif value == "--no-tutorial":
             tutorial = False
             explicit = True
-    if config is None:
-        config = load_player_config()
     return tutorial_requested_from_options(
         tutorial_flag=tutorial,
         config=config,

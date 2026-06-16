@@ -6,19 +6,19 @@ You need Python, plus the pygame and curses libraries available in your Python e
 
 ## First Run
 
-Start with the tutorial if you are new:
+For current playtests, start with a regular run:
+
+```bash
+python3 main.py --ui pygame
+```
+
+The disposable tutorial is opt-in while its pacing and wording are being tuned:
 
 ```bash
 python3 main.py --tutorial --ui pygame
 ```
 
 This opens the pygame frontend and starts a disposable tutorial run. It still asks for your character name and identity, because those are normal game surfaces. When you leave that tutorial, it does not resume or write a character save.
-
-On a fresh player config, BAKERRRR may start the tutorial automatically once. If you want to skip that first pass:
-
-```bash
-python3 main.py --no-tutorial --ui pygame
-```
 
 ## Regular Launch
 

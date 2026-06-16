@@ -4,13 +4,13 @@ Welcome in.
 
 BAKERRRR is a terminal-native systemic sandbox roguelike prototype. That means the game will often answer you through the street, the log, the HUD footer, and the little menus that open when you look closer.
 
-If this is your first run, start with the tutorial:
+For current playtests, start with a regular roguelike run and lean on the in-game help:
 
 ```bash
-python3 main.py --tutorial --ui pygame
+python3 main.py --ui pygame
 ```
 
-The tutorial asks for the normal character setup, then walks you through the live controls in a disposable run. It does not write a character save.
+The tutorial is still available as an explicit disposable test path with `python3 main.py --tutorial --ui pygame`, but ordinary startup will not open it automatically.
 
 The best habit is simple: press `?` whenever you feel lost. The in-game help panel is always the freshest control reference, and the HUD footer changes when you open inventory, dialogue, the map, notebooks, and other panels.
 

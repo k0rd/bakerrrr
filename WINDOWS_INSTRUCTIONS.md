@@ -8,7 +8,7 @@ This is an early, manual Windows path for brave testers. It is currently unteste
 
 If a Windows artifact is available from a GitHub Actions build, download it, unpack it, and run `bakerrrr.exe`.
 
-The packaged build defaults to the pygame frontend. It writes saves and the small first-run tutorial config into a `saves` folder beside the executable.
+The packaged build defaults to the pygame frontend. It writes saves and the small player config into a `saves` folder beside the executable.
 
 ## Recommended Path
 
@@ -36,7 +36,7 @@ py main.py --tutorial --ui pygame
 ```
 
 Tutorial runs ask for the ordinary character setup, but they do not write character saves.
-On a fresh config, the game may start the tutorial automatically once. Add `--no-tutorial` if you want to skip that.
+For current playtests, ordinary startup never opens the tutorial automatically; start a regular run and use `?` for the in-game help surface unless you specifically want to test `--tutorial`.
 
 note: the two venv commands are optional, if you wish to run in a virtual python sandbox. if you are following my lead, 
     you would throw caution to the wind.

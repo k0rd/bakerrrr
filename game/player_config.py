@@ -66,14 +66,11 @@ def mark_tutorial_run_seen(*, completed=False, run_end=None, config_path=None):
 
 
 def tutorial_requested_from_options(*, tutorial_flag=False, config=None, explicit=False):
-    """Read startup tutorial intent from flags/env or the small player config."""
-    if isinstance(config, dict) and "tutorial_requested" in config:
-        return bool(config.get("tutorial_requested"))
-    if explicit:
-        return bool(tutorial_flag)
-    if isinstance(config, dict):
-        if bool(config.get("tutorial_seen")) or bool(config.get("tutorial_completed")):
-            return False
-        if "tutorial_seen" in config or "tutorial_completed" in config:
-            return True
+    """Read startup tutorial intent from the explicit startup flag.
+
+    The player config still records tutorial seen/completed outcomes, but it no
+    longer auto-starts the tutorial on fresh installs while onboarding is being
+    playtested.
+    """
+    del config, explicit
     return bool(tutorial_flag)

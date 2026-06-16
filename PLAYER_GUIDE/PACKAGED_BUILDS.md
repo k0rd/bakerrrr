@@ -18,7 +18,13 @@ Source launch still works too:
 python3 main.py --ui pygame
 ```
 
-For a first pass, the tutorial is the kindest entrance:
+For current playtests, start with a regular run and use `?` for the in-game help surface:
+
+```bash
+python3 main.py --ui pygame
+```
+
+The disposable tutorial is available only when explicitly requested:
 
 ```bash
 python3 main.py --tutorial --ui pygame
