@@ -484,6 +484,12 @@ from game.ui_text_runtime import (
     _wrap_text_lines,
 )
 
+
+def _hud_line_is_read(line):
+    text = _line_text(line).strip().lower()
+    return text.startswith("read:") or text.startswith("read ")
+
+
 _HELP_SECTION_COLORS = (
     "human_slate",
     "human_olive",
@@ -1111,6 +1117,9 @@ class RenderSystem(System):
             for line_index, signature in enumerate(signatures):
                 key = (section_id, int(line_index))
                 active_line_keys.add(key)
+                if _hud_line_is_read(lines[line_index]):
+                    self._hud_flash_ranges_by_line.pop(key, None)
+                    continue
                 if prior is None:
                     continue
                 if line_index >= len(prior) or prior[line_index] != signature:
@@ -1357,7 +1366,7 @@ class RenderSystem(System):
         for line in (
             "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with space or 5.",
             "Observe: / talks, ' physically interacts, . uses the service on your tile, ; locks or unlocks a nearby door, x opens the look cursor, T takes a tactical read, and X opens the map.",
-            "Vehicles: ' enters a vehicle. Local driving uses forward to accelerate, left/right to turn, back to brake or reverse from rest. Land vehicles use X for map travel from a road or trail; boats stay local. Press t to get out.",
+            "Vehicles: ' enters a vehicle. Local driving uses forward to accelerate, left/right to turn, back to brake or reverse from rest. X opens a view-only map; drive onto an entrance ramp for quick travel. Boats stay local. Press t to get out.",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
             "Conversation read: + marks newly surfaced topics when your character notices them; at higher Conversation, its color hints safe, neutral, or dangerous.",
             "Ingress: Shift+J door breach, Shift+W window entry, Shift+K wall breach.",
@@ -1384,10 +1393,10 @@ class RenderSystem(System):
             _append_help_section(lines, character_line)
         if zoom_mode == "overworld":
             if view_only:
-                _append_help_section(lines, "Map view: move to browse chunks, Enter or x inspect the selected chunk, and t return on-foot.")
-                _append_help_section(lines, "Map tools: X opens the map from on foot, M adds a marker here, l lists markers, N jumps to the nearest marker, O ops, Y notebooks, L log.")
+                _append_help_section(lines, "Map view: move to browse chunks, Enter or x inspect the selected chunk, and t returns to local view.")
+                _append_help_section(lines, "Map tools: X opens the map from local mode, M adds a marker here, l lists markers, N jumps to the nearest marker, O ops, Y notebooks, L log.")
             else:
-                _append_help_section(lines, "In-vehicle map: move travels chunks, G drives to the last marker, M adds a marker, l lists markers, N jumps to the nearest marker, and t returns to local driving.")
+                _append_help_section(lines, "Quick travel: normal 8-way movement travels chunks, G drives to the last marker, M adds a marker, l lists markers, N jumps to the nearest marker, and t returns to local driving.")
             _append_help_section(lines, "Overworld POIs: stronger non-city chunks can replace the center glyph with a site initial.")
             _append_help_section(lines, "Overworld centers: each chunk keeps its district or terrain icon; bright means loaded and dim means distant.")
             _append_help_section(lines, "Overworld regions: soft boundary lines separate major outside regions.")
@@ -1464,8 +1473,7 @@ class RenderSystem(System):
         if lower.startswith("aim "):
             return self._hud_token_line(text, label="Aim", color="projectile")
         if lower.startswith("read:") or lower.startswith("read "):
-            label = "Read:" if lower.startswith("read:") else "Read"
-            return self._hud_token_line(text, label=label, color="objective")
+            return text
         if lower.startswith("tactical:") or lower.startswith("tactical "):
             label = "Tactical:" if lower.startswith("tactical:") else "Tactical"
             return self._hud_token_line(text, label=label, color="projectile")

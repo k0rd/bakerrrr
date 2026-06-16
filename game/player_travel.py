@@ -14,6 +14,7 @@ from game.property_runtime import (
     vehicle_label as _vehicle_label,
     vehicle_profile_from_property as _vehicle_profile_from_property,
 )
+from game.quick_travel_ramps import quick_travel_ramp_at
 from game.service_runtime import (
     _overworld_discovery_profile,
     _overworld_identity_profile,
@@ -202,6 +203,9 @@ class PlayerTravelRuntime:
             medium=medium,
         )
 
+    def _quick_travel_ramp_at(self, x, y, z=0):
+        return quick_travel_ramp_at(self.sim, x, y, z)
+
     def _find_route_access_near(self, x, y, z=0, radius=10, *, ignore_property_id=None):
         if self._local_route_accessible_at(x, y, z, ignore_property_id=ignore_property_id):
             return int(x), int(y), int(z)
@@ -249,13 +253,22 @@ class PlayerTravelRuntime:
         data.update(payload)
         self.sim.emit(Event(event_type, **data))
 
-    def _can_enter_overworld_from_local_vehicle(self, eid, pos):
+    def _can_enter_quick_travel_from_local_vehicle(self, eid, pos):
         state = self._vehicle_state_for(eid)
         vehicle_prop = self._active_vehicle_property(eid)
         if not state or not state.in_vehicle or not vehicle_prop:
-            return True
+            self.sim.emit(Event(
+                "vehicle_action_blocked",
+                eid=eid,
+                reason="vehicle_required",
+            ))
+            return False
         if vehicle_medium_for_property(vehicle_prop) == "water":
             self._emit_vehicle_blocked(eid, vehicle_prop, reason="water_map_unavailable")
+            return False
+        ramp = self._quick_travel_ramp_at(pos.x, pos.y, pos.z)
+        if not ramp:
+            self._emit_vehicle_blocked(eid, vehicle_prop, reason="quick_travel_ramp_required")
             return False
         if self._local_route_accessible_at(
             pos.x,
@@ -270,6 +283,22 @@ class PlayerTravelRuntime:
             reason="route_required",
         )
         return False
+
+    def _enter_quick_travel_from_ramp(self, eid, pos, vehicle_prop):
+        ramp = self._quick_travel_ramp_at(pos.x, pos.y, pos.z)
+        if not ramp:
+            return False
+        if not self._can_enter_quick_travel_from_local_vehicle(eid, pos):
+            return False
+        self._set_zoom_mode(
+            eid=eid,
+            pos=pos,
+            mode="overworld",
+            view_only=False,
+            entry_reason="quick_travel_ramp",
+            ramp_prop=ramp,
+        )
+        return True
 
     def _local_vehicle_discrete_controls(self):
         overlay = getattr(self.sim, "combat_overlay", {})
@@ -329,6 +358,8 @@ class PlayerTravelRuntime:
                 cruise_active=int(getattr(state, "speed", 0) or 0) > 0,
                 reason=reason,
             )
+            if self._enter_quick_travel_from_ramp(eid, pos, vehicle_prop):
+                return moved_any
         return moved_any
 
     def _handle_local_vehicle_move_discrete(self, eid, pos, dx, dy):
@@ -457,6 +488,8 @@ class PlayerTravelRuntime:
             move_steps,
             reason="vehicle_move",
         )
+        if str(getattr(self.sim, "zoom_mode", "city")).strip().lower() == "overworld":
+            return moved_any
         self._emit_vehicle_motion_event(
             "vehicle_local_controlled",
             eid,
@@ -741,7 +774,7 @@ class PlayerTravelRuntime:
         half = max(2, self.sim.chunk_size // 2)
         return ox + half, oy + half
 
-    def _set_zoom_mode(self, eid, pos, mode):
+    def _set_zoom_mode(self, eid, pos, mode, *, view_only=None, entry_reason="", ramp_prop=None):
         mode = str(mode).lower()
         if mode not in {"city", "overworld"}:
             return
@@ -750,7 +783,9 @@ class PlayerTravelRuntime:
         if mode == "overworld":
             state = self._vehicle_state_for(eid)
             vehicle_prop = self._active_vehicle_property(eid)
-            view_only = not bool(state and state.in_vehicle and vehicle_prop)
+            if view_only is None:
+                view_only = not bool(state and state.in_vehicle and vehicle_prop)
+            view_only = bool(view_only)
             if not view_only and vehicle_medium_for_property(vehicle_prop) == "water":
                 self._emit_vehicle_blocked(eid, vehicle_prop, reason="water_map_unavailable")
                 return
@@ -804,6 +839,9 @@ class PlayerTravelRuntime:
                 mode="overworld",
                 chunk=current_chunk,
                 view_only=view_only,
+                entry_reason=str(entry_reason or "").strip().lower(),
+                ramp_property_id=(ramp_prop or {}).get("id") if isinstance(ramp_prop, dict) else None,
+                ramp_name=str((ramp_prop or {}).get("name", "") if isinstance(ramp_prop, dict) else "").strip(),
             ))
             return
 

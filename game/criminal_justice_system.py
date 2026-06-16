@@ -60,6 +60,7 @@ from game.items import (
     prepare_item_stack_metadata,
 )
 from game.item_semantics import inventory_has_phone
+from game.quick_travel_ramps import map_mode_active
 from engine.systems import System
 from game.system_support.offense_runtime import (
     ACTION_OFFENSE_BASE,
@@ -3700,6 +3701,8 @@ class CriminalJusticeSystem(System):
             return
         if bool(event.data.get("handled")):
             return
+        if map_mode_active(self.sim):
+            return
         snapshot = self._player_bookable_snapshot()
         if snapshot is None or _actor_in_live_combat(self.sim, self.player_eid):
             return
@@ -3815,6 +3818,8 @@ class CriminalJusticeSystem(System):
             self.pending_detentions.pop(int(offender_eid), None)
 
     def _process_guard_initiated_player_arrest(self):
+        if map_mode_active(self.sim):
+            return False
         snapshot = self._player_bookable_snapshot()
         if snapshot is None:
             return False

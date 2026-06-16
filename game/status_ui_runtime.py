@@ -75,7 +75,7 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
 
     status_chunks = [
         "Map View" if zoom_mode == "overworld" and view_only else "In Vehicle" if zoom_mode == "overworld" or local_in_vehicle else "On Foot",
-        "Overworld Map" if zoom_mode == "overworld" and view_only else "Overworld" if zoom_mode == "overworld" else "Local Driving" if local_in_vehicle else floor_text,
+        "Overworld Map" if zoom_mode == "overworld" and view_only else "Quick Travel" if zoom_mode == "overworld" else "Local Driving" if local_in_vehicle else floor_text,
         f"Chunk {chunk_text}",
         f"Area {area_label}",
     ]

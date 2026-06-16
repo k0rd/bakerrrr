@@ -155,6 +155,7 @@ from game.property_access import (
     property_status_text as _property_status_text,
     world_hour as _world_hour,
 )
+from game.quick_travel_ramps import generate_quick_travel_ramp_records
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
     building_id_from_structure as _building_id_from_structure,
@@ -993,6 +994,43 @@ class WorldStreamingSystem(System):
                 "x": x,
                 "y": y,
                 "z": 0,
+                "archetype": metadata.get("archetype"),
+                "building_id": None,
+            })
+
+        ramps = generate_quick_travel_ramp_records(
+            self.sim,
+            chunk,
+            rng,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+        )
+        for ramp in ramps:
+            x = int(ramp["x"])
+            y = int(ramp["y"])
+            z = int(ramp.get("z", 0) or 0)
+            if self.sim.property_at(x, y, z):
+                continue
+            metadata = dict(ramp.get("metadata", {}))
+            metadata["chunk"] = key
+            kind = str(ramp.get("kind", "asset")).strip().lower() or "asset"
+            property_id = self.sim.register_property(
+                name=str(ramp.get("name", "Entrance Ramp")).strip() or "Entrance Ramp",
+                kind=kind,
+                x=x,
+                y=y,
+                z=z,
+                owner_eid=None,
+                owner_tag=str(ramp.get("owner_tag", "city")).strip() or "city",
+                metadata=metadata,
+            )
+            records.append({
+                "id": property_id,
+                "kind": kind,
+                "x": x,
+                "y": y,
+                "z": z,
                 "archetype": metadata.get("archetype"),
                 "building_id": None,
             })

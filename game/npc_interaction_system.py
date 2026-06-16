@@ -50,6 +50,7 @@ from game.components import (
     WeaponLoadout,
     WeaponUseProfile,
 )
+from game.quick_travel_ramps import map_mode_active
 from game.service_runtime import (
     CASINO_GAME_SERVICE_IDS,
     TRANSIT_SERVICE_IDS,
@@ -12800,6 +12801,8 @@ class NPCInteractionSystem(System):
     def _start_dialogue_with_npc(self, npc_eid, *, prompt_lines=(), highlight_topic_ids=(), allow_distant=False):
         if npc_eid is None:
             return False
+        if map_mode_active(self.sim):
+            return False
         self._remember_opportunity_npc_interaction(npc_eid)
         context = self._dialogue_context(npc_eid, allow_distant=allow_distant)
         if not context:
@@ -12966,6 +12969,8 @@ class NPCInteractionSystem(System):
         return None
 
     def _tick_relationship_dialogue_requests(self):
+        if map_mode_active(self.sim):
+            return
         state = self._dialog_ui_state()
         if state.get("open") or self.player_eid is None:
             return

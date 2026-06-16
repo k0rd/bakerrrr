@@ -64,6 +64,7 @@ from game.property_runtime import (
     viewer_property_credential_status as _viewer_property_credential_status,
     viewer_revealed_building_id as _viewer_revealed_building_id,
 )
+from game.quick_travel_ramps import is_quick_travel_ramp_property
 from game.report_runtime import (
     build_known_locations_report as _report_runtime_build_known_locations_report,
     build_known_people_report as _report_runtime_build_known_people_report,
@@ -733,6 +734,8 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
     bits = [str(prop.get("name", prop.get("id", "property"))).strip() or "property"]
     label = kind if not archetype else f"{kind}/{archetype}"
     bits.append(f"[{label}]")
+    if is_quick_travel_ramp_property(prop):
+        bits.append("quick travel entrance")
     organization_eid = property_organization_eid(sim, prop, ensure=(kind == "building"))
     organization_text = organization_name(sim, organization_eid)
     if organization_text and organization_text.lower() != bits[0].lower():

@@ -5201,10 +5201,14 @@ class EventLogSystem(System):
             if bool(event.data.get("view_only")):
                 self.sim.log.add(f"Opened the view-only overworld map at chunk {chunk}.")
                 return
-            self.sim.log.add(f"Entered in-vehicle map at chunk {chunk}.")
+            ramp_name = str(event.data.get("ramp_name", "") or "").strip()
+            if ramp_name:
+                self.sim.log.add(f"Entered quick travel from {ramp_name} at chunk {chunk}.")
+                return
+            self.sim.log.add(f"Entered quick travel at chunk {chunk}.")
             return
         area = str(event.data.get("area_type", "local")).strip().lower() or "local"
-        self.sim.log.add(f"Entered on-foot view at chunk {chunk} ({area}).")
+        self.sim.log.add(f"Entered local view at chunk {chunk} ({area}).")
 
     def on_zoom_mode_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -5259,7 +5263,10 @@ class EventLogSystem(System):
             self.sim.log.add("You need a usable vehicle for overworld travel.")
             return
         if reason == "route_required":
-            self.sim.log.add("Drive onto a road or trail before opening map travel.")
+            self.sim.log.add("That ramp is not on a usable route.")
+            return
+        if reason == "quick_travel_ramp_required":
+            self.sim.log.add("Drive onto an entrance ramp to start quick travel.")
             return
         if reason == "water_route_required":
             self.sim.log.add("You need a usable shore, dock, or waterway access point for that boat route.")

@@ -50,6 +50,7 @@ from game.organizations import (
 from game.population import seed_chunk_items, spawn_chunk_npcs
 from game.property_access import default_site_services_for_archetype
 from game.property_keys import ensure_actor_has_property_key, ensure_property_lock
+from game.quick_travel_ramps import generate_quick_travel_ramp_records
 from game.run_echoes import maybe_seed_run_echo_for_chunk
 from game.run_objectives import seed_run_objective
 from game.skills import seed_skill_profile
@@ -518,6 +519,42 @@ def _register_chunk_properties(sim, chunk):
             "x": x,
             "y": y,
             "z": 0,
+            "archetype": metadata.get("archetype"),
+            "building_id": None,
+        })
+
+    ramps = generate_quick_travel_ramp_records(
+        sim,
+        chunk,
+        rng,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        chunk_size=chunk_size,
+    )
+    for ramp in ramps:
+        x = int(ramp["x"])
+        y = int(ramp["y"])
+        z = int(ramp.get("z", 0) or 0)
+        if sim.property_at(x, y, z):
+            continue
+        metadata = dict(ramp.get("metadata", {}))
+        metadata["chunk"] = (chunk["cx"], chunk["cy"])
+        property_id = sim.register_property(
+            name=str(ramp.get("name", "Entrance Ramp")).strip() or "Entrance Ramp",
+            kind=str(ramp.get("kind", "asset")).strip().lower() or "asset",
+            x=x,
+            y=y,
+            z=z,
+            owner_eid=None,
+            owner_tag=str(ramp.get("owner_tag", "city")).strip() or "city",
+            metadata=metadata,
+        )
+        records.append({
+            "id": property_id,
+            "kind": str(ramp.get("kind", "asset")).strip().lower() or "asset",
+            "x": x,
+            "y": y,
+            "z": z,
             "archetype": metadata.get("archetype"),
             "building_id": None,
         })

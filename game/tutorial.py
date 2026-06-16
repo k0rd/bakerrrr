@@ -42,6 +42,7 @@ from game.player_config import (
     tutorial_requested_from_options,
 )
 from game.property_keys import ensure_actor_has_property_key, ensure_property_lock
+from game.quick_travel_ramps import QUICK_TRAVEL_RAMP_ARCHETYPE, QUICK_TRAVEL_RAMP_GLYPH
 from game.run_bootstrap import NormalRunBootstrapProfile, bootstrap_normal_run
 from game.vehicles import roll_vehicle_profile, vehicle_metadata
 
@@ -142,12 +143,12 @@ TUTORIAL_STAGES = (
     {
         "id": "map",
         "gate": "map",
-        "hint": "Tutorial: press X from local driving to open the vehicle map.",
+        "hint": "Tutorial: press X from local driving to browse the overworld map. Press t to return.",
     },
     {
         "id": "vehicle_travel",
         "gate": "vehicle_travel",
-        "hint": "Tutorial: from a road tile, open the vehicle map and move once to travel a chunk.",
+        "hint": "Tutorial: drive onto the nearby entrance ramp, then use normal 8-way movement once in quick travel.",
     },
     {
         "id": "vehicle_exit",
@@ -260,8 +261,8 @@ def tutorial_guide_line(sim):
         "trade": "The shop counter opens the buy/sell panel. You do not have to buy to learn the surface.",
         "log_help": "The log catches what the HUD drops. Help is there when the key soup gets loud.",
         "vehicle_entry": "Now get into the staged car. It is yours for this disposable run, but you still start on foot.",
-        "map": "Open the vehicle map from local driving. The city is bigger than the block under your feet.",
-        "vehicle_travel": "Travel once from the vehicle map. Local driving becomes chunk travel after you open the route map.",
+        "map": "Open the view-only map from local driving. The city is bigger than the block under your feet.",
+        "vehicle_travel": "Drive onto the entrance ramp, then travel once. Local driving becomes chunk travel only from a ramp.",
         "vehicle_exit": "Now come back to local driving. Big-map travel still resolves into street-level trouble.",
         "cover": "Try cover. If it feels slow, that is the point: it buys angles, not magic.",
         "safe_aim": "Open aim mode. You are practicing pacing and target selection, not starting a real fight.",
@@ -445,6 +446,28 @@ def _ensure_tutorial_vehicle(sim, player_eid, pos, rng):
     _make_walkable(sim, pos[0], pos[1], pos[2], glyph="=")
     _make_walkable(sim, pos[0] - 1, pos[1], pos[2], glyph="=")
     _make_walkable(sim, vx, vy, vz, glyph="=")
+    ramp_id = sim.register_property(
+        "Entrance Ramp",
+        "asset",
+        pos[0] - 1,
+        pos[1],
+        pos[2],
+        owner_eid=None,
+        owner_tag="city",
+        metadata={
+            "archetype": QUICK_TRAVEL_RAMP_ARCHETYPE,
+            "fixture_type": QUICK_TRAVEL_RAMP_ARCHETYPE,
+            "asset_type": QUICK_TRAVEL_RAMP_ARCHETYPE,
+            "display_glyph": QUICK_TRAVEL_RAMP_GLYPH,
+            "display_color": "terrain_road",
+            "quick_travel_access": True,
+            "vehicle_route_access": True,
+            "route_kind": "road",
+            "tutorial": True,
+            "chunk": sim.chunk_coords(pos[0] - 1, pos[1]),
+        },
+    )
+    _append_chunk_property_record(sim, sim.properties.get(ramp_id), archetype=QUICK_TRAVEL_RAMP_ARCHETYPE)
     profile = roll_vehicle_profile(rng, quality="used")
     profile["fuel"] = max(18, int(profile.get("fuel_capacity", profile.get("fuel", 60)) or 60))
     vehicle_name = f"Tutorial {profile.get('make', 'Street')} {profile.get('model', 'Runner')}"

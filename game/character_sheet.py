@@ -88,7 +88,7 @@ def _active_status_text(status_effects, *, duration_label_fn, sim):
 
 def _sheet_floor_label(z, *, zoom_mode="city"):
     if str(zoom_mode or "").strip().lower() == "overworld":
-        return "Overworld"
+        return "Overworld Map"
     try:
         z = int(z)
     except (TypeError, ValueError):
@@ -177,7 +177,14 @@ def build_character_sheet_pages(sim, player_eid, *, duration_label_fn):
         chunk_text = f"{int(chunk[0])},{int(chunk[1])}" if isinstance(chunk, tuple) and len(chunk) >= 2 else "?,?"
         tile_text = "?,?,?"
         floor_text = _sheet_floor_label(0, zoom_mode=zoom_mode)
-    mode_text = "In Vehicle" if zoom_mode == "overworld" else "On Foot"
+    view_only = False
+    if zoom_mode == "overworld":
+        records = getattr(sim, "overworld_view_only_by_eid", {})
+        try:
+            view_only = bool(records.get(int(player_eid), False))
+        except (TypeError, ValueError):
+            view_only = False
+    mode_text = "Map View" if zoom_mode == "overworld" and view_only else "Quick Travel" if zoom_mode == "overworld" else "On Foot"
     rumor_stats = getattr(sim, "rumor_stats", {}) or {}
     rumor_active = int(rumor_stats.get("active", 0) or 0)
     rumor_shares = int(rumor_stats.get("shares_last_tick", 0) or 0)

@@ -1207,8 +1207,8 @@ class PlayerActionSystem(System):
     def _chunk_center(self, chunk_coord):
         return self.player_travel._chunk_center(chunk_coord)
 
-    def _set_zoom_mode(self, eid, pos, mode):
-        return self.player_travel._set_zoom_mode(eid, pos, mode)
+    def _set_zoom_mode(self, eid, pos, mode, **kwargs):
+        return self.player_travel._set_zoom_mode(eid, pos, mode, **kwargs)
 
     def _handle_overworld_travel(self, eid, pos, dx, dy):
         return self.player_travel._handle_overworld_travel(eid, pos, dx, dy)
@@ -1220,7 +1220,7 @@ class PlayerActionSystem(System):
         return self.player_travel._handle_local_vehicle_momentum(eid, pos)
 
     def _can_enter_overworld_from_local_vehicle(self, eid, pos):
-        return self.player_travel._can_enter_overworld_from_local_vehicle(eid, pos)
+        return self.player_travel._can_enter_quick_travel_from_local_vehicle(eid, pos)
 
     def _overworld_view_only_for(self, eid):
         return self.player_travel._overworld_view_only_for(eid)
@@ -1353,9 +1353,7 @@ class PlayerActionSystem(System):
 
         if action == "zoom_overworld":
             self._set_sneak_mode(eid, False, reason="zoom")
-            if not self._can_enter_overworld_from_local_vehicle(eid, pos):
-                return
-            self._set_zoom_mode(eid=eid, pos=pos, mode="overworld")
+            self._set_zoom_mode(eid=eid, pos=pos, mode="overworld", view_only=True, entry_reason="map_view")
             return
 
         if action == "zoom_city_enter":

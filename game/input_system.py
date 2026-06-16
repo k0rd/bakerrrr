@@ -884,7 +884,7 @@ class InputSystem(System):
         if current_zoom != "overworld":
             _log_player_feedback(
                 self.sim,
-                "Enter the in-vehicle map to drive to a marker.",
+                "Enter quick travel to drive to a marker.",
                 kind="movement",
                 dedupe_window=2,
                 dedupe_key="autodrive:zoom_required",

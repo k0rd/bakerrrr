@@ -14,6 +14,7 @@ from game.property_runtime import (
     vehicle_label as _vehicle_label,
     vehicle_profile_from_property as _vehicle_profile_from_property,
 )
+from game.quick_travel_ramps import property_allows_vehicle_route_access
 from game.system_support.actor_runtime import _apply_downed_actor_state
 from game.system_support.entity_naming import _entity_display_name
 from game.system_support.building_repair_runtime import record_building_damage as _record_building_damage
@@ -249,6 +250,7 @@ def local_route_accessible_at(sim, x, y, z=0, *, ignore_property_id=None, medium
     if (
         isinstance(covering, dict)
         and str(covering.get("id", "")).strip() != str(ignore_property_id or "").strip()
+        and not property_allows_vehicle_route_access(covering)
     ):
         return False
     return True
@@ -279,7 +281,11 @@ def vehicle_local_block_reason(sim, eid, vehicle_prop, x, y, z=0, *, medium=None
 
     active_vehicle_id = str((vehicle_prop or {}).get("id", "")).strip()
     covering = sim.property_covering(x, y, z)
-    if isinstance(covering, dict) and str(covering.get("id", "")).strip() != active_vehicle_id:
+    if (
+        isinstance(covering, dict)
+        and str(covering.get("id", "")).strip() != active_vehicle_id
+        and not property_allows_vehicle_route_access(covering)
+    ):
         return "property_tile"
     if sim.structure_at(x, y, z) is not None:
         return "property_tile"

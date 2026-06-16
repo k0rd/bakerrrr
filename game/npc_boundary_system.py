@@ -13,6 +13,7 @@ from game.organizations import (
     refresh_loaded_organization_branch_briefings,
 )
 from game.property_runtime import property_covering
+from game.quick_travel_ramps import map_mode_active
 from game.social_boundary_runtime import (
     BOUNDARY_DIALOGUE_BAN_TICKS,
     BOUNDARY_EJECTION_GRACE_TICKS,
@@ -457,6 +458,8 @@ class NPCBoundaryEnforcementSystem(System):
         key = ejection_key(property_id, target_eid)
         if not key:
             return None
+        if _safe_int(target_eid, default=0) == _safe_int(getattr(self.sim, "player_eid", None), default=-1) and map_mode_active(self.sim):
+            return None
         state = active_ejection_state(self.sim)
         now = int(self.sim.tick)
         row = state.get(key) if isinstance(state.get(key), dict) else {}
@@ -814,6 +817,8 @@ class NPCBoundaryEnforcementSystem(System):
                 target_eid = _watch_row_subject(watch_row)
                 if target_eid <= 0 or target_eid == _safe_int(enforcer_eid, default=0):
                     continue
+                if target_eid == _safe_int(getattr(self.sim, "player_eid", None), default=-1) and map_mode_active(self.sim):
+                    continue
                 pair = (property_id, target_eid)
                 if pair in seen_pairs or ejection_key(property_id, target_eid) in active_ejection_state(self.sim):
                     continue
@@ -843,6 +848,8 @@ class NPCBoundaryEnforcementSystem(System):
         target_eid = event.data.get("eid")
         if target_eid is None:
             return
+        if target_eid == getattr(self.sim, "player_eid", None) and map_mode_active(self.sim):
+            return
         self._enforce_denials_for_entity(target_eid)
 
     def update(self):
@@ -859,6 +866,8 @@ class NPCBoundaryEnforcementSystem(System):
             if target_eid <= 0 or not property_id:
                 state.pop(key, None)
                 continue
+            if target_eid == _safe_int(getattr(self.sim, "player_eid", None), default=-1) and map_mode_active(self.sim):
+                continue
             if not self._target_in_property(target_eid, property_id):
                 self._emit_ejection_complied(key, row)
                 continue
@@ -867,6 +876,6 @@ class NPCBoundaryEnforcementSystem(System):
             if int(self.sim.tick) >= _safe_int(row.get("grace_until_tick"), default=0):
                 self._emit_ejection_refused(row)
         player_eid = getattr(self.sim, "player_eid", None)
-        if player_eid is not None:
+        if player_eid is not None and not map_mode_active(self.sim):
             self._enforce_denials_for_entity(player_eid)
         self._enforce_local_briefed_denials()
