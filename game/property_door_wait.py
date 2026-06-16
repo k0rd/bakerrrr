@@ -116,6 +116,32 @@ def _door_wait_hold_target(state):
     return (int(state.wait_x), int(state.wait_y), int(state.wait_z))
 
 
+def _door_wait_can_answer_from(sim, state, pos):
+    if not isinstance(state, DoorWaitState) or pos is None:
+        return False
+    if int(pos.z) != int(state.aperture_z):
+        return False
+    dx = abs(int(pos.x) - int(state.aperture_x))
+    dy = abs(int(pos.y) - int(state.aperture_y))
+    if dx + dy <= 1:
+        return True
+    if max(dx, dy) > 2 or (dx + dy) > 3:
+        return False
+    prop_id = str(getattr(state, "property_id", "") or "").strip()
+    covered = _property_covering(sim, int(pos.x), int(pos.y), int(pos.z))
+    return bool(isinstance(covered, dict) and str(covered.get("id", "")).strip() == prop_id)
+
+
+def _door_wait_actor_in_wait_property(sim, state, pos):
+    if not isinstance(state, DoorWaitState) or pos is None:
+        return False
+    prop_id = str(getattr(state, "property_id", "") or "").strip()
+    if not prop_id:
+        return False
+    covered = _property_covering(sim, int(pos.x), int(pos.y), int(pos.z))
+    return bool(isinstance(covered, dict) and str(covered.get("id", "")).strip() == prop_id)
+
+
 def _door_wait_clear_service_courtesies(sim, *, responder_eid=None, caller_eid=None, property_id=""):
     state = _door_service_courtesies_state(sim)
     property_id = str(property_id or "").strip()
@@ -649,10 +675,15 @@ class DoorWaitSystem(System):
                 self._clear_wait(eid, state)
                 continue
 
-            if (
+            player_related_work = (
                 support._active_contractor_record(self.sim, eid, ally_eid=getattr(self.sim, "player_eid", None)) is not None
                 or support.actor_player_business_employment(self.sim, eid, owner_eid=getattr(self.sim, "player_eid", None)) is not None
-            ) and not _actor_in_active_dialogue(self.sim, eid):
+            )
+            if (
+                player_related_work
+                and not _actor_in_active_dialogue(self.sim, eid)
+                and not _door_wait_actor_in_wait_property(self.sim, state, pos)
+            ):
                 self._clear_wait(eid, state)
                 continue
 
@@ -679,10 +710,7 @@ class DoorWaitSystem(System):
                         target_eid=None,
                     )
 
-            near_aperture = bool(
-                int(pos.z) == int(state.aperture_z)
-                and _manhattan(int(pos.x), int(pos.y), int(state.aperture_x), int(state.aperture_y)) <= 1
-            )
+            near_aperture = _door_wait_can_answer_from(self.sim, state, pos)
             if near_aperture:
                 door_state = _operable_door_state_at(
                     self.sim,

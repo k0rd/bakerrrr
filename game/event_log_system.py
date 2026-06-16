@@ -74,6 +74,7 @@ from game.item_semantics import (
 )
 from game.organizations import local_protective_pressure_snapshot
 from game.system_support.actor_attention_runtime import record_area_warmth
+from game.system_support.awareness_runtime import event_observation_accountability
 from game.system_support.crime_plan_runtime import (
     CRIME_PLAN_OBSERVATION_WITNESS,
     record_crime_plan_observation,
@@ -3283,6 +3284,15 @@ class EventLogSystem(System):
 
     def on_action_offense(self, event):
         if event.data.get("offender_eid") != self.player_eid:
+            return
+        observation = event_observation_accountability(
+            self.sim,
+            event,
+            offender_eid=self.player_eid,
+            default_channels=("actor_witness",),
+            use_legacy_witness_fallback=False,
+        )
+        if not bool(observation.get("has_accountable_observation")):
             return
 
         offense_score = int(event.data.get("offense_score", 0))

@@ -153,7 +153,7 @@ def event_observation_accountability(
     *,
     offender_eid=None,
     default_channels=("actor_witness",),
-    use_legacy_witness_fallback=True,
+    use_legacy_witness_fallback=False,
     allow_position_backfill=True,
 ):
     data = getattr(event_or_data, "data", event_or_data)
