@@ -129,6 +129,33 @@ PUBLIC_HOURS_BY_ARCHETYPE = {
 NEUTRAL_STANDING_REASONS = {"", "none", "open_business", "public_space"}
 AUTO_CONTROLLER_OWNER_TAGS = {"", "public", "city", "community", "neutral", "none", "unowned"}
 ALWAYS_PUBLIC_ARCHETYPES = {"metro_exchange"}
+COMMON_AREA_ROOM_KINDS = frozenset({
+    "aisle",
+    "entry",
+    "foyer",
+    "lobby",
+    "hall",
+    "hallway",
+    "corridor",
+    "concourse",
+    "commons",
+    "stair",
+    "stairs",
+    "stairwell",
+    "elevator",
+    "elevator_lobby",
+    "service_corridor",
+    "service_hall",
+    "market_aisle",
+    "market_hall",
+    "shared_yard",
+    "utility_corridor",
+    "service_basement",
+    "maintenance_tunnel",
+    "yard",
+    "drain_junction",
+    "platform",
+})
 BADGE_CONTROLLER_ARCHETYPES = {
     "armory",
     "bank",
@@ -315,6 +342,27 @@ def _property_metadata(prop):
         return {}
     metadata = prop.get("metadata")
     return metadata if isinstance(metadata, dict) else {}
+
+
+def _clean_key(value):
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _property_id(prop):
+    return str((prop or {}).get("id", "") or "").strip() if isinstance(prop, dict) else ""
+
+
+def _property_building_id(prop):
+    metadata = _property_metadata(prop)
+    return str(metadata.get("building_id", "") or "").strip()
+
+
+def _normalize_key_set(raw):
+    if isinstance(raw, str):
+        return frozenset({_clean_key(raw)} if _clean_key(raw) else ())
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return frozenset()
+    return frozenset(_clean_key(value) for value in raw if _clean_key(value))
 
 
 def _shape_cells_2d(metadata, key):
@@ -594,6 +642,376 @@ def property_access_level(prop):
     if property_is_storefront(prop) or finance_services_for_property(prop):
         return "public"
     return "protected"
+
+
+def _property_ids_at_position(sim, x, y, z):
+    if sim is None:
+        return ()
+    try:
+        key = (int(x), int(y), int(z))
+    except (TypeError, ValueError):
+        return ()
+
+    matched = []
+    seen = set()
+    for attr in ("property_anchor_index", "property_cover_index"):
+        index = getattr(sim, attr, {})
+        if not isinstance(index, dict):
+            continue
+        for raw_id in tuple(index.get(key, ()) or ()):
+            property_id = str(raw_id or "").strip()
+            if not property_id or property_id in seen:
+                continue
+            seen.add(property_id)
+            matched.append(property_id)
+
+    orderer = getattr(sim, "_ordered_property_ids", None)
+    if callable(orderer):
+        try:
+            return tuple(orderer(matched))
+        except Exception:
+            return tuple(matched)
+    return tuple(matched)
+
+
+def _structure_context_for_position(sim, x, y, z):
+    structure = None
+    if sim is not None and hasattr(sim, "structure_at"):
+        try:
+            structure = sim.structure_at(int(x), int(y), int(z))
+        except (TypeError, ValueError):
+            structure = None
+    structure = structure if isinstance(structure, dict) else {}
+    building_id = str(structure.get("building_id", "") or "").strip()
+    room_kind = _clean_key(structure.get("room_kind", ""))
+    common_area_kind = _clean_key(structure.get("common_area_kind", ""))
+    if not common_area_kind and room_kind in COMMON_AREA_ROOM_KINDS:
+        common_area_kind = room_kind
+    return structure, building_id, room_kind, common_area_kind
+
+
+def _common_area_kind_for_property(prop, *, room_kind="", common_area_kind=""):
+    metadata = _property_metadata(prop)
+    room_kind = _clean_key(room_kind)
+    common_area_kind = _clean_key(common_area_kind)
+
+    configured_rooms = set()
+    for key in ("common_area_room_kinds", "common_room_kinds", "shared_area_room_kinds"):
+        configured_rooms.update(_normalize_key_set(metadata.get(key)))
+    if room_kind and room_kind in configured_rooms:
+        return common_area_kind or room_kind
+
+    configured_kind = _clean_key(metadata.get("common_area_kind"))
+    if configured_kind and (not common_area_kind or configured_kind == common_area_kind):
+        return configured_kind
+    configured_kinds = set()
+    for key in ("common_area_kinds", "shared_area_kinds"):
+        configured_kinds.update(_normalize_key_set(metadata.get(key)))
+    if common_area_kind and common_area_kind in configured_kinds:
+        return common_area_kind
+    if room_kind and room_kind in configured_kinds:
+        return room_kind
+
+    return ""
+
+
+def _looks_like_property_interest_spec(row):
+    if not isinstance(row, dict):
+        return False
+    keys = {
+        "property_id",
+        "property_ids",
+        "target_property_id",
+        "target_property_ids",
+        "source_property_id",
+        "interest_kind",
+        "authority_reason",
+        "reason",
+        "room_kind",
+        "room_kinds",
+        "common_area_kind",
+        "common_area_kinds",
+        "bounds",
+        "cells",
+    }
+    return any(key in row for key in keys)
+
+
+def _iter_shared_area_interest_specs(prop):
+    metadata = _property_metadata(prop)
+    raw = metadata.get("shared_area_interests")
+    if not raw:
+        return ()
+
+    specs = []
+    if isinstance(raw, dict):
+        if _looks_like_property_interest_spec(raw):
+            specs.append(dict(raw))
+        else:
+            for area_key, value in raw.items():
+                area_kind = _clean_key(area_key)
+                if isinstance(value, dict):
+                    rows = [value] if _looks_like_property_interest_spec(value) else tuple(value.values())
+                elif isinstance(value, (list, tuple, set, frozenset)):
+                    rows = tuple(value)
+                elif value:
+                    rows = ({},)
+                else:
+                    rows = ()
+                for row in rows:
+                    spec = dict(row) if isinstance(row, dict) else {}
+                    if area_kind and not (
+                        spec.get("common_area_kind")
+                        or spec.get("common_area_kinds")
+                        or spec.get("room_kind")
+                        or spec.get("room_kinds")
+                    ):
+                        spec["common_area_kind"] = area_kind
+                    specs.append(spec)
+    elif isinstance(raw, (list, tuple, set, frozenset)):
+        for row in raw:
+            if isinstance(row, dict):
+                specs.append(dict(row))
+
+    return tuple(specs)
+
+
+def _interest_cells_match(raw_cells, x, y, z):
+    if not isinstance(raw_cells, (list, tuple, set, frozenset)):
+        return True
+    for cell in raw_cells:
+        try:
+            if isinstance(cell, dict):
+                cx = int(cell.get("x"))
+                cy = int(cell.get("y"))
+                cz = int(cell.get("z", z))
+            elif isinstance(cell, (list, tuple)) and len(cell) >= 2:
+                cx = int(cell[0])
+                cy = int(cell[1])
+                cz = int(cell[2]) if len(cell) >= 3 else int(z)
+            else:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if (cx, cy, cz) == (int(x), int(y), int(z)):
+            return True
+    return False
+
+
+def _interest_bounds_match(raw_bounds, x, y, z):
+    if not isinstance(raw_bounds, dict):
+        return True
+    try:
+        left = int(raw_bounds.get("left", raw_bounds.get("x1", x)))
+        right = int(raw_bounds.get("right", raw_bounds.get("x2", x)))
+        top = int(raw_bounds.get("top", raw_bounds.get("y1", y)))
+        bottom = int(raw_bounds.get("bottom", raw_bounds.get("y2", y)))
+        min_z = int(raw_bounds.get("min_z", raw_bounds.get("z", z)))
+        max_z = int(raw_bounds.get("max_z", raw_bounds.get("z", z)))
+    except (TypeError, ValueError):
+        return False
+    if left > right:
+        left, right = right, left
+    if top > bottom:
+        top, bottom = bottom, top
+    if min_z > max_z:
+        min_z, max_z = max_z, min_z
+    return left <= int(x) <= right and top <= int(y) <= bottom and min_z <= int(z) <= max_z
+
+
+def _shared_area_interest_matches(spec, *, x, y, z, building_id="", room_kind="", common_area_kind="", source_prop=None):
+    if not isinstance(spec, dict):
+        return False
+
+    spec_building = str(spec.get("building_id", "") or spec.get("target_building_id", "") or "").strip()
+    source_building = _property_building_id(source_prop)
+    if spec_building and spec_building != str(building_id or "").strip():
+        return False
+    if not spec_building and source_building and building_id and source_building != building_id:
+        return False
+
+    room_kinds = set()
+    room_kinds.update(_normalize_key_set(spec.get("room_kind")))
+    room_kinds.update(_normalize_key_set(spec.get("room_kinds")))
+    if room_kinds and _clean_key(room_kind) not in room_kinds:
+        return False
+
+    area_kinds = set()
+    area_kinds.update(_normalize_key_set(spec.get("common_area_kind")))
+    area_kinds.update(_normalize_key_set(spec.get("common_area_kinds")))
+    area_kinds.update(_normalize_key_set(spec.get("area_kind")))
+    area_kinds.update(_normalize_key_set(spec.get("area_kinds")))
+    if area_kinds and _clean_key(common_area_kind) not in area_kinds and _clean_key(room_kind) not in area_kinds:
+        return False
+
+    if not _interest_cells_match(spec.get("cells"), x, y, z):
+        return False
+    if not _interest_bounds_match(spec.get("bounds"), x, y, z):
+        return False
+
+    has_location_filter = bool(room_kinds or area_kinds or spec.get("cells") or spec.get("bounds") or spec_building)
+    return has_location_filter or bool(common_area_kind)
+
+
+def _coerce_bool(value, default=True):
+    if value is None:
+        return bool(default)
+    if isinstance(value, str):
+        clean = value.strip().lower()
+        if clean in {"1", "true", "yes", "y", "on"}:
+            return True
+        if clean in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(value)
+
+
+def _interest_property_ids_from_spec(spec, source_prop):
+    ids = []
+    for key in ("property_id", "target_property_id", "source_property_id"):
+        property_id = str((spec or {}).get(key, "") or "").strip() if isinstance(spec, dict) else ""
+        if property_id:
+            ids.append(property_id)
+    for key in ("property_ids", "target_property_ids"):
+        raw = (spec or {}).get(key) if isinstance(spec, dict) else None
+        if isinstance(raw, str):
+            raw_values = (raw,)
+        elif isinstance(raw, (list, tuple, set, frozenset)):
+            raw_values = tuple(raw)
+        else:
+            raw_values = ()
+        for value in raw_values:
+            property_id = str(value or "").strip()
+            if property_id:
+                ids.append(property_id)
+    if not ids:
+        property_id = _property_id(source_prop)
+        if property_id:
+            ids.append(property_id)
+    return tuple(dict.fromkeys(ids))
+
+
+def _interest_row(property_id, *, source_property_id="", spec=None, common_area_kind="", implicit=False):
+    spec = spec if isinstance(spec, dict) else {}
+    try:
+        standing_bonus = float(spec.get("standing_bonus", 0.12 if implicit else 0.08) or 0.0)
+    except (TypeError, ValueError):
+        standing_bonus = 0.12 if implicit else 0.08
+    reason = _clean_key(spec.get("authority_reason") or spec.get("reason"))
+    return {
+        "property_id": str(property_id or "").strip(),
+        "interest_kind": _clean_key(spec.get("interest_kind")) or ("implicit_common_area" if implicit else "shared_common_area"),
+        "authority_reason": reason or "shared_interest",
+        "standing_bonus": max(0.0, min(1.0, standing_bonus)),
+        "protects": _coerce_bool(spec.get("protects"), True),
+        "warns": _coerce_bool(spec.get("warns"), True),
+        "source_property_id": str(source_property_id or "").strip() or None,
+        "common_area_kind": _clean_key(common_area_kind),
+    }
+
+
+def shared_property_interests_for_position(sim, x, y, z=0, *, primary_prop=None):
+    """Return property interest rows for a common/shared area without changing access."""
+
+    if sim is None:
+        return ()
+    try:
+        x = int(x)
+        y = int(y)
+        z = int(z)
+    except (TypeError, ValueError):
+        return ()
+
+    _structure, building_id, room_kind, common_area_kind = _structure_context_for_position(sim, x, y, z)
+    primary_building_id = _property_building_id(primary_prop)
+    if not building_id:
+        building_id = primary_building_id
+
+    candidate_ids = list(_property_ids_at_position(sim, x, y, z))
+    primary_id = _property_id(primary_prop)
+    if primary_id and primary_id not in candidate_ids:
+        candidate_ids.append(primary_id)
+
+    if building_id and common_area_kind:
+        for property_id, prop in getattr(sim, "properties", {}).items():
+            if property_id in candidate_ids:
+                continue
+            if _property_building_id(prop) == building_id:
+                candidate_ids.append(property_id)
+
+    rows = []
+    seen = set()
+    properties = getattr(sim, "properties", {})
+    for property_id in candidate_ids:
+        prop = properties.get(property_id)
+        if not isinstance(prop, dict):
+            continue
+        source_property_id = _property_id(prop)
+        prop_building_id = _property_building_id(prop)
+        if building_id and prop_building_id and prop_building_id != building_id:
+            continue
+
+        implicit_kind = _common_area_kind_for_property(prop, room_kind=room_kind, common_area_kind=common_area_kind)
+        if implicit_kind and common_area_kind:
+            key = (source_property_id, source_property_id, implicit_kind)
+            if key not in seen:
+                seen.add(key)
+                rows.append(_interest_row(
+                    source_property_id,
+                    source_property_id=source_property_id,
+                    common_area_kind=implicit_kind,
+                    implicit=True,
+                ))
+
+        for spec in _iter_shared_area_interest_specs(prop):
+            if not _shared_area_interest_matches(
+                spec,
+                x=x,
+                y=y,
+                z=z,
+                building_id=building_id,
+                room_kind=room_kind,
+                common_area_kind=common_area_kind,
+                source_prop=prop,
+            ):
+                continue
+            row_area_kind = (
+                _clean_key(spec.get("common_area_kind"))
+                or _clean_key(spec.get("area_kind"))
+                or common_area_kind
+                or room_kind
+            )
+            for target_property_id in _interest_property_ids_from_spec(spec, prop):
+                key = (target_property_id, source_property_id, row_area_kind)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(_interest_row(
+                    target_property_id,
+                    source_property_id=source_property_id,
+                    spec=spec,
+                    common_area_kind=row_area_kind,
+                ))
+
+    return tuple(row for row in rows if row.get("property_id"))
+
+
+def shared_property_interest_event_payload(interests):
+    rows = tuple(row for row in tuple(interests or ()) if isinstance(row, dict) and row.get("property_id"))
+    property_ids = tuple(dict.fromkeys(str(row.get("property_id", "") or "").strip() for row in rows if row.get("property_id")))
+    reasons = tuple(
+        f"{str(row.get('property_id', '') or '').strip()}:{_clean_key(row.get('authority_reason')) or 'shared_interest'}"
+        for row in rows
+    )
+    common_area_kind = ""
+    for row in rows:
+        common_area_kind = _clean_key(row.get("common_area_kind"))
+        if common_area_kind:
+            break
+    return {
+        "interest_property_ids": property_ids,
+        "interest_reasons": reasons,
+        "common_area_kind": common_area_kind,
+    }
 
 
 def world_hour(sim):

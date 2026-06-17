@@ -22,6 +22,7 @@ WIDE_SITE_KINDS = {
     "relay_post",
     "roadhouse",
     "salvage_camp",
+    "flea_market",
     "truck_stop",
     "tide_station",
 }
@@ -31,6 +32,7 @@ PUBLIC_SITE_KINDS = {
     "coast_watch",
     "dock_shack",
     "ferry_post",
+    "flea_market",
     "firewatch_tower",
     "herbalist_camp",
     "inspection_shed",
@@ -47,6 +49,7 @@ WINDOWED_SITE_KINDS = {
     "dock_shack",
     "firewatch_tower",
     "ferry_post",
+    "flea_market",
     "herbalist_camp",
     "net_house",
     "outfitter",
@@ -89,6 +92,10 @@ SITE_GAMEPLAY_PROFILES = {
     },
     "field_camp": {
         "site_services": ("shelter",),
+    },
+    "flea_market": {
+        "public": True,
+        "is_storefront": True,
     },
     "survey_post": {
         "site_services": ("intel",),
@@ -228,6 +235,12 @@ def _site_kind(site):
     if not isinstance(site, dict):
         return ""
     return str(site.get("kind", "") or "").strip().lower()
+
+
+def _site_span_kind(site):
+    if not isinstance(site, dict):
+        return ""
+    return str(site.get("span_kind", "") or "").strip().lower()
 
 
 def _site_layout_rng_seed(origin_x, origin_y, chunk_size, site_index, site):
@@ -424,7 +437,11 @@ def layout_chunk_site(origin_x, origin_y, chunk_size, site_index, site=None, res
     arrival_cx = sum(point[0] for point in arrival_pad) / float(len(arrival_pad))
     arrival_cy = sum(point[1] for point in arrival_pad) / float(len(arrival_pad))
 
+    span_kind = _site_span_kind(site)
+    span_site = span_kind == "non_city_compound_market"
     offsets = list(SITE_LAYOUT_OFFSETS)
+    if span_site:
+        offsets = [(6, 0), (-6, 0), (0, 6), (0, -6), (5, 5), (-5, 5), (5, -5), (-5, -5)]
     block_rng = random.Random(f"site_layout_offsets:{int(origin_x)}:{int(origin_y)}:{int(chunk_size)}")
     block_rng.shuffle(offsets)
     off_x, off_y = offsets[int(site_index) % len(offsets)]
@@ -445,8 +462,12 @@ def layout_chunk_site(origin_x, origin_y, chunk_size, site_index, site=None, res
 
     kind = _site_kind(site)
     base_half_w = 3 if kind in WIDE_SITE_KINDS else 2
-    preferred_half_w = max(2, min(4, base_half_w + layout_rng.randint(0, 1)))
-    preferred_half_h = max(2, min(3, 2 + layout_rng.randint(0, 1)))
+    if span_site:
+        preferred_half_w = max(4, min(5, (chunk_size // 4) + layout_rng.randint(0, 1)))
+        preferred_half_h = max(3, min(4, (chunk_size // 6) + layout_rng.randint(0, 1)))
+    else:
+        preferred_half_w = max(2, min(4, base_half_w + layout_rng.randint(0, 1)))
+        preferred_half_h = max(2, min(3, 2 + layout_rng.randint(0, 1)))
 
     offset_order = list(range(len(offsets)))
     offset_start = int(site_index) % len(offsets)

@@ -78,6 +78,8 @@ from game.property_access import (
     property_apertures as _property_apertures,
     property_ingress_context as _property_ingress_context,
     property_claim_reason as _property_claim_reason,
+    shared_property_interest_event_payload as _shared_property_interest_event_payload,
+    shared_property_interests_for_position as _shared_property_interests_for_position,
     property_status_text as _property_status_text,
     world_hour as _world_hour,
 )
@@ -546,6 +548,55 @@ class PropertyDefenseSystem(System):
         if not prop:
             return
 
+        try:
+            incident_position = (
+                int(event.data.get("x", prop.get("x", 0))),
+                int(event.data.get("y", prop.get("y", 0))),
+                int(event.data.get("z", prop.get("z", 0))),
+            )
+        except (TypeError, ValueError):
+            incident_position = (int(prop.get("x", 0)), int(prop.get("y", 0)), int(prop.get("z", 0)))
+
+        interest_rows = list(_shared_property_interests_for_position(
+            self.sim,
+            incident_position[0],
+            incident_position[1],
+            incident_position[2],
+            primary_prop=prop,
+        ))
+        interest_payload = _shared_property_interest_event_payload(interest_rows)
+        raw_interest_ids = event.data.get("interest_property_ids", interest_payload.get("interest_property_ids", ()))
+        if isinstance(raw_interest_ids, str):
+            raw_interest_ids = (raw_interest_ids,)
+        if isinstance(raw_interest_ids, (list, tuple, set, frozenset)):
+            existing = {str(row.get("property_id", "") or "").strip() for row in interest_rows if isinstance(row, dict)}
+            for raw_id in raw_interest_ids:
+                interest_property_id = str(raw_id or "").strip()
+                if not interest_property_id or interest_property_id in existing:
+                    continue
+                existing.add(interest_property_id)
+                interest_rows.append({
+                    "property_id": interest_property_id,
+                    "interest_kind": "event_shared_interest",
+                    "authority_reason": "shared_interest",
+                    "standing_bonus": 0.08,
+                    "protects": True,
+                    "warns": True,
+                    "source_property_id": None,
+                    "common_area_kind": str(event.data.get("common_area_kind", "") or "").strip().lower(),
+                })
+
+        interest_payload = _shared_property_interest_event_payload(interest_rows)
+        common_area_kind = str(event.data.get("common_area_kind", "") or interest_payload.get("common_area_kind", "") or "").strip().lower()
+        interest_property_ids = tuple(interest_payload.get("interest_property_ids", ()) or ())
+        raw_interest_reasons = event.data.get("interest_reasons", ()) or interest_payload.get("interest_reasons", ()) or ()
+        if isinstance(raw_interest_reasons, str):
+            interest_reasons = (raw_interest_reasons,)
+        elif isinstance(raw_interest_reasons, (list, tuple, set, frozenset)):
+            interest_reasons = tuple(str(reason or "").strip() for reason in raw_interest_reasons if str(reason or "").strip())
+        else:
+            interest_reasons = ()
+
         if threat_type == "property_trespass" and not witnessed:
             return
         if threat_type == "property_tamper" and not witnessed:
@@ -612,6 +663,11 @@ class PropertyDefenseSystem(System):
             aperture_kind=aperture_kind,
             ingress_method=ingress_method,
             witness_eids=frozenset(witness_eids) if defender_witnesses_only else None,
+            interest_rows=tuple(interest_rows),
+            interest_property_ids=interest_property_ids,
+            interest_reasons=interest_reasons,
+            common_area_kind=common_area_kind,
+            incident_position=incident_position,
         )
 
     def _dispatch_defenders(
@@ -626,25 +682,104 @@ class PropertyDefenseSystem(System):
         aperture_kind="",
         ingress_method="",
         witness_eids=None,
+        interest_rows=(),
+        interest_property_ids=(),
+        interest_reasons=(),
+        common_area_kind="",
+        incident_position=None,
     ):
         ais = self.sim.ecs.get(AI)
         wills = self.sim.ecs.get(NPCWill)
         traits_map = self.sim.ecs.get(NPCTraits)
         knowledges = self.sim.ecs.get(PropertyKnowledge)
         justices = self.sim.ecs.get(JusticeProfile)
+        occupations = self.sim.ecs.get(Occupation)
         positions = self.sim.ecs.get(Position)
 
         offender_pos = positions.get(offender_eid)
-        focus = _property_focus_position(prop)
-        focus_x = focus[0] if focus else int(prop["x"])
-        focus_y = focus[1] if focus else int(prop["y"])
-        focus_z = focus[2] if focus else int(prop["z"])
+        if isinstance(incident_position, (list, tuple)) and len(incident_position) >= 3:
+            focus_x, focus_y, focus_z = int(incident_position[0]), int(incident_position[1]), int(incident_position[2])
+        else:
+            focus = _property_focus_position(prop)
+            focus_x = focus[0] if focus else int(prop["x"])
+            focus_y = focus[1] if focus else int(prop["y"])
+            focus_z = focus[2] if focus else int(prop["z"])
 
         defenders = {}
         owner = prop.get("owner_eid")
+        primary_property_id = str(prop.get("id", "") or "").strip()
+        reason_priority = {
+            "owner": 0,
+            "manager": 1,
+            "employee": 2,
+            "credential_holder": 3,
+            "resident": 4,
+            "watcher": 5,
+            "shared_interest": 6,
+        }
+
+        def _record_defender(eid, reason, source_prop, *, shared_interest=False):
+            if eid is None or eid == offender_eid:
+                return
+            reason = str(reason or "").strip().lower() or "shared_interest"
+            source_property_id = str((source_prop or {}).get("id", "") or "").strip() if isinstance(source_prop, dict) else ""
+            record = {
+                "reason": reason,
+                "source_property_id": source_property_id or None,
+                "shared_interest": bool(shared_interest or (source_property_id and source_property_id != primary_property_id)),
+            }
+            existing = defenders.get(eid)
+            if not existing:
+                defenders[eid] = record
+                return
+            current_rank = reason_priority.get(str(existing.get("reason", "") or "").strip().lower(), 8)
+            new_rank = reason_priority.get(reason, 8)
+            if new_rank < current_rank or (
+                new_rank == current_rank
+                and bool(record.get("shared_interest"))
+                and not bool(existing.get("shared_interest"))
+            ):
+                defenders[eid] = record
+
+        def _employee_claim_is_unrelated_private_room(eid, claim_reason, source_prop):
+            reason = str(claim_reason or "").strip().lower()
+            if reason not in {"employee", "manager", "staff"}:
+                return False
+            if common_area_kind:
+                return False
+            occupation = occupations.get(eid) if occupations else None
+            workplace = getattr(occupation, "workplace", None)
+            if not isinstance(workplace, dict):
+                return False
+            workplace_property_id = str(workplace.get("property_id", "") or "").strip()
+            source_property_id = str((source_prop or {}).get("id", "") or "").strip() if isinstance(source_prop, dict) else ""
+            return bool(workplace_property_id and source_property_id and workplace_property_id != source_property_id)
+
+        defense_props = [(prop, None)]
+        seen_defense_props = {primary_property_id}
+        for row in tuple(interest_rows or ()):
+            if not isinstance(row, dict):
+                continue
+            if response_mode == "protect" and not bool(row.get("protects", True)):
+                continue
+            if response_mode == "warn" and not bool(row.get("warns", True)):
+                continue
+            interest_property_id = str(row.get("property_id", "") or "").strip()
+            if not interest_property_id or interest_property_id in seen_defense_props:
+                continue
+            interest_prop = self.sim.properties.get(interest_property_id)
+            if not isinstance(interest_prop, dict):
+                continue
+            seen_defense_props.add(interest_property_id)
+            defense_props.append((interest_prop, row))
 
         if owner is not None and owner != offender_eid:
-            defenders[owner] = "owner"
+            _record_defender(owner, "owner", prop)
+
+        for defense_prop, interest_row in defense_props[1:]:
+            interest_owner = defense_prop.get("owner_eid")
+            if interest_owner is not None and interest_owner != offender_eid:
+                _record_defender(interest_owner, "owner", defense_prop, shared_interest=True)
 
         standing_threshold = 0.72 if severity_score < 18 else 0.58
         for eid, pos in positions.items():
@@ -655,20 +790,26 @@ class PropertyDefenseSystem(System):
             if _manhattan(pos.x, pos.y, focus_x, focus_y) > 12:
                 continue
 
-            _, claim_reason = _property_claim_reason(
-                self.sim,
-                eid,
-                prop,
-                x=pos.x,
-                y=pos.y,
-                z=pos.z,
-                min_standing=standing_threshold,
-            )
-            if not claim_reason:
-                claim_reason = _business_scene_watch_reason(self.sim, eid, prop)
-            if not claim_reason:
-                continue
-            defenders[eid] = claim_reason
+            for defense_prop, interest_row in defense_props:
+                is_shared = interest_row is not None or str(defense_prop.get("id", "") or "").strip() != primary_property_id
+                _, claim_reason = _property_claim_reason(
+                    self.sim,
+                    eid,
+                    defense_prop,
+                    x=pos.x,
+                    y=pos.y,
+                    z=pos.z,
+                    min_standing=standing_threshold,
+                )
+                if not claim_reason:
+                    claim_reason = _business_scene_watch_reason(self.sim, eid, defense_prop)
+                if not claim_reason and is_shared:
+                    claim_reason = str((interest_row or {}).get("authority_reason", "") or "").strip().lower()
+                if not claim_reason:
+                    continue
+                if _employee_claim_is_unrelated_private_room(eid, claim_reason, defense_prop):
+                    continue
+                _record_defender(eid, claim_reason, defense_prop, shared_interest=is_shared)
 
         for eid, profile in justices.items():
             if eid == offender_eid:
@@ -687,7 +828,7 @@ class PropertyDefenseSystem(System):
                 continue
 
             if profile.enforce_all:
-                defenders.setdefault(eid, "watcher")
+                _record_defender(eid, "watcher", prop)
                 continue
 
             law_drive = (_justice_level(profile) * 0.65) + (_crime_sensitivity(profile) * 0.35)
@@ -701,11 +842,15 @@ class PropertyDefenseSystem(System):
 
             known = knowledge.known.get(prop["id"])
             if known and known["confidence"] >= 0.5:
-                defenders.setdefault(eid, "watcher")
+                _record_defender(eid, "watcher", prop)
 
-        for defender_eid, defender_reason in defenders.items():
+        for defender_eid, defender_record in defenders.items():
             if defender_eid == offender_eid:
                 continue
+            defender_reason = str((defender_record or {}).get("reason", "") or "").strip().lower() or "shared_interest"
+            defender_interest_property_id = str((defender_record or {}).get("source_property_id", "") or "").strip()
+            if defender_interest_property_id == primary_property_id:
+                defender_interest_property_id = ""
             if witness_eids is not None and defender_eid not in witness_eids:
                 continue
             if _observer_is_active_contractor_ally(self.sim, defender_eid, offender_eid):
@@ -726,7 +871,7 @@ class PropertyDefenseSystem(System):
             if _entity_is_downed(self.sim, defender_eid):
                 _apply_downed_actor_state(self.sim, defender_eid, tick=self.sim.tick)
                 continue
-            if pos.z != prop["z"]:
+            if pos.z != focus_z:
                 continue
             if (
                 offender_eid == getattr(self.sim, "player_eid", None)
@@ -740,7 +885,7 @@ class PropertyDefenseSystem(System):
             if offender_pos and offender_pos.z == pos.z:
                 target = (offender_pos.x, offender_pos.y, offender_pos.z)
             else:
-                target = (prop["x"], prop["y"], prop["z"])
+                target = (focus_x, focus_y, focus_z)
 
             if response_mode == "warn" and ai.state == "protecting" and ai.target_eid == offender_eid:
                 continue
@@ -826,6 +971,10 @@ class PropertyDefenseSystem(System):
                     ingress_kind=ingress_kind,
                     aperture_kind=aperture_kind,
                     ingress_method=ingress_method,
+                    interest_property_id=defender_interest_property_id or None,
+                    interest_property_ids=tuple(interest_property_ids or ()),
+                    interest_reasons=tuple(interest_reasons or ()),
+                    common_area_kind=common_area_kind,
                 ))
             else:
                 self.sim.emit(Event(
@@ -840,4 +989,8 @@ class PropertyDefenseSystem(System):
                     ingress_kind=ingress_kind,
                     aperture_kind=aperture_kind,
                     ingress_method=ingress_method,
+                    interest_property_id=defender_interest_property_id or None,
+                    interest_property_ids=tuple(interest_property_ids or ()),
+                    interest_reasons=tuple(interest_reasons or ()),
+                    common_area_kind=common_area_kind,
                 ))

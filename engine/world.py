@@ -259,6 +259,7 @@ class World:
         "firewatch_tower": "Firewatch Tower",
         "weather_station": "Weather Station",
         "herbalist_camp": "Herbalist Camp",
+        "flea_market": "Flea Market",
         "dock_shack": "Dock Shack",
         "ferry_post": "Ferry Post",
         "tide_station": "Tide Station",
@@ -288,6 +289,7 @@ class World:
         "firewatch_tower": "F",
         "weather_station": "W",
         "herbalist_camp": "H",
+        "flea_market": "M",
         "dock_shack": "D",
         "ferry_post": "F",
         "tide_station": "T",
@@ -317,6 +319,7 @@ class World:
         "firewatch_tower": "player",
         "weather_station": "player",
         "herbalist_camp": "insect",
+        "flea_market": "cat_orange",
         "dock_shack": "avian",
         "ferry_post": "objective",
         "tide_station": "avian",
@@ -340,8 +343,129 @@ class World:
         "firewatch_tower",
         "weather_station",
         "herbalist_camp",
+        "flea_market",
         "bait_shop",
         "coast_watch",
+    }
+    VERTICAL_MIXED_USE_CHANCE_BY_DISTRICT = {
+        "residential": 0.018,
+        "downtown": 0.055,
+        "slums": 0.045,
+        "corporate": 0.052,
+        "entertainment": 0.05,
+    }
+    INDOOR_CITY_MARKET_CHANCE_BY_DISTRICT = {
+        "downtown": 0.14,
+        "slums": 0.16,
+        "entertainment": 0.15,
+        "industrial": 0.08,
+        "residential": 0.05,
+    }
+    NON_CITY_COMPOUND_MARKET_CHANCE_BY_AREA = {
+        "frontier": 0.18,
+        "wilderness": 0.12,
+        "coastal": 0.16,
+    }
+    VERTICAL_MIXED_USE_PARENT_ARCHETYPES = {
+        "apartment",
+        "bank",
+        "brokerage",
+        "co_working_hub",
+        "hotel",
+        "office",
+        "tenement",
+        "tower",
+    }
+    VERTICAL_MIXED_USE_TENANT_WEIGHTS = (
+        "office",
+        "office",
+        "pharmacy",
+        "backroom_clinic",
+        "bookshop",
+        "hardware_store",
+        "pawn_shop",
+        "restaurant",
+        "tavern",
+        "co_working_hub",
+        "brokerage",
+    )
+    VERTICAL_MIXED_USE_HOUSING_WEIGHTS = (
+        "apartment",
+        "tenement",
+        "flophouse",
+        "hotel",
+    )
+    VERTICAL_MIXED_USE_SPAN_SUFFIXES = (
+        "Arcade",
+        "Building",
+        "Center",
+        "Chambers",
+        "City",
+        "Court",
+        "Exchange",
+        "Flats",
+        "Galleria",
+        "Gardens",
+        "Hall",
+        "House",
+        "Landing",
+        "Lofts",
+        "Plaza",
+        "Square",
+        "Terrace",
+        "Tower",
+        "Walk",
+    )
+    INDOOR_CITY_MARKET_SPAN_SUFFIXES = (
+        "Arcade",
+        "Bazaar",
+        "Exchange",
+        "Food Hall",
+        "Galleria",
+        "Market",
+        "Market Hall",
+        "Public Market",
+        "Swap Hall",
+    )
+    INDOOR_CITY_MARKET_TENANT_WEIGHTS = (
+        "restaurant",
+        "street_kitchen",
+        "pawn_shop",
+        "thrift_store",
+        "outfitter",
+        "hardware_store",
+        "tool_depot",
+        "pharmacy",
+        "backroom_clinic",
+        "arcade",
+        "bookshop",
+        "tavern",
+        "bank",
+    )
+    NON_CITY_COMPOUND_MARKET_TENANT_WEIGHTS = (
+        "restaurant",
+        "tavern",
+        "corner_store",
+        "hardware_store",
+        "tool_depot",
+        "pawn_shop",
+        "outfitter",
+        "surplus_store",
+        "pharmacy",
+        "service_station",
+        "auto_garage",
+        "bank",
+    )
+    SPAN_SERVICE_ANCHOR_ARCHETYPES = {
+        "backroom_clinic",
+        "bank",
+        "brokerage",
+        "flophouse",
+        "hotel",
+        "office",
+        "pawn_shop",
+        "service_station",
+        "tavern",
     }
     NON_CITY_OUTSIDER_SITE_CHANCE_BY_AREA = {
         "frontier": 0.032,
@@ -1227,6 +1351,7 @@ class World:
         "firewatch_tower": ("Firewatch Tower", "Watchtower", "Signal Tower"),
         "weather_station": ("Weather Station", "Storm Station", "Sky Station"),
         "herbalist_camp": ("Herbalist Camp", "Remedy Camp", "Green Camp"),
+        "flea_market": ("Flea Market", "Swap Meet", "Market Compound"),
         "dock_shack": ("Dock Shack", "Pier Supply", "Harbor Shack"),
         "ferry_post": ("Ferry Post", "Ferry Landing", "Crossing"),
         "tide_station": ("Tide Station", "Harbor Station", "Sounding House"),
@@ -2032,6 +2157,34 @@ class World:
             prepared[replace_index] = service_site
         return prepared
 
+    def _apply_non_city_compound_market_site(self, descriptor, rng, sites):
+        prepared = [dict(site) for site in tuple(sites or ()) if isinstance(site, dict)]
+        if len(prepared) < 3:
+            return prepared
+
+        descriptor = descriptor if isinstance(descriptor, dict) else {}
+        area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
+        chance = float(self.NON_CITY_COMPOUND_MARKET_CHANCE_BY_AREA.get(area_type, 0.0))
+        if chance <= 0.0 or rng.random() >= chance:
+            return prepared
+        if any(str(site.get("span_kind", "") or "").strip().lower() == "non_city_compound_market" for site in prepared):
+            return prepared
+
+        used_site_names = {
+            str(site.get("name", "")).strip()
+            for site in prepared
+            if str(site.get("name", "")).strip()
+        }
+        market_site = self._build_non_city_compound_market_site_record(
+            descriptor,
+            0,
+            used_site_names,
+            rng,
+        )
+        if not market_site:
+            return prepared
+        return [market_site] + prepared
+
     def _generate_non_city_sites_base(self, descriptor, rng):
         area_type = str(descriptor.get("area_type", "frontier")).strip().lower() or "frontier"
         if area_type == "city":
@@ -2059,6 +2212,7 @@ class World:
             sites.append(self._build_non_city_site_record(descriptor, kind, idx, used_site_names))
 
         sites = self._apply_non_city_compound_service_sites(descriptor, rng, sites)
+        sites = self._apply_non_city_compound_market_site(descriptor, rng, sites)
         return self._apply_non_city_outsider_sites(descriptor, rng, sites)
 
     def generate_non_city_sites(self, descriptor, rng):
@@ -3076,6 +3230,332 @@ class World:
         used_names.add(fallback)
         return fallback, None
 
+    def _span_name_for(self, span_kind, archetype, rng, used_names):
+        span_kind = str(span_kind or "").strip().lower()
+        archetype = str(archetype or "").strip().lower()
+        if span_kind not in {"vertical_mixed_use", "indoor_city_market"}:
+            return "", None
+
+        templates = (
+            "{street} {suffix}",
+            "{adj} {suffix}",
+            "{noun} {suffix}",
+            "{founder_last} {suffix}",
+            "The {adj} {suffix}",
+            "{adj} {street} {suffix}",
+        )
+        suffixes = tuple(self.VERTICAL_MIXED_USE_SPAN_SUFFIXES)
+        if span_kind == "indoor_city_market":
+            suffixes = tuple(self.INDOOR_CITY_MARKET_SPAN_SUFFIXES)
+            templates = (
+                "{street} {suffix}",
+                "{adj} {suffix}",
+                "{noun} {suffix}",
+                "The {adj} {suffix}",
+                "{adj} {street} {suffix}",
+            )
+        elif archetype in {"apartment", "tenement"}:
+            suffixes = ("Flats", "House", "Court", "Gardens", "Landing", "Lofts", "Terrace", "Walk")
+        elif archetype in {"bank", "brokerage"}:
+            suffixes = ("Exchange", "Center", "Chambers", "Building", "Arcade", "Court", "Plaza")
+        elif archetype in {"office", "co_working_hub"}:
+            suffixes = ("Center", "Chambers", "Building", "Arcade", "Hall", "Galleria", "Exchange", "Plaza")
+        elif archetype == "tower":
+            suffixes = ("Tower", "Spire")
+        elif archetype == "hotel":
+            suffixes = ("House", "Arcade", "Court", "Gardens", "Landing", "Hall")
+
+        for _ in range(8):
+            founder = self._business_founder(rng)
+            template = rng.choice(templates)
+            candidate = " ".join(template.format(
+                adj=self._default_name_token("adjectives", rng),
+                noun=self._default_name_token("nouns", rng),
+                street=self._default_name_token("street_terms", rng),
+                founder_last=founder.get("last_name", self._default_name_token("founder_last_names", rng)),
+                suffix=rng.choice(suffixes),
+            ).split())
+            if candidate not in used_names:
+                used_names.add(candidate)
+                return candidate, founder
+
+        fallback = f"{self._default_name_token('street_terms', rng)} {rng.choice(suffixes)} {rng.randint(11, 99)}"
+        used_names.add(fallback)
+        return fallback, None
+
+    def _named_span_spec(self, archetype, rng, used_business_names, *, floor=0, child_kind="tenant", public=None):
+        archetype = str(archetype or "").strip().lower()
+        if not archetype:
+            return {}
+        business_name = None
+        founder = None
+        if archetype in self.NAMED_BUSINESS_ARCHETYPES:
+            business_name, founder = self._business_name_for(archetype, rng, used_business_names)
+        label = business_name or self.NON_CITY_SITE_LABELS.get(archetype, archetype.replace("_", " ").title())
+        if public is None:
+            public = archetype in self.STOREFRONT_ARCHETYPES or archetype in self.PUBLIC_BUILDING_ARCHETYPES
+        return {
+            "child_kind": str(child_kind or "tenant").strip().lower() or "tenant",
+            "archetype": archetype,
+            "name": label,
+            "business_name": business_name,
+            "business_founder_name": founder.get("full_name") if founder else None,
+            "business_founder_first_name": founder.get("first_name") if founder else None,
+            "business_founder_last_name": founder.get("last_name") if founder else None,
+            "floor": int(floor),
+            "public": bool(public),
+            "is_storefront": archetype in self.STOREFRONT_ARCHETYPES,
+        }
+
+    def _span_specs_from_pool(self, rng, pool, count, used_business_names, *, floors=(0,), child_kind="tenant", public=None):
+        specs = []
+        used = set()
+        pool = tuple(str(value).strip().lower() for value in tuple(pool or ()) if str(value).strip())
+        floors = tuple(int(floor) for floor in tuple(floors or (0,)))
+        if not pool or not floors:
+            return specs
+        for index in range(max(0, int(count))):
+            candidates = [value for value in pool if value not in used]
+            if not candidates:
+                candidates = list(pool)
+            archetype = str(rng.choice(candidates)).strip().lower()
+            used.add(archetype)
+            spec = self._named_span_spec(
+                archetype,
+                rng,
+                used_business_names,
+                floor=floors[index % len(floors)],
+                child_kind=child_kind,
+                public=public,
+            )
+            if spec:
+                specs.append(spec)
+        return specs
+
+    def _ensure_span_service_anchor(self, specs, rng, used_business_names, *, anchor_pool, floors=(0,), child_kind="tenant", public=None):
+        specs = [dict(spec) for spec in tuple(specs or ()) if isinstance(spec, dict)]
+        if any(str(spec.get("archetype", "") or "").strip().lower() in self.SPAN_SERVICE_ANCHOR_ARCHETYPES for spec in specs):
+            return specs
+
+        anchors = tuple(
+            str(archetype).strip().lower()
+            for archetype in tuple(anchor_pool or ())
+            if str(archetype).strip().lower()
+        )
+        if not anchors:
+            return specs
+        try:
+            floor = int((specs[-1] if specs else {}).get("floor", tuple(floors or (0,))[-1]))
+        except (TypeError, ValueError, IndexError):
+            floor = 0
+        anchor_spec = self._named_span_spec(
+            rng.choice(anchors),
+            rng,
+            used_business_names,
+            floor=floor,
+            child_kind=child_kind,
+            public=public,
+        )
+        if not anchor_spec:
+            return specs
+        if specs:
+            specs[-1] = anchor_spec
+        else:
+            specs.append(anchor_spec)
+        return specs
+
+    def _vertical_mixed_use_chance(self, district_type, density, wealth, archetype):
+        chance = float(self.VERTICAL_MIXED_USE_CHANCE_BY_DISTRICT.get(district_type, 0.0))
+        if chance <= 0.0:
+            return 0.0
+        if archetype not in self.VERTICAL_MIXED_USE_PARENT_ARCHETYPES:
+            return 0.0
+        if density >= 7:
+            chance += 0.018
+        if wealth >= 7:
+            chance += 0.012
+        return max(0.0, min(0.12, chance))
+
+    def _maybe_apply_vertical_mixed_use_span(self, building, district, rng, used_business_names):
+        if not isinstance(building, dict):
+            return building
+        if building.get("span_kind"):
+            return building
+        district_type = str(district.get("district_type", "residential") or "residential").strip().lower()
+        density = int(district.get("population_density", 5) or 5)
+        wealth = int(district.get("wealth", 5) or 5)
+        archetype = str(building.get("archetype", "") or "").strip().lower()
+        chance = self._vertical_mixed_use_chance(district_type, density, wealth, archetype)
+        if chance <= 0.0 or rng.random() >= chance:
+            return building
+
+        floors = max(2, int(building.get("floors", 1) or 1))
+        if floors < 3 and density >= 7 and rng.random() < 0.45:
+            floors = 3
+        building["floors"] = max(2, min(3, floors))
+        span_id = f"span:{building.get('building_id', 'vertical')}:vertical"
+        span_name, span_founder = self._span_name_for(
+            "vertical_mixed_use",
+            archetype,
+            rng,
+            used_business_names,
+        )
+        tenant_floors = (1,) if int(building["floors"]) <= 2 else (1, 2)
+        tenant_count = 2 + int(int(building["floors"]) >= 3 and rng.random() < 0.35)
+        building["span_kind"] = "vertical_mixed_use"
+        building["span_id"] = span_id
+        building["span_name"] = span_name or str(building.get("business_name", "") or "").strip()
+        building["span_founder_name"] = span_founder.get("full_name") if span_founder else None
+        building["span_founder_first_name"] = span_founder.get("first_name") if span_founder else None
+        building["span_founder_last_name"] = span_founder.get("last_name") if span_founder else None
+        building["rooms"] = [
+            "lobby",
+            "hallway",
+            "stair",
+            "open_office",
+            "meeting_room",
+            "shop_floor",
+            "units",
+            "service_corridor",
+        ]
+        building["public"] = True
+        tenant_specs = self._span_specs_from_pool(
+            rng,
+            self.VERTICAL_MIXED_USE_TENANT_WEIGHTS,
+            tenant_count,
+            used_business_names,
+            floors=tenant_floors,
+            child_kind="tenant",
+            public=None,
+        )
+        building["tenant_specs"] = self._ensure_span_service_anchor(
+            tenant_specs,
+            rng,
+            used_business_names,
+            anchor_pool=("office", "brokerage", "bank", "backroom_clinic", "pawn_shop"),
+            floors=tenant_floors,
+            child_kind="tenant",
+            public=None,
+        )
+        housing_specs = []
+        if int(building["floors"]) >= 3 and rng.random() < 0.65:
+            housing_specs = self._span_specs_from_pool(
+                rng,
+                self.VERTICAL_MIXED_USE_HOUSING_WEIGHTS,
+                1,
+                used_business_names,
+                floors=(2,),
+                child_kind="housing",
+                public=False,
+            )
+        building["housing_specs"] = housing_specs
+        return building
+
+    def _indoor_city_market_chance(self, district_type, density, wealth):
+        chance = float(self.INDOOR_CITY_MARKET_CHANCE_BY_DISTRICT.get(district_type, 0.0))
+        if chance <= 0.0:
+            return 0.0
+        if density >= 7:
+            chance += 0.03
+        if wealth >= 7:
+            chance += 0.015
+        return max(0.0, min(0.24, chance))
+
+    def _build_indoor_city_market_building(self, district, bx, by, rng, used_business_names):
+        business_name, founder = self._span_name_for("indoor_city_market", "junk_market", rng, used_business_names)
+        span_id = f"span:{int(bx)}:{int(by)}:indoor_market"
+        tenant_count = 4 + int(rng.random() < 0.45)
+        tenant_specs = self._span_specs_from_pool(
+            rng,
+            self.INDOOR_CITY_MARKET_TENANT_WEIGHTS,
+            tenant_count,
+            used_business_names,
+            floors=(0,),
+            child_kind="tenant",
+            public=None,
+        )
+        tenant_specs = self._ensure_span_service_anchor(
+            tenant_specs,
+            rng,
+            used_business_names,
+            anchor_pool=("bank", "tavern", "pawn_shop", "backroom_clinic"),
+            floors=(0,),
+            child_kind="tenant",
+            public=None,
+        )
+        return {
+            "building_id": f"{bx}:{by}:market",
+            "archetype": "junk_market",
+            "floors": 1,
+            "basement_levels": 0,
+            "rooms": ["market_aisle", "open_stalls", "vendor_row", "food_court", "service_corridor"],
+            "career_roles": list(self.careers_for_building("junk_market")),
+            "security_features": ["cameras"] if int(district.get("security_level", 5) or 5) >= 6 else [],
+            "loot_table": "junk_market",
+            "business_name": business_name,
+            "business_founder_name": founder.get("full_name") if founder else None,
+            "business_founder_first_name": founder.get("first_name") if founder else None,
+            "business_founder_last_name": founder.get("last_name") if founder else None,
+            "is_storefront": True,
+            "public": True,
+            "span_kind": "indoor_city_market",
+            "span_id": span_id,
+            "span_name": business_name,
+            "span_founder_name": founder.get("full_name") if founder else None,
+            "span_founder_first_name": founder.get("first_name") if founder else None,
+            "span_founder_last_name": founder.get("last_name") if founder else None,
+            "tenant_specs": tenant_specs,
+            "housing_specs": [],
+        }
+
+    def _build_non_city_compound_market_site_record(self, descriptor, idx, used_site_names, rng):
+        site_name, founder = self._non_city_site_name_for("flea_market", rng, used_site_names)
+        used_business_names = set(used_site_names or set())
+        span_id = f"span:{int(descriptor.get('cx', 0))}:{int(descriptor.get('cy', 0))}:compound_market"
+        tenant_specs = self._span_specs_from_pool(
+            rng,
+            self.NON_CITY_COMPOUND_MARKET_TENANT_WEIGHTS,
+            4 + int(rng.random() < 0.35),
+            used_business_names,
+            floors=(0,),
+            child_kind="tenant",
+            public=None,
+        )
+        tenant_specs = self._ensure_span_service_anchor(
+            tenant_specs,
+            rng,
+            used_business_names,
+            anchor_pool=("bank", "tavern", "pawn_shop", "service_station"),
+            floors=(0,),
+            child_kind="tenant",
+            public=None,
+        )
+        housing_specs = [
+            self._named_span_spec("field_camp", rng, used_business_names, floor=0, child_kind="housing", public=False),
+            self._named_span_spec("flophouse", rng, used_business_names, floor=0, child_kind="shelter", public=True),
+        ]
+        return {
+            "site_id": f"compound_market:{int(idx)}",
+            "kind": "flea_market",
+            "name": site_name,
+            "business_name": site_name,
+            "business_founder_name": founder.get("full_name") if founder else None,
+            "business_founder_first_name": founder.get("first_name") if founder else None,
+            "business_founder_last_name": founder.get("last_name") if founder else None,
+            "public": True,
+            "is_storefront": True,
+            "span_kind": "non_city_compound_market",
+            "span_id": span_id,
+            "span_name": site_name,
+            "span_founder_name": founder.get("full_name") if founder else None,
+            "span_founder_first_name": founder.get("first_name") if founder else None,
+            "span_founder_last_name": founder.get("last_name") if founder else None,
+            "rooms": ["market_aisle", "shared_yard", "vendor_row", "bunk_room", "service_corridor"],
+            "tenant_specs": [spec for spec in tenant_specs if spec],
+            "housing_specs": [spec for spec in housing_specs if spec],
+            "compound_market": True,
+        }
+
     def generate_district(self, cx, cy, rng):
         descriptor = self.overworld_descriptor(cx, cy)
         area_type = str(descriptor.get("area_type", self.pick_area_type(cx, cy))).strip().lower() or "city"
@@ -3408,6 +3888,18 @@ class World:
             "public": archetype in self.PUBLIC_BUILDING_ARCHETYPES,
         }
 
+    def _apply_vertical_mixed_use_spans(self, blocks, district, rng, used_business_names):
+        for block in blocks:
+            if not isinstance(block, dict) or block.get("parcel_reserved"):
+                continue
+            buildings = block.get("buildings", ())
+            if not isinstance(buildings, list) or len(buildings) != 1:
+                continue
+            building = buildings[0]
+            if not isinstance(building, dict):
+                continue
+            self._maybe_apply_vertical_mixed_use_span(building, district, rng, used_business_names)
+
     def _large_parcel_chance(self, district_type, density, wealth):
         chance = float(self.LARGE_PARCEL_BASE_CHANCE_BY_DISTRICT.get(district_type, 0.0))
         if chance <= 0.0:
@@ -3456,15 +3948,25 @@ class World:
 
         anchor_bx, anchor_by, span_x, span_y = rng.choice(candidates)
         anchor_block = blocks_by_coord[(anchor_bx, anchor_by)]
-        building = self.generate_building(
-            district,
-            anchor_bx,
-            anchor_by,
-            0,
-            rng,
-            used_business_names=used_business_names,
-            preferred_archetypes=preferred,
-        )
+        market_chance = self._indoor_city_market_chance(district_type, density, wealth)
+        if market_chance > 0.0 and rng.random() < market_chance:
+            building = self._build_indoor_city_market_building(
+                district,
+                anchor_bx,
+                anchor_by,
+                rng,
+                used_business_names,
+            )
+        else:
+            building = self.generate_building(
+                district,
+                anchor_bx,
+                anchor_by,
+                0,
+                rng,
+                used_business_names=used_business_names,
+                preferred_archetypes=preferred,
+            )
         building["parcel_span_x"] = int(span_x)
         building["parcel_span_y"] = int(span_y)
         building["large_parcel"] = True
@@ -3588,6 +4090,7 @@ class World:
                 ),
             ]
 
+        self._apply_vertical_mixed_use_spans(blocks, district, rng, used_business_names)
         self._assign_city_placement_profiles(blocks, district, cx=cx, cy=cy)
         return blocks
 

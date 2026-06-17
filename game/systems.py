@@ -308,6 +308,8 @@ from game.property_access import (
     property_apertures as _property_apertures,
     property_ingress_context as _property_ingress_context,
     property_claim_reason as _property_claim_reason,
+    shared_property_interest_event_payload as _shared_property_interest_event_payload,
+    shared_property_interests_for_position as _shared_property_interests_for_position,
     property_status_text as _property_status_text,
     world_hour as _world_hour,
 )
@@ -2137,6 +2139,14 @@ def _emit_move_access_events(
                 ingress.ingress_kind,
                 ingress.aperture_kind,
             )
+            shared_interests = _shared_property_interests_for_position(
+                sim,
+                target_x,
+                target_y,
+                target_z,
+                primary_prop=prop,
+            )
+            shared_interest_payload = _shared_property_interest_event_payload(shared_interests)
             if maybe_emit_accidental_trespass_boundary(
                 sim,
                 eid=eid,
@@ -2173,6 +2183,7 @@ def _emit_move_access_events(
                 aperture_kind=ingress.aperture_kind,
                 ingress_method=ingress_method,
                 breach_severity=ingress.breach_severity,
+                **shared_interest_payload,
             ))
             if witnesses:
                 _emit_action_offense_event(

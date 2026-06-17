@@ -74,6 +74,7 @@ from game.custom_content import (
 )
 from game.final_notice import show_final_notice, show_run_end_notice
 from game.items import ITEM_CATALOG
+from game.large_span_places import register_large_span_child_properties
 from game.npc_names import (
     generate_human_household_names,
     generate_human_personal_name,
@@ -126,7 +127,7 @@ from game.perception_systems import (
     StealthSystem,
     VisibilitySystem,
 )
-from game.property_access import default_site_services_for_archetype
+from game.property_access import COMMON_AREA_ROOM_KINDS, default_site_services_for_archetype
 from game.property_controllers import PropertySystem
 from game.property_keys import ensure_actor_has_property_key, ensure_property_lock
 from game.run_pressure import RunPressureSystem
@@ -1348,16 +1349,28 @@ def _register_chunk_properties(sim, chunk):
             archetype = building["archetype"]
             local_building_id = str(building.get("building_id", "") or "").strip()
             chunk_building_id = world_building_id(chunk["cx"], chunk["cy"], local_building_id)
+            records.extend(register_large_span_child_properties(
+                sim,
+                parent_source=building,
+                parent_layout=layout,
+                parent_building_id=chunk_building_id,
+                chunk_key=(chunk["cx"], chunk["cy"]),
+                area_type=area_type,
+                rng=rng,
+                ensure_walkable=_ensure_walkable,
+                district=chunk.get("district"),
+            ))
             finance_services = list(finance_by_archetype.get(archetype, ()))
             site_services = list(dict.fromkeys(
                 list(default_site_services_for_archetype(archetype))
                 + list(vehicle_services_for_archetype(archetype))
             ))
             business_name = str(building.get("business_name") or "").strip()
+            span_name = str(building.get("span_name") or "").strip()
             business_founder_name = str(building.get("business_founder_name") or "").strip()
             business_founder_first_name = str(building.get("business_founder_first_name") or "").strip()
             business_founder_last_name = str(building.get("business_founder_last_name") or "").strip()
-            display_name = business_name if business_name else f"{archetype}:{building['building_id']}"
+            display_name = span_name or business_name or f"{archetype}:{building['building_id']}"
             property_id = sim.register_property(
                 name=display_name,
                 kind="building",
@@ -1376,6 +1389,17 @@ def _register_chunk_properties(sim, chunk):
                     "floors": int(building.get("floors", 1)),
                     "basement_levels": int(building.get("basement_levels", 0)),
                     "rooms": list(building.get("rooms", ())),
+                    "common_area_room_kinds": sorted(COMMON_AREA_ROOM_KINDS),
+                    "common_area_kinds": sorted(COMMON_AREA_ROOM_KINDS),
+                    "span_kind": str(building.get("span_kind", "") or "").strip().lower() or None,
+                    "span_id": str(building.get("span_id", "") or "").strip() or None,
+                    "span_name": span_name or None,
+                    "span_founder_name": str(building.get("span_founder_name", "") or "").strip() or None,
+                    "span_founder_first_name": str(building.get("span_founder_first_name", "") or "").strip() or None,
+                    "span_founder_last_name": str(building.get("span_founder_last_name", "") or "").strip() or None,
+                    "span_parent": bool(building.get("span_kind")),
+                    "tenant_specs": [dict(spec) for spec in building.get("tenant_specs", ()) if isinstance(spec, dict)],
+                    "housing_specs": [dict(spec) for spec in building.get("housing_specs", ()) if isinstance(spec, dict)],
                     "footprint": dict(layout.get("footprint", {})),
                     "placement": dict(layout.get("placement", {})),
                     "placement_profile": dict(building.get("placement_profile", {})) if isinstance(building.get("placement_profile"), dict) else None,
@@ -1387,6 +1411,7 @@ def _register_chunk_properties(sim, chunk):
                     "finance_services": finance_services,
                     "site_services": site_services,
                     "is_storefront": bool(building.get("is_storefront")),
+                    "public": bool(building.get("public")),
                     "business_name": business_name or None,
                     "business_founder_name": business_founder_name or None,
                     "business_founder_first_name": business_founder_first_name or None,
@@ -1433,7 +1458,20 @@ def _register_chunk_properties(sim, chunk):
         _ensure_walkable(sim, x, y, z, glyph=".")
 
         site_kind = str(site.get("kind", "site")).strip().lower() or "site"
-        site_name = str(site.get("name", site_kind.replace("_", " ").title())).strip() or "Site"
+        site_building_id = f"{chunk['cx']}:{chunk['cy']}:{site.get('site_id', idx)}"
+        records.extend(register_large_span_child_properties(
+            sim,
+            parent_source=site,
+            parent_layout=layout,
+            parent_building_id=site_building_id,
+            chunk_key=(chunk["cx"], chunk["cy"]),
+            area_type=area_type,
+            rng=rng,
+            ensure_walkable=_ensure_walkable,
+            district=chunk.get("district"),
+        ))
+        span_name = str(site.get("span_name") or "").strip()
+        site_name = span_name or str(site.get("name", site_kind.replace("_", " ").title())).strip() or "Site"
         gameplay = site_gameplay_profile(site)
         public = bool(gameplay.get("public"))
         site_services = list(gameplay.get("site_services", ()))
@@ -1453,7 +1491,19 @@ def _register_chunk_properties(sim, chunk):
                 "archetype": site_kind,
                 "site_kind": site_kind,
                 "floors": 1,
-                "rooms": ["entry", "room"],
+                "rooms": list(site.get("rooms", ("entry", "room")) or ("entry", "room")),
+                "building_id": site_building_id,
+                "common_area_room_kinds": sorted(COMMON_AREA_ROOM_KINDS),
+                "common_area_kinds": sorted(COMMON_AREA_ROOM_KINDS),
+                "span_kind": str(site.get("span_kind", "") or "").strip().lower() or None,
+                "span_id": str(site.get("span_id", "") or "").strip() or None,
+                "span_name": span_name or None,
+                "span_founder_name": str(site.get("span_founder_name", "") or "").strip() or None,
+                "span_founder_first_name": str(site.get("span_founder_first_name", "") or "").strip() or None,
+                "span_founder_last_name": str(site.get("span_founder_last_name", "") or "").strip() or None,
+                "span_parent": bool(site.get("span_kind")),
+                "tenant_specs": [dict(spec) for spec in site.get("tenant_specs", ()) if isinstance(spec, dict)],
+                "housing_specs": [dict(spec) for spec in site.get("housing_specs", ()) if isinstance(spec, dict)],
                 "footprint": dict(layout.get("footprint", {})),
                 "entry": dict(layout.get("entry", {})),
                 "apertures": [dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)],
@@ -1477,7 +1527,7 @@ def _register_chunk_properties(sim, chunk):
             "y": y,
             "z": z,
             "archetype": site_kind,
-            "building_id": f"{chunk['cx']}:{chunk['cy']}:{site.get('site_id', idx)}",
+            "building_id": site_building_id,
         })
 
     fixture_count = max(1, chunk_size // 8) if area_type != "city" else max(4, chunk_size // 4)

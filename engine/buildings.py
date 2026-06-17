@@ -1834,6 +1834,10 @@ def building_signage_text(building):
     if not isinstance(building, dict):
         return ""
 
+    span_name = str(building.get("span_name") or "").strip()
+    if span_name:
+        return span_name
+
     business_name = str(building.get("business_name") or "").strip()
     if business_name:
         return business_name

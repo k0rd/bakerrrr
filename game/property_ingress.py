@@ -16,6 +16,8 @@ from game.property_access import (
     evaluate_property_access as _evaluate_property_access,
     property_claim_reason as _property_claim_reason,
     property_ingress_context as _property_ingress_context,
+    shared_property_interest_event_payload as _shared_property_interest_event_payload,
+    shared_property_interests_for_position as _shared_property_interests_for_position,
 )
 from game.property_keys import property_lock_state
 from game.property_runtime import (
@@ -950,6 +952,15 @@ class PropertyIngressRuntime:
                 cause=ingress_method,
             )
 
+        shared_interests = _shared_property_interests_for_position(
+            self.sim,
+            candidate["x"],
+            candidate["y"],
+            candidate["z"],
+            primary_prop=prop,
+        )
+        shared_interest_payload = _shared_property_interest_event_payload(shared_interests)
+
         if hostile:
             severity_score = max(
                 24,
@@ -974,6 +985,7 @@ class PropertyIngressRuntime:
                 aperture_kind=ingress.aperture_kind,
                 ingress_method=ingress_method,
                 breach_severity=ingress.breach_severity,
+                **shared_interest_payload,
             ))
             offense_score = min(
                 100,
@@ -1040,6 +1052,7 @@ class PropertyIngressRuntime:
                 aperture_kind=ingress.aperture_kind,
                 ingress_method=ingress_method,
                 breach_severity=ingress.breach_severity,
+                **shared_interest_payload,
             ))
             self.action_system._emit_action_offense(
                 eid=eid,

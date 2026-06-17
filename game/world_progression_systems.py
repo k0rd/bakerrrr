@@ -84,6 +84,7 @@ from game.items import (
     merge_item_stack_metadata,
     prepare_item_stack_metadata,
 )
+from game.large_span_places import register_large_span_child_properties
 from game.opportunities import (
     SPECIALTY_OPPORTUNITY_THEMES,
     _opportunity_requirements,
@@ -138,6 +139,7 @@ from game.population import (
     work_shift_active,
 )
 from game.property_access import (
+    COMMON_AREA_ROOM_KINDS,
     PropertyIngressResult,
     _boundary_tile as _property_boundary_tile,
     apply_controller_intrusion as _apply_controller_intrusion,
@@ -650,6 +652,17 @@ class WorldStreamingSystem(System):
                 archetype = building["archetype"]
                 local_building_id = str(building.get("building_id", "") or "").strip()
                 chunk_building_id = world_building_id(key[0], key[1], local_building_id)
+                records.extend(register_large_span_child_properties(
+                    self.sim,
+                    parent_source=building,
+                    parent_layout=layout,
+                    parent_building_id=chunk_building_id,
+                    chunk_key=key,
+                    area_type=area_type,
+                    rng=rng,
+                    ensure_walkable=self._ensure_property_anchor,
+                    district=chunk.get("district"),
+                ))
                 service_seed_token = _building_site_service_seed_token(key[0], key[1], building, building_index=i)
                 finance_services = list(finance_by_archetype.get(archetype, ()))
                 site_services = list(dict.fromkeys(
@@ -665,6 +678,7 @@ class WorldStreamingSystem(System):
                         (underpass_plan.get("station_surface", {}) or {}).get("destination", {}) or {}
                     )
                 business_name = str(building.get("business_name") or "").strip()
+                span_name = str(building.get("span_name") or "").strip()
                 business_founder_name = str(building.get("business_founder_name") or "").strip()
                 business_founder_first_name = str(building.get("business_founder_first_name") or "").strip()
                 business_founder_last_name = str(building.get("business_founder_last_name") or "").strip()
@@ -673,7 +687,7 @@ class WorldStreamingSystem(System):
                     building.get("floors", 1),
                     building.get("basement_levels", 0),
                 )
-                display_name = business_name if business_name else f"{archetype}:{building['building_id']}"
+                display_name = span_name or business_name or f"{archetype}:{building['building_id']}"
                 metadata = {
                     "archetype": archetype,
                     "building_id": chunk_building_id,
@@ -684,6 +698,17 @@ class WorldStreamingSystem(System):
                     "floors": int(floors),
                     "basement_levels": int(basement_levels),
                     "rooms": list(building.get("rooms", ())),
+                    "common_area_room_kinds": sorted(COMMON_AREA_ROOM_KINDS),
+                    "common_area_kinds": sorted(COMMON_AREA_ROOM_KINDS),
+                    "span_kind": str(building.get("span_kind", "") or "").strip().lower() or None,
+                    "span_id": str(building.get("span_id", "") or "").strip() or None,
+                    "span_name": span_name or None,
+                    "span_founder_name": str(building.get("span_founder_name", "") or "").strip() or None,
+                    "span_founder_first_name": str(building.get("span_founder_first_name", "") or "").strip() or None,
+                    "span_founder_last_name": str(building.get("span_founder_last_name", "") or "").strip() or None,
+                    "span_parent": bool(building.get("span_kind")),
+                    "tenant_specs": [dict(spec) for spec in building.get("tenant_specs", ()) if isinstance(spec, dict)],
+                    "housing_specs": [dict(spec) for spec in building.get("housing_specs", ()) if isinstance(spec, dict)],
                     "footprint": dict(layout.get("footprint", {})),
                     "placement": dict(layout.get("placement", {})),
                     "placement_profile": dict(building.get("placement_profile", {})) if isinstance(building.get("placement_profile"), dict) else None,
@@ -758,8 +783,21 @@ class WorldStreamingSystem(System):
 
             self._ensure_property_anchor(x, y, z)
             site_kind = str(site.get("kind", "site")).strip().lower() or "site"
+            site_building_id = f"{key[0]}:{key[1]}:{site.get('site_id', idx)}"
+            records.extend(register_large_span_child_properties(
+                self.sim,
+                parent_source=site,
+                parent_layout=layout,
+                parent_building_id=site_building_id,
+                chunk_key=key,
+                area_type=area_type,
+                rng=rng,
+                ensure_walkable=self._ensure_property_anchor,
+                district=chunk.get("district"),
+            ))
             service_seed_token = _site_service_seed_token(key[0], key[1], site, site_index=idx)
-            site_name = str(site.get("name", site_kind.replace("_", " ").title())).strip() or "Site"
+            span_name = str(site.get("span_name") or "").strip()
+            site_name = span_name or str(site.get("name", site_kind.replace("_", " ").title())).strip() or "Site"
             gameplay = site_gameplay_profile(site)
             public = bool(gameplay.get("public"))
             site_services = list(gameplay.get("site_services", ()))
@@ -780,7 +818,19 @@ class WorldStreamingSystem(System):
                     "archetype": site_kind,
                     "site_kind": site_kind,
                     "floors": 1,
-                    "rooms": ["entry", "room"],
+                    "rooms": list(site.get("rooms", ("entry", "room")) or ("entry", "room")),
+                    "building_id": site_building_id,
+                    "common_area_room_kinds": sorted(COMMON_AREA_ROOM_KINDS),
+                    "common_area_kinds": sorted(COMMON_AREA_ROOM_KINDS),
+                    "span_kind": str(site.get("span_kind", "") or "").strip().lower() or None,
+                    "span_id": str(site.get("span_id", "") or "").strip() or None,
+                    "span_name": span_name or None,
+                    "span_founder_name": str(site.get("span_founder_name", "") or "").strip() or None,
+                    "span_founder_first_name": str(site.get("span_founder_first_name", "") or "").strip() or None,
+                    "span_founder_last_name": str(site.get("span_founder_last_name", "") or "").strip() or None,
+                    "span_parent": bool(site.get("span_kind")),
+                    "tenant_specs": [dict(spec) for spec in site.get("tenant_specs", ()) if isinstance(spec, dict)],
+                    "housing_specs": [dict(spec) for spec in site.get("housing_specs", ()) if isinstance(spec, dict)],
                     "footprint": dict(layout.get("footprint", {})),
                     "footprint_excluded_cells": [
                         {"x": int(cell_x), "y": int(cell_y)}
@@ -810,8 +860,8 @@ class WorldStreamingSystem(System):
                 "y": y,
                 "z": z,
                 "archetype": site_kind,
-                    "building_id": f"{key[0]}:{key[1]}:{site.get('site_id', idx)}",
-                })
+                "building_id": site_building_id,
+            })
 
         for plan in underground_plans:
             anchor = plan.get("anchor", {})
@@ -838,6 +888,7 @@ class WorldStreamingSystem(System):
                     "source_building_id": str(plan.get("source_building_id", "")).strip() or None,
                     "floors": int(plan.get("floors", 1) or 1),
                     "rooms": list(plan.get("rooms", ())),
+                    "common_area_room_kinds": sorted(COMMON_AREA_ROOM_KINDS),
                     "footprint": dict(footprint),
                     "footprint_excluded_cells": [
                         dict(cell)

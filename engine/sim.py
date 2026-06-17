@@ -11,6 +11,7 @@ from .tilemap import Tile, TileMap
 from game.appearance import AppearanceManager
 from game.components import AI, CreatureIdentity, Position
 from game.items import prepare_ground_item_stack_metadata
+from game.property_access import COMMON_AREA_ROOM_KINDS
 from game.system_support.actor_attention_runtime import warmth_protected_chunks
 from game.system_support.fire_runtime import fire_protected_chunks
 
@@ -1502,6 +1503,11 @@ class Simulation:
     def _mark_structure_area(self, left, right, top, bottom, z, info, room_plan=None, excluded=None):
         excluded = excluded or frozenset()
         stamped = dict(info or {})
+        common_area_room_kinds = {
+            str(room_kind or "").strip().lower().replace("-", "_").replace(" ", "_")
+            for room_kind in tuple(stamped.get("common_area_room_kinds", ()) or COMMON_AREA_ROOM_KINDS)
+            if str(room_kind or "").strip()
+        }
         room_cells = {}
         room_list = tuple((room_plan or {}).get("rooms", ()))
         for room_index, room in enumerate(room_list):
@@ -1522,6 +1528,9 @@ class Simulation:
                 room_info = room_cells.get((int(x), int(y), int(z)))
                 if room_info:
                     cell_info.update(room_info)
+                    room_kind = str(room_info.get("room_kind", "") or "").strip().lower()
+                    if room_kind in common_area_room_kinds:
+                        cell_info["common_area_kind"] = room_kind
                 self.structure_cells[(int(x), int(y), int(z))] = cell_info
 
     def _add_vertical_link_stack(self, x, y, top_floor, kind, bottom_floor=0):
@@ -1940,16 +1949,21 @@ class Simulation:
             structure_id = f"{chunk.get('cx', 0)}:{chunk.get('cy', 0)}:{site.get('site_id', idx)}"
             structure_info = {
                 "building_id": structure_id,
-                "name": str(site.get("name", site.get("kind", "site"))),
+                "name": str(site.get("span_name") or site.get("name", site.get("kind", "site"))),
                 "archetype": str(site.get("kind", "")).strip().lower(),
                 "is_storefront": False,
                 "floor": 0,
                 "floors": 1,
+                "rooms": tuple(site.get("rooms", ("entry", "room")) or ("entry", "room")),
+                "common_area_room_kinds": tuple(sorted(COMMON_AREA_ROOM_KINDS)),
                 "entry": entry,
                 "apertures": tuple(dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)),
                 "footprint": dict(layout.get("footprint", {})),
                 "signage": dict(layout["signage"]) if isinstance(layout.get("signage"), dict) else None,
                 "site_kind": str(site.get("kind", "")).strip().lower(),
+                "span_id": str(site.get("span_id", "") or "").strip() or None,
+                "span_kind": str(site.get("span_kind", "") or "").strip().lower() or None,
+                "span_name": str(site.get("span_name", "") or "").strip() or None,
                 "area_type": area_type,
             }
             room_plan = self._room_plan_for_shell(
@@ -2183,17 +2197,21 @@ class Simulation:
                         structure_info = {
                             "building_id": chunk_building_id,
                             "local_building_id": local_building_id or None,
-                            "name": str(building.get("business_name") or building.get("archetype") or "building"),
+                            "name": str(building.get("span_name") or building.get("business_name") or building.get("archetype") or "building"),
                             "archetype": str(building.get("archetype", "")).strip().lower(),
                             "is_storefront": bool(building.get("is_storefront")),
                             "large_parcel": bool(building.get("large_parcel")),
                             "parcel_span_x": int(building.get("parcel_span_x", 1) or 1),
                             "parcel_span_y": int(building.get("parcel_span_y", 1) or 1),
+                            "span_id": str(building.get("span_id", "") or "").strip() or None,
+                            "span_kind": str(building.get("span_kind", "") or "").strip().lower() or None,
+                            "span_name": str(building.get("span_name", "") or "").strip() or None,
                             "floor": z,
                             "floors": floors,
                             "basement_levels": basement_levels,
                             "total_levels": floors + basement_levels,
                             "rooms": tuple(room.get("kind", "room") for room in room_plan.get("rooms", ())) or tuple(building.get("rooms", ())),
+                            "common_area_room_kinds": tuple(sorted(COMMON_AREA_ROOM_KINDS)),
                             "entry": entry,
                             "apertures": tuple(dict(aperture) for aperture in layout.get("apertures", ()) if isinstance(aperture, dict)),
                             "footprint": dict(layout.get("footprint", {})),
@@ -2297,6 +2315,7 @@ class Simulation:
                     "basement_levels": 0,
                     "total_levels": 1,
                     "rooms": tuple(room.get("kind", "room") for room in room_plan.get("rooms", ())) or tuple(plan.get("rooms", ("maintenance_tunnel",))),
+                    "common_area_room_kinds": tuple(sorted(COMMON_AREA_ROOM_KINDS)),
                     "entry": dict(entry),
                     "apertures": tuple(
                         dict(aperture)
