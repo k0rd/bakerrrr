@@ -691,11 +691,25 @@ class InputSystem(System):
         speed = max(1, min(4, speed))
         return float(max(0.08, min(0.24, 0.30 - (0.055 * speed))))
 
+    def _time_pause_blocks_realtime_movement(self):
+        reasons = getattr(self.sim, "pause_reasons", None)
+        if isinstance(reasons, (set, list, tuple)):
+            blocking_reasons = {
+                str(reason or "").strip().lower()
+                for reason in reasons
+                if str(reason or "").strip()
+            }
+            blocking_reasons.discard("tick_throttle")
+            return bool(blocking_reasons)
+        if callable(getattr(self.sim, "is_time_paused", None)):
+            return bool(self.sim.is_time_paused())
+        return False
+
     def _local_drive_controls_blocked(self, *, zoom_mode=None):
         mode = str(zoom_mode if zoom_mode is not None else getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
         if mode == "overworld":
             return True
-        if callable(getattr(self.sim, "is_time_paused", None)) and self.sim.is_time_paused():
+        if self._time_pause_blocks_realtime_movement():
             return True
         overlay = getattr(self.sim, "combat_overlay", {})
         return bool(getattr(self.sim, "turn_based", False)) or bool(isinstance(overlay, dict) and overlay.get("active"))
@@ -1060,7 +1074,7 @@ class InputSystem(System):
         ):
             return False
 
-        if callable(getattr(self.sim, "is_time_paused", None)) and self.sim.is_time_paused():
+        if self._time_pause_blocks_realtime_movement():
             return False
 
         if str(zoom_mode).strip().lower() != "city":
@@ -1153,7 +1167,7 @@ class InputSystem(System):
         ):
             return False
 
-        if callable(getattr(self.sim, "is_time_paused", None)) and self.sim.is_time_paused():
+        if self._time_pause_blocks_realtime_movement():
             return False
 
         if str(zoom_mode).strip().lower() != "overworld":

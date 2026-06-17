@@ -6,6 +6,7 @@ import sys
 import textwrap
 import time
 
+from game.ui_text_runtime import _modal_body_widths, _modal_panel_width
 from ui.input_keys import (
     ENTER_KEYS,
     KEY_DOWN,
@@ -58,14 +59,14 @@ def _wrap_notice_lines(lines, width):
     return wrapped
 
 
-def _notice_modal_geometry(width, height):
+def _notice_modal_geometry(view, width, height):
     width = max(24, int(width))
     height = max(10, int(height))
-    panel_w = max(32, min(width - 4, int(round(width * 0.75))))
+    panel_w = min(width - 4, _modal_panel_width(width, fraction=0.75, min_width=48))
     panel_h = max(9, min(height - 2, int(round(height * 0.75))))
     left = max(0, (width - panel_w) // 2)
     top = max(0, (height - panel_h) // 2)
-    body_w = max(20, panel_w - 4)
+    _body_cell_w, body_w = _modal_body_widths(view, panel_w, horizontal_padding=4, min_width=20)
     body_h = max(1, panel_h - 5)
     return {
         "panel_w": panel_w,
@@ -79,7 +80,7 @@ def _notice_modal_geometry(width, height):
 
 def _draw_modal(view, title, lines, *, scroll=0):
     width, height = _view_size(view)
-    geometry = _notice_modal_geometry(width, height)
+    geometry = _notice_modal_geometry(view, width, height)
     panel_w = geometry["panel_w"]
     panel_h = geometry["panel_h"]
     left = geometry["left"]

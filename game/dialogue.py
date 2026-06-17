@@ -211,7 +211,7 @@ TOPIC_DEFS = {
         "unlocks": (),
     },
     "fire": {
-        "label": "We need to talk about your job.",
+        "label": "I need to talk about your job.",
         "root": True,
         "unlocks": (),
     },
@@ -1106,9 +1106,9 @@ PLAYER_TOPIC_BANKS = {
         "Want a spot on the schedule?",
     ),
     "fire": (
-        "I am firing you from {player_business_fire_name}.",
-        "I am ending your work at {player_business_fire_name}.",
-        "Your shift at {player_business_fire_name} is done.",
+        "I need to take you off staff at {player_business_fire_name}.",
+        "I am ending your position at {player_business_fire_name}.",
+        "Your work at {player_business_fire_name} ends today.",
         "I need you off the schedule at {player_business_fire_name}.",
     ),
     "services": (
@@ -1788,6 +1788,9 @@ PLAYER_CONNECTIVE_SKIP_TOPICS = {
 
 
 PLAYER_MENU_BASE_LABEL_TOPICS = {
+    "hire",
+    "hire_manager",
+    "hire_staff",
     "fire",
     "street_buy_accept",
     "street_buy_next",
@@ -4203,17 +4206,42 @@ def topic_label(topic_id, context=None):
             for role in tuple(context.get("player_business_hire_roles", ()) or ())
             if str(role).strip()
         )
+        if context.get("player_business_hire_poaching") and context.get("player_business_hire_current_name"):
+            if len(open_roles) > 1:
+                return _with_hint(
+                    f"Would you leave {context['player_business_hire_current_name']} for {context['player_business_hire_name']}?",
+                    "player_business_hire_fit_hint",
+                )
+            if str(context.get("player_business_hire_role", "")).strip().lower() == "manager":
+                return _with_hint(
+                    f"Would you leave {context['player_business_hire_current_name']} to run {context['player_business_hire_name']}?",
+                    "player_business_hire_fit_hint",
+                )
+            return _with_hint(
+                f"Would you leave {context['player_business_hire_current_name']} for {context['player_business_hire_name']}?",
+                "player_business_hire_fit_hint",
+            )
         if len(open_roles) > 1:
             return _with_hint(f"Want work at {context['player_business_hire_name']}?", "player_business_hire_fit_hint")
         if str(context.get("player_business_hire_role", "")).strip().lower() == "manager":
             return _with_hint(f"Want to run {context['player_business_hire_name']}?", "player_business_hire_fit_hint")
         return _with_hint(f"Want work at {context['player_business_hire_name']}?", "player_business_hire_fit_hint")
     if topic_id == "hire_manager" and context.get("player_business_hire_name"):
+        if context.get("player_business_hire_poaching") and context.get("player_business_hire_current_name"):
+            return _with_hint(
+                f"Would you leave {context['player_business_hire_current_name']} to run {context['player_business_hire_name']}?",
+                "player_business_hire_manager_fit_hint",
+            )
         return _with_hint(f"Would you run {context['player_business_hire_name']}?", "player_business_hire_manager_fit_hint")
     if topic_id == "hire_staff" and context.get("player_business_hire_name"):
+        if context.get("player_business_hire_poaching") and context.get("player_business_hire_current_name"):
+            return _with_hint(
+                f"Would you leave {context['player_business_hire_current_name']} for shifts at {context['player_business_hire_name']}?",
+                "player_business_hire_staff_fit_hint",
+            )
         return _with_hint(f"Would you take a shift at {context['player_business_hire_name']}?", "player_business_hire_staff_fit_hint")
     if topic_id == "fire" and context.get("player_business_fire_name"):
-        return f"Fire you from {context['player_business_fire_name']}."
+        return f"I need to take you off staff at {context['player_business_fire_name']}."
     if topic_id == "owner" and context.get("owner_place_name"):
         return f"Who runs {context['owner_place_name']}?"
     if topic_id == "security" and context.get("owner_place_name"):

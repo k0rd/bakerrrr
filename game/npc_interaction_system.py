@@ -5613,7 +5613,7 @@ class NPCInteractionSystem(System):
     def _player_business_staffing_options(self, context):
         if not isinstance(context, dict):
             return {"hire": None, "fire": None}
-        if bool(context.get("guarded")) or not bool(context.get("human", True)):
+        if not bool(context.get("human", True)):
             return {"hire": None, "fire": None}
 
         npc_eid = context.get("npc_eid")
@@ -5633,15 +5633,15 @@ class NPCInteractionSystem(System):
                 "role": str(fire_record.get("role", "staff") or "staff").strip().lower() or "staff",
             }
 
+        if bool(context.get("guarded")):
+            return {"hire": None, "fire": fire_option}
+
         hire_option = None
         occupation = self.sim.ecs.get(Occupation).get(npc_eid)
         workplace = getattr(occupation, "workplace", None)
-        employed_elsewhere = bool(
-            isinstance(workplace, dict)
-            and str(workplace.get("property_id", "")).strip()
-            and fire_option is None
-        )
-        if not employed_elsewhere and fire_option is None:
+        current_property_id = str(workplace.get("property_id", "")).strip() if isinstance(workplace, dict) else ""
+        current_workplace_prop = self.sim.properties.get(current_property_id) if current_property_id else None
+        if fire_option is None:
             targets = list(player_business_staffing_targets(self.sim, self.player_eid))
             if targets:
                 preferred_ids = []
@@ -5689,22 +5689,233 @@ class NPCInteractionSystem(System):
                         "role": primary_role,
                         "roles": open_roles,
                     }
+                    if (
+                        current_property_id
+                        and current_property_id != str(hire_option.get("property_id", "")).strip()
+                    ):
+                        hire_option.update({
+                            "poaching": True,
+                            "current_property_id": current_property_id,
+                            "current_prop": current_workplace_prop,
+                            "current_business_name": (
+                                str((current_workplace_prop or {}).get("metadata", {}).get("business_name", "")).strip()
+                                or str((current_workplace_prop or {}).get("name", "")).strip()
+                                or "their current job"
+                            ),
+                        })
 
         return {
             "hire": hire_option,
             "fire": fire_option,
         }
 
+    def _player_business_property_anchor(self, prop):
+        if not isinstance(prop, dict):
+            return None
+        focus = _property_focus_position(prop) or _property_display_position(prop)
+        if focus is not None:
+            try:
+                return (int(focus[0]), int(focus[1]), int(focus[2] if len(focus) > 2 else prop.get("z", 0)))
+            except (TypeError, ValueError, IndexError):
+                return None
+        try:
+            return (int(prop.get("x")), int(prop.get("y")), int(prop.get("z", 0)))
+        except (TypeError, ValueError):
+            return None
+
+    def _player_business_anchor_distance(self, left, right):
+        if left is None or right is None:
+            return None
+        try:
+            distance = _manhattan(int(left[0]), int(left[1]), int(right[0]), int(right[1]))
+            if int(left[2]) != int(right[2]):
+                distance += 8
+            return int(distance)
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    def _player_business_home_anchor(self, npc_eid, *, home_prop=None):
+        routine = self.sim.ecs.get(NPCRoutine).get(npc_eid)
+        raw_home = getattr(routine, "home", None) if routine is not None else None
+        if isinstance(raw_home, (list, tuple)) and len(raw_home) >= 2:
+            try:
+                return (int(raw_home[0]), int(raw_home[1]), int(raw_home[2] if len(raw_home) > 2 else 0))
+            except (TypeError, ValueError):
+                pass
+        return self._player_business_property_anchor(home_prop)
+
+    def _player_business_offer_social_fit(self, npc_eid, target_prop, *, current_prop=None):
+        target_anchor = self._player_business_property_anchor(target_prop)
+        current_anchor = self._player_business_property_anchor(current_prop)
+        if target_anchor is None:
+            return {"bonus": 0.0, "current_pull": 0.0, "nearby_names": ()}
+        social = self.sim.ecs.get(NPCSocial).get(npc_eid)
+        if not social or not isinstance(getattr(social, "bonds", None), dict):
+            return {"bonus": 0.0, "current_pull": 0.0, "nearby_names": ()}
+
+        relation_weights = {
+            "family": 1.0,
+            "partner": 0.96,
+            "friend": 0.78,
+            "coworker": 0.5,
+            "neighbor": 0.38,
+            "local": 0.26,
+            "contact": 0.22,
+        }
+        target_bonus = 0.0
+        current_pull = 0.0
+        nearby_names = []
+        for other_eid, bond in social.bonds.items():
+            if other_eid == self.player_eid or not isinstance(bond, dict):
+                continue
+            relation = str(bond.get("kind", "contact") or "contact").strip().lower() or "contact"
+            strength = _clamp(
+                (float(bond.get("closeness", 0.0) or 0.0) * 0.58)
+                + (float(bond.get("trust", 0.0) or 0.0) * 0.42),
+                lo=0.0,
+                hi=1.0,
+            )
+            if strength < 0.18:
+                continue
+            weight = relation_weights.get(relation, 0.22)
+            anchors = []
+            occupation = self.sim.ecs.get(Occupation).get(other_eid)
+            workplace = getattr(occupation, "workplace", None) if occupation is not None else None
+            if isinstance(workplace, dict):
+                workplace_prop = self.sim.properties.get(str(workplace.get("property_id", "")).strip())
+                workplace_anchor = self._player_business_property_anchor(workplace_prop)
+                if workplace_anchor is not None:
+                    anchors.append(workplace_anchor)
+            other_routine = self.sim.ecs.get(NPCRoutine).get(other_eid)
+            other_home = getattr(other_routine, "home", None) if other_routine is not None else None
+            if isinstance(other_home, (list, tuple)) and len(other_home) >= 2:
+                try:
+                    anchors.append((int(other_home[0]), int(other_home[1]), int(other_home[2] if len(other_home) > 2 else 0)))
+                except (TypeError, ValueError):
+                    pass
+            if not anchors:
+                continue
+
+            target_distances = [
+                distance
+                for distance in (
+                    self._player_business_anchor_distance(target_anchor, anchor)
+                    for anchor in anchors
+                )
+                if distance is not None
+            ]
+            if not target_distances:
+                continue
+            best_target_distance = min(target_distances)
+            if best_target_distance <= 12:
+                target_bonus += weight * strength * max(0.0, (12.0 - float(best_target_distance)) / 12.0) * 0.16
+                name = _entity_display_name(self.sim, other_eid, title_case=True)
+                if name and name not in nearby_names:
+                    nearby_names.append(name)
+            if current_anchor is not None:
+                current_distances = [
+                    distance
+                    for distance in (
+                        self._player_business_anchor_distance(current_anchor, anchor)
+                        for anchor in anchors
+                    )
+                    if distance is not None
+                ]
+                if not current_distances:
+                    continue
+                best_current_distance = min(current_distances)
+                if best_current_distance <= 8 and best_target_distance > best_current_distance + 4:
+                    current_pull += weight * strength * max(0.0, (8.0 - float(best_current_distance)) / 8.0) * 0.1
+
+        return {
+            "bonus": min(0.2, float(target_bonus)),
+            "current_pull": min(0.14, float(current_pull)),
+            "nearby_names": tuple(nearby_names[:2]),
+        }
+
+    def _player_business_hire_offer_factors(self, context, option):
+        if not isinstance(context, dict) or not isinstance(option, dict):
+            return {"score_delta": 0.0, "threshold_delta": 0.0, "decline_reason": ""}
+        target_prop = option.get("prop")
+        current_prop = option.get("current_prop") or context.get("workplace_prop")
+        target_anchor = self._player_business_property_anchor(target_prop)
+        current_anchor = self._player_business_property_anchor(current_prop)
+        home_anchor = self._player_business_home_anchor(context.get("npc_eid"), home_prop=context.get("home_prop"))
+        target_commute = self._player_business_anchor_distance(home_anchor, target_anchor)
+        current_commute = self._player_business_anchor_distance(home_anchor, current_anchor)
+
+        commute_score = 0.0
+        commute_delta = None
+        poaching = bool(option.get("poaching"))
+        if target_commute is not None and current_commute is not None:
+            commute_delta = int(current_commute) - int(target_commute)
+            commute_score = _clamp(float(commute_delta) / 32.0, lo=-0.14, hi=0.18)
+        elif target_commute is not None:
+            if target_commute <= 8:
+                commute_score = 0.05
+            elif poaching and target_commute >= 24:
+                commute_score = -0.05
+
+        organization_role = str(context.get("organization_role", "") or "").strip().lower()
+        coworker_count = max(0, int(context.get("coworker_count", 0) or 0))
+        job_attachment_penalty = 0.0
+        if poaching:
+            job_attachment_penalty = 0.1 + min(0.08, coworker_count * 0.018)
+            if organization_role in {"owner", "manager"}:
+                job_attachment_penalty += 0.05
+
+        social_fit = self._player_business_offer_social_fit(
+            context.get("npc_eid"),
+            target_prop,
+            current_prop=current_prop if poaching else None,
+        )
+        social_bonus = float(social_fit.get("bonus", 0.0) or 0.0)
+        current_social_pull = float(social_fit.get("current_pull", 0.0) or 0.0) if poaching else 0.0
+
+        attention = max(0, min(100, int(context.get("pressure_attention", 0) or 0)))
+        heat_penalty = min(0.24, (float(attention) / 100.0) * 0.24)
+        if str(context.get("pressure_tier", "") or "").strip().lower() == "high":
+            heat_penalty += 0.04
+
+        score_delta = commute_score + social_bonus - job_attachment_penalty - current_social_pull - heat_penalty
+        threshold_delta = 0.06 if poaching else 0.0
+        decline_reason = ""
+        if heat_penalty >= max(0.12, abs(commute_score), current_social_pull, job_attachment_penalty * 0.72):
+            decline_reason = "heat"
+        elif commute_score <= -0.07:
+            decline_reason = "commute"
+        elif poaching and (job_attachment_penalty + current_social_pull) >= 0.15:
+            decline_reason = "current_ties"
+        elif poaching:
+            decline_reason = "poach"
+
+        return {
+            "score_delta": float(score_delta),
+            "threshold_delta": float(threshold_delta),
+            "decline_reason": decline_reason,
+            "poaching": poaching,
+            "target_commute": target_commute,
+            "current_commute": current_commute,
+            "commute_delta": commute_delta,
+            "commute_score": float(commute_score),
+            "social_bonus": float(social_bonus),
+            "current_social_pull": float(current_social_pull),
+            "job_attachment_penalty": float(job_attachment_penalty),
+            "heat_penalty": float(heat_penalty),
+            "nearby_social_names": tuple(social_fit.get("nearby_names", ()) or ()),
+            "current_business_name": str(option.get("current_business_name", "") or context.get("player_business_hire_current_name", "") or "").strip(),
+        }
+
     def _player_business_hire_decision(self, context, option):
         if not isinstance(option, dict):
-            return False, "no_opening"
+            return False, "no_opening", {}
         if bool(context.get("guarded")):
-            return False, "guarded"
+            return False, "guarded", {}
 
         role_id = str(context.get("role_id", "") or "").strip().lower()
         career_text = str(context.get("career_text", "") or "").strip().lower()
         if role_id == "guard" or "guard" in career_text or "security" in career_text:
-            return False, "career_conflict"
+            return False, "career_conflict", {}
 
         npc_needs = context.get("npc_needs")
         tone = str(context.get("tone", "neutral") or "neutral").strip().lower()
@@ -5712,11 +5923,13 @@ class NPCInteractionSystem(System):
         conversation = float(_actor_skill(self.sim, self.player_eid, "conversation", default=5.0))
         streetwise = float(_actor_skill(self.sim, self.player_eid, "streetwise", default=5.0))
         social_standing = float(context.get("social_standing", 0.0) or 0.0)
+        offer_factors = self._player_business_hire_offer_factors(context, option)
 
         score = 0.26
         score += social_standing * 0.38
         score += (conversation / 10.0) * 0.18
         score += (streetwise / 10.0) * 0.08
+        score += float(offer_factors.get("score_delta", 0.0) or 0.0)
         if str(option.get("role", "staff")).strip().lower() == "manager" and (
             "manager" in career_text or "lead" in career_text or "supervisor" in career_text
         ):
@@ -5738,7 +5951,11 @@ class NPCInteractionSystem(System):
                 score -= 0.04
 
         threshold = 0.5 if str(option.get("role", "staff")).strip().lower() == "staff" else 0.56
-        return score >= threshold, "accepted" if score >= threshold else "declined"
+        threshold += float(offer_factors.get("threshold_delta", 0.0) or 0.0)
+        accepted = score >= threshold
+        if accepted:
+            return True, "accepted", offer_factors
+        return False, str(offer_factors.get("decline_reason", "") or "declined"), offer_factors
 
     def _player_business_hire_option_for_role(self, context, role):
         option = context.get("player_business_hire_option") if isinstance(context, dict) else None
@@ -5814,14 +6031,27 @@ class NPCInteractionSystem(System):
     def _resolve_player_business_hire(self, context, option, *, npc_eid):
         if not isinstance(option, dict):
             return {"npc_lines": ["No. I am not taking work from you right now."]}
-        accepted, reason = self._player_business_hire_decision(context, option)
+        accepted, reason, offer_factors = self._player_business_hire_decision(context, option)
         business_name = str(option.get("business_name", "the business")).strip() or "the business"
         role = str(option.get("role", "staff") or "staff").strip().lower() or "staff"
+        current_business_name = str(
+            offer_factors.get("current_business_name", "")
+            or option.get("current_business_name", "")
+            or "my current job"
+        ).strip() or "my current job"
         if not accepted:
             if reason == "guarded":
                 line = "No. Not after this."
             elif reason == "career_conflict":
                 line = f"No. {business_name} is not my kind of work."
+            elif reason == "heat":
+                line = f"No. {business_name} might work, but there is too much heat around you right now."
+            elif reason == "commute":
+                line = f"No. {current_business_name} fits my days better than {business_name}."
+            elif reason == "current_ties":
+                line = f"No. I still have people depending on me at {current_business_name}."
+            elif reason == "poach":
+                line = f"Not right now. Leaving {current_business_name} for {business_name} is not enough of a step up."
             elif role == "manager":
                 line = f"Not me. I am not taking point on {business_name}."
             else:
@@ -5862,6 +6092,20 @@ class NPCInteractionSystem(System):
             line = f"Yeah. I can run {business_name} for you."
         else:
             line = f"Sure. I can take a shift at {business_name}."
+        if bool(offer_factors.get("poaching")):
+            if role == "manager":
+                line = f"Yeah. I can leave {current_business_name} and run {business_name} for you."
+            else:
+                line = f"Yeah. I can leave {current_business_name} and take shifts at {business_name}."
+            commute_delta = offer_factors.get("commute_delta")
+            try:
+                if commute_delta is not None and int(commute_delta) >= 5:
+                    line = line[:-1] + "; it is closer to home."
+            except (TypeError, ValueError):
+                pass
+            nearby_names = tuple(offer_factors.get("nearby_social_names", ()) or ())
+            if nearby_names:
+                line = line[:-1] + f"; {nearby_names[0]} is nearby."
         if housing_kind == "workplace_lodging":
             line = line[:-1] + " and stay on-site."
         elif housing_kind in {"nearby_housing", "nearby_lodging"} and housing_name:
@@ -6605,6 +6849,8 @@ class NPCInteractionSystem(System):
             "player_business_fire_option": fire_option,
             "player_business_hire_name": str((hire_option or {}).get("business_name", "")).strip(),
             "player_business_hire_role": str((hire_option or {}).get("role", "")).strip().lower(),
+            "player_business_hire_poaching": bool((hire_option or {}).get("poaching")),
+            "player_business_hire_current_name": str((hire_option or {}).get("current_business_name", "")).strip(),
             "player_business_fire_name": str((fire_option or {}).get("business_name", "")).strip(),
             "player_business_fire_role": str((fire_option or {}).get("role", "")).strip().lower(),
         })
@@ -13041,6 +13287,17 @@ class NPCInteractionSystem(System):
             return
         previous_topic_id = str(self._dialogue_memory(npc_eid).get("last_topic_id", "")).strip().lower()
         selected_row = self._current_dialog_selected_row()
+        if topic_id in {"hire", "hire_manager", "hire_staff", "fire"} and not (
+            isinstance(selected_row, dict) and str(selected_row.get("id", "")).strip().lower() == topic_id
+        ):
+            selected_row = next(
+                (
+                    row
+                    for row in list(state.get("topics", ()) or ())
+                    if isinstance(row, dict) and str(row.get("id", "")).strip().lower() == topic_id
+                ),
+                selected_row,
+            )
         previous_index = int(state.get("selected_index", 0))
         previous_topic_ids = {
             str(row.get("id", "")).strip().lower()

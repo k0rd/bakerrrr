@@ -2400,6 +2400,63 @@ def _workplace_for_hire(sim, prop, role):
     return workplace
 
 
+def _deactivate_previous_workplace_for_hire(sim, actor_eid, previous_workplace, *, target_property_id, owner_eid=None):
+    if sim is None or actor_eid is None or not isinstance(previous_workplace, dict):
+        return {}
+    previous_property_id = _text(previous_workplace.get("property_id"))
+    target_property_id = _text(target_property_id)
+    if not previous_property_id or previous_property_id == target_property_id:
+        return {}
+
+    previous_prop = _resolve_owned_property(sim, previous_property_id)
+    previous_org_eid = None
+    if isinstance(previous_prop, dict):
+        previous_org_eid = property_organization_eid(sim, previous_prop, ensure=False)
+    if previous_org_eid is None:
+        try:
+            previous_org_eid = int(previous_workplace.get("organization_eid"))
+        except (TypeError, ValueError):
+            previous_org_eid = None
+
+    component = sim.ecs.get(OrganizationAffiliations).get(actor_eid)
+    if component and previous_org_eid is not None:
+        membership = component.memberships.get(int(previous_org_eid))
+        if isinstance(membership, dict):
+            membership["active"] = False
+            membership["primary"] = False
+            membership["site_property_id"] = None
+            membership["site_building_id"] = None
+
+    if (
+        isinstance(previous_prop, dict)
+        and owner_eid is not None
+        and property_supports_player_business(previous_prop)
+        and _property_owned_by_actor(sim, owner_eid, previous_prop)
+    ):
+        state = player_business_state(previous_prop, create=False)
+        if state is not None:
+            roles = dict(state.get("staff_roles", {}))
+            roles.pop(str(int(actor_eid)), None)
+            state["staff_roles"] = roles
+            state["staff_roster"] = [
+                int(raw_eid)
+                for raw_eid in list(state.get("staff_roster", ()) or ())
+                if _int_or(raw_eid, default=0) > 0 and int(_int_or(raw_eid, default=0)) != int(actor_eid)
+            ]
+            _sync_staff_roster(sim, previous_prop, state)
+            _touch_player_business_runtime(previous_prop, sim=sim)
+
+    return {
+        "previous_property_id": previous_property_id,
+        "previous_business_name": (
+            _text(_property_metadata(previous_prop).get("business_name"))
+            or _text((previous_prop or {}).get("name"))
+            or "their old job"
+        ) if isinstance(previous_prop, dict) else "their old job",
+        "previous_organization_eid": previous_org_eid,
+    }
+
+
 def _ensure_work_routine(sim, actor_eid, prop):
     routine = sim.ecs.get(NPCRoutine).get(actor_eid)
     focus = _property_focus_position(prop)
@@ -2426,15 +2483,8 @@ def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role="")
     if not property_supports_player_business(prop) or not _property_owned_by_actor(sim, owner_eid, prop):
         return None
 
-    current = actor_player_business_employment(sim, actor_eid)
-    if current and _text(current.get("property_id")) != _text(prop.get("id")):
-        return None
-
     occupation = sim.ecs.get(Occupation).get(actor_eid)
-    if occupation and isinstance(getattr(occupation, "workplace", None), dict):
-        property_id = _text(getattr(occupation, "workplace", {}).get("property_id"))
-        if property_id and property_id != _text(prop.get("id")):
-            return None
+    previous_workplace = dict(getattr(occupation, "workplace", {}) or {}) if occupation and isinstance(getattr(occupation, "workplace", None), dict) else {}
 
     open_roles = player_business_open_roles(sim, prop)
     role = str(role or (open_roles[0] if open_roles else "") or "staff").strip().lower()
@@ -2449,6 +2499,13 @@ def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role="")
 
     housing_plan = player_business_housing_plan(sim, owner_eid, actor_eid, prop)
     workplace = _workplace_for_hire(sim, prop, role)
+    previous_departure = _deactivate_previous_workplace_for_hire(
+        sim,
+        actor_eid,
+        previous_workplace,
+        target_property_id=_text(prop.get("id")),
+        owner_eid=owner_eid,
+    )
     shift_start, shift_end = _business_shift_window(sim, prop)
     occupation.workplace = workplace
     occupation.shift_start = shift_start
@@ -2489,6 +2546,8 @@ def hire_actor_into_player_business(sim, owner_eid, actor_eid, prop, *, role="")
         "housing_relocated": bool((housing_plan or {}).get("relocated", False)),
         "housing_property_id": _text(((housing_plan or {}).get("prop") or {}).get("id")),
         "housing_name": str((housing_plan or {}).get("label", "")).strip(),
+        "previous_property_id": _text(previous_departure.get("previous_property_id")),
+        "previous_business_name": str(previous_departure.get("previous_business_name", "") or "").strip(),
     }
 
 

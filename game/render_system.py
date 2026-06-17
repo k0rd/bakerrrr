@@ -3207,8 +3207,8 @@ class RenderSystem(System):
             panel_x = max(0, (screen_w - panel_w) // 2)
             panel_h = max(8, min(map_h, int(round(map_h * 0.75))))
             panel_y = max(0, (map_h - panel_h) // 2)
-            body_w = max(8, panel_w - 4)
-            row_w = max(8, panel_w - 2)
+            body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
+            _row_cell_w, row_w = _modal_body_widths(self.view, panel_w, horizontal_padding=2)
 
             def _clip(text, width):
                 if width <= 0:
@@ -3441,7 +3441,7 @@ class RenderSystem(System):
                 panel_x + 2,
                 panel_y + panel_h - 3,
                 _clip_display_line(inspect_text, body_w),
-                body_w,
+                body_cell_w,
             )
             if panel_kind == "container":
                 hint = (
@@ -3457,8 +3457,8 @@ class RenderSystem(System):
             panel_x = max(0, (screen_w - panel_w) // 2)
             panel_h = max(8, min(map_h, int(round(map_h * 0.75))))
             panel_y = max(0, (map_h - panel_h) // 2)
-            body_w = max(8, panel_w - 4)
-            row_w = max(8, panel_w - 2)
+            body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
+            _row_cell_w, row_w = _modal_body_widths(self.view, panel_w, horizontal_padding=2)
 
             def _clip(text, width):
                 if width <= 0:
@@ -3611,7 +3611,7 @@ class RenderSystem(System):
                 panel_x + 2,
                 panel_y + panel_h - 3,
                 _clip_display_line(inspect_text, body_w),
-                body_w,
+                body_cell_w,
             )
             hint = "E trade  B buy  S sell  X inspect  O ops  Y notebooks  L log  D debug  M/Esc close"
             hint = release_control_text(hint, self.sim)
