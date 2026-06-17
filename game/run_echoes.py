@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import random
 
 from game.components import (
@@ -17,7 +18,7 @@ from game.components import (
     Render,
     Vitality,
 )
-from game.incident_runtime import incident_records
+from game.incident_runtime import incident_kind_label, incident_records
 from game.items import ITEM_CATALOG
 
 RUN_ECHOES_ARCHIVE_LIMIT = 64
@@ -55,6 +56,24 @@ def _safe_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _stamp_value(value):
+    if isinstance(value, dict):
+        return "{" + ",".join(
+            f"{_text(key).casefold()}={_stamp_value(value[key])}"
+            for key in sorted(value, key=lambda item: _text(item).casefold())
+        ) + "}"
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return "[" + ",".join(_stamp_value(item) for item in tuple(value)) + "]"
+    return _text(value).casefold()
+
+
+def _stable_stamp(prefix, *values):
+    raw = "|".join(_stamp_value(value) for value in values)
+    digest = hashlib.sha1(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
+    prefix = _text(prefix).lower() or "echo"
+    return f"{prefix}:{digest}"
 
 
 def _chunk_key(chunk):
@@ -195,58 +214,232 @@ def _echo_notice_name(record):
     return "Public Notice"
 
 
+def _display_ref_text(value):
+    text = _text(value)
+    if "#" in text:
+        prefix, suffix = text.rsplit("#", 1)
+        if prefix.strip() and suffix.strip().isdigit():
+            text = prefix.strip()
+    return text
+
+
+def _sentence_start(value):
+    text = _text(value)
+    if not text:
+        return ""
+    return text[:1].upper() + text[1:]
+
+
+def _join_detail_bits(bits):
+    cleaned = [_text(bit) for bit in tuple(bits or ()) if _text(bit)]
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned[0]
+    if len(cleaned) == 2:
+        return f"{cleaned[0]} and {cleaned[1]}"
+    return f"{', '.join(cleaned[:-1])}, and {cleaned[-1]}"
+
+
+def _incident_reference_parts(record):
+    person_name = _display_ref_text(record.get("victim_name"))
+    place_name = _display_ref_text(record.get("property_name"))
+    return person_name, place_name
+
+
+def _incident_reference_clause(record, *, place_preposition="at", place_first=True):
+    person_name, place_name = _incident_reference_parts(record)
+    place_preposition = _text(place_preposition) or "at"
+    if person_name and place_name:
+        if place_first:
+            return f"{place_preposition} {place_name} involving {person_name}"
+        return f"involving {person_name} {place_preposition} {place_name}"
+    if place_name:
+        return f"{place_preposition} {place_name}"
+    if person_name:
+        return f"involving {person_name}"
+    return ""
+
+
 def _incident_subject_text(record):
-    victim_name = _text(record.get("victim_name"))
-    property_name = _text(record.get("property_name"))
-    if victim_name and property_name:
-        return f"{victim_name} at {property_name}"
-    if property_name:
-        return property_name
-    if victim_name:
-        return victim_name
-    return "that case"
+    person_name, place_name = _incident_reference_parts(record)
+    if person_name and place_name:
+        return f"{person_name} at {place_name}"
+    if place_name:
+        return place_name
+    if person_name:
+        return person_name
+    return "an old case"
 
 
 def _incident_bulletin_text(record):
     kind = _text(record.get("incident_kind")).replace("_", " ").strip().lower()
-    subject = _incident_subject_text(record)
+    place_ref = _incident_reference_clause(record, place_preposition="at", place_first=True)
+    person_ref = _incident_reference_clause(record, place_preposition="at", place_first=False)
+    around_ref = _incident_reference_clause(record, place_preposition="around", place_first=True)
     if kind == "action offense":
-        return f"A remembered violent case still hangs over {subject}. The posting reads like an old warning, not a closed story."
-    if kind == "property_trespass":
-        return f"A reported trespass at {subject} still gets mentioned on public notices here."
-    if kind == "property_tamper":
-        return f"A tampering case at {subject} still lingers in the public paperwork."
-    if kind == "item_stolen":
-        return f"A stolen-property case around {subject} still lives on in posted caution notes."
-    return f"An old case around {subject} still shows up in local notices."
+        if person_ref:
+            return f"A remembered violent case {person_ref} still hangs over the city. The posting reads like an old warning, not a closed story."
+        return "A remembered violent case still hangs over the city. The posting reads like an old warning, not a closed story."
+    if kind == "property trespass":
+        if place_ref:
+            return f"A reported trespass {place_ref} still gets mentioned on public notices here."
+        return "A reported trespass still gets mentioned on public notices here."
+    if kind == "property tamper":
+        if place_ref:
+            return f"A tampering case {place_ref} still lingers in the public paperwork."
+        return "A tampering case still lingers in the public paperwork."
+    if kind == "item stolen":
+        if around_ref:
+            return f"A stolen-property case {around_ref} still lives on in posted caution notes."
+        return "A stolen-property case still lives on in posted caution notes."
+    if around_ref:
+        return f"An old case {around_ref} still shows up in local notices."
+    return "An old case still shows up in local notices."
+
+
+def _incident_kind_display(record):
+    label = _text(record.get("kind_label"))
+    if label:
+        return label
+    return incident_kind_label(
+        record.get("incident_kind"),
+        action=record.get("action"),
+        context=record.get("context"),
+        tags=record.get("tags", ()),
+    )
+
+
+def _incident_echo_title(record):
+    kind = _incident_kind_display(record)
+    incident_kind = _text(record.get("incident_kind")).lower()
+    if incident_kind == "action_offense" and kind == "trouble":
+        kind = "violence"
+    if not kind:
+        kind = "incident"
+
+    if incident_kind == "action_offense":
+        ref = _incident_reference_clause(record, place_preposition="at", place_first=False)
+    elif kind == "theft":
+        ref = _incident_reference_clause(record, place_preposition="around", place_first=True)
+    else:
+        ref = _incident_reference_clause(record, place_preposition="at", place_first=True)
+    title = _sentence_start(kind)
+    if ref:
+        return f"{title} {ref}"
+    return f"{title} incident"
+
+
+def _incident_echo_why_bits(record):
+    kind = _incident_kind_display(record)
+    if _text(record.get("incident_kind")).lower() == "action_offense" and kind == "trouble":
+        kind = "violence"
+    severity = _safe_int(record.get("severity"), default=0)
+    if severity >= 70:
+        bits = [f"severe {kind}"]
+    elif severity >= 45:
+        bits = [f"serious {kind}"]
+    elif severity >= 25:
+        bits = [f"noticeable {kind}"]
+    elif severity > 0:
+        bits = [f"low-level {kind}"]
+    else:
+        bits = [kind or "incident"]
+
+    if bool(record.get("officially_reported")):
+        bits.append("official report")
+    propagation = _safe_int(record.get("propagation_depth"), default=0)
+    if propagation >= 2:
+        bits.append("repeated local talk")
+    elif propagation == 1:
+        bits.append("local rumor")
+    accountable = _safe_int(record.get("accountable_observer_count"), default=0)
+    observed = _safe_int(record.get("observer_count"), default=0)
+    if accountable > 1:
+        bits.append(f"seen by {accountable} accountable witnesses")
+    elif accountable == 1:
+        bits.append("seen by an accountable witness")
+    elif observed > 1:
+        bits.append(f"seen by {observed} witnesses")
+    elif observed == 1:
+        bits.append("seen by a witness")
+
+    organization_name = _text(record.get("organization_name"))
+    property_name = _display_ref_text(record.get("property_name"))
+    if organization_name:
+        bits.append(f"tied to {organization_name}")
+    elif property_name:
+        bits.append(f"tied to {property_name}")
+    else:
+        settlement_name = _text(record.get("settlement_name"))
+        district_type = _text(record.get("district_type")).replace("_", " ")
+        if settlement_name:
+            bits.append(f"remembered in {settlement_name}")
+        elif district_type:
+            bits.append(f"remembered in the {district_type} district")
+    return tuple(bits)
+
+
+def _incident_echo_epilogue_line(record, *, strongest=False):
+    prefix = "Strongest incident echo" if strongest else "Incident echo"
+    title = _incident_echo_title(record)
+    why = _join_detail_bits(_incident_echo_why_bits(record))
+    line = f"  {prefix}: {title}."
+    if why:
+        line += f" Why it carries: {why}."
+    return line
 
 
 def _incident_rumor_text(record):
     kind = _text(record.get("incident_kind")).replace("_", " ").strip().lower()
-    subject = _incident_subject_text(record)
+    place_ref = _incident_reference_clause(record, place_preposition="at", place_first=True)
+    person_ref = _incident_reference_clause(record, place_preposition="at", place_first=False)
+    around_ref = _incident_reference_clause(record, place_preposition="around", place_first=True)
     if kind == "action offense":
-        return f"People still talk about the violence at {subject}."
-    if kind == "property_trespass":
-        return f"People still remember who crossed the line at {subject}."
-    if kind == "property_tamper":
-        return f"People still mention someone trying to work over {subject}."
-    if kind == "item_stolen":
-        return f"People still talk about what disappeared around {subject}."
-    return f"People still trade stories about what happened around {subject}."
+        if person_ref:
+            return f"People still talk about the violence {person_ref}."
+        return "People still talk about an old violent case."
+    if kind == "property trespass":
+        if place_ref:
+            return f"People still remember the trespass {place_ref}."
+        return "People still remember an old trespass."
+    if kind == "property tamper":
+        if place_ref:
+            return f"People still mention the tampering {place_ref}."
+        return "People still mention an old tampering case."
+    if kind == "item stolen":
+        if around_ref:
+            return f"People still talk about the theft {around_ref}."
+        return "People still talk about an old theft."
+    if around_ref:
+        return f"People still trade stories about an old case {around_ref}."
+    return "People still trade stories about an old case."
 
 
 def _incident_summary_text(record):
     kind = _text(record.get("incident_kind")).replace("_", " ").strip().lower()
-    subject = _incident_subject_text(record)
+    place_ref = _incident_reference_clause(record, place_preposition="at", place_first=True)
+    person_ref = _incident_reference_clause(record, place_preposition="at", place_first=False)
+    around_ref = _incident_reference_clause(record, place_preposition="around", place_first=True)
     if kind == "action offense":
-        return f"Violence at {subject} stayed with the city."
-    if kind == "property_trespass":
-        return f"Trespass at {subject} still echoes locally."
-    if kind == "property_tamper":
-        return f"Tampering at {subject} still echoes locally."
-    if kind == "item_stolen":
-        return f"A theft around {subject} still echoes locally."
-    return f"A case around {subject} still echoes locally."
+        if person_ref:
+            return f"Violence {person_ref} stayed with the city."
+        return "Violence stayed with the city."
+    if kind == "property trespass":
+        if place_ref:
+            return f"Trespass {place_ref} still echoes locally."
+        return "Trespass still echoes locally."
+    if kind == "property tamper":
+        if place_ref:
+            return f"Tampering {place_ref} still echoes locally."
+        return "Tampering still echoes locally."
+    if kind == "item stolen":
+        if around_ref:
+            return f"A theft {around_ref} still echoes locally."
+        return "A theft still echoes locally."
+    if around_ref:
+        return f"A case {around_ref} still echoes locally."
+    return "A case still echoes locally."
 
 
 def _player_business_owner_name(sim):
@@ -307,6 +500,267 @@ def _actor_display_name(sim, actor_eid):
         return _text(identity.display_name())
     ai = sim.ecs.get(AI).get(actor_eid)
     return _text(getattr(ai, "role", ""))
+
+
+def _unique_ints(values):
+    rows = []
+    seen = set()
+    for raw in tuple(values or ()):
+        if raw is None:
+            continue
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        rows.append(value)
+    return tuple(rows)
+
+
+def _compact_dict(row):
+    compact = {}
+    for key, value in dict(row or {}).items():
+        if value in (None, "", (), [], {}):
+            continue
+        compact[key] = value
+    return compact
+
+
+def _entity_echo_descriptor(sim, actor_eid, *, relation=""):
+    try:
+        actor_eid = int(actor_eid)
+    except (TypeError, ValueError):
+        return {}
+    if sim is None:
+        return {}
+    identity = sim.ecs.get(CreatureIdentity).get(actor_eid)
+    ai = sim.ecs.get(AI).get(actor_eid)
+    occupation = sim.ecs.get(Occupation).get(actor_eid)
+    descriptor = {"relation": _text(relation).lower()}
+    if identity is not None:
+        descriptor.update({
+            "name": _display_ref_text(identity.display_name()),
+            "common_name": _text(getattr(identity, "common_name", "")),
+            "creature_type": _text(getattr(identity, "creature_type", "")).lower(),
+            "taxonomy_class": _text(getattr(identity, "taxonomy_class", "")).lower(),
+            "species": _text(getattr(identity, "species", "")).lower(),
+        })
+    elif ai is not None:
+        descriptor["name"] = _text(getattr(ai, "role", ""))
+    if ai is not None:
+        descriptor["role"] = _text(getattr(ai, "role", "")).lower()
+    if occupation is not None:
+        descriptor["career"] = _text(getattr(occupation, "career", "")).lower()
+        workplace = getattr(occupation, "workplace", None)
+        if isinstance(workplace, dict):
+            descriptor["workplace_name"] = (
+                _text(workplace.get("business_name"))
+                or _text(workplace.get("property_name"))
+                or _text(workplace.get("store_name"))
+            )
+    return _compact_dict(descriptor)
+
+
+def _incident_subject_descriptors(sim, incident):
+    rows = []
+    victim_eid = incident.get("victim_eid")
+    victim = _entity_echo_descriptor(sim, victim_eid, relation="victim") if victim_eid is not None else {}
+    victim_name = _display_ref_text(incident.get("victim_name"))
+    if not victim and victim_name:
+        victim = {"relation": "victim", "name": victim_name}
+    elif victim_name and not _text(victim.get("name")):
+        victim["name"] = victim_name
+    if victim:
+        rows.append(_compact_dict(victim))
+
+    target_eid = incident.get("target_eid")
+    if target_eid is not None and _safe_int(target_eid, default=-1) != _safe_int(victim_eid, default=-2):
+        target = _entity_echo_descriptor(sim, target_eid, relation="target")
+        target_name = _display_ref_text(incident.get("target_name"))
+        if not target and target_name:
+            target = {"relation": "target", "name": target_name}
+        elif target_name and not _text(target.get("name")):
+            target["name"] = target_name
+        if target:
+            rows.append(_compact_dict(target))
+    return tuple(rows)
+
+
+def _incident_observer_snapshot(sim, incident):
+    observer_ids = set(_unique_ints(incident.get("observer_eids", ())))
+    accountable_ids = set(_unique_ints(incident.get("accountable_observer_eids", ())))
+    all_observers = tuple(sorted(observer_ids | accountable_ids))
+    channels = tuple(sorted({
+        _text(channel).lower()
+        for channel in tuple(incident.get("observation_channels", ()) or ())
+        if _text(channel)
+    }))
+    descriptors = []
+    ordered = tuple(sorted(accountable_ids)) + tuple(eid for eid in all_observers if eid not in accountable_ids)
+    seen = set()
+    for observer_eid in ordered:
+        if observer_eid in seen:
+            continue
+        seen.add(observer_eid)
+        relation = "accountable_witness" if observer_eid in accountable_ids else "witness"
+        descriptor = _entity_echo_descriptor(sim, observer_eid, relation=relation)
+        if descriptor:
+            descriptors.append(descriptor)
+        if len(descriptors) >= 3:
+            break
+    return {
+        "count": len(all_observers),
+        "accountable_count": len(accountable_ids),
+        "channels": channels,
+        "descriptors": tuple(descriptors),
+    }
+
+
+def _footprint_profile(prop):
+    if not isinstance(prop, dict):
+        return {}
+    metadata = _property_metadata(prop)
+    footprint = metadata.get("footprint")
+    if not isinstance(footprint, dict):
+        return {}
+    try:
+        left = int(footprint.get("left"))
+        right = int(footprint.get("right"))
+        top = int(footprint.get("top"))
+        bottom = int(footprint.get("bottom"))
+    except (TypeError, ValueError):
+        return {}
+    width = max(1, right - left + 1)
+    height = max(1, bottom - top + 1)
+    return {
+        "shape": "rectangle",
+        "width": int(width),
+        "height": int(height),
+        "area": int(width * height),
+        "floors": max(1, _safe_int(metadata.get("floors"), default=1)),
+        "basement_levels": max(0, _safe_int(metadata.get("basement_levels"), default=0)),
+    }
+
+
+def _band_for_offset(offset, length):
+    try:
+        offset = int(offset)
+        length = max(1, int(length))
+    except (TypeError, ValueError):
+        return ""
+    if length <= 2:
+        return "center"
+    third = length / 3.0
+    if offset < third:
+        return "near_edge"
+    if offset >= third * 2:
+        return "far_edge"
+    return "center"
+
+
+def _scene_position_profile(prop, incident):
+    if not isinstance(prop, dict):
+        return {}
+    metadata = _property_metadata(prop)
+    footprint = metadata.get("footprint")
+    if not isinstance(footprint, dict):
+        return {}
+    try:
+        x = int(incident.get("x"))
+        y = int(incident.get("y"))
+        z = int(incident.get("z", 0))
+        left = int(footprint.get("left"))
+        right = int(footprint.get("right"))
+        top = int(footprint.get("top"))
+        bottom = int(footprint.get("bottom"))
+        base_z = int(prop.get("z", 0))
+    except (TypeError, ValueError):
+        return {}
+    if not (left <= x <= right and top <= y <= bottom):
+        return {}
+    width = max(1, right - left + 1)
+    height = max(1, bottom - top + 1)
+    x_offset = x - left
+    y_offset = y - top
+    return {
+        "x_offset": int(x_offset),
+        "y_offset": int(y_offset),
+        "z_offset": int(z - base_z),
+        "x_band": _band_for_offset(x_offset, width),
+        "y_band": _band_for_offset(y_offset, height),
+    }
+
+
+def _structure_scene_profile(sim, incident):
+    try:
+        x = int(incident.get("x"))
+        y = int(incident.get("y"))
+        z = int(incident.get("z", 0))
+    except (TypeError, ValueError):
+        return {}
+    if sim is None or not hasattr(sim, "structure_at"):
+        return {}
+    try:
+        info = sim.structure_at(x, y, z)
+    except Exception:
+        return {}
+    if not isinstance(info, dict):
+        return {}
+    allowed = (
+        "room_kind",
+        "common_area_kind",
+        "aperture_kind",
+        "ingress_kind",
+        "span_kind",
+        "site_kind",
+    )
+    return _compact_dict({
+        key: _text(info.get(key)).lower()
+        for key in allowed
+        if _text(info.get(key))
+    })
+
+
+def _incident_scene_snapshot(sim, incident, prop_ctx, *, subjects=(), observers=None):
+    prop = prop_ctx.get("prop") if isinstance(prop_ctx, dict) else None
+    place = _compact_dict({
+        "name": _display_ref_text((prop_ctx or {}).get("property_name")),
+        "archetype": _text((prop_ctx or {}).get("property_archetype")).lower(),
+        "property_kind": _text((prop_ctx or {}).get("property_kind")).lower(),
+        "organization_name": _text((prop_ctx or {}).get("organization_name")),
+        "footprint": _footprint_profile(prop),
+    })
+    structure = _structure_scene_profile(sim, incident)
+    position = _scene_position_profile(prop, incident)
+    scene = _compact_dict({
+        "place": place,
+        "structure": structure,
+        "position": position,
+        "kind": _text(incident.get("kind")).lower(),
+        "kind_label": incident_kind_label(
+            _text(incident.get("kind")).lower() or "incident",
+            action=incident.get("action"),
+            context=incident.get("context"),
+            tags=incident.get("tags", ()),
+        ),
+    })
+    scene["scene_stamp"] = _stable_stamp(
+        "scene",
+        scene.get("kind"),
+        scene.get("kind_label"),
+        place,
+        structure,
+        position,
+        tuple(subjects or ()),
+        {
+            "observer_count": _safe_int((observers or {}).get("count"), default=0),
+            "accountable_count": _safe_int((observers or {}).get("accountable_count"), default=0),
+            "channels": tuple((observers or {}).get("channels", ()) or ()),
+        },
+    )
+    return scene
 
 
 def _business_staff_snapshot(sim, state, *, limit=3):
@@ -454,8 +908,10 @@ def _incident_property_context(sim, incident):
     return {
         "property_id": property_id,
         "property_name": _text(incident.get("property_name")) or _text((prop or {}).get("name")),
+        "property_kind": _text((prop or {}).get("kind")),
         "property_archetype": property_archetype,
         "organization_name": organization_name,
+        "prop": prop,
     }
 
 
@@ -495,12 +951,46 @@ def _build_incident_echo_records(sim, *, outcome=""):
                 chunk_key = None
         area = _record_area_profile(sim, chunk_key)
         prop_ctx = _incident_property_context(sim, incident)
+        subjects = _incident_subject_descriptors(sim, incident)
+        observers = _incident_observer_snapshot(sim, incident)
+        scene = _incident_scene_snapshot(sim, incident, prop_ctx, subjects=subjects, observers=observers)
         caution_bias = max(4, min(12, int(round(float(score) / 22.0))))
+        incident_kind = _text(incident.get("kind")).lower() or "incident"
+        action = _text(incident.get("action")).lower()
+        context = _text(incident.get("context")).lower()
+        tags = tuple(
+            _text(tag).lower()
+            for tag in tuple(incident.get("tags", ()) or ())
+            if _text(tag)
+        )
+        observed_tick = _safe_int(
+            incident.get("last_observed_tick"),
+            default=_safe_int(getattr(sim, "tick", 0), default=0),
+        )
+        echo_id = _stable_stamp(
+            "incident",
+            scene,
+            incident_kind,
+            action,
+            context,
+            tags,
+            _safe_int(incident.get("severity"), default=0),
+            observed_tick,
+            _text(outcome).lower(),
+        )
         record = {
-            "echo_id": f"incident:{getattr(sim, 'seed', 'seed')}:{incident_id}:{_safe_int(getattr(sim, 'tick', 0), default=0)}",
+            "echo_id": echo_id,
             "family": "incident_echo",
-            "incident_id": incident_id,
-            "incident_kind": _text(incident.get("kind")).lower() or "incident",
+            "incident_kind": incident_kind,
+            "action": action,
+            "context": context,
+            "tags": tags,
+            "kind_label": incident_kind_label(
+                incident_kind,
+                action=action,
+                context=context,
+                tags=tags,
+            ),
             "summary": "",
             "bulletin_text": "",
             "rumor_text": "",
@@ -510,14 +1000,20 @@ def _build_incident_echo_records(sim, *, outcome=""):
                 _safe_int(incident.get("current_propagation"), default=0),
                 _safe_int(incident.get("max_propagation"), default=0),
             ),
-            "victim_name": _text(incident.get("victim_name")),
-            "subject_name": _text(incident.get("victim_name")) or _text(incident.get("property_name")),
+            "victim_name": _display_ref_text(incident.get("victim_name")),
+            "subject_name": _display_ref_text(incident.get("victim_name")) or _display_ref_text(incident.get("property_name")),
+            "subjects": subjects,
+            "observers": observers,
+            "observer_count": _safe_int(observers.get("count"), default=0),
+            "accountable_observer_count": _safe_int(observers.get("accountable_count"), default=0),
+            "observation_channels": tuple(observers.get("channels", ()) or ()),
+            "scene": scene,
+            "scene_stamp": _text(scene.get("scene_stamp")),
             "property_name": prop_ctx["property_name"],
-            "property_id": prop_ctx["property_id"],
             "property_archetype": prop_ctx["property_archetype"],
             "organization_name": prop_ctx["organization_name"],
             "run_outcome": _text(outcome).lower(),
-            "tick": _safe_int(incident.get("last_observed_tick"), default=_safe_int(getattr(sim, "tick", 0), default=0)),
+            "tick": observed_tick,
             "caution_bias": caution_bias,
             **area,
         }
@@ -687,9 +1183,9 @@ def archive_run_echoes(sim, player_eid, *, outcome="", reason="", objective_titl
     lines = ["What may carry forward:"]
     if incident_records_to_archive:
         strongest = incident_records_to_archive[0]
-        lines.append(f"  Strongest incident echo: {_text(strongest.get('summary'))}")
+        lines.append(_incident_echo_epilogue_line(strongest, strongest=True))
         for record in incident_records_to_archive[1:]:
-            lines.append(f"  Incident echo: {_text(record.get('summary'))}")
+            lines.append(_incident_echo_epilogue_line(record))
     for record in business_records_to_archive:
         lines.append(f"  Business echo: {_text(record.get('summary'))}")
     if remnant_records:
@@ -843,6 +1339,10 @@ def _seed_incident_notice(sim, chunk_key, record, rng):
         "run_echo_family": "incident_echo",
         "run_echo_summary": _text(record.get("summary")),
         "run_echo_rumor_text": _text(record.get("rumor_text")),
+        "run_echo_scene_stamp": _text(record.get("scene_stamp")),
+        "run_echo_scene": dict(record.get("scene") or {}) if isinstance(record.get("scene"), dict) else {},
+        "run_echo_subjects": tuple(record.get("subjects", ()) or ()),
+        "run_echo_observers": dict(record.get("observers") or {}) if isinstance(record.get("observers"), dict) else {},
         "run_echo_caution_bias": _safe_int(record.get("caution_bias"), default=0),
         "run_echo_target_property_id": _text((target_prop or {}).get("id")) or _text(record.get("property_id")),
         "run_echo_target_archetype": _text(record.get("property_archetype")).lower(),
@@ -865,6 +1365,10 @@ def _seed_incident_notice(sim, chunk_key, record, rng):
         "target_property_id": _text(metadata.get("run_echo_target_property_id")),
         "target_archetype": _text(metadata.get("run_echo_target_archetype")),
         "organization_name": _text(metadata.get("run_echo_organization_name")),
+        "scene_stamp": _text(metadata.get("run_echo_scene_stamp")),
+        "scene": dict(metadata.get("run_echo_scene") or {}),
+        "subjects": tuple(metadata.get("run_echo_subjects", ()) or ()),
+        "observers": dict(metadata.get("run_echo_observers") or {}),
         "summary": _text(record.get("summary")),
         "rumor_text": _text(record.get("rumor_text")),
         "caution_bias": _safe_int(record.get("caution_bias"), default=0),

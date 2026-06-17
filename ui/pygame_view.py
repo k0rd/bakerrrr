@@ -107,6 +107,7 @@ class PygameView:
         marker_font_px = max(8, int(round(self.cell_px * 0.62)))
         self._marker_font = pygame.font.SysFont("DejaVu Sans Mono", marker_font_px, bold=True)
         self.key_queue = deque()
+        self._close_requested = False
         self._animation_tick = 0
         self.uses_realtime_animation = True
         self._queued_draw_calls = []
@@ -397,7 +398,8 @@ class PygameView:
             self.refresh()
 
             for event in self.pygame.event.get():
-                if event.type == self.pygame.QUIT:
+                if self._is_close_event(event):
+                    self._mark_close_requested()
                     return None
                 if event.type != self.pygame.KEYDOWN:
                     continue
@@ -552,7 +554,8 @@ class PygameView:
             self.refresh()
 
             for event in self.pygame.event.get():
-                if event.type == self.pygame.QUIT:
+                if self._is_close_event(event):
+                    self._mark_close_requested()
                     return None
                 if event.type != self.pygame.KEYDOWN:
                     continue
@@ -4751,9 +4754,28 @@ class PygameView:
         self._flush_queued_draws()
         self._draw_segments_now(x, y, segments, max_width=max_width, attrs=attrs)
 
+    def _is_close_event(self, event):
+        close_types = {self.pygame.QUIT}
+        window_close = getattr(self.pygame, "WINDOWCLOSE", None)
+        if window_close is not None:
+            close_types.add(window_close)
+        return event.type in close_types
+
+    def _mark_close_requested(self):
+        self._close_requested = True
+
+    def close_requested(self):
+        return bool(self._close_requested)
+
+    def consume_close_requested(self):
+        requested = bool(self._close_requested)
+        self._close_requested = False
+        return requested
+
     def _map_key(self, event):
-        if event.type == self.pygame.QUIT:
-            return ord("q")
+        if self._is_close_event(event):
+            self._mark_close_requested()
+            return ord("Q")
         if event.type != self.pygame.KEYDOWN:
             return None
 

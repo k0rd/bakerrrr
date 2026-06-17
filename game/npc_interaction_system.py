@@ -148,6 +148,7 @@ from game.opportunities import (
     stage_active_opportunities,
 )
 from game.run_echoes import strongest_active_run_echo_for_chunk
+from game.incident_runtime import incident_action_label
 from game.economy import chunk_economy_profile
 from engine.systems import System
 from game.skills import (
@@ -1498,6 +1499,14 @@ class NPCInteractionSystem(System):
             if not best or float(entry.get("strength", 0.0)) > float(best.get("strength", 0.0)):
                 best = entry
         return best
+
+    def _recent_offense_action_label(self, recent_offense, *, noun=False):
+        data = recent_offense.get("data", {}) if isinstance(recent_offense, dict) else {}
+        return incident_action_label(
+            data.get("action", "trouble"),
+            data.get("context", ""),
+            noun=bool(noun),
+        )
 
     def _current_trespass_property(self, npc_eid, player_pos):
         if not player_pos:
@@ -9440,8 +9449,8 @@ class NPCInteractionSystem(System):
         if guarded and owner_place_name:
             lines.append(f"Badly. Around {owner_place_name}, you already look like trouble.")
         elif recent_offense:
-            action = str(recent_offense.get("data", {}).get("action", "trouble")).replace("_", " ").strip() or "trouble"
-            lines.append(f"People still remember your {action}. That keeps attention on you longer than you think.")
+            action = self._recent_offense_action_label(recent_offense)
+            lines.append(f"People still remember you {action}. That keeps attention on you longer than you think.")
 
         if pressure_tier in {"medium", "high"}:
             if pressure_role == "guard":
@@ -9971,8 +9980,8 @@ class NPCInteractionSystem(System):
             return f"Strangers testing the edges around {context['owner_place_name']}."
         recent_offense = context.get("recent_offense")
         if recent_offense:
-            action = str(recent_offense.get("data", {}).get("action", "trouble")).replace("_", " ").strip() or "trouble"
-            return f"The wrong kind of {action} around here."
+            action = self._recent_offense_action_label(recent_offense)
+            return f"The wrong kind of attention after {action} around here."
         if context.get("local_source") == "opportunity" and context.get("opportunity_summary"):
             return f"People keep circling back to {context['opportunity_summary']}."
         if context.get("local_source") == "rumor" and context.get("rumor_line"):
@@ -11096,8 +11105,8 @@ class NPCInteractionSystem(System):
                 prop_name = str(context["trespass_prop"].get("name", context["trespass_prop"].get("id", "property"))).strip() or "property"
                 lines.append(self._dialogue_npc_line(context["npc_name"], f"You should not be hanging around {prop_name}.", npc_eid=context["npc_eid"]))
             elif context.get("recent_offense"):
-                action = str(context["recent_offense"].get("data", {}).get("action", "trouble")).replace("_", " ").strip() or "trouble"
-                lines.append(self._dialogue_npc_line(context["npc_name"], f"I still remember your {action}.", npc_eid=context["npc_eid"]))
+                action = self._recent_offense_action_label(context["recent_offense"])
+                lines.append(self._dialogue_npc_line(context["npc_name"], f"I still remember you {action}.", npc_eid=context["npc_eid"]))
             anchor_line = self._relationship_anchor_opening_line(context)
             if anchor_line:
                 lines.append(self._dialogue_npc_line(context["npc_name"], anchor_line, npc_eid=context["npc_eid"]))
@@ -13033,8 +13042,8 @@ class NPCInteractionSystem(System):
         if context.get("trespass_prop"):
             lines.append(f"They do not like you lingering around {context['trespass_prop'].get('name', context['trespass_prop'].get('id', 'property'))}.")
         elif context.get("recent_offense") and float(context["recent_offense"].get("strength", 0.0)) >= 0.18:
-            action = str(context["recent_offense"].get("data", {}).get("action", "trouble")).replace("_", " ").strip()
-            lines.append(f"They remember your recent {action} and stay guarded.")
+            action = self._recent_offense_action_label(context["recent_offense"])
+            lines.append(f"They remember you {action} recently and stay guarded.")
         else:
             if context.get("rumor_line"):
                 lines.append(context["rumor_line"])

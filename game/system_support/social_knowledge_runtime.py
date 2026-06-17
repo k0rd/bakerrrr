@@ -17,7 +17,7 @@ from game.components import (
     Position,
     SocialKnowledge,
 )
-from game.incident_runtime import incident_record
+from game.incident_runtime import incident_knowledge_label, incident_record
 from game.system_support.entity_naming import _entity_display_name
 
 
@@ -30,6 +30,14 @@ def _text(value):
 
 def _key(value):
     return _text(value).lower()
+
+
+def _looks_like_machine_label(value):
+    text = _text(value)
+    if not text:
+        return False
+    compact = text.replace("_", "").replace("/", "").replace("-", "")
+    return ("_" in text or "/" in text) and compact.isalnum()
 
 
 def _int(value, default=0):
@@ -198,8 +206,10 @@ def hydrate_incident_social_knowledge(sim, actor_eid, *, limit=3, source_event="
         if incident_id <= 0 or not isinstance(record, dict):
             continue
         incident = incident_record(sim, incident_id) or {}
-        note = _text(record.get("account_note")) or _text(incident.get("note")) or _text(incident.get("kind"))
-        kind = _text(incident.get("kind") or record.get("category") or "trouble").replace("_", " ")
+        kind = incident_knowledge_label(record, incident)
+        note = _text(record.get("account_note")) or _text(incident.get("note"))
+        if _looks_like_machine_label(note):
+            note = ""
         place = _property_name(sim, incident.get("property_id") or record.get("property_id"))
         if note:
             summary = note

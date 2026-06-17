@@ -927,6 +927,27 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(render_system)
 
 
+def _consume_view_close_requested(view):
+    consume = getattr(view, "consume_close_requested", None)
+    if callable(consume):
+        return bool(consume())
+    close_requested = getattr(view, "close_requested", None)
+    if callable(close_requested):
+        return bool(close_requested())
+    return False
+
+
+def _request_session_quit(sim, *, source="input"):
+    was_running = bool(getattr(sim, "running", True))
+    sim.running = False
+    if not was_running:
+        return
+    try:
+        sim.emit(Event("quit_requested", eid=getattr(sim, "player_eid", None), source=str(source or "input")))
+    except Exception:
+        pass
+
+
 def _run_loop(sim, view, character_name):
     set_active_debug_sim(sim)
     frame_seconds = 1.0 / 20.0
@@ -944,6 +965,9 @@ def _run_loop(sim, view, character_name):
     LIVE_TIMESKIP_MIN_YIELD_SECONDS = 0.001
     _frame = 0
     while True:
+        if _consume_view_close_requested(view):
+            _request_session_quit(sim, source="window_close")
+            break
         if not sim.running:
             break
 
@@ -964,6 +988,9 @@ def _run_loop(sim, view, character_name):
             drain_keys = getattr(view, "drain_keys", None)
             if callable(drain_keys):
                 drain_keys()
+                if _consume_view_close_requested(view):
+                    _request_session_quit(sim, source="window_close")
+                    break
             remaining = max(0, int(live_timeskip.get("target_end_tick", sim.tick)) - int(getattr(sim, "tick", 0)))
             target_slices = max(1, int(LIVE_TIMESKIP_TARGET_SLICES))
             batch = max(
@@ -996,6 +1023,9 @@ def _run_loop(sim, view, character_name):
             if callable(pump_window):
                 pump_window()
             view.refresh()
+            if _consume_view_close_requested(view):
+                _request_session_quit(sim, source="window_close")
+                break
             elapsed = time.perf_counter() - frame_start
             if elapsed < float(LIVE_TIMESKIP_MIN_YIELD_SECONDS):
                 time.sleep(float(LIVE_TIMESKIP_MIN_YIELD_SECONDS) - elapsed)
@@ -1010,6 +1040,9 @@ def _run_loop(sim, view, character_name):
             sim.set_time_paused(False, reason="tick_throttle")
 
         view.refresh()
+        if _consume_view_close_requested(view):
+            _request_session_quit(sim, source="window_close")
+            break
 
         elapsed = time.perf_counter() - frame_start
         sleep_for = frame_seconds - elapsed

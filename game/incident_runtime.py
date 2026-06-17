@@ -35,6 +35,92 @@ INCIDENT_LINK_KINDS = {
     "scene_residue",
 }
 
+INCIDENT_KIND_LABELS = {
+    "action_offense": "trouble",
+    "camera_alert": "camera sighting",
+    "disturbance": "disturbance",
+    "item_stolen": "theft",
+    "property_tamper": "tampering",
+    "property_trespass": "trespass",
+    "street_deal": "street deal",
+    "structure_fire": "fire",
+}
+
+INCIDENT_CATEGORY_LABELS = {
+    "official": "official report",
+    "self": "something you did",
+    "social": "rumor",
+    "social_rumor": "rumor",
+    "witnessed": "witnessed incident",
+    "witnessed_event": "witnessed incident",
+}
+
+INCIDENT_CONTEXT_LABELS = {
+    "armed_assault": "armed violence",
+    "contraband_use": "contraband use",
+    "explosive_discharge": "explosive discharge",
+    "item_theft": "theft",
+    "melee_assault": "assault",
+    "not_for_sale_attempt": "testing a sale boundary",
+    "tamper": "tampering",
+    "trespass": "trespass",
+    "unarmed_assault": "assault",
+    "wildlife_harassment": "wildlife harassment",
+    "wildlife_hunting": "wildlife hunting",
+}
+
+INCIDENT_CONTEXT_ACTION_LABELS = {
+    "armed_assault": "using a weapon",
+    "contraband_use": "using contraband",
+    "explosive_discharge": "setting off explosives",
+    "item_theft": "taking something",
+    "melee_assault": "attacking someone",
+    "not_for_sale_attempt": "testing a sale boundary",
+    "tamper": "tampering",
+    "trespass": "trespassing",
+    "unarmed_assault": "attacking someone",
+    "wildlife_harassment": "harassing wildlife",
+    "wildlife_hunting": "hunting wildlife",
+}
+
+INCIDENT_ACTION_LABELS = {
+    "attack": "violence",
+    "cover_hop": "moving through cover",
+    "fire_weapon": "gunfire",
+    "floor_change": "going through restricted stairs",
+    "forced_breach": "forced entry",
+    "interact": "tampering",
+    "melee_attack": "assault",
+    "move": "trespass",
+    "pickup_item": "taking something",
+    "pickup_object": "taking something",
+    "purchase_property": "testing a sale boundary",
+    "side_entry": "using a side entry",
+    "tamper": "tampering",
+    "toggle_door_lock": "working a lock",
+    "use_item": "using something",
+    "window_entry": "window entry",
+}
+
+INCIDENT_ACTION_NOUN_LABELS = {
+    "attack": "violence",
+    "cover_hop": "cover movement",
+    "fire_weapon": "gunfire",
+    "floor_change": "restricted stair movement",
+    "forced_breach": "forced entry",
+    "interact": "tampering",
+    "melee_attack": "assault",
+    "move": "trespass",
+    "pickup_item": "taking something",
+    "pickup_object": "taking something",
+    "purchase_property": "sale-boundary testing",
+    "side_entry": "side entry",
+    "tamper": "tampering",
+    "toggle_door_lock": "lock work",
+    "use_item": "item use",
+    "window_entry": "window entry",
+}
+
 
 def _int_or_default(value, default=0):
     try:
@@ -45,6 +131,90 @@ def _int_or_default(value, default=0):
 
 def _text(value):
     return str(value or "").strip()
+
+
+def _key(value):
+    return _text(value).lower().replace(" ", "_")
+
+
+def _humanized_key(value, default="trouble"):
+    text = _key(value).replace("_", " ").strip()
+    return text or str(default or "trouble")
+
+
+def incident_category_label(category):
+    key = _key(category)
+    if not key:
+        return "incident"
+    return INCIDENT_CATEGORY_LABELS.get(key) or INCIDENT_KIND_LABELS.get(key) or _humanized_key(key, default="incident")
+
+
+def incident_action_label(action, context="", *, noun=False):
+    context_key = _key(context)
+    action_key = _key(action)
+    if context_key and context_key != "ordinary":
+        context_label = (INCIDENT_CONTEXT_LABELS if noun else INCIDENT_CONTEXT_ACTION_LABELS).get(context_key)
+        if context_label:
+            return context_label
+    labels = INCIDENT_ACTION_NOUN_LABELS if noun else INCIDENT_ACTION_LABELS
+    if action_key:
+        return labels.get(action_key) or _humanized_key(action_key, default="trouble")
+    if context_key:
+        return INCIDENT_CONTEXT_LABELS.get(context_key) or _humanized_key(context_key, default="trouble")
+    return "trouble"
+
+
+def incident_kind_label(kind, *, category="", action="", context="", tags=()):
+    kind_key = _key(kind)
+    category_key = _key(category)
+    tag_keys = {_key(tag) for tag in tuple(tags or ()) if _key(tag)}
+
+    if kind_key == "action_offense":
+        return incident_action_label(action, context, noun=True)
+    if kind_key:
+        label = INCIDENT_KIND_LABELS.get(kind_key)
+        if label:
+            return label
+    if category_key and category_key not in {"official", "self", "social", "social_rumor", "witnessed", "witnessed_event", "other"}:
+        label = INCIDENT_KIND_LABELS.get(category_key) or INCIDENT_CONTEXT_LABELS.get(category_key)
+        if label:
+            return label
+    for tag_key, label in (
+        ("trespass", "trespass"),
+        ("tamper", "tampering"),
+        ("alarm", "tampering"),
+        ("theft", "theft"),
+        ("stolen", "theft"),
+        ("camera", "camera sighting"),
+        ("violence", "violence"),
+        ("assault", "assault"),
+        ("fire", "fire"),
+    ):
+        if tag_key in tag_keys:
+            return label
+    if action or context:
+        return incident_action_label(action, context, noun=True)
+    if kind_key:
+        return _humanized_key(kind_key)
+    if category_key:
+        return incident_category_label(category_key)
+    return "trouble"
+
+
+def incident_knowledge_label(record=None, incident=None):
+    record = record if isinstance(record, dict) else {}
+    incident = incident if isinstance(incident, dict) else {}
+    for key in ("kind_label", "friendly_kind", "incident_label"):
+        label = _text(record.get(key))
+        if label:
+            return label
+    return incident_kind_label(
+        incident.get("kind") or record.get("incident_kind") or record.get("kind") or record.get("category"),
+        category=record.get("category"),
+        action=incident.get("action") or record.get("action"),
+        context=incident.get("context") or record.get("context"),
+        tags=incident.get("tags") or record.get("tags") or (),
+    )
 
 
 def _incident_tags(tags):

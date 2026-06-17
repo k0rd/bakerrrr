@@ -6,6 +6,7 @@ from game.items import (
     prepare_item_stack_metadata,
     split_item_stack_metadata,
 )
+from game.incident_runtime import incident_category_label, incident_kind_label
 
 
 _UNCHANGED = object()
@@ -1244,6 +1245,12 @@ class IncidentKnowledge:
         urgency=0.0,
         social_interest=0.0,
         category="other",
+        kind=None,
+        action=None,
+        context=None,
+        tags=None,
+        category_label=None,
+        kind_label=None,
         severity=0,
         x=None,
         y=None,
@@ -1278,6 +1285,24 @@ class IncidentKnowledge:
         social_interest = _clamp_unit(social_interest, default=0.0)
         category = str(category or "other").strip().lower() or "other"
         source_kind = str(source_kind or "").strip().lower()
+        incident_kind = str(kind or "").strip().lower()
+        action_key = str(action or "").strip().lower()
+        context_key = str(context or "").strip().lower()
+        tag_values = tuple(
+            str(tag or "").strip().lower()
+            for tag in tuple(tags or ())
+            if str(tag or "").strip()
+        )
+        requested_category_label = str(category_label or "").strip()
+        requested_kind_label = str(kind_label or "").strip()
+        generic_categories = {"official", "other", "self", "social", "social_rumor", "witnessed", "witnessed_event"}
+        incoming_has_semantic = bool(
+            incident_kind
+            or action_key
+            or context_key
+            or tag_values
+            or (category and category not in generic_categories)
+        )
 
         existing = self.records.get(incident_key)
         incoming_quality = self._source_quality(
@@ -1336,6 +1361,44 @@ class IncidentKnowledge:
                 y = existing.get("y")
                 z = existing.get("z")
 
+        if isinstance(existing, dict):
+            if not incident_kind:
+                incident_kind = str(existing.get("incident_kind", "") or "").strip().lower()
+            if not action_key:
+                action_key = str(existing.get("action", "") or "").strip().lower()
+            if not context_key:
+                context_key = str(existing.get("context", "") or "").strip().lower()
+            if not tag_values:
+                tag_values = tuple(
+                    str(tag or "").strip().lower()
+                    for tag in tuple(existing.get("tags", ()) or ())
+                    if str(tag or "").strip()
+                )
+        category_label = (
+            requested_category_label
+            or (
+                str(existing.get("category_label", existing.get("friendly_category", "")) or "").strip()
+                if isinstance(existing, dict) and not incoming_has_semantic
+                else ""
+            )
+            or incident_category_label(category)
+        )
+        kind_label = (
+            requested_kind_label
+            or (
+                str(existing.get("kind_label", existing.get("friendly_kind", "")) or "").strip()
+                if isinstance(existing, dict) and not incoming_has_semantic
+                else ""
+            )
+            or incident_kind_label(
+                incident_kind or category,
+                category=category,
+                action=action_key,
+                context=context_key,
+                tags=tag_values,
+            )
+        )
+
         record = dict(existing) if isinstance(existing, dict) else {}
         record.update({
             "incident_id": incident_key,
@@ -1357,6 +1420,14 @@ class IncidentKnowledge:
             "urgency": float(urgency),
             "social_interest": float(social_interest),
             "category": category,
+            "category_label": category_label,
+            "friendly_category": category_label,
+            "incident_kind": incident_kind or None,
+            "action": action_key or None,
+            "context": context_key or None,
+            "tags": tag_values,
+            "kind_label": kind_label,
+            "friendly_kind": kind_label,
             "severity": int(severity),
             "x": x,
             "y": y,

@@ -11,7 +11,7 @@ import random
 
 from game.components import AI, CreatureIdentity, IncidentKnowledge, NPCMemory, NPCNeeds, NPCSocial, NPCTraits, Occupation, Position, SkillProfile
 from game.human_identity import is_human_identity, normalize_gender_identity, pronoun_format_slots
-from game.incident_runtime import incident_record
+from game.incident_runtime import incident_knowledge_label, incident_record
 
 
 _AUTHORITY_ROLES = {"guard", "security", "officer", "police", "deputy", "marshal"}
@@ -162,24 +162,7 @@ def _direction_from_player(sim, x, y, z=0):
 
 
 def _incident_label(record, incident):
-    kind = _text((incident or {}).get("kind") if isinstance(incident, dict) else "").lower()
-    category = _text(record.get("category", "")).lower()
-    tags = {
-        _text(tag).lower()
-        for tag in tuple((incident or {}).get("tags", ()) or ())
-        if _text(tag)
-    } if isinstance(incident, dict) else set()
-    if kind == "property_trespass" or category == "property_trespass" or "trespass" in tags:
-        return "trespass"
-    if kind == "property_tamper" or "tamper" in tags or "alarm" in tags:
-        return "tampering"
-    if kind == "item_stolen" or "stolen" in tags or "theft" in tags:
-        return "theft"
-    if kind == "camera_alert" or "camera" in tags:
-        return "camera hit"
-    if kind == "action_offense" or "violence" in tags or "assault" in tags:
-        return "violence"
-    return kind.replace("_", " ") if kind else category.replace("_", " ") if category else "trouble"
+    return incident_knowledge_label(record, incident)
 
 
 def _rapport_chunk_profile(sim, npc_eid, context):

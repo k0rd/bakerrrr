@@ -15,7 +15,7 @@ from game.components import (
 )
 from game.final_operation import evaluate_final_operation
 from game.human_identity import identity_debug_summary, is_human_identity
-from game.incident_runtime import incident_record
+from game.incident_runtime import incident_knowledge_label, incident_record
 from game.lighting import lighting_state, update_lighting_state
 from game.opportunities import evaluate_opportunity_facts
 from game.organization_presence import format_property_org_presence
@@ -361,7 +361,7 @@ def _incident_knowledge_lines(sim, player_eid, *, limit=6):
         if not isinstance(record, dict):
             continue
         incident = incident_record(sim, incident_id) or {}
-        kind = str(incident.get("kind", record.get("category", "incident")) or "incident").strip().lower()
+        kind = incident_knowledge_label(record, incident)
         note = str(incident.get("note", "") or "").strip()
         tags = tuple(str(tag).strip().lower() for tag in incident.get("tags", ()) or () if str(tag).strip())
         severity = int(record.get("severity", incident.get("severity", 0)) or 0)

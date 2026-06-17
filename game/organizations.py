@@ -4969,7 +4969,7 @@ def hydrate_property_organization_branches(
             ),
         )
     )
-    if hydrated and property_id:
+    if hydrated and property_id and not _organization_member_read_active(sim):
         refresh_loaded_organization_branch_briefings(
             sim,
             property_ids=(property_id,),
@@ -5065,6 +5065,11 @@ def _organization_actor_briefing_state(sim):
         query_cache = {}
         state["query_cache"] = query_cache
     return state
+
+
+def _organization_member_read_active(sim):
+    state = _organization_actor_briefing_state(sim)
+    return _safe_int(state.get("member_read_depth"), default=0) > 0
 
 
 def _organization_runtime_cache_state(sim):
@@ -6866,13 +6871,14 @@ def link_property_organization(
         metadata["organization_name"] = _text(profile.name)
         metadata["organization_kind"] = _normalize_org_kind(profile.kind, default="business")
     _invalidate_organization_runtime_caches(sim)
-    hydrate_property_organization_branches(
-        sim,
-        prop,
-        organization_eid=organization_eid,
-        current_tick=getattr(sim, "tick", 0),
-        active_only=True,
-    )
+    if not _organization_member_read_active(sim):
+        hydrate_property_organization_branches(
+            sim,
+            prop,
+            organization_eid=organization_eid,
+            current_tick=getattr(sim, "tick", 0),
+            active_only=True,
+        )
     return dict(row)
 
 
@@ -7372,12 +7378,14 @@ def assign_actor_organization(
     _invalidate_organization_runtime_caches(sim)
     property_id = _text(site_property_id)
     prop = sim.properties.get(property_id) if property_id else None
-    refresh_actor_branch_briefing(
-        sim,
-        actor_eid,
-        prop=prop if isinstance(prop, dict) else None,
-        reason="membership_update",
-    )
+    briefing_state = _organization_actor_briefing_state(sim)
+    if not _organization_member_read_active(sim) and not bool(briefing_state.get("refreshing", False)):
+        refresh_actor_branch_briefing(
+            sim,
+            actor_eid,
+            prop=prop if isinstance(prop, dict) else None,
+            reason="membership_update",
+        )
     return int(organization_eid)
 
 
@@ -7690,7 +7698,7 @@ def _membership_targets_property(prop, organization_eid, membership):
     return False
 
 
-def property_org_members(sim, prop):
+def _property_org_members_impl(sim, prop):
     organization_eid = property_organization_eid(sim, prop, ensure=True)
     occupations = sim.ecs.get(Occupation)
     affiliations_map = sim.ecs.get(OrganizationAffiliations)
@@ -7753,3 +7761,17 @@ def property_org_members(sim, prop):
         ),
     )
     return tuple(ordered)
+
+
+def property_org_members(sim, prop):
+    state = _organization_actor_briefing_state(sim)
+    depth = max(0, _safe_int(state.get("member_read_depth"), default=0))
+    state["member_read_depth"] = depth + 1
+    try:
+        return _property_org_members_impl(sim, prop)
+    finally:
+        current = max(0, _safe_int(state.get("member_read_depth"), default=1) - 1)
+        if current > 0:
+            state["member_read_depth"] = current
+        else:
+            state.pop("member_read_depth", None)
