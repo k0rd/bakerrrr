@@ -11,7 +11,7 @@ from pathlib import Path
 from .events import EventBus
 from .sim import Simulation
 from game.appearance import AppearanceManager
-from game.components import Position
+from game.components import Position, VehicleState
 from game.organizations import rebuild_organization_index, refresh_loaded_organization_branch_briefings
 
 
@@ -389,7 +389,28 @@ def snapshot_chunk_state(sim, key):
     if key is None:
         return None
 
-    property_records = copy.deepcopy(sim.chunk_property_records.get(key, []))
+    property_records = []
+    for record in copy.deepcopy(sim.chunk_property_records.get(key, [])):
+        if not isinstance(record, dict):
+            property_records.append(record)
+            continue
+        property_id = str(record.get("id", "")).strip()
+        live_prop = sim.properties.get(property_id) if property_id else None
+        if isinstance(live_prop, dict):
+            live_chunk = _property_chunk(sim, live_prop)
+            if live_chunk is not None and live_chunk != key:
+                continue
+            record.update({
+                "x": int(live_prop.get("x", record.get("x", 0)) or 0),
+                "y": int(live_prop.get("y", record.get("y", 0)) or 0),
+                "z": int(live_prop.get("z", record.get("z", 0)) or 0),
+                "kind": str(live_prop.get("kind", record.get("kind", "property"))).strip().lower() or "property",
+            })
+            metadata = live_prop.get("metadata")
+            if isinstance(metadata, dict):
+                record["archetype"] = metadata.get("archetype", record.get("archetype"))
+                record["building_id"] = metadata.get("building_id", record.get("building_id"))
+        property_records.append(record)
     raw_ground_item_records = list(sim.chunk_ground_item_records.get(key, []))
     raw_population_records = list(sim.chunk_population_records.get(key, []))
 
@@ -560,6 +581,84 @@ def restore_chunk_state(sim, key):
     return True
 
 
+def _remove_property_record_from_rows(rows, property_id):
+    property_id = str(property_id)
+    return [
+        row
+        for row in tuple(rows or ())
+        if not (isinstance(row, dict) and str(row.get("id", "")).strip() == property_id)
+    ]
+
+
+def _restore_active_vehicle_properties(sim):
+    ecs = getattr(sim, "ecs", None)
+    if ecs is None:
+        return 0
+    vehicle_states = ecs.get(VehicleState)
+    positions = ecs.get(Position)
+    saved_states = getattr(sim, "chunk_saved_states", None)
+    if not isinstance(vehicle_states, dict) or not isinstance(saved_states, dict):
+        return 0
+
+    restored = 0
+    for eid, state in tuple(vehicle_states.items()):
+        if not bool(getattr(state, "in_vehicle", False)):
+            continue
+        vehicle_id = str(getattr(state, "active_vehicle_id", "") or "").strip()
+        if not vehicle_id or vehicle_id in getattr(sim, "properties", {}):
+            continue
+
+        found = None
+        for _key, snapshot in tuple(saved_states.items()):
+            if not isinstance(snapshot, dict):
+                continue
+            properties = snapshot.get("properties")
+            if isinstance(properties, dict) and vehicle_id in properties:
+                found = (snapshot, properties[vehicle_id])
+                break
+        if found is None:
+            continue
+
+        snapshot, saved_prop = found
+        prop = copy.deepcopy(saved_prop)
+        pos = positions.get(eid)
+        if pos is not None:
+            prop["x"] = int(pos.x)
+            prop["y"] = int(pos.y)
+            prop["z"] = int(pos.z)
+            metadata = prop.get("metadata")
+            if isinstance(metadata, dict):
+                metadata["chunk"] = sim.chunk_coords(int(pos.x), int(pos.y))
+
+        sim.properties[vehicle_id] = prop
+
+        properties = snapshot.get("properties")
+        if isinstance(properties, dict):
+            properties.pop(vehicle_id, None)
+        stores = snapshot.get("stores")
+        if isinstance(stores, dict) and vehicle_id in stores:
+            sim.stores[vehicle_id] = copy.deepcopy(stores.pop(vehicle_id))
+        if isinstance(snapshot.get("property_records"), list):
+            snapshot["property_records"] = _remove_property_record_from_rows(
+                snapshot.get("property_records"),
+                vehicle_id,
+            )
+
+        if isinstance(getattr(sim, "chunk_property_records", None), dict):
+            for record_key, records in tuple(sim.chunk_property_records.items()):
+                cleaned = _remove_property_record_from_rows(records, vehicle_id)
+                if len(cleaned) != len(tuple(records or ())):
+                    if cleaned:
+                        sim.chunk_property_records[record_key] = cleaned
+                    else:
+                        sim.chunk_property_records.pop(record_key, None)
+            sync_record = getattr(sim, "_sync_property_chunk_record", None)
+            if callable(sync_record):
+                sync_record(vehicle_id, prop)
+        restored += 1
+    return restored
+
+
 def snapshot_simulation(sim):
     state = {}
     for key, value in sim.__dict__.items():
@@ -630,6 +729,7 @@ def restore_simulation(snapshot):
             for key, data in getattr(sim.world, "loaded_chunks", {}).items()
             if isinstance(data, dict)
         }
+    _restore_active_vehicle_properties(sim)
     if hasattr(sim, "rebuild_spatial_indexes"):
         sim.rebuild_spatial_indexes()
     if hasattr(sim, "reapply_door_states"):

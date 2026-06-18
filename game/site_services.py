@@ -1348,7 +1348,7 @@ class SiteServiceSystem(System):
             return
 
         profile = _vehicle_profile_from_property(vehicle_prop)
-        durability = max(1, min(10, _int_or_default(profile.get("durability"), 5)))
+        durability = max(0, min(10, _int_or_default(profile.get("durability"), 5)))
         max_durability = 10
         missing = max(0, max_durability - durability)
         if missing <= 0:
@@ -1401,7 +1401,8 @@ class SiteServiceSystem(System):
         durability_gain = max(1, int(round(float(affordable) * self._service_quality_mult(practice_modifiers))))
         metadata["durability"] = int(min(max_durability, durability + durability_gain))
         metadata["vehicle_usable"] = True
-        new_durability = max(1, min(max_durability, _int_or_default(metadata.get("durability"), durability)))
+        metadata["vehicle_broken"] = False
+        new_durability = max(0, min(max_durability, _int_or_default(metadata.get("durability"), durability)))
         self.sim.emit(Event(
             "site_service_used",
             eid=eid,
@@ -1884,7 +1885,7 @@ class SiteServiceSystem(System):
             if fuel < max(4, int(round(float(fuel_capacity) * 0.92))):
                 return "fuel"
         if "repair" in services and vehicle_prop:
-            durability = max(1, min(10, _int_or_default(_vehicle_profile_from_property(vehicle_prop).get("durability"), 5)))
+            durability = max(0, min(10, _int_or_default(_vehicle_profile_from_property(vehicle_prop).get("durability"), 5)))
             if durability < 9:
                 return "repair"
 

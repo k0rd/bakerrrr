@@ -919,8 +919,80 @@ class Simulation:
         except (TypeError, ValueError):
             self._index_property_record(property_id, prop)
             return False
+        metadata = prop.get("metadata")
+        if isinstance(metadata, dict):
+            metadata["chunk"] = self.chunk_coords(int(prop["x"]), int(prop["y"]))
         self._index_property_record(property_id, prop)
+        self._sync_property_chunk_record(property_id, prop)
         return True
+
+    def _property_record_chunk_key(self, prop):
+        if not isinstance(prop, dict):
+            return None
+        metadata = prop.get("metadata")
+        if isinstance(metadata, dict):
+            raw_chunk = metadata.get("chunk")
+            if isinstance(raw_chunk, (list, tuple)) and len(raw_chunk) == 2:
+                try:
+                    return (int(raw_chunk[0]), int(raw_chunk[1]))
+                except (TypeError, ValueError):
+                    pass
+        try:
+            return self.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+        except (TypeError, ValueError):
+            return None
+
+    def _property_chunk_record(self, property_id, prop, existing=None):
+        record = dict(existing or {})
+        metadata = prop.get("metadata", {}) if isinstance(prop, dict) else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        record.update({
+            "id": str(property_id),
+            "kind": str(prop.get("kind", "property")).strip().lower() or "property",
+            "x": int(prop.get("x", 0) or 0),
+            "y": int(prop.get("y", 0) or 0),
+            "z": int(prop.get("z", 0) or 0),
+            "archetype": metadata.get("archetype", record.get("archetype")),
+            "building_id": metadata.get("building_id", record.get("building_id")),
+        })
+        return record
+
+    def _sync_property_chunk_record(self, property_id, prop):
+        if not isinstance(getattr(self, "chunk_property_records", None), dict):
+            return None
+        if not isinstance(prop, dict):
+            return None
+        property_id = str(property_id)
+        found_record = None
+        for key, records in tuple(self.chunk_property_records.items()):
+            kept = []
+            removed = False
+            for record in tuple(records or ()):
+                if isinstance(record, dict) and str(record.get("id", "")).strip() == property_id:
+                    if found_record is None:
+                        found_record = dict(record)
+                    removed = True
+                    continue
+                kept.append(record)
+            if removed:
+                if kept:
+                    self.chunk_property_records[key] = kept
+                else:
+                    self.chunk_property_records.pop(key, None)
+
+        new_chunk = self._property_record_chunk_key(prop)
+        if new_chunk is None:
+            return None
+        record = self._property_chunk_record(property_id, prop, existing=found_record)
+        bucket = [
+            row
+            for row in tuple(self.chunk_property_records.get(new_chunk, ()) or ())
+            if not (isinstance(row, dict) and str(row.get("id", "")).strip() == property_id)
+        ]
+        bucket.append(record)
+        self.chunk_property_records[new_chunk] = bucket
+        return new_chunk
 
     def _ordered_property_ids(self, property_ids):
         return sorted(

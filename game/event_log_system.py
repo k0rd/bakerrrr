@@ -1758,7 +1758,7 @@ class EventLogSystem(System):
                 return f"fuel for {vehicle_name} {fuel}/{fuel_capacity} (empty)"
             return f"fuel for {vehicle_name} {fuel}/{fuel_capacity}"
 
-        durability = max(1, min(10, _int_or_default(_vehicle_profile_from_property(vehicle_prop).get("durability"), 5)))
+        durability = max(0, min(10, _int_or_default(_vehicle_profile_from_property(vehicle_prop).get("durability"), 5)))
         if durability >= 10:
             return f"repair for {vehicle_name} D{durability}/10 (solid)"
         if durability <= 3:
@@ -5293,6 +5293,13 @@ class EventLogSystem(System):
         if reason == "property_tile":
             self.sim.log.add("The vehicle cannot drive through property grounds or building tiles.")
             return
+        if reason == "chunk_unready":
+            self.sim.log.add("The route ahead is still coming into view.")
+            return
+        if reason == "vehicle_broken":
+            name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
+            self.sim.log.add(f"{name} is broken and will not move.")
+            return
         if reason in {"blocked_tile", "closed_door", "locked_door", "locked_property", "closed_property", "door_access_denied", "active_fire"}:
             self.sim.log.add("The vehicle cannot pass that way.")
             return
@@ -5358,7 +5365,8 @@ class EventLogSystem(System):
         durability_after = _int_or_default(event.data.get("durability_after"), 0)
         driver_damage = _int_or_default(event.data.get("driver_damage"), 0)
         hurt_text = f" You are jolted for {driver_damage} harm." if driver_damage > 0 else ""
-        self.sim.log.add(f"The vehicle crashes into {impact_kind} and stops. Condition {durability_after}/10.{hurt_text}")
+        broken_text = " It will not move until repaired." if bool(event.data.get("vehicle_broken", False)) else ""
+        self.sim.log.add(f"The vehicle crashes into {impact_kind} and stops. Condition {durability_after}/10.{broken_text}{hurt_text}")
 
     def on_overworld_travelled(self, event):
         if event.data.get("eid") != self.player_eid:

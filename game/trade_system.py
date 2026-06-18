@@ -1951,7 +1951,7 @@ class TradeSystem(System):
         purchase_cost = int(max(80, _int_or_default(metadata.get("purchase_cost"), 500)))
         ratio = float(self.VEHICLE_TRADE_IN_VALUE_BY_QUALITY.get(quality, self.VEHICLE_TRADE_IN_VALUE_BY_QUALITY["used"]))
 
-        durability = max(1, min(10, _int_or_default(metadata.get("durability"), 5)))
+        durability = max(0, min(10, _int_or_default(metadata.get("durability"), 5)))
         fuel_efficiency = max(1, min(10, _int_or_default(metadata.get("fuel_efficiency"), 5)))
         condition_mult = 0.78 + (float(durability) * 0.03) + (float(fuel_efficiency) * 0.015)
 

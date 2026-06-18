@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from engine.events import Event
 
 from game.components import Collider, Position, Render, VehicleState, Vitality
@@ -73,6 +75,7 @@ VEHICLE_HEADING_LABELS = {
 
 LAND_ROUTE_GLYPHS = {"=", ":"}
 WATER_TILE_GLYPHS = {"~"}
+SOFT_VEHICLE_BLOCK_REASONS = {"out_of_bounds", "chunk_unready"}
 
 
 def normalize_vehicle_heading(dx, dy):
@@ -110,10 +113,14 @@ def _int_or_default(value, default=0):
 
 def vehicle_top_speed(vehicle_prop):
     profile = _vehicle_profile_from_property(vehicle_prop) or {}
+    if not bool(profile.get("usable", True)):
+        return 0
     vehicle_class = str(profile.get("vehicle_class", "sedan") or "sedan").strip().lower() or "sedan"
     top_speed = int(VEHICLE_CLASS_TOP_SPEED.get(vehicle_class, 3))
     power = max(1, min(10, _int_or_default(profile.get("power"), 5)))
-    durability = max(1, min(10, _int_or_default(profile.get("durability"), 5)))
+    durability = max(0, min(10, _int_or_default(profile.get("durability"), 5)))
+    if durability <= 0:
+        return 0
 
     if power <= 2:
         top_speed -= 1
@@ -196,6 +203,15 @@ def vehicle_heading_label(state):
     return VEHICLE_HEADING_LABELS.get(vehicle_heading_tuple(state), "N")
 
 
+def vehicle_is_usable(vehicle_prop):
+    if not _property_is_vehicle(vehicle_prop):
+        return False
+    profile = _vehicle_profile_from_property(vehicle_prop) or {}
+    if not bool(profile.get("usable", True)):
+        return False
+    return max(0, min(10, _int_or_default(profile.get("durability"), 5))) > 0
+
+
 def vehicle_medium_for_property(prop, default="land"):
     if not _property_is_vehicle(prop):
         return str(default or "land")
@@ -256,19 +272,43 @@ def local_route_accessible_at(sim, x, y, z=0, *, ignore_property_id=None, medium
     return True
 
 
+def _ensure_loaded_vehicle_target_terrain(sim, x, y):
+    try:
+        chunk_key = sim.chunk_coords(int(x), int(y))
+    except (TypeError, ValueError, AttributeError):
+        return False
+    loaded_chunks = getattr(getattr(sim, "world", None), "loaded_chunks", {}) or {}
+    if chunk_key not in loaded_chunks:
+        return False
+    if chunk_key in getattr(sim, "realized_chunks", set()):
+        return True
+
+    ensure = getattr(sim, "ensure_chunk_terrain", None)
+    if not callable(ensure):
+        return True
+    changed = bool(ensure(chunk_key[0], chunk_key[1]))
+    if changed:
+        reapply = getattr(sim, "reapply_door_states", None)
+        if callable(reapply):
+            reapply(chunk=chunk_key)
+    return True
+
+
 def vehicle_local_block_reason(sim, eid, vehicle_prop, x, y, z=0, *, medium=None):
     x = int(x)
     y = int(y)
     z = int(z)
     medium = str(medium or vehicle_medium_for_property(vehicle_prop)).strip().lower() or "land"
-    if sim.detail_for_xy(x, y) == "unloaded":
-        return "out_of_bounds"
     if not sim.tilemap.in_bounds(x, y):
         return "out_of_bounds"
+    if sim.detail_for_xy(x, y) == "unloaded":
+        return "chunk_unready"
     tile = sim.tilemap.tile_at(x, y, z)
+    if not tile and _ensure_loaded_vehicle_target_terrain(sim, x, y):
+        tile = sim.tilemap.tile_at(x, y, z)
     glyph = str(getattr(tile, "glyph", "") or "")[:1]
     if not tile:
-        return "blocked_tile"
+        return "chunk_unready"
     if medium == "water":
         if glyph not in WATER_TILE_GLYPHS:
             return "blocked_tile"
@@ -405,7 +445,7 @@ def _apply_vehicle_collision_damage(sim, driver_eid, target_eid, vehicle_prop, s
 
 def _vehicle_durability(vehicle_prop):
     metadata = _property_metadata(vehicle_prop)
-    return max(1, min(10, _int_or_default(metadata.get("durability"), 5)))
+    return max(0, min(10, _int_or_default(metadata.get("durability"), 5)))
 
 
 def apply_vehicle_durability_loss(sim, vehicle_prop, amount=1, *, cause="vehicle_crash"):
@@ -414,28 +454,60 @@ def apply_vehicle_durability_loss(sim, vehicle_prop, amount=1, *, cause="vehicle
         return 0, 0, 0
     loss = max(0, int(amount or 0))
     before = _vehicle_durability(vehicle_prop)
-    after = max(1, before - loss)
+    after = max(0, before - loss)
     metadata = _property_metadata(vehicle_prop)
     metadata["durability"] = int(after)
     metadata["last_vehicle_damage_cause"] = str(cause or "vehicle_crash")
+    metadata["vehicle_usable"] = bool(after > 0)
+    metadata["vehicle_broken"] = bool(after <= 0)
     return int(before), int(after), max(0, int(before) - int(after))
 
 
-def _driver_crash_damage_amount(vehicle_prop, speed):
+def _driver_crash_damage_amount(vehicle_prop, speed, surface_kind="medium", *, durability_before=None, durability_after=None, durability_lost=0):
     speed = max(0, int(speed or 0))
-    durability = _vehicle_durability(vehicle_prop)
-    if speed < 2 and durability >= 4:
+    surface_kind = str(surface_kind or "medium").strip().lower()
+    before = _vehicle_durability(vehicle_prop) if durability_before is None else max(0, int(durability_before or 0))
+    after = _vehicle_durability(vehicle_prop) if durability_after is None else max(0, int(durability_after or 0))
+    lost = max(0, int(durability_lost or 0))
+    if speed < 3 and after > 0:
         return 0
-    damage = max(1, speed - 1)
-    if durability <= 3:
+    damage = max(0, speed - 2)
+    if surface_kind == "hard":
         damage += 1
-    if durability <= 1:
+    elif surface_kind == "soft":
+        damage -= 1
+    if after <= 0:
         damage += 1
+        overflow = max(0, lost - before)
+        if overflow > 0:
+            damage += min(2, overflow)
+    elif before >= 7:
+        damage -= 1
     return max(0, min(6, int(damage)))
 
 
-def _apply_driver_crash_damage(sim, driver_eid, vehicle_prop, speed, x, y, z):
-    damage = _driver_crash_damage_amount(vehicle_prop, speed)
+def _apply_driver_crash_damage(
+    sim,
+    driver_eid,
+    vehicle_prop,
+    speed,
+    x,
+    y,
+    z,
+    *,
+    surface_kind="medium",
+    durability_before=None,
+    durability_after=None,
+    durability_lost=0,
+):
+    damage = _driver_crash_damage_amount(
+        vehicle_prop,
+        speed,
+        surface_kind=surface_kind,
+        durability_before=durability_before,
+        durability_after=durability_after,
+        durability_lost=durability_lost,
+    )
     if damage <= 0 or driver_eid is None:
         return 0, False
     vitalities = sim.ecs.get(Vitality)
@@ -513,11 +585,46 @@ def _record_vehicle_infrastructure_damage(sim, driver_eid, x, y, z, block_reason
     return prop
 
 
+def _vehicle_crash_surface_kind(sim, x, y, z, block_reason):
+    reason = str(block_reason or "").strip().lower()
+    if reason in {"property_tile", "closed_property", "locked_property", "door_access_denied"}:
+        return "hard"
+    if reason in {"closed_door", "locked_door"}:
+        return "medium"
+    if reason == "active_fire":
+        return "soft"
+
+    tile = sim.tilemap.tile_at(int(x), int(y), int(z))
+    glyph = str(getattr(tile, "glyph", "") or "")[:1]
+    if sim.structure_at(int(x), int(y), int(z)) is not None:
+        return "hard"
+    if glyph in {"#", "B", "b"}:
+        return "hard"
+    if glyph in {"+", "/", "^"}:
+        return "medium"
+    if glyph in {"~", ",", "_"}:
+        return "soft"
+    return "medium"
+
+
+def _vehicle_crash_durability_loss(speed, surface_kind):
+    speed = max(1, int(speed or 1))
+    surface_kind = str(surface_kind or "medium").strip().lower()
+    base = speed + max(0, speed - 2)
+    multiplier = {
+        "soft": 0.55,
+        "medium": 0.80,
+        "hard": 1.00,
+    }.get(surface_kind, 0.80)
+    return max(1, min(10, int(math.ceil(float(base) * float(multiplier)))))
+
+
 def apply_vehicle_crash(sim, driver_eid, vehicle_prop, speed, x, y, z, *, block_reason="blocked"):
     if not _property_is_vehicle(vehicle_prop):
         return None
     impact_speed = max(1, min(vehicle_top_speed(vehicle_prop), int(speed or 1)))
-    durability_loss = max(1, min(3, impact_speed - 1))
+    surface_kind = _vehicle_crash_surface_kind(sim, x, y, z, block_reason)
+    durability_loss = _vehicle_crash_durability_loss(impact_speed, surface_kind)
     before, after, lost = apply_vehicle_durability_loss(
         sim,
         vehicle_prop,
@@ -532,6 +639,10 @@ def apply_vehicle_crash(sim, driver_eid, vehicle_prop, speed, x, y, z, *, block_
         x,
         y,
         z,
+        surface_kind=surface_kind,
+        durability_before=before,
+        durability_after=after,
+        durability_lost=lost,
     )
     damaged_prop = _record_vehicle_infrastructure_damage(
         sim,
@@ -550,9 +661,11 @@ def apply_vehicle_crash(sim, driver_eid, vehicle_prop, speed, x, y, z, *, block_
         speed=int(impact_speed),
         top_speed=vehicle_top_speed(vehicle_prop),
         impact_kind=str(block_reason or "blocked"),
+        impact_surface=str(surface_kind),
         durability_before=int(before),
         durability_after=int(after),
         durability_lost=int(lost),
+        vehicle_broken=bool(after <= 0),
         driver_damage=int(driver_damage),
         driver_downed=bool(driver_downed),
         damaged_property_id=(damaged_prop or {}).get("id") if isinstance(damaged_prop, dict) else None,
@@ -574,6 +687,8 @@ def apply_vehicle_crash(sim, driver_eid, vehicle_prop, speed, x, y, z, *, block_
         "durability_before": int(before),
         "durability_after": int(after),
         "durability_lost": int(lost),
+        "vehicle_broken": bool(after <= 0),
+        "impact_surface": str(surface_kind),
         "driver_damage": int(driver_damage),
         "driver_downed": bool(driver_downed),
         "damaged_property_id": (damaged_prop or {}).get("id") if isinstance(damaged_prop, dict) else None,
@@ -604,6 +719,7 @@ def apply_vehicle_collision(sim, driver_eid, target_eid, vehicle_prop, speed, x,
         durability_before=int(durability_before),
         durability_after=int(durability_after),
         durability_lost=int(durability_lost),
+        vehicle_broken=bool(durability_after <= 0),
         damage=damage,
         target_downed=downed,
         x=int(x),
@@ -677,7 +793,7 @@ def try_vehicle_step(sim, eid, vehicle_prop, target_x, target_y, target_z=0, *, 
                     target_z,
                 )
                 return False, "collision"
-        elif int(speed or 0) > 0 and block_reason != "out_of_bounds":
+        elif int(speed or 0) > 0 and block_reason not in SOFT_VEHICLE_BLOCK_REASONS:
             apply_vehicle_crash(
                 sim,
                 eid,

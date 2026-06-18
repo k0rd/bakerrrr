@@ -80,17 +80,18 @@ def vehicle_profile_from_property(prop):
     metadata = property_metadata(prop)
     if not property_is_vehicle(prop):
         return {}
+    durability = _int_or_default(metadata.get("durability"), 5)
     return {
         "make": str(metadata.get("vehicle_make", "Unknown")).strip() or "Unknown",
         "model": str(metadata.get("vehicle_model", "Vehicle")).strip() or "Vehicle",
         "vehicle_class": str(metadata.get("vehicle_class", "sedan")).strip().lower() or "sedan",
         "quality": str(metadata.get("vehicle_quality", "used")).strip().lower() or "used",
         "power": _int_or_default(metadata.get("power"), 5),
-        "durability": _int_or_default(metadata.get("durability"), 5),
+        "durability": durability,
         "fuel_efficiency": _int_or_default(metadata.get("fuel_efficiency"), 5),
         "fuel_capacity": _int_or_default(metadata.get("fuel_capacity"), 60),
         "fuel": _int_or_default(metadata.get("fuel"), _int_or_default(metadata.get("fuel_capacity"), 60)),
-        "usable": bool(metadata.get("vehicle_usable", True)),
+        "usable": bool(metadata.get("vehicle_usable", True)) and int(durability) > 0,
     }
 
 

@@ -38,6 +38,7 @@ from game.vehicle_motion import (
     try_vehicle_step,
     vehicle_heading_label,
     vehicle_heading_tuple,
+    vehicle_is_usable,
     vehicle_local_block_reason as _vehicle_local_block_reason_for,
     vehicle_medium_for_property,
     vehicle_top_speed,
@@ -319,6 +320,15 @@ class PlayerTravelRuntime:
         )
         return False
 
+    def _local_vehicle_is_usable(self, eid, vehicle_prop, state=None):
+        if vehicle_is_usable(vehicle_prop):
+            return True
+        if state is None:
+            state = self._vehicle_state_for(eid)
+        set_vehicle_speed(state, 0, tick=self.sim.tick, vehicle_prop=vehicle_prop)
+        self._emit_vehicle_blocked(eid, vehicle_prop, reason="vehicle_broken")
+        return False
+
     def _move_local_vehicle_steps(self, eid, pos, vehicle_prop, state, move_dx, move_dy, move_steps=1, *, reason="vehicle_move"):
         moved_any = False
         for _step_index in range(int(max(0, move_steps))):
@@ -367,6 +377,8 @@ class PlayerTravelRuntime:
         vehicle_prop = self._active_vehicle_property(eid)
         if not state or not state.in_vehicle or not vehicle_prop:
             self._emit_vehicle_blocked(eid, vehicle_prop, reason="vehicle_required")
+            return False
+        if not self._local_vehicle_is_usable(eid, vehicle_prop, state):
             return False
 
         turn, thrust = self._vehicle_drive_command(dx, dy)
@@ -433,6 +445,8 @@ class PlayerTravelRuntime:
         vehicle_prop = self._active_vehicle_property(eid)
         if not state or not state.in_vehicle or not vehicle_prop:
             self._emit_vehicle_blocked(eid, vehicle_prop, reason="vehicle_required")
+            return False
+        if not self._local_vehicle_is_usable(eid, vehicle_prop, state):
             return False
 
         turn, thrust = self._vehicle_drive_command(dx, dy)
@@ -509,6 +523,8 @@ class PlayerTravelRuntime:
         if not state or not state.in_vehicle or not vehicle_prop:
             self._emit_vehicle_blocked(eid, vehicle_prop, reason="vehicle_required")
             return False
+        if not self._local_vehicle_is_usable(eid, vehicle_prop, state):
+            return False
         if self._local_vehicle_discrete_controls():
             return False
         if not self._local_vehicle_has_fuel(eid, pos, vehicle_prop):
@@ -571,6 +587,15 @@ class PlayerTravelRuntime:
         vehicle_id = str(vehicle_prop.get("id", "")).strip()
         if not vehicle_id:
             self.sim.emit(Event("vehicle_action_blocked", eid=eid, reason="invalid_vehicle"))
+            return False
+        if not vehicle_is_usable(vehicle_prop):
+            self.sim.emit(Event(
+                "vehicle_action_blocked",
+                eid=eid,
+                reason="vehicle_broken",
+                vehicle_id=vehicle_id,
+                vehicle_name=_vehicle_label(vehicle_prop),
+            ))
             return False
 
         owner_tag = str(vehicle_prop.get("owner_tag", "")).strip().lower()
