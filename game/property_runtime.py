@@ -403,6 +403,22 @@ def finance_services_for_property(prop):
     return _finance_services_for_property_base(prop)
 
 
+def property_supports_business_relevance(prop, *, include_assets=False):
+    if not isinstance(prop, dict):
+        return False
+    kind = str(prop.get("kind", "") or "").strip().lower()
+    allowed_kinds = {"building", "asset"} if include_assets else {"building"}
+    if kind not in allowed_kinds:
+        return False
+    metadata = property_metadata(prop)
+    return bool(
+        property_is_storefront(prop)
+        or finance_services_for_property(prop)
+        or site_services_for_property(prop)
+        or str(metadata.get("business_name", "") or "").strip()
+    )
+
+
 def property_fixture_type(prop):
     metadata = property_metadata(prop)
     return str(metadata.get("fixture_type", metadata.get("archetype", "")) or "").strip().lower()

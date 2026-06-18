@@ -1086,7 +1086,7 @@ class WorldStreamingSystem(System):
                 "building_id": None,
             })
 
-        vehicle_target_count = max(1, chunk_size // 12) if area_type == "city" else (1 if rng.random() < 0.55 else 0)
+        vehicle_target_count = max(2, chunk_size // 12) if area_type == "city" else (1 if rng.random() < 0.55 else 0)
         vehicles = generate_chunk_vehicle_records(
             self.sim,
             chunk,

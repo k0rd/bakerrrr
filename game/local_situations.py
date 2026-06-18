@@ -16,6 +16,7 @@ from game.property_runtime import (
     property_display_position,
     property_focus_position,
     property_metadata,
+    property_supports_business_relevance,
 )
 from game.system_support.crime_plan_runtime import crime_plan_surface_rows
 
@@ -494,9 +495,10 @@ def _property_is_player_owned_site(sim, prop, player_eid=None):
 
 
 def _ownership_fields(sim, prop, player_eid=None):
-    relevant = _property_is_player_owned_site(sim, prop, player_eid=player_eid)
+    owned = _property_is_player_owned_site(sim, prop, player_eid=player_eid)
+    relevant = bool(owned and property_supports_business_relevance(prop))
     return {
-        "is_player_owned_site": bool(relevant),
+        "is_player_owned_site": bool(owned),
         "player_business_relevance": bool(relevant),
     }
 

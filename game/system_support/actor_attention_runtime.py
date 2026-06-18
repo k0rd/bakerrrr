@@ -20,6 +20,7 @@ from game.components import (
     SuppressionState,
     Vitality,
 )
+from game.property_runtime import property_is_vehicle, property_supports_business_relevance
 
 
 ATTENTION_FAMILIES = ("will", "move", "settlement")
@@ -844,7 +845,13 @@ def _collect_attention_sources(sim, state):
             chunk = _property_chunk(sim, prop)
             if chunk is not None:
                 warm_chunks.add(chunk)
-                _add_chunk_reason(chunk_reasons, chunk, "player_business")
+                if property_supports_business_relevance(prop):
+                    reason = "player_business"
+                elif property_is_vehicle(prop):
+                    reason = "player_vehicle"
+                else:
+                    reason = "player_property"
+                _add_chunk_reason(chunk_reasons, chunk, reason)
 
     opportunities = getattr(sim, "world_traits", {}).get("opportunities", {})
     tracked = opportunities.get("tracked_targets", {}) if isinstance(opportunities, dict) else {}

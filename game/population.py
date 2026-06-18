@@ -35,6 +35,7 @@ from game.components import (
     WeaponLoadout,
     WeaponUseProfile,
     SuppressionState,
+    VehicleState,
     WildlifeSocialState,
     WildlifeBehavior,
 )
@@ -44,8 +45,10 @@ from game.human_identity import seed_human_identity_profile
 from game.npc_names import generate_human_personal_name, human_descriptor
 from game.organizations import ensure_property_organization, sync_actor_organization_affiliations
 from game.property_access import property_is_open, property_is_public, property_is_storefront, world_hour
+from game.property_runtime import property_is_vehicle, vehicle_fuel_values
 from game.skills import seed_skill_profile
 from game.system_support.npc_behavior_runtime import behavior_profile_for_spawn
+from game.vehicle_motion import local_route_accessible_at, sync_vehicle_property_position, vehicle_top_speed
 from game.weapons import roll_weapon_instance
 
 
@@ -163,6 +166,8 @@ STOREFRONT_ARCHETYPES = {
     "karaoke_box",
     "pool_hall",
 }
+NPC_COMMUTE_DRIVER_CAP_PER_CHUNK = 2
+NPC_COMMUTE_DRIVER_ROUTE_SCAN_RADIUS = 10
 LARGE_STAFF_ARCHETYPES = {
     "hotel",
     "warehouse",
@@ -3114,6 +3119,261 @@ def _business_founder_keyholder_chance(prop):
     return 0.26 if property_is_storefront(prop) else 0.14
 
 
+def _chunk_bounds_for_population(sim, chunk):
+    size = int(max(8, getattr(sim, "chunk_size", 12)))
+    try:
+        cx = int(chunk.get("cx", 0))
+        cy = int(chunk.get("cy", 0))
+    except (TypeError, ValueError, AttributeError):
+        cx = cy = 0
+    return cx * size, cy * size, (cx * size) + size - 1, (cy * size) + size - 1
+
+
+def _property_position_tuple(prop):
+    if not isinstance(prop, dict):
+        return None
+    try:
+        return int(prop.get("x", 0)), int(prop.get("y", 0)), int(prop.get("z", 0))
+    except (TypeError, ValueError):
+        return None
+
+
+def _route_tile_available_for_vehicle(sim, x, y, z, *, vehicle_id="", driver_eid=None):
+    if not local_route_accessible_at(
+        sim,
+        int(x),
+        int(y),
+        int(z),
+        ignore_property_id=str(vehicle_id or "").strip() or None,
+        medium="land",
+    ):
+        return False
+    occupants = set(sim.tilemap.entities_at(int(x), int(y), int(z)) or ())
+    if driver_eid is not None:
+        try:
+            occupants.discard(int(driver_eid))
+        except (TypeError, ValueError):
+            pass
+    return not occupants
+
+
+def _nearby_vehicle_route_start(sim, vehicle_prop, rng, *, driver_eid=None):
+    position = _property_position_tuple(vehicle_prop)
+    if position is None:
+        return None
+    vx, vy, vz = position
+    vehicle_id = str(vehicle_prop.get("id", "") or "").strip()
+    candidates = []
+    for radius in range(0, 4):
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                if max(abs(dx), abs(dy)) != radius:
+                    continue
+                x = vx + dx
+                y = vy + dy
+                if not _route_tile_available_for_vehicle(
+                    sim,
+                    x,
+                    y,
+                    vz,
+                    vehicle_id=vehicle_id,
+                    driver_eid=driver_eid,
+                ):
+                    continue
+                distance = abs(dx) + abs(dy)
+                candidates.append((int(distance), rng.random(), int(x), int(y), int(vz)))
+        if candidates:
+            break
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][2], candidates[0][3], candidates[0][4]
+
+
+def _route_target_from_start(sim, chunk, start, vehicle_prop, rng):
+    if not isinstance(start, (tuple, list)) or len(start) < 3:
+        return None
+    sx, sy, sz = int(start[0]), int(start[1]), int(start[2])
+    vehicle_id = str((vehicle_prop or {}).get("id", "") or "").strip()
+    left, top, right, bottom = _chunk_bounds_for_population(sim, chunk)
+    directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+    rng.shuffle(directions)
+    targets = []
+    for dx, dy in directions:
+        last = None
+        for step in range(1, NPC_COMMUTE_DRIVER_ROUTE_SCAN_RADIUS + 1):
+            x = sx + (dx * step)
+            y = sy + (dy * step)
+            if x < left or x > right or y < top or y > bottom:
+                break
+            if not _route_tile_available_for_vehicle(sim, x, y, sz, vehicle_id=vehicle_id):
+                break
+            if step >= 3:
+                last = (int(x), int(y), int(sz))
+        if last is not None:
+            targets.append((abs(last[0] - sx) + abs(last[1] - sy), rng.random(), last))
+    if targets:
+        targets.sort(reverse=True)
+        return targets[0][2]
+    return None
+
+
+def _steady_commute_driver_candidates(sim, spawned):
+    positions = sim.ecs.get(Position)
+    ais = sim.ecs.get(AI)
+    occupations = sim.ecs.get(Occupation)
+    vehicle_states = sim.ecs.get(VehicleState)
+    candidates = []
+    for eid in tuple(spawned or ()):
+        ai = ais.get(eid)
+        pos = positions.get(eid)
+        occupation = occupations.get(eid)
+        if ai is None or pos is None or occupation is None:
+            continue
+        role = str(getattr(ai, "role", "") or "").strip().lower()
+        if role not in {"worker", "guard"}:
+            continue
+        state = vehicle_states.get(eid)
+        if state is not None and bool(getattr(state, "in_vehicle", False)):
+            continue
+        career = str(getattr(occupation, "career", "") or "").strip().lower()
+        if career in {"", "resident", "drunk", "thief", "drifter", "scavenger"}:
+            continue
+        workplace = getattr(occupation, "workplace", None)
+        if not isinstance(workplace, dict):
+            continue
+        workplace_id = str(workplace.get("property_id", "") or "").strip()
+        workplace_prop = sim.properties.get(workplace_id)
+        if not isinstance(workplace_prop, dict):
+            continue
+        if str(workplace_prop.get("kind", "") or "").strip().lower() != "building":
+            continue
+        anchor = _focus_position(workplace_prop)
+        score = 2.0 if role == "guard" else 1.0
+        if anchor is not None:
+            score += min(8.0, abs(int(pos.x) - int(anchor[0])) + abs(int(pos.y) - int(anchor[1]))) * 0.1
+        candidates.append((score, int(eid)))
+    candidates.sort(reverse=True)
+    return [eid for _score, eid in candidates]
+
+
+def _commute_vehicle_candidates(sim, property_records):
+    vehicles = []
+    for record in tuple(property_records or ()):
+        prop_id = str((record or {}).get("id", "") or "").strip() if isinstance(record, dict) else ""
+        prop = sim.properties.get(prop_id)
+        if not property_is_vehicle(prop):
+            continue
+        owner_tag = str(prop.get("owner_tag", "") or "").strip().lower()
+        if owner_tag == "player" or prop.get("owner_eid") not in {None, "", 0}:
+            continue
+        metadata = _property_metadata(prop)
+        medium = str(metadata.get("vehicle_medium", metadata.get("medium", "land")) or "land").strip().lower()
+        if medium != "land":
+            continue
+        fuel, _capacity = vehicle_fuel_values(prop)
+        if int(fuel) <= 0 or vehicle_top_speed(prop) <= 0:
+            continue
+        vehicles.append(prop)
+    return vehicles
+
+
+def _seed_npc_commute_drivers(sim, chunk, property_records, rng, spawned):
+    cap = int(max(0, NPC_COMMUTE_DRIVER_CAP_PER_CHUNK))
+    if cap <= 0:
+        return []
+    drivers = _steady_commute_driver_candidates(sim, spawned)
+    vehicles = _commute_vehicle_candidates(sim, property_records)
+    if not drivers or not vehicles:
+        return []
+
+    rng.shuffle(drivers)
+    rng.shuffle(vehicles)
+    assigned = []
+    used_vehicle_ids = set()
+    positions = sim.ecs.get(Position)
+    ais = sim.ecs.get(AI)
+    vehicle_states = sim.ecs.get(VehicleState)
+    portfolios = sim.ecs.get(PropertyPortfolio)
+    wills = sim.ecs.get(NPCWill)
+    throttles = sim.ecs.get(MovementThrottle)
+
+    for driver_eid in drivers:
+        if len(assigned) >= cap:
+            break
+        pos = positions.get(driver_eid)
+        ai = ais.get(driver_eid)
+        if pos is None or ai is None:
+            continue
+        chosen = None
+        start = None
+        target = None
+        for vehicle_prop in vehicles:
+            vehicle_id = str(vehicle_prop.get("id", "") or "").strip()
+            if not vehicle_id or vehicle_id in used_vehicle_ids:
+                continue
+            route_start = _nearby_vehicle_route_start(sim, vehicle_prop, rng, driver_eid=driver_eid)
+            if route_start is None:
+                continue
+            route_target = _route_target_from_start(sim, chunk, route_start, vehicle_prop, rng)
+            if route_target is None:
+                continue
+            chosen = vehicle_prop
+            start = route_start
+            target = route_target
+            break
+        if chosen is None or start is None or target is None:
+            continue
+
+        vehicle_id = str(chosen.get("id", "") or "").strip()
+        used_vehicle_ids.add(vehicle_id)
+        old_x, old_y, old_z = int(pos.x), int(pos.y), int(pos.z)
+        start_x, start_y, start_z = int(start[0]), int(start[1]), int(start[2])
+        if (old_x, old_y, old_z) != (start_x, start_y, start_z):
+            sim.tilemap.move_entity(driver_eid, old_x, old_y, start_x, start_y, old_z, start_z)
+            pos.x, pos.y, pos.z = start_x, start_y, start_z
+
+        chosen["owner_eid"] = int(driver_eid)
+        chosen["owner_tag"] = "npc"
+        sim.property_registry_dirty = True
+        metadata = _property_metadata(chosen)
+        metadata["vehicle_owner_tag"] = "npc"
+        metadata["npc_commute_driver_eid"] = int(driver_eid)
+        metadata["npc_commute_vehicle"] = True
+        sync_vehicle_property_position(sim, chosen, start_x, start_y, start_z)
+
+        state = vehicle_states.get(driver_eid)
+        if state is None:
+            state = VehicleState()
+            sim.ecs.add(driver_eid, state)
+        state.set_active_vehicle(vehicle_id, tick=getattr(sim, "tick", 0))
+        state.set_in_vehicle(True, tick=getattr(sim, "tick", 0))
+        dx = 1 if int(target[0]) > start_x else -1 if int(target[0]) < start_x else 0
+        dy = 1 if int(target[1]) > start_y else -1 if int(target[1]) < start_y else 0
+        state.set_heading(dx, dy, tick=getattr(sim, "tick", 0))
+
+        portfolio = portfolios.get(driver_eid)
+        if portfolio is not None:
+            portfolio.owned_property_ids.add(vehicle_id)
+
+        ai.state = "patrolling"
+        ai.target = (int(target[0]), int(target[1]), int(target[2]))
+        ai.target_eid = None
+        will = wills.get(driver_eid)
+        if will is not None:
+            will.intent = "patrolling"
+            will.score = max(float(getattr(will, "score", 0.0) or 0.0), 24.0)
+            will.target = ai.target
+            will.target_eid = None
+            will.last_tick = int(getattr(sim, "tick", 0) or 0)
+        throttle = throttles.get(driver_eid)
+        if throttle is not None:
+            throttle.next_move_tick = min(int(getattr(throttle, "next_move_tick", 0) or 0), int(getattr(sim, "tick", 0) or 0))
+
+        assigned.append(driver_eid)
+    return assigned
+
+
 UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS = (
     {
         "profile_id": "maintenance_worker",
@@ -4364,6 +4624,7 @@ def spawn_chunk_npcs(sim, chunk, property_records, reserved_property_ids=None):
             "work_property_id": workplace_prop.get("id") if isinstance(workplace_prop, dict) else None,
         }
 
+    _seed_npc_commute_drivers(sim, chunk, property_records, rng, spawned)
     baseline_population = len(spawned)
 
     wildlife_target_count = _wildlife_target_count(_chunk_descriptor(sim, chunk), rng)

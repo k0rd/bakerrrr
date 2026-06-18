@@ -3522,6 +3522,18 @@ class NPCWillSystem(System):
 
 class NPCInvestigateSystem(System):
 
+    COMMUTE_STATES = {
+        "working",
+        "lounging",
+        "socializing",
+        "shopping",
+        "resting",
+        "patrolling",
+    }
+    COMMUTE_VEHICLE_RADIUS = 5
+    COMMUTE_MIN_TARGET_DISTANCE = 7
+    COMMUTE_ROUTE_STOP_RADIUS = 7
+
     DEFAULT_MOVE_COOLDOWNS = {
         "investigating": 2,
         "protecting": 1,
@@ -3859,6 +3871,7 @@ class NPCInvestigateSystem(System):
         routines = self.sim.ecs.get(NPCRoutine)
         wills = self.sim.ecs.get(NPCWill)
         wildlife_behaviors = self.sim.ecs.get(WildlifeBehavior)
+        vehicle_states = self.sim.ecs.get(VehicleState)
 
         for eid, ai in ais.items():
             if eid == source_eid:
@@ -3903,6 +3916,14 @@ class NPCInvestigateSystem(System):
                 _mark_actor_urgent(self.sim, eid, family="move", reason="noise:wildlife", ttl_ticks=12)
                 _mark_actor_urgent(self.sim, eid, family="will", reason="noise:wildlife", ttl_ticks=12)
                 self._schedule_move_due(eid, getattr(self.sim, "tick", 0))
+                continue
+
+            vehicle_state = vehicle_states.get(eid)
+            if (
+                vehicle_state is not None
+                and bool(getattr(vehicle_state, "in_vehicle", False))
+                and str(cause or "").strip().lower() in {"move", "vehicle_move"}
+            ):
                 continue
 
             if not _noise_merits_attention(self.sim, eid, source_eid, nx, ny, nz, cause):
@@ -4147,6 +4168,327 @@ class NPCInvestigateSystem(System):
             f"{getattr(self.sim, 'seed', 0)}:npc_vehicle_miss:{int(eid)}:{int(getattr(self.sim, 'tick', 0))}:{int(getattr(pos, 'x', 0))}:{int(getattr(pos, 'y', 0))}"
         ).random()
         return roll < chance
+
+    def _clear_npc_vehicle_commute(self, ai):
+        for attr in (
+            "vehicle_commute_phase",
+            "vehicle_commute_vehicle_id",
+            "vehicle_commute_final_target",
+            "vehicle_commute_route_target",
+            "vehicle_commute_original_state",
+            "vehicle_commute_started_tick",
+        ):
+            if hasattr(ai, attr):
+                delattr(ai, attr)
+
+    def _tuple3(self, value):
+        if not isinstance(value, (tuple, list)) or len(value) < 3:
+            return None
+        try:
+            return int(value[0]), int(value[1]), int(value[2])
+        except (TypeError, ValueError):
+            return None
+
+    def _vehicle_position_tuple(self, prop):
+        if not _property_is_vehicle(prop):
+            return None
+        try:
+            return int(prop.get("x", 0)), int(prop.get("y", 0)), int(prop.get("z", 0))
+        except (TypeError, ValueError):
+            return None
+
+    def _vehicle_commute_usable_for(self, eid, vehicle_prop, pos):
+        if not _property_is_vehicle(vehicle_prop) or pos is None:
+            return False
+        vehicle_pos = self._vehicle_position_tuple(vehicle_prop)
+        if vehicle_pos is None or int(vehicle_pos[2]) != int(pos.z):
+            return False
+        owner_eid = vehicle_prop.get("owner_eid")
+        metadata = _property_metadata(vehicle_prop)
+        assigned_eid = metadata.get("npc_commute_driver_eid")
+        if owner_eid not in {None, "", 0}:
+            try:
+                if int(owner_eid) != int(eid):
+                    return False
+            except (TypeError, ValueError):
+                return False
+        elif assigned_eid not in {None, "", 0}:
+            try:
+                if int(assigned_eid) != int(eid):
+                    return False
+            except (TypeError, ValueError):
+                return False
+        else:
+            return False
+        medium = str(metadata.get("vehicle_medium", metadata.get("medium", "land")) or "land").strip().lower()
+        if medium != "land":
+            return False
+        fuel, _capacity = _vehicle_fuel_values(vehicle_prop)
+        if int(fuel) <= 0 or _vehicle_top_speed(vehicle_prop) <= 0:
+            return False
+        vehicle_id = str(vehicle_prop.get("id", "") or "").strip()
+        return _vehicle_route_accessible_at(
+            self.sim,
+            vehicle_pos[0],
+            vehicle_pos[1],
+            vehicle_pos[2],
+            ignore_property_id=vehicle_id,
+            medium="land",
+        )
+
+    def _owned_commute_vehicle_candidates(self, eid, pos):
+        ids = set()
+        portfolio = self.sim.ecs.get(PropertyPortfolio).get(eid)
+        if portfolio is not None:
+            ids.update(str(raw).strip() for raw in tuple(getattr(portfolio, "owned_property_ids", ()) or ()) if str(raw).strip())
+        state = self.sim.ecs.get(VehicleState).get(eid)
+        if state is not None:
+            for raw in (getattr(state, "active_vehicle_id", None), getattr(state, "last_vehicle_id", None)):
+                if str(raw or "").strip():
+                    ids.add(str(raw).strip())
+
+        rows = []
+        seen = set()
+        for property_id in ids:
+            prop = self.sim.properties.get(property_id)
+            if not self._vehicle_commute_usable_for(eid, prop, pos):
+                continue
+            vehicle_pos = self._vehicle_position_tuple(prop)
+            if vehicle_pos is None:
+                continue
+            distance = _manhattan(int(pos.x), int(pos.y), vehicle_pos[0], vehicle_pos[1])
+            if distance > self.COMMUTE_VEHICLE_RADIUS:
+                continue
+            rows.append((int(distance), str(prop.get("name", "") or ""), str(prop.get("id", "") or ""), prop))
+            seen.add(str(prop.get("id", "") or ""))
+
+        for prop in self.sim.properties.values():
+            if not _property_is_vehicle(prop):
+                continue
+            prop_id = str(prop.get("id", "") or "").strip()
+            if not prop_id or prop_id in seen:
+                continue
+            if not self._vehicle_commute_usable_for(eid, prop, pos):
+                continue
+            vehicle_pos = self._vehicle_position_tuple(prop)
+            if vehicle_pos is None:
+                continue
+            distance = _manhattan(int(pos.x), int(pos.y), vehicle_pos[0], vehicle_pos[1])
+            if distance <= self.COMMUTE_VEHICLE_RADIUS:
+                rows.append((int(distance), str(prop.get("name", "") or ""), prop_id, prop))
+        rows.sort()
+        return [row[-1] for row in rows]
+
+    def _route_tile_clear_for_commute(self, x, y, z, *, vehicle_id="", driver_eid=None):
+        if not _vehicle_route_accessible_at(
+            self.sim,
+            int(x),
+            int(y),
+            int(z),
+            ignore_property_id=str(vehicle_id or "").strip() or None,
+            medium="land",
+        ):
+            return False
+        occupants = set(self.sim.tilemap.entities_at(int(x), int(y), int(z)) or ())
+        if driver_eid is not None:
+            try:
+                occupants.discard(int(driver_eid))
+            except (TypeError, ValueError):
+                pass
+        return not occupants
+
+    def _vehicle_route_next_step(self, eid, start, goal, vehicle_id, *, max_nodes=384):
+        start = self._tuple3(start)
+        goal = self._tuple3(goal)
+        if start is None or goal is None or int(start[2]) != int(goal[2]):
+            return None
+        if start[:2] == goal[:2]:
+            return None
+        z = int(start[2])
+        if not self._route_tile_clear_for_commute(start[0], start[1], z, vehicle_id=vehicle_id, driver_eid=eid):
+            return None
+        if not self._route_tile_clear_for_commute(goal[0], goal[1], z, vehicle_id=vehicle_id, driver_eid=eid):
+            return None
+
+        start2 = (int(start[0]), int(start[1]))
+        goal2 = (int(goal[0]), int(goal[1]))
+        parents = {start2: None}
+        queue = [start2]
+        index = 0
+        best = start2
+        best_distance = _manhattan(start2[0], start2[1], goal2[0], goal2[1])
+        while index < len(queue) and len(parents) < int(max_nodes):
+            cx, cy = queue[index]
+            index += 1
+            if (cx, cy) == goal2:
+                best = goal2
+                break
+            for dx, dy in ((0, -1), (1, 0), (0, 1), (-1, 0)):
+                nx = cx + dx
+                ny = cy + dy
+                node = (nx, ny)
+                if node in parents:
+                    continue
+                if not self._route_tile_clear_for_commute(nx, ny, z, vehicle_id=vehicle_id, driver_eid=eid):
+                    continue
+                parents[node] = (cx, cy)
+                queue.append(node)
+                distance = _manhattan(nx, ny, goal2[0], goal2[1])
+                if distance < best_distance:
+                    best = node
+                    best_distance = distance
+        if best == start2:
+            return None
+        cursor = best
+        while parents.get(cursor) is not None and parents[cursor] != start2:
+            cursor = parents[cursor]
+        return cursor
+
+    def _route_stop_near_target(self, eid, start, final_target, vehicle_id):
+        start = self._tuple3(start)
+        final_target = self._tuple3(final_target)
+        if start is None or final_target is None or int(start[2]) != int(final_target[2]):
+            return None
+        fx, fy, fz = final_target
+        candidates = []
+        for radius in range(0, self.COMMUTE_ROUTE_STOP_RADIUS + 1):
+            for dy in range(-radius, radius + 1):
+                for dx in range(-radius, radius + 1):
+                    if max(abs(dx), abs(dy)) != radius:
+                        continue
+                    x = int(fx) + dx
+                    y = int(fy) + dy
+                    if not self._route_tile_clear_for_commute(x, y, fz, vehicle_id=vehicle_id, driver_eid=eid):
+                        continue
+                    if self._vehicle_route_next_step(eid, start, (x, y, fz), vehicle_id) is None and (int(start[0]), int(start[1])) != (x, y):
+                        continue
+                    walk_distance = _manhattan(x, y, fx, fy)
+                    drive_distance = _manhattan(int(start[0]), int(start[1]), x, y)
+                    candidates.append((int(walk_distance), -int(drive_distance), int(x), int(y), int(fz)))
+            if candidates:
+                break
+        if not candidates:
+            return None
+        candidates.sort()
+        return candidates[0][2], candidates[0][3], candidates[0][4]
+
+    def _maybe_start_vehicle_commute(self, eid, ai, pos, target, *, routine_path_state=False):
+        if getattr(ai, "vehicle_commute_phase", None):
+            return None
+        state_name = str(getattr(ai, "state", "") or "").strip().lower()
+        if state_name not in self.COMMUTE_STATES or not routine_path_state:
+            return None
+        target = self._tuple3(target)
+        if target is None or int(target[2]) != int(pos.z):
+            return None
+        if _manhattan(int(pos.x), int(pos.y), target[0], target[1]) < self.COMMUTE_MIN_TARGET_DISTANCE:
+            return None
+        vehicle_state = self.sim.ecs.get(VehicleState).get(eid)
+        if vehicle_state is not None and bool(getattr(vehicle_state, "in_vehicle", False)):
+            return None
+
+        for vehicle_prop in self._owned_commute_vehicle_candidates(eid, pos):
+            vehicle_pos = self._vehicle_position_tuple(vehicle_prop)
+            if vehicle_pos is None:
+                continue
+            vehicle_id = str(vehicle_prop.get("id", "") or "").strip()
+            route_stop = self._route_stop_near_target(eid, vehicle_pos, target, vehicle_id)
+            if route_stop is None:
+                continue
+            ai.vehicle_commute_phase = "walk_to_vehicle"
+            ai.vehicle_commute_vehicle_id = vehicle_id
+            ai.vehicle_commute_final_target = target
+            ai.vehicle_commute_route_target = route_stop
+            ai.vehicle_commute_original_state = state_name
+            ai.vehicle_commute_started_tick = int(getattr(self.sim, "tick", 0) or 0)
+            ai.target = vehicle_pos
+            ai.target_eid = None
+            self.sim.emit(Event(
+                "npc_vehicle_commute_started",
+                npc_eid=int(eid),
+                vehicle_id=vehicle_id,
+                final_target=target,
+                route_target=route_stop,
+                x=int(pos.x),
+                y=int(pos.y),
+                z=int(pos.z),
+            ))
+            return vehicle_pos
+        return None
+
+    def _maybe_enter_commute_vehicle(self, eid, ai, pos):
+        if str(getattr(ai, "vehicle_commute_phase", "") or "").strip().lower() != "walk_to_vehicle":
+            return False
+        vehicle_id = str(getattr(ai, "vehicle_commute_vehicle_id", "") or "").strip()
+        vehicle_prop = self.sim.properties.get(vehicle_id)
+        if not self._vehicle_commute_usable_for(eid, vehicle_prop, pos):
+            self._clear_npc_vehicle_commute(ai)
+            return False
+        vehicle_pos = self._vehicle_position_tuple(vehicle_prop)
+        route_target = self._tuple3(getattr(ai, "vehicle_commute_route_target", None))
+        final_target = self._tuple3(getattr(ai, "vehicle_commute_final_target", None))
+        if vehicle_pos is None or route_target is None or final_target is None:
+            self._clear_npc_vehicle_commute(ai)
+            return False
+        if (int(pos.x), int(pos.y), int(pos.z)) != vehicle_pos:
+            return False
+        state = self.sim.ecs.get(VehicleState).get(eid)
+        if state is None:
+            state = VehicleState()
+            self.sim.ecs.add(eid, state)
+        state.set_active_vehicle(vehicle_id, tick=getattr(self.sim, "tick", 0))
+        state.set_in_vehicle(True, tick=getattr(self.sim, "tick", 0))
+        dx = 1 if route_target[0] > int(pos.x) else -1 if route_target[0] < int(pos.x) else 0
+        dy = 1 if route_target[1] > int(pos.y) else -1 if route_target[1] < int(pos.y) else 0
+        state.set_heading(dx, dy, tick=getattr(self.sim, "tick", 0))
+        ai.vehicle_commute_phase = "drive"
+        ai.target = route_target
+        ai.target_eid = None
+        self.sim.emit(Event(
+            "npc_vehicle_commute_entered",
+            npc_eid=int(eid),
+            vehicle_id=vehicle_id,
+            final_target=final_target,
+            route_target=route_target,
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        ))
+        return True
+
+    def _maybe_finish_vehicle_commute_drive(self, eid, ai, pos):
+        if str(getattr(ai, "vehicle_commute_phase", "") or "").strip().lower() != "drive":
+            return False
+        route_target = self._tuple3(getattr(ai, "vehicle_commute_route_target", None))
+        final_target = self._tuple3(getattr(ai, "vehicle_commute_final_target", None))
+        if route_target is None or final_target is None:
+            self._clear_npc_vehicle_commute(ai)
+            return False
+        if (int(pos.x), int(pos.y), int(pos.z)) != route_target:
+            return False
+        state = self.sim.ecs.get(VehicleState).get(eid)
+        if state is not None:
+            _set_vehicle_speed(state, 0, tick=getattr(self.sim, "tick", 0))
+            state.set_in_vehicle(False, tick=getattr(self.sim, "tick", 0))
+            vehicle_prop = _active_vehicle_property_for_state(self.sim, state)
+            if _property_is_vehicle(vehicle_prop):
+                _sync_vehicle_property_position(self.sim, vehicle_prop, int(pos.x), int(pos.y), int(pos.z))
+        vehicle_id = str(getattr(ai, "vehicle_commute_vehicle_id", "") or "").strip()
+        original_state = str(getattr(ai, "vehicle_commute_original_state", "") or "").strip().lower()
+        self._clear_npc_vehicle_commute(ai)
+        ai.state = original_state or "patrolling"
+        ai.target = final_target
+        ai.target_eid = None
+        self.sim.emit(Event(
+            "npc_vehicle_commute_parked",
+            npc_eid=int(eid),
+            vehicle_id=vehicle_id or None,
+            final_target=final_target,
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        ))
+        return True
 
     def _try_npc_vehicle_route_step(self, eid, pos, step):
         if not step:
@@ -4432,6 +4774,28 @@ class NPCInvestigateSystem(System):
             ):
                 continue
 
+            routine_path_state = ai.state in {
+                "selling_scavenged",
+                "seeking_medical_aid",
+                "seeking_safe_spot",
+                "seeking_shelter",
+                "patrolling",
+                "working",
+                "lounging",
+                "socializing",
+                "shopping",
+                "resting",
+            }
+            commute_target = self._maybe_start_vehicle_commute(
+                eid,
+                ai,
+                pos,
+                (tx, ty, tz),
+                routine_path_state=routine_path_state,
+            )
+            if commute_target is not None:
+                tx, ty, tz = commute_target
+
             hold_cooldown = (
                 throttle.cooldown_for(ai.state, status_multiplier=status_speed_mult)
                 if throttle
@@ -4459,6 +4823,13 @@ class NPCInvestigateSystem(System):
                     throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
                 else:
                     self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
+                continue
+
+            if self._maybe_enter_commute_vehicle(eid, ai, pos) or self._maybe_finish_vehicle_commute_drive(eid, ai, pos):
+                if throttle:
+                    throttle.next_move_tick = self.sim.tick + 1
+                else:
+                    self.next_move_tick[eid] = self.sim.tick + 1
                 continue
 
             if pos.x == tx and pos.y == ty:
@@ -5068,11 +5439,20 @@ class NPCInvestigateSystem(System):
                 "working",
                 "lounging",
                 "socializing",
+                "shopping",
                 "resting",
             }
             step = None
             path_suppressed = live_timeskip_active and self._live_no_path_cached(eid, ai, pos, (tx, ty, tz))
-            if routine_path_state and not path_suppressed:
+            commute_phase = str(getattr(ai, "vehicle_commute_phase", "") or "").strip().lower()
+            if commute_phase == "drive":
+                step = self._vehicle_route_next_step(
+                    eid,
+                    (int(pos.x), int(pos.y), int(pos.z)),
+                    (tx, ty, tz),
+                    str(getattr(ai, "vehicle_commute_vehicle_id", "") or "").strip(),
+                )
+            if step is None and commute_phase != "drive" and routine_path_state and not path_suppressed:
                 step = _next_opportunity_active_target_step(
                     self.sim,
                     eid,
@@ -5081,7 +5461,7 @@ class NPCInvestigateSystem(System):
                     (tx, ty, tz),
                     max_nodes=256,
                 )
-            if step is None and not path_suppressed:
+            if step is None and commute_phase != "drive" and not path_suppressed:
                 step = _path_next_step(
                     self.sim,
                     eid=eid,
