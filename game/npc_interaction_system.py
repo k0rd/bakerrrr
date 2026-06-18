@@ -136,6 +136,7 @@ from game.opportunities import (
     evaluate_opportunity_board,
     evaluate_opportunity_facts,
     format_reward_text,
+    opportunity_required_item_survives_pickup,
     opportunity_intel_for_observer,
     opportunity_distance_text,
     opportunity_known_count,
@@ -893,6 +894,8 @@ class NPCInteractionSystem(System):
 
     def _dialogue_refusal_line(self, context):
         prop = self._dialogue_boundary_property(context)
+        if self._property_owned_by_dialogue_player(prop):
+            return "I am done talking to you."
         place_name = str((prop or {}).get("name") or (prop or {}).get("id") or "").strip()
         if place_name:
             return f"I am done talking to you. Leave {place_name} alone."
@@ -3076,23 +3079,27 @@ class NPCInteractionSystem(System):
             f"{self.sim.seed}:issuer-side-job:{int(npc_eid)}:{issuer_property_id}:{self.sim.tick // self.SIDE_JOB_COOLDOWN_TICKS}"
         )
 
-        def _item_pool(item_ids):
+        def _item_pool(item_ids, *, require_survives_pickup=False):
             if isinstance(item_ids, str):
                 raw = [item_ids]
             elif isinstance(item_ids, (list, tuple, set)):
                 raw = list(item_ids)
             else:
                 raw = []
-            return [
-                str(item_id).strip().lower()
-                for item_id in raw
-                if str(item_id).strip().lower() in ITEM_CATALOG
-            ]
+            pool = []
+            for item_id in raw:
+                item_key = str(item_id).strip().lower()
+                if not item_key or item_key not in ITEM_CATALOG:
+                    continue
+                if require_survives_pickup and not opportunity_required_item_survives_pickup(item_key):
+                    continue
+                pool.append(item_key)
+            return pool
 
-        def _pick_item(item_ids):
-            pool = _item_pool(item_ids)
+        def _pick_item(item_ids, *, require_survives_pickup=False):
+            pool = _item_pool(item_ids, require_survives_pickup=require_survives_pickup)
             if not pool:
-                pool = _item_pool(self.SIDE_JOB_ITEM_POOL)
+                pool = _item_pool(self.SIDE_JOB_ITEM_POOL, require_survives_pickup=require_survives_pickup)
             if not pool:
                 return ""
             return str(rng.choice(pool)).strip().lower()
@@ -3191,7 +3198,7 @@ class NPCInteractionSystem(System):
         pressure_offers = []
 
         def _append_procure_offer(family, title, summary_template, item_ids, *, credit_bonus=8, standing=1, intel=0, bonus_items=(), pressure="medium"):
-            item_id = _pick_item(item_ids)
+            item_id = _pick_item(item_ids, require_survives_pickup=True)
             if not item_id:
                 return
             item_label = item_display_name(item_id, item_catalog=ITEM_CATALOG)
@@ -3234,7 +3241,7 @@ class NPCInteractionSystem(System):
         def _append_delivery_offer(family, title, summary_template, item_ids, *, credit_bonus=0, standing=1, intel=0, bonus_items=(), risk=None, pressure=None):
             if not remote_chunk or not remote_property_id:
                 return
-            item_id = _pick_item(item_ids)
+            item_id = _pick_item(item_ids, require_survives_pickup=True)
             if not item_id:
                 return
             item_label = item_display_name(item_id, item_catalog=ITEM_CATALOG)
@@ -3282,7 +3289,7 @@ class NPCInteractionSystem(System):
         def _append_pickup_offer(family, title, summary_template, item_ids, *, credit_bonus=4, standing=1, intel=0, bonus_items=(), risk=None, pressure=None):
             if not remote_chunk or not remote_property_id:
                 return
-            item_id = _pick_item(item_ids)
+            item_id = _pick_item(item_ids, require_survives_pickup=True)
             if not item_id:
                 return
             item_label = item_display_name(item_id, item_catalog=ITEM_CATALOG)

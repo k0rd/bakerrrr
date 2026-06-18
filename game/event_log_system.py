@@ -475,6 +475,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("item_used", self.on_item_used)
         self.sim.events.subscribe("item_use_blocked", self.on_item_use_blocked)
         self.sim.events.subscribe("report_device_used", self.on_report_device_used)
+        self.sim.events.subscribe("justice_vehicle_misuse_barked", self.on_justice_vehicle_misuse_barked)
         self.sim.events.subscribe("item_stolen", self.on_item_stolen)
         self.sim.events.subscribe("business_scene_posture_started", self.on_business_scene_posture_started)
         self.sim.events.subscribe("business_scene_nuisance", self.on_business_scene_nuisance)
@@ -537,6 +538,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("player_business_acquired", self.on_player_business_acquired)
         self.sim.events.subscribe("player_business_staff_hired", self.on_player_business_staff_hired)
         self.sim.events.subscribe("player_business_staff_fired", self.on_player_business_staff_fired)
+        self.sim.events.subscribe("player_business_staff_resigned", self.on_player_business_staff_resigned)
         self.sim.events.subscribe("property_purchase_blocked", self.on_property_purchase_blocked)
         self.sim.events.subscribe("trade_bought", self.on_trade_bought)
         self.sim.events.subscribe("street_vendor_purchase", self.on_street_vendor_purchase)
@@ -3742,6 +3744,22 @@ class EventLogSystem(System):
             dedupe_key=f"report-device:{npc_eid}:{event.data.get('incident_id')}:{method or 'device'}",
         )
 
+    def on_justice_vehicle_misuse_barked(self, event):
+        npc_eid = event.data.get("npc_eid") or event.data.get("observer_eid")
+        offender_eid = event.data.get("offender_eid") or event.data.get("eid")
+        if offender_eid != self.player_eid and not self._player_can_perceive_entity(npc_eid):
+            return
+        quote = str(event.data.get("quote", "") or "").strip() or "Police! Out of the vehicle!"
+        self._log_npc_bark(
+            npc_eid,
+            quote,
+            "A justice officer shouts nearby.",
+            "A justice officer shouts from another floor.",
+            channel="combat",
+            priority="critical",
+            dedupe_key=f"justice-vehicle-misuse:{npc_eid}:{event.data.get('incident_id')}",
+        )
+
     def on_item_stolen(self, event):
         if event.data.get("offender_eid") != self.player_eid:
             return
@@ -4818,6 +4836,13 @@ class EventLogSystem(System):
         business_name = str(event.data.get("business_name", "Business")).strip() or "Business"
         npc_name = self._npc_label(event.data.get("npc_eid"))
         self.sim.log.add(f"{npc_name} is no longer employed at {business_name}.")
+
+    def on_player_business_staff_resigned(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        business_name = str(event.data.get("business_name", "Business")).strip() or "Business"
+        npc_name = self._npc_label(event.data.get("npc_eid"))
+        self.sim.log.add(f"{npc_name} resigns from {business_name}.")
 
     def on_property_purchase_blocked(self, event):
         if event.data.get("eid") != self.player_eid:

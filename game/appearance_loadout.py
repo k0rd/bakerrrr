@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from engine.events import Event
 from game.components import AppearanceLoadout, ArmorLoadout, CreatureIdentity, Inventory
-from game.human_description import human_self_physical_summary, human_render_color_key
+from game.human_description import build_human_description_profile, human_self_physical_summary, human_render_color_key
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG, item_display_name, item_inventory_slot_cost
 
@@ -286,7 +286,86 @@ STYLE_SERVICE_OPTIONS = {
     "hair_style": ("cropped", "short", "bob", "braided", "loose", "nape-tied"),
     "hair_color": ("black", "brown", "auburn", "blonde", "silver", "copper"),
     "makeup": ("none", "clean", "subtle", "smoky", "bold"),
+    "makeup_eyes": ("none", "clean", "subtle", "smoky", "bold"),
+    "makeup_lips": ("none", "clear", "soft", "dark", "bold"),
+    "makeup_cheeks": ("none", "clean", "subtle", "warm", "bold"),
 }
+MAKEUP_STYLE_KINDS = frozenset({"makeup", "makeup_eyes", "makeup_lips", "makeup_cheeks"})
+MAKEUP_REGION_BY_KIND = {
+    "makeup_eyes": "eyes",
+    "makeup_lips": "lips",
+    "makeup_cheeks": "cheeks",
+}
+MAKEUP_REGION_LABELS = {
+    "eyes": "Eyes",
+    "lips": "Lips",
+    "cheeks": "Cheeks",
+}
+APPEARANCE_STYLE_KINDS_BY_ARCHETYPE = {
+    "hair_studio": ("hair_style", "hair_color"),
+    "makeup_counter": ("makeup", "makeup_eyes", "makeup_lips", "makeup_cheeks"),
+}
+SKIN_MARK_SLOT_LABELS = {
+    "forehead": "Forehead",
+    "left_brow": "Left brow",
+    "right_brow": "Right brow",
+    "left_eye_area": "Left eye area",
+    "right_eye_area": "Right eye area",
+    "left_cheek": "Left cheek",
+    "right_cheek": "Right cheek",
+    "nose": "Nose",
+    "lips": "Lips",
+    "chin": "Chin",
+    "neck": "Neck",
+    "collarline": "Collarline",
+    "left_wrist": "Left wrist",
+    "right_wrist": "Right wrist",
+    "left_hand": "Left hand",
+    "right_hand": "Right hand",
+    "left_forearm": "Left forearm",
+    "right_forearm": "Right forearm",
+    "upper_chest": "Upper chest",
+    "back": "Back",
+    "left_leg": "Left leg",
+    "right_leg": "Right leg",
+}
+SKIN_MARK_SLOTS = tuple(SKIN_MARK_SLOT_LABELS)
+MAKEUP_CONFLICT_REGIONS_BY_MARK_SLOT = {
+    "left_brow": ("eyes",),
+    "right_brow": ("eyes",),
+    "left_eye_area": ("eyes",),
+    "right_eye_area": ("eyes",),
+    "left_cheek": ("cheeks",),
+    "right_cheek": ("cheeks",),
+    "lips": ("lips",),
+}
+TATTOO_SERVICE_ITEM_ID = "tattoo_service"
+TATTOO_DESIGNS = (
+    "anchor line",
+    "blackwork band",
+    "cedar sprig",
+    "compass rose",
+    "little starburst",
+    "moth silhouette",
+    "orbit line",
+    "river wave",
+    "threaded needle",
+    "worklight halo",
+)
+TATTOO_LOCATION_ROWS = (
+    ("left_forearm", "left forearm"),
+    ("right_forearm", "right forearm"),
+    ("left_wrist", "left wrist"),
+    ("right_wrist", "right wrist"),
+    ("collarline", "collarline"),
+    ("neck", "neck"),
+    ("left_cheek", "left cheek"),
+    ("right_cheek", "right cheek"),
+    ("left_eye_area", "left eye area"),
+    ("right_eye_area", "right eye area"),
+    ("lips", "near the lips"),
+    ("upper_chest", "upper chest"),
+)
 STARTER_OUTFIT_COLOR_BUCKETS = {
     "human_charcoal": ("charcoal", "black", "slate"),
     "human_olive": ("olive", "green", "tan"),
@@ -332,6 +411,83 @@ def _clean_slots(values):
     return tuple(slots)
 
 
+def style_service_kinds_for_property(prop):
+    metadata = prop.get("metadata") if isinstance(prop, dict) and isinstance(prop.get("metadata"), dict) else {}
+    configured = metadata.get("appearance_style_kinds") if isinstance(metadata, dict) else None
+    if isinstance(configured, (list, tuple, set)):
+        kinds = tuple(_key(kind) for kind in configured if _key(kind) in STYLE_SERVICE_OPTIONS)
+        if kinds:
+            return kinds
+    archetype = _key(metadata.get("archetype") if isinstance(metadata, dict) else "")
+    return tuple(APPEARANCE_STYLE_KINDS_BY_ARCHETYPE.get(archetype, tuple(STYLE_SERVICE_OPTIONS)))
+
+
+def _skin_mark_entry(kind, slot, *, description="", self_phrase="", design="", source="", covered_mark=None):
+    kind = _key(kind)
+    slot = _key(slot)
+    if not kind or slot not in SKIN_MARK_SLOTS:
+        return {}
+    row = {
+        "kind": kind,
+        "slot": slot,
+        "description": _text(description),
+        "self_phrase": _text(self_phrase),
+        "design": _text(design),
+        "source": _key(source),
+    }
+    if isinstance(covered_mark, dict) and covered_mark:
+        row["covered_mark"] = dict(covered_mark)
+    return row
+
+
+def _makeup_conflict_regions_for_slot(slot):
+    return tuple(MAKEUP_CONFLICT_REGIONS_BY_MARK_SLOT.get(_key(slot), ()))
+
+
+def _tattoo_conflict_regions(loadout):
+    blocked = set()
+    marks = dict(getattr(loadout, "skin_marks", {}) or {})
+    for slot, mark in marks.items():
+        if _key((mark or {}).get("kind")) != "tattoo":
+            continue
+        blocked.update(_makeup_conflict_regions_for_slot(slot))
+    return tuple(sorted(blocked))
+
+
+def _makeup_region_blocked(loadout, region):
+    return _key(region) in set(_tattoo_conflict_regions(loadout))
+
+
+def seed_appearance_skin_marks_from_description(sim, eid, *, loadout=None):
+    if sim is None or eid is None:
+        return False
+    if loadout is None:
+        loadout = sim.ecs.get(AppearanceLoadout).get(eid)
+    if loadout is None:
+        return False
+    identity = sim.ecs.get(CreatureIdentity).get(eid)
+    profile = build_human_description_profile(
+        getattr(sim, "seed", 0),
+        eid=eid,
+        identity=identity,
+        personal_name=getattr(identity, "personal_name", "") if identity is not None else "",
+    )
+    mark = profile.get("standout_mark") if isinstance(profile, dict) else None
+    if isinstance(mark, dict) and mark:
+        slot = _key(mark.get("slot"))
+        if slot in SKIN_MARK_SLOTS and not dict(getattr(loadout, "skin_marks", {}) or {}).get(slot):
+            loadout.skin_marks[slot] = _skin_mark_entry(
+                mark.get("kind"),
+                slot,
+                description=mark.get("description"),
+                self_phrase=mark.get("self_phrase"),
+                design=mark.get("design"),
+                source=mark.get("source") or "seeded_description",
+            )
+    loadout.skin_marks_seeded = True
+    return True
+
+
 def appearance_loadout_for(sim, eid, create=False):
     if sim is None or eid is None:
         return None
@@ -342,6 +498,8 @@ def appearance_loadout_for(sim, eid, create=False):
         sim.ecs.add(eid, loadout)
     if loadout is not None and hasattr(loadout, "normalize"):
         loadout.normalize()
+        if not bool(getattr(loadout, "skin_marks_seeded", False)):
+            seed_appearance_skin_marks_from_description(sim, eid, loadout=loadout)
     return loadout
 
 
@@ -465,6 +623,78 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None):
         "display_name": display_name,
         APPEARANCE_METADATA_KEY: appearance,
     }
+
+
+def tattoo_service_metadata(*, seed_token="", prop=None):
+    prop_id = ""
+    archetype = ""
+    if isinstance(prop, dict):
+        prop_id = _text(prop.get("id"))
+        metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+        archetype = _key(metadata.get("archetype"))
+    rng = random.Random(f"tattoo-service:{prop_id}:{archetype}:{seed_token}")
+    slot, location_label = rng.choice(TATTOO_LOCATION_ROWS)
+    design = rng.choice(TATTOO_DESIGNS)
+    display_name = f"{_title_words(design)} Tattoo - {_title_words(location_label)}"
+    return {
+        "display_name": display_name,
+        "appearance_service": "tattoo",
+        "tattoo_design": design,
+        "tattoo_slot": slot,
+        "tattoo_location": location_label,
+        "service_stock": True,
+        "non_inventory_service": True,
+    }
+
+
+def apply_tattoo_service(sim, eid, *, design="", slot="", prop=None, source_metadata=None):
+    loadout = appearance_loadout_for(sim, eid, create=True)
+    if loadout is None:
+        return AppearanceEquipResult(False, reason="missing_loadout")
+    slot = _key(slot)
+    design = _text(design)
+    metadata = source_metadata if isinstance(source_metadata, dict) else {}
+    if not design:
+        design = _text(metadata.get("tattoo_design")) or "linework"
+    if slot not in SKIN_MARK_SLOTS:
+        return AppearanceEquipResult(False, reason="invalid_tattoo_location")
+    existing = dict(getattr(loadout, "skin_marks", {}) or {}).get(slot)
+    if isinstance(existing, dict) and _key(existing.get("kind")) == "tattoo":
+        return AppearanceEquipResult(False, reason="tattoo_slot_occupied", slot=slot, item_name=design)
+
+    label = _text(metadata.get("tattoo_location")) or SKIN_MARK_SLOT_LABELS.get(slot, slot.replace("_", " ").title()).lower()
+    covered = existing if isinstance(existing, dict) and _key(existing.get("kind")) in {"scar", "burn", "nick"} else None
+    self_phrase = f"a {_text(design)} tattoo on my {label}"
+    if label.startswith("near "):
+        self_phrase = f"a {_text(design)} tattoo {label}"
+    mark = _skin_mark_entry(
+        "tattoo",
+        slot,
+        description=f"{design} tattoo at {label}",
+        self_phrase=self_phrase,
+        design=design,
+        source="tattoo_parlor",
+        covered_mark=covered,
+    )
+    if not mark:
+        return AppearanceEquipResult(False, reason="invalid_tattoo")
+    loadout.skin_marks[slot] = mark
+    blocked_regions = _makeup_conflict_regions_for_slot(slot)
+    for region in blocked_regions:
+        loadout.makeup_regions.pop(region, None)
+    if blocked_regions and _key(loadout.body_overrides.get("makeup")) not in {"", "none"}:
+        loadout.body_overrides["makeup"] = "none"
+    sim.emit(Event(
+        "appearance_tattoo_applied",
+        eid=eid,
+        property_id=(prop or {}).get("id") if isinstance(prop, dict) else None,
+        tattoo_design=design,
+        tattoo_slot=slot,
+        tattoo_location=label,
+        covered_mark_kind=_key((covered or {}).get("kind")),
+        blocked_makeup_regions=tuple(blocked_regions),
+    ))
+    return AppearanceEquipResult(True, action="tattoo_applied", slot=slot, item_name=f"{design} tattoo")
 
 
 def _metadata_with_color(metadata, *, color):
@@ -875,8 +1105,55 @@ def _adornment_sentence(sim, eid):
     return f"I have {', '.join(bits[:-1])}, and {bits[-1]} on."
 
 
+def _skin_mark_phrase(mark):
+    if not isinstance(mark, dict):
+        return ""
+    phrase = _text(mark.get("self_phrase"))
+    if phrase:
+        return phrase
+    kind = _key(mark.get("kind")) or "mark"
+    design = _text(mark.get("design"))
+    slot = _key(mark.get("slot"))
+    label = SKIN_MARK_SLOT_LABELS.get(slot, slot.replace("_", " ").title()).lower()
+    if kind == "tattoo":
+        return f"a {design or 'linework'} tattoo on my {label}"
+    if kind == "burn":
+        return f"an old burn mark near my {label}"
+    if kind == "nick":
+        return f"a nick at my {label}"
+    if kind == "scar":
+        return f"a scar at my {label}"
+    return _text(mark.get("description"))
+
+
+def _skin_mark_sentence(loadout):
+    marks = dict(getattr(loadout, "skin_marks", {}) or {})
+    if not marks:
+        return ""
+    phrases = []
+    coverups = []
+    for slot in SKIN_MARK_SLOTS:
+        mark = marks.get(slot)
+        if not isinstance(mark, dict):
+            continue
+        phrase = _skin_mark_phrase(mark)
+        if phrase:
+            phrases.append(phrase)
+        covered = mark.get("covered_mark") if isinstance(mark.get("covered_mark"), dict) else None
+        if _key(mark.get("kind")) == "tattoo" and covered:
+            covered_kind = _key(covered.get("kind")) or "mark"
+            coverups.append(f"it covers an older {covered_kind}")
+    if not phrases:
+        return ""
+    sentence = f"I have {_join_with_and(phrases)}."
+    if coverups:
+        sentence = f"{sentence[:-1]}, and {_join_with_and(coverups)}."
+    return sentence
+
+
 def _salon_sentence(loadout):
     overrides = dict(getattr(loadout, "body_overrides", {}) or {})
+    makeup_regions = dict(getattr(loadout, "makeup_regions", {}) or {})
     bits = []
     hair_style = _text(overrides.get("hair_style"))
     hair_color = _text(overrides.get("hair_color"))
@@ -889,6 +1166,13 @@ def _salon_sentence(loadout):
         bits.append(f"my hair is colored {hair_color}")
     if makeup and makeup.lower() != "none":
         bits.append(f"I have {makeup} makeup")
+    region_bits = []
+    for region in ("eyes", "lips", "cheeks"):
+        value = _text(makeup_regions.get(region))
+        if value and value.lower() != "none":
+            region_bits.append(f"{value} {region} makeup")
+    if region_bits:
+        bits.append(f"I have {_join_with_and(region_bits)}")
     if not bits:
         return ""
     sentence = _join_with_and(bits)
@@ -904,12 +1188,16 @@ def player_appearance_summary(sim, player_eid):
             eid=player_eid,
             identity=identity,
             personal_name=getattr(identity, "personal_name", ""),
+            omit_structured_mark=True,
         )
     loadout = appearance_loadout_for(sim, player_eid, create=True)
     sentences = [base] if base else []
     salon = _salon_sentence(loadout)
+    skin = _skin_mark_sentence(loadout)
     outfit = _outfit_sentence(sim, player_eid)
     adornment = _adornment_sentence(sim, player_eid)
+    if skin:
+        sentences.append(skin)
     if salon:
         sentences.append(salon)
     if outfit:
@@ -943,7 +1231,84 @@ def appearance_slot_rows(sim, eid):
     for key in ("hair_style", "hair_color", "makeup"):
         label = key.replace("_", " ").title()
         rows.append(f"{label}: {_text(overrides.get(key)) or 'default'}")
+    makeup_regions = dict(getattr(loadout, "makeup_regions", {}) or {})
+    for region in ("eyes", "lips", "cheeks"):
+        label = f"Makeup {MAKEUP_REGION_LABELS.get(region, region.title())}"
+        blocked = " blocked by tattoo" if _makeup_region_blocked(loadout, region) else ""
+        rows.append(f"{label}: {_text(makeup_regions.get(region)) or 'default'}{blocked}")
+    marks = dict(getattr(loadout, "skin_marks", {}) or {})
+    for slot in SKIN_MARK_SLOTS:
+        mark = marks.get(slot)
+        if not isinstance(mark, dict):
+            continue
+        kind = _key(mark.get("kind")) or "mark"
+        phrase = _text(mark.get("description")) or _skin_mark_phrase(mark)
+        rows.append(f"{SKIN_MARK_SLOT_LABELS.get(slot, slot.title())}: {kind} - {phrase}")
     return rows
+
+
+def appearance_signal_profile(sim, eid):
+    loadout = appearance_loadout_for(sim, eid, create=False)
+    if loadout is None:
+        return {}
+    marks = {
+        slot: dict(mark)
+        for slot, mark in dict(getattr(loadout, "skin_marks", {}) or {}).items()
+        if isinstance(mark, dict)
+    }
+    tattoos = []
+    visible_marks = []
+    covered_marks = []
+    for slot, mark in marks.items():
+        kind = _key(mark.get("kind"))
+        row = {
+            "slot": slot,
+            "kind": kind,
+            "description": _text(mark.get("description")),
+            "design": _text(mark.get("design")),
+        }
+        if kind == "tattoo":
+            tattoos.append(row)
+            covered = mark.get("covered_mark") if isinstance(mark.get("covered_mark"), dict) else None
+            if covered:
+                covered_marks.append({
+                    "slot": slot,
+                    "kind": _key(covered.get("kind")),
+                    "description": _text(covered.get("description")),
+                    "covered_by": "tattoo",
+                })
+        elif kind:
+            visible_marks.append(row)
+    makeup_regions = {
+        region: value
+        for region, value in dict(getattr(loadout, "makeup_regions", {}) or {}).items()
+        if _text(value) and _key(value) != "none"
+    }
+    overrides = dict(getattr(loadout, "body_overrides", {}) or {})
+    global_makeup = _key(overrides.get("makeup"))
+    tags = set()
+    if tattoos:
+        tags.add("tattoo")
+        tags.add("visible_mark")
+    if visible_marks:
+        tags.add("visible_mark")
+        tags.add("scar")
+    if global_makeup and global_makeup != "none":
+        tags.add("makeup")
+    if makeup_regions:
+        tags.add("makeup")
+    if _text(overrides.get("hair_style")) or _text(overrides.get("hair_color")):
+        tags.add("styled_hair")
+    return {
+        "skin_marks": marks,
+        "tattoos": tuple(tattoos),
+        "visible_marks": tuple(visible_marks),
+        "covered_marks": tuple(covered_marks),
+        "makeup_regions": dict(makeup_regions),
+        "blocked_makeup_regions": _tattoo_conflict_regions(loadout),
+        "body_overrides": overrides,
+        "tags": tuple(sorted(tags)),
+    }
 
 
 def player_appearance_color_key(sim, player_eid):
@@ -969,12 +1334,26 @@ def apply_appearance_service(sim, eid, *, kind="", value="", prop=None):
     if value not in STYLE_SERVICE_OPTIONS[kind]:
         return AppearanceEquipResult(False, reason="invalid_style_value")
     loadout = appearance_loadout_for(sim, eid, create=True)
-    loadout.body_overrides[kind] = value
+    if kind in MAKEUP_REGION_BY_KIND:
+        region = MAKEUP_REGION_BY_KIND[kind]
+        if value != "none" and _makeup_region_blocked(loadout, region):
+            return AppearanceEquipResult(False, reason="makeup_blocked_by_tattoo")
+        if value == "none":
+            loadout.makeup_regions.pop(region, None)
+        else:
+            loadout.makeup_regions[region] = value
+    elif kind == "makeup":
+        if value != "none" and _tattoo_conflict_regions(loadout):
+            return AppearanceEquipResult(False, reason="makeup_blocked_by_tattoo")
+        loadout.body_overrides[kind] = value
+    else:
+        loadout.body_overrides[kind] = value
     sim.emit(Event(
         "appearance_style_updated",
         eid=eid,
         style_kind=kind,
         style_value=value,
+        makeup_region=MAKEUP_REGION_BY_KIND.get(kind, ""),
         property_id=(prop or {}).get("id") if isinstance(prop, dict) else None,
     ))
     return AppearanceEquipResult(True, action="style_updated", item_name=value)

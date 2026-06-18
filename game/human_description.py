@@ -262,6 +262,38 @@ _EYELINER_STANDOUT_ROWS = (
 
 _STANDOUT_ROWS = _GENERAL_STANDOUT_ROWS + _EYELINER_STANDOUT_ROWS
 
+_STRUCTURED_STANDOUT_MARKS = {
+    "scarred right cheek": {
+        "kind": "scar",
+        "slot": "right_cheek",
+        "description": "scar on the right cheek",
+        "self_phrase": "a scar on my right cheek",
+        "style_tags": ("visible_mark", "scar"),
+    },
+    "nicked eyebrow": {
+        "kind": "nick",
+        "slot": "brow",
+        "description": "nick through one eyebrow",
+        "self_phrase": "a nick through one eyebrow",
+        "style_tags": ("visible_mark", "scar"),
+    },
+    "burn-marked wrist": {
+        "kind": "burn",
+        "slot": "wrist",
+        "description": "old burn mark near one wrist",
+        "self_phrase": "an old burn mark near one wrist",
+        "style_tags": ("visible_mark", "scar"),
+    },
+    "collarline tattoo": {
+        "kind": "tattoo",
+        "slot": "collarline",
+        "description": "tattoo line disappearing under the collar",
+        "self_phrase": "a tattoo line disappearing under my collar",
+        "design": "thin collarline",
+        "style_tags": ("visible_mark", "tattoo"),
+    },
+}
+
 _FACIAL_HAIR_STANDOUT_ROWS = (
     ("close-trimmed stubble kept exact", "trimmed stubble"),
     ("a clean shave that somehow still looks recent", "fresh clean shave"),
@@ -397,6 +429,26 @@ def _grooming_rows_for(gender_identity, style_axis):
     return filtered or _GROOMING_ROWS["masc"]
 
 
+def _structured_standout_mark(standout_compact, rng):
+    base = _STRUCTURED_STANDOUT_MARKS.get(str(standout_compact or "").strip().lower())
+    if not isinstance(base, dict):
+        return None
+    mark = dict(base)
+    slot = str(mark.get("slot", "") or "").strip().lower()
+    if slot == "brow":
+        side = rng.choice(("left", "right"))
+        mark["slot"] = f"{side}_brow"
+        mark["description"] = f"nick through the {side} eyebrow"
+        mark["self_phrase"] = f"a nick through my {side} eyebrow"
+    elif slot == "wrist":
+        side = rng.choice(("left", "right"))
+        mark["slot"] = f"{side}_wrist"
+        mark["description"] = f"old burn mark near the {side} wrist"
+        mark["self_phrase"] = f"an old burn mark near my {side} wrist"
+    mark["source"] = "seeded_description"
+    return mark
+
+
 def build_human_description_profile(seed, *, eid=None, identity=None, personal_name=None):
     if identity is not None and not is_human_identity(identity):
         return None
@@ -422,6 +474,7 @@ def build_human_description_profile(seed, *, eid=None, identity=None, personal_n
     condition_phrase = _pick_row(rng, _CONDITION_PHRASES)
     accessory_phrase, accessory_compact = _pick_row(rng, _ACCESSORY_ROWS[style_axis])
     standout_phrase, standout_compact = _pick_row(rng, _standout_rows_for(gender_identity, style_axis))
+    standout_mark = _structured_standout_mark(standout_compact, rng)
     demeanor_phrase, demeanor_compact = _pick_row(rng, _DEMEANOR_ROWS)
     grooming_sentence = _pick_row(rng, _grooming_rows_for(gender_identity, style_axis))
 
@@ -452,6 +505,7 @@ def build_human_description_profile(seed, *, eid=None, identity=None, personal_n
         "accessory_compact": accessory_compact,
         "standout_phrase": standout_phrase,
         "standout_compact": standout_compact,
+        "standout_mark": dict(standout_mark or {}),
         "demeanor_phrase": demeanor_phrase,
         "demeanor_compact": demeanor_compact,
         "grooming_sentence": grooming_sentence,
@@ -507,7 +561,7 @@ def human_physical_summary(seed, *, eid=None, identity=None, personal_name=None)
     return f"{summary}."
 
 
-def human_self_physical_summary(seed, *, eid=None, identity=None, personal_name=None):
+def human_self_physical_summary(seed, *, eid=None, identity=None, personal_name=None, omit_structured_mark=False):
     profile = build_human_description_profile(
         seed,
         eid=eid,
@@ -529,6 +583,8 @@ def human_self_physical_summary(seed, *, eid=None, identity=None, personal_name=
     if hair:
         features.append(hair)
     standout = str(profile.get("standout_phrase", "") or "").strip()
+    if omit_structured_mark and isinstance(profile.get("standout_mark"), dict) and profile.get("standout_mark"):
+        standout = ""
     if standout:
         features.append(standout)
 

@@ -1399,6 +1399,108 @@ def split_item_stack_metadata(item_id, metadata=None, stack_quantity=1, removed_
     return removed_metadata, remaining_metadata
 
 
+STACK_DIRTY_BOOLEAN_METADATA_KEYS = (
+    "justice_stolen",
+    "justice_reported_stolen",
+    "justice_incident_evidence",
+    "latent_claim_violation",
+    "street_vendor_hot",
+)
+
+STACK_DIRTY_PROVENANCE_METADATA_KEYS = (
+    "stolen_tick",
+    "stolen_owner_eid",
+    "stolen_owner_tag",
+    "stolen_property_id",
+    "source_owner_eid",
+    "source_owner_tag",
+    "source_property_id",
+    "source_organization_eid",
+    "source_actor_eid",
+    "source_incident_id",
+    "source_victim_eid",
+    "source_context",
+    "claim_class",
+    "justice_discovered_tick",
+    "justice_discovered_from_incident_id",
+)
+
+STACK_LEGAL_STATUS_RANK = {
+    "": 0,
+    "legal": 0,
+    "unknown": 0,
+    "suspicious": 1,
+    "restricted": 2,
+    "illegal": 3,
+    "stolen": 4,
+}
+
+
+def _metadata_value_present(value):
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value is not None
+
+
+def _stack_dirty_score(metadata):
+    metadata = metadata if isinstance(metadata, dict) else {}
+    score = 0
+    legal_status = str(metadata.get("legal_status", "") or "").strip().lower()
+    score = max(score, STACK_LEGAL_STATUS_RANK.get(legal_status, 0))
+    if bool(metadata.get("street_vendor_hot")):
+        score = max(score, 1)
+    if bool(metadata.get("latent_claim_violation")):
+        score = max(score, 2)
+    if bool(metadata.get("justice_stolen")):
+        score = max(score, 3)
+    if bool(metadata.get("justice_reported_stolen")):
+        score = max(score, 4)
+    if bool(metadata.get("justice_incident_evidence")):
+        score = max(score, 5)
+    return score
+
+
+def _merge_stack_dirty_metadata(base_metadata, existing_metadata=None, incoming_metadata=None):
+    merged = dict(base_metadata or {})
+    sources = [
+        dict(existing_metadata or {}),
+        dict(incoming_metadata or {}),
+    ]
+    scored_sources = sorted(
+        ((source, _stack_dirty_score(source), idx) for idx, source in enumerate(sources) if source),
+        key=lambda row: (-row[1], row[2]),
+    )
+    dirtiest = scored_sources[0][0] if scored_sources and scored_sources[0][1] > 0 else {}
+
+    for key in STACK_DIRTY_BOOLEAN_METADATA_KEYS:
+        if any(bool(source.get(key)) for source in sources):
+            merged[key] = True
+
+    best_legal_status = ""
+    best_legal_rank = 0
+    for source in sources:
+        legal_status = str(source.get("legal_status", "") or "").strip().lower()
+        rank = STACK_LEGAL_STATUS_RANK.get(legal_status, 0)
+        if rank > best_legal_rank:
+            best_legal_status = legal_status
+            best_legal_rank = rank
+    if best_legal_status and best_legal_rank > STACK_LEGAL_STATUS_RANK.get(str(merged.get("legal_status", "") or "").strip().lower(), 0):
+        merged["legal_status"] = best_legal_status
+
+    for key in STACK_DIRTY_PROVENANCE_METADATA_KEYS:
+        if _metadata_value_present(dirtiest.get(key)):
+            merged[key] = dirtiest.get(key)
+            continue
+        if _metadata_value_present(merged.get(key)):
+            continue
+        for source in sources:
+            if _metadata_value_present(source.get(key)):
+                merged[key] = source.get(key)
+                break
+
+    return merged
+
+
 def merge_item_stack_metadata(
     item_id,
     existing_metadata=None,
@@ -1412,13 +1514,22 @@ def merge_item_stack_metadata(
     total_quantity = max(1, existing_quantity + incoming_quantity)
     if not is_credstick_item(item_id):
         source = existing_metadata if existing_metadata is not None else incoming_metadata
-        return prepare_item_stack_metadata(item_id, metadata=source, quantity=total_quantity, item_catalog=item_catalog)
+        merged = prepare_item_stack_metadata(item_id, metadata=source, quantity=total_quantity, item_catalog=item_catalog)
+        return _merge_stack_dirty_metadata(
+            merged,
+            existing_metadata=existing_metadata,
+            incoming_metadata=incoming_metadata,
+        )
 
     existing_total = credstick_total_credits(quantity=max(1, existing_quantity or 1), metadata=existing_metadata) if existing_quantity > 0 else 0
     incoming_total = credstick_total_credits(quantity=max(1, incoming_quantity or 1), metadata=incoming_metadata) if incoming_quantity > 0 else 0
     merged = prepare_item_stack_metadata(item_id, metadata=existing_metadata or incoming_metadata, quantity=total_quantity, item_catalog=item_catalog)
     merged["stored_credits"] = int(existing_total + incoming_total)
-    return merged
+    return _merge_stack_dirty_metadata(
+        merged,
+        existing_metadata=existing_metadata,
+        incoming_metadata=incoming_metadata,
+    )
 
 
 def item_instance_condition(item_id, metadata=None, item_catalog=None):

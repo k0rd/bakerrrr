@@ -197,6 +197,7 @@ class PygameView:
             "vehicle_parked": (190, 190, 190),
             "vehicle_new": (235, 190, 95),
             "vehicle_player": (80, 210, 240),
+            "vehicle_police": (76, 126, 232),
             "vehicle_paint_red": (198, 90, 90),
             "vehicle_paint_blue": (92, 132, 208),
             "vehicle_paint_green": (96, 168, 104),
@@ -1660,6 +1661,22 @@ class PygameView:
                 (int(round(mid_x)), int(round(mid_y))),
                 ring_r + max(1, self.cell_px // 18),
                 max(1, stroke_w),
+            )
+        elif color_key == "vehicle_police":
+            stripe_w = max(1, self.cell_px // 20)
+            self.pygame.draw.line(
+                overlay,
+                (244, 248, 255, 220),
+                oriented_point(-rear_len * 0.72, -rear_half_w * 0.18),
+                oriented_point(front_len * 0.72, -front_half_w * 0.18),
+                stripe_w,
+            )
+            self.pygame.draw.line(
+                overlay,
+                (30, 44, 78, 230),
+                oriented_point(-rear_len * 0.72, rear_half_w * 0.18),
+                oriented_point(front_len * 0.72, front_half_w * 0.18),
+                stripe_w,
             )
         elif color_key == "vehicle_new":
             self.pygame.draw.line(

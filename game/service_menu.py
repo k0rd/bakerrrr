@@ -1,6 +1,6 @@
 from engine.events import Event
 from engine.systems import System
-from game.appearance_loadout import STYLE_SERVICE_OPTIONS
+from game.appearance_loadout import STYLE_SERVICE_OPTIONS, style_service_kinds_for_property
 from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position
 from game.casino_ui_runtime import (
     CASINO_FLOOR_ARCHETYPES,
@@ -2799,8 +2799,11 @@ class ServiceMenuSystem(System):
             "hair_style": "Hair style",
             "hair_color": "Hair color",
             "makeup": "Makeup",
+            "makeup_eyes": "Eyes",
+            "makeup_lips": "Lips",
+            "makeup_cheeks": "Cheeks",
         }
-        for kind in ("hair_style", "hair_color", "makeup"):
+        for kind in style_service_kinds_for_property(prop):
             for value in STYLE_SERVICE_OPTIONS.get(kind, ()):
                 topics.append({
                     "id": f"appearance_style:{kind}:{value}",

@@ -4,7 +4,7 @@ from collections import deque
 
 from engine.events import Event
 from engine.systems import System
-from game.components import AI, Collider, NPCMemory, NPCWill, Position
+from game.components import AI, Collider, NPCMemory, NPCWill, PlayerAssets, Position
 from game.incident_runtime import incident_record
 from game.organizations import (
     actor_branch_briefing_packet,
@@ -12,6 +12,7 @@ from game.organizations import (
     record_organization_watchlist,
     refresh_loaded_organization_branch_briefings,
 )
+from game.player_businesses import actor_player_business_employment, fire_actor_from_player_business
 from game.property_runtime import property_covering
 from game.quick_travel_ramps import map_mode_active
 from game.social_boundary_runtime import (
@@ -77,6 +78,21 @@ def _actor_has_property_claim(sim, actor_eid, prop):
     if _safe_int(packet.get("packet_count"), default=0) > 0:
         return True
     return False
+
+
+def _actor_owns_property(sim, actor_eid, prop):
+    actor_eid = _safe_int(actor_eid, default=0)
+    if actor_eid <= 0 or not isinstance(prop, dict):
+        return False
+    if _prop_owner_eid(prop) == actor_eid:
+        return True
+    prop_id = _property_id(prop)
+    assets = sim.ecs.get(PlayerAssets).get(actor_eid) if sim is not None else None
+    if prop_id and assets and prop_id in getattr(assets, "owned_property_ids", set()):
+        return True
+    player_eid = _safe_int(getattr(sim, "player_eid", None), default=-1) if sim is not None else -1
+    owner_tag = _text(prop.get("owner_tag")).lower()
+    return bool(actor_eid == player_eid and owner_tag == "player")
 
 
 def _organization_for_property_enforcer(sim, enforcer_eid, prop):
@@ -242,6 +258,8 @@ class NPCBoundaryEnforcementSystem(System):
     ):
         property_id = _property_id(prop)
         if not property_id:
+            return None
+        if _actor_owns_property(self.sim, target_eid, prop):
             return None
         organization_eid = _organization_for_property_enforcer(self.sim, enforcer_eid, prop)
         if organization_eid is None:
@@ -458,6 +476,18 @@ class NPCBoundaryEnforcementSystem(System):
         key = ejection_key(property_id, target_eid)
         if not key:
             return None
+        if _actor_owns_property(self.sim, target_eid, prop):
+            self._maybe_resign_from_player_business(
+                enforcer_eid=enforcer_eid,
+                owner_eid=target_eid,
+                prop=prop,
+                reason=reason,
+                source_kind=source_kind,
+                source_incident_id=source_incident_id,
+                violation_count=violation_count,
+                violence_eligible=violence_eligible,
+            )
+            return None
         if _safe_int(target_eid, default=0) == _safe_int(getattr(self.sim, "player_eid", None), default=-1) and map_mode_active(self.sim):
             return None
         state = active_ejection_state(self.sim)
@@ -540,6 +570,52 @@ class NPCBoundaryEnforcementSystem(System):
             exit_target=exit_target,
         ))
         return row
+
+    def _maybe_resign_from_player_business(
+        self,
+        *,
+        enforcer_eid,
+        owner_eid,
+        prop,
+        reason="dialogue_boundary",
+        source_kind="dialogue_boundary",
+        source_incident_id=None,
+        violation_count=0,
+        violence_eligible=False,
+    ):
+        if not bool(violence_eligible):
+            return None
+        player_eid = _safe_int(getattr(self.sim, "player_eid", None), default=-1)
+        owner_eid = _safe_int(owner_eid, default=0)
+        enforcer_eid = _safe_int(enforcer_eid, default=0)
+        if owner_eid <= 0 or enforcer_eid <= 0 or owner_eid != player_eid:
+            return None
+        if not _actor_owns_property(self.sim, owner_eid, prop):
+            return None
+        reason_text = _text(reason).lower()
+        source_text = _text(source_kind).lower()
+        if source_text not in {"dialogue", "dialogue_refusal", "dialogue_boundary"} and not reason_text.startswith("dialogue"):
+            return None
+        employment = actor_player_business_employment(self.sim, enforcer_eid, owner_eid=owner_eid)
+        if employment is None:
+            return None
+        outcome = fire_actor_from_player_business(self.sim, owner_eid, enforcer_eid, prop=prop)
+        if not isinstance(outcome, dict):
+            return None
+        self.sim.emit(Event(
+            "player_business_staff_resigned",
+            eid=owner_eid,
+            owner_eid=owner_eid,
+            npc_eid=enforcer_eid,
+            property_id=outcome.get("property_id"),
+            business_name=outcome.get("business_name"),
+            role=outcome.get("role"),
+            reason=reason_text or "dialogue_boundary",
+            source_kind=source_text or "dialogue_boundary",
+            source_incident_id=source_incident_id,
+            violation_count=_safe_int(violation_count, default=0),
+        ))
+        return outcome
 
     def on_npc_boundary_violation(self, event):
         npc_eid = event.data.get("npc_eid") or event.data.get("enforcer_eid")
@@ -677,6 +753,10 @@ class NPCBoundaryEnforcementSystem(System):
         target_eid = _safe_int(row.get("target_eid"), default=0)
         enforcer_eid = _safe_int(row.get("enforcer_eid"), default=0)
         property_id = _text(row.get("property_id"))
+        prop = getattr(self.sim, "properties", {}).get(property_id)
+        if _actor_owns_property(self.sim, target_eid, prop):
+            active_ejection_state(self.sim).pop(row.get("key"), None)
+            return
         self.sim.emit(Event(
             "npc_ejection_refused",
             npc_eid=enforcer_eid,
@@ -776,6 +856,8 @@ class NPCBoundaryEnforcementSystem(System):
         property_id = _property_id(prop)
         if not property_id:
             return False
+        if _actor_owns_property(self.sim, target_eid, prop):
+            return False
         if ejection_key(property_id, target_eid) in active_ejection_state(self.sim):
             return False
         enforcer_eid, row = self._enforcer_with_denial_brief(target_eid, prop)
@@ -827,6 +909,8 @@ class NPCBoundaryEnforcementSystem(System):
                     continue
                 if _property_id(property_covering(self.sim, target_pos.x, target_pos.y, target_pos.z)) != property_id:
                     continue
+                if _actor_owns_property(self.sim, target_eid, prop):
+                    continue
                 seen_pairs.add(pair)
                 ejection = self._start_ejection(
                     enforcer_eid=enforcer_eid,
@@ -867,6 +951,10 @@ class NPCBoundaryEnforcementSystem(System):
                 state.pop(key, None)
                 continue
             if target_eid == _safe_int(getattr(self.sim, "player_eid", None), default=-1) and map_mode_active(self.sim):
+                continue
+            prop = getattr(self.sim, "properties", {}).get(property_id)
+            if _actor_owns_property(self.sim, target_eid, prop):
+                state.pop(key, None)
                 continue
             if not self._target_in_property(target_eid, property_id):
                 self._emit_ejection_complied(key, row)

@@ -449,6 +449,15 @@ class ItemActionRuntime:
         nearby = sorted(nearby, key=lambda item: _manhattan(x, y, item["x"], item["y"]))
         return nearby[0]
 
+    def _rotate_blocked_ground_item(self, ground):
+        ground_item_id = str((ground or {}).get("ground_item_id", "") or "").strip()
+        if not ground_item_id:
+            return False
+        rotate = getattr(self.sim, "rotate_ground_item_to_back", None)
+        if not callable(rotate):
+            return False
+        return bool(rotate(ground_item_id))
+
     def _is_theft(self, actor_eid, item_entry):
         entitlement = item_entitlement_for_actor(self.sim, actor_eid, item_entry)
         return bool(entitlement and not entitlement.get("lawful_take"))
@@ -1285,7 +1294,7 @@ class ItemActionRuntime:
         added, instance_id = inventory.add_item(
             item_id=ground["item_id"],
             quantity=ground.get("quantity", 1),
-            stack_max=1 if is_theft else item_def.get("stack_max", 1),
+            stack_max=item_def.get("stack_max", 1),
             instance_id=ground.get("instance_id"),
             instance_factory=self.sim.new_item_instance_id,
             owner_eid=eid,
@@ -1293,6 +1302,7 @@ class ItemActionRuntime:
             metadata={**item_metadata, "origin_ground_id": ground["ground_item_id"]},
         )
         if not added:
+            self._rotate_blocked_ground_item(ground)
             self.sim.emit(Event(
                 "item_pickup_blocked",
                 eid=eid,

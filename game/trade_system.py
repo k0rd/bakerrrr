@@ -6,7 +6,13 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game.appearance import ground_item_color as _ground_item_color, item_display_glyph as _appearance_item_display_glyph
-from game.appearance_loadout import cosmetic_variant_metadata, is_appearance_item
+from game.appearance_loadout import (
+    TATTOO_SERVICE_ITEM_ID,
+    apply_tattoo_service,
+    cosmetic_variant_metadata,
+    is_appearance_item,
+    tattoo_service_metadata,
+)
 from game.components import Inventory, NPCSocial, PlayerAssets, Position, VehicleState
 from game.economy import item_market_bias, store_supply_profile
 from game.item_semantics import item_display_name_for_actor
@@ -312,6 +318,7 @@ class TradeSystem(System):
         "parking_stub": 3,
         "metro_flyer": 2,
         "scratch_ticket": 6,
+        "tattoo_service": 85,
         "pocket_notebook": 5,
         "deck_of_cards": 7,
         "phone": 22,
@@ -799,6 +806,131 @@ class TradeSystem(System):
                 ("field_dressing", 8),
                 ("pocket_multitool", 8),
                 ("light_ammo_box", 6),
+            ),
+        },
+        "top_shop": {
+            "min_slots": 3,
+            "max_slots": 5,
+            "buy_mult_lo": 0.98,
+            "buy_mult_hi": 1.32,
+            "sell_ratio": 0.46,
+            "item_pool": (
+                ("tee", 16),
+                ("button_up", 14),
+                ("blouse", 12),
+                ("sweater", 12),
+                ("overshirt", 12),
+                ("turtleneck", 10),
+            ),
+        },
+        "bottom_shop": {
+            "min_slots": 3,
+            "max_slots": 5,
+            "buy_mult_lo": 0.98,
+            "buy_mult_hi": 1.32,
+            "sell_ratio": 0.46,
+            "item_pool": (
+                ("trousers", 16),
+                ("shorts", 12),
+                ("skirt", 12),
+            ),
+        },
+        "dress_shop": {
+            "min_slots": 2,
+            "max_slots": 4,
+            "buy_mult_lo": 1.02,
+            "buy_mult_hi": 1.42,
+            "sell_ratio": 0.48,
+            "item_pool": (
+                ("dress", 18),
+                ("blazer", 8),
+                ("cardigan", 8),
+                ("necklace", 6),
+                ("bracelet", 6),
+            ),
+        },
+        "shoe_shop": {
+            "min_slots": 2,
+            "max_slots": 4,
+            "buy_mult_lo": 1.0,
+            "buy_mult_hi": 1.36,
+            "sell_ratio": 0.48,
+            "item_pool": (
+                ("boots", 14),
+                ("sneakers", 14),
+                ("sandals", 10),
+            ),
+        },
+        "outerwear_shop": {
+            "min_slots": 3,
+            "max_slots": 5,
+            "buy_mult_lo": 1.02,
+            "buy_mult_hi": 1.44,
+            "sell_ratio": 0.5,
+            "item_pool": (
+                ("jacket", 14),
+                ("windbreaker", 12),
+                ("coat", 12),
+                ("cardigan", 10),
+                ("blazer", 10),
+                ("vest", 9),
+            ),
+        },
+        "headwear_shop": {
+            "min_slots": 2,
+            "max_slots": 4,
+            "buy_mult_lo": 0.94,
+            "buy_mult_hi": 1.24,
+            "sell_ratio": 0.42,
+            "item_pool": (
+                ("cap", 14),
+                ("baseball_cap", 14),
+                ("bandana", 12),
+                ("scarf", 8),
+            ),
+        },
+        "jewelry_shop": {
+            "min_slots": 3,
+            "max_slots": 5,
+            "buy_mult_lo": 1.08,
+            "buy_mult_hi": 1.6,
+            "sell_ratio": 0.52,
+            "item_pool": (
+                ("earrings", 12),
+                ("ring", 12),
+                ("necklace", 12),
+                ("bracelet", 10),
+                ("watch", 8),
+            ),
+        },
+        "accessory_shop": {
+            "min_slots": 3,
+            "max_slots": 5,
+            "buy_mult_lo": 0.98,
+            "buy_mult_hi": 1.34,
+            "sell_ratio": 0.46,
+            "item_pool": (
+                ("scarf", 12),
+                ("bracelet", 10),
+                ("gloves", 10),
+                ("watch", 8),
+                ("bandana", 8),
+                ("cap", 6),
+                ("earrings", 6),
+                ("ring", 6),
+            ),
+        },
+        "tattoo_parlor": {
+            "min_slots": 3,
+            "max_slots": 5,
+            "min_stock": 1,
+            "max_stock": 2,
+            "buy_mult_lo": 1.05,
+            "buy_mult_hi": 1.5,
+            "sell_ratio": 0.0,
+            "unlisted_sell_ratio": 0.0,
+            "item_pool": (
+                (TATTOO_SERVICE_ITEM_ID, 20),
             ),
         },
         "outfitter": {
@@ -1812,11 +1944,17 @@ class TradeSystem(System):
             item_def = ITEM_CATALOG.get(item_id)
             if not item_def:
                 continue
-            entry_metadata = cosmetic_variant_metadata(
-                item_id,
-                seed_token=f"{self.sim.seed}:{prop['id']}:{cycle_index}:{len(entries)}",
-                item_catalog=ITEM_CATALOG,
-            ) if is_appearance_item(item_id, item_catalog=ITEM_CATALOG) else {}
+            seed_token = f"{self.sim.seed}:{prop['id']}:{cycle_index}:{len(entries)}"
+            if item_id == TATTOO_SERVICE_ITEM_ID:
+                entry_metadata = tattoo_service_metadata(seed_token=seed_token, prop=prop)
+            elif is_appearance_item(item_id, item_catalog=ITEM_CATALOG):
+                entry_metadata = cosmetic_variant_metadata(
+                    item_id,
+                    seed_token=seed_token,
+                    item_catalog=ITEM_CATALOG,
+                )
+            else:
+                entry_metadata = {}
             bias = item_market_bias(item_id, market_profile)
             base = int(max(1, self.ITEM_BASE_VALUES.get(item_id, 10)))
             buy_price = max(
@@ -2693,6 +2831,15 @@ class TradeSystem(System):
                 property_id=store_prop.get("id"),
             ))
             return None
+        if item_id == TATTOO_SERVICE_ITEM_ID:
+            self.sim.emit(Event(
+                "trade_buy_blocked",
+                eid=actor_eid,
+                reason="npc_service_stock_skipped",
+                item_id=item_id,
+                property_id=store_prop.get("id"),
+            ))
+            return None
 
         terms = self._trade_terms(actor_eid, store_prop)
         base_price = int(max(1, choice.get("buy_price", 1)))
@@ -3102,6 +3249,78 @@ class TradeSystem(System):
         ))
         return True
 
+    def _trade_buy_service_stock(self, eid, store_prop, store, choice, terms, *, owner_transfer=False):
+        assets = self._assets_for(eid)
+        metadata = dict(choice.get("metadata") or {}) if isinstance(choice.get("metadata"), dict) else {}
+        service = str(metadata.get("appearance_service", "") or "").strip().lower()
+        item_id = str(choice.get("item_id", "") or "").strip().lower()
+        if item_id != TATTOO_SERVICE_ITEM_ID or service != "tattoo":
+            return None
+        base_price = int(max(1, choice.get("buy_price", 1)))
+        price = 0 if owner_transfer else self._effective_buy_price(base_price, terms)
+        if not owner_transfer and assets.credits < price:
+            self.sim.emit(Event(
+                "trade_buy_blocked",
+                eid=eid,
+                reason="insufficient_funds",
+                credits=assets.credits,
+                cheapest_price=price,
+                property_id=store_prop["id"],
+            ))
+            return False
+        result = apply_tattoo_service(
+            self.sim,
+            eid,
+            design=metadata.get("tattoo_design"),
+            slot=metadata.get("tattoo_slot"),
+            prop=store_prop,
+            source_metadata=metadata,
+        )
+        if not bool(getattr(result, "ok", False)):
+            self.sim.emit(Event(
+                "trade_buy_blocked",
+                eid=eid,
+                reason=getattr(result, "reason", "service_blocked"),
+                item_id=item_id,
+                property_id=store_prop["id"],
+            ))
+            return False
+
+        if not owner_transfer:
+            assets.credits -= price
+        next_sale_count = int(choice.get("sale_count", 0) or 0) + 1
+        choice["stock"] = max(0, int(choice.get("stock", 0)) - 1)
+        choice["sale_count"] = next_sale_count
+        item_name = item_display_name_for_actor(
+            self.sim,
+            self.player_eid,
+            {"item_id": item_id, "metadata": metadata},
+            item_catalog=ITEM_CATALOG,
+        )
+        self.sim.emit(Event(
+            "trade_bought",
+            eid=eid,
+            property_id=store_prop["id"],
+            store_name=store_prop.get("name", store_prop["id"]),
+            item_id=item_id,
+            item_name=item_name,
+            price=price,
+            base_price=base_price,
+            stock_left=choice["stock"],
+            credits=assets.credits,
+            instance_id=None,
+            owner_transfer=bool(owner_transfer),
+            transfer_mode="service" if not owner_transfer else "withdraw",
+            contact_source_eid=terms.get("source_eid"),
+            contact_note=terms.get("note", ""),
+            practice_note="",
+            service_stock=True,
+            appearance_service=service,
+            tattoo_design=metadata.get("tattoo_design"),
+            tattoo_slot=metadata.get("tattoo_slot"),
+        ))
+        return True
+
     def _trade_buy(self, eid, pos, target_item_id=None):
         assets = self._assets_for(eid)
         inventory = self._inventory_for(eid)
@@ -3180,6 +3399,16 @@ class TradeSystem(System):
             return False
 
         item_id = choice["item_id"]
+        service_purchase = self._trade_buy_service_stock(
+            eid,
+            store_prop,
+            store,
+            choice,
+            terms,
+            owner_transfer=owner_transfer,
+        )
+        if service_purchase is not None:
+            return bool(service_purchase)
         item_def = ITEM_CATALOG.get(item_id, {"name": item_id, "stack_max": 1})
         item_practice = self._item_realization_bundle(store_prop, item_id)
         source_row = next(iter(item_practice.get("rows", ())), None)

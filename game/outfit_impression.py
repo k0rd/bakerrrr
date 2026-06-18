@@ -6,7 +6,7 @@ import random
 from math import copysign
 
 from engine.visibility import has_line_of_sight
-from game.appearance_loadout import appearance_loadout_for, appearance_metadata_for_entry
+from game.appearance_loadout import appearance_loadout_for, appearance_metadata_for_entry, appearance_signal_profile
 from game.components import (
     AI,
     ArmorLoadout,
@@ -29,7 +29,20 @@ OUTFIT_SOCIAL_OFFSET_THRESHOLD = 0.08
 OUTFIT_SOCIAL_OFFSET_CAP = 0.015
 OUTFIT_SOCIAL_OFFSET_FRACTION = 0.2
 
-_TAG_WEIGHTS = ("practical", "polished", "flashy", "jewelry", "rough", "street", "armor", "muted")
+_TAG_WEIGHTS = (
+    "practical",
+    "polished",
+    "flashy",
+    "jewelry",
+    "rough",
+    "street",
+    "armor",
+    "muted",
+    "tattoo",
+    "makeup",
+    "styled_hair",
+    "visible_mark",
+)
 _COLORS = (
     "black",
     "charcoal",
@@ -310,7 +323,29 @@ def _profile_from_loadout(sim, eid):
         types.append("armor")
         signature_parts.append(f"armor:{getattr(armor, 'equipped_item_id', '')}:{getattr(armor, 'equipped_instance_id', '')}")
 
-    if not items and "armor" not in tags:
+    appearance_signals = appearance_signal_profile(sim, eid)
+    for tag in tuple(appearance_signals.get("tags", ()) or ()):
+        clean_tag = _key(tag)
+        if clean_tag:
+            tags.add(clean_tag)
+    for tattoo in tuple(appearance_signals.get("tattoos", ()) or ()):
+        if not isinstance(tattoo, dict):
+            continue
+        design = _key(tattoo.get("design"))
+        if design:
+            labels.append(f"{design} tattoo")
+            signature_parts.append(f"tattoo:{tattoo.get('slot')}:{design}")
+    makeup_regions = dict(appearance_signals.get("makeup_regions", {}) or {})
+    if makeup_regions:
+        styles.extend(_key(value) for value in makeup_regions.values() if _key(value))
+        signature_parts.append("makeup:" + ",".join(f"{_key(k)}={_key(v)}" for k, v in sorted(makeup_regions.items())))
+    body_overrides = dict(appearance_signals.get("body_overrides", {}) or {})
+    if _key(body_overrides.get("hair_style")):
+        styles.append(_key(body_overrides.get("hair_style")))
+    if _key(body_overrides.get("hair_color")):
+        colors.append(_key(body_overrides.get("hair_color")))
+
+    if not items and "armor" not in tags and not appearance_signals.get("tags"):
         return None
     primary = _display_label(colors, labels, tags)
     return {

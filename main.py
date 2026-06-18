@@ -91,7 +91,7 @@ from game.player_businesses import PlayerBusinessSystem
 from game.run_echoes import maybe_seed_run_echo_for_chunk, prime_run_echoes_runtime
 from game.systems_incidents import IncidentKnowledgeSystem
 from game.systems_business_reputation import BusinessReputationSystem
-from game.run_bootstrap import bootstrap_normal_run
+from game.run_bootstrap import bootstrap_normal_run, _register_justice_station_vehicles
 from game.tutorial import (
     TutorialSystem,
     bootstrap_tutorial_run,
@@ -119,6 +119,7 @@ from game.organization_reputation import OrganizationReputationSystem
 from game.organization_response import OrganizationResponseSystem
 from game.organization_practice_evolution import OrganizationPracticeEvolutionSystem
 from game.criminal_drive_system import CriminalDriveSystem
+from game.justice_vehicle_system import JusticeVehicleMisuseSystem
 from game.perception_systems import (
     CombatPacingSystem,
     CoverSystem,
@@ -763,6 +764,7 @@ def _register_runtime_systems(sim, view, player):
     eavesdrop_system = EavesdropSystem(sim, player)
     door_wait_system = DoorWaitSystem(sim)
     criminal_drive_system = CriminalDriveSystem(sim)
+    justice_vehicle_misuse_system = JusticeVehicleMisuseSystem(sim)
     social_knowledge_influence_system = SocialKnowledgeInfluenceSystem(sim)
     npc_will_system = NPCWillSystem(sim)
     business_pulse_aftermath_system = BusinessPulseAftermathSystem(sim)
@@ -902,6 +904,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(suppression_system, 5)
     sim.register_system(door_wait_system)
     sim.register_system(criminal_drive_system)
+    sim.register_system(justice_vehicle_misuse_system)
     sim.register_system(social_knowledge_influence_system)
     sim.register_system(npc_will_system)
     sim.register_system(business_pulse_scene_system)
@@ -1599,6 +1602,15 @@ def _register_chunk_properties(sim, chunk):
             "archetype": metadata.get("archetype"),
             "building_id": None,
         })
+
+    _register_justice_station_vehicles(
+        sim,
+        chunk,
+        records,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        chunk_size=chunk_size,
+    )
 
     vehicle_target_count = max(2, chunk_size // 12) if area_type == "city" else (1 if rng.random() < 0.55 else 0)
     vehicles = generate_chunk_vehicle_records(

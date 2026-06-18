@@ -2609,6 +2609,26 @@ class Simulation:
             self._unindex_ground_item_record(ground_item_id, removed, drop_order=True)
         return removed
 
+    def rotate_ground_item_to_back(self, ground_item_id):
+        ground_item_id = str(ground_item_id or "").strip()
+        if not ground_item_id or ground_item_id not in self.ground_items:
+            return False
+        if not isinstance(getattr(self, "ground_item_order", None), dict):
+            self.ground_item_order = {}
+        try:
+            next_order = int(getattr(self, "next_ground_item_order", 0))
+        except (TypeError, ValueError):
+            next_order = 0
+        max_order = next_order - 1
+        for order in self.ground_item_order.values():
+            try:
+                max_order = max(max_order, int(order))
+            except (TypeError, ValueError):
+                continue
+        self.ground_item_order[ground_item_id] = max_order + 1
+        self.next_ground_item_order = max_order + 2
+        return True
+
     def ground_items_at(self, x, y, z=0):
         key = self._coord_key(x, y, z)
         if key is None:

@@ -3530,9 +3530,12 @@ class AppearanceLoadout:
         "outer",
     )
 
-    def __init__(self, slots=None, body_overrides=None):
+    def __init__(self, slots=None, body_overrides=None, skin_marks=None, makeup_regions=None, skin_marks_seeded=False):
         self.slots = self._clean_slots(slots)
         self.body_overrides = self._clean_overrides(body_overrides)
+        self.skin_marks = self._clean_skin_marks(skin_marks)
+        self.makeup_regions = self._clean_overrides(makeup_regions)
+        self.skin_marks_seeded = bool(skin_marks_seeded)
 
     @classmethod
     def _clean_slots(cls, slots=None):
@@ -3557,9 +3560,37 @@ class AppearanceLoadout:
                     clean[clean_key] = clean_value
         return clean
 
+    @staticmethod
+    def _clean_skin_marks(skin_marks=None):
+        clean = {}
+        if isinstance(skin_marks, dict):
+            for slot, value in skin_marks.items():
+                clean_slot = str(slot or "").strip().lower()
+                if not clean_slot:
+                    continue
+                if isinstance(value, dict):
+                    row = {
+                        str(key or "").strip().lower(): stored
+                        for key, stored in value.items()
+                        if str(key or "").strip()
+                    }
+                    kind = str(row.get("kind", "") or "").strip().lower()
+                    row["kind"] = kind
+                    row["slot"] = str(row.get("slot", clean_slot) or clean_slot).strip().lower() or clean_slot
+                    if kind:
+                        clean[clean_slot] = row
+                else:
+                    text = str(value or "").strip()
+                    if text:
+                        clean[clean_slot] = {"kind": "mark", "slot": clean_slot, "description": text}
+        return clean
+
     def normalize(self):
         self.slots = self._clean_slots(getattr(self, "slots", None))
         self.body_overrides = self._clean_overrides(getattr(self, "body_overrides", None))
+        self.skin_marks = self._clean_skin_marks(getattr(self, "skin_marks", None))
+        self.makeup_regions = self._clean_overrides(getattr(self, "makeup_regions", None))
+        self.skin_marks_seeded = bool(getattr(self, "skin_marks_seeded", False))
         return self
 
     def worn_instance_ids(self):

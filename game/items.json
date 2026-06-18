@@ -2518,6 +2518,7 @@
     "tags": [
       "armor",
       "wearable",
+      "disguise",
       "restricted"
     ],
     "legal_status": "restricted",
@@ -2525,6 +2526,10 @@
     "armor": {
       "slot": "body",
       "damage_reduction": 0.22
+    },
+    "disguise": {
+      "role_id": "guard",
+      "strength": 0.55
     }
   },
   "riot_plates": {
@@ -3157,6 +3162,18 @@
     ],
     "appearance_slots": [
       "bracelet"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "tattoo_service": {
+    "name": "Tattoo",
+    "glyph": "*",
+    "stack_max": 1,
+    "tags": [
+      "service",
+      "appearance",
+      "legal"
     ],
     "legal_status": "legal",
     "effects": []

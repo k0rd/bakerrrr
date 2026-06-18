@@ -1505,6 +1505,26 @@ class WeaponSystem(System):
                     break
 
 
+def _forced_attack_active(ai, tick):
+    if ai is None:
+        return False
+    reason = str(getattr(ai, "force_attack_reason", "") or "").strip().lower()
+    if not reason:
+        return False
+    try:
+        until_tick = int(getattr(ai, "force_attack_until_tick", 0) or 0)
+    except (TypeError, ValueError):
+        until_tick = 0
+    return until_tick >= int(tick)
+
+
+def _clear_forced_attack(ai):
+    if ai is None:
+        return
+    ai.force_attack_until_tick = 0
+    ai.force_attack_reason = ""
+
+
 class NPCWeaponSystem(System):
 
     def __init__(self, sim, player_eid):
@@ -1538,7 +1558,8 @@ class NPCWeaponSystem(System):
                 continue
             if ai.target_eid is None:
                 continue
-            if not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
+            forced_attack = _forced_attack_active(ai, self.sim.tick)
+            if not forced_attack and not _detail_tick_allowed(self.sim, pos, eid, coarse_divisor=3):
                 continue
 
             target_eid = ai.target_eid
@@ -1565,25 +1586,28 @@ class NPCWeaponSystem(System):
                 dist = _grid_distance(pos.x, pos.y, target_pos.x, target_pos.y)
                 if dist > 1:
                     continue
-                metrics = _npc_combat_metrics(
-                    needs=needs,
-                    traits=traits,
-                    vitality=vitality,
-                    suppression=suppression,
-                    weapon=None,
-                    **_npc_status_metric_args(self.sim, eid),
-                )
-                if metrics["retreat_bias"] < 0.38:
-                    aggression = float(getattr(profile, "aggression", 0.55) if profile else 0.55)
-                    commit = (aggression * 0.55) + (metrics["assault_bias"] * 0.6) - (metrics["retreat_bias"] * 0.7)
-                    if self.rng.random() > max(0.32, min(0.92, commit + 0.24)):
-                        continue
+                if not forced_attack:
+                    metrics = _npc_combat_metrics(
+                        needs=needs,
+                        traits=traits,
+                        vitality=vitality,
+                        suppression=suppression,
+                        weapon=None,
+                        **_npc_status_metric_args(self.sim, eid),
+                    )
+                    if metrics["retreat_bias"] < 0.38:
+                        aggression = float(getattr(profile, "aggression", 0.55) if profile else 0.55)
+                        commit = (aggression * 0.55) + (metrics["assault_bias"] * 0.6) - (metrics["retreat_bias"] * 0.7)
+                        if self.rng.random() > max(0.32, min(0.92, commit + 0.24)):
+                            continue
                 self.sim.emit(Event(
                     "melee_attack_request",
                     eid=eid,
                     target_eid=target_eid,
-                    reason="npc_auto_melee",
+                    reason="justice_vehicle_misuse_forced" if forced_attack else "npc_auto_melee",
                 ))
+                if forced_attack:
+                    _clear_forced_attack(ai)
                 continue
 
             if self.sim.tick < loadout.cooldown_until_tick:
@@ -1592,7 +1616,7 @@ class NPCWeaponSystem(System):
                 continue
 
             # Suppressed NPCs hesitate; pinned NPCs won't fire at all.
-            if suppression and suppression.pinned():
+            if not forced_attack and suppression and suppression.pinned():
                 if self.rng.random() < 0.82:
                     continue
 
@@ -1657,18 +1681,20 @@ class NPCWeaponSystem(System):
             aggression_roll = profile.aggression * 0.85
             if _weapon_is_melee(weapon):
                 aggression_roll *= max(0.35, 0.45 + (metrics["assault_bias"] * 0.8) - (metrics["retreat_bias"] * 0.5))
-            if self.rng.random() > max(0.12, min(0.96, accuracy * aggression_roll + 0.18)):
+            if not forced_attack and self.rng.random() > max(0.12, min(0.96, accuracy * aggression_roll + 0.18)):
                 continue
 
-            if profile.cooldown_jitter > 0 and self.rng.randint(0, profile.cooldown_jitter) > 0:
+            if not forced_attack and profile.cooldown_jitter > 0 and self.rng.randint(0, profile.cooldown_jitter) > 0:
                 continue
 
             self.sim.emit(Event(
                 "weapon_fire_request",
                 eid=eid,
                 target_eid=target_eid,
-                reason="npc_auto",
+                reason="justice_vehicle_misuse_forced" if forced_attack else "npc_auto",
             ))
+            if forced_attack:
+                _clear_forced_attack(ai)
 
 
 class StatusEffectSystem(System):

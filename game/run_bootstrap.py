@@ -64,6 +64,18 @@ from game.vehicles import (
 )
 
 
+JUSTICE_VEHICLE_STATION_ARCHETYPES = {
+    "checkpoint",
+    "courthouse",
+    "jail",
+    "police_precinct",
+    "police_station",
+    "prison",
+    "security_office",
+}
+JUSTICE_VEHICLE_DISPLAY_COLOR = "vehicle_police"
+
+
 @dataclass(frozen=True)
 class NormalRunBootstrapProfile:
     profile_id: str = "normal"
@@ -151,6 +163,164 @@ def _ensure_walkable(sim, x, y, z, glyph="."):
     if existing and existing.walkable:
         return
     sim.tilemap.set_tile(x, y, Tile(walkable=True, transparent=True, glyph=glyph), z=z)
+
+
+def _property_metadata(prop):
+    if not isinstance(prop, dict):
+        return {}
+    metadata = prop.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _justice_vehicle_profile():
+    return {
+        "quality": "new",
+        "make": "Warden",
+        "model": "Patrol",
+        "vehicle_class": "cruiser",
+        "vehicle_medium": "land",
+        "power": 7,
+        "durability": 9,
+        "fuel_efficiency": 5,
+        "fuel_capacity": 82,
+        "fuel": 82,
+        "price": 0,
+        "glyph": "&",
+        "paint": JUSTICE_VEHICLE_DISPLAY_COLOR,
+    }
+
+
+def _chunk_contains_xy(origin_x, origin_y, chunk_size, x, y):
+    return (
+        int(origin_x) <= int(x) < int(origin_x) + int(chunk_size)
+        and int(origin_y) <= int(y) < int(origin_y) + int(chunk_size)
+    )
+
+
+def _justice_vehicle_parking_tile(sim, station_prop, *, origin_x, origin_y, chunk_size):
+    if not isinstance(station_prop, dict):
+        return None
+    try:
+        sx = int(station_prop.get("x", 0))
+        sy = int(station_prop.get("y", 0))
+        sz = int(station_prop.get("z", 0))
+    except (TypeError, ValueError):
+        return None
+    if sz != 0:
+        return None
+
+    candidates = []
+    for radius in range(1, 7):
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                if max(abs(dx), abs(dy)) != radius:
+                    continue
+                x = sx + dx
+                y = sy + dy
+                if not _chunk_contains_xy(origin_x, origin_y, chunk_size, x, y):
+                    continue
+                if sim.property_at(x, y, 0) is not None:
+                    continue
+                if sim.structure_at(x, y, 0) is not None:
+                    continue
+                tile = sim.tilemap.tile_at(x, y, 0)
+                if tile is None:
+                    continue
+                road_score = 0
+                for ny in range(y - 1, y + 2):
+                    for nx in range(x - 1, x + 2):
+                        neighbor = sim.tilemap.tile_at(nx, ny, 0)
+                        glyph = str(getattr(neighbor, "glyph", "") or "")[:1]
+                        if glyph == "=":
+                            road_score = max(road_score, 4)
+                        elif glyph == ":":
+                            road_score = max(road_score, 3)
+                walkable_score = 2 if bool(getattr(tile, "walkable", False)) else 0
+                if walkable_score <= 0 and road_score <= 0:
+                    continue
+                candidates.append((road_score + walkable_score, radius, x, y))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (-int(row[0]), int(row[1]), int(row[3]), int(row[2])))
+    _score, _radius, x, y = candidates[0]
+    return int(x), int(y), 0
+
+
+def _register_justice_station_vehicles(sim, chunk, records, *, origin_x, origin_y, chunk_size):
+    chunk_key = (int(chunk["cx"]), int(chunk["cy"]))
+    existing_station_ids = {
+        str(_property_metadata(prop).get("station_property_id", "") or "").strip()
+        for prop in getattr(sim, "properties", {}).values()
+        if str(prop.get("kind", "")).strip().lower() == "vehicle"
+        and str(_property_metadata(prop).get("restricted_use", "") or "").strip().lower() == "justice"
+    }
+    created = []
+    for record in list(records):
+        prop_id = str(record.get("id", "") or "").strip()
+        station_prop = sim.properties.get(prop_id)
+        metadata = _property_metadata(station_prop)
+        archetype = str(record.get("archetype") or metadata.get("archetype") or "").strip().lower()
+        if archetype not in JUSTICE_VEHICLE_STATION_ARCHETYPES:
+            continue
+        if prop_id in existing_station_ids:
+            continue
+        tile = _justice_vehicle_parking_tile(
+            sim,
+            station_prop,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            chunk_size=chunk_size,
+        )
+        if tile is None:
+            continue
+        x, y, z = tile
+        _ensure_walkable(sim, x, y, z, glyph="=")
+        profile = _justice_vehicle_profile()
+        vehicle_token = f"veh:justice:{chunk_key[0]}:{chunk_key[1]}:{prop_id}"
+        vehicle_meta = vehicle_metadata(
+            profile,
+            chunk=chunk_key,
+            owner_tag="justice",
+            display_color=JUSTICE_VEHICLE_DISPLAY_COLOR,
+            locked=True,
+            key_id=vehicle_token,
+            key_label="Warden Patrol",
+            lock_tier=4,
+        )
+        vehicle_meta.update({
+            "vehicle_id": vehicle_token,
+            "vehicle_paint": JUSTICE_VEHICLE_DISPLAY_COLOR,
+            "display_color": JUSTICE_VEHICLE_DISPLAY_COLOR,
+            "restricted_use": "justice",
+            "vehicle_restricted_use": "justice",
+            "justice_vehicle": True,
+            "vehicle_role": "police",
+            "station_property_id": prop_id,
+            "station_archetype": archetype,
+            "public": False,
+        })
+        vehicle_id = sim.register_property(
+            name="Police Cruiser",
+            kind="vehicle",
+            x=x,
+            y=y,
+            z=z,
+            owner_eid=None,
+            owner_tag="justice",
+            metadata=vehicle_meta,
+        )
+        created.append({
+            "id": vehicle_id,
+            "kind": "vehicle",
+            "x": x,
+            "y": y,
+            "z": z,
+            "archetype": "vehicle",
+            "building_id": None,
+        })
+        existing_station_ids.add(prop_id)
+    records.extend(created)
+    return created
 
 
 def _pick_playtest_start_chunk(sim, rng, radius=14, attempts=48, preferred_area_type="city"):
@@ -608,6 +778,15 @@ def _register_chunk_properties(sim, chunk):
             "archetype": metadata.get("archetype"),
             "building_id": None,
         })
+
+    _register_justice_station_vehicles(
+        sim,
+        chunk,
+        records,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        chunk_size=chunk_size,
+    )
 
     vehicle_target_count = max(2, chunk_size // 12) if area_type == "city" else (1 if rng.random() < 0.55 else 0)
     vehicles = generate_chunk_vehicle_records(

@@ -414,6 +414,29 @@ COURIER_ITEM_POOL = (
     "access_badge",
 )
 
+def opportunity_required_item_survives_pickup(item_id):
+    item_key = str(item_id or "").strip().lower()
+    if not item_key or item_key not in ITEM_CATALOG:
+        return False
+    # Player credstick pickup auto-converts into wallet credits, so no carried
+    # item remains for later handoffs, dead drops, or delivery checks.
+    if is_credstick_item(item_key):
+        return False
+    return True
+
+
+def _required_item_pool(item_ids):
+    if isinstance(item_ids, str):
+        raw = (item_ids,)
+    else:
+        raw = tuple(item_ids or ())
+    return [
+        str(item_id).strip().lower()
+        for item_id in raw
+        if opportunity_required_item_survives_pickup(item_id)
+    ]
+
+
 COURIER_PARTIES = (
     ("a local fixer", "a district runner"),
     ("a clinic assistant", "a remote patient"),
@@ -2355,26 +2378,18 @@ def _chunk_features(chunk):
 
 
 def _pick_courier_item(rng):
-    pool = [item_id for item_id in COURIER_ITEM_POOL if item_id in ITEM_CATALOG]
+    pool = _required_item_pool(COURIER_ITEM_POOL)
     if not pool:
-        pool = sorted(ITEM_CATALOG.keys())
+        pool = _required_item_pool(sorted(ITEM_CATALOG.keys()))
     return str(rng.choice(pool)).strip().lower()
 
 
 def _discovery_item_pool(discovery, fallback_ids):
     discovery = discovery if isinstance(discovery, dict) else {}
-    pool = [
-        str(candidate).strip().lower()
-        for candidate in tuple(discovery.get("item_pool", ()) or ())
-        if str(candidate).strip().lower() in ITEM_CATALOG
-    ]
+    pool = _required_item_pool(discovery.get("item_pool", ()))
     if pool:
         return pool
-    return [
-        str(item_id).strip().lower()
-        for item_id in tuple(fallback_ids or ())
-        if str(item_id).strip().lower() in ITEM_CATALOG
-    ]
+    return _required_item_pool(fallback_ids)
 
 
 def _item_label(item_id):
