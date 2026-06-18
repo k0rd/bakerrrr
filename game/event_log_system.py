@@ -73,6 +73,7 @@ from game.item_semantics import (
     item_unknown_inspect_text_for_actor,
 )
 from game.organizations import local_protective_pressure_snapshot
+from game.quick_travel_ramps import map_mode_active
 from game.system_support.actor_attention_runtime import record_area_warmth
 from game.system_support.awareness_runtime import event_observation_accountability
 from game.system_support.crime_plan_runtime import (
@@ -558,6 +559,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("zoom_mode_blocked", self.on_zoom_mode_blocked)
         self.sim.events.subscribe("vehicle_entered", self.on_vehicle_entered)
         self.sim.events.subscribe("vehicle_exited", self.on_vehicle_exited)
+        self.sim.events.subscribe("vehicle_onramp_nearby", self.on_vehicle_onramp_nearby)
         self.sim.events.subscribe("vehicle_action_blocked", self.on_vehicle_action_blocked)
         self.sim.events.subscribe("vehicle_collision", self.on_vehicle_collision)
         self.sim.events.subscribe("vehicle_crash", self.on_vehicle_crash)
@@ -1072,6 +1074,9 @@ class EventLogSystem(System):
         return f"{item_name} x{qty}"
 
     def _ground_item_notice_text(self, x, y, z):
+        if map_mode_active(self.sim):
+            return "", ""
+
         ground_items = list(self.sim.ground_items_at(x, y, z=z))
         if not ground_items:
             return "", ""
@@ -3407,6 +3412,8 @@ class EventLogSystem(System):
         item_name = self._event_item_label(event)
         if reason == "no_inventory":
             _log_player_feedback(self.sim, "You have no inventory access right now.", kind="pickup")
+        elif reason == "map_mode":
+            _log_player_feedback(self.sim, "Return to local view before picking up nearby items.", kind="pickup")
         elif reason == "no_item_nearby":
             _log_player_feedback(self.sim, "No item on or next to you to pick up.", kind="pickup")
         elif reason == "inventory_full":
@@ -5265,6 +5272,20 @@ class EventLogSystem(System):
         if fuel <= 0:
             self.sim.log.add(self._service_recovery_hint("fuel", on_foot=True))
 
+    def on_vehicle_onramp_nearby(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        ramp_id = str(event.data.get("ramp_property_id", "") or "").strip()
+        distance = _int_or_default(event.data.get("distance"), 0)
+        distance_text = "here" if distance <= 0 else f"{distance}t away"
+        _log_player_feedback(
+            self.sim,
+            f"There is an onramp nearby ({distance_text}). Interact to enter quick travel.",
+            kind="movement",
+            dedupe_window=8,
+            dedupe_key=f"vehicle-onramp-nearby:{ramp_id or 'unknown'}",
+        )
+
     def on_vehicle_action_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -5276,7 +5297,7 @@ class EventLogSystem(System):
             self.sim.log.add("That ramp is not on a usable route.")
             return
         if reason == "quick_travel_ramp_required":
-            self.sim.log.add("Drive onto an entrance ramp to start quick travel.")
+            self.sim.log.add("Interact near an entrance ramp to start quick travel.")
             return
         if reason == "water_route_required":
             self.sim.log.add("You need a usable shore, dock, or waterway access point for that boat route.")

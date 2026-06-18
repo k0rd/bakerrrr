@@ -3,6 +3,7 @@
 import re
 
 from game.components import VehicleState
+from game.quick_travel_ramps import QUICK_TRAVEL_RAMP_INTERACT_RADIUS, quick_travel_ramp_near
 from game.service_runtime import _int_or_default
 from game.system_support.status_runtime import (
     SURVIVAL_CRITICAL_LEVEL,
@@ -61,6 +62,7 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
 
     view_only = False
     local_in_vehicle = False
+    nearby_onramp = False
     try:
         vehicle_state = sim.ecs.get(VehicleState).get(int(getattr(sim, "player_eid", 0) or 0))
         local_in_vehicle = bool(vehicle_state and vehicle_state.in_vehicle and zoom_mode != "overworld")
@@ -72,10 +74,18 @@ def _hud_primary_status_chunks(sim, *, zoom_mode, active_z, player_pos, lighting
             view_only = bool(records.get(int(getattr(sim, "player_eid", 0) or 0), False))
         except (TypeError, ValueError):
             view_only = False
+    elif local_in_vehicle and player_pos is not None:
+        nearby_onramp = quick_travel_ramp_near(
+            sim,
+            player_pos.x,
+            player_pos.y,
+            player_pos.z,
+            radius=QUICK_TRAVEL_RAMP_INTERACT_RADIUS,
+        ) is not None
 
     status_chunks = [
         "Map View" if zoom_mode == "overworld" and view_only else "In Vehicle" if zoom_mode == "overworld" or local_in_vehicle else "On Foot",
-        "Overworld Map" if zoom_mode == "overworld" and view_only else "Quick Travel" if zoom_mode == "overworld" else "Local Driving" if local_in_vehicle else floor_text,
+        "Overworld Map" if zoom_mode == "overworld" and view_only else "Quick Travel" if zoom_mode == "overworld" else "[Onramp]" if nearby_onramp else "Local Driving" if local_in_vehicle else floor_text,
         f"Chunk {chunk_text}",
         f"Area {area_label}",
     ]

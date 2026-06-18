@@ -29,6 +29,7 @@ from game.components import (
     WeaponUseProfile,
 )
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
+from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.checks import (
     crime_sensitivity as _crime_sensitivity,
     justice_level as _justice_level,
@@ -540,6 +541,9 @@ class WeaponSystem(System):
         return weapon["name"]
 
     def _is_valid_target(self, target_eid, source_eid, source_pos, max_range):
+        if local_interactions_suspended_for_actor(self.sim, target_eid):
+            return None
+
         positions = self.sim.ecs.get(Position)
         vitalities = self.sim.ecs.get(Vitality)
 
@@ -729,6 +733,9 @@ class WeaponSystem(System):
         cover_penetration=0.0,
         damage_kind="ballistic",
     ):
+        if local_interactions_suspended_for_actor(self.sim, target_eid):
+            return False
+
         armor_loadouts = self.sim.ecs.get(ArmorLoadout)
         vitalities = self.sim.ecs.get(Vitality)
         positions = self.sim.ecs.get(Position)
@@ -1535,6 +1542,11 @@ class NPCWeaponSystem(System):
                 continue
 
             target_eid = ai.target_eid
+            if local_interactions_suspended_for_actor(self.sim, target_eid):
+                ai.state = "idle"
+                ai.target = None
+                ai.target_eid = None
+                continue
             target_pos = positions.get(target_eid)
             target_vitality = vitalities.get(target_eid)
             if not target_pos or target_pos.z != pos.z:

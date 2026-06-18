@@ -14,7 +14,10 @@ from game.property_runtime import (
     vehicle_label as _vehicle_label,
     vehicle_profile_from_property as _vehicle_profile_from_property,
 )
-from game.quick_travel_ramps import quick_travel_ramp_at
+from game.quick_travel_ramps import (
+    QUICK_TRAVEL_RAMP_INTERACT_RADIUS,
+    quick_travel_ramp_near,
+)
 from game.service_runtime import (
     _overworld_discovery_profile,
     _overworld_identity_profile,
@@ -204,8 +207,39 @@ class PlayerTravelRuntime:
             medium=medium,
         )
 
-    def _quick_travel_ramp_at(self, x, y, z=0):
-        return quick_travel_ramp_at(self.sim, x, y, z)
+    def _quick_travel_ramp_near(self, x, y, z=0):
+        return quick_travel_ramp_near(self.sim, x, y, z, radius=QUICK_TRAVEL_RAMP_INTERACT_RADIUS)
+
+    def _ramp_distance_from_pos(self, ramp, pos):
+        if not isinstance(ramp, dict) or pos is None:
+            return None
+        try:
+            return abs(int(ramp.get("x", 0)) - int(pos.x)) + abs(int(ramp.get("y", 0)) - int(pos.y))
+        except (TypeError, ValueError):
+            return None
+
+    def _emit_nearby_onramp_notice(self, eid, pos, vehicle_prop=None, ramp=None):
+        ramp = ramp if isinstance(ramp, dict) else self._quick_travel_ramp_near(pos.x, pos.y, pos.z)
+        if not isinstance(ramp, dict):
+            return False
+        distance = self._ramp_distance_from_pos(ramp, pos)
+        self.sim.emit(Event(
+            "vehicle_onramp_nearby",
+            eid=eid,
+            vehicle_id=(vehicle_prop or {}).get("id") if isinstance(vehicle_prop, dict) else None,
+            vehicle_name=_vehicle_label(vehicle_prop) if isinstance(vehicle_prop, dict) else "",
+            ramp_property_id=ramp.get("id"),
+            ramp_name=str(ramp.get("name", "onramp") or "onramp").strip() or "onramp",
+            distance=distance,
+            radius=QUICK_TRAVEL_RAMP_INTERACT_RADIUS,
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+            ramp_x=int(ramp.get("x", 0)),
+            ramp_y=int(ramp.get("y", 0)),
+            ramp_z=int(ramp.get("z", 0)),
+        ))
+        return True
 
     def _find_route_access_near(self, x, y, z=0, radius=10, *, ignore_property_id=None):
         if self._local_route_accessible_at(x, y, z, ignore_property_id=ignore_property_id):
@@ -267,7 +301,7 @@ class PlayerTravelRuntime:
         if vehicle_medium_for_property(vehicle_prop) == "water":
             self._emit_vehicle_blocked(eid, vehicle_prop, reason="water_map_unavailable")
             return False
-        ramp = self._quick_travel_ramp_at(pos.x, pos.y, pos.z)
+        ramp = self._quick_travel_ramp_near(pos.x, pos.y, pos.z)
         if not ramp:
             self._emit_vehicle_blocked(eid, vehicle_prop, reason="quick_travel_ramp_required")
             return False
@@ -285,8 +319,10 @@ class PlayerTravelRuntime:
         )
         return False
 
-    def _enter_quick_travel_from_ramp(self, eid, pos, vehicle_prop):
-        ramp = self._quick_travel_ramp_at(pos.x, pos.y, pos.z)
+    def _enter_quick_travel_from_ramp(self, eid, pos, vehicle_prop=None):
+        if vehicle_prop is None:
+            vehicle_prop = self._active_vehicle_property(eid)
+        ramp = self._quick_travel_ramp_near(pos.x, pos.y, pos.z)
         if not ramp:
             return False
         if not self._can_enter_quick_travel_from_local_vehicle(eid, pos):
@@ -368,8 +404,7 @@ class PlayerTravelRuntime:
                 cruise_active=int(getattr(state, "speed", 0) or 0) > 0,
                 reason=reason,
             )
-            if self._enter_quick_travel_from_ramp(eid, pos, vehicle_prop):
-                return moved_any
+            self._emit_nearby_onramp_notice(eid, pos, vehicle_prop=vehicle_prop)
         return moved_any
 
     def _handle_local_vehicle_move_discrete(self, eid, pos, dx, dy):
@@ -424,6 +459,7 @@ class PlayerTravelRuntime:
                 z=int(pos.z),
                 cruise_active=False,
             )
+            self._emit_nearby_onramp_notice(eid, pos, vehicle_prop=vehicle_prop)
             return True
 
         return self._move_local_vehicle_steps(
@@ -490,6 +526,7 @@ class PlayerTravelRuntime:
                 z=int(pos.z),
                 cruise_active=int(getattr(state, "speed", 0) or 0) > 0,
             )
+            self._emit_nearby_onramp_notice(eid, pos, vehicle_prop=vehicle_prop)
             return True
 
         moved_any = self._move_local_vehicle_steps(
@@ -515,6 +552,7 @@ class PlayerTravelRuntime:
             z=int(pos.z),
             cruise_active=int(getattr(state, "speed", 0) or 0) > 0,
         )
+        self._emit_nearby_onramp_notice(eid, pos, vehicle_prop=vehicle_prop)
         return moved_any
 
     def _handle_local_vehicle_momentum(self, eid, pos):

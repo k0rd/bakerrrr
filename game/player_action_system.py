@@ -1037,6 +1037,9 @@ class PlayerActionSystem(System):
         return self.player_movement.try_advance_stakeout(eid, pos)
 
     def _handle_interact_action(self, eid, pos, *, force_direction=False, target=None):
+        vehicle_state = self._vehicle_state_for(eid)
+        if vehicle_state and vehicle_state.in_vehicle and self._enter_quick_travel_from_nearby_ramp(eid, pos):
+            return True
         return self.player_interactions.handle_interact_action(
             eid,
             pos,
@@ -1221,6 +1224,9 @@ class PlayerActionSystem(System):
 
     def _can_enter_overworld_from_local_vehicle(self, eid, pos):
         return self.player_travel._can_enter_quick_travel_from_local_vehicle(eid, pos)
+
+    def _enter_quick_travel_from_nearby_ramp(self, eid, pos):
+        return self.player_travel._enter_quick_travel_from_ramp(eid, pos)
 
     def _overworld_view_only_for(self, eid):
         return self.player_travel._overworld_view_only_for(eid)

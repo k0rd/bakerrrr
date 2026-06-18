@@ -10,6 +10,7 @@ import random
 from engine.events import Event
 from engine.systems import System
 from game import systems as _systems
+from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.system_support.actor_runtime import _detail_tick_allowed, _entity_is_downed
 
 AI = _systems.AI
@@ -526,6 +527,9 @@ class CreatureHazardSystem(System):
         return _species_key(left_identity, left_ecology) == _species_key(right_identity, right_ecology)
 
     def _apply_toxin(self, source_eid, target_eid, source_pos, target_pos, toxic_coat):
+        if local_interactions_suspended_for_actor(self.sim, target_eid):
+            return False
+
         statuses = self.sim.ecs.get(StatusEffects)
         needs_map = self.sim.ecs.get(NPCNeeds)
         vitalities = self.sim.ecs.get(Vitality)
@@ -591,6 +595,9 @@ class CreatureHazardSystem(System):
         return True
 
     def _apply_venom(self, source_eid, target_eid, source_pos, target_pos, venom_profile):
+        if local_interactions_suspended_for_actor(self.sim, target_eid):
+            return False
+
         statuses = self.sim.ecs.get(StatusEffects)
         needs_map = self.sim.ecs.get(NPCNeeds)
         vitalities = self.sim.ecs.get(Vitality)
@@ -1486,6 +1493,8 @@ def _wildlife_ecology_intent(sim, eid, pos, routine, behavior, identity, needs):
 
     for other_eid, other_pos in positions.items():
         if other_eid == eid or int(other_pos.z) != int(pos.z):
+            continue
+        if local_interactions_suspended_for_actor(sim, other_eid):
             continue
         if _entity_is_downed(sim, other_eid):
             continue

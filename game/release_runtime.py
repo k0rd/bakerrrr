@@ -12,7 +12,7 @@ from pathlib import Path
 from engine.persistence import SAVE_DIR
 
 
-GAME_VERSION = "0.1.10-hellonwheels"
+GAME_VERSION = "0.1.11-roundandround"
 CRASH_REPORT_PATH = SAVE_DIR / "bakerrrr_last_crash.txt"
 
 _SIGUSR2_DEBUG_UNLOCKED = False

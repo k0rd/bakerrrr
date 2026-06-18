@@ -27,6 +27,7 @@ from game.human_identity import is_human_identity
 from game.local_situations import local_situation_look_text_for_property
 from game.organization_presence import format_actor_org_presence, format_property_org_presence
 from game.organizations import organization_name
+from game.quick_travel_ramps import map_mode_active
 from game.property_runtime import (
     building_id_from_property as _building_id_from_property,
     building_id_from_structure as _building_id_from_structure,
@@ -209,7 +210,7 @@ class PlayerLookRuntime:
             if structure_text:
                 bits.append("inside:" + structure_text)
 
-        ground_items = self.sim.ground_items_at(x, y, z=z)
+        ground_items = () if map_mode_active(self.sim) else self.sim.ground_items_at(x, y, z=z)
         if ground_items:
             labels = []
             for idx, ground in enumerate(ground_items[:2]):
@@ -449,18 +450,19 @@ class PlayerLookRuntime:
 
         best_item = None
         best_item_dist = radius + 1
-        for ground in self.sim.ground_items.values():
-            if ground.get("z", 0) != pos.z:
-                continue
-            gx = int(ground.get("x", 0))
-            gy = int(ground.get("y", 0))
-            if self.sim.detail_for_xy(gx, gy) == "unloaded":
-                continue
-            dist = _manhattan(pos.x, pos.y, gx, gy)
-            if dist > radius or dist >= best_item_dist:
-                continue
-            best_item = ground
-            best_item_dist = dist
+        if not map_mode_active(self.sim):
+            for ground in self.sim.ground_items.values():
+                if ground.get("z", 0) != pos.z:
+                    continue
+                gx = int(ground.get("x", 0))
+                gy = int(ground.get("y", 0))
+                if self.sim.detail_for_xy(gx, gy) == "unloaded":
+                    continue
+                dist = _manhattan(pos.x, pos.y, gx, gy)
+                if dist > radius or dist >= best_item_dist:
+                    continue
+                best_item = ground
+                best_item_dist = dist
 
         best_npc = None
         best_npc_dist = radius + 1

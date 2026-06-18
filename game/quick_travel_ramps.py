@@ -6,12 +6,25 @@ from __future__ import annotations
 QUICK_TRAVEL_RAMP_ARCHETYPE = "quick_travel_ramp"
 QUICK_TRAVEL_RAMP_GLYPH = "R"
 LOCAL_ROUTE_GLYPHS = {"=", ":"}
+QUICK_TRAVEL_RAMP_INTERACT_RADIUS = 3
 
 
 def map_mode_active(sim) -> bool:
-    """Return True when face-to-face local interactions should be suspended."""
+    """Return True when local-mode player interactions should be suspended."""
 
     return str(getattr(sim, "zoom_mode", "city") or "city").strip().lower() == "overworld"
+
+
+def local_interactions_suspended_for_actor(sim, eid) -> bool:
+    """Return True when local-mode interactions should ignore this actor."""
+
+    if eid is None or not map_mode_active(sim):
+        return False
+    player_eid = getattr(sim, "player_eid", None)
+    try:
+        return int(eid) == int(player_eid)
+    except (TypeError, ValueError):
+        return eid == player_eid
 
 
 def _property_metadata(prop) -> dict:
@@ -53,6 +66,35 @@ def quick_travel_ramp_properties_at(sim, x, y, z=0):
 def quick_travel_ramp_at(sim, x, y, z=0):
     ramps = quick_travel_ramp_properties_at(sim, x, y, z)
     return ramps[0] if ramps else None
+
+
+def quick_travel_ramp_near(sim, x, y, z=0, *, radius=QUICK_TRAVEL_RAMP_INTERACT_RADIUS):
+    try:
+        px = int(x)
+        py = int(y)
+        pz = int(z)
+        search_radius = max(0, int(radius))
+    except (TypeError, ValueError):
+        return None
+
+    candidates = []
+    seen_ids = set()
+    for dy in range(-search_radius, search_radius + 1):
+        max_dx = search_radius - abs(dy)
+        for dx in range(-max_dx, max_dx + 1):
+            rx = px + dx
+            ry = py + dy
+            for prop in quick_travel_ramp_properties_at(sim, rx, ry, pz):
+                prop_id = str(prop.get("id", ""))
+                if prop_id in seen_ids:
+                    continue
+                seen_ids.add(prop_id)
+                distance = abs(int(prop.get("x", rx)) - px) + abs(int(prop.get("y", ry)) - py)
+                candidates.append((distance, int(prop.get("y", ry)), int(prop.get("x", rx)), prop_id, prop))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: row[:4])
+    return candidates[0][4]
 
 
 def _route_tile_candidates(sim, origin_x, origin_y, chunk_size):

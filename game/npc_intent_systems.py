@@ -103,6 +103,7 @@ from game.property_access import (
     world_hour as _world_hour,
 )
 from game.property_door_wait import DoorWaitSystem, _actor_in_live_combat, _door_knock_attempt
+from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.movement_runtime import (
     _animal_npc_cannot_cross_doorway,
     _auto_open_closed_door_for_move,
@@ -807,6 +808,8 @@ def _retreat_target_from_warning(sim, pos, warning_pos, *, max_stride=4):
 
 def _live_target_position(sim, target_eid, *, positions=None, vitalities=None, z=None):
     if sim is None or target_eid is None:
+        return None
+    if local_interactions_suspended_for_actor(sim, target_eid):
         return None
     positions = positions or sim.ecs.get(Position)
     vitalities = vitalities or sim.ecs.get(Vitality)
@@ -4635,6 +4638,7 @@ class NPCInvestigateSystem(System):
         needs_map = self.sim.ecs.get(NPCNeeds)
         socials = self.sim.ecs.get(NPCSocial)
         move_throttles = self.sim.ecs.get(MovementThrottle)
+        wills = self.sim.ecs.get(NPCWill)
         effects_map = self.sim.ecs.get(StatusEffects)
         noise_profiles = self.sim.ecs.get(NoiseProfile)
         memories = self.sim.ecs.get(NPCMemory)
@@ -4681,6 +4685,18 @@ class NPCInvestigateSystem(System):
                 continue
             if _entity_is_downed(self.sim, eid):
                 _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+                if live_timeskip_active:
+                    self._unschedule_move_due(eid)
+                continue
+            if local_interactions_suspended_for_actor(self.sim, getattr(ai, "target_eid", None)):
+                ai.state = "idle"
+                ai.target = None
+                ai.target_eid = None
+                will = wills.get(eid)
+                if will is not None:
+                    will.intent = "idle"
+                    will.target = None
+                    will.target_eid = None
                 if live_timeskip_active:
                     self._unschedule_move_due(eid)
                 continue

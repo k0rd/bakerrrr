@@ -16,6 +16,7 @@ from game.item_semantics import (
     item_identification_profile,
 )
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name, item_inventory_slot_cost, item_lead_profile
+from game.quick_travel_ramps import local_interactions_suspended_for_actor
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_runtime import (
     property_covering as _property_covering,
@@ -1174,6 +1175,10 @@ class ItemActionRuntime:
         return True
 
     def handle_pickup(self, eid, x, y, z):
+        if local_interactions_suspended_for_actor(self.sim, eid):
+            self.sim.emit(Event("item_pickup_blocked", eid=eid, reason="map_mode"))
+            return
+
         inventory = self._inventory_for(eid)
         if not inventory:
             self.sim.emit(Event("item_pickup_blocked", eid=eid, reason="no_inventory"))
