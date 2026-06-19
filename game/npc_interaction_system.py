@@ -1610,6 +1610,12 @@ class NPCInteractionSystem(System):
     def _player_person_contact_entry(self, person_eid):
         return _person_contact_entry(self.sim, self.player_eid, person_eid)
 
+    def _player_formal_intro_entry(self, person_eid):
+        entry = self._player_person_contact_entry(person_eid)
+        if not isinstance(entry, dict) or not bool(entry.get("introduced", False)):
+            return None
+        return entry
+
     def _player_knows_person_name(self, person_eid):
         entry = self._player_person_contact_entry(person_eid)
         if not entry:
@@ -3996,7 +4002,7 @@ class NPCInteractionSystem(System):
         if not social:
             return None
         bond = social.bonds.get(self.player_eid)
-        intro_entry = self._player_person_contact_entry(npc_eid)
+        intro_entry = self._player_formal_intro_entry(npc_eid)
         if not bond:
             if guarded:
                 return None
@@ -6353,15 +6359,21 @@ class NPCInteractionSystem(System):
         organization = self._organization_snapshot(npc_eid, occupation, workplace_prop)
         bond = bond if bond is not None else self._bond_snapshot(npc_eid)
         rapport = self._conversation_rapport()
-        intro_entry = self._player_person_contact_entry(npc_eid)
-        met_directly = bool((intro_entry or {}).get("met_directly", False))
+        person_entry = self._player_person_contact_entry(npc_eid)
+        intro_entry = self._player_formal_intro_entry(npc_eid)
+        met_directly = bool((person_entry or {}).get("met_directly", False))
+        person_standing = (
+            float((person_entry or {}).get("standing", 0.0))
+            if (met_directly or intro_entry)
+            else 0.0
+        )
         intro_standing = float((intro_entry or {}).get("standing", 0.0))
         trust = float((bond or {}).get("trust", 0.0))
         closeness = float((bond or {}).get("closeness", 0.0))
         bond_score = (trust * 0.6) + (closeness * 0.4)
         contact_standing = self._contact_standing(bond, rapport)
-        social_standing = max(contact_standing, intro_standing)
-        fallout_rep = max(intro_standing, bond_score)
+        social_standing = max(contact_standing, person_standing)
+        fallout_rep = max(person_standing, bond_score)
         pressure = _pressure_snapshot(self.sim)
         pressure_effects = dict(pressure.get("effects", {}) if isinstance(pressure, dict) else {})
         pressure_tier = str(pressure.get("tier", "low")).strip().lower() or "low"
@@ -6415,7 +6427,7 @@ class NPCInteractionSystem(System):
             other_name = str(primary_social_lead.get("name", "")).strip()
             other_relation = str(primary_social_lead.get("relation_text", "")).strip() or "contact"
         intro_source_name = ""
-        if intro_entry:
+        if intro_entry and intro_entry.get("source_eid") is not None:
             intro_source_name = _entity_display_name(self.sim, intro_entry.get("source_eid"), title_case=True)
         player_profile = self._player_profile()
         rumor_line = self._memory_line(memory, player_profile)
@@ -7486,6 +7498,21 @@ class NPCInteractionSystem(System):
         if place_name:
             return f"{name} is usually around {place_name}."
         return f"{name} is worth knowing."
+
+    def _unnamed_social_lead_sentence(self, lead):
+        if not isinstance(lead, dict):
+            return ""
+        context_text = self._introduction_context_text(lead)
+        if context_text:
+            return f"They can point you toward {context_text}."
+        return "They know someone worth meeting."
+
+    def _visible_social_lead_sentence(self, lead):
+        if not isinstance(lead, dict):
+            return ""
+        if self._player_knows_person_name(lead.get("eid")):
+            return self._social_lead_sentence(lead)
+        return self._unnamed_social_lead_sentence(lead)
 
     def _people_summary(self, context):
         leads = list(context.get("social_leads", ()) or ())
@@ -12896,12 +12923,12 @@ class NPCInteractionSystem(System):
         if topic_id == "contacts":
             intro = self._introduction_target(context)
             if intro:
-                return f"{intro.get('name', 'They')} are {self._introduction_context_text(intro)}."
+                return self._visible_social_lead_sentence(intro)
             return ""
         if topic_id == "introduction":
             intro = self._introduction_target(context)
             if intro:
-                return self._social_lead_sentence(intro)
+                return self._visible_social_lead_sentence(intro)
             return ""
         return ""
 

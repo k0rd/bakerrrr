@@ -74,7 +74,9 @@ from game.system_support.item_provenance_runtime import CLAIM_PRIVATE_EFFECT, st
 from game.system_support.item_runtime import (
     _apply_item_effects_to_entity,
     _default_weapon_reserve_ammo,
+    _item_can_recover_downed_actor as _runtime_item_can_recover_downed_actor,
     _item_tags,
+    _smallest_recovery_item_for_downed_actor,
     _weapon_uses_ammo,
 )
 from game.system_support.offense_runtime import (
@@ -1827,28 +1829,11 @@ class NPCItemUseSystem(System):
         self.sim.events.subscribe("npc_help_arrived", self.on_npc_help_arrived)
 
     def _item_can_recover_downed_actor(self, item_def):
-        tags = _item_tags(item_def)
-        if "death_save" in tags or "medical" not in tags:
-            return False
-        for effect in tuple(item_def.get("effects", ()) or ()):
-            if not isinstance(effect, dict) or effect.get("type") != "restore_hp":
-                continue
-            try:
-                delta = int(round(float(effect.get("delta", 0) or 0)))
-            except (TypeError, ValueError):
-                delta = 0
-            if delta > 0:
-                return True
-        return False
+        return _runtime_item_can_recover_downed_actor(item_def)
 
     def _field_rescue_item(self, inventory):
-        if not inventory:
-            return None, None
-        for entry in list(getattr(inventory, "items", ()) or ()):
-            item_def = self.catalog.get(entry.get("item_id"))
-            if item_def and self._item_can_recover_downed_actor(item_def):
-                return entry, item_def
-        return None, None
+        entry, item_def, _restore_hp = _smallest_recovery_item_for_downed_actor(inventory, self.catalog)
+        return entry, item_def
 
     def _occupation(self, eid):
         return self.sim.ecs.get(Occupation).get(eid)

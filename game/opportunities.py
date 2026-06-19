@@ -6,6 +6,7 @@ from game.criminal_justice_runtime import (
     _justice_held_property_snapshot,
     _justice_snapshot,
 )
+from game.justice_runtime import record_incident as _record_justice_incident
 from game.components import (
     AI,
     ContactLedger,
@@ -56,6 +57,12 @@ OPPORTUNITY_TERMINAL_REFILL_DELAY_HOURS = 0.25
 OPPORTUNITY_EMERGENCY_ACTIVE_COUNT = 2
 EXPIRE_DISTANCE_BONUS_HOURS_PER_CHUNK = 1.0
 EXPIRE_DISTANCE_BONUS_CAP_HOURS = 12.0
+SERVICE_JOB_BOARD_SERVICES = frozenset({"courier_jobs", "agency_jobs", "bounty_jobs"})
+SERVICE_JOB_DEADLINE_HOURS = {
+    "courier_jobs": 8,
+    "agency_jobs": 10,
+    "bounty_jobs": 12,
+}
 _OPPORTUNITY_URGENCY_KEYWORDS = (
     "urgent",
     "immediate",
@@ -1590,6 +1597,7 @@ def _ensure_lifecycle_fields(sim, opportunity):
         and (
             _safe_int(requirements.get("interact_npc_eid"), default=0) > 0
             or _safe_int(requirements.get("pickup_interact_npc_eid"), default=0) > 0
+            or _safe_int(requirements.get("bounty_target_eid"), default=0) > 0
         )
     ):
         policy.setdefault("fail_on_target_killed", True)
@@ -1597,6 +1605,11 @@ def _ensure_lifecycle_fields(sim, opportunity):
     origin = _chunk_tuple(getattr(sim, "world_traits", {}).get("origin_chunk")) if isinstance(getattr(sim, "world_traits", None), dict) else None
     if origin and "origin_chunk" not in opportunity:
         opportunity["origin_chunk"] = origin
+
+    current_expire_tick = _safe_int(opportunity.get("expire_tick"), default=0)
+    if bool(requirements.get("strict_deadline")) and current_expire_tick > 0:
+        opportunity["expire_version"] = _OPPORTUNITY_EXPIRE_VERSION
+        return opportunity
 
     desired_duration = _default_opportunity_expire_ticks(sim, opportunity)
     accepted_tick = _safe_int(opportunity.get("accepted_tick"), default=-1)
@@ -1612,7 +1625,6 @@ def _ensure_lifecycle_fields(sim, opportunity):
         anchor_tick = now
     desired_expire_tick = anchor_tick + desired_duration
 
-    current_expire_tick = _safe_int(opportunity.get("expire_tick"), default=0)
     expire_version = _safe_int(opportunity.get("expire_version"), default=0)
     if current_expire_tick <= 0:
         opportunity["expire_tick"] = desired_expire_tick
@@ -4567,6 +4579,341 @@ def append_external_opportunity(
     return entry
 
 
+def _service_job_actor_name(sim, eid):
+    identities = sim.ecs.get(CreatureIdentity) if sim is not None else {}
+    identity = identities.get(eid) if identities else None
+    if identity is not None:
+        name = str(
+            getattr(identity, "personal_name", "")
+            or getattr(identity, "common_name", "")
+            or getattr(identity, "creature_type", "")
+            or ""
+        ).strip()
+        if name:
+            return name.title()
+    return f"Person {eid}"
+
+
+def _service_job_property_candidates(sim, issuer_prop, player_eid, *, limit=12):
+    if sim is None or not isinstance(issuer_prop, dict):
+        return []
+    issuer_id = str(issuer_prop.get("id", "") or "").strip()
+    origin_chunk = _player_chunk(sim, player_eid)
+    try:
+        origin_x = int(issuer_prop.get("x", 0))
+        origin_y = int(issuer_prop.get("y", 0))
+    except (TypeError, ValueError):
+        origin_x = origin_y = 0
+    rows = []
+    for prop in getattr(sim, "properties", {}).values():
+        if not isinstance(prop, dict):
+            continue
+        prop_id = str(prop.get("id", "") or "").strip()
+        if not prop_id or prop_id == issuer_id:
+            continue
+        if str(prop.get("kind", "") or "").strip().lower() != "building":
+            continue
+        metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
+        if bool(metadata.get("span_parent")):
+            continue
+        if not (property_is_public(prop) or property_is_storefront(prop) or tuple(site_services_for_property(prop))):
+            continue
+        try:
+            px = int(prop.get("x", 0))
+            py = int(prop.get("y", 0))
+        except (TypeError, ValueError):
+            continue
+        try:
+            chunk = sim.chunk_coords(px, py)
+        except Exception:
+            chunk = _chunk_tuple(metadata.get("chunk")) or origin_chunk
+        chunk_dist = _manhattan(origin_chunk, chunk) if origin_chunk and chunk else 0
+        tile_dist = abs(px - origin_x) + abs(py - origin_y)
+        rows.append((chunk_dist, tile_dist, str(prop.get("name", prop_id)).lower(), prop_id, prop, chunk))
+    rows.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+    return rows[: max(1, int(limit))]
+
+
+def _service_job_target_npcs(sim, player_eid, *, limit=12):
+    if sim is None:
+        return []
+    positions = sim.ecs.get(Position)
+    ai_map = sim.ecs.get(AI)
+    rows = []
+    for eid, pos in list(positions.items()) if hasattr(positions, "items") else ():
+        if eid == player_eid or not ai_map.get(eid):
+            continue
+        snapshot = _justice_snapshot(sim, eid)
+        tier = str(snapshot.get("wanted_tier", "clear") or "clear").strip().lower() or "clear"
+        wanted_rank = {"arrest_on_sight": 0, "wanted": 1, "questioning": 2}.get(tier, 3)
+        try:
+            chunk = sim.chunk_coords(int(pos.x), int(pos.y))
+        except Exception:
+            chunk = (0, 0)
+        rows.append((
+            wanted_rank,
+            abs(int(chunk[0])) + abs(int(chunk[1])),
+            _service_job_actor_name(sim, eid).lower(),
+            int(eid),
+            pos,
+            tier,
+        ))
+    rows.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+    return rows[: max(1, int(limit))]
+
+
+def service_job_board_offers(sim, player_eid, prop, service, *, limit=4):
+    service = str(service or "").strip().lower()
+    if service not in SERVICE_JOB_BOARD_SERVICES or not isinstance(prop, dict):
+        return []
+    limit = max(1, int(limit))
+    prop_id = str(prop.get("id", "") or "").strip()
+    prop_name = str(prop.get("name", prop_id) or prop_id).strip() or "the office"
+    tick_bucket = int(getattr(sim, "tick", 0) // max(1, _opportunity_ticks_per_hour(sim) * 4))
+    rng = random.Random(f"{getattr(sim, 'seed', 0)}:service-job-board:{prop_id}:{service}:{tick_bucket}")
+    origin_chunk = _player_chunk(sim, player_eid)
+    deadline_hours = int(SERVICE_JOB_DEADLINE_HOURS.get(service, 8))
+    offers = []
+
+    if service in {"courier_jobs", "agency_jobs"}:
+        candidates = _service_job_property_candidates(sim, prop, player_eid, limit=max(limit * 3, 8))
+        verbs = ("Deliver", "Pick up", "Run", "Handoff") if service == "courier_jobs" else ("Day labor", "Supply run", "Local errand", "Salvage check")
+        base_pay = 28 if service == "courier_jobs" else 34
+        for index, row in enumerate(candidates[:limit]):
+            chunk_dist, tile_dist, _name_key, target_id, target_prop, target_chunk = row
+            target_name = str(target_prop.get("name", target_id) or target_id).strip()
+            verb = verbs[(index + rng.randrange(len(verbs))) % len(verbs)]
+            pay = int(base_pay + (chunk_dist * 10) + min(22, tile_dist // 5) + rng.randint(0, 12))
+            standing = 1 + int(chunk_dist >= 2)
+            job_key = f"service_job:{service}:{prop_id}:{target_id}:{tick_bucket}:{index}"
+            offers.append({
+                "service": service,
+                "job_key": job_key,
+                "label": f"{verb}: {target_name} ({pay}c)",
+                "summary": f"{verb.lower()} for {prop_name}; finish within {deadline_hours}h.",
+                "target_property_id": target_id,
+                "target_property_name": target_name,
+                "target_chunk": tuple(target_chunk or ()),
+                "deadline_hours": deadline_hours,
+                "pay": pay,
+                "standing": standing,
+                "kind": "courier_job" if service == "courier_jobs" else "agency_job",
+                "verb": verb.lower(),
+                "origin_chunk": origin_chunk,
+            })
+        return offers
+
+    if service == "bounty_jobs":
+        candidates = _service_job_target_npcs(sim, player_eid, limit=max(limit * 3, 8))
+        for index, row in enumerate(candidates[:limit]):
+            wanted_rank, _dist, _name_key, target_eid, pos, tier = row
+            target_name = _service_job_actor_name(sim, target_eid)
+            pay = int(72 + ((3 - min(3, wanted_rank)) * 20) + rng.randint(0, 28))
+            job_key = f"service_job:{service}:{prop_id}:{target_eid}:{tick_bucket}:{index}"
+            try:
+                target_chunk = sim.chunk_coords(int(pos.x), int(pos.y))
+            except Exception:
+                target_chunk = ()
+            offers.append({
+                "service": service,
+                "job_key": job_key,
+                "label": f"Alive pickup: {target_name} ({pay}c)",
+                "summary": f"Drop or accept surrender, then use the issued restraint jab within {deadline_hours}h.",
+                "target_eid": int(target_eid),
+                "target_name": target_name,
+                "target_chunk": tuple(target_chunk or ()),
+                "target_wanted_tier": tier,
+                "court_selected": tier not in {"wanted", "arrest_on_sight"},
+                "deadline_hours": deadline_hours,
+                "pay": pay,
+                "standing": 2,
+                "kind": "bounty_capture",
+                "origin_chunk": origin_chunk,
+            })
+        return offers
+    return offers
+
+
+def _service_job_offer_by_key(sim, player_eid, prop, service, job_key):
+    job_key = str(job_key or "").strip()
+    for offer in service_job_board_offers(sim, player_eid, prop, service, limit=8):
+        if str(offer.get("job_key", "") or "").strip() == job_key:
+            return offer
+    return None
+
+
+def _grant_bounty_restraint_jab(sim, player_eid, opportunity):
+    inventory = sim.ecs.get(Inventory).get(player_eid) if sim is not None else None
+    item_def = ITEM_CATALOG.get("field_restraint_jab")
+    if inventory is None or not isinstance(item_def, dict):
+        return False
+    added, _instance_id = inventory.add_item(
+        "field_restraint_jab",
+        quantity=1,
+        stack_max=max(1, _safe_int(item_def.get("stack_max"), default=1)),
+        instance_factory=getattr(sim, "new_item_instance_id", None),
+        owner_eid=player_eid,
+        owner_tag="opportunity",
+        metadata={
+            "quest_opportunity_id": _safe_int(opportunity.get("id"), default=0),
+            "quest_kind": "bounty_capture",
+            "issued_by_property_id": str((opportunity.get("issuer") or {}).get("property_id", "") or "").strip(),
+        },
+    )
+    return bool(added)
+
+
+def _apply_fallback_bounty_heat(sim, target_eid, prop):
+    if sim is None or target_eid is None:
+        return None
+    pos = sim.ecs.get(Position).get(target_eid)
+    x = int(getattr(pos, "x", (prop or {}).get("x", 0)) or 0)
+    y = int(getattr(pos, "y", (prop or {}).get("y", 0)) or 0)
+    first = _record_justice_incident(
+        sim,
+        target_eid,
+        incident_type="bounty_pickup",
+        severity=220,
+        source_event="bounty_board_pickup",
+        property_id=str((prop or {}).get("id", "") or "").strip() or None,
+        x=x,
+        y=y,
+        witnessed=True,
+        note="court pickup posted",
+    )
+    second = _record_justice_incident(
+        sim,
+        target_eid,
+        incident_type="bounty_pickup",
+        severity=220,
+        source_event="bounty_board_warrant",
+        property_id=str((prop or {}).get("id", "") or "").strip() or None,
+        x=x,
+        y=y,
+        witnessed=True,
+        note="court pickup posted",
+    )
+    return second or first
+
+
+def accept_service_job_offer(sim, player_eid, prop, service, job_key):
+    offer = _service_job_offer_by_key(sim, player_eid, prop, service, job_key)
+    if not isinstance(offer, dict):
+        return None
+    service = str(service or "").strip().lower()
+    prop_id = str((prop or {}).get("id", "") or "").strip()
+    prop_name = str((prop or {}).get("name", prop_id) or prop_id).strip()
+    now = int(getattr(sim, "tick", 0))
+    deadline_hours = max(1, _safe_int(offer.get("deadline_hours"), default=8))
+    expire_tick = now + int(deadline_hours * _opportunity_ticks_per_hour(sim))
+    reward = {
+        "credits": max(0, _safe_int(offer.get("pay"), default=0)),
+        "standing": max(0, _safe_int(offer.get("standing"), default=0)),
+    }
+    issuer = {
+        "property_id": prop_id,
+        "property_name": prop_name,
+        "relation_kind": "job_issuer",
+        "property_standing_delta": 0.03,
+        "benefits": ("known_name",),
+    }
+    metadata = (prop or {}).get("metadata") if isinstance((prop or {}).get("metadata"), dict) else {}
+    org_key = str(metadata.get("organization_key", "") or metadata.get("root_organization_key", "") or "").strip()
+    if org_key:
+        issuer["organization_key"] = org_key
+        issuer["organization_standing_delta"] = 0.02
+
+    if service in {"courier_jobs", "agency_jobs"}:
+        target_chunk = _chunk_tuple(offer.get("target_chunk"))
+        opportunity = {
+            "key": offer["job_key"],
+            "kind": offer.get("kind"),
+            "title": str(offer.get("label", "Service job")).strip(),
+            "summary": str(offer.get("summary", "")).strip(),
+            "source": "property_service",
+            "contract_family": service,
+            "risk": "low",
+            "chunk": target_chunk,
+            "origin_chunk": _chunk_tuple(offer.get("origin_chunk")),
+            "seed_tick": now,
+            "accepted_tick": now,
+            "expire_tick": expire_tick,
+            "requirements": {
+                "player_accepted": True,
+                "strict_deadline": True,
+                "property_id": str(offer.get("target_property_id", "") or "").strip(),
+                "property_name": str(offer.get("target_property_name", "") or "").strip(),
+                "visit_chunk": target_chunk,
+            },
+            "reward": reward,
+            "issuer": issuer,
+            "failure_policy": {"fail_on_legal_compromise": service == "courier_jobs"},
+        }
+    else:
+        target_eid = _safe_int(offer.get("target_eid"), default=0)
+        if bool(offer.get("court_selected")):
+            _apply_fallback_bounty_heat(sim, target_eid, prop)
+        opportunity = {
+            "key": offer["job_key"],
+            "kind": "bounty_capture",
+            "title": str(offer.get("label", "Alive pickup")).strip(),
+            "summary": str(offer.get("summary", "")).strip(),
+            "source": "property_service",
+            "contract_family": service,
+            "risk": "hazardous",
+            "chunk": _chunk_tuple(offer.get("target_chunk")),
+            "origin_chunk": _chunk_tuple(offer.get("origin_chunk")),
+            "seed_tick": now,
+            "accepted_tick": now,
+            "expire_tick": expire_tick,
+            "requirements": {
+                "player_accepted": True,
+                "strict_deadline": True,
+                "bounty_target_eid": target_eid,
+                "bounty_target_name": str(offer.get("target_name", "target") or "target").strip(),
+                "bounty_restrained": False,
+                "field_restraint_item_id": "field_restraint_jab",
+            },
+            "reward": reward,
+            "issuer": issuer,
+            "failure_policy": {
+                "fail_on_legal_compromise": False,
+                "fail_on_target_killed": True,
+            },
+        }
+    entry = append_external_opportunity(
+        sim,
+        opportunity,
+        observer_eid=player_eid,
+        awareness_state="confirmed",
+        confidence=1.0,
+        source="service_job_board",
+    )
+    if isinstance(entry, dict) and service == "bounty_jobs":
+        _grant_bounty_restraint_jab(sim, player_eid, entry)
+    return entry
+
+
+def mark_bounty_target_restrained(sim, player_eid, target_eid):
+    state = _state(sim)
+    target_eid = _safe_int(target_eid, default=0)
+    if target_eid <= 0:
+        return None
+    for entry in state.get("active", ()):
+        if not isinstance(entry, dict):
+            continue
+        requirements = entry.get("requirements") if isinstance(entry.get("requirements"), dict) else {}
+        if _safe_int(requirements.get("bounty_target_eid"), default=0) != target_eid:
+            continue
+        if not bool(requirements.get("player_accepted")):
+            continue
+        requirements["bounty_restrained"] = True
+        requirements["bounty_restrained_tick"] = int(getattr(sim, "tick", 0))
+        requirements["bounty_restrained_by_eid"] = player_eid
+        return entry
+    return None
+
+
 def _seed_chunk_coordinates(origin, max_radius=8):
     ox, oy = int(origin[0]), int(origin[1])
     coords = []
@@ -5379,6 +5726,15 @@ def refresh_due_dynamic_opportunities(sim, player_eid, rng=None, *, reason="peri
 
 def _completion_detail(sim, opportunity, metrics):
     requirements = _opportunity_requirements(opportunity)
+    bounty_target_eid = _safe_int(requirements.get("bounty_target_eid"), default=0)
+    if bounty_target_eid > 0:
+        if not bool(requirements.get("player_accepted")):
+            return False, "", None
+        if bool(requirements.get("bounty_restrained")):
+            target_name = str(requirements.get("bounty_target_name", "target")).strip() or "target"
+            return True, f"{target_name} restrained for pickup", None
+        return False, "", None
+
     visit_chunk = _chunk_tuple(requirements.get("visit_chunk"))
     current_chunk = _chunk_tuple(metrics.get("current_chunk"))
     visited = set(metrics.get("visited_chunks", ()))
@@ -6212,6 +6568,14 @@ def _target_killed_failure_detail(opportunity, metrics):
         return None
 
     kind = str((opportunity or {}).get("kind", "") or "").strip().lower()
+    requirements = _opportunity_requirements(opportunity)
+    bounty_target_eid = _safe_int(requirements.get("bounty_target_eid"), default=0)
+    if bounty_target_eid > 0 and bounty_target_eid in killed_eids:
+        target_name = str(requirements.get("bounty_target_name", "target")).strip() or "target"
+        return {
+            "failure_code": "target_killed",
+            "failure_reason": f"{target_name} was killed before pickup",
+        }
     for target_eid, target_name, stage in _opportunity_target_specs(opportunity):
         if target_eid not in killed_eids:
             continue

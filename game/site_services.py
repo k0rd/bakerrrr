@@ -6,7 +6,7 @@ from game.appearance_loadout import apply_appearance_service
 from engine.underground import UNDERGROUND_ACCESS_SERVICE
 from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, PropertyKnowledge, StatusEffects, VehicleState, Vitality
 from game.items import ITEM_CATALOG, item_display_name
-from game.opportunities import append_external_opportunity
+from game.opportunities import accept_service_job_offer, append_external_opportunity
 from game.organization_response import property_vigilante_denial
 from game.organizations import effective_org_access_posture, property_service_practice_bundle
 from game.player_businesses import player_business_apply_remodel as _player_business_apply_remodel
@@ -2030,6 +2030,9 @@ class SiteServiceSystem(System):
         if service == "appearance_style":
             self._apply_appearance_style_service(eid, prop, request=request)
             return True
+        if service in {"courier_jobs", "agency_jobs", "bounty_jobs"}:
+            self._apply_service_job_board(eid, prop, service, request=request)
+            return True
         if service in TRANSIT_SERVICE_IDS:
             self._apply_transit_service(eid, prop, pos, service, request=request)
             return True
@@ -2043,6 +2046,54 @@ class SiteServiceSystem(System):
             self._apply_vehicle_fetch(eid, prop, pos)
             return True
         return False
+
+    def _apply_service_job_board(self, eid, prop, service, request=None):
+        request = request if isinstance(request, dict) else {}
+        job_key = str(request.get("job_key", "") or "").strip()
+        if not job_key:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                reason="no_job_selected",
+            ))
+            return False
+        entry = accept_service_job_offer(self.sim, eid, prop, service, job_key)
+        if not isinstance(entry, dict):
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                reason="job_unavailable",
+            ))
+            return False
+        reward = entry.get("reward") if isinstance(entry.get("reward"), dict) else {}
+        deadline_tick = int(entry.get("expire_tick", getattr(self.sim, "tick", 0)) or getattr(self.sim, "tick", 0))
+        ticks_left = max(0, deadline_tick - int(getattr(self.sim, "tick", 0)))
+        hours_left = max(1, int(round(ticks_left / max(1, _int_or_default(getattr(self.sim, "ticks_per_hour", 600), 600)))))
+        lines = [
+            str(entry.get("summary", "Job accepted.")).strip() or "Job accepted.",
+            f"Reward: {int(reward.get('credits', 0) or 0)}c, standing +{int(reward.get('standing', 0) or 0)}.",
+            f"Deadline: {hours_left}h.",
+        ]
+        if str(entry.get("kind", "")).strip().lower() == "bounty_capture":
+            lines.append("A field restraint jab was issued. Use it on the downed or surrendered target.")
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service=service,
+            headline="Job accepted.",
+            lines=tuple(lines),
+            opportunity_id=int(entry.get("id", 0) or 0),
+            opportunity_key=str(entry.get("key", "") or "").strip(),
+        ))
+        return True
 
     def _apply_appearance_style_service(self, eid, prop, request=None):
         request = request if isinstance(request, dict) else {}

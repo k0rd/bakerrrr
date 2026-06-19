@@ -35,8 +35,10 @@ from game.system_support.item_runtime import (
     _default_weapon_reserve_ammo,
     _ensure_armor_loadout,
     _item_armor_profile,
+    _item_can_recover_downed_actor as _runtime_item_can_recover_downed_actor,
     _item_tags,
     _item_weapon_id,
+    _smallest_recovery_item_for_downed_actor,
     _weapon_uses_ammo,
 )
 from game.system_support.combat_targeting_runtime import _projectile_path_points
@@ -83,30 +85,15 @@ class ItemActionRuntime:
         })
 
     def _item_can_recover_downed_actor(self, item_def):
-        tags = _item_tags(item_def)
-        if "death_save" in tags or "medical" not in tags:
-            return False
-        for effect in tuple(item_def.get("effects", ()) or ()):
-            if not isinstance(effect, dict) or effect.get("type") != "restore_hp":
-                continue
-            try:
-                delta = int(round(float(effect.get("delta", 0) or 0)))
-            except (TypeError, ValueError):
-                delta = 0
-            if delta > 0:
-                return True
-        return False
+        return _runtime_item_can_recover_downed_actor(item_def)
 
     def _downed_recovery_entry(self, inventory, *, instance_id=None):
         if not inventory:
             return None
         if instance_id:
             return inventory.find(instance_id=instance_id)
-        for entry in list(getattr(inventory, "items", ()) or ()):
-            item_def = self._item_def(entry.get("item_id"))
-            if self._item_can_recover_downed_actor(item_def):
-                return entry
-        return None
+        entry, _item_def, _restore_hp = _smallest_recovery_item_for_downed_actor(inventory, self.catalog)
+        return entry
 
     def _item_throw_profile(self, item_def):
         profile = item_def.get("throw_profile") if isinstance(item_def, dict) else None

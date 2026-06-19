@@ -29,8 +29,10 @@ WIDE_SITE_KINDS = {
 
 PUBLIC_SITE_KINDS = {
     "bait_shop",
+    "breaker_yard",
     "coast_watch",
     "dock_shack",
+    "drydock_yard",
     "ferry_post",
     "flea_market",
     "firewatch_tower",
@@ -38,6 +40,7 @@ PUBLIC_SITE_KINDS = {
     "inspection_shed",
     "relay_post",
     "roadhouse",
+    "salvage_camp",
     "truck_stop",
     "tide_station",
     "weather_station",
@@ -64,6 +67,14 @@ WINDOWED_SITE_KINDS = {
 }
 
 SITE_GAMEPLAY_PROFILES = {
+    "breaker_yard": {
+        "public": True,
+        "is_storefront": True,
+    },
+    "drydock_yard": {
+        "public": True,
+        "is_storefront": True,
+    },
     "relay_post": {
         "public": True,
         "site_services": ("intel", "bus_transit", "shuttle_transit"),
@@ -96,6 +107,19 @@ SITE_GAMEPLAY_PROFILES = {
     "flea_market": {
         "public": True,
         "is_storefront": True,
+    },
+    "salvage_camp": {
+        "public": True,
+        "is_storefront": True,
+    },
+    "work_shed": {
+        "public": False,
+    },
+    "pump_house": {
+        "public": False,
+    },
+    "net_house": {
+        "public": True,
     },
     "survey_post": {
         "site_services": ("intel",),

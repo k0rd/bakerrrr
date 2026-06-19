@@ -37,6 +37,9 @@ BROAD_BUYER_ARCHETYPES = {
     "backroom_market",
     "chop_shop",
     "junk_market",
+    "salvage_camp",
+    "breaker_yard",
+    "drydock_yard",
 }
 
 SHADY_BUYER_ARCHETYPES = {
@@ -162,12 +165,19 @@ def _profile_for_archetype(archetype):
             "adjacent": {"food", "drink", "survival", "tool"},
             "refuse_dangerous": True,
         })
-    elif archetype in {"hardware_store", "tool_depot", "auto_garage", "service_station"}:
+    elif archetype in {"hardware_store", "tool_depot", "auto_garage", "service_station", "salvage_camp", "breaker_yard", "drydock_yard"}:
         profile.update({
-            "summary": "tools, parts, batteries, work gear, and practical repair supplies",
-            "wanted": {"tool", "device", "communication", "phone", "battery", "armor", "wearable", "safety"},
+            "summary": "tools, parts, batteries, circuits, work gear, and practical repair supplies",
+            "wanted": {"tool", "device", "communication", "phone", "battery", "circuit", "scrap", "armor", "wearable", "safety"},
             "adjacent": {"medical", "food", "drink", "ammo", "throwable", "tactical"},
             "refuse_dangerous": False,
+        })
+    elif archetype in {"top_shop", "bottom_shop", "dress_shop", "shoe_shop", "outerwear_shop", "headwear_shop", "jewelry_shop", "accessory_shop", "clothing_superstore", "salon", "barbershop", "hair_studio", "makeup_counter"}:
+        profile.update({
+            "summary": "clothing, accessories, wearable style goods, and light counter stock",
+            "wanted": {"clothing", "wearable", "disguise", "social", "fashion", "jewelry"},
+            "adjacent": {"token", "food", "drink", "medical", "phone", "communication"},
+            "refuse_dangerous": True,
         })
     elif archetype in {"outfitter", "bait_shop", "dock_shack"}:
         profile.update({

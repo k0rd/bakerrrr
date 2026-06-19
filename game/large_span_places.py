@@ -19,6 +19,33 @@ def _text(value):
     return str(value or "").strip()
 
 
+def _slug(value):
+    clean = _clean(value)
+    return clean.replace(":", "_").replace("/", "_") or "span"
+
+
+def _span_association_spec(span_kind, span_id, span_name, parent_name):
+    span_kind = _clean(span_kind)
+    if span_kind not in {"indoor_city_market", "non_city_compound_market", "vertical_mixed_use"}:
+        return None
+    base_name = _text(span_name) or _text(parent_name) or "Shared Market"
+    if span_kind == "vertical_mixed_use":
+        suffix = "Tenant Association"
+    else:
+        suffix = "Market Association"
+    return {
+        "organization_key": f"span_association:{_slug(span_id)}",
+        "organization_name": f"{base_name} {suffix}",
+        "organization_kind": "community",
+        "tags": ("trade_guild", "market_association", "org_role:collective", span_kind),
+        "link_kind": "service_host",
+        "membership_kind": "membership",
+        "membership_title": "market member",
+        "membership_roles": ("owner", "manager", "staff"),
+        "allow_owner_membership": True,
+    }
+
+
 def _dedupe(values):
     out = []
     seen = set()
@@ -200,6 +227,7 @@ def register_large_span_child_properties(
     parent_entry = dict(parent_layout.get("entry", {})) if isinstance(parent_layout.get("entry"), dict) else {}
     parent_profile = dict(parent_source.get("placement_profile", {})) if isinstance(parent_source.get("placement_profile"), dict) else None
     common_kinds = sorted(COMMON_AREA_ROOM_KINDS)
+    association_spec = _span_association_spec(span_kind, span_id, span_name, parent_name)
     records = []
     child_index = 0
 
@@ -274,6 +302,8 @@ def register_large_span_child_properties(
                 "business_founder_last_name": _text(spec.get("business_founder_last_name")) or None,
                 "chunk": tuple(chunk_key),
             }
+            if isinstance(association_spec, dict):
+                metadata["affiliate_organizations"] = [dict(association_spec)]
             if child_kind in {"housing", "shelter"}:
                 metadata["is_storefront"] = False
 

@@ -6729,9 +6729,27 @@ def _site_link_matches_property(prop, row):
         _text(metadata.get("building_id")),
         _text(metadata.get("local_building_id")),
     }
-    if row.get("property_id") and row.get("property_id") == property_id:
-        return True
+    row_property_id = _text(row.get("property_id"))
+    if row_property_id:
+        return row_property_id == property_id
     if row.get("building_id") and row.get("building_id") in building_ids:
+        return True
+    return False
+
+
+def _profile_has_active_primary_operates_link(profile, prop, organization_eid):
+    if profile is None:
+        return False
+    for row in tuple(getattr(profile, "site_links", ()) or ()):
+        normalized = _normalize_site_link_row(row, organization_eid=organization_eid)
+        if not _site_link_matches_property(prop, normalized):
+            continue
+        if normalized.get("link_kind") != "operates":
+            continue
+        if not bool(normalized.get("primary", False)):
+            continue
+        if not bool(normalized.get("active", True)):
+            continue
         return True
     return False
 
@@ -6774,6 +6792,35 @@ def _property_org_link_index(sim, *, active_only=True, cache=None):
     }
     cache[index_key] = result
     return result
+
+
+def _synthetic_primary_property_org_link(sim, prop, organization_eid):
+    if not isinstance(prop, dict):
+        return None
+    organization_eid = _safe_int(organization_eid, default=0)
+    if organization_eid <= 0:
+        return None
+    profile = organization_profile(sim, organization_eid)
+    if profile is None:
+        return None
+    metadata = _property_metadata(prop)
+    row = _normalize_site_link_row(
+        {
+            "organization_eid": int(organization_eid),
+            "property_id": _text(prop.get("id")) or None,
+            "building_id": _text(metadata.get("building_id")) or _text(metadata.get("local_building_id")) or None,
+            "link_kind": "operates",
+            "primary": True,
+            "active": True,
+        },
+        organization_eid=organization_eid,
+    )
+    return {
+        **row,
+        "organization_key": _text(profile.key),
+        "organization_name": _text(profile.name),
+        "organization_kind": _normalize_org_kind(profile.kind, default="other"),
+    }
 
 
 def _upsert_profile_site_link(profile, row):
@@ -6896,22 +6943,12 @@ def property_org_links(sim, prop, *, active_only=True):
     cached = cache.get(cache_key)
     if isinstance(cached, tuple):
         return cached
+    synthetic_primary = None
     primary_org_eid = property_organization_eid(sim, prop, ensure=False)
     if primary_org_eid is not None:
         profile = organization_profile(sim, primary_org_eid)
-        if profile is not None and not any(
-            _site_link_matches_property(prop, row)
-            and _normalize_site_link_row(row, organization_eid=primary_org_eid).get("link_kind") == "operates"
-            and bool(_normalize_site_link_row(row, organization_eid=primary_org_eid).get("primary", False))
-            and bool(_normalize_site_link_row(row, organization_eid=primary_org_eid).get("active", True))
-            for row in profile.site_links
-        ):
-            link_property_organization(sim, prop, organization_eid=primary_org_eid, link_kind="operates", primary=True, active=True)
-            cache_state = _organization_runtime_cache_state(sim)
-            cache = cache_state.get("property_links", {})
-            cached = cache.get(cache_key)
-            if isinstance(cached, tuple):
-                return cached
+        if profile is not None and not _profile_has_active_primary_operates_link(profile, prop, primary_org_eid):
+            synthetic_primary = _synthetic_primary_property_org_link(sim, prop, primary_org_eid)
 
     link_index = _property_org_link_index(sim, active_only=active_only, cache=cache)
     property_id = _text(prop.get("id"))
@@ -6921,7 +6958,10 @@ def property_org_links(sim, prop, *, active_only=True):
     } - {""}
     rows = []
     seen = set()
-    for row in tuple(link_index.get("by_property", {}).get(property_id, ()) if property_id else ()):
+
+    def _append_link_row(row):
+        if not isinstance(row, dict):
+            return
         key = (
             _safe_int(row.get("organization_eid"), default=0),
             _text(row.get("property_id")),
@@ -6929,21 +6969,19 @@ def property_org_links(sim, prop, *, active_only=True):
             _text(row.get("link_kind")),
         )
         if key in seen:
-            continue
+            return
         seen.add(key)
         rows.append(dict(row))
+
+    if isinstance(synthetic_primary, dict) and (not active_only or bool(synthetic_primary.get("active", True))):
+        _append_link_row(synthetic_primary)
+    for row in tuple(link_index.get("by_property", {}).get(property_id, ()) if property_id else ()):
+        _append_link_row(row)
     for building_id in sorted(building_ids):
         for row in tuple(link_index.get("by_building", {}).get(building_id, ())):
-            key = (
-                _safe_int(row.get("organization_eid"), default=0),
-                _text(row.get("property_id")),
-                _text(row.get("building_id")),
-                _text(row.get("link_kind")),
-            )
-            if key in seen:
+            if _text(row.get("property_id")):
                 continue
-            seen.add(key)
-            rows.append(dict(row))
+            _append_link_row(row)
     rows.sort(
         key=lambda row: (
             0 if row.get("primary") else 1,
@@ -7145,17 +7183,20 @@ def ensure_property_organization(sim, prop):
                 tags=parent_organization_tags,
             )
     existing = property_organization_eid(sim, prop, ensure=False)
-    if existing is not None and organization_profile(sim, existing):
+    existing_profile = organization_profile(sim, existing) if existing is not None else None
+    if existing is not None and existing_profile:
         ensure_organization(
             sim,
-            organization_key=getattr(organization_profile(sim, existing), "key", None),
+            organization_key=getattr(existing_profile, "key", None),
             parent_organization_key=parent_organization_key,
         )
-        link_property_organization(sim, prop, organization_eid=existing, link_kind="operates", primary=True, active=True)
+        if not _profile_has_active_primary_operates_link(existing_profile, prop, existing):
+            link_property_organization(sim, prop, organization_eid=existing, link_kind="operates", primary=True, active=True)
+            existing_profile = organization_profile(sim, existing)
         sync_property_collective_affiliations(sim, prop)
         metadata["organization_name"] = organization_name(sim, existing, fallback=_organization_name_for_property(prop))
         metadata["organization_kind"] = _normalize_org_kind(
-            getattr(organization_profile(sim, existing), "kind", ""),
+            getattr(existing_profile, "kind", ""),
             default="business",
         )
         return existing
@@ -7180,8 +7221,8 @@ def workplace_targets_property(prop, workplace):
         return False
 
     property_id = workplace.get("property_id")
-    if property_id and property_id == prop.get("id"):
-        return True
+    if property_id:
+        return property_id == prop.get("id")
 
     building_id = workplace.get("building_id")
     metadata = _property_metadata(prop)
@@ -7584,7 +7625,9 @@ def sync_actor_organization_affiliations(sim, actor_eid, occupation=None):
     prop = sim.properties.get(property_id) if property_id else None
     organization_eid = None
     if prop:
-        organization_eid = ensure_property_organization(sim, prop)
+        organization_eid = property_organization_eid(sim, prop, ensure=False)
+        if organization_eid is None:
+            organization_eid = ensure_property_organization(sim, prop)
     else:
         raw_eid = workplace.get("organization_eid")
         try:
@@ -7684,8 +7727,8 @@ def _membership_targets_property(prop, organization_eid, membership):
         return False
 
     site_property_id = _text(membership.get("site_property_id"))
-    if site_property_id and site_property_id == _text(prop.get("id")):
-        return True
+    if site_property_id:
+        return site_property_id == _text(prop.get("id"))
 
     site_building_id = _text(membership.get("site_building_id"))
     metadata = _property_metadata(prop)

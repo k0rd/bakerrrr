@@ -2271,7 +2271,7 @@ class Simulation:
                             "local_building_id": local_building_id or None,
                             "name": str(building.get("span_name") or building.get("business_name") or building.get("archetype") or "building"),
                             "archetype": str(building.get("archetype", "")).strip().lower(),
-                            "is_storefront": bool(building.get("is_storefront")),
+                            "is_storefront": bool(building.get("is_storefront")) and not bool(building.get("span_kind")),
                             "large_parcel": bool(building.get("large_parcel")),
                             "parcel_span_x": int(building.get("parcel_span_x", 1) or 1),
                             "parcel_span_y": int(building.get("parcel_span_y", 1) or 1),

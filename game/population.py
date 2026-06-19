@@ -45,7 +45,7 @@ from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property,
 from game.human_identity import seed_human_identity_profile
 from game.npc_names import generate_human_personal_name, human_descriptor
 from game.organizations import ensure_property_organization, sync_actor_organization_affiliations
-from game.property_access import property_is_open, property_is_public, property_is_storefront, world_hour
+from game.property_access import STOREFRONT_ARCHETYPE_HINTS, property_is_open, property_is_public, property_is_storefront, world_hour
 from game.property_runtime import property_is_vehicle, vehicle_fuel_values
 from game.skills import seed_skill_profile
 from game.system_support.npc_behavior_runtime import behavior_profile_for_spawn
@@ -132,41 +132,7 @@ TRANSIT_ARCHETYPES = {
     "truck_stop",
     "courier_office",
 }
-STOREFRONT_ARCHETYPES = {
-    "bait_shop",
-    "corner_store",
-    "restaurant",
-    "outfitter",
-    "pawn_shop",
-    "backroom_clinic",
-    "nightclub",
-    "arcade",
-    "bar",
-    "auto_garage",
-    "daycare",
-    "laundromat",
-    "pharmacy",
-    "hotel",
-    "herbalist_camp",
-    "chop_shop",
-    "junk_market",
-    "soup_kitchen",
-    "theater",
-    "music_venue",
-    "gaming_hall",
-    "surplus_store",
-    "service_station",
-    "truck_stop",
-    "tool_depot",
-    "thrift_store",
-    "bookshop",
-    "hardware_store",
-    "gallery",
-    "flophouse",
-    "street_kitchen",
-    "karaoke_box",
-    "pool_hall",
-}
+STOREFRONT_ARCHETYPES = set(STOREFRONT_ARCHETYPE_HINTS)
 NPC_COMMUTE_DRIVER_CAP_PER_CHUNK = 2
 NPC_COMMUTE_DRIVER_ROUTE_SCAN_RADIUS = 10
 LARGE_STAFF_ARCHETYPES = {

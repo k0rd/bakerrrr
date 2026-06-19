@@ -12,6 +12,7 @@ from game.casino_ui_runtime import (
 )
 from game.finance_services import _nearest_property_with_finance_service
 from game.justice_runtime import held_property_snapshot as _justice_held_property_snapshot
+from game.opportunities import SERVICE_JOB_BOARD_SERVICES, service_job_board_offers
 from game.player_businesses import (
     player_business_account_balance,
     player_business_customer_policy,
@@ -2829,6 +2830,45 @@ class ServiceMenuSystem(System):
             "casino_session": None,
         })
 
+    def _open_service_job_board(self, prop, service):
+        service = str(service or "").strip().lower()
+        state = self._dialog_ui_state()
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        prop_name = str(prop.get("name", prop.get("id", "Jobs"))).strip() or "Jobs"
+        offers = service_job_board_offers(self.sim, self.player_eid, prop, service, limit=5)
+        topics = [{"id": "service_menu:root", "label": "Back"}]
+        for offer in offers:
+            topics.append({
+                "id": f"{service}:accept|{offer.get('job_key')}",
+                "label": str(offer.get("label", "Job")).strip() or "Job",
+                "job_key": str(offer.get("job_key", "") or "").strip(),
+                "service": service,
+            })
+        board_title = _service_menu_option_label(service)
+        transcript = [f"{board_title} at {prop_name}."]
+        if not offers:
+            transcript.append("Nothing useful is posted right now.")
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": prop.get("id"),
+            "title": f"{board_title}: {prop_name}",
+            "subtitle": "",
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Choose a posted job to accept it.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": service,
+            "casino_session": None,
+        })
+
     def _close_service_menu(self):
         self._clear_pending_service_result()
         self._clear_casino_session()
@@ -3977,6 +4017,49 @@ class ServiceMenuSystem(System):
             else:
                 title, lines = self._stale_service_option_lines(option_id)
                 self._present_service_result(title, lines)
+            return
+        if option_id in SERVICE_JOB_BOARD_SERVICES:
+            if isinstance(prop, dict):
+                self._open_service_job_board(prop, option_id)
+            else:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+            return
+        job_board_service = next(
+            (service for service in SERVICE_JOB_BOARD_SERVICES if option_id.startswith(f"{service}:accept|")),
+            "",
+        )
+        if job_board_service:
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            selected = next(
+                (
+                    row
+                    for row in list(state.get("topics", []) or ())
+                    if isinstance(row, dict) and str(row.get("id", "")).strip().lower() == option_id
+                ),
+                None,
+            )
+            job_key = str((selected or {}).get("job_key", "") or option_id.partition("|")[2]).strip()
+            if not job_key:
+                self._present_service_result("Jobs", ["That job posting is no longer available."], property_id=property_id)
+                return
+            self._begin_pending_service_result(
+                channel="site",
+                property_id=property_id,
+                property_name=prop.get("name", property_id),
+                service=job_board_service,
+            )
+            self.sim.emit(Event(
+                "site_service_request",
+                eid=self.player_eid,
+                property_id=property_id,
+                service=job_board_service,
+                property_name=prop.get("name", property_id),
+                job_key=job_key,
+            ))
             return
         if option_id.startswith("appearance_style:"):
             if not isinstance(prop, dict):

@@ -4630,6 +4630,19 @@ class EventLogSystem(System):
         target_name = self._npc_label(target)
         item_name = str(event.data.get("item_name", event.data.get("item_id", "medical aid"))).strip() or "medical aid"
         recovered = int(event.data.get("recovered_hp", 1) or 1)
+        try:
+            player_is_rescuer = int(rescuer) == int(self.player_eid)
+        except (TypeError, ValueError):
+            player_is_rescuer = rescuer == self.player_eid
+        if player_is_rescuer:
+            self._log(
+                f"You use {item_name} and get {target_name} back up at {recovered} HP.",
+                channel="combat",
+                priority="high",
+                dedupe_window=2,
+                dedupe_key=f"npc_medical_rescue:{rescuer}:{target}",
+            )
+            return
         self._log(
             f"{rescuer_name} uses {item_name} and gets {target_name} back up at {recovered} HP.",
             channel="combat",

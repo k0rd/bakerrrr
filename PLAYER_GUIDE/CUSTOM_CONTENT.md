@@ -18,6 +18,7 @@ PLAYER_GUIDE/examples/custom_content/world_profiles/canal_slums.json
 
 ## Load Rules
 
+- the project will keep this file up-to-date when the specification changes. the loading process is strict. 
 - Item files are checked as one domain. If any item file fails, no custom items load for that run.
 - World-profile files are checked as one domain. If any world-profile file fails, no custom world profiles load for that run.
 - A bad item file does not disable valid world-profile files, and a bad world-profile file does not disable valid item files.
@@ -125,7 +126,7 @@ Allowed `district_types` values:
 
 Allowed building ids for `building_weights` and `service_building_weights`:
 
-`accessory_shop`, `apartment`, `arcade`, `armory`, `auto_garage`, `backroom_clinic`, `bank`, `bar`, `barbershop`, `barracks`, `biotech_clinic`, `bookshop`, `bottom_shop`, `brokerage`, `casino`, `checkpoint`, `chop_shop`, `co_working_hub`, `cold_storage`, `command_center`, `contractor_office`, `corner_store`, `courier_office`, `courthouse`, `data_center`, `daycare`, `dress_shop`, `factory`, `field_hospital`, `flophouse`, `freight_depot`, `gallery`, `gaming_hall`, `hair_studio`, `hardware_store`, `headwear_shop`, `hotel`, `house`, `jail`, `jewelry_shop`, `junk_market`, `karaoke_box`, `lab`, `laundromat`, `machine_shop`, `makeup_counter`, `media_lab`, `metro_exchange`, `motor_pool`, `music_venue`, `nightclub`, `office`, `outerwear_shop`, `outfitter`, `pawn_shop`, `pharmacy`, `pool_hall`, `prison`, `recruitment_office`, `recycling_plant`, `restaurant`, `salon`, `server_hub`, `service_station`, `shoe_shop`, `soup_kitchen`, `street_kitchen`, `supply_bunker`, `surplus_store`, `tattoo_parlor`, `tavern`, `tenement`, `theater`, `thrift_store`, `tool_depot`, `top_shop`, `tower`, `warehouse`
+`accessory_shop`, `apartment`, `arcade`, `armory`, `auto_garage`, `backroom_clinic`, `bank`, `bar`, `barbershop`, `barracks`, `biotech_clinic`, `bookshop`, `bottom_shop`, `bounty_office`, `brokerage`, `casino`, `checkpoint`, `chop_shop`, `clothing_superstore`, `co_working_hub`, `cold_storage`, `command_center`, `contractor_office`, `corner_store`, `courier_office`, `courthouse`, `data_center`, `daycare`, `dress_shop`, `employment_agency`, `factory`, `field_hospital`, `flophouse`, `freight_depot`, `gallery`, `gaming_hall`, `hair_studio`, `hardware_store`, `headwear_shop`, `hotel`, `house`, `jail`, `jewelry_shop`, `junk_market`, `karaoke_box`, `lab`, `laundromat`, `machine_shop`, `makeup_counter`, `media_lab`, `metro_exchange`, `motor_pool`, `music_venue`, `nightclub`, `office`, `outerwear_shop`, `outfitter`, `pawn_shop`, `pharmacy`, `pool_hall`, `prison`, `recruitment_office`, `recycling_plant`, `restaurant`, `salon`, `server_hub`, `service_station`, `shoe_shop`, `soup_kitchen`, `street_kitchen`, `supply_bunker`, `surplus_store`, `tattoo_parlor`, `tavern`, `tenement`, `theater`, `thrift_store`, `tool_depot`, `top_shop`, `tower`, `warehouse`
 
 Water values mean:
 

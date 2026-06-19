@@ -3,10 +3,10 @@
 from engine.events import Event
 
 from game.appearance_loadout import is_entry_worn
-from game.components import Position
+from game.components import AI, Position, SuppressionState, Vitality
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
-from game.opportunities import _item_label
+from game.opportunities import _item_label, mark_bounty_target_restrained, resolve_opportunities
 from game.property_access import (
     property_access_controller as _property_access_controller,
     property_access_level as _property_access_level,
@@ -16,6 +16,7 @@ from game.property_runtime import (
     property_infrastructure_role as _property_infrastructure_role,
     property_runtime_container_entries as _property_runtime_container_entries,
 )
+from game.system_support.actor_runtime import _recover_downed_actor_state
 from game.system_support.awareness_runtime import observation_payload_for_position
 from game.system_support.container_runtime import (
     ITEM_STOWED_CONTAINER_METADATA_KEY,
@@ -25,6 +26,10 @@ from game.system_support.container_runtime import (
     _unlink_removed_item_from_gear,
 )
 from game.system_support.interaction_ordering import _manhattan
+from game.system_support.item_runtime import (
+    _apply_item_effects_to_entity,
+    _smallest_recovery_item_for_downed_actor,
+)
 from game.system_support.item_provenance_runtime import (
     CLAIM_SCENE_SALVAGE,
     item_entitlement_for_actor,
@@ -93,6 +98,345 @@ class PlayerInteractionRuntime:
             return None
         candidates.sort(key=lambda row: row[0])
         return candidates[0][1]
+
+    def _interact_target_coords(self, pos, *, preferred_dir=None, exact_direction=False, target=None):
+        if isinstance(target, (tuple, list)) and len(target) >= 2:
+            try:
+                target_x = int(target[0])
+                target_y = int(target[1])
+                target_z = int(target[2] if len(target) >= 3 and target[2] is not None else pos.z)
+            except (TypeError, ValueError):
+                return None
+            return target_x, target_y, target_z
+
+        if exact_direction:
+            direction = preferred_dir if preferred_dir is not None else None
+            if not isinstance(direction, tuple) or len(direction) < 2:
+                return None
+            dx = _int_or_default(direction[0], 0)
+            dy = _int_or_default(direction[1], 0)
+            if dx == 0 and dy == 0:
+                return None
+            return int(pos.x) + int(dx), int(pos.y) + int(dy), int(pos.z)
+
+        return None
+
+    def nearest_downed_actor(self, eid, pos, *, preferred_dir=None, exact_direction=False, target=None):
+        target_coords = self._interact_target_coords(
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+            target=target,
+        )
+        candidates = []
+        positions = self.sim.ecs.get(Position)
+        players = getattr(self.sim, "player_eid", None)
+        for other_eid, vitality in self.sim.ecs.get(Vitality).items():
+            if other_eid == eid:
+                continue
+            if players is not None and other_eid == players and eid != players:
+                continue
+            if not bool(getattr(vitality, "downed", False)):
+                continue
+            if getattr(vitality, "death_reported_tick", None) is not None:
+                continue
+            other_pos = positions.get(other_eid)
+            if not other_pos or int(other_pos.z) != int(pos.z):
+                continue
+            if target_coords is not None:
+                target_x, target_y, target_z = target_coords
+                if (
+                    int(other_pos.x) != int(target_x)
+                    or int(other_pos.y) != int(target_y)
+                    or int(other_pos.z) != int(target_z)
+                ):
+                    continue
+            elif max(abs(int(other_pos.x) - int(pos.x)), abs(int(other_pos.y) - int(pos.y))) > 1:
+                continue
+
+            distance = max(abs(int(other_pos.x) - int(pos.x)), abs(int(other_pos.y) - int(pos.y)))
+            if distance > 1:
+                continue
+            candidates.append((
+                self.action_system._interaction_target_sort_key(
+                    eid,
+                    pos,
+                    int(other_pos.x),
+                    int(other_pos.y),
+                    stable_tiebreaker=(int(other_eid),),
+                ),
+                other_eid,
+            ))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda row: row[0])
+        return candidates[0][1]
+
+    def _active_bounty_for_target(self, target_eid):
+        traits = getattr(self.sim, "world_traits", None)
+        state = traits.get("opportunities") if isinstance(traits, dict) else None
+        active = state.get("active", ()) if isinstance(state, dict) else ()
+        for entry in active:
+            if not isinstance(entry, dict):
+                continue
+            requirements = entry.get("requirements") if isinstance(entry.get("requirements"), dict) else {}
+            try:
+                bounty_target = int(requirements.get("bounty_target_eid", 0) or 0)
+            except (TypeError, ValueError):
+                bounty_target = 0
+            if bounty_target != int(target_eid):
+                continue
+            if bool(requirements.get("bounty_restrained")):
+                continue
+            if not bool(requirements.get("player_accepted")):
+                continue
+            return entry
+        return None
+
+    def nearest_bounty_restrainable_actor(self, eid, pos, *, preferred_dir=None, exact_direction=False, target=None):
+        target_coords = self._interact_target_coords(
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+            target=target,
+        )
+        candidates = []
+        positions = self.sim.ecs.get(Position)
+        vitality_map = self.sim.ecs.get(Vitality)
+        suppression_map = self.sim.ecs.get(SuppressionState)
+        players = getattr(self.sim, "player_eid", None)
+        for other_eid, other_pos in positions.items():
+            if other_eid == eid:
+                continue
+            if players is not None and other_eid == players and eid != players:
+                continue
+            if self._active_bounty_for_target(other_eid) is None:
+                continue
+            vitality = vitality_map.get(other_eid)
+            suppression = suppression_map.get(other_eid)
+            downed = bool(vitality and getattr(vitality, "downed", False))
+            surrendered = bool(suppression and getattr(suppression, "surrendered", False))
+            if not downed and not surrendered:
+                continue
+            if vitality and getattr(vitality, "death_reported_tick", None) is not None:
+                continue
+            if not other_pos or int(other_pos.z) != int(pos.z):
+                continue
+            if target_coords is not None:
+                target_x, target_y, target_z = target_coords
+                if (
+                    int(other_pos.x) != int(target_x)
+                    or int(other_pos.y) != int(target_y)
+                    or int(other_pos.z) != int(target_z)
+                ):
+                    continue
+            elif max(abs(int(other_pos.x) - int(pos.x)), abs(int(other_pos.y) - int(pos.y))) > 1:
+                continue
+            distance = max(abs(int(other_pos.x) - int(pos.x)), abs(int(other_pos.y) - int(pos.y)))
+            if distance > 1:
+                continue
+            candidates.append((
+                self.action_system._interaction_target_sort_key(
+                    eid,
+                    pos,
+                    int(other_pos.x),
+                    int(other_pos.y),
+                    stable_tiebreaker=(int(other_eid),),
+                ),
+                other_eid,
+            ))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda row: row[0])
+        return candidates[0][1]
+
+    def _field_restraint_entry(self, eid):
+        inventory = self.action_system._inventory_for(eid)
+        if not inventory:
+            return None
+        for entry in list(getattr(inventory, "items", ()) or ()):
+            if str(entry.get("item_id", "") or "").strip().lower() == "field_restraint_jab":
+                if int(entry.get("quantity", 0) or 0) > 0:
+                    return entry
+        return None
+
+    def player_restrain_bounty_target(self, eid, pos, target_eid):
+        opportunity = self._active_bounty_for_target(target_eid)
+        if not isinstance(opportunity, dict):
+            return False
+        target_vitality = self.sim.ecs.get(Vitality).get(target_eid)
+        target_pos = self.sim.ecs.get(Position).get(target_eid)
+        suppression = self.sim.ecs.get(SuppressionState).get(target_eid)
+        downed = bool(target_vitality and getattr(target_vitality, "downed", False))
+        surrendered = bool(suppression and getattr(suppression, "surrendered", False))
+        if not downed and not surrendered:
+            return False
+        if not target_pos or int(target_pos.z) != int(pos.z):
+            return False
+        if max(abs(int(target_pos.x) - int(pos.x)), abs(int(target_pos.y) - int(pos.y))) > 1:
+            return False
+        entry = self._field_restraint_entry(eid)
+        if entry is None:
+            _log_player_feedback(
+                self.sim,
+                "You need an issued field restraint jab for this pickup.",
+                kind="interaction",
+                dedupe_window=3,
+                dedupe_key=f"bounty_no_restraint:{target_eid}",
+            )
+            return True
+        inventory = self.action_system._inventory_for(eid)
+        removed = inventory.remove_item(instance_id=entry.get("instance_id"), quantity=1) if inventory else None
+        if not removed:
+            return False
+        item_metadata = dict(removed.get("metadata") or {}) if isinstance(removed.get("metadata"), dict) else {}
+        applied = _apply_item_effects_to_entity(
+            self.sim,
+            target_eid,
+            ITEM_CATALOG.get("field_restraint_jab", {}),
+            item_metadata=item_metadata,
+        )
+        if target_vitality is not None:
+            _recover_downed_actor_state(
+                self.sim,
+                target_eid,
+                tick=self.sim.tick,
+                min_hp=max(1, int(getattr(target_vitality, "hp", 1) or 1)),
+            )
+        suppression = self.sim.ecs.get(SuppressionState).get(target_eid)
+        if suppression is None:
+            self.sim.ecs.add(target_eid, SuppressionState())
+            suppression = self.sim.ecs.get(SuppressionState).get(target_eid)
+        if suppression is not None:
+            suppression.surrendered = True
+            suppression.surrender_tick = int(getattr(self.sim, "tick", 0))
+            suppression.pressure = 1.0
+        ai = self.sim.ecs.get(AI).get(target_eid)
+        if ai is not None:
+            ai.state = "surrendered"
+            ai.target = None
+            ai.target_eid = None
+        marked = mark_bounty_target_restrained(self.sim, eid, target_eid)
+        target_name = "the target"
+        if isinstance(marked, dict):
+            requirements = marked.get("requirements") if isinstance(marked.get("requirements"), dict) else {}
+            target_name = str(requirements.get("bounty_target_name", "") or target_name).strip()
+        self.sim.emit(Event(
+            "item_used",
+            eid=eid,
+            target_eid=target_eid,
+            item_id="field_restraint_jab",
+            item_name=item_display_name_for_actor(self.sim, self._viewer_eid(), removed, item_catalog=ITEM_CATALOG),
+            reason="bounty_restraint",
+            usage_kind="bounty_restraint",
+            applied=applied,
+            consumed=True,
+            item_metadata=item_metadata,
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        ))
+        self.sim.emit(Event(
+            "bounty_target_restrained",
+            eid=target_eid,
+            target_eid=target_eid,
+            rescuer_eid=eid,
+            target_name=target_name,
+            opportunity_id=int((marked or {}).get("id", 0) or 0) if isinstance(marked, dict) else 0,
+            x=int(target_pos.x),
+            y=int(target_pos.y),
+            z=int(target_pos.z),
+        ))
+        self.sim.emit(Event(
+            "bounty_pickup_dispatch_requested",
+            eid=eid,
+            target_eid=target_eid,
+            target_name=target_name,
+            opportunity_id=int((marked or {}).get("id", 0) or 0) if isinstance(marked, dict) else 0,
+            x=int(target_pos.x),
+            y=int(target_pos.y),
+            z=int(target_pos.z),
+        ))
+        resolve_opportunities(self.sim, eid)
+        _log_player_feedback(
+            self.sim,
+            f"{target_name} is restrained and law pickup is called.",
+            kind="interaction",
+            dedupe_window=3,
+            dedupe_key=f"bounty_restrained:{target_eid}",
+        )
+        return True
+
+    def player_stabilize_downed_actor(self, eid, pos, target_eid):
+        if self.player_restrain_bounty_target(eid, pos, target_eid):
+            return True
+        target_vitality = self.sim.ecs.get(Vitality).get(target_eid)
+        target_pos = self.sim.ecs.get(Position).get(target_eid)
+        if not target_vitality or not bool(getattr(target_vitality, "downed", False)):
+            return False
+        if not target_pos or int(target_pos.z) != int(pos.z):
+            return False
+        if max(abs(int(target_pos.x) - int(pos.x)), abs(int(target_pos.y) - int(pos.y))) > 1:
+            return False
+
+        inventory = self.action_system._inventory_for(eid)
+        entry, item_def, _restore_hp = _smallest_recovery_item_for_downed_actor(inventory, ITEM_CATALOG)
+        if entry is None or not item_def:
+            _log_player_feedback(
+                self.sim,
+                "You need restorative medical aid to stabilize them.",
+                kind="interaction",
+                dedupe_window=3,
+                dedupe_key=f"stabilize_no_aid:{target_eid}",
+            )
+            return True
+
+        item_name = item_display_name_for_actor(self.sim, self._viewer_eid(), entry, item_catalog=ITEM_CATALOG)
+        removed = inventory.remove_item(instance_id=entry.get("instance_id"), quantity=1) if inventory else None
+        if not removed:
+            return False
+        item_metadata = dict((removed or entry).get("metadata") or {}) if isinstance((removed or entry).get("metadata"), dict) else {}
+        applied = _apply_item_effects_to_entity(self.sim, target_eid, item_def, item_metadata=item_metadata)
+        _recover_downed_actor_state(
+            self.sim,
+            target_eid,
+            tick=self.sim.tick,
+            min_hp=int(getattr(target_vitality, "hp", 1) or 1),
+        )
+        recovered_hp = int(getattr(target_vitality, "hp", 1) or 1)
+        max_hp = int(getattr(target_vitality, "max_hp", recovered_hp) or recovered_hp)
+        self.sim.emit(Event(
+            "item_used",
+            eid=eid,
+            target_eid=target_eid,
+            item_id=item_def.get("id"),
+            item_name=item_name,
+            reason="player_field_rescue",
+            usage_kind="field_rescue",
+            applied=applied,
+            consumed=True,
+            item_metadata=item_metadata,
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        ))
+        payload = {
+            "rescuer_eid": eid,
+            "target_eid": target_eid,
+            "item_id": item_def.get("id"),
+            "item_name": item_name,
+            "recovered_hp": int(recovered_hp),
+            "max_hp": int(max_hp),
+            "professional": False,
+            "applied": applied,
+            "x": int(target_pos.x),
+            "y": int(target_pos.y),
+            "z": int(target_pos.z),
+        }
+        self.sim.emit(Event("npc_medical_rescue_applied", **payload))
+        self.sim.emit(Event("npc_recovered_from_downed", eid=target_eid, **payload))
+        return True
 
     def nearest_sabotage_fixture(self, eid, pos, *, preferred_dir=None, exact_direction=False):
         return self._nearest_fixture_by_role(
@@ -847,6 +1191,26 @@ class PlayerInteractionRuntime:
     def handle_interact_action(self, eid, pos, *, force_direction=False, target=None):
         preferred_dir = self.action_system._player_interact_direction(eid, pos)
         exact_direction = bool(force_direction and preferred_dir is not None)
+
+        bounty_actor = self.nearest_bounty_restrainable_actor(
+            eid,
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+            target=target,
+        )
+        if bounty_actor is not None and self.player_restrain_bounty_target(eid, pos, bounty_actor):
+            return
+
+        downed_actor = self.nearest_downed_actor(
+            eid,
+            pos,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+            target=target,
+        )
+        if downed_actor is not None and self.player_stabilize_downed_actor(eid, pos, downed_actor):
+            return
 
         sabotage_prop = self.nearest_sabotage_fixture(
             eid,

@@ -35,6 +35,75 @@ def _item_tags(item_def):
     }
 
 
+def _metadata_float(metadata, key, default=1.0):
+    try:
+        value = float((metadata if isinstance(metadata, dict) else {}).get(key, default) or default)
+    except (TypeError, ValueError):
+        value = float(default)
+    return value
+
+
+def _item_positive_effect_scalar(item_metadata=None):
+    metadata = item_metadata if isinstance(item_metadata, dict) else {}
+    effect_scalar = max(0.25, min(3.0, _metadata_float(metadata, "item_effect_scalar", 1.0)))
+    positive_effect_scalar = _metadata_float(metadata, "item_positive_effect_scalar", effect_scalar)
+    return max(0.25, min(3.0, positive_effect_scalar))
+
+
+def _item_restore_hp_delta(item_def, *, item_metadata=None):
+    if not isinstance(item_def, dict):
+        return 0
+    positive_effect_scalar = _item_positive_effect_scalar(item_metadata)
+    total = 0
+    for effect in tuple(item_def.get("effects", ()) or ()):
+        if not isinstance(effect, dict) or effect.get("type") != "restore_hp":
+            continue
+        try:
+            delta = int(round(float(effect.get("delta", 0) or 0) * positive_effect_scalar))
+        except (TypeError, ValueError):
+            delta = 0
+        if delta > 0:
+            total += int(delta)
+    return int(max(0, total))
+
+
+def _item_can_recover_downed_actor(item_def, *, item_metadata=None):
+    tags = _item_tags(item_def)
+    if "death_save" in tags or "medical" not in tags:
+        return False
+    return _item_restore_hp_delta(item_def, item_metadata=item_metadata) > 0
+
+
+def _smallest_recovery_item_for_downed_actor(inventory, item_catalog=None):
+    if not inventory:
+        return None, None, 0
+    catalog = item_catalog or {}
+    best = None
+    for index, entry in enumerate(list(getattr(inventory, "items", ()) or ())):
+        if not isinstance(entry, dict):
+            continue
+        item_def = catalog.get(entry.get("item_id"))
+        if not isinstance(item_def, dict):
+            continue
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else None
+        restore_hp = _item_restore_hp_delta(item_def, item_metadata=metadata)
+        if restore_hp <= 0 or not _item_can_recover_downed_actor(item_def, item_metadata=metadata):
+            continue
+        row = (
+            int(restore_hp),
+            str(entry.get("item_id", "") or ""),
+            str(entry.get("instance_id", "") or ""),
+            int(index),
+            entry,
+            item_def,
+        )
+        if best is None or row[:4] < best[:4]:
+            best = row
+    if best is None:
+        return None, None, 0
+    return best[4], best[5], best[0]
+
+
 def _weapon_uses_ammo(weapon):
     if not isinstance(weapon, dict):
         return False

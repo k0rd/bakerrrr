@@ -456,6 +456,46 @@
       }
     ]
   },
+  "field_restraint_jab": {
+    "name": "Field Restraint Jab",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "restraint",
+      "justice",
+      "restricted"
+    ],
+    "legal_status": "restricted",
+    "appearance_family": "restraint",
+    "identification_profile": {
+      "family": "restraint",
+      "requires_identification": false,
+      "auto_identify_on_use": false
+    },
+    "effects": [
+      {
+        "type": "restore_hp",
+        "delta": 4
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 6
+      },
+      {
+        "type": "status",
+        "status": "restrained_pickup",
+        "duration": 60,
+        "modifiers": {
+          "move_speed_mult": -1.0,
+          "retreat_bias_delta": -0.2,
+          "incoming_damage_mult": -0.08
+        }
+      }
+    ]
+  },
   "shiver_patch": {
     "name": "Fentanyl Patch",
     "glyph": "!",

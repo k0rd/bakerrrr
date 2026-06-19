@@ -286,6 +286,7 @@ class CriminalJusticeSystem(System):
         self.sim.events.subscribe("property_interact", self.on_property_interact)
         self.sim.events.subscribe("npc_interact", self.on_npc_interact)
         self.sim.events.subscribe("npc_surrendered", self.on_npc_surrendered)
+        self.sim.events.subscribe("bounty_pickup_dispatch_requested", self.on_bounty_pickup_dispatch_requested)
         self.sim.events.subscribe("justice_surrender_choice", self.on_justice_surrender_choice)
         self.sim.events.subscribe("justice_questioning_choice", self.on_justice_questioning_choice)
 
@@ -3762,6 +3763,19 @@ class CriminalJusticeSystem(System):
         if str(snapshot.get("wanted_tier", "clear")).strip().lower() not in {"wanted", "arrest_on_sight"}:
             return
         self.pending_detentions[int(offender_eid)] = int(getattr(self.sim, "tick", 0)) + int(self.DETENTION_QUEUE_WINDOW)
+
+    def on_bounty_pickup_dispatch_requested(self, event):
+        offender_eid = event.data.get("target_eid")
+        if offender_eid in {None, self.player_eid}:
+            return
+        try:
+            offender_eid = int(offender_eid)
+        except (TypeError, ValueError):
+            return
+        snapshot = _justice_snapshot(self.sim, offender_eid)
+        if bool(snapshot.get("in_custody", False)):
+            return
+        self.pending_detentions[offender_eid] = int(getattr(self.sim, "tick", 0)) + int(self.DETENTION_QUEUE_WINDOW * 2)
 
     def _process_pending_detentions(self):
         positions = self.sim.ecs.get(Position)
