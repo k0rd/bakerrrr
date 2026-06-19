@@ -218,6 +218,7 @@ class PygameView:
             "inventory_equipped_clothing": (145, 205, 215),
             "inventory_equipped_weapon": (230, 145, 95),
             "inventory_equipped_consequence": (198, 160, 230),
+            "inventory_critical_quest": (95, 230, 210),
             "item_food": (220, 185, 105),
             "item_drink": (120, 190, 235),
             "item_access": (200, 220, 160),

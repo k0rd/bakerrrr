@@ -3084,6 +3084,7 @@ class SiteServiceSystem(System):
             return
 
         service = self._choose_site_service(eid, prop)
+        event.data["opportunity_handoff_ready"] = True
         self._run_site_service(eid, prop, pos, service, request=event.data)
 
     def on_site_service_request(self, event):

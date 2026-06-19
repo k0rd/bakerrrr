@@ -627,6 +627,7 @@ _CHARACTER_LABEL_PREFIXES = (
 )
 _INVENTORY_KEY_ITEM_COLOR = "objective"
 _INVENTORY_KEY_ITEM_IDS = frozenset(("property_key", "access_badge", "manager_badge"))
+_INVENTORY_CRITICAL_QUEST_ITEM_COLOR = "inventory_critical_quest"
 
 
 def _help_section_color(index):
@@ -781,6 +782,22 @@ def _inventory_entry_is_key_item(entry, item_def=None):
         or bool(str(metadata.get("property_key_id", "") or "").strip())
         or bool(str(metadata.get("property_credential_kind", "") or "").strip())
     )
+
+
+def _inventory_entry_is_critical_quest_item(entry):
+    if not isinstance(entry, dict):
+        return False
+    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+    owner_tag = str(entry.get("owner_tag", "") or "").strip().lower()
+    if owner_tag == "quest":
+        return True
+    quest_kind = str(metadata.get("quest_kind", "") or "").strip()
+    if quest_kind:
+        return True
+    try:
+        return int(metadata.get("quest_opportunity_id", 0) or 0) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _character_sheet_display_lines(raw_lines):
@@ -3393,6 +3410,8 @@ class RenderSystem(System):
                         row_color = "inventory_equipped_clothing"
                 if _inventory_entry_is_key_item(entry, item_def):
                     row_color = _INVENTORY_KEY_ITEM_COLOR
+                elif _inventory_entry_is_critical_quest_item(entry):
+                    row_color = _INVENTORY_CRITICAL_QUEST_ITEM_COLOR
                 label = f"{marker}{absolute + 1:02d}{gear_marker:>1} {glyph} {name} x{entry['quantity']}{ammo_suffix}{worn_suffix}{storage_suffix}"
                 self.view.draw_text(panel_x + 1, list_y + idx, _clip(label, row_w), color=row_color)
 

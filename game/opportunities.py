@@ -1305,6 +1305,36 @@ def _recent_site_interactions(sim, freshness_ticks=8):
     return frozenset(property_ids), frozenset(building_ids)
 
 
+def _recent_handoff_site_interactions(sim, freshness_ticks=8):
+    property_ids = set()
+    building_ids = set()
+    if sim is None:
+        return frozenset(), frozenset()
+
+    current_tick = int(getattr(sim, "tick", 0))
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        return frozenset(), frozenset()
+
+    recent_props = traits.get("recent_handoff_property_interactions")
+    if isinstance(recent_props, dict):
+        for raw_property_id, raw_tick in list(recent_props.items()):
+            property_id = str(raw_property_id or "").strip()
+            interacted_tick = _safe_int(raw_tick, default=-10_000)
+            if property_id and current_tick - interacted_tick <= int(max(1, freshness_ticks)):
+                property_ids.add(property_id)
+
+    recent_buildings = traits.get("recent_handoff_building_interactions")
+    if isinstance(recent_buildings, dict):
+        for raw_building_id, raw_tick in list(recent_buildings.items()):
+            building_id = str(raw_building_id or "").strip()
+            interacted_tick = _safe_int(raw_tick, default=-10_000)
+            if building_id and current_tick - interacted_tick <= int(max(1, freshness_ticks)):
+                building_ids.add(building_id)
+
+    return frozenset(property_ids), frozenset(building_ids)
+
+
 def _recent_required_item_transfers(sim, freshness_ticks=12):
     records = []
     if sim is None:
@@ -1682,6 +1712,7 @@ def _player_metrics(sim, player_eid):
         if e is not None
     )
     recent_property_ids, recent_building_ids = _recent_site_interactions(sim)
+    recent_handoff_property_ids, recent_handoff_building_ids = _recent_handoff_site_interactions(sim)
     recent_required_item_transfers = _recent_required_item_transfers(sim)
     recent_activity_property_tags, recent_activity_building_tags, recent_activity_chunk_tags = _recent_opportunity_activities(sim)
     justice_snapshot = _justice_snapshot(sim, player_eid) if sim is not None and player_eid is not None else {}
@@ -1701,6 +1732,8 @@ def _player_metrics(sim, player_eid):
         "recent_npc_eids": _recent_npc_interactions(sim),
         "recent_property_ids": recent_property_ids,
         "recent_building_ids": recent_building_ids,
+        "recent_handoff_property_ids": recent_handoff_property_ids,
+        "recent_handoff_building_ids": recent_handoff_building_ids,
         "recent_required_item_transfers": recent_required_item_transfers,
         "recent_activity_property_tags": recent_activity_property_tags,
         "recent_activity_building_tags": recent_activity_building_tags,
@@ -2189,6 +2222,18 @@ def _matches_recent_site_interaction(metrics, *, property_id=None, building_id=N
     building_id = str(building_id or "").strip()
     recent_property_ids = set(metrics.get("recent_property_ids", ()) or ())
     recent_building_ids = set(metrics.get("recent_building_ids", ()) or ())
+    if property_id and property_id in recent_property_ids:
+        return True
+    if building_id and building_id in recent_building_ids:
+        return True
+    return False
+
+
+def _matches_recent_handoff_site_interaction(metrics, *, property_id=None, building_id=None):
+    property_id = str(property_id or "").strip()
+    building_id = str(building_id or "").strip()
+    recent_property_ids = set(metrics.get("recent_handoff_property_ids", ()) or ())
+    recent_building_ids = set(metrics.get("recent_handoff_building_ids", ()) or ())
     if property_id and property_id in recent_property_ids:
         return True
     if building_id and building_id in recent_building_ids:
@@ -5842,7 +5887,7 @@ def _completion_detail(sim, opportunity, metrics):
                     building_id=delivery_building_id,
                 ):
                     return False, "", None
-                if not _matches_recent_site_interaction(
+                if not _matches_recent_handoff_site_interaction(
                     metrics,
                     property_id=delivery_property_id,
                     building_id=delivery_building_id,
@@ -5934,16 +5979,16 @@ def _inventory_counts(inventory):
 def _ensure_provided_item(sim, player_eid, opportunity, metrics):
     requirements = _opportunity_requirements(opportunity)
     if not bool(requirements.get("provide_item")):
-        return
+        return None
 
     item_id = str(requirements.get("require_item_id", "")).strip().lower()
     if not item_id:
-        return
+        return None
 
     pickup_chunk = _chunk_tuple(requirements.get("pickup_chunk"))
     current_chunk = _chunk_tuple(metrics.get("current_chunk"))
     if pickup_chunk and pickup_chunk != current_chunk:
-        return
+        return None
     pickup_property_id = str(requirements.get("pickup_property_id", "")).strip()
     pickup_building_id = str(requirements.get("pickup_building_id", "")).strip()
     if (pickup_property_id or pickup_building_id) and not _matches_site_requirement(
@@ -5952,35 +5997,53 @@ def _ensure_provided_item(sim, player_eid, opportunity, metrics):
         property_id=pickup_property_id,
         building_id=pickup_building_id,
     ):
-        return
+        return None
     pickup_interact_npc_eid = _safe_int(requirements.get("pickup_interact_npc_eid"), default=0)
     if pickup_interact_npc_eid > 0:
         recent_npc_eids = metrics.get("recent_npc_eids", frozenset())
         if pickup_interact_npc_eid not in recent_npc_eids:
-            return
+            return None
     elif pickup_property_id or pickup_building_id:
-        if not _matches_recent_site_interaction(
-            metrics,
-            property_id=pickup_property_id,
-            building_id=pickup_building_id,
-        ):
-            return
+        acquisition_hint = str(requirements.get("acquisition_hint", "provided") or "provided").strip().lower()
+        handoff_required = acquisition_hint in {"provided", "issued", "handoff"}
+        if handoff_required:
+            ready = _matches_recent_handoff_site_interaction(
+                metrics,
+                property_id=pickup_property_id,
+                building_id=pickup_building_id,
+            )
+        else:
+            ready = _matches_recent_site_interaction(
+                metrics,
+                property_id=pickup_property_id,
+                building_id=pickup_building_id,
+            )
+        if not ready:
+            return None
     else:
-        return
+        return None
 
     inventory = sim.ecs.get(Inventory).get(player_eid) if sim is not None else None
     if not inventory:
-        return
+        return None
 
     opportunity_id = _safe_int(opportunity.get("id"), default=0)
     required_qty = max(1, _safe_int(requirements.get("require_item_qty"), default=1))
     tagged_qty = _opportunity_tagged_item_quantity(inventory, opportunity_id, item_id)
+    item_label = str(requirements.get("item_label", "")).strip() or _item_label(item_id)
+    site_id = pickup_property_id or pickup_building_id
+    site_name = str(requirements.get("pickup_property_name", "") or "").strip()
+    if not site_name and pickup_property_id and sim is not None:
+        site_name = _property_label(getattr(sim, "properties", {}).get(pickup_property_id), pickup_property_id)
+    if not site_name:
+        site_name = site_id or "pickup site"
+
     if tagged_qty >= required_qty:
         if _safe_int(opportunity.get("provided_item_issued_tick"), default=-1) < 0:
             opportunity["provided_item_issued_tick"] = int(getattr(sim, "tick", 0))
-        return
+        return None
     if _safe_int(opportunity.get("provided_item_issued_tick"), default=-1) >= 0:
-        return
+        return None
 
     metadata = {
         "quest_opportunity_id": int(opportunity.get("id", 0) or 0),
@@ -5989,13 +6052,42 @@ def _ensure_provided_item(sim, player_eid, opportunity, metrics):
     }
     inventory.add_item(
         item_id=item_id,
-        quantity=1,
+        quantity=max(1, required_qty - tagged_qty),
         stack_max=_item_stack_max(item_id),
         instance_id=f"opp-{int(opportunity.get('id', 0) or 0)}-{item_id}-{int(getattr(sim, 'tick', 0))}",
         owner_tag="opportunity",
         metadata=metadata,
     )
-    opportunity["provided_item_issued_tick"] = int(getattr(sim, "tick", 0))
+    tagged_qty = _opportunity_tagged_item_quantity(inventory, opportunity_id, item_id)
+    if tagged_qty >= required_qty:
+        opportunity["provided_item_issued_tick"] = int(getattr(sim, "tick", 0))
+        opportunity.pop("provided_item_blocked_tick", None)
+        return {
+            "status": "received",
+            "opportunity_id": opportunity_id,
+            "title": str(opportunity.get("title", "Opportunity")).strip() or "Opportunity",
+            "item_id": item_id,
+            "item_label": item_label,
+            "quantity": required_qty,
+            "site_id": site_id,
+            "site_name": site_name,
+        }
+
+    current_tick = int(getattr(sim, "tick", 0))
+    last_blocked_tick = _safe_int(opportunity.get("provided_item_blocked_tick"), default=-10_000)
+    if current_tick - last_blocked_tick >= 20:
+        opportunity["provided_item_blocked_tick"] = current_tick
+        return {
+            "status": "inventory_full",
+            "opportunity_id": opportunity_id,
+            "title": str(opportunity.get("title", "Opportunity")).strip() or "Opportunity",
+            "item_id": item_id,
+            "item_label": item_label,
+            "quantity": required_qty,
+            "site_id": site_id,
+            "site_name": site_name,
+        }
+    return None
 
 
 def _remove_tagged_opportunity_item(inventory, *, opportunity_id=0, item_id="", quantity=1):
@@ -6750,7 +6842,7 @@ def advance_opportunity_lifecycle(sim, player_eid):
     active = list(state.get("active", ()))
     if not active:
         _tracked_targets_bucket(state).clear()
-        return {"completed": [], "failed": []}
+        return {"completed": [], "failed": [], "issued_items": []}
 
     _refresh_tracked_targets(sim)
     _update_tracked_target_drift(sim, player_eid)
@@ -6758,6 +6850,7 @@ def advance_opportunity_lifecycle(sim, player_eid):
     metrics = _player_metrics(sim, player_eid)
     completed = []
     failed = []
+    issued_items = []
     remaining = []
     for entry in active:
         if not isinstance(entry, dict):
@@ -6780,7 +6873,9 @@ def advance_opportunity_lifecycle(sim, player_eid):
                 )
             )
             continue
-        _ensure_provided_item(sim, player_eid, entry, metrics)
+        issued_item = _ensure_provided_item(sim, player_eid, entry, metrics)
+        if isinstance(issued_item, dict):
+            issued_items.append(issued_item)
         inventory = sim.ecs.get(Inventory).get(player_eid) if sim is not None else None
         metrics["inventory"] = inventory
         metrics["inventory_counts"] = _inventory_counts(inventory)
@@ -6848,6 +6943,7 @@ def advance_opportunity_lifecycle(sim, player_eid):
     return {
         "completed": completed,
         "failed": failed,
+        "issued_items": issued_items,
     }
 
 

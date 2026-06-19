@@ -1406,6 +1406,42 @@ class OpportunitySystem(System):
                 if _int_or_default(raw_tick, default=-10_000) < cutoff:
                     recent_buildings.pop(raw_building_id, None)
 
+    def _remember_opportunity_handoff_interaction(self, property_id):
+        property_id = str(property_id or "").strip()
+        if not property_id:
+            return
+        traits = getattr(self.sim, "world_traits", None)
+        if not isinstance(traits, dict):
+            self.sim.world_traits = {}
+            traits = self.sim.world_traits
+        current_tick = int(getattr(self.sim, "tick", 0))
+
+        recent_props = traits.get("recent_handoff_property_interactions")
+        if not isinstance(recent_props, dict):
+            recent_props = {}
+            traits["recent_handoff_property_interactions"] = recent_props
+        recent_props[property_id] = current_tick
+
+        prop = self.sim.properties.get(property_id) if hasattr(self.sim, "properties") else None
+        building_id = _building_id_from_property(prop) if isinstance(prop, dict) else ""
+        if building_id:
+            recent_buildings = traits.get("recent_handoff_building_interactions")
+            if not isinstance(recent_buildings, dict):
+                recent_buildings = {}
+                traits["recent_handoff_building_interactions"] = recent_buildings
+            recent_buildings[building_id] = current_tick
+        else:
+            recent_buildings = traits.get("recent_handoff_building_interactions")
+
+        cutoff = current_tick - 16
+        for raw_property_id, raw_tick in list(recent_props.items()):
+            if _int_or_default(raw_tick, default=-10_000) < cutoff:
+                recent_props.pop(raw_property_id, None)
+        if isinstance(recent_buildings, dict):
+            for raw_building_id, raw_tick in list(recent_buildings.items()):
+                if _int_or_default(raw_tick, default=-10_000) < cutoff:
+                    recent_buildings.pop(raw_building_id, None)
+
     def _remember_required_item_transfer(self, *, item_id, quantity=1, npc_eid=None, property_id=None, building_id=None, chunk=None, source=""):
         item_id = str(item_id or "").strip().lower()
         property_id = str(property_id or "").strip()
@@ -1459,7 +1495,10 @@ class OpportunitySystem(System):
     def on_property_interact(self, event):
         if event.data.get("eid") != self.player_eid:
             return
-        self._remember_opportunity_property_interaction(event.data.get("property_id"))
+        property_id = event.data.get("property_id")
+        self._remember_opportunity_property_interaction(property_id)
+        if bool(event.data.get("opportunity_handoff_ready")):
+            self._remember_opportunity_handoff_interaction(property_id)
 
     def on_npc_interacted(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -1473,6 +1512,7 @@ class OpportunitySystem(System):
             return
         property_id = event.data.get("property_id")
         self._remember_opportunity_activity_for_property(property_id, "service")
+        self._remember_opportunity_handoff_interaction(property_id)
         if str(event.data.get("service", "")).strip().lower() == "intel":
             self._remember_opportunity_activity_for_property(property_id, "intel")
 
@@ -1496,6 +1536,7 @@ class OpportunitySystem(System):
         property_id = event.data.get("property_id")
         self._remember_opportunity_activity_for_property(property_id, "trade")
         prop = self.sim.properties.get(str(property_id or "").strip()) if hasattr(self.sim, "properties") else None
+        self._remember_opportunity_handoff_interaction(property_id)
         chunk = None
         if isinstance(prop, dict):
             try:
@@ -1575,6 +1616,29 @@ class OpportunitySystem(System):
         if kind == "landmark":
             self._remember_opportunity_chunk_activity(chunk, "intel")
 
+    def _emit_provided_item_log(self, item_notice):
+        if not isinstance(item_notice, dict):
+            return
+        opp_id = _int_or_default(item_notice.get("opportunity_id"), default=0)
+        title = str(item_notice.get("title", "Opportunity") or "Opportunity").strip() or "Opportunity"
+        label = f"O{opp_id} {title}" if opp_id > 0 else title
+        item_label = str(item_notice.get("item_label", "package") or "package").strip() or "package"
+        site_name = str(item_notice.get("site_name", "pickup site") or "pickup site").strip() or "pickup site"
+        status = str(item_notice.get("status", "") or "").strip().lower()
+        if status == "received":
+            self.sim.log.add(
+                f"Pickup confirmed: {label} received {item_label} at {site_name}.",
+                channel="opportunity",
+                priority="high",
+            )
+            return
+        if status == "inventory_full":
+            self.sim.log.add(
+                f"Pickup waiting: {label} needs room for {item_label}; ask again at {site_name}.",
+                channel="opportunity",
+                priority="high",
+            )
+
     def update(self):
         self._ensure_seeded()
         tick = int(getattr(self.sim, "tick", 0))
@@ -1588,6 +1652,9 @@ class OpportunitySystem(System):
         lifecycle = advance_opportunity_lifecycle(self.sim, self.player_eid)
         completed = list(lifecycle.get("completed", ())) if isinstance(lifecycle, dict) else []
         failed = list(lifecycle.get("failed", ())) if isinstance(lifecycle, dict) else []
+        issued_items = list(lifecycle.get("issued_items", ())) if isinstance(lifecycle, dict) else []
+        for item_notice in issued_items:
+            self._emit_provided_item_log(item_notice)
         if not completed and not failed:
             return
 

@@ -4086,6 +4086,7 @@ class TradeSystem(System):
             target_property_id=prop["id"],
             emit_toggle=True,
         )
+        event.data["opportunity_handoff_ready"] = True
 
     def on_player_action(self, event):
         eid = event.data.get("eid")

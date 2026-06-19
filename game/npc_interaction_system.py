@@ -520,6 +520,8 @@ class NPCInteractionSystem(System):
         "fence",
     }
     MENU_REPEAT_ROW_BUDGET = 3
+    DIALOGUE_TOPIC_REPEAT_COOLDOWN_HOURS = 1.0
+    DIALOGUE_FAMILY_REPEAT_COOLDOWN_HOURS = 1.0
     REPEAT_PRESSURE_SKIP_TOPICS = {
         "bye",
         "trade",
@@ -851,6 +853,9 @@ class NPCInteractionSystem(System):
                 "last_topic_id": "",
                 "topic_counts": {},
                 "topic_family_counts": {},
+                "topic_last_ticks": {},
+                "topic_family_last_ticks": {},
+                "last_topic_repeat_state": {},
                 "unlocked_topics": set(),
                 "last_property_id": "",
                 "last_property_lead_kind": "",
@@ -861,6 +866,12 @@ class NPCInteractionSystem(System):
         if not isinstance(memory.get("topic_counts"), dict):
             memory["topic_counts"] = {}
         _dialogue_family_counts(memory)
+        if not isinstance(memory.get("topic_last_ticks"), dict):
+            memory["topic_last_ticks"] = {}
+        if not isinstance(memory.get("topic_family_last_ticks"), dict):
+            memory["topic_family_last_ticks"] = {}
+        if not isinstance(memory.get("last_topic_repeat_state"), dict):
+            memory["last_topic_repeat_state"] = {}
         unlocked = memory.get("unlocked_topics")
         if isinstance(unlocked, set):
             pass
@@ -1257,19 +1268,149 @@ class NPCInteractionSystem(System):
         except (TypeError, ValueError):
             return 0
 
+    def _dialogue_now_tick(self):
+        try:
+            return max(0, int(getattr(self.sim, "tick", 0) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _dialogue_repeat_cooldown_ticks(self, *, family=False):
+        hours = self.DIALOGUE_FAMILY_REPEAT_COOLDOWN_HOURS if family else self.DIALOGUE_TOPIC_REPEAT_COOLDOWN_HOURS
+        try:
+            hours = max(0.0, float(hours))
+        except (TypeError, ValueError):
+            hours = 1.0
+        return max(1, int(round(float(self._ticks_per_hour()) * hours)))
+
+    def _dialogue_tick_value(self, value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _dialogue_tick_is_recent(self, last_tick, *, family=False, now_tick=None):
+        last_tick = self._dialogue_tick_value(last_tick)
+        if last_tick is None:
+            return False
+        if now_tick is None:
+            now_tick = self._dialogue_now_tick()
+        else:
+            now_tick = self._dialogue_tick_value(now_tick)
+            if now_tick is None:
+                now_tick = self._dialogue_now_tick()
+        elapsed = max(0, int(now_tick) - int(last_tick))
+        return elapsed <= self._dialogue_repeat_cooldown_ticks(family=family)
+
+    def _dialogue_topic_last_tick(self, npc_eid, topic_id):
+        topic_key = str(topic_id or "").strip().lower()
+        if not topic_key:
+            return None
+        ticks = self._dialogue_memory(npc_eid).get("topic_last_ticks", {})
+        if not isinstance(ticks, dict):
+            return None
+        return self._dialogue_tick_value(ticks.get(topic_key))
+
+    def _dialogue_topic_family_last_tick(self, npc_eid, topic_id):
+        family_key = _dialogue_topic_family(topic_id)
+        if not family_key:
+            return None
+        ticks = self._dialogue_memory(npc_eid).get("topic_family_last_ticks", {})
+        if not isinstance(ticks, dict):
+            return None
+        return self._dialogue_tick_value(ticks.get(family_key))
+
+    def _dialogue_recent_topic_count(self, npc_eid, topic_id):
+        count = self._dialogue_topic_count(npc_eid, topic_id)
+        if count <= 0:
+            return 0
+        last_tick = self._dialogue_topic_last_tick(npc_eid, topic_id)
+        return count if self._dialogue_tick_is_recent(last_tick) else 0
+
+    def _dialogue_recent_topic_family_count(self, npc_eid, topic_id):
+        count = self._dialogue_topic_family_count(npc_eid, topic_id)
+        if count <= 0:
+            return 0
+        last_tick = self._dialogue_topic_family_last_tick(npc_eid, topic_id)
+        return count if self._dialogue_tick_is_recent(last_tick, family=True) else 0
+
+    def _dialogue_last_repeat_state(self, npc_eid, topic_id):
+        topic_key = str(topic_id or "").strip().lower()
+        if not topic_key:
+            return {}
+        state = self._dialogue_memory(npc_eid).get("last_topic_repeat_state", {})
+        if not isinstance(state, dict):
+            return {}
+        if str(state.get("topic_id", "") or "").strip().lower() != topic_key:
+            return {}
+        return state
+
+    def _dialogue_current_ask_count(self, npc_eid, topic_id):
+        state = self._dialogue_last_repeat_state(npc_eid, topic_id)
+        if state:
+            try:
+                return max(1, int(state.get("ask_count", 1) or 1))
+            except (TypeError, ValueError):
+                return 1
+        recent = self._dialogue_recent_topic_count(npc_eid, topic_id)
+        return recent if recent > 0 else self._dialogue_topic_count(npc_eid, topic_id)
+
+    def _dialogue_current_family_count(self, npc_eid, topic_id):
+        state = self._dialogue_last_repeat_state(npc_eid, topic_id)
+        if state:
+            try:
+                return max(1, int(state.get("family_count", 1) or 1))
+            except (TypeError, ValueError):
+                return 1
+        recent = self._dialogue_recent_topic_family_count(npc_eid, topic_id)
+        return recent if recent > 0 else self._dialogue_topic_family_count(npc_eid, topic_id)
+
     def _dialogue_mark_topic(self, npc_eid, topic_id):
         topic_key = str(topic_id or "").strip().lower()
         if not topic_key:
             return 0
         memory = self._dialogue_memory(npc_eid)
+        now_tick = self._dialogue_now_tick()
+        topic_ticks = memory.get("topic_last_ticks")
+        if not isinstance(topic_ticks, dict):
+            topic_ticks = {}
+            memory["topic_last_ticks"] = topic_ticks
+        family_ticks = memory.get("topic_family_last_ticks")
+        if not isinstance(family_ticks, dict):
+            family_ticks = {}
+            memory["topic_family_last_ticks"] = family_ticks
+        previous_topic_tick = self._dialogue_tick_value(topic_ticks.get(topic_key))
+        topic_recent = self._dialogue_tick_is_recent(previous_topic_tick, now_tick=now_tick)
         count = self._dialogue_topic_count(npc_eid, topic_key) + 1
         memory["topic_counts"][topic_key] = count
         family_key = _dialogue_topic_family(topic_key)
+        family_count = 0
+        previous_family_tick = None
+        family_recent = False
         if family_key:
             family_counts = _dialogue_family_counts(memory)
-            family_counts[family_key] = self._dialogue_topic_family_count(npc_eid, topic_key) + 1
+            previous_family_tick = self._dialogue_tick_value(family_ticks.get(family_key))
+            family_recent = self._dialogue_tick_is_recent(previous_family_tick, family=True, now_tick=now_tick)
+            family_count = self._dialogue_topic_family_count(npc_eid, topic_key) + 1
+            family_counts[family_key] = family_count
+            family_ticks[family_key] = now_tick
+        topic_ticks[topic_key] = now_tick
+        current_ask_count = count if topic_recent else 1
+        current_family_count = family_count if family_recent else 1
+        memory["last_topic_repeat_state"] = {
+            "topic_id": topic_key,
+            "family_id": family_key,
+            "ask_count": current_ask_count,
+            "family_count": current_family_count,
+            "lifetime_ask_count": count,
+            "lifetime_family_count": family_count,
+            "topic_recent": bool(topic_recent),
+            "family_recent": bool(family_recent),
+            "previous_topic_tick": previous_topic_tick,
+            "previous_family_tick": previous_family_tick,
+            "marked_tick": now_tick,
+        }
         memory["last_topic_id"] = topic_key
-        return count
+        return current_ask_count
 
     def _dialogue_total_topics_asked(self, npc_eid):
         topic_counts = self._dialogue_memory(npc_eid)["topic_counts"]
@@ -1306,7 +1447,7 @@ class NPCInteractionSystem(System):
             return 0
         if topic_id in self.REPEAT_PRESSURE_SKIP_TOPICS or topic_id in self.MISSTEP_TOPICS:
             return 0
-        family_count = self._dialogue_topic_family_count(context.get("npc_eid"), topic_id)
+        family_count = self._dialogue_recent_topic_family_count(context.get("npc_eid"), topic_id)
         pressure_count = max(ask_count, family_count)
         if pressure_count <= 0:
             return 0
@@ -1397,13 +1538,14 @@ class NPCInteractionSystem(System):
             topic_id = str(row.get("id", "")).strip().lower()
             if not topic_id:
                 continue
-            ask_count = self._dialogue_topic_count(npc_eid, topic_id)
+            ask_count = self._dialogue_recent_topic_count(npc_eid, topic_id)
+            family_count = self._dialogue_recent_topic_family_count(npc_eid, topic_id)
             extra = self._dialogue_repeat_row_count(context, topic_id, ask_count)
             if extra <= 0:
                 continue
             ranked.append((
                 0 if topic_id == last_topic_id else 1,
-                -max(ask_count, self._dialogue_topic_family_count(npc_eid, topic_id)),
+                -max(ask_count, family_count),
                 index,
                 topic_id,
                 extra,
@@ -1439,8 +1581,8 @@ class NPCInteractionSystem(System):
                     row.get("label", row.get("id", "topic")),
                     topic_id=topic_id,
                     repeat_slot=repeat_slot + 1,
-                    ask_count=self._dialogue_topic_count(npc_eid, topic_id),
-                    family_count=self._dialogue_topic_family_count(npc_eid, topic_id),
+                    ask_count=self._dialogue_recent_topic_count(npc_eid, topic_id),
+                    family_count=self._dialogue_recent_topic_family_count(npc_eid, topic_id),
                 )
                 extra_rows.append(clone)
 
@@ -1626,6 +1768,30 @@ class NPCInteractionSystem(System):
             if str(bit).strip()
         }
         return bool(entry.get("introduced", False)) or "known_name" in benefits
+
+    def _player_knows_social_lead_from_source(self, lead, source_eid):
+        if not isinstance(lead, dict):
+            return False
+        person_eid = lead.get("eid")
+        if person_eid is None or not str(lead.get("name", "") or "").strip():
+            return False
+        entry = self._player_person_contact_entry(person_eid)
+        if not isinstance(entry, dict):
+            return False
+        benefits = {
+            str(bit).strip().lower()
+            for bit in tuple(entry.get("benefits", ()) or ())
+            if str(bit).strip()
+        }
+        if not (bool(entry.get("introduced", False)) or "known_name" in benefits):
+            return False
+        if source_eid is None:
+            return False
+        entry_source = entry.get("source_eid")
+        try:
+            return int(entry_source) == int(source_eid)
+        except (TypeError, ValueError):
+            return str(entry_source) == str(source_eid)
 
     def _person_identity_snapshot(self, person_eid, *, identity=None):
         if person_eid is None:
@@ -1838,7 +2004,7 @@ class NPCInteractionSystem(System):
                 continue
             person_eid = lead.get("eid")
             name = str(lead.get("name", "")).strip()
-            if person_eid is None or not name or self._player_knows_person_name(person_eid):
+            if person_eid is None or not name or self._player_knows_social_lead_from_source(lead, source_eid):
                 continue
             pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", re.IGNORECASE)
             if not any(pattern.search(str(line)) for line in npc_lines):
@@ -6757,7 +6923,7 @@ class NPCInteractionSystem(System):
             "social_leads": social_leads,
             "social_lead_name": (
                 str(primary_social_lead.get("name", "")).strip()
-                if primary_social_lead and self._player_knows_person_name(primary_social_lead.get("eid"))
+                if primary_social_lead and self._player_knows_social_lead_from_source(primary_social_lead, npc_eid)
                 else ""
             ),
             "social_lead_relation": str(primary_social_lead.get("relation_text", "")).strip() if primary_social_lead else "",
@@ -7507,10 +7673,14 @@ class NPCInteractionSystem(System):
             return f"They can point you toward {context_text}."
         return "They know someone worth meeting."
 
-    def _visible_social_lead_sentence(self, lead):
+    def _visible_social_lead_sentence(self, lead, *, source_eid=None, require_source=False):
         if not isinstance(lead, dict):
             return ""
-        if self._player_knows_person_name(lead.get("eid")):
+        if require_source:
+            known = self._player_knows_social_lead_from_source(lead, source_eid)
+        else:
+            known = self._player_knows_person_name(lead.get("eid"))
+        if known:
             return self._social_lead_sentence(lead)
         return self._unnamed_social_lead_sentence(lead)
 
@@ -10581,8 +10751,8 @@ class NPCInteractionSystem(System):
             repeat_slot = max(0, int(row.get("repeat_slot", 0) or 0))
         except (TypeError, ValueError):
             repeat_slot = 0
-        ask_count = self._dialogue_topic_count(npc_eid, topic_id) if npc_eid is not None else 0
-        family_count = self._dialogue_topic_family_count(npc_eid, topic_id) if npc_eid is not None else 0
+        ask_count = self._dialogue_recent_topic_count(npc_eid, topic_id) if npc_eid is not None else 0
+        family_count = self._dialogue_recent_topic_family_count(npc_eid, topic_id) if npc_eid is not None else 0
         repeat_pressure = max(0, max(ask_count, family_count) - 1) + repeat_slot
         if repeat_pressure > 0 and topic_id not in self.REPEAT_PRESSURE_SKIP_TOPICS:
             score -= min(0.38, 0.12 * float(repeat_pressure))
@@ -12757,8 +12927,8 @@ class NPCInteractionSystem(System):
         if response.get("open_trade"):
             return response
 
-        ask_count = self._dialogue_topic_count(npc_eid, topic_id)
-        family_count = self._dialogue_topic_family_count(npc_eid, topic_id)
+        ask_count = self._dialogue_current_ask_count(npc_eid, topic_id)
+        family_count = self._dialogue_current_family_count(npc_eid, topic_id)
         if ask_count <= 1 and family_count <= 1:
             return response
 
@@ -12923,12 +13093,20 @@ class NPCInteractionSystem(System):
         if topic_id == "contacts":
             intro = self._introduction_target(context)
             if intro:
-                return self._visible_social_lead_sentence(intro)
+                return self._visible_social_lead_sentence(
+                    intro,
+                    source_eid=context.get("npc_eid"),
+                    require_source=True,
+                )
             return ""
         if topic_id == "introduction":
             intro = self._introduction_target(context)
             if intro:
-                return self._visible_social_lead_sentence(intro)
+                return self._visible_social_lead_sentence(
+                    intro,
+                    source_eid=context.get("npc_eid"),
+                    require_source=True,
+                )
             return ""
         return ""
 
@@ -13020,7 +13198,7 @@ class NPCInteractionSystem(System):
         state = self._dialog_ui_state()
         transcript = list(state.get("transcript", ()) or ())
         player_line = str(player_line_override or "").strip()
-        ask_count = self._dialogue_topic_count(context.get("npc_eid"), topic_id)
+        ask_count = self._dialogue_current_ask_count(context.get("npc_eid"), topic_id)
         if not player_line:
             player_line = _dialogue_topic_player_line(
                 topic_id,

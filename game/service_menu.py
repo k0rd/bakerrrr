@@ -2585,14 +2585,14 @@ class ServiceMenuSystem(System):
 
     def _open_property_service_surface(self, prop):
         if not isinstance(prop, dict):
-            return False
+            return ""
         pos = self._position_for(self.player_eid)
         if not pos:
-            return False
+            return ""
         archetype = str(((prop.get("metadata", {}) or {}).get("archetype", "") or "").strip().lower())
         if archetype in CASINO_FLOOR_ARCHETYPES:
             self._open_casino_floor(prop)
-            return True
+            return "ready"
         options, storefront_service = self._service_menu_options(self.player_eid, prop, pos)
         if options:
             option_ids = [str(option.get("id", "")).strip().lower() for option in options]
@@ -2600,12 +2600,12 @@ class ServiceMenuSystem(System):
                 self._open_banking_menu(prop)
             else:
                 self._open_service_menu(prop, options, storefront_service=storefront_service)
-            return True
+            return "ready"
         if _property_is_storefront(prop) and isinstance(storefront_service, dict) and storefront_service.get("blocked_reason") and not self._machine_service_profile(prop):
             title, lines = self._storefront_blocked_lines(prop, storefront_service)
             self._present_service_result(title, lines, property_id=prop.get("id"))
-            return True
-        return False
+            return "blocked"
+        return ""
 
     def _service_menu_options(self, eid, prop, pos):
         access = _evaluate_property_access(
@@ -3586,7 +3586,10 @@ class ServiceMenuSystem(System):
         pos = self._position_for(eid)
         if not pos:
             return
-        if self._open_property_service_surface(prop):
+        surface_result = self._open_property_service_surface(prop)
+        if surface_result:
+            if surface_result == "ready":
+                event.data["opportunity_handoff_ready"] = True
             event.data["handled"] = True
 
     def on_player_action(self, event):
