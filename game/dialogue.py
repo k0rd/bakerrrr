@@ -1840,6 +1840,16 @@ AREA_STYLE_HINTS = {
             "The city keeps no secrets long.",
             "Half the city learns things by pretending not to look.",
         ),
+        "idioms": (
+            "Keep it under the streetline.",
+            "A quiet face travels farther than a loud story.",
+            "The block counts twice before it forgets.",
+        ),
+        "local_terms": (
+            "Streetline is what everybody saw enough to deny.",
+            "Backcount follows a person longer than heat.",
+            "Corner talk gets legs before noon.",
+        ),
     },
     "frontier": {
         "farewell_tags": (
@@ -1852,6 +1862,16 @@ AREA_STYLE_HINTS = {
             "Nothing stays easy for long out here.",
             "The frontier holds on to things.",
             "Distance makes every choice louder.",
+        ),
+        "idioms": (
+            "Roadcount changes faster than maps.",
+            "A long road makes short tempers.",
+            "A quiet day out here still has a bill.",
+        ),
+        "local_terms": (
+            "Dustmark sticks to sloppy choices.",
+            "Fence talk travels straighter than gossip.",
+            "Out here, close means before dark.",
         ),
     },
     "coastal": {
@@ -1866,6 +1886,16 @@ AREA_STYLE_HINTS = {
             "The tide brings more than water.",
             "The port knows what moves and who waits too long.",
         ),
+        "idioms": (
+            "Tidebook never balances clean.",
+            "Dockwind carries names.",
+            "Storm talk makes people generous with bad guesses.",
+        ),
+        "local_terms": (
+            "Tidebook is the version the docks remember.",
+            "Dockwind makes a whisper cross the whole landing.",
+            "Salt hours turn small delays into stories.",
+        ),
     },
     "wilderness": {
         "farewell_tags": (
@@ -1879,6 +1909,16 @@ AREA_STYLE_HINTS = {
             "A quiet trail is still a trail.",
             "Out here, you can't help but listen.",
         ),
+        "idioms": (
+            "Treeline talk travels quietly.",
+            "A cold trail still tells on somebody.",
+            "The quiet has a way of counting footsteps.",
+        ),
+        "local_terms": (
+            "Treeline talk means news with no witness attached.",
+            "Trailcount is never as empty as it looks.",
+            "Out here, near means before the light turns.",
+        ),
     },
 }
 
@@ -1890,6 +1930,15 @@ DISTRICT_STYLE_HINTS = {
             "Keep your gears straight.",
             "The floor remembers who misses a beat.",
             "A person's hands tell the honest story.",
+        ),
+        "idioms": (
+            "Shiftline catches every mistake.",
+            "Gear-debt comes due when the room gets loud.",
+            "If the floor goes quiet, listen harder.",
+        ),
+        "local_terms": (
+            "Shiftline is the part of the day nobody gets to dodge.",
+            "Gear-debt means a problem someone kept nursing.",
         ),
         "address_terms": (
             "friend",
@@ -1903,6 +1952,15 @@ DISTRICT_STYLE_HINTS = {
             "Nobody forgets a face on their block.",
             "Curtains move faster than doors around here.",
         ),
+        "idioms": (
+            "Porchlight talk moves faster than mail.",
+            "A quiet block is still taking notes.",
+            "Curtain-count is high today.",
+        ),
+        "local_terms": (
+            "Porchcount means who noticed without stepping outside.",
+            "Doorquiet never lasts after trouble.",
+        ),
         "address_terms": (
             "neighbor",
             "friend",
@@ -1914,6 +1972,15 @@ DISTRICT_STYLE_HINTS = {
             "The money moves fast downtown.",
             "Speed is the price of being central.",
             "Downtown hears a rumor and invoices it by lunch.",
+        ),
+        "idioms": (
+            "Fastwalk rules apply.",
+            "Lunch rumor becomes policy by noon.",
+            "If it matters downtown, somebody already priced it.",
+        ),
+        "local_terms": (
+            "Fastwalk means answer while you are still moving.",
+            "Glass minutes cost more than street hours.",
         ),
         "address_terms": (
             "friend",
@@ -1929,6 +1996,16 @@ DISTRICT_STYLE_HINTS = {
             "Keep your pockets close.",
             "Help has a price out here.",
             "Every favor here leaves a thumbprint.",
+        ),
+        "idioms": (
+            "Favor-marks last longer than cash.",
+            "Backstep before you owe.",
+            "Thin pockets still remember who helped.",
+        ),
+        "local_terms": (
+            "Favor-mark means a kindness with a shadow.",
+            "Backstep is what you take before the day owns you.",
+            "Street mercy is real, but it keeps a ledger.",
         ),
         "address_terms": (
             "friend",
@@ -1946,6 +2023,15 @@ DISTRICT_STYLE_HINTS = {
             "Every room here has a budget.",
             "Someone always signs the silence.",
         ),
+        "idioms": (
+            "Glass talk always has a signer.",
+            "Budget hush covers plenty.",
+            "Policy is just a locked door with nicer shoes.",
+        ),
+        "local_terms": (
+            "Glass talk is what people say when walls might invoice them.",
+            "Budget hush means nobody admits the quiet was purchased.",
+        ),
         "address_terms": (
             "friend",
             "associate",
@@ -1957,6 +2043,15 @@ DISTRICT_STYLE_HINTS = {
             "Keep it clean.",
             "My orders cut clean.",
             "How copy?",
+        ),
+        "idioms": (
+            "Linecall stays clean.",
+            "Clean copy or no copy.",
+            "Loose procedure makes loud reports.",
+        ),
+        "local_terms": (
+            "Linecall means everyone knows who answered.",
+            "Clean copy means no story attached.",
         ),
         "address_terms": (
             "citizen",
@@ -1973,10 +2068,58 @@ DISTRICT_STYLE_HINTS = {
             "The applause is the toughest critic.",
             "Every backstage whisper wants an audience.",
         ),
+        "idioms": (
+            "Backlight makes every whisper taller.",
+            "Curtain heat sticks.",
+            "The room loves a secret until it owns one.",
+        ),
+        "local_terms": (
+            "Backlight is gossip dressed up pretty.",
+            "Curtain heat means trouble waiting for applause to cover it.",
+        ),
         "address_terms": (
             "friend",
             "dear",
             "patron",
+        ),
+    },
+    "transit": {
+        "catch_phrases": (
+            "Routes remember delays.",
+            "Every platform has a listener.",
+            "The schedule tells one truth and people tell another.",
+        ),
+        "idioms": (
+            "Platform talk moves in loops.",
+            "Routewash makes clean stories muddy.",
+            "A missed stop can still follow you.",
+        ),
+        "local_terms": (
+            "Routewash is what happens when a story rides too many lines.",
+            "Platform time makes strangers sound local.",
+        ),
+        "address_terms": (
+            "friend",
+            "traveler",
+        ),
+    },
+    "tourist": {
+        "catch_phrases": (
+            "Guest faces get noticed fast.",
+            "Maps hide the parts locals actually use.",
+            "A bright sign is not always a clean door.",
+        ),
+        "idioms": (
+            "Map-smile only lasts one question.",
+            "Guestlight makes things look safer than they are.",
+        ),
+        "local_terms": (
+            "Guestlight is the shine a place keeps for new eyes.",
+            "Map-smile means helpful until the question gets real.",
+        ),
+        "address_terms": (
+            "friend",
+            "traveler",
         ),
     },
 }
@@ -1998,6 +2141,14 @@ ROLE_STYLE_HINTS = {
             "Don't cause trouble here.",
             "I notice repeats.",
         ),
+        "idioms": (
+            "Procedure has a long memory.",
+            "A clean line keeps everyone breathing.",
+        ),
+        "local_terms": (
+            "Paper shadow follows every bad step.",
+            "Linecall means I know who I am answering for.",
+        ),
         "address_terms": (
             "citizen",
             "friend",
@@ -2017,6 +2168,13 @@ ROLE_STYLE_HINTS = {
             "Head on a swivel!",
             "Patterns matter.",
         ),
+        "idioms": (
+            "Patterns get louder when people hurry.",
+            "The quiet part of a patrol still counts.",
+        ),
+        "local_terms": (
+            "Linecall means every stop has a name on it.",
+        ),
         "address_terms": (
             "citizen",
             "friend",
@@ -2033,6 +2191,10 @@ ROLE_STYLE_HINTS = {
             "The quiet carries.",
             "Eyes stay open out here.",
         ),
+        "idioms": (
+            "A good scout trusts the second look.",
+            "Quiet ground still changes shape.",
+        ),
     },
     "thief": {
         "register": "rough",
@@ -2047,6 +2209,13 @@ ROLE_STYLE_HINTS = {
             "Keep it quiet.",
             "Do not be the reason this gets loud.",
             "Clean exits beat pretty stories.",
+        ),
+        "idioms": (
+            "A clean exit is worth more than a clever entrance.",
+            "Heat loves a slow hand.",
+        ),
+        "local_terms": (
+            "Soft-step means nobody has to explain you later.",
         ),
     },
     "drunk": {
@@ -2070,6 +2239,13 @@ ROLE_STYLE_HINTS = {
             "You'd be surprised what I hear at the job.",
             "A wet counter collects dry secrets.",
         ),
+        "idioms": (
+            "Barlight makes liars generous.",
+            "A glass tells on the hand holding it.",
+        ),
+        "local_terms": (
+            "Barlight is when people think nobody can see them clearly.",
+        ),
         "address_terms": (
             "friend",
             "there",
@@ -2085,6 +2261,14 @@ ROLE_STYLE_HINTS = {
             "Late packages make loud enemies.",
             "Routes teach you who waits and who wanders.",
         ),
+        "idioms": (
+            "Routecount is never just distance.",
+            "A clean handoff beats a loud arrival.",
+        ),
+        "local_terms": (
+            "Routecount means distance, eyes, and who is waiting.",
+            "Handoff hush is what keeps a package boring.",
+        ),
     },
     "runner": {
         "register": "plain",
@@ -2092,6 +2276,13 @@ ROLE_STYLE_HINTS = {
             "Fast feet hear a lot.",
             "Loose routes make loud trouble.",
             "A clean pass beats a pretty plan.",
+        ),
+        "idioms": (
+            "A good route is mostly the parts nobody notices.",
+            "Fast gets ugly when it forgets quiet.",
+        ),
+        "local_terms": (
+            "Threading means moving like the room already expected you.",
         ),
     },
     "driver": {
@@ -2101,6 +2292,13 @@ ROLE_STYLE_HINTS = {
             "Every route has a mood.",
             "A bad turn tells on you.",
         ),
+        "idioms": (
+            "The road charges extra for panic.",
+            "A clean turn is half apology.",
+        ),
+        "local_terms": (
+            "Roadmood is why the same block feels different twice.",
+        ),
     },
     "mechanic": {
         "register": "plain",
@@ -2108,6 +2306,13 @@ ROLE_STYLE_HINTS = {
             "Everything breaks where it was already tired.",
             "Bad maintenance always finds daylight.",
             "You can hear a problem before it admits itself.",
+        ),
+        "idioms": (
+            "A machine lies loud before it dies quiet.",
+            "Rust keeps better notes than people.",
+        ),
+        "local_terms": (
+            "Tooltruth is what the part says after the owner is done explaining.",
         ),
         "address_terms": (
             "friend",
@@ -2121,6 +2326,14 @@ ROLE_STYLE_HINTS = {
             "Bad business echoes.",
             "Receipts are quieter than rumors, but not by much.",
         ),
+        "idioms": (
+            "Counterweather changes before the door opens.",
+            "Shelf heat tells you what people are afraid to ask for.",
+        ),
+        "local_terms": (
+            "Counterweather is the mood that walks in before the customer.",
+            "Shelf heat means stock people stare at and do not name.",
+        ),
         "address_terms": (
             "friend",
             "neighbor",
@@ -2133,9 +2346,93 @@ ROLE_STYLE_HINTS = {
             "A counter sees more than it sells.",
             "Bad heat sticks to shelves.",
         ),
+        "idioms": (
+            "Counterweather changes before the door opens.",
+            "Prices lean when the neighborhood leans.",
+        ),
+        "local_terms": (
+            "Counterweather is the mood that walks in before the customer.",
+        ),
         "address_terms": (
             "friend",
             "neighbor",
+        ),
+    },
+    "clerk": {
+        "register": "plain",
+        "catch_phrases": (
+            "Counters remember repeat faces.",
+            "The till hears more than it should.",
+            "People tell on themselves while pretending to browse.",
+        ),
+        "idioms": (
+            "Counterweather changes before the bell rings.",
+            "A slow customer is sometimes just a fast problem.",
+        ),
+        "local_terms": (
+            "Counterweather is the mood that walks in before the customer.",
+            "Shelf heat means stock people stare at and do not name.",
+        ),
+        "address_terms": (
+            "friend",
+            "neighbor",
+        ),
+    },
+    "vendor": {
+        "register": "plain",
+        "catch_phrases": (
+            "Stalls hear more than walls.",
+            "A busy aisle tells the truth sideways.",
+            "Goods move when stories move.",
+        ),
+        "idioms": (
+            "A stall has ears even when the seller smiles.",
+            "Market noise sorts itself if you stand still.",
+        ),
+        "local_terms": (
+            "Aisleweather is how a market tells you what it wants.",
+        ),
+        "address_terms": (
+            "friend",
+            "neighbor",
+        ),
+    },
+    "cashier": {
+        "register": "plain",
+        "catch_phrases": (
+            "The register hears plenty.",
+            "Small talk gets expensive at the counter.",
+            "A line of customers becomes a line of rumors.",
+        ),
+        "idioms": (
+            "Counterweather changes before the receipt prints.",
+            "Receipts are the polite version of memory.",
+        ),
+        "local_terms": (
+            "Register hush is what people use when the line is listening.",
+        ),
+        "address_terms": (
+            "friend",
+            "neighbor",
+        ),
+    },
+    "server": {
+        "register": "warm",
+        "catch_phrases": (
+            "Tables talk when people settle in.",
+            "A room gets honest after the second cup.",
+            "Service hears the parts people mean to keep quiet.",
+        ),
+        "idioms": (
+            "Tablelight makes people softer than they expect.",
+            "A clean plate does not mean a clean mood.",
+        ),
+        "local_terms": (
+            "Tablelight is when a person forgets the room can hear them.",
+        ),
+        "address_terms": (
+            "friend",
+            "hon",
         ),
     },
     "resident": {
@@ -2144,6 +2441,13 @@ ROLE_STYLE_HINTS = {
             "The block remembers faces.",
             "People notice what repeats.",
             "Doors hear more than walls admit.",
+        ),
+        "idioms": (
+            "Porchcount is high when the block goes quiet.",
+            "A neighbor hears the apology before the excuse.",
+        ),
+        "local_terms": (
+            "Porchcount means who noticed without stepping outside.",
         ),
         "address_terms": (
             "neighbor",
@@ -2156,6 +2460,13 @@ ROLE_STYLE_HINTS = {
             "Care comes around.",
             "Pain makes honest witnesses.",
         ),
+        "idioms": (
+            "Pain makes poor secrets.",
+            "A steady hand is not the same as a soft heart.",
+        ),
+        "local_terms": (
+            "Pulse talk is what people say when they think they might not get another chance.",
+        ),
         "address_terms": (
             "friend",
         ),
@@ -2166,6 +2477,13 @@ ROLE_STYLE_HINTS = {
             "People tell the truth differently when they hurt.",
             "Pain makes poor secrets.",
             "Care gets complicated fast.",
+        ),
+        "idioms": (
+            "Pain makes poor secrets.",
+            "A diagnosis is just a door with cleaner hinges.",
+        ),
+        "local_terms": (
+            "Pulse talk is what people say when they think they might not get another chance.",
         ),
         "address_terms": (
             "friend",
@@ -2183,6 +2501,13 @@ ROLE_STYLE_HINTS = {
             "Keep it clean or keep it moving.",
             "Quiet care is still care.",
         ),
+        "idioms": (
+            "Pain makes poor secrets.",
+            "Quiet care still leaves a trail.",
+        ),
+        "local_terms": (
+            "Backroom clean means nobody asks why the bandage is new.",
+        ),
         "address_terms": (
             "friend",
         ),
@@ -2198,6 +2523,13 @@ ROLE_STYLE_HINTS = {
             "The market keeps moving.",
             "Value finds its level... without guidance.",
             "Risk always wants a receipt.",
+        ),
+        "idioms": (
+            "Risk always wants a receipt.",
+            "Paper money keeps paper shadows.",
+        ),
+        "local_terms": (
+            "Paper shadow is what follows a bad signature.",
         ),
         "address_terms": (
             "associate",
@@ -2216,9 +2548,54 @@ ROLE_STYLE_HINTS = {
             "Numbers remember what people forget.",
             "Clean books are rarely quiet books.",
         ),
+        "idioms": (
+            "Numbers remember what people forget.",
+            "Risk always wants a receipt.",
+        ),
+        "local_terms": (
+            "Paper shadow is what follows a bad signature.",
+        ),
         "address_terms": (
             "associate",
             "friend",
+        ),
+    },
+    "transit_worker": {
+        "register": "plain",
+        "catch_phrases": (
+            "Routes remember delays.",
+            "Schedules are promises with weather in them.",
+            "Every platform has a mood.",
+        ),
+        "idioms": (
+            "Platform talk moves in loops.",
+            "Routewash makes clean stories muddy.",
+        ),
+        "local_terms": (
+            "Routewash is what happens when a story rides too many lines.",
+        ),
+        "address_terms": (
+            "friend",
+            "traveler",
+        ),
+    },
+    "rail_worker": {
+        "register": "plain",
+        "catch_phrases": (
+            "Rail time is honest until people touch it.",
+            "Platforms remember who waited too long.",
+            "A late train makes every story bigger.",
+        ),
+        "idioms": (
+            "Tracktalk runs ahead of the train.",
+            "A clean platform is still listening.",
+        ),
+        "local_terms": (
+            "Tracktalk means the version that arrives before the train does.",
+        ),
+        "address_terms": (
+            "friend",
+            "traveler",
         ),
     },
 }
@@ -2229,6 +2606,10 @@ REGISTER_STYLE_HINTS = {
         "lead_ins": (),
         "address_terms": (),
         "farewell_tags": (),
+        "usage_weights": {
+            "lead_in": 0.35,
+            "address": 0.55,
+        },
     },
     "warm": {
         "lead_ins": (
@@ -2245,6 +2626,11 @@ REGISTER_STYLE_HINTS = {
             "my dear",
             "youngster",
         ),
+        "usage_weights": {
+            "lead_in": 0.75,
+            "address": 0.85,
+            "idiom": 0.3,
+        },
     },
     "clipped": {
         "lead_ins": (
@@ -2254,6 +2640,11 @@ REGISTER_STYLE_HINTS = {
             "Simply put,",
         ),
         "address_terms": (),
+        "usage_weights": {
+            "lead_in": 0.9,
+            "address": 0.15,
+            "local_term": 0.05,
+        },
     },
     "official": {
         "lead_ins": (
@@ -2267,6 +2658,12 @@ REGISTER_STYLE_HINTS = {
             "citizen",
             "friend",
         ),
+        "usage_weights": {
+            "lead_in": 1.1,
+            "address": 0.65,
+            "idiom": 0.2,
+            "local_term": 0.08,
+        },
     },
     "rough": {
         "lead_ins": (
@@ -2281,6 +2678,12 @@ REGISTER_STYLE_HINTS = {
             "pal",
             "bud",
         ),
+        "usage_weights": {
+            "lead_in": 1.0,
+            "address": 0.8,
+            "idiom": 0.45,
+            "local_term": 0.2,
+        },
     },
     "theatrical": {
         "lead_ins": (
@@ -2294,11 +2697,73 @@ REGISTER_STYLE_HINTS = {
             "friend",
             "dear",
         ),
+        "usage_weights": {
+            "lead_in": 1.0,
+            "address": 0.75,
+            "idiom": 0.65,
+            "local_term": 0.25,
+        },
     },
 }
 
 
+VOICE_QUALITY_PROFILES = {
+    "spare": {
+        "descriptor": "spare",
+        "usage_weights": {
+            "lead_in": 0.25,
+            "address": 0.35,
+            "catch": 1.0,
+            "idiom": 0.04,
+            "local_term": 0.01,
+            "farewell": 0.8,
+            "quiet": 1.35,
+        },
+    },
+    "ordinary": {
+        "descriptor": "ordinary",
+        "usage_weights": {
+            "lead_in": 0.65,
+            "address": 0.65,
+            "catch": 1.0,
+            "idiom": 0.18,
+            "local_term": 0.06,
+            "farewell": 1.0,
+            "quiet": 0.75,
+        },
+    },
+    "local": {
+        "descriptor": "local",
+        "usage_weights": {
+            "lead_in": 0.85,
+            "address": 0.75,
+            "catch": 0.9,
+            "idiom": 0.45,
+            "local_term": 0.18,
+            "farewell": 1.0,
+            "quiet": 0.35,
+        },
+    },
+    "colorful": {
+        "descriptor": "colorful",
+        "usage_weights": {
+            "lead_in": 0.95,
+            "address": 0.8,
+            "catch": 0.75,
+            "idiom": 0.85,
+            "local_term": 0.32,
+            "farewell": 1.0,
+            "quiet": 0.18,
+        },
+    },
+}
+
+
+VOICE_QUALITY_ORDER = ("spare", "ordinary", "local", "colorful")
+
+
 STYLE_LEAD_IN_BANKS = {
+    "greet_guarded",
     "history",
     "organization",
     "supervisor",
@@ -2361,6 +2826,11 @@ STYLE_LEAD_IN_BANKS = {
 
 
 STYLE_CATCH_BANKS = {
+    "greet_guarded",
+    "greet_wary",
+    "greet_neutral",
+    "greet_friendly",
+    "greet_introduced",
     "history",
     "organization",
     "supervisor",
@@ -2422,6 +2892,15 @@ STYLE_CATCH_BANKS = {
 }
 
 
+STYLE_SOFT_TEXTURE_BANKS = {
+    "greet_guarded",
+    "greet_wary",
+    "greet_neutral",
+    "greet_friendly",
+    "greet_introduced",
+}
+
+
 STYLE_ADDRESS_BANKS = {
     "contacts_offer",
     "contacts_repeat",
@@ -2477,7 +2956,7 @@ DIALOGUE_BANKS = {
         "Start with the useful part.",
         "No wandering around the point. Speak.",
         "This is not friendly time. What do you need?",
-        "This better be cleaner than it looks.",
+        "Keep this clean and I will listen.",
     ),
     "greet_wary": (
         "Yeah?",
@@ -2495,7 +2974,10 @@ DIALOGUE_BANKS = {
         "Alright, talk to me.",
         "I can spare a second. What are you after?",
         "Let us hear the ask.",
-        "What is the angle?",
+        "Where should we start?",
+        "I can listen for a minute.",
+        "No rush, just say it straight.",
+        "What do you need from me?",
     ),
     "greet_neutral": (
         "Sure. What do you need?",
@@ -2506,6 +2988,8 @@ DIALOGUE_BANKS = {
         "Yeah? Go ahead.",
         "I have a minute. What are you after?",
         "Ask your question.",
+        "Alright. What are we looking at?",
+        "I can talk. Start where it matters.",
     ),
     "greet_friendly": (
         "Hey. What is up?",
@@ -2552,6 +3036,8 @@ DIALOGUE_BANKS = {
         "Long story short? {history_summary}",
         "Around here? Yeah, {history_summary}",
         "If you want the short version, {history_summary}",
+        "The clean version is this: {history_summary}",
+        "If you are asking how this place settled on me, {history_summary}",
     ),
     "history_none": (
         "Long enough to recognize the regulars.",
@@ -2850,6 +3336,8 @@ DIALOGUE_BANKS = {
         "From what I see, {security_summary}",
         "If you are asking me, {security_summary}",
         "That place? {security_summary}",
+        "The practical read is this: {security_summary_lc}",
+        "If you are reading the door, start here: {security_summary_lc}",
     ),
     "security_none": (
         "Nothing sharper than an ordinary lock.",
@@ -2985,6 +3473,8 @@ DIALOGUE_BANKS = {
         "Something circulating locally. {opportunity_summary}",
         "The useful noise says this: {opportunity_summary}",
         "If you need a thread, take this one: {opportunity_summary}",
+        "The part with a handle on it is this: {opportunity_summary}",
+        "I would not call it safe, but it is live: {opportunity_summary}",
     ),
     "local_other_bond": (
         "You should probably talk to {other_name} too.",
@@ -3244,6 +3734,8 @@ DIALOGUE_BANKS = {
         "One worth noting: {opportunity_summary}",
         "If you are looking around, here is one: {opportunity_summary}",
         "The one with a pulse is this: {opportunity_summary}",
+        "If you want something with shape, start here: {opportunity_summary}",
+        "The useful opening I can see is this: {opportunity_summary}",
     ),
     "opportunities_none": (
         "Nothing is lining up cleanly right this second.",
@@ -3674,6 +4166,8 @@ DIALOGUE_BANKS = {
         "No stock, no counter, no deal.",
         "If you are shopping, you found the wrong person.",
         "Nothing I am carrying belongs in a trade window.",
+        "No shelf, no till, no sale.",
+        "I am not the person with stock today.",
     ),
     "store_buy_policy": (
         "{store_purchase_summary}",
@@ -3779,6 +4273,8 @@ DIALOGUE_BANKS = {
         "Try not to make the day louder.",
         "Later. Move smart.",
         "Go easy where you can.",
+        "Leave the room quieter than you found it.",
+        "Catch your breath where you can.",
     ),
     "payoff_accept": (
         "Fine. {payoff_cost} and I did not see anything.",
@@ -3984,6 +4480,83 @@ def _style_profile(group, key):
     return profile if isinstance(profile, dict) else {}
 
 
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _voice_quality_for(seed, npc_eid, *, area_type, district_type, role_id, tone, empathy, discipline):
+    rng = random.Random(
+        f"{seed}:dialogue-voice-quality:{npc_eid}:{area_type}:{district_type}:{role_id}:{tone}"
+    )
+    roll = rng.random()
+    roll -= max(0.0, min(1.0, float(discipline))) * 0.07
+    roll += max(0.0, min(1.0, float(empathy))) * 0.05
+    if str(role_id or "").strip().lower() in {"guard", "patrol", "scout", "banker", "broker"}:
+        roll -= 0.04
+    if str(tone or "").strip().lower() in {"friendly", "warm"}:
+        roll += 0.04
+    elif str(tone or "").strip().lower() in {"guarded", "wary"}:
+        roll -= 0.03
+    roll = max(0.0, min(0.999, roll))
+    if roll < 0.16:
+        return "spare"
+    if roll < 0.72:
+        return "ordinary"
+    if roll < 0.93:
+        return "local"
+    return "colorful"
+
+
+def _merge_usage_weights(*profiles):
+    merged = {}
+    for profile in profiles:
+        if not isinstance(profile, dict):
+            continue
+        weights = profile.get("usage_weights", {})
+        if not isinstance(weights, dict):
+            continue
+        for key, value in weights.items():
+            key = str(key or "").strip().lower()
+            if not key:
+                continue
+            weight = max(0.0, _safe_float(value, 0.0))
+            if key in merged:
+                merged[key] = max(0.0, merged[key] * weight)
+            else:
+                merged[key] = weight
+    return dict(merged)
+
+
+def _style_weight(weights, key, default=1.0):
+    if not isinstance(weights, dict):
+        return max(0.0, float(default))
+    return max(0.0, _safe_float(weights.get(key, default), default))
+
+
+def _weighted_style_choice(rng, candidates):
+    weighted = [
+        (str(kind or "").strip().lower(), tuple(phrases or ()), max(0.0, _safe_float(weight, 0.0)))
+        for kind, phrases, weight in candidates
+        if max(0.0, _safe_float(weight, 0.0)) > 0.0
+    ]
+    if not weighted:
+        return "", ()
+    total = sum(weight for _kind, _phrases, weight in weighted)
+    if total <= 0.0:
+        return "", ()
+    pick = rng.random() * total
+    running = 0.0
+    for kind, phrases, weight in weighted:
+        running += weight
+        if pick <= running:
+            return kind, phrases
+    kind, phrases, _weight = weighted[-1]
+    return kind, phrases
+
+
 def speaker_style(
     seed,
     npc_eid,
@@ -3995,20 +4568,12 @@ def speaker_style(
     empathy=0.5,
     discipline=0.5,
 ):
-    del seed
-    del npc_eid
     area_type = str(area_type or "city").strip().lower() or "city"
     district_type = str(district_type or "unknown").strip().lower() or "unknown"
     role_id = str(role_id or "").strip().lower()
     tone = str(tone or "neutral").strip().lower() or "neutral"
-    try:
-        empathy = float(empathy)
-    except (TypeError, ValueError):
-        empathy = 0.5
-    try:
-        discipline = float(discipline)
-    except (TypeError, ValueError):
-        discipline = 0.5
+    empathy = _safe_float(empathy, 0.5)
+    discipline = _safe_float(discipline, 0.5)
 
     role_profile = _style_profile(ROLE_STYLE_HINTS, role_id)
     district_profile = _style_profile(DISTRICT_STYLE_HINTS, district_type)
@@ -4035,12 +4600,32 @@ def speaker_style(
         register = "plain"
 
     register_profile = _style_profile(REGISTER_STYLE_HINTS, register)
+    voice_quality = _voice_quality_for(
+        seed,
+        npc_eid,
+        area_type=area_type,
+        district_type=district_type,
+        role_id=role_id,
+        tone=tone,
+        empathy=empathy,
+        discipline=discipline,
+    )
+    quality_profile = _style_profile(VOICE_QUALITY_PROFILES, voice_quality)
+    usage_weights = _merge_usage_weights(
+        quality_profile,
+        register_profile,
+        area_profile,
+        district_profile,
+        role_profile,
+    )
     merged = {
         "register": register,
         "area_type": area_type,
         "district_type": district_type,
         "role_id": role_id,
         "tone": tone,
+        "voice_quality": voice_quality,
+        "usage_weights": usage_weights,
         "lead_ins": _tuple_merge(
             register_profile.get("lead_ins"),
             role_profile.get("lead_ins"),
@@ -4054,6 +4639,16 @@ def speaker_style(
             area_profile.get("catch_phrases"),
             district_profile.get("catch_phrases"),
             role_profile.get("catch_phrases"),
+        ),
+        "idioms": _tuple_merge(
+            area_profile.get("idioms"),
+            district_profile.get("idioms"),
+            role_profile.get("idioms"),
+        ),
+        "local_terms": _tuple_merge(
+            area_profile.get("local_terms"),
+            district_profile.get("local_terms"),
+            role_profile.get("local_terms"),
         ),
         "farewell_tags": _tuple_merge(
             area_profile.get("farewell_tags"),
@@ -4111,19 +4706,40 @@ def style_dialogue_line(text, *, seed, npc_eid, bank_id, topic_id="", count=0, s
     lead_ins = tuple(style_profile.get("lead_ins", ()) or ())
     address_terms = tuple(style_profile.get("address_terms", ()) or ())
     catch_phrases = tuple(style_profile.get("catch_phrases", ()) or ())
+    idioms = tuple(style_profile.get("idioms", ()) or ())
+    local_terms = tuple(style_profile.get("local_terms", ()) or ())
     farewell_tags = tuple(style_profile.get("farewell_tags", ()) or ()) or catch_phrases
-    register = str(style_profile.get("register", "plain")).strip().lower() or "plain"
+    usage_weights = style_profile.get("usage_weights", {})
+    if not isinstance(usage_weights, dict):
+        usage_weights = {}
 
-    if bank_key in STYLE_LEAD_IN_BANKS and lead_ins and register in {"official", "rough", "theatrical"}:
-        result = _prepend_phrase(result, lead_ins[rng.randrange(len(lead_ins))])
-
+    candidates = []
+    if bank_key in STYLE_LEAD_IN_BANKS and lead_ins:
+        candidates.append(("lead_in", lead_ins, _style_weight(usage_weights, "lead_in", 0.65)))
     if bank_key in STYLE_ADDRESS_BANKS and address_terms:
-        result = _with_address(result, address_terms[rng.randrange(len(address_terms))])
-
+        candidates.append(("address", address_terms, _style_weight(usage_weights, "address", 0.65)))
     if bank_key == "farewell" and farewell_tags:
-        result = _append_phrase(result, farewell_tags[rng.randrange(len(farewell_tags))])
-    elif bank_key in STYLE_CATCH_BANKS and catch_phrases:
-        result = _append_phrase(result, catch_phrases[rng.randrange(len(catch_phrases))])
+        candidates.append(("farewell", farewell_tags, _style_weight(usage_weights, "farewell", 1.0)))
+    elif bank_key in STYLE_CATCH_BANKS:
+        if catch_phrases:
+            candidates.append(("catch", catch_phrases, _style_weight(usage_weights, "catch", 1.0)))
+        if idioms:
+            candidates.append(("idiom", idioms, _style_weight(usage_weights, "idiom", 0.15)))
+        if local_terms:
+            candidates.append(("local_term", local_terms, _style_weight(usage_weights, "local_term", 0.05)))
+    if bank_key in STYLE_SOFT_TEXTURE_BANKS:
+        candidates.append(("none", (), _style_weight(usage_weights, "quiet", 0.75)))
+
+    style_kind, phrases = _weighted_style_choice(rng, candidates)
+    if not style_kind or style_kind == "none":
+        return result
+    phrase = phrases[rng.randrange(len(phrases))] if phrases else ""
+    if style_kind == "lead_in":
+        result = _prepend_phrase(result, phrase)
+    elif style_kind == "address":
+        result = _with_address(result, phrase)
+    else:
+        result = _append_phrase(result, phrase)
 
     return result
 
@@ -4710,3 +5326,74 @@ def choose_dialogue_line(bank_id, *, seed, npc_eid, topic_id="", count=0, salt="
         style_profile=style_profile,
     )
     return _clean_dialogue_output(styled)
+
+
+DIALOGUE_VOICE_SAMPLE_BANKS = (
+    "greet_neutral",
+    "history",
+    "local_opportunity",
+    "security",
+    "opportunities",
+    "attention",
+    "farewell",
+)
+
+
+def dialogue_voice_samples(
+    seed=12345,
+    npc_eid=2,
+    *,
+    area_type="city",
+    district_type="downtown",
+    role_id="clerk",
+    tone="neutral",
+    empathy=0.5,
+    discipline=0.5,
+    sample_banks=None,
+):
+    style = speaker_style(
+        seed,
+        npc_eid,
+        area_type=area_type,
+        district_type=district_type,
+        role_id=role_id,
+        tone=tone,
+        empathy=empathy,
+        discipline=discipline,
+    )
+    slots = {
+        "history_summary": "I have been here long enough to know the corners.",
+        "history_summary_lc": "i have been here long enough to know the corners.",
+        "opportunity_summary": "A courier lead is still live nearby.",
+        "security_summary": "Badge checks and one camera cover the front.",
+        "security_summary_lc": "badge checks and one camera cover the front.",
+        "attention_summary": "You are background motion right now.",
+        "attention_summary_lc": "you are background motion right now.",
+    }
+    rows = []
+    banks = tuple(sample_banks or DIALOGUE_VOICE_SAMPLE_BANKS)
+    for index, bank_id in enumerate(banks):
+        bank_key = str(bank_id or "").strip().lower()
+        line = choose_dialogue_line(
+            bank_key,
+            seed=seed,
+            npc_eid=npc_eid,
+            topic_id=bank_key,
+            count=index,
+            style_profile=style,
+            **slots,
+        )
+        if not line:
+            continue
+        rows.append(
+            {
+                "bank_id": bank_key,
+                "line": line,
+                "voice_quality": style.get("voice_quality", ""),
+                "register": style.get("register", ""),
+                "area_type": style.get("area_type", ""),
+                "district_type": style.get("district_type", ""),
+                "role_id": style.get("role_id", ""),
+            }
+        )
+    return tuple(rows)
