@@ -7098,14 +7098,224 @@ class NPCInteractionSystem(System):
             return None
         return strongest_active_run_echo_for_chunk(self.sim, chunk_key)
 
+    def _run_echo_clean_ref_text(self, value):
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        text = re.sub(r"(?<=\S)#\d+\b", "", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _run_echo_strip_summary_suffix(self, value):
+        text = self._run_echo_clean_ref_text(value)
+        if not text:
+            return ""
+        text = re.sub(r"\s+stayed with the city\.?$", "", text, flags=re.IGNORECASE).strip()
+        return text.rstrip(" .")
+
+    def _run_echo_sentence(self, value):
+        text = self._run_echo_clean_ref_text(value)
+        if not text:
+            return ""
+        if text[-1:] not in ".!?":
+            text += "."
+        return text
+
+    def _run_echo_place_name(self, echo):
+        if not isinstance(echo, dict):
+            return ""
+        for key in ("property_name", "business_name"):
+            value = self._run_echo_clean_ref_text(echo.get(key))
+            if value:
+                return value
+        scene = echo.get("scene")
+        if isinstance(scene, dict):
+            place = scene.get("place")
+            if isinstance(place, dict):
+                value = self._run_echo_clean_ref_text(place.get("name"))
+                if value:
+                    return value
+            value = self._run_echo_clean_ref_text(scene.get("name"))
+            if value:
+                return value
+        return ""
+
+    def _run_echo_person_name(self, echo, *, place_name=""):
+        if not isinstance(echo, dict):
+            return ""
+        place_key = str(place_name or "").casefold()
+        for key in ("victim_name", "target_name", "actor_name"):
+            value = self._run_echo_clean_ref_text(echo.get(key))
+            if value and value.casefold() != place_key:
+                return value
+        subjects = echo.get("subjects")
+        if isinstance(subjects, dict):
+            subjects = (subjects,)
+        first_named = ""
+        for subject in tuple(subjects or ()):
+            if not isinstance(subject, dict):
+                continue
+            name = self._run_echo_clean_ref_text(subject.get("name"))
+            if not name or name.casefold() == place_key:
+                continue
+            relation = self._run_echo_clean_ref_text(subject.get("relation")).casefold()
+            if relation in {"victim", "target", "subject", "witnessed", "injured", "downed"}:
+                return name
+            if not first_named:
+                first_named = name
+        if first_named:
+            return first_named
+        subject_name = self._run_echo_clean_ref_text(echo.get("subject_name"))
+        if not subject_name or subject_name.casefold() == place_key:
+            return ""
+        if place_name and " at " in subject_name:
+            subject_part, place_part = subject_name.rsplit(" at ", 1)
+            if place_part.strip().casefold() == place_key and subject_part.strip():
+                return subject_part.strip()
+        return subject_name
+
+    def _run_echo_legacy_violence_parts_from_text(self, value):
+        raw_text = str(value or "").strip()
+        if not raw_text:
+            return {}
+        raw_text = re.sub(r"\s+", " ", raw_text)
+        raw_text = re.sub(r"\s+stayed with the city\.?$", "", raw_text, flags=re.IGNORECASE).strip()
+        prefixes = (
+            ("People still talk about the violence at ", "at"),
+            ("People still talk about the violence involving ", "involving"),
+            ("Violence at ", "at"),
+            ("Violence involving ", "involving"),
+        )
+        lowered = raw_text.casefold()
+        for prefix, mode in prefixes:
+            if not lowered.startswith(prefix.casefold()):
+                continue
+            raw_tail = raw_text[len(prefix):].strip().rstrip(".").strip()
+            clean_tail = self._run_echo_clean_ref_text(raw_tail).rstrip(".").strip()
+            if not clean_tail:
+                return {}
+            if " at " in clean_tail:
+                person_name, place_name = clean_tail.split(" at ", 1)
+                person_name = person_name.strip()
+                place_name = place_name.strip()
+                if person_name and place_name:
+                    return {
+                        "kind": "violence",
+                        "person_name": person_name,
+                        "place_name": place_name,
+                    }
+            if mode == "at" and not re.search(r"(?<=\S)#\d+\b", raw_tail):
+                return {"kind": "violence", "place_name": clean_tail}
+            return {"kind": "violence", "person_name": clean_tail}
+        return {}
+
+    def _run_echo_legacy_violence_parts(self, echo):
+        if not isinstance(echo, dict):
+            return {}
+        for key in ("summary", "rumor_text"):
+            parsed = self._run_echo_legacy_violence_parts_from_text(echo.get(key))
+            if parsed:
+                return parsed
+        return {}
+
+    def _run_echo_incident_kind(self, echo, *, parsed=None):
+        parsed = parsed if isinstance(parsed, dict) else {}
+        if parsed.get("kind"):
+            return str(parsed.get("kind")).strip().lower()
+        pieces = [
+            str(echo.get("incident_kind", "") or ""),
+            str(echo.get("summary", "") or ""),
+            str(echo.get("rumor_text", "") or ""),
+        ]
+        scene = echo.get("scene")
+        if isinstance(scene, dict):
+            pieces.append(str(scene.get("kind", "") or ""))
+            pieces.append(str(scene.get("kind_label", "") or ""))
+        combined = " ".join(pieces).replace("_", " ").casefold()
+        if "violence" in combined or "action offense" in combined:
+            return "violence"
+        if "trespass" in combined:
+            return "trespass"
+        if "tamper" in combined:
+            return "tampering"
+        if "stolen" in combined or "theft" in combined:
+            return "theft"
+        return ""
+
+    def _run_echo_incident_reference(self, echo):
+        parsed = self._run_echo_legacy_violence_parts(echo)
+        place_name = self._run_echo_place_name(echo) or self._run_echo_clean_ref_text(parsed.get("place_name"))
+        person_name = self._run_echo_person_name(echo, place_name=place_name) or self._run_echo_clean_ref_text(parsed.get("person_name"))
+        kind = self._run_echo_incident_kind(echo, parsed=parsed)
+        return kind, person_name, place_name
+
+    def _run_echo_incident_case_label(self, echo):
+        kind, person_name, place_name = self._run_echo_incident_reference(echo)
+        if kind == "violence":
+            if person_name and place_name:
+                return f"the violence involving {person_name} at {place_name}"
+            if person_name:
+                return f"the violence involving {person_name}"
+            if place_name:
+                return f"the violence at {place_name}"
+            return "an old violent case"
+        if kind in {"trespass", "tampering", "theft"}:
+            noun = {"trespass": "trespass", "tampering": "tampering", "theft": "theft"}[kind]
+            if person_name and place_name:
+                return f"the {noun} involving {person_name} at {place_name}"
+            if place_name:
+                return f"the {noun} at {place_name}"
+            if person_name:
+                return f"the {noun} involving {person_name}"
+            return f"an old {noun} case"
+        summary = self._run_echo_strip_summary_suffix(echo.get("summary"))
+        if summary:
+            return summary
+        return ""
+
+    def _run_echo_rumor_sentence(self, echo):
+        kind, person_name, place_name = self._run_echo_incident_reference(echo)
+        if kind == "violence":
+            if person_name and place_name:
+                return f"People still talk about the violence involving {person_name} at {place_name}."
+            if person_name:
+                return f"People still talk about the violence involving {person_name}."
+            if place_name:
+                return f"People still talk about the violence at {place_name}."
+            return "People still talk about an old violent case."
+        if kind == "trespass":
+            if place_name:
+                return f"People still remember the trespass at {place_name}."
+            return "People still remember an old trespass."
+        if kind == "tampering":
+            if place_name:
+                return f"People still mention the tampering at {place_name}."
+            return "People still mention an old tampering case."
+        if kind == "theft":
+            if place_name:
+                return f"People still talk about the theft around {place_name}."
+            return "People still talk about an old theft."
+        for key in ("rumor_text", "summary"):
+            text = self._run_echo_sentence(echo.get(key))
+            if text:
+                return text
+        return ""
+
     def _run_echo_case_label(self, echo):
         if not isinstance(echo, dict):
             return ""
-        for key in ("property_name", "subject_name", "victim_name", "summary"):
-            value = str(echo.get(key, "") or "").strip()
+        family = str(echo.get("family", "") or "").strip().lower()
+        if family == "incident_echo" or self._run_echo_legacy_violence_parts(echo):
+            incident_label = self._run_echo_incident_case_label(echo)
+            if incident_label:
+                return incident_label
+        for key in ("property_name", "business_name", "victim_name", "subject_name"):
+            value = self._run_echo_clean_ref_text(echo.get(key))
             if value:
                 return value
-        return "that old case"
+        summary = self._run_echo_strip_summary_suffix(echo.get("summary"))
+        if summary:
+            return summary
+        return "an old case"
 
     def _run_echo_local_line(
         self,
@@ -7119,21 +7329,20 @@ class NPCInteractionSystem(System):
     ):
         if not isinstance(echo, dict):
             return ""
-        rumor_text = str(echo.get("rumor_text", "") or "").strip()
-        summary = str(echo.get("summary", "") or "").strip()
+        rumor_text = self._run_echo_rumor_sentence(echo)
         case_label = self._run_echo_case_label(echo)
+        if not rumor_text:
+            rumor_text = f"People here still bring up {case_label}."
         role_id = str(role_id or "").strip().lower()
         if guarded or role_id in {"guard", "scout", "cop", "peace_officer", "security"}:
             place_name = str(owner_place_name or workplace_name or "the block").strip()
-            return f"{rumor_text or summary} Since then people around {place_name} read strangers a little harder."
+            return f"{rumor_text} Since then people around {place_name} read strangers a little harder."
         if workplace_name:
-            return f"{rumor_text or summary} It still comes up around {workplace_name}."
+            return f"{rumor_text} It still comes up around {workplace_name}."
         if home_name:
-            return f"{rumor_text or summary} People around {home_name} still bring it up."
+            return f"{rumor_text} People around {home_name} still bring it up."
         if rumor_text:
             return rumor_text
-        if summary:
-            return summary
         return f"People here still bring up {case_label}."
 
     def _run_echo_history_line(

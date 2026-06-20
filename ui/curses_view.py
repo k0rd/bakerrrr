@@ -1,6 +1,8 @@
 import curses
 import time
 
+from game.appearance_palette import curses_palette_entries
+from game.world_palette import curses_world_palette_entries
 from ui.input_keys import ENTER_KEYS
 
 class CursesView:
@@ -11,6 +13,7 @@ class CursesView:
         self.scr.keypad(True)
         self.color_enabled = False
         self.palette = {"default": 0}
+        self.palette_attrs = {"default": 0}
         try:
             curses.curs_set(0)
         except curses.error:
@@ -37,13 +40,14 @@ class CursesView:
 
         next_pair = 1
 
-        def _register(name, fg, bg=-1):
+        def _register(name, fg, bg=-1, attrs=0):
             nonlocal next_pair
             try:
                 curses.init_pair(next_pair, fg, bg)
             except curses.error:
                 return
             self.palette[str(name)] = next_pair
+            self.palette_attrs[str(name)] = int(attrs or 0)
             next_pair += 1
 
         _register("player", curses.COLOR_CYAN)
@@ -62,35 +66,46 @@ class CursesView:
         _register("other", curses.COLOR_MAGENTA)
 
         colors = int(getattr(curses, "COLORS", 0) or 0)
+        limited_color_map = {
+            "white": curses.COLOR_WHITE,
+            "blue": curses.COLOR_BLUE,
+            "cyan": curses.COLOR_CYAN,
+            "green": curses.COLOR_GREEN,
+            "yellow": curses.COLOR_YELLOW,
+            "red": curses.COLOR_RED,
+            "magenta": curses.COLOR_MAGENTA,
+        }
+
+        def _attrs_from_names(names):
+            attrs = 0
+            for name in tuple(names or ()):
+                token = str(name or "").strip().lower()
+                if token == "bold":
+                    attrs |= getattr(curses, "A_BOLD", 0)
+                elif token == "dim":
+                    attrs |= getattr(curses, "A_DIM", 0)
+                elif token == "underline":
+                    attrs |= getattr(curses, "A_UNDERLINE", 0)
+                elif token == "reverse":
+                    attrs |= getattr(curses, "A_REVERSE", 0)
+            return attrs
+
+        def _register_palette_entries(entries):
+            for name, row in entries.items():
+                fg = row.get("fg") if isinstance(row, dict) else None
+                attrs = _attrs_from_names(row.get("attrs", ())) if isinstance(row, dict) else 0
+                if isinstance(fg, str):
+                    fg = limited_color_map.get(fg, curses.COLOR_WHITE)
+                _register(name, int(fg), attrs=attrs)
+
+        def _register_appearance_palette():
+            _register_palette_entries(curses_palette_entries(colors))
+
+        def _register_world_palette():
+            _register_palette_entries(curses_world_palette_entries(colors))
+
         if colors >= 256:
-            _register("floor_coarse", 238)
-            _register("floor_industrial", 242)
-            _register("floor_residential", 250)
-            _register("floor_downtown", 252)
-            _register("floor_slums", 239)
-            _register("floor_corporate", 117)
-            _register("floor_military", 110)
-            _register("floor_entertainment", 181)
-            _register("floor_frontier", 180)
-            _register("floor_wilderness", 71)
-            _register("floor_coastal", 117)
-            _register("building_fill", 240)
-            _register("building_edge", 244)
-            _register("terrain_block", 238)
-            _register("terrain_brush", 108)
-            _register("terrain_rock", 245)
-            _register("terrain_water", 117)
-            _register("terrain_salt", 223)
-            _register("terrain_road", 186)
-            _register("terrain_trail", 180)
-            _register("building_roof", 239)
-            _register("building_roof_residential", 250)
-            _register("building_roof_storefront", 180)
-            _register("building_roof_industrial", 242)
-            _register("building_roof_corporate", 117)
-            _register("building_roof_civic", 153)
-            _register("building_roof_secure", 71)
-            _register("building_roof_entertainment", 181)
+            _register_world_palette()
             _register("feature_door", 186)
             _register("feature_window", 117)
             _register("feature_breach", 203)
@@ -123,6 +138,8 @@ class CursesView:
             _register("item_medical", 121)
             _register("item_restricted", 215)
             _register("item_illegal", 203)
+            _register("item_outline", 235)
+            _register("item_highlight", 230)
             _register("inventory_equipped_clothing", 153)
             _register("inventory_equipped_weapon", 209)
             _register("inventory_equipped_consequence", 177)
@@ -137,6 +154,9 @@ class CursesView:
             _register("human_rust", 173)
             _register("human_slate", 109)
             _register("human_wine", 175)
+            _register_appearance_palette()
+            _register("actor_outline", 235)
+            _register("actor_highlight", 195)
             _register("cat_orange", 208)
             _register("cat_black", 238)
             _register("cat_tabby", 180)
@@ -152,34 +172,7 @@ class CursesView:
             _register("casino_chip", 45)
             _register("casino_cursor", 159)
         else:
-            _register("floor_coarse", curses.COLOR_BLUE)
-            _register("floor_industrial", curses.COLOR_WHITE)
-            _register("floor_residential", curses.COLOR_WHITE)
-            _register("floor_downtown", curses.COLOR_CYAN)
-            _register("floor_slums", curses.COLOR_MAGENTA)
-            _register("floor_corporate", curses.COLOR_CYAN)
-            _register("floor_military", curses.COLOR_BLUE)
-            _register("floor_entertainment", curses.COLOR_YELLOW)
-            _register("floor_frontier", curses.COLOR_YELLOW)
-            _register("floor_wilderness", curses.COLOR_GREEN)
-            _register("floor_coastal", curses.COLOR_CYAN)
-            _register("building_fill", curses.COLOR_BLUE)
-            _register("building_edge", curses.COLOR_WHITE)
-            _register("terrain_block", curses.COLOR_BLUE)
-            _register("terrain_brush", curses.COLOR_GREEN)
-            _register("terrain_rock", curses.COLOR_WHITE)
-            _register("terrain_water", curses.COLOR_CYAN)
-            _register("terrain_salt", curses.COLOR_YELLOW)
-            _register("terrain_road", curses.COLOR_YELLOW)
-            _register("terrain_trail", curses.COLOR_MAGENTA)
-            _register("building_roof", curses.COLOR_WHITE)
-            _register("building_roof_residential", curses.COLOR_WHITE)
-            _register("building_roof_storefront", curses.COLOR_YELLOW)
-            _register("building_roof_industrial", curses.COLOR_WHITE)
-            _register("building_roof_corporate", curses.COLOR_CYAN)
-            _register("building_roof_civic", curses.COLOR_CYAN)
-            _register("building_roof_secure", curses.COLOR_GREEN)
-            _register("building_roof_entertainment", curses.COLOR_MAGENTA)
+            _register_world_palette()
             _register("feature_door", curses.COLOR_YELLOW)
             _register("feature_window", curses.COLOR_CYAN)
             _register("feature_breach", curses.COLOR_RED)
@@ -212,6 +205,8 @@ class CursesView:
             _register("item_medical", curses.COLOR_GREEN)
             _register("item_restricted", curses.COLOR_MAGENTA)
             _register("item_illegal", curses.COLOR_RED)
+            _register("item_outline", curses.COLOR_WHITE, attrs=getattr(curses, "A_DIM", 0))
+            _register("item_highlight", curses.COLOR_YELLOW, attrs=getattr(curses, "A_BOLD", 0))
             _register("inventory_equipped_clothing", curses.COLOR_CYAN)
             _register("inventory_equipped_weapon", curses.COLOR_YELLOW)
             _register("inventory_equipped_consequence", curses.COLOR_MAGENTA)
@@ -226,6 +221,9 @@ class CursesView:
             _register("human_rust", curses.COLOR_YELLOW)
             _register("human_slate", curses.COLOR_BLUE)
             _register("human_wine", curses.COLOR_MAGENTA)
+            _register_appearance_palette()
+            _register("actor_outline", curses.COLOR_WHITE, attrs=getattr(curses, "A_DIM", 0))
+            _register("actor_highlight", curses.COLOR_CYAN, attrs=getattr(curses, "A_BOLD", 0))
             _register("cat_orange", curses.COLOR_YELLOW)
             _register("cat_black", curses.COLOR_WHITE)
             _register("cat_tabby", curses.COLOR_YELLOW)
@@ -246,10 +244,11 @@ class CursesView:
             return 0
 
         if isinstance(color, str):
-            pair = int(self.palette.get(color, self.palette.get("default", 0)))
+            key = str(color)
+            pair = int(self.palette.get(key, self.palette.get("default", 0)))
             if pair <= 0:
                 return 0
-            return curses.color_pair(pair)
+            return curses.color_pair(pair) | int(self.palette_attrs.get(key, 0) or 0)
 
         try:
             pair = int(color)

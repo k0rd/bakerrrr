@@ -20,6 +20,7 @@ from game.property_doors import (
 )
 from game.property_access import property_access_controller as _property_access_controller
 from game.property_access import (
+    evaluate_property_access as _evaluate_property_access,
     finance_services_for_property as _finance_services_for_property,
     property_is_storefront as _property_is_storefront,
     site_services_for_property as _site_services_for_property,
@@ -63,6 +64,32 @@ class PropertyActionRuntime:
 
         assets = self.sim.ecs.get(PlayerAssets).get(eid)
         return bool(assets and prop["id"] in assets.owned_property_ids)
+
+    def _purchase_dispute_context(self, eid, prop, pos):
+        if eid is None or not isinstance(prop, dict) or pos is None:
+            return {}
+        try:
+            access = _evaluate_property_access(
+                self.sim,
+                eid,
+                prop,
+                x=int(pos.x),
+                y=int(pos.y),
+                z=int(pos.z),
+            )
+        except (AttributeError, TypeError, ValueError):
+            return {}
+        severity_label = str(getattr(access, "severity_label", "clear") or "clear").strip().lower()
+        entry_denied = bool(getattr(access, "organization_denied_entry", False))
+        if severity_label not in {"trespass", "serious_trespass"} and not entry_denied:
+            return {}
+        return {
+            "active": True,
+            "severity_label": severity_label,
+            "severity_score": int(getattr(access, "severity_score", 0) or 0),
+            "organization_denied_entry": entry_denied,
+            "standing_reason": str(getattr(access, "standing_reason", "none") or "none").strip().lower(),
+        }
 
     def property_for_player_action(self, pos, radius=1, actor_eid=None):
         prop = _property_covering(self.sim, pos.x, pos.y, pos.z)
@@ -764,6 +791,19 @@ class PropertyActionRuntime:
             ))
             return False
 
+        if reason == "active_dispute":
+            dispute = context.get("dispute") if isinstance(context.get("dispute"), dict) else {}
+            self.sim.emit(Event(
+                "property_purchase_blocked",
+                eid=eid,
+                reason="active_dispute",
+                property_id=context.get("property_id"),
+                severity_label=str(dispute.get("severity_label", "") or "").strip().lower(),
+                severity_score=int(dispute.get("severity_score", 0) or 0),
+                organization_denied_entry=bool(dispute.get("organization_denied_entry")),
+            ))
+            return False
+
         assets = context.get("assets")
         if assets is None or not isinstance(prop, dict):
             self.sim.emit(Event(
@@ -842,8 +882,11 @@ class PropertyActionRuntime:
             reason = "not_for_sale"
         elif credits < price:
             reason = "insufficient_funds"
+        elif self._purchase_dispute_context(eid, prop, pos).get("active"):
+            reason = "active_dispute"
         else:
             reason = ""
+        dispute = self._purchase_dispute_context(eid, prop, pos) if reason == "active_dispute" else {}
 
         return {
             "allowed": not bool(reason),
@@ -857,6 +900,7 @@ class PropertyActionRuntime:
             "owner_eid": owner_eid,
             "owner_tag": str(owner_tag or "").strip(),
             "assets": assets,
+            "dispute": dispute,
         }
 
 

@@ -2198,9 +2198,14 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
     social_cover = 0.0
     social_actor_eid = _party_rep_proxy_actor(sim, actor_eid)
 
-    if _player_owns_property(sim, actor_eid, prop) or (
-        social_actor_eid != actor_eid and _player_owns_property(sim, social_actor_eid, prop)
-    ):
+    owner_authority = bool(
+        _player_owns_property(sim, actor_eid, prop)
+        or (
+            social_actor_eid != actor_eid
+            and _player_owns_property(sim, social_actor_eid, prop)
+        )
+    )
+    if owner_authority:
         standing, standing_reason = 1.0, "owner"
     else:
         key_score, key_reason = _credential_holder_standing(sim, actor_eid, prop)
@@ -2284,6 +2289,13 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
         prop,
         current_tick=getattr(sim, "tick", 0),
     )
+    if owner_authority and (
+        bool(org_posture.get("deny_entry"))
+        or bool(org_posture.get("deny_service"))
+    ):
+        org_posture = dict(org_posture)
+        org_posture["deny_entry"] = False
+        org_posture["deny_service"] = False
     org_reason_tags = tuple(org_posture.get("reason_tags", ()) or ())
     if "oversight_access" in org_reason_tags:
         org_reason = "oversight"

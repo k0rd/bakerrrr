@@ -3746,6 +3746,79 @@ def _casino_slots_resolve(seed_token, wager):
     }
 
 
+def _casino_plinko_multiplier_label(multiplier):
+    try:
+        value = float(multiplier)
+    except (TypeError, ValueError):
+        value = 0.0
+    if abs(value - int(value)) < 0.001:
+        return f"{int(value)}x"
+    return f"{value:.1f}x"
+
+
+def _casino_ascii_plinko_board(*, drop_lane=None, path=(), bucket_index=None):
+    bucket_count = len(CASINO_PLINKO_BUCKET_MULTIPLIERS)
+    lane_labels = {
+        lane + 1: str(lane + 1)
+        for lane in range(CASINO_PLINKO_LANE_COUNT)
+    }
+
+    def _cell_line(label, markers=None, default=" "):
+        markers = markers if isinstance(markers, dict) else {}
+        cells = []
+        for index in range(bucket_count):
+            value = markers.get(index, default)
+            cells.append(f"{str(value)[:4]:^4}")
+        return f"{str(label)[:6]:<6}" + " ".join(cells).rstrip()
+
+    try:
+        lane = max(0, min(int(drop_lane), CASINO_PLINKO_LANE_COUNT - 1))
+    except (TypeError, ValueError):
+        lane = None
+
+    current = (lane + 1) if lane is not None else None
+    positions = [current] if current is not None else []
+    normalized_path = []
+    for raw_step in tuple(path or ())[:CASINO_PLINKO_ROWS]:
+        step_text = str(raw_step or "").strip().upper()
+        if step_text not in {"L", "R"} or current is None:
+            continue
+        normalized_path.append(step_text)
+        current = max(0, min(current + (-1 if step_text == "L" else 1), bucket_count - 1))
+        positions.append(current)
+
+    lines = [
+        ".---------------- plinko ----------------.",
+        _cell_line("Lane", lane_labels, " "),
+    ]
+    if positions:
+        lines.append(_cell_line("Drop", {positions[0]: "v"}, " "))
+    for row_index in range(CASINO_PLINKO_ROWS):
+        marker = {}
+        if row_index + 1 < len(positions):
+            marker[positions[row_index + 1]] = "o"
+        direction = normalized_path[row_index] if row_index < len(normalized_path) else ""
+        label = f"{row_index + 1}{direction}"
+        lines.append(_cell_line(label, marker, "."))
+
+    if bucket_index is not None:
+        try:
+            bucket = max(0, min(int(bucket_index), bucket_count - 1))
+        except (TypeError, ValueError):
+            bucket = None
+        if bucket is not None:
+            lines.append(_cell_line("Hit", {bucket: "^"}, " "))
+    payout_markers = {
+        index: _casino_plinko_multiplier_label(multiplier)
+        for index, multiplier in enumerate(CASINO_PLINKO_BUCKET_MULTIPLIERS)
+    }
+    lines.extend([
+        _cell_line("Pay", payout_markers, ""),
+        "'-----------------------------------------'",
+    ])
+    return lines
+
+
 def _casino_plinko_resolve(seed_token, wager, drop_lane):
     lane = max(0, min(int(drop_lane), CASINO_PLINKO_LANE_COUNT - 1))
     bounce_rng = random.Random(f"{seed_token}:plinko:{lane}")
@@ -3773,6 +3846,13 @@ def _casino_plinko_resolve(seed_token, wager, drop_lane):
         headline = "Center bucket."
         detail = "The disc fights through the pegs and snaps into the hot center pocket."
         outcome_key = "center"
+    result_lines = []
+    result_lines.extend(_casino_ascii_plinko_board(drop_lane=lane, path=path, bucket_index=position))
+    result_lines.extend([
+        f"Drop lane {lane + 1}: {' '.join(path)}",
+        f"Bucket {position + 1} pays x{payout_mult:.1f}.",
+        detail,
+    ])
     return {
         "service": "plinko",
         "wager": int(wager),
@@ -3782,11 +3862,7 @@ def _casino_plinko_resolve(seed_token, wager, drop_lane):
         "headline": headline,
         "detail": detail,
         "summary": f"Lane {lane + 1} rides {' '.join(path)} into bucket {position + 1}. {headline}",
-        "result_lines": [
-            f"Drop lane {lane + 1}: {' '.join(path)}",
-            f"Bucket {position + 1} pays x{payout_mult:.1f}.",
-            detail,
-        ],
+        "result_lines": result_lines,
         "drop_lane": int(lane),
         "bucket_index": int(position),
         "path": tuple(path),
@@ -4522,6 +4598,7 @@ __all__ = [
     "CASINO_PLINKO_LANE_COUNT",
     "TRANSIT_SERVICE_IDS",
     "_casino_apply_round_result",
+    "_casino_ascii_plinko_board",
     "_casino_baccarat_normalize_session",
     "_casino_baccarat_resolve",
     "_casino_baccarat_start",

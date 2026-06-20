@@ -4,6 +4,11 @@ import random
 from dataclasses import dataclass
 
 from engine.events import Event
+from game.appearance_palette import (
+    appearance_color_words,
+    choose_appearance_color_word,
+    render_key_for_color_word,
+)
 from game.components import AppearanceLoadout, ArmorLoadout, CreatureIdentity, Inventory
 from game.human_description import build_human_description_profile, human_self_physical_summary, human_render_color_key
 from game.item_semantics import item_display_name_for_actor
@@ -239,49 +244,9 @@ COSMETIC_ITEM_IDS = {
         "styles": ("weathered", "smooth", "narrow", "polished"),
     },
 }
-COSMETIC_COLORS = (
-    "black",
-    "charcoal",
-    "white",
-    "ivory",
-    "gray",
-    "slate",
-    "denim",
-    "blue",
-    "olive",
-    "green",
-    "rust",
-    "brown",
-    "tan",
-    "red",
-    "wine",
-    "gold",
-    "brass",
-    "teal",
-)
-COSMETIC_COLOR_KEYS = {
-    "black": "human_charcoal",
-    "charcoal": "human_charcoal",
-    "white": "human_monochrome",
-    "ivory": "human_monochrome",
-    "gray": "human_slate",
-    "slate": "human_slate",
-    "denim": "human_denim",
-    "blue": "human_denim",
-    "olive": "human_olive",
-    "green": "human_olive",
-    "rust": "human_rust",
-    "brown": "human_rust",
-    "tan": "human_olive",
-    "red": "human_wine",
-    "wine": "human_wine",
-    "gold": "human_accent",
-    "brass": "human_accent",
-    "teal": "human_denim",
-    "silver": "human_monochrome",
-    "steel": "human_slate",
-    "onyx": "human_charcoal",
-}
+COSMETIC_COLORS = appearance_color_words()
+COSMETIC_COLOR_KEYS = {word: render_key_for_color_word(word) for word in COSMETIC_COLORS}
+CLOTHING_RENDER_COLOR_KEYS = tuple(dict.fromkeys(COSMETIC_COLOR_KEYS.values()))
 STYLE_SERVICE_OPTIONS = {
     "hair_style": ("cropped", "short", "bob", "braided", "loose", "nape-tied"),
     "hair_color": ("black", "brown", "auburn", "blonde", "silver", "copper"),
@@ -551,7 +516,7 @@ def appearance_metadata_for_entry(entry, *, item_catalog=None):
     if not style:
         style = _text((profile.get("styles") or ("plain",))[0]).lower()
     if not accent:
-        accent = COSMETIC_COLOR_KEYS.get(color, "human_monochrome")
+        accent = render_key_for_color_word(color, default="human_monochrome")
     if not slots:
         return {}
     return {
@@ -591,13 +556,13 @@ def cosmetic_variant_metadata(item_id, *, seed_token="", item_catalog=None):
         return {}
     seed = f"cosmetic-variant:{item_id}:{seed_token}"
     rng = random.Random(seed)
-    color = rng.choice(COSMETIC_COLORS)
+    slots = tuple(profile.get("slots", ()))
+    color = choose_appearance_color_word(rng, slots=slots)
     materials = tuple(profile.get("materials") or ("cotton",))
     styles = tuple(profile.get("styles") or ("plain",))
     material = rng.choice(materials)
     style = rng.choice(styles)
-    slots = tuple(profile.get("slots", ()))
-    accent = COSMETIC_COLOR_KEYS.get(color, "human_monochrome")
+    accent = render_key_for_color_word(color, default="human_monochrome")
     label = str(profile.get("label", item_id)).strip() or item_id
     display_parts = [color, material, label]
     if style and style not in {"plain", "simple"}:
@@ -700,7 +665,7 @@ def apply_tattoo_service(sim, eid, *, design="", slot="", prop=None, source_meta
 def _metadata_with_color(metadata, *, color):
     updated = dict(metadata or {})
     color = _key(color) or "charcoal"
-    accent = COSMETIC_COLOR_KEYS.get(color, "human_monochrome")
+    accent = render_key_for_color_word(color, default="human_monochrome")
     updated["color"] = color
     updated["accent_color"] = accent
     nested = dict(updated.get(APPEARANCE_METADATA_KEY) or {})
@@ -1311,19 +1276,88 @@ def appearance_signal_profile(sim, eid):
     }
 
 
-def player_appearance_color_key(sim, player_eid):
-    loadout = appearance_loadout_for(sim, player_eid, create=False)
-    if loadout is None:
+def _appearance_render_color_part(sim, eid, slot):
+    entry = _entry_for_slot(sim, eid, slot)
+    if not entry:
         return None
-    for slot in OUTFIT_COLOR_PRIORITY:
-        entry = _entry_for_slot(sim, player_eid, slot)
-        if not entry:
-            continue
-        profile = appearance_metadata_for_entry(entry)
-        color = _key(profile.get("accent_color"))
-        if color:
-            return color
+    profile = appearance_metadata_for_entry(entry)
+    word = _key(profile.get("color"))
+    render_key = _key(profile.get("accent_color"))
+    if not render_key and word:
+        render_key = _key(render_key_for_color_word(word, default=""))
+    if not render_key:
+        return None
+    return {
+        "slot": slot,
+        "word": word,
+        "render_key": render_key,
+    }
+
+
+def _first_appearance_render_color_part(sim, eid, slots):
+    for slot in tuple(slots or ()):
+        part = _appearance_render_color_part(sim, eid, slot)
+        if part:
+            return part
     return None
+
+
+def appearance_render_colors(sim, eid):
+    loadout = appearance_loadout_for(sim, eid, create=False)
+    result = {
+        "dominant": None,
+        "primary": None,
+        "secondary": None,
+        "footwear": None,
+        "headwear": None,
+        "accessory": None,
+        "words": {},
+        "word_list": (),
+    }
+    if loadout is None:
+        return result
+    parts = {
+        "primary": _first_appearance_render_color_part(sim, eid, ("outer", "full_body", "top")),
+        "secondary": _first_appearance_render_color_part(sim, eid, ("bottom",)),
+        "footwear": _first_appearance_render_color_part(sim, eid, ("shoes",)),
+        "headwear": _first_appearance_render_color_part(sim, eid, ("hat",)),
+        "accessory": _first_appearance_render_color_part(
+            sim,
+            eid,
+            ("necklace", "bracelet", "ring_left", "ring_right", "earrings"),
+        ),
+    }
+    for role, part in parts.items():
+        if not part:
+            continue
+        result[role] = part["render_key"]
+    for role in ("primary", "secondary", "footwear", "headwear", "accessory"):
+        if result.get(role):
+            result["dominant"] = result[role]
+            break
+    words = {}
+    word_list = []
+    for role, part in parts.items():
+        if not part:
+            continue
+        word = _key(part.get("word"))
+        if not word:
+            continue
+        words[role] = word
+        if word not in word_list:
+            word_list.append(word)
+    result["words"] = words
+    result["word_list"] = tuple(word_list)
+    return result
+
+
+def appearance_color_key(sim, eid):
+    colors = appearance_render_colors(sim, eid)
+    return colors.get("dominant") if isinstance(colors, dict) else None
+
+
+def player_appearance_color_key(sim, player_eid):
+    return appearance_color_key(sim, player_eid)
 
 
 def apply_appearance_service(sim, eid, *, kind="", value="", prop=None):

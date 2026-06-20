@@ -54,6 +54,7 @@ from game.service_runtime import (
     _casino_ascii_card_block,
     _casino_ascii_craps_layout,
     _casino_ascii_keno_board,
+    _casino_ascii_plinko_board,
     _casino_baccarat_normalize_session,
     _casino_baccarat_resolve,
     _casino_baccarat_start,
@@ -866,6 +867,8 @@ class ServiceMenuSystem(System):
         transcript = [
             f"Choose a lane for {_credit_amount_label(wager)}.",
             "Center buckets pay best if the pegs keep the disc alive.",
+            "",
+            *_casino_ascii_plinko_board(),
             f"Wallet {_credit_amount_label(self._wallet_credits())}.",
         ]
         self._open_casino_modal(

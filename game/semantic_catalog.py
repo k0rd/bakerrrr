@@ -332,7 +332,7 @@ class RuntimeSemanticCatalog:
             "fish",
             "ungulate",
             "other",
-        } or key.startswith("cat_"):
+        } or key.startswith("cat_") or key.startswith("clothing_"):
             return ["entities"] + [name for name in default_order if name != "entities"]
         if key.startswith("item_"):
             return ["items"] + [name for name in default_order if name != "items"]

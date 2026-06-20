@@ -6,6 +6,7 @@ import random
 from math import copysign
 
 from engine.visibility import has_line_of_sight
+from game.appearance_palette import appearance_color_words, tags_for_color_word
 from game.appearance_loadout import appearance_loadout_for, appearance_metadata_for_entry, appearance_signal_profile
 from game.components import (
     AI,
@@ -43,29 +44,7 @@ _TAG_WEIGHTS = (
     "styled_hair",
     "visible_mark",
 )
-_COLORS = (
-    "black",
-    "charcoal",
-    "white",
-    "ivory",
-    "gray",
-    "slate",
-    "denim",
-    "blue",
-    "olive",
-    "green",
-    "rust",
-    "brown",
-    "tan",
-    "red",
-    "wine",
-    "gold",
-    "brass",
-    "teal",
-    "silver",
-    "steel",
-    "onyx",
-)
+_COLORS = appearance_color_words()
 _RENDER_COLOR_PROFILE = {
     "human_charcoal": ("charcoal", "black"),
     "human_olive": ("olive", "brown"),
@@ -163,8 +142,16 @@ _STREET_WORDS = {
     "vest",
     "scarf",
 }
-_MUTED_COLORS = {"black", "charcoal", "gray", "slate", "olive", "brown", "tan", "denim", "blue"}
-_FLASHY_COLORS = {"red", "wine", "gold", "brass", "teal", "white", "ivory", "silver"}
+_MUTED_COLORS = frozenset(
+    color
+    for color in _COLORS
+    if {"muted", "neutral", "dark"} & set(tags_for_color_word(color))
+)
+_FLASHY_COLORS = frozenset(
+    color
+    for color in _COLORS
+    if {"flashy", "bright", "metal"} & set(tags_for_color_word(color))
+)
 
 
 def _key(value):
@@ -298,6 +285,9 @@ def _profile_from_loadout(sim, eid):
         signature_parts.append(f"{slot}:{appearance_type}:{color}:{material}:{style}")
         words = [color, material, style, label, appearance_type, slot]
         _add_profile_tags_from_words(tags, words)
+        for palette_tag in tags_for_color_word(color):
+            if palette_tag in _TAG_WEIGHTS:
+                tags.add(palette_tag)
         if slot in {"earrings", "necklace", "bracelet", "ring_left", "ring_right"}:
             tags.add("jewelry")
             tags.add("flashy")
@@ -387,6 +377,9 @@ def _profile_from_seeded_description(sim, eid):
     palette_key = _key(profile.get("render_color_key"))
     colors = _RENDER_COLOR_PROFILE.get(palette_key, ())
     for color in colors:
+        for palette_tag in tags_for_color_word(color):
+            if palette_tag in _TAG_WEIGHTS:
+                tags.add(palette_tag)
         if color in _MUTED_COLORS:
             tags.add("muted")
         if color in _FLASHY_COLORS:

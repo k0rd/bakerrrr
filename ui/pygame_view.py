@@ -5,7 +5,9 @@ import time
 from collections import deque
 from pathlib import Path
 
+from game.appearance_palette import pygame_palette_entries
 from game.semantic_catalog import DEFAULT_RENDER_SEMANTICS_PATH, get_runtime_semantic_catalog
+from game.world_palette import pygame_world_palette_entries
 from ui.input_keys import (
     KEY_DOWN,
     KEY_END,
@@ -129,6 +131,8 @@ class PygameView:
             "human_wine": (196, 142, 172),
             "guard": (95, 140, 255),
             "scout": (120, 220, 120),
+            "actor_outline": (16, 20, 28),
+            "actor_highlight": (232, 246, 255),
             "feline": (255, 220, 90),
             "canine": (220, 220, 220),
             "avian": (220, 120, 220),
@@ -139,48 +143,6 @@ class PygameView:
             "fish": (110, 185, 235),
             "ungulate": (200, 185, 120),
             "other": (205, 145, 205),
-            "floor_coarse": (90, 90, 90),
-            "floor_industrial": (120, 120, 120),
-            "floor_residential": (170, 170, 170),
-            "floor_downtown": (190, 190, 210),
-            "floor_slums": (110, 95, 120),
-            "floor_corporate": (120, 170, 220),
-            "floor_military": (95, 150, 140),
-            "floor_entertainment": (205, 170, 120),
-            "floor_frontier": (180, 150, 100),
-            "floor_wilderness": (95, 160, 95),
-            "floor_coastal": (110, 180, 210),
-            "building_fill": (112, 112, 112),
-            "building_edge": (154, 154, 154),
-            "building_fill_gray_a": (108, 110, 112),
-            "building_edge_gray_a": (154, 156, 158),
-            "building_fill_gray_b": (123, 126, 128),
-            "building_edge_gray_b": (170, 172, 174),
-            "building_fill_gray_c": (94, 97, 101),
-            "building_edge_gray_c": (138, 142, 146),
-            "building_fill_brick": (137, 70, 58),
-            "building_edge_brick": (187, 104, 86),
-            "building_fill_plaster": (205, 201, 187),
-            "building_edge_plaster": (232, 226, 210),
-            "building_fill_painted": (106, 134, 132),
-            "building_edge_painted": (154, 183, 178),
-            "building_fill_dark": (56, 61, 67),
-            "building_edge_dark": (98, 106, 116),
-            "terrain_block": (85, 85, 85),
-            "terrain_brush": (120, 180, 120),
-            "terrain_rock": (165, 165, 165),
-            "terrain_water": (120, 170, 220),
-            "terrain_salt": (230, 220, 190),
-            "terrain_road": (205, 190, 110),
-            "terrain_trail": (185, 140, 110),
-            "building_roof": (104, 106, 110),
-            "building_roof_residential": (183, 101, 72),
-            "building_roof_storefront": (205, 158, 75),
-            "building_roof_industrial": (116, 138, 132),
-            "building_roof_corporate": (82, 145, 206),
-            "building_roof_civic": (92, 185, 197),
-            "building_roof_secure": (109, 132, 82),
-            "building_roof_entertainment": (204, 86, 170),
             "feature_door": (205, 190, 110),
             "feature_window": (110, 180, 220),
             "feature_breach": (220, 100, 100),
@@ -215,6 +177,8 @@ class PygameView:
             "item_illegal": (220, 90, 90),
             "item_weapon": (210, 130, 110),
             "item_armor": (170, 190, 225),
+            "item_outline": (18, 22, 28),
+            "item_highlight": (248, 242, 204),
             "inventory_equipped_clothing": (145, 205, 215),
             "inventory_equipped_weapon": (230, 145, 95),
             "inventory_equipped_consequence": (198, 160, 230),
@@ -240,6 +204,8 @@ class PygameView:
             "casino_chip": (84, 182, 198),
             "casino_cursor": (198, 240, 214),
         }
+        self.palette.update(pygame_world_palette_entries())
+        self.palette.update(pygame_palette_entries())
 
     def _install_window_icon(self):
         icon_path = _resource_path("assets", "icons", "bakerrrr.png")
@@ -621,7 +587,7 @@ class PygameView:
             "fish",
             "ungulate",
             "other",
-        } or key.startswith("cat_"):
+        } or key.startswith("cat_") or key.startswith("clothing_"):
             return ["entities"] + [name for name in default_order if name != "entities"]
         if key.startswith("item_"):
             return ["items"] + [name for name in default_order if name != "items"]
@@ -672,6 +638,44 @@ class PygameView:
                 min(255, int(frame[2] * bold_scale)),
             )
         return frame
+
+    def _alpha_color(self, color, alpha):
+        rgb = self._color_value(color)
+        return (int(rgb[0]), int(rgb[1]), int(rgb[2]), max(0, min(255, int(alpha))))
+
+    def _lightened_rgba(self, rgb, alpha=255, *, amount=0.18):
+        amount = max(0.0, min(1.0, float(amount)))
+        return (
+            min(255, int(rgb[0] + ((255 - rgb[0]) * amount))),
+            min(255, int(rgb[1] + ((255 - rgb[1]) * amount))),
+            min(255, int(rgb[2] + ((255 - rgb[2]) * amount))),
+            max(0, min(255, int(alpha))),
+        )
+
+    def _darkened_rgba(self, rgb, alpha=255, *, amount=0.42):
+        amount = max(0.0, min(1.0, float(amount)))
+        return (
+            max(0, int(rgb[0] * (1.0 - amount))),
+            max(0, int(rgb[1] * (1.0 - amount))),
+            max(0, int(rgb[2] * (1.0 - amount))),
+            max(0, min(255, int(alpha))),
+        )
+
+    def _local_tile_rect(self, *, inset=None, min_size=4):
+        px_inset = max(0, int(self.cell_px // 8 if inset is None else inset))
+        size = max(int(min_size), self.cell_px - (px_inset * 2))
+        return self.pygame.Rect(px_inset, px_inset, size, size)
+
+    def _draw_legibility_backing(self, overlay, rect=None, *, color="actor_outline", alpha=84, radius=None):
+        backing_rect = rect.copy() if rect is not None else self._local_tile_rect(inset=max(1, self.cell_px // 10))
+        backing_rect.clamp_ip(self.pygame.Rect(0, 0, self.cell_px, self.cell_px))
+        border_radius = max(1, self.cell_px // 8) if radius is None else int(radius)
+        self.pygame.draw.rect(
+            overlay,
+            self._alpha_color(color, alpha),
+            backing_rect.move(1, 1),
+            border_radius=border_radius,
+        )
 
     def _draw_window_overlay(self, x, y, color=None, attrs=0):
         frame = self._styled_overlay_color(color, attrs=attrs)
@@ -1338,12 +1342,16 @@ class PygameView:
         stroke_w = max(1, self.cell_px // 16)
         fill = (frame[0], frame[1], frame[2], 156)
         stroke = (
-            min(255, int(frame[0] * 1.12)),
-            min(255, int(frame[1] * 1.12)),
-            min(255, int(frame[2] * 1.12)),
+            min(255, int(frame[0] * 1.16) + 8),
+            min(255, int(frame[1] * 1.16) + 8),
+            min(255, int(frame[2] * 1.16) + 8),
             210,
         )
-        dark = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 132)
+        dark = self._darkened_rgba(frame, 166, amount=0.55)
+        outline = self._alpha_color("item_outline", 172)
+        highlight = self._alpha_color("item_highlight", 156)
+        backing_rect = self._local_tile_rect(inset=max(2, self.cell_px // 7), min_size=6)
+        self._draw_legibility_backing(overlay, backing_rect, color="item_outline", alpha=72)
 
         if kind == "ground":
             points = [
@@ -1352,48 +1360,79 @@ class PygameView:
                 (mid_x, self.cell_px - max(3, self.cell_px // 5)),
                 (max(2, self.cell_px // 5), mid_y),
             ]
+            self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in points], stroke_w + 1)
             self.pygame.draw.polygon(overlay, fill, points)
             self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
         elif kind == "medical":
             bar_w = max(2, self.cell_px // 5)
             arm = max(4, self.cell_px // 3)
+            vertical = (mid_x - (bar_w // 2), max(2, mid_y - arm // 2), bar_w, arm)
+            horizontal = (max(2, mid_x - arm // 2), mid_y - (bar_w // 2), arm, bar_w)
+            self.pygame.draw.rect(overlay, outline, self.pygame.Rect(vertical).move(1, 1), border_radius=max(1, self.cell_px // 28))
+            self.pygame.draw.rect(overlay, outline, self.pygame.Rect(horizontal).move(1, 1), border_radius=max(1, self.cell_px // 28))
             self.pygame.draw.rect(
                 overlay,
                 fill,
-                (mid_x - (bar_w // 2), max(2, mid_y - arm // 2), bar_w, arm),
+                vertical,
             )
             self.pygame.draw.rect(
                 overlay,
                 fill,
-                (max(2, mid_x - arm // 2), mid_y - (bar_w // 2), arm, bar_w),
+                horizontal,
             )
             self.pygame.draw.rect(
                 overlay,
                 stroke,
-                (mid_x - (bar_w // 2), max(2, mid_y - arm // 2), bar_w, arm),
+                vertical,
                 stroke_w,
             )
             self.pygame.draw.rect(
                 overlay,
                 stroke,
-                (max(2, mid_x - arm // 2), mid_y - (bar_w // 2), arm, bar_w),
+                horizontal,
                 stroke_w,
             )
+            self.pygame.draw.circle(overlay, highlight, (mid_x, mid_y), max(2, stroke_w + 1))
         elif kind == "token":
             radius = max(3, self.cell_px // 4)
+            self.pygame.draw.circle(overlay, outline, (mid_x + 1, mid_y + 1), radius)
             self.pygame.draw.circle(overlay, fill, (mid_x, mid_y), radius)
             self.pygame.draw.circle(overlay, stroke, (mid_x, mid_y), radius, stroke_w)
             self.pygame.draw.circle(overlay, dark, (mid_x, mid_y), max(1, radius // 2), max(1, stroke_w - 1))
+            shine_y = mid_y - max(1, radius // 3)
+            self.pygame.draw.arc(
+                overlay,
+                highlight,
+                (mid_x - radius + 1, shine_y - max(2, radius // 2), max(2, radius * 2 - 2), max(3, radius)),
+                3.4,
+                5.7,
+                max(1, stroke_w),
+            )
         elif kind == "tool":
             handle_x0 = max(2, self.cell_px // 4)
             handle_y0 = self.cell_px - max(4, self.cell_px // 3)
             handle_x1 = self.cell_px - max(4, self.cell_px // 4)
             handle_y1 = max(3, self.cell_px // 3)
+            self.pygame.draw.line(overlay, outline, (handle_x0 + 1, handle_y0 + 1), (handle_x1 + 1, handle_y1 + 1), max(3, stroke_w + 2))
             self.pygame.draw.line(overlay, stroke, (handle_x0, handle_y0), (handle_x1, handle_y1), max(2, stroke_w + 1))
             jaw_r = max(2, self.cell_px // 7)
             self.pygame.draw.circle(overlay, fill, (handle_x1, handle_y1), jaw_r)
-            self.pygame.draw.circle(overlay, (0, 0, 0, 0), (handle_x1, handle_y1), max(1, jaw_r - 1))
+            self.pygame.draw.circle(overlay, outline, (handle_x1 + max(1, jaw_r // 2), handle_y1 - max(1, jaw_r // 2)), max(1, jaw_r - 1))
+            self.pygame.draw.line(
+                overlay,
+                highlight,
+                (handle_x0 + max(1, self.cell_px // 12), handle_y0 - max(1, self.cell_px // 12)),
+                (handle_x1 - max(1, self.cell_px // 12), handle_y1 + max(1, self.cell_px // 12)),
+                max(1, stroke_w),
+            )
         elif kind == "weapon":
+            self.pygame.draw.line(
+                overlay,
+                outline,
+                (max(2, self.cell_px // 4) + 1, self.cell_px - max(3, self.cell_px // 4) + 1),
+                (self.cell_px - max(2, self.cell_px // 4) + 1, max(2, self.cell_px // 4) + 1),
+                max(3, stroke_w + 2),
+            )
             self.pygame.draw.line(
                 overlay,
                 stroke,
@@ -1408,8 +1447,15 @@ class PygameView:
                 dark,
                 (grip_x - max(1, self.cell_px // 14), grip_y + max(1, self.cell_px // 12)),
                 (grip_x + max(2, self.cell_px // 8), grip_y - max(1, self.cell_px // 10)),
-                stroke_w,
+                max(2, stroke_w),
             )
+            muzzle = self.pygame.Rect(
+                self.cell_px - max(4, self.cell_px // 4),
+                max(2, self.cell_px // 5),
+                max(3, self.cell_px // 6),
+                max(2, self.cell_px // 10),
+            )
+            self.pygame.draw.rect(overlay, stroke, muzzle, border_radius=max(1, self.cell_px // 24))
         elif kind == "armor":
             points = [
                 (mid_x, max(2, self.cell_px // 5)),
@@ -1419,8 +1465,16 @@ class PygameView:
                 (max(2, self.cell_px // 4), self.cell_px - max(4, self.cell_px // 4)),
                 (max(2, self.cell_px // 4), max(3, self.cell_px // 3)),
             ]
+            self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in points], stroke_w + 1)
             self.pygame.draw.polygon(overlay, fill, points)
             self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
+            self.pygame.draw.line(
+                overlay,
+                highlight,
+                (mid_x, max(3, self.cell_px // 4)),
+                (mid_x, self.cell_px - max(3, self.cell_px // 4)),
+                max(1, stroke_w),
+            )
         elif kind == "food":
             plate = self.pygame.Rect(
                 max(2, self.cell_px // 6),
@@ -1434,6 +1488,7 @@ class PygameView:
                 self.cell_px - max(6, self.cell_px // 2),
                 max(5, self.cell_px // 3),
             )
+            self.pygame.draw.ellipse(overlay, outline, plate.move(1, 1))
             self.pygame.draw.ellipse(overlay, (245, 232, 172, 110), plate)
             self.pygame.draw.arc(overlay, stroke, bowl, 0.0, 3.14, max(2, stroke_w + 1))
             self.pygame.draw.rect(
@@ -1464,6 +1519,7 @@ class PygameView:
             )
             neck_rect = self.pygame.Rect(mid_x - (neck_w // 2), body_rect.top - neck_h + 1, neck_w, neck_h)
             cap_rect = self.pygame.Rect(neck_rect.left - 1, max(1, neck_rect.top - max(1, self.cell_px // 18)), neck_rect.w + 2, max(2, self.cell_px // 12))
+            self.pygame.draw.rect(overlay, outline, body_rect.move(1, 1), border_radius=max(2, self.cell_px // 12))
             self.pygame.draw.rect(overlay, fill, body_rect, border_radius=max(2, self.cell_px // 12))
             self.pygame.draw.rect(overlay, fill, neck_rect)
             self.pygame.draw.rect(overlay, stroke, body_rect, stroke_w, border_radius=max(2, self.cell_px // 12))
@@ -1475,6 +1531,7 @@ class PygameView:
         elif kind == "access":
             ring_r = max(2, self.cell_px // 8)
             ring_x = max(3, self.cell_px // 3)
+            self.pygame.draw.circle(overlay, outline, (ring_x + 1, mid_y + 1), ring_r + max(1, stroke_w // 2), stroke_w + 1)
             self.pygame.draw.circle(overlay, stroke, (ring_x, mid_y), ring_r, stroke_w)
             self.pygame.draw.line(
                 overlay,
@@ -1498,6 +1555,9 @@ class PygameView:
                 (tooth_x - max(3, self.cell_px // 10), mid_y + max(1, self.cell_px // 8)),
                 stroke_w,
             )
+            card = self.pygame.Rect(max(2, self.cell_px // 5), max(2, self.cell_px // 5), max(5, self.cell_px // 3), max(4, self.cell_px // 4))
+            self.pygame.draw.rect(overlay, (frame[0], frame[1], frame[2], 74), card, border_radius=max(1, self.cell_px // 20))
+            self.pygame.draw.line(overlay, highlight, (card.left + 1, card.centery), (card.right - 1, card.centery), max(1, stroke_w - 1))
         elif kind == "restricted":
             points = [
                 (mid_x, max(2, self.cell_px // 6)),
@@ -1505,6 +1565,7 @@ class PygameView:
                 (mid_x, self.cell_px - max(3, self.cell_px // 6)),
                 (max(2, self.cell_px // 6), mid_y),
             ]
+            self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in points], stroke_w + 1)
             self.pygame.draw.polygon(overlay, fill, points)
             self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
             self.pygame.draw.line(
@@ -1514,7 +1575,10 @@ class PygameView:
                 (mid_x, self.cell_px - max(3, self.cell_px // 4)),
                 stroke_w,
             )
+            self.pygame.draw.circle(overlay, dark, (mid_x, self.cell_px - max(3, self.cell_px // 5)), max(1, stroke_w))
         elif kind == "illegal":
+            self.pygame.draw.circle(overlay, outline, (mid_x + 1, mid_y + 1), max(4, self.cell_px // 3), stroke_w + 1)
+            self.pygame.draw.circle(overlay, fill, (mid_x, mid_y), max(4, self.cell_px // 3), max(1, stroke_w))
             self.pygame.draw.line(
                 overlay,
                 stroke,
@@ -1530,9 +1594,18 @@ class PygameView:
                 max(2, stroke_w + 1),
             )
         elif kind == "objective":
-            radius = max(3, self.cell_px // 4)
-            self.pygame.draw.circle(overlay, stroke, (mid_x, mid_y), radius, stroke_w)
-            self.pygame.draw.circle(overlay, fill, (mid_x, mid_y), max(1, radius // 3))
+            outer_r = max(4, self.cell_px // 3)
+            inner_r = max(2, self.cell_px // 6)
+            points = []
+            for idx in range(8):
+                angle = (math.pi / 4.0) * idx - (math.pi / 2.0)
+                radius = outer_r if idx % 2 == 0 else inner_r
+                points.append((mid_x + int(math.cos(angle) * radius), mid_y + int(math.sin(angle) * radius)))
+            self.pygame.draw.polygon(overlay, self._alpha_color("item_highlight", 86), [(px + 1, py + 1) for px, py in points])
+            self.pygame.draw.polygon(overlay, fill, points)
+            self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
+            self.pygame.draw.circle(overlay, highlight, (mid_x, mid_y), max(1, self.cell_px // 10))
+            self.pygame.draw.circle(overlay, outline, (mid_x, mid_y), max(1, self.cell_px // 18))
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
@@ -1958,26 +2031,26 @@ class PygameView:
         mid_y = self.cell_px // 2
         inset = max(1, self.cell_px // 8)
         stroke_w = max(1, self.cell_px // 18)
-        fill = (frame[0], frame[1], frame[2], 132)
-        stroke = (
-            min(255, int(frame[0] * 1.12)),
-            min(255, int(frame[1] * 1.12)),
-            min(255, int(frame[2] * 1.12)),
-            220,
-        )
-        shadow = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 152)
-        accent = (
-            min(255, int(frame[0] * 1.08) + 10),
-            min(255, int(frame[1] * 1.02) + 8),
-            min(255, int(frame[2] * 1.02) + 8),
-            160,
+        fill = (frame[0], frame[1], frame[2], 152)
+        stroke = self._lightened_rgba(frame, 232, amount=0.2)
+        shadow = self._darkened_rgba(frame, 172, amount=0.55)
+        outline = self._alpha_color("actor_outline", 188)
+        highlight = self._alpha_color("actor_highlight", 142)
+        accent = self._lightened_rgba(frame, 184, amount=0.32)
+        self._draw_legibility_backing(
+            overlay,
+            self._local_tile_rect(inset=max(2, self.cell_px // 9), min_size=7),
+            color="actor_outline",
+            alpha=58,
+            radius=max(2, self.cell_px // 7),
         )
 
         if kind == "player":
             radius = max(4, (self.cell_px // 2) - inset)
-            self.pygame.draw.circle(overlay, shadow, (mid_x + 1, mid_y + 1), radius)
+            self.pygame.draw.circle(overlay, outline, (mid_x + 1, mid_y + 1), radius + max(1, stroke_w))
             self.pygame.draw.circle(overlay, fill, (mid_x, mid_y), radius)
             self.pygame.draw.circle(overlay, stroke, (mid_x, mid_y), radius, stroke_w)
+            self.pygame.draw.circle(overlay, highlight, (mid_x, mid_y), max(2, radius - max(2, self.cell_px // 6)), max(1, stroke_w))
             self.pygame.draw.arc(
                 overlay,
                 accent,
@@ -1994,6 +2067,17 @@ class PygameView:
                 ((self.cell_px - inset - 1, mid_y), (self.cell_px - inset - 1 - tick, mid_y)),
             ):
                 self.pygame.draw.line(overlay, accent, start, end, max(1, stroke_w))
+            self.pygame.draw.polygon(
+                overlay,
+                highlight,
+                [
+                    (mid_x, inset + max(1, self.cell_px // 8)),
+                    (mid_x + max(2, self.cell_px // 8), mid_y),
+                    (mid_x, self.cell_px - inset - max(1, self.cell_px // 8)),
+                    (mid_x - max(2, self.cell_px // 8), mid_y),
+                ],
+                max(1, stroke_w),
+            )
         elif kind == "guard":
             points = [
                 (mid_x, inset),
@@ -2004,9 +2088,16 @@ class PygameView:
                 (inset + 1, inset + max(2, self.cell_px // 4)),
             ]
             shadow_points = [(px + 1, py + 1) for px, py in points]
-            self.pygame.draw.polygon(overlay, shadow, shadow_points)
+            self.pygame.draw.polygon(overlay, outline, shadow_points)
             self.pygame.draw.polygon(overlay, fill, points)
             self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
+            cap = self.pygame.Rect(
+                mid_x - max(3, self.cell_px // 5),
+                inset + max(1, self.cell_px // 10),
+                max(6, (self.cell_px // 5) * 2),
+                max(2, self.cell_px // 8),
+            )
+            self.pygame.draw.rect(overlay, highlight, cap, border_radius=max(1, self.cell_px // 24))
             self.pygame.draw.line(
                 overlay,
                 accent,
@@ -2028,6 +2119,7 @@ class PygameView:
                 (mid_x + max(2, self.cell_px // 8), mid_y + max(1, self.cell_px // 5)),
                 max(1, stroke_w),
             )
+            self.pygame.draw.circle(overlay, highlight, (mid_x, mid_y + max(1, self.cell_px // 12)), max(1, self.cell_px // 18))
         elif kind == "scout":
             diamond = [
                 (mid_x, inset),
@@ -2035,9 +2127,16 @@ class PygameView:
                 (mid_x, self.cell_px - inset - 1),
                 (inset, mid_y),
             ]
-            self.pygame.draw.polygon(overlay, shadow, [(px + 1, py + 1) for px, py in diamond])
+            self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in diamond])
             self.pygame.draw.polygon(overlay, fill, diamond)
             self.pygame.draw.polygon(overlay, stroke, diamond, stroke_w)
+            inner = [
+                (mid_x, inset + max(3, self.cell_px // 5)),
+                (mid_x + max(3, self.cell_px // 6), mid_y),
+                (mid_x, self.cell_px - inset - max(3, self.cell_px // 5)),
+                (mid_x - max(3, self.cell_px // 6), mid_y),
+            ]
+            self.pygame.draw.polygon(overlay, highlight, inner, max(1, stroke_w))
             self.pygame.draw.line(
                 overlay,
                 accent,
@@ -2054,23 +2153,30 @@ class PygameView:
             )
             self.pygame.draw.circle(overlay, accent, (mid_x, inset + max(2, self.cell_px // 5)), max(1, self.cell_px // 18))
         else:
-            rect = self.pygame.Rect(
-                inset,
-                inset,
-                max(4, self.cell_px - (inset * 2)),
-                max(4, self.cell_px - (inset * 2)),
+            body = self.pygame.Rect(
+                mid_x - max(3, self.cell_px // 5),
+                mid_y - max(1, self.cell_px // 14),
+                max(6, (self.cell_px // 5) * 2),
+                max(5, self.cell_px // 3),
             )
-            self.pygame.draw.rect(overlay, shadow, rect.move(1, 1), border_radius=max(2, self.cell_px // 7))
-            self.pygame.draw.rect(overlay, fill, rect, border_radius=max(2, self.cell_px // 7))
-            self.pygame.draw.rect(overlay, stroke, rect, stroke_w, border_radius=max(2, self.cell_px // 7))
-            self.pygame.draw.circle(overlay, accent, (mid_x, rect.top + max(3, self.cell_px // 5)), max(2, self.cell_px // 8))
+            head_r = max(3, self.cell_px // 6)
+            head_center = (mid_x, max(inset + head_r, mid_y - max(2, self.cell_px // 5)))
+            self.pygame.draw.ellipse(overlay, outline, body.move(1, 1))
+            self.pygame.draw.circle(overlay, outline, (head_center[0] + 1, head_center[1] + 1), head_r + max(1, stroke_w // 2))
+            self.pygame.draw.ellipse(overlay, fill, body)
+            self.pygame.draw.ellipse(overlay, stroke, body, stroke_w)
+            self.pygame.draw.circle(overlay, fill, head_center, head_r)
+            self.pygame.draw.circle(overlay, stroke, head_center, head_r, stroke_w)
             self.pygame.draw.line(
                 overlay,
                 accent,
-                (rect.left + max(2, self.cell_px // 6), rect.bottom - max(2, self.cell_px // 5)),
-                (rect.right - max(2, self.cell_px // 6), rect.bottom - max(2, self.cell_px // 5)),
+                (body.left + max(1, self.cell_px // 8), body.centery),
+                (body.right - max(1, self.cell_px // 8), body.centery),
                 max(1, stroke_w),
             )
+            foot_y = body.bottom + max(1, self.cell_px // 14)
+            self.pygame.draw.line(overlay, shadow, (mid_x - max(2, self.cell_px // 8), body.bottom), (mid_x - max(3, self.cell_px // 7), foot_y), max(1, stroke_w))
+            self.pygame.draw.line(overlay, shadow, (mid_x + max(2, self.cell_px // 8), body.bottom), (mid_x + max(3, self.cell_px // 7), foot_y), max(1, stroke_w))
 
         text_value = str(glyph or "@")[:1] or "@"
         brightness = (frame[0] * 0.299) + (frame[1] * 0.587) + (frame[2] * 0.114)
@@ -2841,6 +2947,59 @@ class PygameView:
         text_surface = self._marker_font.render(text_value, True, text_rgb)
         text_rect = text_surface.get_rect(center=(self.cell_px // 2, self.cell_px // 2))
         overlay.blit(text_surface, text_rect)
+
+        self.surface.blit(overlay, (cell_x, cell_y))
+
+    def _draw_actor_outfit_overlay(self, x, y, color=None, attrs=0, *, kind="secondary"):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+
+        px = self.cell_px
+        stroke_w = max(1, px // 22)
+        outline = self._alpha_color("actor_outline", 190)
+        stroke = self._lightened_rgba(frame, 224, amount=0.22)
+        fill = (frame[0], frame[1], frame[2], 212)
+        shine = self._lightened_rgba(frame, 190, amount=0.48)
+
+        if kind == "secondary":
+            band = self.pygame.Rect(
+                max(3, px // 3),
+                max(7, int(px * 0.58)),
+                max(5, px - (max(3, px // 3) * 2)),
+                max(2, px // 7),
+            )
+            self.pygame.draw.rect(overlay, outline, band.inflate(stroke_w * 2, stroke_w * 2), border_radius=max(1, px // 12))
+            self.pygame.draw.rect(overlay, fill, band, border_radius=max(1, px // 12))
+            self.pygame.draw.line(overlay, stroke, band.midleft, band.midright, stroke_w)
+        elif kind == "footwear":
+            shoe_w = max(3, px // 5)
+            shoe_h = max(2, px // 9)
+            y0 = px - max(3, px // 6)
+            left = self.pygame.Rect(max(3, px // 3) - shoe_w // 2, y0, shoe_w, shoe_h)
+            right = self.pygame.Rect(px - max(3, px // 3) - shoe_w // 2, y0, shoe_w, shoe_h)
+            for rect in (left, right):
+                self.pygame.draw.ellipse(overlay, outline, rect.inflate(stroke_w * 2, stroke_w * 2))
+                self.pygame.draw.ellipse(overlay, fill, rect)
+                self.pygame.draw.line(overlay, stroke, (rect.left + 1, rect.centery), (rect.right - 1, rect.centery), stroke_w)
+        elif kind == "headwear":
+            cap = self.pygame.Rect(max(4, px // 4), max(2, px // 8), max(6, px // 2), max(3, px // 7))
+            brim = self.pygame.Rect(max(3, px // 4) - max(2, px // 9), cap.bottom - 1, max(8, px // 2 + px // 5), max(2, px // 11))
+            self.pygame.draw.rect(overlay, outline, cap.inflate(stroke_w * 2, stroke_w * 2), border_radius=max(1, px // 14))
+            self.pygame.draw.rect(overlay, fill, cap, border_radius=max(1, px // 14))
+            self.pygame.draw.rect(overlay, outline, brim.inflate(stroke_w, stroke_w), border_radius=max(1, px // 16))
+            self.pygame.draw.rect(overlay, fill, brim, border_radius=max(1, px // 16))
+            self.pygame.draw.arc(overlay, shine, cap.inflate(1, 1), 3.3, 6.0, stroke_w)
+        elif kind == "accessory":
+            radius = max(2, px // 11)
+            center = (px - max(4, px // 4), max(5, px // 3))
+            self.pygame.draw.circle(overlay, outline, (center[0] + 1, center[1] + 1), radius + stroke_w)
+            self.pygame.draw.circle(overlay, fill, center, radius)
+            self.pygame.draw.line(overlay, shine, (center[0] - radius, center[1]), (center[0] + radius, center[1]), stroke_w)
+            self.pygame.draw.line(overlay, shine, (center[0], center[1] - radius), (center[0], center[1] + radius), stroke_w)
+        else:
+            self.pygame.draw.circle(overlay, fill, (px // 2, px // 2), max(2, px // 8))
 
         self.surface.blit(overlay, (cell_x, cell_y))
 
@@ -3946,6 +4105,15 @@ class PygameView:
         if glyph == "*" and color_key == "floor_entertainment":
             self._draw_district_floor_overlay(x, y, color=color, attrs=attrs, kind="entertainment")
             return "floor_entertainment"
+        outfit_overlay_kind = {
+            "ui_actor_outfit_secondary": "secondary",
+            "ui_actor_outfit_footwear": "footwear",
+            "ui_actor_outfit_headwear": "headwear",
+            "ui_actor_outfit_accessory": "accessory",
+        }.get(semantic_key)
+        if outfit_overlay_kind:
+            self._draw_actor_outfit_overlay(x, y, color=color, attrs=attrs, kind=outfit_overlay_kind)
+            return semantic_key
         actor_badge_kind = {
             "ui_actor_threat": "threat",
             "ui_actor_ally": "ally",

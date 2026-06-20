@@ -1169,6 +1169,10 @@ class PlayerActionSystem(System):
         if reason == "insufficient_funds":
             lines.append("You do not have enough credits to close this purchase.")
             return self._present_property_purchase_result(title, lines, property_id=property_id)
+        if reason == "active_dispute":
+            lines.append("You cannot close a property transfer while this place is treating you as an active trespass problem.")
+            lines.append("Clear the dispute first, then come back to the sale.")
+            return self._present_property_purchase_result(title, lines, property_id=property_id)
         if reason == "missing_assets":
             lines.append("No asset profile is available for this purchase.")
             return self._present_property_purchase_result(title, lines, property_id=property_id)

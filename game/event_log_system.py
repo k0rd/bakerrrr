@@ -4877,6 +4877,8 @@ class EventLogSystem(System):
             price = event.data.get("price", 0)
             credits = event.data.get("credits", 0)
             self.sim.log.add(f"{property_name} costs {price} credits; you have {credits}.")
+        elif reason == "active_dispute":
+            self.sim.log.add(f"{property_name} will not close a sale while you are in an active property dispute there.")
         elif reason == "missing_assets":
             self.sim.log.add(f"Cannot purchase {property_name} because your wallet is not accessible right now.")
         else:

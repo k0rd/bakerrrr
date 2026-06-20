@@ -6,7 +6,7 @@ from typing import Mapping, Tuple
 
 from engine.buildings import building_exterior_profile
 from game.components import AI, CreatureIdentity, NPCSocial, NPCWill, Render, Vitality
-from game.appearance_loadout import player_appearance_color_key
+from game.appearance_loadout import appearance_color_key, appearance_render_colors, player_appearance_color_key
 from game.dialogue_runtime import active_contractor_record
 from game.human_description import human_render_color_key as _human_render_color_key
 from game.property_runtime import (
@@ -718,6 +718,28 @@ def _actor_badge_overlay(sim, eid, *, player_eid=None, ai=None, will=None, socia
     return ()
 
 
+def _actor_outfit_color_overlays(render_colors):
+    if not isinstance(render_colors, Mapping):
+        return ()
+    overlays = []
+    rows = (
+        ("secondary", "ui_actor_outfit_secondary"),
+        ("footwear", "ui_actor_outfit_footwear"),
+        ("headwear", "ui_actor_outfit_headwear"),
+        ("accessory", "ui_actor_outfit_accessory"),
+    )
+    for role, semantic_id in rows:
+        color = str(render_colors.get(role) or "").strip()
+        if not color:
+            continue
+        overlays.append({
+            "glyph": " ",
+            "color": color,
+            "semantic_id": semantic_id,
+        })
+    return tuple(overlays)
+
+
 def _hominid_semantic_id_for_role(catalog, role=""):
     semantic_role = "human"
     if role == "guard":
@@ -750,14 +772,15 @@ def entity_default_snapshot(identity, *, role="", player=False, catalog=None, se
 
     if taxonomy == "hominid":
         glyph = "@"
-        if seed is not None:
+        worn_color = appearance_color_key(sim, eid) if sim is not None and eid is not None else None
+        if seed is not None and not worn_color:
             color = _human_render_color_key(
                 seed,
                 eid=eid,
                 identity=identity,
                 personal_name=getattr(identity, "personal_name", None),
             ) or color
-        color = color or "human"
+        color = worn_color or color or "human"
         semantic_id = _hominid_semantic_id_for_role(catalog, role=role)
     elif taxonomy in ENTITY_TAXONOMY_SEMANTICS:
         color = color or taxonomy
@@ -1252,6 +1275,15 @@ class AppearanceManager:
         ):
             owned_color = None
         taxonomy = str(getattr(identity, "taxonomy_class", "") or "").strip().lower()
+        outfit_overlays = ()
+        if taxonomy == "hominid":
+            outfit_overlays = _actor_outfit_color_overlays(appearance_render_colors(self.sim, eid))
+        if (
+            taxonomy == "hominid"
+            and str(defaults.color or "").strip().lower().startswith("clothing_")
+            and str(owned_color or "").strip().lower() in {"human", "guard", "scout"}
+        ):
+            owned_color = None
         uses_legacy_hominid_placeholder = (
             taxonomy == "hominid"
             and not getattr(render, "semantic_id", None)
@@ -1278,6 +1310,7 @@ class AppearanceManager:
             visible=bool(defaults.visible) and bool(owned.visible),
             overlays=(
                 tuple(defaults.overlays or ())
+                + tuple(outfit_overlays or ())
                 + tuple(state_overlays or ())
                 + tuple(badge_overlays or ())
                 + tuple(owned.overlays or ())
