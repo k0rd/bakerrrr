@@ -509,12 +509,24 @@ def _owner_cue_fields(scene, relevant):
     cue = _text(scene.get("player_business_cue"))
     kind = _text(scene.get("owner_signal_kind")).lower()
     reason = _text(scene.get("owner_signal_reason"))
-    if not cue:
+    style_kind = _text(scene.get("operating_style_kind")).lower()
+    style_label = _text(scene.get("operating_style_label"))
+    style_reason = _text(scene.get("operating_style_reason"))
+    stock_label = _text(scene.get("stock_identity_label"))
+    customer_mix = _text(scene.get("customer_mix_label"))
+    staff_mood = _text(scene.get("staff_mood_label"))
+    if not cue and not style_label:
         return {}
     return {
         "player_business_cue": cue,
         "owner_signal_kind": kind,
         "owner_signal_reason": reason,
+        "operating_style_kind": style_kind,
+        "operating_style_label": style_label,
+        "operating_style_reason": style_reason,
+        "stock_identity_label": stock_label,
+        "customer_mix_label": customer_mix,
+        "staff_mood_label": staff_mood,
     }
 
 
@@ -1036,8 +1048,11 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
         fixture_text = f" Fixture: {fixtures[0]}." if fixtures else ""
         org_text = f" Orgs: {row['organization_presence']}." if _text(row.get("organization_presence")) else ""
         owner_cue = _text(row.get("player_business_cue"))
+        owner_style = _text(row.get("operating_style_label"))
         if row.get("player_business_relevance") and owner_cue:
             owner_text = f" Your business is directly involved: {owner_cue}."
+        elif row.get("player_business_relevance") and owner_style:
+            owner_text = f" Your business is directly involved: {owner_style}."
         elif row.get("player_business_relevance"):
             owner_text = " Your business is directly involved."
         else:
@@ -1055,6 +1070,9 @@ def _look_owner_text(row):
     owner_cue = _text(row.get("player_business_cue"))
     if owner_cue:
         return f"; your business is directly involved: {owner_cue}"
+    owner_style = _text(row.get("operating_style_label"))
+    if owner_style:
+        return f"; your business is directly involved: {owner_style}"
     return "; your business is directly involved"
 
 

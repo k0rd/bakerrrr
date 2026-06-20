@@ -695,6 +695,14 @@ DEFAULT_ITEM_CATALOG = {
         "legal_status": "legal",
         "effects": [],
     },
+    "sealed_packet": {
+        "name": "Sealed Packet",
+        "glyph": "=",
+        "stack_max": 1,
+        "tags": ["token", "quest", "legal"],
+        "legal_status": "legal",
+        "effects": [],
+    },
     "property_key": {
         "name": "Property Key",
         "glyph": "=",

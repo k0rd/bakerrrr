@@ -519,8 +519,11 @@ def build_debug_overlay(
             warmth_top = f"{warmth_kind}:{top.get('reason', 'social_bond')} chunk {top.get('chunk', '?')} spent"
     lines.append(
         f"Warmth: {int(warmth.get('actor_count', 0) or 0)} actors / "
-        f"{int(warmth.get('area_count', 0) or 0)} areas / "
-        f"{int(warmth.get('protected_count', 0) or 0)} protected chunks | Top {warmth_top}"
+        f"{int(warmth.get('area_count', 0) or 0)} places | "
+        f"Protected social/building {int(warmth.get('social_protected_count', 0) or 0)}/"
+        f"{int(warmth.get('area_protected_count', 0) or 0)} "
+        f"(budgets {int(warmth.get('social_budget', 0) or 0)}/"
+        f"{int(warmth.get('building_budget', 0) or 0)}) | Top {warmth_top}"
     )
     lines.append(
         f"Entities {len(positions)} | Floor {len(sim.tilemap.entities_on_floor(active_z))} | "

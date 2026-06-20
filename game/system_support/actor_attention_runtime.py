@@ -77,6 +77,10 @@ FULL_DISTANCE = 8
 FULL_LOS_DISTANCE = 14
 URGENT_DEFAULT_TTL = 12
 SOCIAL_WARMTH_CHUNK_BUDGET = 3
+BUILDING_WARMTH_CHUNK_BUDGET = 3
+AREA_WARMTH_CHUNK_BUDGET = BUILDING_WARMTH_CHUNK_BUDGET
+PLAYER_BUSINESS_WARMTH_SCORE = 2.4
+PLAYER_VEHICLE_WARMTH_SCORE = 2.2
 SOCIAL_WARMTH_MIN_SCORE = 0.08
 SOCIAL_WARMTH_MAX_SCORE = 3.0
 SOCIAL_WARMTH_SPEND_FRACTION = 0.42
@@ -101,6 +105,7 @@ def _empty_stats():
         "social_warmth_actors": 0,
         "area_warmth_areas": 0,
         "social_warmth_protected_chunks": 0,
+        "area_warmth_protected_chunks": 0,
     }
 
 
@@ -118,7 +123,9 @@ def _new_state():
         "social_warmth": {},
         "area_warmth": {},
         "social_warmth_protected_chunks": set(),
+        "area_warmth_protected_chunks": set(),
         "social_warmth_last_protected": (),
+        "area_warmth_last_protected": (),
         "last_refresh_tick": None,
         "settlement_candidate_cache": {"home": {}, "work": {}, "arrival": {}},
         "stats": _empty_stats(),
@@ -144,7 +151,10 @@ def actor_attention_state(sim):
         state["area_warmth"] = {}
     if not isinstance(state.get("social_warmth_protected_chunks"), set):
         state["social_warmth_protected_chunks"] = set(state.get("social_warmth_protected_chunks") or ())
+    if not isinstance(state.get("area_warmth_protected_chunks"), set):
+        state["area_warmth_protected_chunks"] = set(state.get("area_warmth_protected_chunks") or ())
     state.setdefault("social_warmth_last_protected", ())
+    state.setdefault("area_warmth_last_protected", ())
     for family in ATTENTION_FAMILIES:
         state["due"].setdefault(family, {})
         state["due_membership"].setdefault(family, {})
@@ -660,7 +670,7 @@ def _spend_social_warmth_row(rows, eid):
     return _spend_warmth_row(rows, eid)
 
 
-def _warmth_item(kind, key, chunk, score, row, *, actor_eid=None):
+def _warmth_item(kind, key, chunk, score, row, *, actor_eid=None, no_spend=False):
     reason = str((row or {}).get("reason", "") or "").strip().lower()
     if not reason:
         reason = "social_bond" if kind == "actor" else "area"
@@ -672,13 +682,103 @@ def _warmth_item(kind, key, chunk, score, row, *, actor_eid=None):
         "row": row,
         "reason": reason,
         "priority": 0 if kind == "actor" else 1,
+        "no_spend": bool(no_spend),
     }
     if actor_eid is not None:
         item["actor_eid"] = int(actor_eid)
     return item
 
 
-def warmth_protected_chunks(sim, unload_candidates, *, budget=SOCIAL_WARMTH_CHUNK_BUDGET):
+def _rank_warmth_candidates(by_chunk):
+    ranked = []
+    for chunk, warm_rows in by_chunk.items():
+        if not warm_rows:
+            continue
+        warm_rows = sorted(warm_rows, key=lambda item: (-float(item["score"]), int(item["priority"]), str(item["key"])))
+        top_row = warm_rows[0]
+        top_score = float(top_row["score"])
+        extra = sum(float(item["score"]) for item in warm_rows[1:])
+        chunk_score = top_score + min(SOCIAL_WARMTH_CHUNK_EXTRA_CAP, extra * 0.25)
+        ranked.append({
+            "chunk_score": float(chunk_score),
+            "chunk": chunk,
+            "top": top_row,
+            "items": tuple(warm_rows),
+            "actor_count": sum(1 for item in warm_rows if item["kind"] == "actor"),
+            "area_count": sum(1 for item in warm_rows if item["kind"] == "area"),
+        })
+    return sorted(
+        ranked,
+        key=lambda item: (-float(item["chunk_score"]), int(item["top"]["priority"]), item["chunk"]),
+    )
+
+
+def _selected_warmth_last_row(selected_row):
+    chunk = selected_row["chunk"]
+    top = selected_row["top"]
+    reason = str(top.get("reason", "") or "").strip().lower()
+    last_row = {
+        "kind": str(top.get("kind", "actor") or "actor"),
+        "chunk": chunk,
+        "score": float(selected_row["chunk_score"]),
+        "top_score": float(top["score"]),
+        "actor_count": int(selected_row["actor_count"]),
+        "area_count": int(selected_row["area_count"]),
+        "reason": reason or ("social_bond" if top.get("kind") == "actor" else "area"),
+    }
+    if top.get("kind") == "actor":
+        last_row["actor_eid"] = int(top.get("actor_eid", top.get("key")))
+    else:
+        last_row["area_key"] = str(top.get("key", ""))
+    return last_row
+
+
+def _owned_property_warmth_rows(sim):
+    player_eid = getattr(sim, "player_eid", None)
+    if player_eid is None:
+        return tuple()
+    assets = sim.ecs.get(PlayerAssets).get(player_eid)
+    if assets is None:
+        return tuple()
+    owned_ids = {
+        str(raw).strip()
+        for raw in tuple(getattr(assets, "owned_property_ids", ()) or ())
+        if str(raw).strip()
+    }
+    if not owned_ids:
+        return tuple()
+
+    rows = []
+    for prop_id in sorted(owned_ids):
+        prop = getattr(sim, "properties", {}).get(prop_id)
+        if property_supports_business_relevance(prop):
+            reason = "player_business"
+            score = PLAYER_BUSINESS_WARMTH_SCORE
+        elif property_is_vehicle(prop):
+            reason = "player_vehicle"
+            score = PLAYER_VEHICLE_WARMTH_SCORE
+        else:
+            continue
+        chunk = _property_chunk(sim, prop)
+        if chunk is None:
+            continue
+        key = f"{reason}:{prop_id}"
+        row = {
+            "chunk": chunk,
+            "score": score,
+            "peak_score": score,
+            "reason": reason,
+            "reason_score": score,
+            "source_kind": reason,
+            "source_id": prop_id,
+            "last_tick": _safe_int(getattr(sim, "tick", 0), 0),
+            "spend_count": 0,
+        }
+        rows.append((key, chunk, score, row))
+    return tuple(rows)
+
+
+def social_warmth_protected_chunks(sim, unload_candidates, *, budget=SOCIAL_WARMTH_CHUNK_BUDGET):
     state = actor_attention_state(sim)
     candidates = {
         chunk
@@ -702,83 +802,104 @@ def warmth_protected_chunks(sim, unload_candidates, *, budget=SOCIAL_WARMTH_CHUN
         if chunk not in candidates:
             continue
         by_chunk[chunk].append(_warmth_item("actor", eid, chunk, score, row, actor_eid=eid))
+
+    selected = _rank_warmth_candidates(by_chunk)[:budget]
+    protected = {item["chunk"] for item in selected}
+    social_rows = _social_warmth_rows(state)
+    last = []
+    for selected_row in selected:
+        last.append(_selected_warmth_last_row(selected_row))
+        for item in selected_row["items"]:
+            _spend_social_warmth_row(social_rows, item["key"])
+    state["social_warmth_protected_chunks"] = protected
+    state["social_warmth_last_protected"] = tuple(last)
+    _prune_social_warmth(sim, state, live_only=True)
+    return set(protected)
+
+
+def area_warmth_protected_chunks(sim, unload_candidates, *, budget=BUILDING_WARMTH_CHUNK_BUDGET):
+    state = actor_attention_state(sim)
+    candidates = {
+        chunk
+        for chunk in (_normalize_chunk(raw) for raw in tuple(unload_candidates or ()))
+        if chunk is not None
+    }
+    state["area_warmth_protected_chunks"] = set()
+    state["area_warmth_last_protected"] = ()
+    if not candidates:
+        return set()
+    try:
+        budget = int(budget)
+    except (TypeError, ValueError):
+        budget = BUILDING_WARMTH_CHUNK_BUDGET
+    if budget <= 0:
+        return set()
+
+    by_chunk = defaultdict(list)
     for key, chunk, score, row in _live_area_warmth_rows(sim, state):
         if chunk not in candidates:
             continue
         by_chunk[chunk].append(_warmth_item("area", key, chunk, score, row))
-
-    ranked = []
-    for chunk, warm_rows in by_chunk.items():
-        if not warm_rows:
+    for key, chunk, score, row in _owned_property_warmth_rows(sim):
+        if chunk not in candidates:
             continue
-        warm_rows = sorted(warm_rows, key=lambda item: (-float(item["score"]), int(item["priority"]), str(item["key"])))
-        top_row = warm_rows[0]
-        top_score = float(top_row["score"])
-        extra = sum(float(item["score"]) for item in warm_rows[1:])
-        chunk_score = top_score + min(SOCIAL_WARMTH_CHUNK_EXTRA_CAP, extra * 0.25)
-        ranked.append({
-            "chunk_score": float(chunk_score),
-            "chunk": chunk,
-            "top": top_row,
-            "items": tuple(warm_rows),
-            "actor_count": sum(1 for item in warm_rows if item["kind"] == "actor"),
-            "area_count": sum(1 for item in warm_rows if item["kind"] == "area"),
-        })
+        by_chunk[chunk].append(_warmth_item("area", key, chunk, score, row, no_spend=True))
 
-    selected = sorted(
-        ranked,
-        key=lambda item: (-float(item["chunk_score"]), int(item["top"]["priority"]), item["chunk"]),
-    )[:budget]
+    selected = _rank_warmth_candidates(by_chunk)[:budget]
     protected = {item["chunk"] for item in selected}
-    social_rows = _social_warmth_rows(state)
     area_rows = _area_warmth_rows(state)
     last = []
     for selected_row in selected:
-        chunk = selected_row["chunk"]
-        top = selected_row["top"]
-        reason = str(top.get("reason", "") or "").strip().lower()
-        last_row = {
-            "kind": str(top.get("kind", "actor") or "actor"),
-            "chunk": chunk,
-            "score": float(selected_row["chunk_score"]),
-            "top_score": float(top["score"]),
-            "actor_count": int(selected_row["actor_count"]),
-            "area_count": int(selected_row["area_count"]),
-            "reason": reason or ("social_bond" if top.get("kind") == "actor" else "area"),
-        }
-        if top.get("kind") == "actor":
-            last_row["actor_eid"] = int(top.get("actor_eid", top.get("key")))
-        else:
-            last_row["area_key"] = str(top.get("key", ""))
-        last.append(last_row)
+        last.append(_selected_warmth_last_row(selected_row))
         for item in selected_row["items"]:
-            if item["kind"] == "actor":
-                _spend_social_warmth_row(social_rows, item["key"])
-            else:
+            if not bool(item.get("no_spend")):
                 _spend_warmth_row(area_rows, item["key"])
-    state["social_warmth_protected_chunks"] = protected
-    state["social_warmth_last_protected"] = tuple(last)
-    _prune_social_warmth(sim, state, live_only=True)
+    state["area_warmth_protected_chunks"] = protected
+    state["area_warmth_last_protected"] = tuple(last)
     _prune_area_warmth(sim, state)
     return set(protected)
 
 
-def social_warmth_protected_chunks(sim, unload_candidates, *, budget=SOCIAL_WARMTH_CHUNK_BUDGET):
-    return warmth_protected_chunks(sim, unload_candidates, budget=budget)
+def warmth_protected_chunks(
+    sim,
+    unload_candidates,
+    *,
+    social_budget=SOCIAL_WARMTH_CHUNK_BUDGET,
+    building_budget=BUILDING_WARMTH_CHUNK_BUDGET,
+    area_budget=None,
+    budget=None,
+):
+    if budget is not None:
+        social_budget = budget
+        building_budget = budget
+    elif area_budget is not None:
+        building_budget = area_budget
+    social_protected = social_warmth_protected_chunks(sim, unload_candidates, budget=social_budget)
+    area_protected = area_warmth_protected_chunks(sim, unload_candidates, budget=building_budget)
+    return set(social_protected) | set(area_protected)
 
 
 def warmth_debug_summary(sim, *, limit=1):
     state = actor_attention_state(sim)
     live_actor_rows = tuple(_live_social_warmth_rows(sim, state))
     live_area_rows = tuple(_live_area_warmth_rows(sim, state))
-    protected = state.get("social_warmth_protected_chunks", set())
-    if not isinstance(protected, set):
-        protected = set(protected or ())
+    owned_property_rows = tuple(_owned_property_warmth_rows(sim))
+    social_protected = state.get("social_warmth_protected_chunks", set())
+    if not isinstance(social_protected, set):
+        social_protected = set(social_protected or ())
+    area_protected = state.get("area_warmth_protected_chunks", set())
+    if not isinstance(area_protected, set):
+        area_protected = set(area_protected or ())
+    protected = set(social_protected) | set(area_protected)
     combined = []
     for eid, pos, score, row in live_actor_rows:
         combined.append(_warmth_item("actor", eid, _chunk_for_pos(sim, pos), score, row, actor_eid=eid))
     for key, chunk, score, row in live_area_rows:
         combined.append(_warmth_item("area", key, chunk, score, row))
+    for key, chunk, score, row in owned_property_rows:
+        combined.append(_warmth_item("area", key, chunk, score, row, no_spend=True))
+    owned_business_count = sum(1 for _key, _chunk, _score, row in owned_property_rows if row.get("reason") == "player_business")
+    owned_vehicle_count = sum(1 for _key, _chunk, _score, row in owned_property_rows if row.get("reason") == "player_vehicle")
     combined = sorted(combined, key=lambda item: (-float(item["score"]), int(item["priority"]), str(item["key"])))
     top = []
     for item in combined[: max(0, int(limit))]:
@@ -795,10 +916,19 @@ def warmth_debug_summary(sim, *, limit=1):
         top.append(row)
     return {
         "actor_count": len(live_actor_rows),
-        "area_count": len(live_area_rows),
+        "area_count": len(live_area_rows) + len(owned_property_rows),
+        "owned_business_count": owned_business_count,
+        "owned_vehicle_count": owned_vehicle_count,
         "protected_count": len(protected),
+        "social_protected_count": len(social_protected),
+        "area_protected_count": len(area_protected),
+        "social_budget": SOCIAL_WARMTH_CHUNK_BUDGET,
+        "building_budget": BUILDING_WARMTH_CHUNK_BUDGET,
         "top": tuple(top),
-        "last_protected": tuple(state.get("social_warmth_last_protected", ()) or ()),
+        "last_protected": tuple(state.get("social_warmth_last_protected", ()) or ())
+        + tuple(state.get("area_warmth_last_protected", ()) or ()),
+        "social_last_protected": tuple(state.get("social_warmth_last_protected", ()) or ()),
+        "area_last_protected": tuple(state.get("area_warmth_last_protected", ()) or ()),
     }
 
 
@@ -1184,9 +1314,14 @@ def refresh_actor_attention(sim, *, player_eid=None):
         stats["due_counts"][family] = sum(len(bucket or ()) for bucket in state["due"][family].values())
         stats["urgent_counts"][family] = len(state["urgent"][family])
     stats["social_warmth_actors"] = len(social_warm_actor_eids(sim))
-    stats["area_warmth_areas"] = len(_live_area_warmth_rows(sim, state))
+    owned_property_rows = tuple(_owned_property_warmth_rows(sim))
+    stats["area_warmth_areas"] = len(_live_area_warmth_rows(sim, state)) + len(owned_property_rows)
+    stats["owned_business_warmth_areas"] = sum(1 for _key, _chunk, _score, row in owned_property_rows if row.get("reason") == "player_business")
+    stats["owned_vehicle_warmth_areas"] = sum(1 for _key, _chunk, _score, row in owned_property_rows if row.get("reason") == "player_vehicle")
     protected = state.get("social_warmth_protected_chunks", set())
     stats["social_warmth_protected_chunks"] = len(protected if isinstance(protected, set) else set(protected or ()))
+    protected = state.get("area_warmth_protected_chunks", set())
+    stats["area_warmth_protected_chunks"] = len(protected if isinstance(protected, set) else set(protected or ()))
     state["stats"] = stats
     state["last_refresh_tick"] = tick
     return state

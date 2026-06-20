@@ -28,6 +28,7 @@ from game.organizations import (
 from game.player_businesses import (
     player_business_markup_profile as _player_business_markup_profile,
     player_business_record_direct_sale as _player_business_record_direct_sale,
+    refresh_player_business_runtime as _refresh_player_business_runtime,
 )
 from game.property_access import (
     STOREFRONT_ARCHETYPE_HINTS,
@@ -64,6 +65,7 @@ from game.system_support.store_purchase_runtime import (
     INTEREST_UNUSUAL,
     canonical_store_item_id,
     classify_store_purchase_interest,
+    item_purchase_tags,
 )
 from game.system_support.street_vendor_trade_runtime import (
     STREET_TRADE_SOURCE_KIND,
@@ -2054,6 +2056,79 @@ class TradeSystem(System):
         rng = random.Random(f"{self.sim.seed}:store_refresh:{property_id}")
         return rng.randint(140, 220)
 
+    def _owner_stocked_entries(self, state):
+        rows = []
+        for entry in list((state or {}).get("entries", ()) or ()):
+            if not isinstance(entry, dict) or not bool(entry.get("owner_stocked")):
+                continue
+            stock = int(max(0, entry.get("stock", 0) or 0))
+            owner_stock = int(max(0, entry.get("owner_stocked_stock", 0) or 0))
+            if stock <= 0 or owner_stock <= 0:
+                continue
+            clean = dict(entry)
+            clean["stock"] = min(stock, owner_stock)
+            clean["owner_stocked_stock"] = min(stock, owner_stock)
+            rows.append(clean)
+        return rows
+
+    def _entry_metadata_matches(self, left, right):
+        left_meta = left.get("metadata") if isinstance(left, dict) and isinstance(left.get("metadata"), dict) else None
+        right_meta = right.get("metadata") if isinstance(right, dict) and isinstance(right.get("metadata"), dict) else None
+        return left_meta == right_meta
+
+    def _merge_owner_stocked_entries(self, entries, owner_entries):
+        for owner_entry in list(owner_entries or ()):
+            item_key = canonical_store_item_id(owner_entry.get("item_id"))
+            if not item_key:
+                continue
+            owner_stock = int(max(0, owner_entry.get("owner_stocked_stock", owner_entry.get("stock", 0)) or 0))
+            if owner_stock <= 0:
+                continue
+            existing = None
+            for row in entries:
+                if canonical_store_item_id(row.get("item_id")) != item_key:
+                    continue
+                if self._entry_metadata_matches(row, owner_entry):
+                    existing = row
+                    break
+            if existing is None:
+                clean = dict(owner_entry)
+                clean["stock"] = owner_stock
+                clean["owner_stocked"] = True
+                clean["owner_stocked_stock"] = owner_stock
+                entries.append(clean)
+                continue
+            existing["stock"] = int(max(0, existing.get("stock", 0) or 0)) + owner_stock
+            existing["owner_stocked"] = True
+            existing["owner_stocked_stock"] = int(max(0, existing.get("owner_stocked_stock", 0) or 0)) + owner_stock
+            if not isinstance(existing.get("metadata"), dict) and isinstance(owner_entry.get("metadata"), dict):
+                existing["metadata"] = dict(owner_entry.get("metadata") or {})
+        entries.sort(key=lambda row: (int(row.get("buy_price", 0) or 0), row.get("item_id", "")))
+        return entries
+
+    def _owner_stock_tag_bias(self, state):
+        tags = set()
+        broad_tags = {"legal", "restricted", "illegal", "stolen"}
+        for entry in self._owner_stocked_entries(state):
+            item_id = canonical_store_item_id(entry.get("item_id"))
+            if item_id:
+                tags.update(tag for tag in item_purchase_tags(item_id, entry) if tag not in broad_tags)
+        return tags
+
+    def _consume_store_stock(self, entry, quantity=1):
+        if not isinstance(entry, dict):
+            return 0
+        quantity = max(1, int(quantity or 1))
+        before = int(max(0, entry.get("stock", 0) or 0))
+        consumed = min(before, quantity)
+        entry["stock"] = max(0, before - consumed)
+        owner_stock = int(max(0, entry.get("owner_stocked_stock", 0) or 0))
+        if owner_stock > 0 and consumed > 0:
+            entry["owner_stocked_stock"] = max(0, owner_stock - consumed)
+            if int(entry.get("owner_stocked_stock", 0) or 0) <= 0:
+                entry["owner_stocked"] = False
+        return int(entry["stock"])
+
     def _rebuild_store(self, state, prop, cycle_index):
         metadata = prop.get("metadata") if isinstance(prop.get("metadata"), dict) else {}
         archetype = str(metadata.get("archetype", "")).strip().lower()
@@ -2063,6 +2138,8 @@ class TradeSystem(System):
         practice_modifiers = dict(practice.get("effect_modifiers", {}))
         rng = random.Random(f"{self.sim.seed}:store:{prop['id']}:cycle:{cycle_index}")
         weight_mults = _metadata_weight_mults(metadata)
+        owner_stocked_entries = self._owner_stocked_entries(state)
+        owner_stock_tags = self._owner_stock_tag_bias(state)
         extra_supply_note = _join_notes(
             metadata.get("trade_supply_note", ""),
             metadata.get("covert_hint", ""),
@@ -2079,6 +2156,10 @@ class TradeSystem(System):
         for item_id, weight in profile.get("item_pool", ()):
             bias = item_market_bias(item_id, market_profile)
             adjusted = float(weight) * float(bias.get("weight_mult", 1.0)) * float(weight_mults.get(item_id, 1.0))
+            if owner_stock_tags:
+                overlap = set(item_purchase_tags(item_id)) & owner_stock_tags
+                if overlap:
+                    adjusted *= 1.0 + min(0.34, 0.08 + (0.04 * len(overlap)))
             adjusted = int(max(1, round(adjusted)))
             weighted_pool.append((item_id, adjusted))
         item_ids = self._weighted_unique(rng, weighted_pool, slots)
@@ -2143,6 +2224,8 @@ class TradeSystem(System):
             })
 
         entries.sort(key=lambda row: (row["buy_price"], row["item_id"]))
+        if owner_stocked_entries:
+            self._merge_owner_stocked_entries(entries, owner_stocked_entries)
 
         state["property_id"] = prop["id"]
         state["store_name"] = prop.get("name", prop["id"])
@@ -2157,6 +2240,8 @@ class TradeSystem(System):
         state["pressure_note"] = str(market_profile.get("pressure_note", "")).strip()
         state["entries"] = entries
         state["last_refresh_tick"] = self.sim.tick
+        if self._actor_owns_property(self.player_eid, prop):
+            _refresh_player_business_runtime(self.sim, prop)
 
     def _store_state(self, prop):
         property_id = prop["id"]
@@ -3104,7 +3189,7 @@ class TradeSystem(System):
             ))
             return None
         wallet_after = inventory_liquid_credits(inventory)
-        choice["stock"] = max(0, int(choice.get("stock", 0)) - 1)
+        self._consume_store_stock(choice, 1)
         choice["sale_count"] = next_sale_count
         item_name = item_display_name_for_actor(
             self.sim,
@@ -3457,7 +3542,9 @@ class TradeSystem(System):
         if not owner_transfer:
             assets.credits -= price
         next_sale_count = int(choice.get("sale_count", 0) or 0) + 1
-        choice["stock"] = max(0, int(choice.get("stock", 0)) - 1)
+        self._consume_store_stock(choice, 1)
+        if owner_transfer:
+            _refresh_player_business_runtime(self.sim, store_prop)
         choice["sale_count"] = next_sale_count
         item_name = item_display_name_for_actor(
             self.sim,
@@ -3648,7 +3735,9 @@ class TradeSystem(System):
         price = 0 if owner_transfer else self._effective_buy_price(base_price, terms)
         if not owner_transfer:
             assets.credits -= price
-        choice["stock"] = max(0, int(choice.get("stock", 0)) - 1)
+        self._consume_store_stock(choice, 1)
+        if owner_transfer:
+            _refresh_player_business_runtime(self.sim, store_prop)
         choice["sale_count"] = next_sale_count
 
         self.sim.emit(Event(
@@ -3893,9 +3982,10 @@ class TradeSystem(System):
         if not owner_transfer:
             assets.credits += payout
 
+        stocked_quantity = int(max(1, removed.get("quantity", 1)))
         existing = self._entry_for_item(store, item_id)
         if existing:
-            existing["stock"] = int(existing.get("stock", 0)) + int(max(1, removed.get("quantity", 1)))
+            existing["stock"] = int(existing.get("stock", 0)) + stocked_quantity
             if is_appearance_item(removed, item_catalog=ITEM_CATALOG) and not isinstance(existing.get("metadata"), dict):
                 existing["metadata"] = dict(removed.get("metadata") or {})
             stock_now = existing["stock"]
@@ -3909,7 +3999,7 @@ class TradeSystem(System):
             existing = {
                 "item_id": item_id,
                 "metadata": dict(removed.get("metadata") or {}) if is_appearance_item(removed, item_catalog=ITEM_CATALOG) else None,
-                "stock": int(max(1, removed.get("quantity", 1))),
+                "stock": stocked_quantity,
                 "buy_price": buy_price,
                 "sell_price": sell_price,
                 "sale_count": 0,
@@ -3917,6 +4007,12 @@ class TradeSystem(System):
             store["entries"].append(existing)
             store["entries"].sort(key=lambda row: (int(row.get("buy_price", 0)), row.get("item_id", "")))
             stock_now = existing["stock"]
+        if owner_transfer:
+            existing["owner_stocked"] = True
+            existing["stocked_by_eid"] = int(eid)
+            existing["stocked_tick"] = int(getattr(self.sim, "tick", 0) or 0)
+            existing["owner_stocked_stock"] = int(max(0, existing.get("owner_stocked_stock", 0) or 0)) + stocked_quantity
+            _refresh_player_business_runtime(self.sim, store_prop)
 
         self.sim.emit(Event(
             "trade_sold",

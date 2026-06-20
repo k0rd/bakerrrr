@@ -989,6 +989,21 @@ class InputSystem(System):
                 self._start_overworld_drive_to_marker(marker)
             return bool(marked)
 
+        if self._player_in_vehicle():
+            marked = self._mark_selected_known_location()
+            if marked:
+                self._stop_auto_walk(reason="stopped", announce=False)
+                self._stop_local_drive(reason="stopped", announce=False)
+                self._close_report_ui()
+                _log_player_feedback(
+                    self.sim,
+                    f"{target.get('name', 'Known location')} marked on the overworld map. Exit the vehicle to walk there, or use quick travel from an onramp.",
+                    kind="movement",
+                    dedupe_window=2,
+                    dedupe_key=f"known_location:vehicle_walk:{str(target.get('property_id') or target.get('name') or target.get('chunk'))}",
+                )
+            return bool(marked)
+
         if detail == "unloaded":
             marked = self._mark_selected_known_location()
             if marked:

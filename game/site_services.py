@@ -6,7 +6,7 @@ from game.appearance_loadout import apply_appearance_service
 from engine.underground import UNDERGROUND_ACCESS_SERVICE
 from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, PropertyKnowledge, StatusEffects, VehicleState, Vitality
 from game.items import ITEM_CATALOG, item_display_name
-from game.opportunities import accept_service_job_offer, append_external_opportunity
+from game.opportunities import accept_service_job_offer, append_external_opportunity, opportunity_instruction_lines
 from game.organization_response import property_vigilante_denial
 from game.organizations import effective_org_access_posture, property_service_practice_bundle
 from game.player_businesses import player_business_apply_remodel as _player_business_apply_remodel
@@ -2060,7 +2060,19 @@ class SiteServiceSystem(System):
                 reason="no_job_selected",
             ))
             return False
-        entry = accept_service_job_offer(self.sim, eid, prop, service, job_key)
+        entry = accept_service_job_offer(self.sim, eid, prop, service, job_key, return_blocked=True)
+        if isinstance(entry, dict) and bool(entry.get("blocked")):
+            message = str(entry.get("message", "") or "That job posting is no longer available.").strip()
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service=service,
+                reason=str(entry.get("reason", "job_unavailable") or "job_unavailable").strip(),
+                lines=(message,),
+            ))
+            return False
         if not isinstance(entry, dict):
             self.sim.emit(Event(
                 "site_service_blocked",
@@ -2071,17 +2083,11 @@ class SiteServiceSystem(System):
                 reason="job_unavailable",
             ))
             return False
-        reward = entry.get("reward") if isinstance(entry.get("reward"), dict) else {}
-        deadline_tick = int(entry.get("expire_tick", getattr(self.sim, "tick", 0)) or getattr(self.sim, "tick", 0))
-        ticks_left = max(0, deadline_tick - int(getattr(self.sim, "tick", 0)))
-        hours_left = max(1, int(round(ticks_left / max(1, _int_or_default(getattr(self.sim, "ticks_per_hour", 600), 600)))))
-        lines = [
-            str(entry.get("summary", "Job accepted.")).strip() or "Job accepted.",
-            f"Reward: {int(reward.get('credits', 0) or 0)}c, standing +{int(reward.get('standing', 0) or 0)}.",
-            f"Deadline: {hours_left}h.",
-        ]
+        lines = list(opportunity_instruction_lines(self.sim, entry))
         if str(entry.get("kind", "")).strip().lower() == "bounty_capture":
             lines.append("A field restraint jab was issued. Use it on the downed or surrendered target.")
+        if not lines:
+            lines = [str(entry.get("summary", "Job accepted.")).strip() or "Job accepted."]
         self.sim.emit(Event(
             "site_service_used",
             eid=eid,

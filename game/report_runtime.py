@@ -190,6 +190,7 @@ def _opportunity_report_line(row):
     intel_state = str(row.get("awareness_state", "heard")).strip().lower() or "heard"
     intel_percent = int(round(float(row.get("confidence", 0.0)) * 100.0))
     tracked_summary = str(row.get("tracked_target_summary", "") or "").strip()
+    next_step = str(row.get("next_step", "") or "").strip()
     bold = getattr(curses, "A_BOLD", 0)
     segments = [
         _segment("[", color="building_edge"),
@@ -208,6 +209,13 @@ def _opportunity_report_line(row):
             _segment(tracked_summary, color="property_service"),
         ))
         text += f" | {tracked_summary}"
+    if next_step:
+        segments.extend((
+            _segment(" | ", color="building_edge"),
+            _segment("Next ", color="player", attrs=bold),
+            _segment(next_step, color="player"),
+        ))
+        text += f" | Next {next_step}"
     return _rich_line(
         segments,
         text=text,

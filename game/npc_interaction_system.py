@@ -344,6 +344,7 @@ from game.player_businesses import (
     hire_actor_into_player_business,
     player_business_role_fit,
     player_business_staffing_targets,
+    player_business_status_snapshot,
 )
 from game.final_operation import (
     active_final_operation_target_property_id,
@@ -550,6 +551,9 @@ class NPCInteractionSystem(System):
         "backup_wait_return",
         "backup_kill",
         "street_buy",
+        "side_job",
+        "side_job_accept",
+        "side_job_decline",
     }
     PAYOFF_BASE_COST = 40
     PAYOFF_COOLDOWN_TICKS = 800
@@ -563,6 +567,7 @@ class NPCInteractionSystem(System):
     FALLOUT_MIN_STANDING = 0.28
     SIDE_JOB_MIN_STANDING = 0.44
     SIDE_JOB_COOLDOWN_TICKS = 240
+    SIDE_JOB_DECLINE_COOLDOWN_TICKS = 240
     CHECK_IN_MIN_HOURS = 1.0
     SENSITIVE_INFO_TOPICS = {"keyholder", "weak_point"}
     SENSITIVE_INFO_TRUSTED_BONDS = {"friend", "family", "partner", "coworker", "owner", "workplace", "job_issuer"}
@@ -2999,6 +3004,122 @@ class NPCInteractionSystem(System):
                 return entry
         return None
 
+    def _pending_side_job_offer(self, npc_eid):
+        if npc_eid is None:
+            return None
+        memory = self._dialogue_memory(npc_eid)
+        offer = memory.get("pending_side_job_offer")
+        if not isinstance(offer, dict):
+            return None
+        if self._side_job_for_npc(npc_eid):
+            memory.pop("pending_side_job_offer", None)
+            return None
+        return dict(offer)
+
+    def _stage_pending_side_job_offer(self, npc_eid, offer):
+        if npc_eid is None or not isinstance(offer, dict):
+            return None
+        staged = dict(offer)
+        requirements = dict(staged.get("requirements", {}) if isinstance(staged.get("requirements"), dict) else {})
+        requirements["player_accepted"] = False
+        staged["requirements"] = requirements
+        memory = self._dialogue_memory(npc_eid)
+        memory["pending_side_job_offer"] = staged
+        memory["side_job_declined_until_tick"] = 0
+        return dict(staged)
+
+    def _clear_pending_side_job_offer(self, npc_eid):
+        if npc_eid is None:
+            return
+        memory = self._dialogue_memory(npc_eid)
+        memory.pop("pending_side_job_offer", None)
+
+    def _side_job_decline_active(self, npc_eid):
+        if npc_eid is None:
+            return False
+        memory = self._dialogue_memory(npc_eid)
+        until = _int_or_default(memory.get("side_job_declined_until_tick"), 0)
+        if until <= int(getattr(self.sim, "tick", 0) or 0):
+            if until:
+                memory["side_job_declined_until_tick"] = 0
+            return False
+        return True
+
+    def _decline_pending_side_job_offer(self, npc_eid):
+        if npc_eid is None:
+            return
+        memory = self._dialogue_memory(npc_eid)
+        memory.pop("pending_side_job_offer", None)
+        memory["side_job_declined_until_tick"] = int(getattr(self.sim, "tick", 0) or 0) + int(self.SIDE_JOB_DECLINE_COOLDOWN_TICKS)
+
+    def _accept_pending_side_job_offer(self, context):
+        if not isinstance(context, dict):
+            return None
+        npc_eid = context.get("npc_eid")
+        existing = self._side_job_for_npc(npc_eid)
+        if isinstance(existing, dict):
+            self._clear_pending_side_job_offer(npc_eid)
+            reveal_opportunity_to_observer(
+                self.sim,
+                self.player_eid,
+                int(existing.get("id", 0)),
+                awareness_state="confirmed",
+                confidence=0.95,
+                source="npc_dialogue_side_job",
+            )
+            return existing
+        offer = self._pending_side_job_offer(npc_eid)
+        if not isinstance(offer, dict):
+            offer = self._build_side_job_offer(context)
+        if not isinstance(offer, dict):
+            return None
+        accepted = dict(offer)
+        requirements = dict(accepted.get("requirements", {}) if isinstance(accepted.get("requirements"), dict) else {})
+        requirements["player_accepted"] = True
+        accepted["requirements"] = requirements
+        self._clear_pending_side_job_offer(npc_eid)
+        return append_external_opportunity(
+            self.sim,
+            accepted,
+            observer_eid=self.player_eid,
+            awareness_state="confirmed",
+            confidence=0.95,
+            source="npc_dialogue_side_job",
+        )
+
+    def _side_job_dialogue_summary(self, offer, context):
+        if not isinstance(offer, dict):
+            return ""
+        summary = str(offer.get("summary", "") or "").strip()
+        if not summary:
+            return ""
+        issuer = offer.get("issuer", {}) if isinstance(offer.get("issuer"), dict) else {}
+        if _int_or_default(issuer.get("npc_eid"), 0) != _int_or_default((context or {}).get("npc_eid"), -1):
+            return summary
+        issuer_name = str(issuer.get("npc_name", "") or "").strip()
+        if not issuer_name:
+            return summary
+        replacements = (
+            (f"hand it to {issuer_name} at ", "hand it to me at "),
+            (f"hand it to {issuer_name}.", "hand it to me."),
+            (f"bring it back to {issuer_name} at ", "bring it back to me at "),
+            (f"bring it back to {issuer_name}.", "bring it back to me."),
+            (f"back to {issuer_name} at ", "back to me at "),
+            (f"back to {issuer_name}.", "back to me."),
+            (f"sell it back to {issuer_name} at ", "sell it back to me at "),
+            (f"sell it back to {issuer_name}.", "sell it back to me."),
+            (f"dodging {issuer_name}", "dodging me"),
+            (f"{issuer_name} wants", "I want"),
+            (" They need ", " I need "),
+            (" They are ", " I am "),
+            (" They have ", " I have "),
+            (" They want ", " I want "),
+            (" owes them ", " owes me "),
+        )
+        for old, new in replacements:
+            summary = summary.replace(old, new)
+        return summary
+
     def _recent_side_job_completion_for_npc(self, npc_eid):
         if npc_eid is None:
             return None
@@ -3722,17 +3843,17 @@ class NPCInteractionSystem(System):
             )
             return existing
 
+        pending = self._pending_side_job_offer(context.get("npc_eid"))
+        if isinstance(pending, dict):
+            return pending
+
+        if self._side_job_decline_active(context.get("npc_eid")):
+            return None
+
         opportunity = self._build_side_job_offer(context)
         if not isinstance(opportunity, dict):
             return None
-        return append_external_opportunity(
-            self.sim,
-            opportunity,
-            observer_eid=self.player_eid,
-            awareness_state="confirmed",
-            confidence=0.95,
-            source="npc_dialogue_side_job",
-        )
+        return self._stage_pending_side_job_offer(context.get("npc_eid"), opportunity)
 
     def _learn_dialogue_opportunity(self, context, *, source="dialogue", confidence_mult=1.0):
         if not isinstance(context, dict):
@@ -7032,7 +7153,13 @@ class NPCInteractionSystem(System):
         if context["tutorial_guide"]:
             context["tutorial_hint"] = _current_tutorial_hint(self.sim)
         context["side_job_offer"] = self._side_job_for_npc(npc_eid)
-        context["side_job_available"] = bool(context["side_job_offer"] or self._build_side_job_offer(context))
+        context["side_job_pending_offer"] = self._pending_side_job_offer(npc_eid)
+        context["side_job_decline_cooling"] = self._side_job_decline_active(npc_eid)
+        context["side_job_available"] = bool(
+            context["side_job_offer"]
+            or context["side_job_pending_offer"]
+            or (not context["side_job_decline_cooling"] and self._build_side_job_offer(context))
+        )
         context["pressure_role"] = self._dialogue_pressure_role(context)
         context["dialogue_prep_terms"] = _dialogue_prep_skill_terms(self.sim, self.player_eid)
         staffing = self._player_business_staffing_options(context)
@@ -7076,6 +7203,17 @@ class NPCInteractionSystem(System):
             "player_business_hire_fit_hint": hire_fit_hint,
             "player_business_hire_manager_fit_hint": str((hire_manager_preview or {}).get("topic_hint", "")).strip(),
             "player_business_hire_staff_fit_hint": str((hire_staff_preview or {}).get("topic_hint", "")).strip(),
+        })
+        business_snapshot = {}
+        if self._property_owned_by_dialogue_player(context.get("workplace_prop")):
+            snapshot = player_business_status_snapshot(self.sim, context.get("workplace_prop"))
+            business_snapshot = snapshot if isinstance(snapshot, dict) else {}
+        context.update({
+            "player_business_operating_style_label": str(business_snapshot.get("operating_style_label", "")).strip(),
+            "player_business_operating_style_reason": str(business_snapshot.get("operating_style_reason", "")).strip(),
+            "player_business_stock_identity_label": str(business_snapshot.get("stock_identity_label", "")).strip(),
+            "player_business_customer_mix_label": str(business_snapshot.get("customer_mix_label", "")).strip(),
+            "player_business_staff_mood_label": str(business_snapshot.get("staff_mood_label", "")).strip(),
         })
         context["dialogue_shape"] = _build_dialogue_shape(self.sim, npc_eid, context=context)
         context["rapport_shape"] = _build_rapport_shape(self.sim, npc_eid, context=context)
@@ -7614,6 +7752,23 @@ class NPCInteractionSystem(System):
             return f"Lately I have been {state_text} and seeing where that leads."
         return ""
 
+    def _player_business_dialogue_style_line(self, context):
+        if not isinstance(context, dict):
+            return ""
+        workplace_prop = context.get("workplace_prop")
+        if not self._property_owned_by_dialogue_player(workplace_prop):
+            return ""
+        style_label = str(context.get("player_business_operating_style_label", "") or "").strip().lower()
+        stock_label = str(context.get("player_business_stock_identity_label", "") or "").strip().lower()
+        staff_mood = str(context.get("player_business_staff_mood_label", "") or "").strip().lower()
+        if style_label and stock_label:
+            return f"Right now it reads like {style_label}, with {stock_label}."
+        if style_label:
+            return f"Right now it reads like {style_label}."
+        if staff_mood:
+            return f"The crew reads {staff_mood}."
+        return ""
+
     def _organization_summary(self, context):
         if context.get("is_rival_operator"):
             reputation = str(context.get("rival_reputation", "")).strip().lower()
@@ -7634,6 +7789,7 @@ class NPCInteractionSystem(System):
         scene_type = str(scene_note.get("scene_type", "")).strip().lower()
         event_phase = str(scene_note.get("event_phase", "")).strip().lower()
         site_affiliated = bool(scene_note.get("site_affiliated"))
+        business_style_line = self._player_business_dialogue_style_line(context)
 
         if scene_type == "delivery" and not site_affiliated:
             return "Nobody at this stop signs me. I am with the delivery side, then I move on."
@@ -7642,13 +7798,13 @@ class NPCInteractionSystem(System):
         if player_owned_workplace and workplace_name:
             if organization_role == "owner":
                 if career_text:
-                    return f"You own {workplace_name}. I keep doing {career_text} work here, but the final calls are yours."
-                return f"You own {workplace_name}. The final calls are yours now."
+                    return f"You own {workplace_name}. I keep doing {career_text} work here, but the final calls are yours. {business_style_line}".strip()
+                return f"You own {workplace_name}. The final calls are yours now. {business_style_line}".strip()
             if organization_role == "manager":
-                return f"You own {workplace_name}. I manage it for you."
+                return f"You own {workplace_name}. I manage it for you. {business_style_line}".strip()
             if career_text:
-                return f"You own {workplace_name}. I do {career_text} work here."
-            return f"You own {workplace_name}."
+                return f"You own {workplace_name}. I do {career_text} work here. {business_style_line}".strip()
+            return f"You own {workplace_name}. {business_style_line}".strip()
         if organization_role == "owner" and workplace_name and organization_name_text and organization_name_text.lower() != workplace_name.lower():
             return f"Nobody over me. {workplace_name} runs under {organization_name_text}, and it is mine."
         if organization_role == "owner" and workplace_name:
@@ -7847,6 +8003,7 @@ class NPCInteractionSystem(System):
         career_text = str(lead.get("career_text", "")).strip()
         place_name = str(lead.get("place_name", "")).strip()
         place_role = str(lead.get("place_role", "")).strip().lower()
+        shared_workplace = bool(lead.get("shared_workplace"))
         lead_slots = self._human_pronoun_slots(
             eid=lead.get("eid"),
             personal_name=name,
@@ -7858,6 +8015,12 @@ class NPCInteractionSystem(System):
             personal_name=name,
         )
 
+        if shared_workplace and career_text and place_name and place_role == "workplace":
+            if relation_text:
+                return f"{name} is my {relation_text} and does {career_text} work with me at {place_name}."
+            return f"{name} does {career_text} work with me at {place_name}."
+        if shared_workplace and relation_text and place_name and place_role == "workplace":
+            return f"{name} works with me at {place_name}."
         if relation_text and career_text and place_name and place_role == "workplace":
             return f"{name} is my {relation_text} and does {career_text} work at {place_name}."
         if relation_text and place_name and place_role == "home":
@@ -9037,6 +9200,7 @@ class NPCInteractionSystem(System):
         row = rows[0]
         summary = str(row.get("summary", "")).strip()
         requirement_fragment = self._opportunity_requirement_summary_fragment(row)
+        next_step = str(row.get("next_step", "") or "").strip()
         quality = quality if isinstance(quality, dict) else self._dialogue_pressure_intel_quality(context, "opportunities")
         quality_mode = str(quality.get("mode", "clear")).strip().lower() or "clear"
 
@@ -9048,6 +9212,13 @@ class NPCInteractionSystem(System):
                 detail = f"{detail} {requirement_fragment}."
             else:
                 detail = requirement_fragment
+        if next_step and quality_mode != "vague":
+            if detail:
+                if detail[-1] not in ".!?":
+                    detail = f"{detail}."
+                detail = f"{detail} Next, {next_step[:1].lower() + next_step[1:]}"
+            else:
+                detail = next_step
         if detail:
             return detail.strip()
         return self._opportunity_summary(context, quality=quality)
@@ -11659,6 +11830,8 @@ class NPCInteractionSystem(System):
                 continue
             if topic_id == "side_job" and not context.get("side_job_available"):
                 continue
+            if topic_id in {"side_job_accept", "side_job_decline"} and not context.get("side_job_pending_offer"):
+                continue
             if topic_id == "payoff" and not context.get("payoff_available"):
                 continue
             if topic_id == "fence" and not context.get("fence_available"):
@@ -11858,7 +12031,14 @@ class NPCInteractionSystem(System):
         career_text = str(lead.get("career_text", "")).strip()
         place_name = str(lead.get("place_name", "")).strip()
         place_role = str(lead.get("place_role", "")).strip().lower()
+        shared_workplace = bool(lead.get("shared_workplace"))
 
+        if shared_workplace and career_text and place_name and place_role == "workplace":
+            if relation_text:
+                return f"my {relation_text} who does {career_text} work with me at {place_name}"
+            return f"someone who does {career_text} work with me at {place_name}"
+        if shared_workplace and relation_text and place_name and place_role == "workplace":
+            return f"my {relation_text} from work at {place_name}"
         if relation_text and career_text and place_name and place_role == "workplace":
             return f"my {relation_text} who does {career_text} work at {place_name}"
         if relation_text and place_name and place_role == "workplace":
@@ -12054,7 +12234,11 @@ class NPCInteractionSystem(System):
         if topic_id == "job":
             if context.get("career_text"):
                 bank_id = "job_first" if ask_count <= 1 else "job_repeat"
-                return {"npc_lines": [self._say(bank_id, context, topic_id=topic_id, count=ask_count, career_text=context["career_text"])]}
+                lines = [self._say(bank_id, context, topic_id=topic_id, count=ask_count, career_text=context["career_text"])]
+                style_line = self._player_business_dialogue_style_line(context)
+                if style_line:
+                    lines.append(style_line)
+                return {"npc_lines": lines}
             return {"npc_lines": [self._say("job_none", context, topic_id=topic_id, count=ask_count)]}
         if topic_id == "job_feel":
             return self._resolve_rapport_topic(context, topic_id, ask_count=ask_count)
@@ -12943,22 +13127,49 @@ class NPCInteractionSystem(System):
             issuer = offer.get("issuer", {}) if isinstance(offer.get("issuer"), dict) else {}
             favor_target = str(issuer.get("organization_name", "")).strip() or str(issuer.get("npc_name", "")).strip() or "me"
             reward_hint = format_reward_text(offer.get("reward", {}))
-            side_job_summary = str(offer.get("summary", "")).strip() or "Handle the drop quietly."
+            side_job_summary = self._side_job_dialogue_summary(offer, context) or "Handle the drop quietly."
             bank_id = "side_job_offer" if ask_count <= 1 else "side_job_repeat"
-            lines = [
-                self._say(
-                    bank_id,
-                    context,
-                    topic_id=topic_id,
-                    count=ask_count,
-                    side_job_summary=side_job_summary,
-                    reward_hint=reward_hint,
-                    favor_target=favor_target,
-                )
-            ]
-            if ask_count <= 1:
-                lines.append(self._say("side_job_accepted", context, topic_id=topic_id, count=ask_count))
-            return {"npc_lines": lines}
+            return {
+                "npc_lines": [
+                    self._say(
+                        bank_id,
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                        side_job_summary=side_job_summary,
+                        reward_hint=reward_hint,
+                        favor_target=favor_target,
+                    )
+                ]
+            }
+        if topic_id == "side_job_accept":
+            offer = self._accept_pending_side_job_offer(context)
+            if not isinstance(offer, dict):
+                return {"npc_lines": [self._say("side_job_none", context, topic_id=topic_id, count=ask_count)]}
+            return {
+                "npc_lines": [
+                    self._say(
+                        "side_job_accepted",
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                    )
+                ]
+            }
+        if topic_id == "side_job_decline":
+            if not self._pending_side_job_offer(context.get("npc_eid")):
+                return {"npc_lines": [self._say("side_job_none", context, topic_id=topic_id, count=ask_count)]}
+            self._decline_pending_side_job_offer(context.get("npc_eid"))
+            return {
+                "npc_lines": [
+                    self._say(
+                        "side_job_declined",
+                        context,
+                        topic_id=topic_id,
+                        count=ask_count,
+                    )
+                ]
+            }
         if topic_id == "hire_runner":
             npc_eid = context.get("npc_eid")
             cost = int(self.CONTRACTOR_COST)
@@ -13760,7 +13971,12 @@ class NPCInteractionSystem(System):
             return
         state["subtitle"] = refreshed.get("subtitle", "")
         pending_street_buy_offer = bool(refreshed.get("street_buy_offer_pending"))
-        highlight_topic_ids = ("street_buy_accept", "street_buy_next", "street_buy_decline") if pending_street_buy_offer else ()
+        pending_side_job_offer = bool(refreshed.get("side_job_pending_offer"))
+        highlight_topic_ids = ()
+        if pending_street_buy_offer:
+            highlight_topic_ids = ("street_buy_accept", "street_buy_next", "street_buy_decline")
+        elif pending_side_job_offer:
+            highlight_topic_ids = ("side_job_accept", "side_job_decline")
         refreshed_topics = self._prioritize_dialog_topics(
             self._available_dialog_topics(refreshed),
             highlight_topic_ids=highlight_topic_ids,
@@ -13792,6 +14008,15 @@ class NPCInteractionSystem(System):
                     row
                     for row in list(state.get("topics", ()) or ())
                     if str(row.get("id", "")).strip().lower() == "street_buy_accept"
+                ),
+                preferred_row,
+            )
+        if topic_id == "side_job" and pending_side_job_offer:
+            preferred_row = next(
+                (
+                    row
+                    for row in list(state.get("topics", ()) or ())
+                    if str(row.get("id", "")).strip().lower() == "side_job_accept"
                 ),
                 preferred_row,
             )

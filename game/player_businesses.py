@@ -45,6 +45,7 @@ from game.system_support.actor_attention_runtime import record_actor_social_warm
 from game.system_support.business_event_state import _business_event_actor_note
 from game.system_support.interaction_ordering import _manhattan
 from game.system_support.npc_income_runtime import grant_npc_wallet_credits, npc_hourly_wage
+from game.system_support.store_purchase_runtime import canonical_store_item_id, item_purchase_tags
 from game.systems_business_reputation import business_opinion_profile, property_business_reputation_snapshot
 
 
@@ -165,6 +166,84 @@ BUSINESS_MARKUP_MODE_PROFILES = {
         "revenue_mult": 1.12,
         "note": "leans on high margin and thinner demand tolerance",
     },
+}
+STOCK_IDENTITY_PROFILES = {
+    "provisions": {
+        "label": "provisions-heavy shelves",
+        "tags": {"food", "drink", "meal", "voucher", "consumable"},
+    },
+    "style": {
+        "label": "style-heavy shelves",
+        "tags": {"clothing", "wearable", "fashion", "jewelry", "disguise", "social"},
+    },
+    "care": {
+        "label": "care stock",
+        "tags": {"medical", "safety", "injectable", "drug"},
+    },
+    "tooling": {
+        "label": "practical tool shelves",
+        "tags": {"tool", "device", "battery", "circuit", "scrap", "repair"},
+    },
+    "field_gear": {
+        "label": "field-gear shelves",
+        "tags": {"weapon", "melee", "blade", "ammo", "armor", "survival", "tactical", "throwable"},
+    },
+    "mixed": {
+        "label": "mixed counter stock",
+        "tags": set(),
+    },
+}
+STOCK_IDENTITY_ARCHETYPE_DEFAULTS = {
+    "arcade": "provisions",
+    "bar": "provisions",
+    "corner_store": "provisions",
+    "hotel": "provisions",
+    "nightclub": "provisions",
+    "restaurant": "provisions",
+    "roadhouse": "provisions",
+    "street_kitchen": "provisions",
+    "tavern": "provisions",
+    "accessory_shop": "style",
+    "barbershop": "style",
+    "bottom_shop": "style",
+    "clothing_superstore": "style",
+    "dress_shop": "style",
+    "hair_studio": "style",
+    "headwear_shop": "style",
+    "jewelry_shop": "style",
+    "makeup_counter": "style",
+    "outerwear_shop": "style",
+    "salon": "style",
+    "shoe_shop": "style",
+    "tattoo_parlor": "style",
+    "thrift_store": "style",
+    "top_shop": "style",
+    "backroom_clinic": "care",
+    "field_hospital": "care",
+    "herbalist_camp": "care",
+    "pharmacy": "care",
+    "auto_garage": "tooling",
+    "breaker_yard": "tooling",
+    "contractor_office": "tooling",
+    "drydock_yard": "tooling",
+    "hardware_store": "tooling",
+    "salvage_camp": "tooling",
+    "service_station": "tooling",
+    "tool_depot": "tooling",
+    "bait_shop": "field_gear",
+    "dock_shack": "field_gear",
+    "outfitter": "field_gear",
+    "surplus_store": "field_gear",
+}
+OPERATING_STYLE_PROFILES = {
+    "curated": {"label": "curated shelves", "revenue_mult": 1.06, "slippage_mult": 0.92},
+    "bargain": {"label": "bargain counter", "revenue_mult": 1.04, "slippage_mult": 0.97},
+    "offbrand": {"label": "off-brand shelf mix", "revenue_mult": 0.94, "slippage_mult": 1.08},
+    "thin": {"label": "thin floor", "revenue_mult": 0.88, "slippage_mult": 1.18},
+    "loyal": {"label": "regulars' place", "revenue_mult": 1.04, "slippage_mult": 0.90},
+    "expensive": {"label": "expensive counter", "revenue_mult": 0.98, "slippage_mult": 1.08},
+    "strained": {"label": "strained frontage", "revenue_mult": 0.95, "slippage_mult": 1.12},
+    "steady": {"label": "steady shop", "revenue_mult": 1.0, "slippage_mult": 1.0},
 }
 GENERIC_JOBLESS_CAREERS = {
     "",
@@ -1527,6 +1606,288 @@ def _business_health(sim, prop):
     }
 
 
+def _stock_identity_default_kind(prop):
+    archetype = _property_archetype(prop)
+    return STOCK_IDENTITY_ARCHETYPE_DEFAULTS.get(archetype, "mixed")
+
+
+def _stock_identity_label(kind):
+    clean = str(kind or "mixed").strip().lower() or "mixed"
+    profile = STOCK_IDENTITY_PROFILES.get(clean) or STOCK_IDENTITY_PROFILES["mixed"]
+    return str(profile.get("label", "mixed counter stock")).strip() or "mixed counter stock"
+
+
+def _store_entries_for_business(sim, prop):
+    store_state = _store_state_for_business(sim, prop)
+    if not isinstance(store_state, dict):
+        return ()
+    return tuple(entry for entry in tuple(store_state.get("entries", ()) or ()) if isinstance(entry, dict))
+
+
+def _store_state_for_business(sim, prop):
+    if sim is None or not isinstance(prop, dict):
+        return None
+    property_id = _text(prop.get("id"))
+    store_state = getattr(sim, "stores", {}).get(property_id) if property_id else None
+    if not isinstance(store_state, dict):
+        return None
+    return store_state
+
+
+def _stock_entry_weight(entry):
+    stock = max(0, _int_or((entry or {}).get("stock"), default=0))
+    if stock <= 0:
+        return 0
+    return min(8, stock)
+
+
+def player_business_stock_identity(sim, prop):
+    default_kind = _stock_identity_default_kind(prop)
+    base = {
+        "stock_identity_kind": default_kind,
+        "stock_identity_label": _stock_identity_label(default_kind),
+        "stock_identity_default_kind": default_kind,
+        "stock_identity_coherence": 0.0,
+        "stock_total": 0,
+        "stock_identity_source": "archetype_default",
+        "owner_stocked_count": 0,
+        "owner_stocked_rows": 0,
+        "owner_stocked_tags": tuple(),
+    }
+    if not isinstance(prop, dict):
+        return dict(base)
+
+    store_state = _store_state_for_business(sim, prop)
+    if not isinstance(store_state, dict):
+        defaulted = dict(base)
+        defaulted["stock_total"] = 1
+        return defaulted
+
+    entries = _store_entries_for_business(sim, prop)
+    if not entries:
+        empty = dict(base)
+        empty["stock_identity_source"] = "store_entries"
+        return empty
+
+    tag_scores = {kind: 0.0 for kind in STOCK_IDENTITY_PROFILES}
+    owner_tags = set()
+    stock_total = 0
+    owner_stocked_count = 0
+    owner_stocked_rows = 0
+    for entry in entries:
+        item_id = canonical_store_item_id(entry.get("item_id"))
+        weight = _stock_entry_weight(entry)
+        if not item_id or weight <= 0:
+            continue
+        stock_total += weight
+        tags = set(item_purchase_tags(item_id, entry))
+        if bool(entry.get("owner_stocked")):
+            owner_rows_stock = _int_or(entry.get("owner_stocked_stock"), default=0)
+            if owner_rows_stock <= 0:
+                owner_rows_stock = _int_or(entry.get("stock"), default=0)
+            owner_stocked_count += max(0, owner_rows_stock)
+            owner_stocked_rows += 1
+            owner_tags.update(tags)
+        matched = False
+        for kind, profile in STOCK_IDENTITY_PROFILES.items():
+            profile_tags = set(profile.get("tags") or ())
+            if not profile_tags:
+                continue
+            overlap = tags & profile_tags
+            if overlap:
+                tag_scores[kind] += float(weight) * (1.0 + min(0.6, 0.12 * len(overlap)))
+                matched = True
+        if not matched:
+            tag_scores["mixed"] += float(weight) * 0.55
+
+    if stock_total <= 0:
+        return dict(base)
+
+    ranked = sorted(tag_scores.items(), key=lambda row: (-row[1], row[0]))
+    best_kind, best_score = ranked[0]
+    if best_score <= 0.0:
+        best_kind = default_kind
+    total_score = max(1.0, sum(max(0.0, score) for _kind, score in ranked))
+    coherence = max(0.0, min(1.0, float(best_score) / float(total_score)))
+    if best_kind == "mixed" and default_kind != "mixed" and coherence < 0.62:
+        label = "off-brand shelf mix"
+    else:
+        label = _stock_identity_label(best_kind)
+
+    return {
+        "stock_identity_kind": best_kind,
+        "stock_identity_label": label,
+        "stock_identity_default_kind": default_kind,
+        "stock_identity_coherence": round(float(coherence), 3),
+        "stock_total": int(stock_total),
+        "stock_identity_source": "store_entries",
+        "owner_stocked_count": int(owner_stocked_count),
+        "owner_stocked_rows": int(owner_stocked_rows),
+        "owner_stocked_tags": tuple(sorted(owner_tags)),
+    }
+
+
+def _customer_mix_label(values):
+    policy = _normalize_customer_policy((values or {}).get("customer_policy"))
+    markup = _normalize_business_markup_mode((values or {}).get("markup_mode"))
+    stock_kind = str((values or {}).get("stock_identity_kind", "") or "").strip().lower()
+    if policy == "closed":
+        return "no public customers"
+    if policy == "staff_only":
+        return "screened customers"
+    if markup == "discount":
+        return "bargain regulars"
+    if markup == "steep":
+        return "selective buyers"
+    if stock_kind == "style":
+        return "style shoppers"
+    if stock_kind == "care":
+        return "care-seekers"
+    if stock_kind in {"tooling", "field_gear"}:
+        return "practical buyers"
+    if stock_kind == "provisions":
+        return "walk-in regulars"
+    return "mixed walk-ins"
+
+
+def _staff_mood_label(values):
+    staff_total = _int_or((values or {}).get("staff_total"), default=0)
+    required_staff = max(1, _int_or((values or {}).get("required_staff"), default=1))
+    reliability = float((values or {}).get("service_reliability", 0.0) or 0.0)
+    operating_note = _text((values or {}).get("operating_note")).lower()
+    if _int_or((values or {}).get("unpaid_wages"), default=0) > 0:
+        return "unpaid and tense"
+    if staff_total <= 0:
+        return "no crew"
+    if staff_total < required_staff:
+        return "stretched crew"
+    if operating_note == "tight crew" or reliability >= 0.94:
+        return "tight crew"
+    if reliability and reliability < 0.45:
+        return "frayed crew"
+    if reliability and reliability < 0.68:
+        return "uneven crew"
+    if _normalize_customer_policy((values or {}).get("customer_policy")) == "staff_only":
+        return "guarded crew"
+    return "steady crew"
+
+
+def _operating_style_profile(kind):
+    clean = str(kind or "steady").strip().lower() or "steady"
+    return OPERATING_STYLE_PROFILES.get(clean) or OPERATING_STYLE_PROFILES["steady"]
+
+
+def _operating_style_from_values(sim, prop, values):
+    values = dict(values or {})
+    stock = player_business_stock_identity(sim, prop)
+    for key, value in stock.items():
+        if key not in values or values.get(key) is None or values.get(key) == "":
+            values[key] = value
+    policy = _normalize_customer_policy(values.get("customer_policy"))
+    markup = _normalize_business_markup_mode(values.get("markup_mode"))
+    stock_kind = str(values.get("stock_identity_kind", "") or "").strip().lower()
+    default_kind = str(values.get("stock_identity_default_kind", "") or "").strip().lower()
+    owner_stocked_count = max(0, _int_or(values.get("owner_stocked_count"), default=0))
+    stock_total = max(0, _int_or(values.get("stock_total"), default=0))
+    coherence = float(values.get("stock_identity_coherence", 0.0) or 0.0)
+    staff_total = max(0, _int_or(values.get("staff_total"), default=0))
+    required_staff = max(1, _int_or(values.get("required_staff"), default=1))
+    reliability = float(values.get("service_reliability", 0.0) or 0.0)
+    reputation_note = _text(values.get("reputation_note")).lower()
+    community_note = _text(values.get("community_note")).lower()
+    community_signal_note = _text(values.get("community_signal_note")).lower()
+    scene_pressure_note = _text(values.get("scene_pressure_note")).lower()
+    churn_delta = _int_or(values.get("churn_delta_pct"), default=0)
+    footfall_delta = _int_or(values.get("footfall_delta_pct"), default=0)
+
+    kind = "steady"
+    reason = "the shop is reading steady"
+    if policy == "closed":
+        kind = "thin"
+        reason = "the customer policy is keeping the public side thin"
+    elif staff_total <= 0 or stock_total <= 0:
+        kind = "thin"
+        reason = "the floor reads thin because the shelves or crew are not there"
+    elif staff_total < required_staff:
+        kind = "thin"
+        reason = "the staffing gap is making the floor read thin"
+    elif markup == "steep" and (
+        reputation_note in {"price grumbling", "front trouble"}
+        or community_signal_note in {"making the block tense", "souring the block"}
+        or churn_delta >= 8
+    ):
+        kind = "expensive"
+        reason = "the high markup is giving the counter an expensive read"
+    elif (
+        reputation_note == "front trouble"
+        or scene_pressure_note == "soft-front trouble"
+        or community_signal_note in {"making the block tense", "souring the block"}
+        or community_note == "tenser block"
+        or churn_delta >= 12
+    ):
+        kind = "strained"
+        reason = "neighborhood pressure is making the frontage read strained"
+    elif owner_stocked_count > 0 and default_kind and stock_kind not in {default_kind, "mixed"} and coherence >= 0.42:
+        kind = "offbrand"
+        reason = "owner-stocked shelves are pulling the store away from its usual lane"
+    elif markup == "discount" and policy == "public":
+        kind = "bargain"
+        reason = "public access and softer prices are pulling bargain traffic"
+    elif (
+        reputation_note in {"neighborhood staple", "growing regulars"}
+        or scene_pressure_note == "block watch"
+        or community_signal_note == "lifting the block"
+        or footfall_delta >= 8
+    ):
+        kind = "loyal"
+        reason = "locals are starting to treat the place like a regular stop"
+    elif owner_stocked_count > 0 and coherence >= 0.48 and reliability >= 0.68:
+        kind = "curated"
+        reason = "owner-stocked shelves and steady service are giving the shop a curated read"
+    elif reliability and reliability < 0.68:
+        kind = "strained"
+        reason = "patchy operations are making the frontage feel strained"
+
+    profile = _operating_style_profile(kind)
+    return {
+        **stock,
+        "operating_style_kind": kind,
+        "operating_style_label": str(profile.get("label", "steady shop")).strip() or "steady shop",
+        "operating_style_reason": reason,
+        "style_revenue_mult": float(profile.get("revenue_mult", 1.0) or 1.0),
+        "style_slippage_mult": float(profile.get("slippage_mult", 1.0) or 1.0),
+        "customer_mix_label": _customer_mix_label({**values, **stock}),
+        "staff_mood_label": _staff_mood_label(values),
+    }
+
+
+def player_business_operating_style(sim, prop):
+    summary = player_business_summary(sim, prop)
+    if isinstance(summary, dict):
+        return {
+            key: summary.get(key)
+            for key in (
+                "stock_identity_kind",
+                "stock_identity_label",
+                "stock_identity_default_kind",
+                "stock_identity_coherence",
+                "stock_total",
+                "owner_stocked_count",
+                "owner_stocked_rows",
+                "owner_stocked_tags",
+                "operating_style_kind",
+                "operating_style_label",
+                "operating_style_reason",
+                "style_revenue_mult",
+                "style_slippage_mult",
+                "customer_mix_label",
+                "staff_mood_label",
+            )
+            if key in summary
+        }
+    return _operating_style_from_values(sim, prop, {})
+
+
 def _business_reputation_market_effect(sim, prop):
     base = {
         "awareness_count": 0,
@@ -1659,6 +2020,8 @@ def _player_business_owner_signal(values):
     community_note = _text(values.get("community_note")).lower()
     scene_pressure_note = _text(values.get("scene_pressure_note")).lower()
     note = _text(values.get("note") or values.get("operating_note")).lower()
+    operating_style_kind = _text(values.get("operating_style_kind")).lower()
+    operating_style_reason = _text(values.get("operating_style_reason"))
     footfall_delta = _int_or(values.get("footfall_delta_pct"), default=0)
     churn_delta = _int_or(values.get("churn_delta_pct"), default=0)
     open_now = bool(values.get("open_now"))
@@ -1733,6 +2096,24 @@ def _player_business_owner_signal(values):
             "player_business_cue": "active from your extended hours",
             "owner_signal_kind": "loyal",
             "owner_signal_reason": "your extended hours are keeping the business visibly active",
+        }
+    if operating_style_kind == "offbrand":
+        return {
+            "player_business_cue": "off-brand from your shelf mix",
+            "owner_signal_kind": "offbrand",
+            "owner_signal_reason": operating_style_reason or "your stocked shelves are pulling the store away from its usual lane",
+        }
+    if operating_style_kind == "curated":
+        return {
+            "player_business_cue": "curated by your shelf choices",
+            "owner_signal_kind": "curated",
+            "owner_signal_reason": operating_style_reason or "your shelf choices are giving the shop a curated read",
+        }
+    if operating_style_kind == "bargain":
+        return {
+            "player_business_cue": "bargain from your shelf and price stance",
+            "owner_signal_kind": "bargain",
+            "owner_signal_reason": operating_style_reason or "your stock and pricing are pulling bargain traffic",
         }
     return dict(base)
 
@@ -1923,7 +2304,16 @@ def player_business_summary(sim, prop):
         "footfall_delta_pct": int(reputation.get("footfall_delta_pct", 0) or 0),
         "churn_delta_pct": int(reputation.get("churn_delta_pct", 0) or 0),
         "note": note,
+        "unpaid_wages": _int_or((last_summary or {}).get("unpaid_wages"), default=0) if isinstance(last_summary, dict) else 0,
     }
+    style = _operating_style_from_values(sim, prop, signal_inputs)
+    signal_inputs.update({
+        "operating_style_kind": style.get("operating_style_kind"),
+        "operating_style_reason": style.get("operating_style_reason"),
+        "stock_identity_kind": style.get("stock_identity_kind"),
+        "stock_identity_default_kind": style.get("stock_identity_default_kind"),
+        "owner_stocked_count": style.get("owner_stocked_count"),
+    })
     owner_signal = _player_business_owner_signal(signal_inputs)
 
     summary = {
@@ -1959,6 +2349,7 @@ def player_business_summary(sim, prop):
         "last_scene_nuisance_loss": _int_or(state.get("last_scene_nuisance_loss"), default=0),
         "last_scene_nuisance_tick": None if state.get("last_scene_nuisance_tick") is None else _int_or(state.get("last_scene_nuisance_tick"), default=0),
         "note": note,
+        **style,
         **owner_signal,
     }
     if cache_state is not None and cache_key:
@@ -3042,6 +3433,26 @@ class PlayerBusinessSystem(System):
             policy_revenue_factor = 0.0
             policy_slippage_factor = 0.0
             policy_note = "closed to customers"
+        style = _operating_style_from_values(self.sim, prop, {
+            "open_now": bool(open_now),
+            "required_staff": required_staff,
+            "staff_total": staff_total,
+            "manager_fit_score": float(operating.get("manager_fit_score", 0.0)),
+            "staff_fit_score": float(operating.get("staff_fit_score", 0.0)),
+            "service_reliability": float(operating.get("service_reliability", 0.0)),
+            "operating_note": str(operating.get("quality_note", "")).strip(),
+            "customer_policy": customer_policy,
+            "hours_mode": hours_mode,
+            "markup_mode": str(markup_profile.get("mode", "standard")).strip() or "standard",
+            "reputation_note": str(reputation.get("reputation_note", "")).strip(),
+            "community_note": str(reputation.get("community_note", "")).strip(),
+            "community_signal_note": str(reputation.get("community_signal_note", "")).strip(),
+            "scene_pressure_note": str(scene_pressure.get("scene_pressure_note", "")).strip(),
+            "footfall_delta_pct": int(reputation.get("footfall_delta_pct", 0) or 0),
+            "churn_delta_pct": int(reputation.get("churn_delta_pct", 0) or 0),
+        })
+        style_revenue_mult = max(0.86, min(1.08, float(style.get("style_revenue_mult", 1.0) or 1.0)))
+        style_slippage_mult = max(0.88, min(1.2, float(style.get("style_slippage_mult", 1.0) or 1.0)))
 
         gross_revenue = 0
         realized_revenue = 0
@@ -3055,6 +3466,7 @@ class PlayerBusinessSystem(System):
                 * float(markup_profile.get("revenue_mult", 1.0))
                 * float(reputation.get("revenue_mult", 1.0))
                 * float(scene_pressure.get("scene_revenue_mult", 1.0))
+                * float(style_revenue_mult)
             )
             gross_revenue = max(1, int(round(float(self._base_revenue_for(prop)) * revenue_factor)))
             if policy_revenue_factor <= 0.0:
@@ -3065,6 +3477,7 @@ class PlayerBusinessSystem(System):
                 * float(policy_slippage_factor)
                 * float(reputation.get("slippage_mult", 1.0))
                 * float(scene_pressure.get("scene_slippage_mult", 1.0))
+                * float(style_slippage_mult)
             ))
             if gross_revenue > 0:
                 ceiling = gross_revenue - 1 if gross_revenue > 1 else gross_revenue
@@ -3162,6 +3575,9 @@ class PlayerBusinessSystem(System):
             "scene_slippage_mult": float(scene_pressure.get("scene_slippage_mult", 1.0) or 1.0),
             "account_balance": int(state.get("account_balance", 0)),
             "note": note,
+            **style,
+            "style_revenue_mult": float(style_revenue_mult),
+            "style_slippage_mult": float(style_slippage_mult),
         }
         last_summary.update(_player_business_owner_signal(last_summary))
         state["last_summary"] = last_summary
@@ -3219,6 +3635,7 @@ __all__ = [
     "player_business_next_hours_mode",
     "player_business_next_markup_mode",
     "player_business_open_role",
+    "player_business_operating_style",
     "player_business_apply_remodel",
     "player_business_role_fit",
     "player_business_role_weights",
@@ -3233,6 +3650,7 @@ __all__ = [
     "player_business_staffing_fit",
     "player_business_staffing_targets",
     "player_business_status_snapshot",
+    "player_business_stock_identity",
     "player_business_summary",
     "player_business_work_practice_awards",
     "player_owned_businesses_for_actor",

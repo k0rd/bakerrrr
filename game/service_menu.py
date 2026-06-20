@@ -1947,6 +1947,20 @@ class ServiceMenuSystem(System):
         lines.append(f"Policy: {customer_policy_label}.")
         lines.append(f"Hours: {hours_mode_label} | {hours_text}.")
         lines.append(f"Markup: {markup_mode_label}.")
+        style_label = str(snapshot.get("operating_style_label", "")).strip()
+        stock_label = str(snapshot.get("stock_identity_label", "")).strip()
+        customer_mix = str(snapshot.get("customer_mix_label", "")).strip()
+        staff_mood = str(snapshot.get("staff_mood_label", "")).strip()
+        if style_label:
+            lines.append(f"Style: {style_label}.")
+        if stock_label:
+            owner_stocked = int(snapshot.get("owner_stocked_count", 0) or 0)
+            owner_note = f" | owner-stocked {owner_stocked}" if owner_stocked > 0 else ""
+            lines.append(f"Shelf read: {stock_label}{owner_note}.")
+        if customer_mix or staff_mood:
+            mix_text = customer_mix or "mixed walk-ins"
+            mood_text = staff_mood or "steady crew"
+            lines.append(f"Customer mix: {mix_text} | Staff mood: {mood_text}.")
         lines.append(f"Status: {'open' if open_now else 'closed'} | {note}.")
         owner_reason = str(snapshot.get("owner_signal_reason", "")).strip()
         if owner_reason:
@@ -2057,8 +2071,13 @@ class ServiceMenuSystem(System):
         else:
             detail = "Customer-facing service is shut down until you reopen it."
         return [
-            f"{business_name} customer policy set to {label}.",
-            detail,
+            line
+            for line in (
+                f"{business_name} customer policy set to {label}.",
+                detail,
+                self._business_street_read_line(prop),
+            )
+            if str(line).strip()
         ]
 
     def _business_hours_result_lines(self, prop, result):
@@ -2069,8 +2088,13 @@ class ServiceMenuSystem(System):
         hours_label = player_business_hours_mode_label(hours_mode)
         hours_text = str(result.get("hours_text", "")).strip() or self._business_hours_text(result.get("opening_window"))
         return [
-            f"{business_name} hours set to {hours_label}.",
-            f"Open window: {hours_text}.",
+            line
+            for line in (
+                f"{business_name} hours set to {hours_label}.",
+                f"Open window: {hours_text}.",
+                self._business_street_read_line(prop),
+            )
+            if str(line).strip()
         ]
 
     def _business_markup_result_lines(self, prop, mode):
@@ -2085,9 +2109,26 @@ class ServiceMenuSystem(System):
         else:
             detail = "The counter returns to its usual everyday pricing balance."
         return [
-            f"{business_name} markup set to {label}.",
-            detail,
+            line
+            for line in (
+                f"{business_name} markup set to {label}.",
+                detail,
+                self._business_street_read_line(prop),
+            )
+            if str(line).strip()
         ]
+
+    def _business_street_read_line(self, prop):
+        snapshot = player_business_status_snapshot(self.sim, prop)
+        if not isinstance(snapshot, dict):
+            return ""
+        reason = str(snapshot.get("operating_style_reason", "")).strip()
+        label = str(snapshot.get("operating_style_label", "")).strip()
+        if reason:
+            return f"Street read: {reason}."
+        if label:
+            return f"Street read: {label}."
+        return ""
 
     def _business_role_fit_line(self, role_name, fit):
         if not isinstance(fit, dict):
@@ -3259,6 +3300,13 @@ class ServiceMenuSystem(System):
         prop_name = str(event.data.get("property_name", self._pending_property_name("Service"))).strip() or self._pending_property_name("Service")
         reason = str(event.data.get("reason", "blocked")).strip().lower()
         title = f"{_casino_game_title(service)}: {prop_name}" if service in CASINO_GAME_SERVICE_IDS else f"Service: {prop_name}"
+        event_lines = [
+            str(line).strip()
+            for line in tuple(event.data.get("lines", ()) or ())
+            if str(line).strip()
+        ]
+        if event_lines and service in SERVICE_JOB_BOARD_SERVICES:
+            return f"Jobs: {prop_name}", event_lines
         if reason == "invalid_wager" and service in CASINO_GAME_SERVICE_IDS:
             return f"{_casino_game_title(service)}: {prop_name}", ["The house refuses that stake.", "Choose one of the posted wager sizes."]
         if reason == "invalid_round" and service in CASINO_GAME_SERVICE_IDS:

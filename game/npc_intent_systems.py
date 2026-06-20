@@ -196,6 +196,13 @@ from game.system_support.opportunity_knowledge_runtime import (
     schedule_will_rethink as _schedule_will_rethink,
     will_rethink_due as _will_rethink_due,
 )
+from game.opportunities import (
+    active_service_job_claim_for_actor as _active_service_job_claim_for_actor,
+    advance_service_job_board_claims as _advance_service_job_board_claims,
+    mark_service_job_claim_arrival as _mark_service_job_claim_arrival,
+    npc_claim_service_job_from_board as _npc_claim_service_job_from_board,
+    service_job_claim_target as _service_job_claim_target,
+)
 from game.vehicle_motion import (
     active_vehicle_property as _active_vehicle_property_for_state,
     clamp_vehicle_speed as _clamp_vehicle_speed,
@@ -2010,6 +2017,21 @@ class NPCWillSystem(System):
             tip_cooldowns = {}
             self.sim.npc_behavior_tip_cooldowns = tip_cooldowns
         pending_behavior_tips = []
+        completed_service_claims = _advance_service_job_board_claims(self.sim)
+        if completed_service_claims and player_pos is not None and hasattr(self.sim, "log"):
+            for claim in completed_service_claims[:3]:
+                npc_pos = positions.get(int(claim.get("claimant_eid", 0) or 0))
+                if npc_pos is None or int(npc_pos.z) != int(player_pos.z):
+                    continue
+                if _manhattan(int(npc_pos.x), int(npc_pos.y), int(player_pos.x), int(player_pos.y)) > 14:
+                    continue
+                claimant = str(claim.get("claimant_name", "") or "Someone").strip() or "Someone"
+                target_name = str(claim.get("target_property_name", "") or "the posting").strip() or "the posting"
+                self.sim.log.add(
+                    f"{claimant} finishes posted work for {target_name}.",
+                    channel="opportunity",
+                    priority="normal",
+                )
 
         _refresh_actor_attention(self.sim, player_eid=player_eid)
         if live_timeskip_active:
@@ -2462,6 +2484,51 @@ class NPCWillSystem(System):
                         ai.target_eid,
                     )
                     continue
+
+            active_service_claim = _active_service_job_claim_for_actor(self.sim, eid)
+            if isinstance(active_service_claim, dict):
+                service_target = _service_job_claim_target(self.sim, active_service_claim)
+                if service_target is not None:
+                    active_service_claim["target"] = service_target
+                    self._set_intent(eid, ai, will, "working", 58.0, service_target, None)
+                    _mark_actor_urgent(self.sim, eid, family="move", reason="service_job", ttl_ticks=18)
+                    _mark_actor_urgent(self.sim, eid, family="will", reason="service_job", ttl_ticks=18)
+                    _schedule_actor_due(self.sim, eid, "move", delay_ticks=0, reason="service_job")
+                    _schedule_actor_due(self.sim, eid, "will", delay_ticks=12, reason="service_job")
+                    continue
+
+            if str(getattr(ai, "state", "") or "").strip().lower() in {
+                "idle",
+                "lounging",
+                "patrolling",
+                "resting",
+                "scavenging",
+                "seeking_companionship",
+                "seeking_social",
+                "selling_scavenged",
+                "socializing",
+                "working",
+            }:
+                claimed_service_job = _npc_claim_service_job_from_board(self.sim, eid)
+                if isinstance(claimed_service_job, dict):
+                    service_target = _service_job_claim_target(self.sim, claimed_service_job)
+                    if service_target is not None:
+                        claimed_service_job["target"] = service_target
+                        if player_pos is not None and int(pos.z) == int(player_pos.z):
+                            if _manhattan(int(pos.x), int(pos.y), int(player_pos.x), int(player_pos.y)) <= 14 and hasattr(self.sim, "log"):
+                                claimant = str(claimed_service_job.get("claimant_name", "") or "Someone").strip() or "Someone"
+                                target_name = str(claimed_service_job.get("target_property_name", "") or "the posting").strip() or "the posting"
+                                self.sim.log.add(
+                                    f"{claimant} takes posted work for {target_name}.",
+                                    channel="opportunity",
+                                    priority="normal",
+                                )
+                        self._set_intent(eid, ai, will, "working", 58.0, service_target, None)
+                        _mark_actor_urgent(self.sim, eid, family="move", reason="service_job_claimed", ttl_ticks=18)
+                        _mark_actor_urgent(self.sim, eid, family="will", reason="service_job_claimed", ttl_ticks=18)
+                        _schedule_actor_due(self.sim, eid, "move", delay_ticks=0, reason="service_job_claimed")
+                        _schedule_actor_due(self.sim, eid, "will", delay_ticks=12, reason="service_job_claimed")
+                        continue
 
             best_intent = "idle"
             best_score = 0.0
@@ -3534,6 +3601,7 @@ class NPCInvestigateSystem(System):
         "patrolling",
     }
     COMMUTE_VEHICLE_RADIUS = 5
+    COMMUTE_OWNED_VEHICLE_RADIUS = 14
     COMMUTE_MIN_TARGET_DISTANCE = 7
     COMMUTE_ROUTE_STOP_RADIUS = 7
 
@@ -4200,29 +4268,43 @@ class NPCInvestigateSystem(System):
         except (TypeError, ValueError):
             return None
 
-    def _vehicle_commute_usable_for(self, eid, vehicle_prop, pos):
-        if not _property_is_vehicle(vehicle_prop) or pos is None:
-            return False
-        vehicle_pos = self._vehicle_position_tuple(vehicle_prop)
-        if vehicle_pos is None or int(vehicle_pos[2]) != int(pos.z):
-            return False
+    def _vehicle_commute_owner_kind(self, eid, vehicle_prop):
+        if not _property_is_vehicle(vehicle_prop):
+            return None
         owner_eid = vehicle_prop.get("owner_eid")
         metadata = _property_metadata(vehicle_prop)
         assigned_eid = metadata.get("npc_commute_driver_eid")
         if owner_eid not in {None, "", 0}:
             try:
                 if int(owner_eid) != int(eid):
-                    return False
+                    return None
+                return "owned"
             except (TypeError, ValueError):
-                return False
+                return None
         elif assigned_eid not in {None, "", 0}:
             try:
                 if int(assigned_eid) != int(eid):
-                    return False
+                    return None
+                return "owned"
             except (TypeError, ValueError):
-                return False
-        else:
+                return None
+        owner_tag = str(vehicle_prop.get("owner_tag", metadata.get("vehicle_owner_tag", "")) or "").strip().lower()
+        if owner_tag in {"player", "justice", "police", "npc"}:
+            return None
+        if owner_tag in {"", "public", "private", "unowned", "none", "neutral", "city"}:
+            return "unowned"
+        return None
+
+    def _vehicle_commute_usable_for(self, eid, vehicle_prop, pos, *, allow_unowned=False):
+        if not _property_is_vehicle(vehicle_prop) or pos is None:
             return False
+        owner_kind = self._vehicle_commute_owner_kind(eid, vehicle_prop)
+        if owner_kind is None or (owner_kind == "unowned" and not allow_unowned):
+            return False
+        vehicle_pos = self._vehicle_position_tuple(vehicle_prop)
+        if vehicle_pos is None or int(vehicle_pos[2]) != int(pos.z):
+            return False
+        metadata = _property_metadata(vehicle_prop)
         medium = str(metadata.get("vehicle_medium", metadata.get("medium", "land")) or "land").strip().lower()
         if medium != "land":
             return False
@@ -4239,7 +4321,25 @@ class NPCInvestigateSystem(System):
             medium="land",
         )
 
-    def _owned_commute_vehicle_candidates(self, eid, pos):
+    def _claim_commute_vehicle_for(self, eid, vehicle_prop):
+        if self._vehicle_commute_owner_kind(eid, vehicle_prop) != "unowned":
+            return False
+        vehicle_id = str((vehicle_prop or {}).get("id", "") or "").strip()
+        if not vehicle_id:
+            return False
+        vehicle_prop["owner_eid"] = int(eid)
+        vehicle_prop["owner_tag"] = "npc"
+        self.sim.property_registry_dirty = True
+        metadata = _property_metadata(vehicle_prop)
+        metadata["vehicle_owner_tag"] = "npc"
+        metadata["npc_commute_driver_eid"] = int(eid)
+        metadata["npc_commute_vehicle"] = True
+        portfolio = self.sim.ecs.get(PropertyPortfolio).get(eid)
+        if portfolio is not None:
+            portfolio.owned_property_ids.add(vehicle_id)
+        return True
+
+    def _commute_vehicle_candidates(self, eid, pos):
         ids = set()
         portfolio = self.sim.ecs.get(PropertyPortfolio).get(eid)
         if portfolio is not None:
@@ -4260,9 +4360,9 @@ class NPCInvestigateSystem(System):
             if vehicle_pos is None:
                 continue
             distance = _manhattan(int(pos.x), int(pos.y), vehicle_pos[0], vehicle_pos[1])
-            if distance > self.COMMUTE_VEHICLE_RADIUS:
+            if distance > self.COMMUTE_OWNED_VEHICLE_RADIUS:
                 continue
-            rows.append((int(distance), str(prop.get("name", "") or ""), str(prop.get("id", "") or ""), prop))
+            rows.append((0, int(distance), str(prop.get("name", "") or ""), str(prop.get("id", "") or ""), prop, False))
             seen.add(str(prop.get("id", "") or ""))
 
         for prop in self.sim.properties.values():
@@ -4271,16 +4371,29 @@ class NPCInvestigateSystem(System):
             prop_id = str(prop.get("id", "") or "").strip()
             if not prop_id or prop_id in seen:
                 continue
-            if not self._vehicle_commute_usable_for(eid, prop, pos):
+            owner_kind = self._vehicle_commute_owner_kind(eid, prop)
+            if owner_kind == "owned":
+                allow_unowned = False
+                max_distance = self.COMMUTE_OWNED_VEHICLE_RADIUS
+                priority = 0
+                claim = False
+            elif owner_kind == "unowned":
+                allow_unowned = True
+                max_distance = self.COMMUTE_VEHICLE_RADIUS
+                priority = 1
+                claim = True
+            else:
+                continue
+            if not self._vehicle_commute_usable_for(eid, prop, pos, allow_unowned=allow_unowned):
                 continue
             vehicle_pos = self._vehicle_position_tuple(prop)
             if vehicle_pos is None:
                 continue
             distance = _manhattan(int(pos.x), int(pos.y), vehicle_pos[0], vehicle_pos[1])
-            if distance <= self.COMMUTE_VEHICLE_RADIUS:
-                rows.append((int(distance), str(prop.get("name", "") or ""), prop_id, prop))
+            if distance <= max_distance:
+                rows.append((priority, int(distance), str(prop.get("name", "") or ""), prop_id, prop, claim))
         rows.sort()
-        return [row[-1] for row in rows]
+        return [(row[-2], bool(row[-1])) for row in rows]
 
     def _route_tile_clear_for_commute(self, x, y, z, *, vehicle_id="", driver_eid=None):
         if not _vehicle_route_accessible_at(
@@ -4390,13 +4503,15 @@ class NPCInvestigateSystem(System):
         if vehicle_state is not None and bool(getattr(vehicle_state, "in_vehicle", False)):
             return None
 
-        for vehicle_prop in self._owned_commute_vehicle_candidates(eid, pos):
+        for vehicle_prop, claim_vehicle in self._commute_vehicle_candidates(eid, pos):
             vehicle_pos = self._vehicle_position_tuple(vehicle_prop)
             if vehicle_pos is None:
                 continue
             vehicle_id = str(vehicle_prop.get("id", "") or "").strip()
             route_stop = self._route_stop_near_target(eid, vehicle_pos, target, vehicle_id)
             if route_stop is None:
+                continue
+            if claim_vehicle and not self._claim_commute_vehicle_for(eid, vehicle_prop):
                 continue
             ai.vehicle_commute_phase = "walk_to_vehicle"
             ai.vehicle_commute_vehicle_id = vehicle_id
@@ -5099,6 +5214,24 @@ class NPCInvestigateSystem(System):
                         ai.target = None
                         ai.target_eid = None
                 elif ai.state in {"working", "lounging", "socializing"}:
+                    if ai.state == "working":
+                        service_claim = _mark_service_job_claim_arrival(self.sim, eid, pos)
+                        if isinstance(service_claim, dict):
+                            service_target = _service_job_claim_target(self.sim, service_claim) or (int(pos.x), int(pos.y), int(pos.z))
+                            ai.target = service_target
+                            ai.target_eid = None
+                            will = wills.get(eid)
+                            if will is not None:
+                                will.intent = "working"
+                            _mark_actor_urgent(self.sim, eid, family="move", reason="service_job_waiting", ttl_ticks=18)
+                            _mark_actor_urgent(self.sim, eid, family="will", reason="service_job_waiting", ttl_ticks=18)
+                            _schedule_actor_due(self.sim, eid, "move", delay_ticks=max(1, hold_cooldown), reason="service_job_waiting")
+                            _schedule_actor_due(self.sim, eid, "will", delay_ticks=12, reason="service_job_waiting")
+                            if throttle:
+                                throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
+                            else:
+                                self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
+                            continue
                     # Arrived at roam tile; clear target so will system picks a new one.
                     _clear_opportunity_active_target(self.sim, eid, ai.state)
                     ai.target = None
@@ -5115,6 +5248,25 @@ class NPCInvestigateSystem(System):
                 else:
                     self.next_move_tick[eid] = self.sim.tick + arrival_cooldown
                 continue
+
+            if ai.state == "working" and _manhattan(pos.x, pos.y, tx, ty) <= 1:
+                service_claim = _mark_service_job_claim_arrival(self.sim, eid, pos)
+                if isinstance(service_claim, dict):
+                    service_target = _service_job_claim_target(self.sim, service_claim) or (int(pos.x), int(pos.y), int(pos.z))
+                    ai.target = service_target
+                    ai.target_eid = None
+                    will = wills.get(eid)
+                    if will is not None:
+                        will.intent = "working"
+                    _mark_actor_urgent(self.sim, eid, family="move", reason="service_job_waiting", ttl_ticks=18)
+                    _mark_actor_urgent(self.sim, eid, family="will", reason="service_job_waiting", ttl_ticks=18)
+                    _schedule_actor_due(self.sim, eid, "move", delay_ticks=max(1, hold_cooldown), reason="service_job_waiting")
+                    _schedule_actor_due(self.sim, eid, "will", delay_ticks=12, reason="service_job_waiting")
+                    if throttle:
+                        throttle.next_move_tick = self.sim.tick + max(1, hold_cooldown)
+                    else:
+                        self.next_move_tick[eid] = self.sim.tick + max(1, hold_cooldown)
+                    continue
 
             if ai.state in {"investigating", "seeking_social", "seeking_companionship", "protecting", "reporting_incident", "helping_victim", "warning", "ejecting_target", "leaving_property", "soliciting_player", "seeking_street_buyer", "seeking_street_appraiser"} and _manhattan(pos.x, pos.y, tx, ty) <= 1:
                 if ai.state == "reporting_incident":

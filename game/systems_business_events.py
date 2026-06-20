@@ -848,12 +848,26 @@ def _player_business_owner_scene_fields(sim, prop, *, event_phase=""):
     reason = str(summary.get("owner_signal_reason", "") or "").strip()
     if not cue or not kind or not reason:
         return {}
-    return {
+    fields = {
         "player_business_cue": cue,
         "owner_signal_kind": kind,
         "owner_signal_reason": reason,
         "owner_signal_scene_bias": round(float(_player_business_owner_signal_bias(kind, event_phase)), 3),
     }
+    for key in (
+        "stock_identity_kind",
+        "stock_identity_label",
+        "owner_stocked_count",
+        "operating_style_kind",
+        "operating_style_label",
+        "operating_style_reason",
+        "customer_mix_label",
+        "staff_mood_label",
+    ):
+        value = summary.get(key)
+        if value not in {None, ""}:
+            fields[key] = value
+    return fields
 
 
 def _with_player_business_owner_scene_fields(sim, prop, event):
@@ -944,6 +958,14 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
             "owner_signal_kind": str(player_business_event.get("owner_signal_kind", "") or "").strip().lower(),
             "owner_signal_reason": str(player_business_event.get("owner_signal_reason", "") or "").strip(),
             "owner_signal_scene_bias": float(player_business_event.get("owner_signal_scene_bias", 0.0) or 0.0),
+            "stock_identity_kind": str(player_business_event.get("stock_identity_kind", "") or "").strip().lower(),
+            "stock_identity_label": str(player_business_event.get("stock_identity_label", "") or "").strip(),
+            "owner_stocked_count": int(player_business_event.get("owner_stocked_count", 0) or 0),
+            "operating_style_kind": str(player_business_event.get("operating_style_kind", "") or "").strip().lower(),
+            "operating_style_label": str(player_business_event.get("operating_style_label", "") or "").strip(),
+            "operating_style_reason": str(player_business_event.get("operating_style_reason", "") or "").strip(),
+            "customer_mix_label": str(player_business_event.get("customer_mix_label", "") or "").strip(),
+            "staff_mood_label": str(player_business_event.get("staff_mood_label", "") or "").strip(),
         }
     reputation_event = _business_reputation_micro_event(
         sim,
@@ -963,6 +985,14 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
             "owner_signal_kind": str(reputation_event.get("owner_signal_kind", "") or "").strip().lower(),
             "owner_signal_reason": str(reputation_event.get("owner_signal_reason", "") or "").strip(),
             "owner_signal_scene_bias": float(reputation_event.get("owner_signal_scene_bias", 0.0) or 0.0),
+            "stock_identity_kind": str(reputation_event.get("stock_identity_kind", "") or "").strip().lower(),
+            "stock_identity_label": str(reputation_event.get("stock_identity_label", "") or "").strip(),
+            "owner_stocked_count": int(reputation_event.get("owner_stocked_count", 0) or 0),
+            "operating_style_kind": str(reputation_event.get("operating_style_kind", "") or "").strip().lower(),
+            "operating_style_label": str(reputation_event.get("operating_style_label", "") or "").strip(),
+            "operating_style_reason": str(reputation_event.get("operating_style_reason", "") or "").strip(),
+            "customer_mix_label": str(reputation_event.get("customer_mix_label", "") or "").strip(),
+            "staff_mood_label": str(reputation_event.get("staff_mood_label", "") or "").strip(),
         }
     events = list(_building_micro_event_pool(category, phase, open_now=open_now))
     if not events:
@@ -1864,6 +1894,14 @@ def _building_pulse_snapshot(sim, prop=None, structure=None, *, respect_chunk_ca
         pulse["player_business_cue"] = str(event.get("player_business_cue", "") or "").strip()
         pulse["owner_signal_kind"] = str(event.get("owner_signal_kind", "") or "").strip().lower()
         pulse["owner_signal_reason"] = str(event.get("owner_signal_reason", "") or "").strip()
+        pulse["stock_identity_kind"] = str(event.get("stock_identity_kind", "") or "").strip().lower()
+        pulse["stock_identity_label"] = str(event.get("stock_identity_label", "") or "").strip()
+        pulse["owner_stocked_count"] = int(event.get("owner_stocked_count", 0) or 0)
+        pulse["operating_style_kind"] = str(event.get("operating_style_kind", "") or "").strip().lower()
+        pulse["operating_style_label"] = str(event.get("operating_style_label", "") or "").strip()
+        pulse["operating_style_reason"] = str(event.get("operating_style_reason", "") or "").strip()
+        pulse["customer_mix_label"] = str(event.get("customer_mix_label", "") or "").strip()
+        pulse["staff_mood_label"] = str(event.get("staff_mood_label", "") or "").strip()
         try:
             pulse["owner_signal_scene_bias"] = float(event.get("owner_signal_scene_bias", 0.0) or 0.0)
         except (TypeError, ValueError):
@@ -5772,7 +5810,19 @@ class BusinessPulseSceneSystem(System):
             "linked_property_id": str(scene.get("property_id", "") or "").strip() or None,
             "linked_building_id": linked_building_id or None,
         }
-        for key in ("player_business_cue", "owner_signal_kind", "owner_signal_reason"):
+        for key in (
+            "player_business_cue",
+            "owner_signal_kind",
+            "owner_signal_reason",
+            "stock_identity_kind",
+            "stock_identity_label",
+            "owner_stocked_count",
+            "operating_style_kind",
+            "operating_style_label",
+            "operating_style_reason",
+            "customer_mix_label",
+            "staff_mood_label",
+        ):
             value = str(scene.get(key, "") or "").strip()
             if value:
                 metadata[key] = value
@@ -5821,7 +5871,19 @@ class BusinessPulseSceneSystem(System):
             "linked_property_id": str(scene.get("property_id", "") or "").strip() or None,
             "linked_building_id": linked_building_id or None,
         })
-        for key in ("player_business_cue", "owner_signal_kind", "owner_signal_reason"):
+        for key in (
+            "player_business_cue",
+            "owner_signal_kind",
+            "owner_signal_reason",
+            "stock_identity_kind",
+            "stock_identity_label",
+            "owner_stocked_count",
+            "operating_style_kind",
+            "operating_style_label",
+            "operating_style_reason",
+            "customer_mix_label",
+            "staff_mood_label",
+        ):
             value = str(scene.get(key, "") or "").strip()
             if value:
                 metadata[key] = value
@@ -6350,6 +6412,14 @@ class BusinessPulseSceneSystem(System):
             "player_business_cue": str((spec.get("pulse") or {}).get("player_business_cue", "") or "").strip(),
             "owner_signal_kind": str((spec.get("pulse") or {}).get("owner_signal_kind", "") or "").strip().lower(),
             "owner_signal_reason": str((spec.get("pulse") or {}).get("owner_signal_reason", "") or "").strip(),
+            "stock_identity_kind": str((spec.get("pulse") or {}).get("stock_identity_kind", "") or "").strip().lower(),
+            "stock_identity_label": str((spec.get("pulse") or {}).get("stock_identity_label", "") or "").strip(),
+            "owner_stocked_count": int((spec.get("pulse") or {}).get("owner_stocked_count", 0) or 0),
+            "operating_style_kind": str((spec.get("pulse") or {}).get("operating_style_kind", "") or "").strip().lower(),
+            "operating_style_label": str((spec.get("pulse") or {}).get("operating_style_label", "") or "").strip(),
+            "operating_style_reason": str((spec.get("pulse") or {}).get("operating_style_reason", "") or "").strip(),
+            "customer_mix_label": str((spec.get("pulse") or {}).get("customer_mix_label", "") or "").strip(),
+            "staff_mood_label": str((spec.get("pulse") or {}).get("staff_mood_label", "") or "").strip(),
             "scene_type": str(blueprint.get("scene_type", "") or "").strip().lower(),
             "source_kind": str(spec.get("source_kind", "pulse") or "pulse").strip().lower(),
             "seed_id": str(spec.get("seed_id", "") or "").strip(),

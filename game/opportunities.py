@@ -16,12 +16,14 @@ from game.components import (
     JusticeProfile,
     NPCMemory,
     NPCNeeds,
+    NPCRoutine,
     NPCSocial,
     NPCTraits,
     Occupation,
     PlayerAssets,
     Position,
     PropertyKnowledge,
+    Vitality,
 )
 from game.economy import chunk_economy_profile
 from game.items import ITEM_CATALOG, credstick_total_credits, is_credstick_item, item_display_name
@@ -63,6 +65,10 @@ SERVICE_JOB_DEADLINE_HOURS = {
     "agency_jobs": 10,
     "bounty_jobs": 12,
 }
+SERVICE_JOB_PACKAGE_ITEM_ID = "sealed_packet"
+SERVICE_JOB_NPC_SCAN_COOLDOWN_TICKS = 60
+SERVICE_JOB_NPC_COMPLETE_MIN_TICKS = 80
+SERVICE_JOB_NPC_COMPLETE_MAX_TICKS = 420
 _OPPORTUNITY_URGENCY_KEYWORDS = (
     "urgent",
     "immediate",
@@ -756,6 +762,11 @@ def _state(sim):
     if not isinstance(intel_by_observer, dict):
         intel_by_observer = {}
         state["intel_by_observer"] = intel_by_observer
+
+    service_claims = state.get("service_job_board_claims")
+    if not isinstance(service_claims, dict):
+        service_claims = {}
+        state["service_job_board_claims"] = service_claims
 
     state["next_id"] = max(1, _safe_int(state.get("next_id"), default=1))
     state["seeded"] = bool(state.get("seeded", False))
@@ -4639,11 +4650,293 @@ def _service_job_actor_name(sim, eid):
     return f"Person {eid}"
 
 
+def _service_job_claims(sim):
+    state = _state(sim)
+    claims = state.get("service_job_board_claims")
+    if not isinstance(claims, dict):
+        claims = {}
+        state["service_job_board_claims"] = claims
+    return claims
+
+
+def _service_job_origin_chunk(sim, issuer_prop, actor_eid=None):
+    if sim is not None and isinstance(issuer_prop, dict):
+        try:
+            return tuple(
+                sim.chunk_coords(
+                    int(issuer_prop.get("x", 0)),
+                    int(issuer_prop.get("y", 0)),
+                )
+            )
+        except Exception:
+            pass
+        metadata = issuer_prop.get("metadata") if isinstance(issuer_prop.get("metadata"), dict) else {}
+        chunk = _chunk_tuple(metadata.get("chunk") or metadata.get("origin_chunk"))
+        if chunk is not None:
+            return chunk
+    if actor_eid is not None:
+        return _player_chunk(sim, actor_eid)
+    return None
+
+
+def _service_job_claim_key(job_key):
+    return str(job_key or "").strip()
+
+
+def _service_job_claim_for(sim, job_key):
+    key = _service_job_claim_key(job_key)
+    if not key:
+        return None
+    claim = _service_job_claims(sim).get(key)
+    return claim if isinstance(claim, dict) else None
+
+
+def _service_job_claim_active(claim):
+    return isinstance(claim, dict) and str(claim.get("status", "") or "").strip().lower() == "active"
+
+
+def _service_job_claim_terminal(claim):
+    if not isinstance(claim, dict):
+        return False
+    return str(claim.get("status", "") or "").strip().lower() in {"completed", "failed", "expired", "cancelled"}
+
+
+def _service_job_claim_terminal_tick(claim):
+    if not isinstance(claim, dict):
+        return -1
+    for key in (
+        "terminal_tick",
+        "completed_tick",
+        "failed_tick",
+        "expired_tick",
+        "cancelled_tick",
+    ):
+        tick = _safe_int(claim.get(key), default=-1)
+        if tick >= 0:
+            return tick
+    return _safe_int(claim.get("claimed_tick"), default=-1)
+
+
+def prune_service_job_board_claims(sim, max_age_hours=24):
+    if sim is None:
+        return 0
+    claims = _service_job_claims(sim)
+    if not claims:
+        return 0
+    now = int(getattr(sim, "tick", 0) or 0)
+    try:
+        hours = max(0.0, float(max_age_hours))
+    except (TypeError, ValueError):
+        hours = 24.0
+    max_age_ticks = max(1, int(round(hours * _opportunity_ticks_per_hour(sim))))
+    removed = 0
+    for job_key, claim in list(claims.items()):
+        if _service_job_claim_active(claim):
+            continue
+        if not _service_job_claim_terminal(claim):
+            continue
+        terminal_tick = _service_job_claim_terminal_tick(claim)
+        if terminal_tick < 0:
+            continue
+        if now - terminal_tick >= max_age_ticks:
+            claims.pop(job_key, None)
+            removed += 1
+    return removed
+
+
+def _service_job_claimant_name(sim, actor_eid, fallback="someone"):
+    try:
+        actor_eid = int(actor_eid)
+    except (TypeError, ValueError):
+        actor_eid = 0
+    if actor_eid > 0:
+        return _service_job_actor_name(sim, actor_eid)
+    return str(fallback or "someone").strip() or "someone"
+
+
+def _service_job_offer_with_claim(sim, offer):
+    offer = dict(offer or {})
+    claim = _service_job_claim_for(sim, offer.get("job_key"))
+    if not isinstance(claim, dict) or _service_job_claim_terminal(claim):
+        return offer
+    status = str(claim.get("status", "") or "").strip().lower()
+    claimant_name = str(claim.get("claimant_name", "") or "").strip() or _service_job_claimant_name(
+        sim,
+        claim.get("claimant_eid"),
+    )
+    if status:
+        offer["claim_status"] = status
+        offer["claimant_eid"] = _safe_int(claim.get("claimant_eid"), default=0)
+        offer["claimant_name"] = claimant_name
+        offer["claimant_kind"] = str(claim.get("claimant_kind", "") or "").strip().lower()
+        base_label = str(offer.get("base_label", "") or offer.get("label", "Job") or "Job").strip() or "Job"
+        offer["label"] = f"{base_label} -> active / {claimant_name}"
+    return offer
+
+
+def service_job_offer_instruction_lines(offer, *, prop=None):
+    offer = offer if isinstance(offer, dict) else {}
+    prop_name = str((prop or {}).get("name", "") or offer.get("issuer_property_name", "") or "the office").strip()
+    target_name = str(offer.get("target_property_name", "") or offer.get("target_name", "") or "the target").strip()
+    short_step = str(offer.get("short_step", "") or "").strip()
+    summary = str(offer.get("summary", "") or "").strip()
+    deadline_hours = max(1, _safe_int(offer.get("deadline_hours"), default=8))
+    pay = max(0, _safe_int(offer.get("pay"), default=0))
+    standing = max(0, _safe_int(offer.get("standing"), default=0))
+    failure_text = str(offer.get("failure_text", "") or "").strip()
+    claim_status = str(offer.get("claim_status", "") or "").strip().lower()
+    claimant_name = str(offer.get("claimant_name", "") or "").strip()
+
+    lines = []
+    if claim_status == "active" and claimant_name:
+        lines.append(f"Status: active / {claimant_name}.")
+    if summary:
+        lines.append(summary)
+    elif short_step:
+        lines.append(f"From {prop_name}, {short_step}.")
+    if short_step:
+        lines.append(f"Next: {short_step}.")
+    elif target_name:
+        lines.append(f"Next: go to {target_name} and check in.")
+    lines.append(f"Deadline: {deadline_hours}h. Reward: {pay}c, standing +{standing}.")
+    if failure_text:
+        lines.append(f"Failure: {failure_text}.")
+    return tuple(line for line in lines if str(line).strip())
+
+
+def _service_job_offer_short_step(service, verb, target_name):
+    service = str(service or "").strip().lower()
+    verb = str(verb or "").strip().lower()
+    target_name = str(target_name or "the target").strip() or "the target"
+    if service == "courier_jobs":
+        if verb == "deliver":
+            return f"receive the sealed packet here, then deliver it to {target_name}"
+        if verb == "pick up":
+            return f"pick up the sealed packet at {target_name}, then bring it back here"
+        if verb == "run":
+            return f"check in at {target_name}"
+        return f"make the handoff at {target_name}"
+    if service == "agency_jobs":
+        if verb == "day labor":
+            return f"check in for day labor at {target_name}"
+        if verb == "supply run":
+            return f"check in with the supply desk at {target_name}"
+        if verb == "salvage check":
+            return f"check the salvage lane at {target_name}"
+        return f"handle the local errand at {target_name}"
+    return f"work the posting at {target_name}"
+
+
+def _service_job_offer_failure_text(service, verb):
+    service = str(service or "").strip().lower()
+    verb = str(verb or "").strip().lower()
+    if service == "bounty_jobs":
+        return "the target dies, the window expires, or pickup no longer applies"
+    if service == "courier_jobs":
+        if verb in {"deliver", "pick up"}:
+            return "the deadline expires, the packet is lost after receipt, or clean courier standing is burned"
+        return "the deadline expires or clean courier standing is burned"
+    return "the deadline expires or the site can no longer take the work"
+
+
+def _opportunity_deadline_hours_left(sim, opportunity):
+    expire_tick = _safe_int((opportunity or {}).get("expire_tick"), default=0)
+    if expire_tick <= 0:
+        return 0
+    ticks_left = max(0, expire_tick - int(getattr(sim, "tick", 0) or 0))
+    return max(1, int(round(ticks_left / max(1, _opportunity_ticks_per_hour(sim)))))
+
+
+def opportunity_next_step_text(sim, opportunity):
+    opportunity = opportunity if isinstance(opportunity, dict) else {}
+    requirements = _opportunity_requirements(opportunity)
+    kind = str(opportunity.get("kind", "") or "").strip().lower()
+    job_action = str(requirements.get("job_action", "") or "").strip().lower()
+    item_id = str(requirements.get("require_item_id", "") or "").strip().lower()
+    item_label = str(requirements.get("item_label", "") or "").strip() or _item_label(item_id)
+    issued_tick = _safe_int(opportunity.get("provided_item_issued_tick"), default=-1)
+    pickup_label = _site_label_from_requirement(
+        sim,
+        requirements,
+        property_key="pickup_property_id",
+        building_key="pickup_building_id",
+        name_key="pickup_property_name",
+    )
+    delivery_label = _site_label_from_requirement(
+        sim,
+        requirements,
+        property_key="delivery_property_id",
+        building_key="delivery_building_id",
+        name_key="delivery_property_name",
+    )
+    target_label = _site_label_from_requirement(sim, requirements)
+
+    bounty_target = _safe_int(requirements.get("bounty_target_eid"), default=0)
+    if bounty_target > 0 or kind == "bounty_capture":
+        target_name = str(requirements.get("bounty_target_name", "target") or "target").strip() or "target"
+        return f"Find {target_name}, drop them or accept surrender, then use the field restraint jab."
+
+    if item_id:
+        acquisition_hint = str(requirements.get("acquisition_hint", "") or "").strip().lower()
+        if bool(requirements.get("provide_item")) and issued_tick < 0:
+            if acquisition_hint == "pickup":
+                pickup = pickup_label or "the pickup site"
+                return f"Go to {pickup} and receive {item_label}; make room first if your inventory is full."
+            pickup = pickup_label or "the issuing counter"
+            return f"Receive {item_label} at {pickup}; make room first if your inventory is full."
+        delivery = delivery_label or target_label or "the delivery site"
+        return f"Deliver {item_label} to {delivery} and use the handoff there."
+
+    if job_action == "day_labor":
+        return f"Go to {target_label or 'the work site'} and check in for day labor."
+    if job_action == "supply_run":
+        return f"Go to {target_label or 'the supply site'} and check in with the supply desk."
+    if job_action == "salvage_check":
+        return f"Go to {target_label or 'the salvage site'} and check the salvage lane."
+    if job_action in {"route", "handoff", "local_errand"}:
+        return f"Go to {target_label or 'the target site'} and check in at the counter."
+
+    tags = set(_normalize_activity_tags(requirements.get("recent_activity_tags")))
+    if tags:
+        return _opportunity_activity_instruction(requirements)
+    if target_label:
+        return f"Go to {target_label} and interact there."
+    return _opportunity_activity_instruction(requirements)
+
+
+def opportunity_instruction_lines(sim, opportunity):
+    opportunity = opportunity if isinstance(opportunity, dict) else {}
+    lines = []
+    summary = str(opportunity.get("summary", "") or "").strip()
+    if summary:
+        lines.append(summary)
+    next_step = opportunity_next_step_text(sim, opportunity)
+    if next_step:
+        lines.append(f"Next: {next_step}")
+    hours_left = _opportunity_deadline_hours_left(sim, opportunity)
+    reward_text = format_reward_text(opportunity.get("reward", {}))
+    if hours_left > 0:
+        lines.append(f"Deadline: {hours_left}h. Reward: {reward_text}.")
+    elif reward_text:
+        lines.append(f"Reward: {reward_text}.")
+    requirements = _opportunity_requirements(opportunity)
+    if _safe_int(requirements.get("bounty_target_eid"), default=0) > 0:
+        lines.append("Failure: the target dies, the window expires, or pickup no longer applies.")
+    elif str(opportunity.get("contract_family", "") or "").strip().lower() == "courier_jobs":
+        if str(requirements.get("require_item_id", "") or "").strip():
+            lines.append("Failure: the deadline expires, the packet is lost after receipt, or clean courier standing is burned.")
+        else:
+            lines.append("Failure: the deadline expires or clean courier standing is burned.")
+    elif str(opportunity.get("contract_family", "") or "").strip().lower() == "agency_jobs":
+        lines.append("Failure: the deadline expires or the site can no longer take the work.")
+    return tuple(line for line in lines if str(line).strip())
+
+
 def _service_job_property_candidates(sim, issuer_prop, player_eid, *, limit=12):
     if sim is None or not isinstance(issuer_prop, dict):
         return []
     issuer_id = str(issuer_prop.get("id", "") or "").strip()
-    origin_chunk = _player_chunk(sim, player_eid)
+    origin_chunk = _service_job_origin_chunk(sim, issuer_prop, player_eid)
     try:
         origin_x = int(issuer_prop.get("x", 0))
         origin_y = int(issuer_prop.get("y", 0))
@@ -4707,16 +5000,17 @@ def _service_job_target_npcs(sim, player_eid, *, limit=12):
     return rows[: max(1, int(limit))]
 
 
-def service_job_board_offers(sim, player_eid, prop, service, *, limit=4):
+def service_job_board_offers(sim, player_eid, prop, service, *, limit=4, include_terminal_claims=False):
     service = str(service or "").strip().lower()
     if service not in SERVICE_JOB_BOARD_SERVICES or not isinstance(prop, dict):
         return []
+    prune_service_job_board_claims(sim)
     limit = max(1, int(limit))
     prop_id = str(prop.get("id", "") or "").strip()
     prop_name = str(prop.get("name", prop_id) or prop_id).strip() or "the office"
     tick_bucket = int(getattr(sim, "tick", 0) // max(1, _opportunity_ticks_per_hour(sim) * 4))
     rng = random.Random(f"{getattr(sim, 'seed', 0)}:service-job-board:{prop_id}:{service}:{tick_bucket}")
-    origin_chunk = _player_chunk(sim, player_eid)
+    origin_chunk = _service_job_origin_chunk(sim, prop, player_eid)
     deadline_hours = int(SERVICE_JOB_DEADLINE_HOURS.get(service, 8))
     offers = []
 
@@ -4728,14 +5022,77 @@ def service_job_board_offers(sim, player_eid, prop, service, *, limit=4):
             chunk_dist, tile_dist, _name_key, target_id, target_prop, target_chunk = row
             target_name = str(target_prop.get("name", target_id) or target_id).strip()
             verb = verbs[(index + rng.randrange(len(verbs))) % len(verbs)]
+            verb_key = verb.lower()
             pay = int(base_pay + (chunk_dist * 10) + min(22, tile_dist // 5) + rng.randint(0, 12))
             standing = 1 + int(chunk_dist >= 2)
             job_key = f"service_job:{service}:{prop_id}:{target_id}:{tick_bucket}:{index}"
-            offers.append({
+            short_step = _service_job_offer_short_step(service, verb_key, target_name)
+            label_step = {
+                "deliver": "deliver packet",
+                "pick up": "pickup + return",
+                "run": "check in",
+                "handoff": "make handoff",
+                "day labor": "check in",
+                "supply run": "supply check",
+                "local errand": "site errand",
+                "salvage check": "salvage check",
+            }.get(verb_key, "check in")
+            if service == "courier_jobs" and verb_key == "deliver":
+                summary = f"Receive a sealed packet at {prop_name}; deliver it to {target_name} within {deadline_hours}h."
+                job_action = "delivery"
+                item_id = SERVICE_JOB_PACKAGE_ITEM_ID
+                item_label = "sealed packet"
+                requires_package = True
+            elif service == "courier_jobs" and verb_key == "pick up":
+                summary = f"Pick up a sealed packet at {target_name}; bring it back to {prop_name} within {deadline_hours}h."
+                job_action = "pickup"
+                item_id = SERVICE_JOB_PACKAGE_ITEM_ID
+                item_label = "sealed packet"
+                requires_package = True
+            elif service == "courier_jobs" and verb_key == "run":
+                summary = f"Check in at {target_name} for {prop_name}; no package is issued."
+                job_action = "route"
+                item_id = ""
+                item_label = ""
+                requires_package = False
+            elif service == "courier_jobs":
+                summary = f"Make a counter handoff at {target_name} for {prop_name}; no package is issued."
+                job_action = "handoff"
+                item_id = ""
+                item_label = ""
+                requires_package = False
+            elif service == "agency_jobs" and verb_key == "day labor":
+                summary = f"Check in for day labor at {target_name}; finish within {deadline_hours}h."
+                job_action = "day_labor"
+                item_id = ""
+                item_label = ""
+                requires_package = False
+            elif service == "agency_jobs" and verb_key == "supply run":
+                summary = f"Check in with the supply desk at {target_name}; finish within {deadline_hours}h."
+                job_action = "supply_run"
+                item_id = ""
+                item_label = ""
+                requires_package = False
+            elif service == "agency_jobs" and verb_key == "salvage check":
+                summary = f"Check the salvage lane at {target_name}; finish within {deadline_hours}h."
+                job_action = "salvage_check"
+                item_id = ""
+                item_label = ""
+                requires_package = False
+            else:
+                summary = f"Handle a local errand at {target_name}; finish within {deadline_hours}h."
+                job_action = "local_errand"
+                item_id = ""
+                item_label = ""
+                requires_package = False
+            offer = {
                 "service": service,
                 "job_key": job_key,
-                "label": f"{verb}: {target_name} ({pay}c)",
-                "summary": f"{verb.lower()} for {prop_name}; finish within {deadline_hours}h.",
+                "base_label": f"{verb}: {target_name} ({pay}c/{deadline_hours}h) - {label_step}",
+                "label": f"{verb}: {target_name} ({pay}c/{deadline_hours}h) - {label_step}",
+                "summary": summary,
+                "short_step": short_step,
+                "failure_text": _service_job_offer_failure_text(service, verb_key),
                 "target_property_id": target_id,
                 "target_property_name": target_name,
                 "target_chunk": tuple(target_chunk or ()),
@@ -4743,9 +5100,19 @@ def service_job_board_offers(sim, player_eid, prop, service, *, limit=4):
                 "pay": pay,
                 "standing": standing,
                 "kind": "courier_job" if service == "courier_jobs" else "agency_job",
-                "verb": verb.lower(),
+                "verb": verb_key,
+                "job_action": job_action,
+                "item_id": item_id,
+                "item_label": item_label,
+                "requires_package": bool(requires_package),
                 "origin_chunk": origin_chunk,
-            })
+                "issuer_property_id": prop_id,
+                "issuer_property_name": prop_name,
+            }
+            claim = _service_job_claim_for(sim, job_key)
+            if _service_job_claim_terminal(claim) and not include_terminal_claims:
+                continue
+            offers.append(_service_job_offer_with_claim(sim, offer))
         return offers
 
     if service == "bounty_jobs":
@@ -4759,11 +5126,14 @@ def service_job_board_offers(sim, player_eid, prop, service, *, limit=4):
                 target_chunk = sim.chunk_coords(int(pos.x), int(pos.y))
             except Exception:
                 target_chunk = ()
-            offers.append({
+            offer = {
                 "service": service,
                 "job_key": job_key,
-                "label": f"Alive pickup: {target_name} ({pay}c)",
+                "base_label": f"Alive pickup: {target_name} ({pay}c/{deadline_hours}h)",
+                "label": f"Alive pickup: {target_name} ({pay}c/{deadline_hours}h)",
                 "summary": f"Drop or accept surrender, then use the issued restraint jab within {deadline_hours}h.",
+                "short_step": f"find {target_name}, drop or accept surrender, then use the restraint jab",
+                "failure_text": _service_job_offer_failure_text(service, "bounty"),
                 "target_eid": int(target_eid),
                 "target_name": target_name,
                 "target_chunk": tuple(target_chunk or ()),
@@ -4774,7 +5144,13 @@ def service_job_board_offers(sim, player_eid, prop, service, *, limit=4):
                 "standing": 2,
                 "kind": "bounty_capture",
                 "origin_chunk": origin_chunk,
-            })
+                "issuer_property_id": prop_id,
+                "issuer_property_name": prop_name,
+            }
+            claim = _service_job_claim_for(sim, job_key)
+            if _service_job_claim_terminal(claim) and not include_terminal_claims:
+                continue
+            offers.append(_service_job_offer_with_claim(sim, offer))
         return offers
     return offers
 
@@ -4785,6 +5161,362 @@ def _service_job_offer_by_key(sim, player_eid, prop, service, job_key):
         if str(offer.get("job_key", "") or "").strip() == job_key:
             return offer
     return None
+
+
+def _claim_service_job_offer(sim, offer, *, actor_eid, claimant_kind="player"):
+    if sim is None or not isinstance(offer, dict):
+        return None, {
+            "blocked": True,
+            "reason": "job_unavailable",
+            "message": "That job posting is no longer available.",
+        }
+    job_key = _service_job_claim_key(offer.get("job_key"))
+    if not job_key:
+        return None, {
+            "blocked": True,
+            "reason": "job_unavailable",
+            "message": "That job posting is no longer available.",
+        }
+    claims = _service_job_claims(sim)
+    existing = claims.get(job_key)
+    if _service_job_claim_active(existing):
+        claimant_eid = _safe_int(existing.get("claimant_eid"), default=0)
+        claimant_name = str(existing.get("claimant_name", "") or "").strip() or _service_job_claimant_name(
+            sim,
+            claimant_eid,
+        )
+        return None, {
+            "blocked": True,
+            "reason": "already_claimed",
+            "claimant_eid": claimant_eid,
+            "claimant_name": claimant_name,
+            "message": f"That posting is already active for {claimant_name}.",
+        }
+    actor_name = _service_job_claimant_name(sim, actor_eid)
+    now = int(getattr(sim, "tick", 0))
+    target_chunk = _chunk_tuple(offer.get("target_chunk"))
+    origin_chunk = _chunk_tuple(offer.get("origin_chunk"))
+    distance = _manhattan(origin_chunk, target_chunk) if origin_chunk and target_chunk else 0
+    deadline_hours = max(1, _safe_int(offer.get("deadline_hours"), default=8))
+    due_ticks = min(
+        max(
+            SERVICE_JOB_NPC_COMPLETE_MIN_TICKS,
+            SERVICE_JOB_NPC_COMPLETE_MIN_TICKS + (distance * 80),
+        ),
+        SERVICE_JOB_NPC_COMPLETE_MAX_TICKS,
+    )
+    claim = {
+        "job_key": job_key,
+        "status": "active",
+        "service": str(offer.get("service", "") or "").strip().lower(),
+        "kind": str(offer.get("kind", "") or "").strip().lower(),
+        "job_action": str(offer.get("job_action", "") or "").strip().lower(),
+        "claimant_eid": _safe_int(actor_eid, default=0),
+        "claimant_name": actor_name,
+        "claimant_kind": str(claimant_kind or "player").strip().lower() or "player",
+        "claimed_tick": now,
+        "due_tick": now + int(due_ticks),
+        "expire_tick": now + int(deadline_hours * _opportunity_ticks_per_hour(sim)),
+        "issuer_property_id": str(offer.get("issuer_property_id", "") or "").strip(),
+        "issuer_property_name": str(offer.get("issuer_property_name", "") or "").strip(),
+        "target_property_id": str(offer.get("target_property_id", "") or "").strip(),
+        "target_property_name": str(offer.get("target_property_name", "") or "").strip(),
+        "target_chunk": target_chunk,
+        "label": str(offer.get("base_label", "") or offer.get("label", "") or "Service job").strip(),
+        "summary": str(offer.get("summary", "") or "").strip(),
+        "short_step": str(offer.get("short_step", "") or "").strip(),
+        "pay": max(0, _safe_int(offer.get("pay"), default=0)),
+        "standing": max(0, _safe_int(offer.get("standing"), default=0)),
+        "deadline_hours": deadline_hours,
+    }
+    claims[job_key] = claim
+    return claim, None
+
+
+def _finish_service_job_claim(sim, job_key, *, status="completed", reason=""):
+    claim = _service_job_claim_for(sim, job_key)
+    if not _service_job_claim_active(claim):
+        return None
+    terminal = str(status or "completed").strip().lower() or "completed"
+    if terminal not in {"completed", "failed", "expired", "cancelled"}:
+        terminal = "completed"
+    claim["status"] = terminal
+    terminal_tick = int(getattr(sim, "tick", 0))
+    claim[f"{terminal}_tick"] = terminal_tick
+    claim["terminal_tick"] = terminal_tick
+    if reason:
+        claim["reason"] = str(reason).strip()
+    return claim
+
+
+def _service_job_claim_target(sim, claim):
+    if sim is None or not isinstance(claim, dict):
+        return None
+    prop_id = str(claim.get("target_property_id", "") or "").strip()
+    prop = getattr(sim, "properties", {}).get(prop_id) if prop_id else None
+    focus = property_focus_position(prop) if isinstance(prop, dict) else None
+    if isinstance(focus, (tuple, list)) and len(focus) >= 3:
+        try:
+            return (int(focus[0]), int(focus[1]), int(focus[2]))
+        except (TypeError, ValueError):
+            return None
+    if isinstance(prop, dict):
+        try:
+            return (int(prop.get("x", 0)), int(prop.get("y", 0)), int(prop.get("z", 0)))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def active_service_job_claim_for_actor(sim, actor_eid):
+    try:
+        actor_eid = int(actor_eid)
+    except (TypeError, ValueError):
+        return None
+    if actor_eid <= 0:
+        return None
+    for claim in _service_job_claims(sim).values():
+        if not _service_job_claim_active(claim):
+            continue
+        if _safe_int(claim.get("claimant_eid"), default=0) == actor_eid:
+            return claim
+    return None
+
+
+def service_job_claim_target(sim, claim):
+    return _service_job_claim_target(sim, claim)
+
+
+def _service_job_claim_at_target(sim, claim, pos=None, *, radius=1):
+    if sim is None or not isinstance(claim, dict):
+        return False, None
+    target = _service_job_claim_target(sim, claim)
+    if target is None:
+        return False, None
+    if pos is None:
+        npc_eid = _safe_int(claim.get("claimant_eid"), default=0)
+        if npc_eid > 0:
+            pos = sim.ecs.get(Position).get(npc_eid)
+    if pos is None:
+        return False, target
+    try:
+        if int(getattr(pos, "z", 0) or 0) != int(target[2]):
+            return False, target
+        distance = abs(int(pos.x) - int(target[0])) + abs(int(pos.y) - int(target[1]))
+    except (TypeError, ValueError):
+        return False, target
+    return distance <= max(0, int(radius)), target
+
+
+def service_job_claim_is_at_target(sim, claim, pos=None, *, radius=1):
+    at_target, _target = _service_job_claim_at_target(sim, claim, pos, radius=radius)
+    return bool(at_target)
+
+
+def mark_service_job_claim_arrival(sim, actor_eid, pos=None):
+    claim = active_service_job_claim_for_actor(sim, actor_eid)
+    at_target, target = _service_job_claim_at_target(sim, claim, pos, radius=1)
+    if not at_target or not isinstance(claim, dict):
+        return None
+    now = int(getattr(sim, "tick", 0) or 0)
+    claim["target"] = target
+    claim["last_seen_tick"] = now
+    if _safe_int(claim.get("arrived_tick"), default=-1) < 0:
+        claim["arrived_tick"] = now
+    return claim
+
+
+def _npc_credit_total(inventory):
+    total = 0
+    for entry in list(getattr(inventory, "items", ()) or ()):
+        if str(entry.get("item_id", "") or "").strip().lower() != "credstick_chip":
+            continue
+        total += credstick_total_credits(
+            quantity=entry.get("quantity", 1),
+            metadata=entry.get("metadata"),
+        )
+    return int(total)
+
+
+def _npc_needs_service_job(sim, npc_eid, needs):
+    if sim is None or needs is None:
+        return False
+    inventory = sim.ecs.get(Inventory).get(npc_eid)
+    credits = _npc_credit_total(inventory) if inventory is not None else 0
+    routine = sim.ecs.get(NPCRoutine).get(npc_eid)
+    home = getattr(routine, "home", None) if routine is not None else None
+    hunger = float(getattr(needs, "hunger", 100.0) or 100.0)
+    thirst = float(getattr(needs, "thirst", 100.0) or 100.0)
+    energy = float(getattr(needs, "energy", 100.0) or 100.0)
+    safety = float(getattr(needs, "safety", 100.0) or 100.0)
+    if hunger <= 48.0 or thirst <= 48.0:
+        return True
+    if credits < 12 and (hunger <= 68.0 or thirst <= 68.0 or energy <= 48.0):
+        return True
+    if not home and (credits < 30 or safety <= 56.0 or energy <= 44.0):
+        return True
+    return False
+
+
+def _nearby_service_job_boards(sim, pos, *, radius=14):
+    if sim is None or pos is None:
+        return ()
+    rows = []
+    for prop in getattr(sim, "properties", {}).values():
+        if not isinstance(prop, dict):
+            continue
+        services = set(site_services_for_property(prop))
+        services &= {"courier_jobs", "agency_jobs"}
+        if not services:
+            continue
+        try:
+            px = int(prop.get("x", 0))
+            py = int(prop.get("y", 0))
+            pz = int(prop.get("z", 0))
+        except (TypeError, ValueError):
+            continue
+        if pz != int(getattr(pos, "z", 0) or 0):
+            continue
+        dist = abs(px - int(pos.x)) + abs(py - int(pos.y))
+        if dist > int(radius):
+            continue
+        rows.append((dist, str(prop.get("name", prop.get("id", ""))).lower(), prop))
+    rows.sort(key=lambda row: (row[0], row[1], str(row[2].get("id", ""))))
+    return tuple(row[2] for row in rows)
+
+
+def _npc_offer_allowed(offer):
+    if not isinstance(offer, dict):
+        return False
+    if str(offer.get("claim_status", "") or "").strip():
+        return False
+    service = str(offer.get("service", "") or "").strip().lower()
+    if service == "bounty_jobs":
+        return False
+    if bool(offer.get("requires_package")):
+        return False
+    return service in {"courier_jobs", "agency_jobs"}
+
+
+def npc_claim_service_job_from_board(sim, npc_eid):
+    if sim is None:
+        return None
+    if active_service_job_claim_for_actor(sim, npc_eid):
+        return None
+    now = int(getattr(sim, "tick", 0) or 0)
+    traits = getattr(sim, "world_traits", None)
+    if not isinstance(traits, dict):
+        sim.world_traits = {}
+        traits = sim.world_traits
+    cooldowns = traits.get("npc_service_job_scan_ticks")
+    if not isinstance(cooldowns, dict):
+        cooldowns = {}
+        traits["npc_service_job_scan_ticks"] = cooldowns
+    key = str(int(npc_eid))
+    next_scan = _safe_int(cooldowns.get(key), default=0)
+    if now < next_scan:
+        return None
+    cooldowns[key] = now + SERVICE_JOB_NPC_SCAN_COOLDOWN_TICKS
+
+    positions = sim.ecs.get(Position)
+    pos = positions.get(npc_eid)
+    needs = sim.ecs.get(NPCNeeds).get(npc_eid)
+    if pos is None or not _npc_needs_service_job(sim, npc_eid, needs):
+        return None
+
+    for prop in _nearby_service_job_boards(sim, pos):
+        services = tuple(service for service in ("agency_jobs", "courier_jobs") if service in set(site_services_for_property(prop)))
+        for service in services:
+            for offer in service_job_board_offers(sim, npc_eid, prop, service, limit=5):
+                if not _npc_offer_allowed(offer):
+                    continue
+                claim, blocked = _claim_service_job_offer(
+                    sim,
+                    offer,
+                    actor_eid=npc_eid,
+                    claimant_kind="npc",
+                )
+                if isinstance(claim, dict) and not blocked:
+                    target = _service_job_claim_target(sim, claim)
+                    if target is not None:
+                        claim["target"] = target
+                    return claim
+    return None
+
+
+def _reward_npc_service_job(sim, claim):
+    if sim is None or not isinstance(claim, dict):
+        return
+    npc_eid = _safe_int(claim.get("claimant_eid"), default=0)
+    if npc_eid <= 0:
+        return
+    pay = max(0, _safe_int(claim.get("pay"), default=0))
+    inventory = sim.ecs.get(Inventory).get(npc_eid)
+    if inventory is None:
+        inventory = Inventory(capacity=4)
+        sim.ecs.add(npc_eid, inventory)
+    if pay > 0:
+        inventory.add_item(
+            "credstick_chip",
+            quantity=1,
+            stack_max=_item_stack_max("credstick_chip"),
+            instance_factory=getattr(sim, "new_item_instance_id", None),
+            owner_eid=npc_eid,
+            owner_tag="npc_service_job",
+            metadata={"stored_credits": pay},
+        )
+    needs = sim.ecs.get(NPCNeeds).get(npc_eid)
+    if needs is not None:
+        needs.energy = _clamp(float(getattr(needs, "energy", 0.0) or 0.0) + 8.0)
+        needs.safety = _clamp(float(getattr(needs, "safety", 0.0) or 0.0) + 5.0)
+        needs.hunger = _clamp(float(getattr(needs, "hunger", 0.0) or 0.0) + 10.0)
+        needs.thirst = _clamp(float(getattr(needs, "thirst", 0.0) or 0.0) + 6.0)
+
+
+def advance_service_job_board_claims(sim):
+    if sim is None:
+        return []
+    prune_service_job_board_claims(sim)
+    now = int(getattr(sim, "tick", 0) or 0)
+    positions = sim.ecs.get(Position)
+    vitalities = sim.ecs.get(Vitality)
+    completed = []
+    for job_key, claim in list(_service_job_claims(sim).items()):
+        if not _service_job_claim_active(claim):
+            continue
+        if str(claim.get("claimant_kind", "") or "").strip().lower() != "npc":
+            continue
+        npc_eid = _safe_int(claim.get("claimant_eid"), default=0)
+        vitality = vitalities.get(npc_eid)
+        if npc_eid <= 0 or positions.get(npc_eid) is None or (vitality is not None and bool(getattr(vitality, "downed", False))):
+            _finish_service_job_claim(sim, job_key, status="failed", reason="claimant unavailable")
+            continue
+        expire_tick = _safe_int(claim.get("expire_tick"), default=0)
+        if expire_tick > 0 and now >= expire_tick:
+            _finish_service_job_claim(sim, job_key, status="expired", reason="deadline expired")
+            continue
+        target = _service_job_claim_target(sim, claim)
+        if target is None:
+            _finish_service_job_claim(sim, job_key, status="failed", reason="target unavailable")
+            continue
+        pos = positions.get(npc_eid)
+        at_target, target = _service_job_claim_at_target(sim, claim, pos, radius=1)
+        claim["target"] = target
+        if not at_target:
+            if now >= _safe_int(claim.get("due_tick"), default=now + 1):
+                claim["due_tick"] = now + 60
+            continue
+        claim["last_seen_tick"] = now
+        if _safe_int(claim.get("arrived_tick"), default=-1) < 0:
+            claim["arrived_tick"] = now
+        if now < _safe_int(claim.get("due_tick"), default=now + 1):
+            continue
+        _reward_npc_service_job(sim, claim)
+        completed_claim = _finish_service_job_claim(sim, job_key, status="completed", reason="npc completed posted work")
+        if isinstance(completed_claim, dict):
+            completed.append(dict(completed_claim))
+    prune_service_job_board_claims(sim)
+    return completed
 
 
 def _grant_bounty_restraint_jab(sim, player_eid, opportunity):
@@ -4841,10 +5573,24 @@ def _apply_fallback_bounty_heat(sim, target_eid, prop):
     return second or first
 
 
-def accept_service_job_offer(sim, player_eid, prop, service, job_key):
+def accept_service_job_offer(sim, player_eid, prop, service, job_key, *, return_blocked=False):
     offer = _service_job_offer_by_key(sim, player_eid, prop, service, job_key)
     if not isinstance(offer, dict):
+        if return_blocked:
+            return {
+                "blocked": True,
+                "reason": "job_unavailable",
+                "message": "That job posting is no longer available.",
+            }
         return None
+    claim, blocked = _claim_service_job_offer(
+        sim,
+        offer,
+        actor_eid=player_eid,
+        claimant_kind="player",
+    )
+    if isinstance(blocked, dict):
+        return blocked if return_blocked else None
     service = str(service or "").strip().lower()
     prop_id = str((prop or {}).get("id", "") or "").strip()
     prop_name = str((prop or {}).get("name", prop_id) or prop_id).strip()
@@ -4870,10 +5616,56 @@ def accept_service_job_offer(sim, player_eid, prop, service, job_key):
 
     if service in {"courier_jobs", "agency_jobs"}:
         target_chunk = _chunk_tuple(offer.get("target_chunk"))
+        job_action = str(offer.get("job_action", "") or "").strip().lower()
+        item_id = str(offer.get("item_id", "") or "").strip().lower()
+        item_label = str(offer.get("item_label", "") or "").strip()
+        requirements = {
+            "player_accepted": True,
+            "strict_deadline": True,
+            "property_id": str(offer.get("target_property_id", "") or "").strip(),
+            "property_name": str(offer.get("target_property_name", "") or "").strip(),
+            "visit_chunk": target_chunk,
+            "job_action": job_action,
+            "job_board_service": service,
+            "job_key": str(offer.get("job_key", "") or "").strip(),
+        }
+        if service == "courier_jobs" and job_action == "delivery" and item_id:
+            requirements.update({
+                "pickup_chunk": _chunk_tuple(offer.get("origin_chunk")),
+                "pickup_property_id": prop_id,
+                "pickup_property_name": prop_name,
+                "delivery_chunk": target_chunk,
+                "delivery_property_id": str(offer.get("target_property_id", "") or "").strip(),
+                "delivery_property_name": str(offer.get("target_property_name", "") or "").strip(),
+                "require_item_id": item_id,
+                "require_item_qty": 1,
+                "consume_item": True,
+                "provide_item": True,
+                "item_label": item_label or _item_label(item_id),
+                "acquisition_hint": "issued",
+            })
+        elif service == "courier_jobs" and job_action == "pickup" and item_id:
+            requirements.update({
+                "property_id": prop_id,
+                "property_name": prop_name,
+                "visit_chunk": _chunk_tuple(offer.get("origin_chunk")),
+                "pickup_chunk": target_chunk,
+                "pickup_property_id": str(offer.get("target_property_id", "") or "").strip(),
+                "pickup_property_name": str(offer.get("target_property_name", "") or "").strip(),
+                "delivery_chunk": _chunk_tuple(offer.get("origin_chunk")),
+                "delivery_property_id": prop_id,
+                "delivery_property_name": prop_name,
+                "require_item_id": item_id,
+                "require_item_qty": 1,
+                "consume_item": True,
+                "provide_item": True,
+                "item_label": item_label or _item_label(item_id),
+                "acquisition_hint": "pickup",
+            })
         opportunity = {
             "key": offer["job_key"],
             "kind": offer.get("kind"),
-            "title": str(offer.get("label", "Service job")).strip(),
+            "title": str(offer.get("base_label", "") or offer.get("label", "Service job")).strip(),
             "summary": str(offer.get("summary", "")).strip(),
             "source": "property_service",
             "contract_family": service,
@@ -4883,15 +5675,10 @@ def accept_service_job_offer(sim, player_eid, prop, service, job_key):
             "seed_tick": now,
             "accepted_tick": now,
             "expire_tick": expire_tick,
-            "requirements": {
-                "player_accepted": True,
-                "strict_deadline": True,
-                "property_id": str(offer.get("target_property_id", "") or "").strip(),
-                "property_name": str(offer.get("target_property_name", "") or "").strip(),
-                "visit_chunk": target_chunk,
-            },
+            "requirements": requirements,
             "reward": reward,
             "issuer": issuer,
+            "job_instructions": tuple(service_job_offer_instruction_lines(offer, prop=prop)),
             "failure_policy": {"fail_on_legal_compromise": service == "courier_jobs"},
         }
     else:
@@ -4901,7 +5688,7 @@ def accept_service_job_offer(sim, player_eid, prop, service, job_key):
         opportunity = {
             "key": offer["job_key"],
             "kind": "bounty_capture",
-            "title": str(offer.get("label", "Alive pickup")).strip(),
+            "title": str(offer.get("base_label", "") or offer.get("label", "Alive pickup")).strip(),
             "summary": str(offer.get("summary", "")).strip(),
             "source": "property_service",
             "contract_family": service,
@@ -4918,9 +5705,13 @@ def accept_service_job_offer(sim, player_eid, prop, service, job_key):
                 "bounty_target_name": str(offer.get("target_name", "target") or "target").strip(),
                 "bounty_restrained": False,
                 "field_restraint_item_id": "field_restraint_jab",
+                "job_action": "bounty_capture",
+                "job_board_service": service,
+                "job_key": str(offer.get("job_key", "") or "").strip(),
             },
             "reward": reward,
             "issuer": issuer,
+            "job_instructions": tuple(service_job_offer_instruction_lines(offer, prop=prop)),
             "failure_policy": {
                 "fail_on_legal_compromise": False,
                 "fail_on_target_killed": True,
@@ -4934,6 +5725,17 @@ def accept_service_job_offer(sim, player_eid, prop, service, job_key):
         confidence=1.0,
         source="service_job_board",
     )
+    if not isinstance(entry, dict):
+        _finish_service_job_claim(sim, offer.get("job_key"), status="cancelled", reason="opportunity already active")
+        if return_blocked:
+            return {
+                "blocked": True,
+                "reason": "already_active",
+                "message": "That job is already active.",
+            }
+        return None
+    if isinstance(claim, dict):
+        claim["opportunity_id"] = int(entry.get("id", 0) or 0)
     if isinstance(entry, dict) and service == "bounty_jobs":
         _grant_bounty_restraint_jab(sim, player_eid, entry)
     return entry
@@ -6622,6 +7424,14 @@ def _resolve_terminal_entry(
         failure_family = str(done.get("failure_family", "") or "").strip().lower()
         done["failure_family"] = failure_family or _failure_family_for_code(failure_code)
         state["failed"].append(done)
+    job_key = str(done.get("key", "") or "").strip()
+    if job_key.startswith("service_job:"):
+        _finish_service_job_claim(
+            sim,
+            job_key,
+            status="completed" if terminal_status == "completed" else "failed",
+            reason=str(reason or terminal_status).strip(),
+        )
     if player_eid is not None:
         _upsert_observer_intel(
             sim,
@@ -7190,11 +8000,13 @@ def evaluate_opportunity_board(sim, player_eid, limit=3, observer_eid=None):
         style_text = "/".join(style_bits[:2]) if style_bits else "mixed"
         source_text = opportunity_source_label(entry.get("source", "unknown"), short=True)
         intel_tag = f"intel:{awareness}/{int(round(confidence * 100.0))}%/{source}"
+        next_step = opportunity_next_step_text(sim, entry)
+        next_part = f" next:{next_step}" if next_step else ""
         lines.append(
             f"O{int(entry.get('id', 0))} {dist_text} "
             f"{str(entry.get('title', 'Opportunity')).strip()} "
             f"@({chunk[0]},{chunk[1]}) src:{source_text} {style_text} "
-            f"risk:{str(entry.get('risk', 'low')).strip()} rw:{reward_text} {intel_tag}"
+            f"risk:{str(entry.get('risk', 'low')).strip()} rw:{reward_text} {intel_tag}{next_part}"
         )
 
     if scoped:
@@ -7301,6 +8113,7 @@ def evaluate_opportunity_facts(sim, player_eid, limit=3, observer_eid=None):
                 "tracked_target_detail": tracked_detail,
                 "tracked_target_stage_kind": tracked_stage_kind,
                 "tracked_target_property_id": tracked_property_id,
+                "next_step": opportunity_next_step_text(sim, entry),
             }
         )
     return tuple(rows)
