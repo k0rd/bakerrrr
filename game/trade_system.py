@@ -2507,6 +2507,7 @@ class TradeSystem(System):
                 "interest_price_mult": float(max(0.0, interest.get("price_mult", 1.0) or 1.0)),
                 "interest_accepted": bool(interest.get("accepted", True)),
                 "interest_pressure_weight": int(max(0, interest.get("pressure_weight", 0) or 0)),
+                "risk_label": interest.get("risk_label", ""),
             })
 
         if owner_transfer:
@@ -2573,6 +2574,7 @@ class TradeSystem(System):
                 "row_color": row.get("row_color"),
                 "interest_reason": row.get("interest_reason", ""),
                 "interest_price_mult": float(max(0.0, row.get("interest_price_mult", 1.0) or 1.0)),
+                "risk_label": row.get("risk_label", ""),
             })
         return rows
 
@@ -2633,11 +2635,14 @@ class TradeSystem(System):
             return
         listed_text = "listed" if row.get("listed") else "unlisted"
         interest_text = str(row.get("interest_label", "") or "").strip()
+        risk_text = str(row.get("risk_label", "") or "").strip()
         read_text = ""
         if interest_text:
             read_text = f"; {interest_text}"
             if not bool(row.get("interest_known", True)):
                 read_text += " (your read)"
+        if risk_text:
+            read_text += f"; {risk_text}"
         state["inspect_text"] = _item_legend_line(
             row.get("item_id"),
             _trade_item_line(row, (

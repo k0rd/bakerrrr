@@ -561,7 +561,7 @@ def human_physical_summary(seed, *, eid=None, identity=None, personal_name=None)
     return f"{summary}."
 
 
-def human_self_physical_summary(seed, *, eid=None, identity=None, personal_name=None, omit_structured_mark=False):
+def human_self_physical_summary(seed, *, eid=None, identity=None, personal_name=None, omit_structured_mark=False, omit_hair=False):
     profile = build_human_description_profile(
         seed,
         eid=eid,
@@ -579,7 +579,7 @@ def human_self_physical_summary(seed, *, eid=None, identity=None, personal_name=
     complexion = str(profile.get("complexion_phrase", "") or "").strip()
     if complexion:
         features.append(_indefinite_article_phrase(complexion))
-    hair = str(profile.get("hair_phrase", "") or "").strip()
+    hair = "" if omit_hair else str(profile.get("hair_phrase", "") or "").strip()
     if hair:
         features.append(hair)
     standout = str(profile.get("standout_phrase", "") or "").strip()

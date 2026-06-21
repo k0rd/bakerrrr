@@ -7,6 +7,7 @@ Copy JSON files into these live folders:
 ```bash
 config/custom_content/items/
 config/custom_content/world_profiles/
+config/custom_content/room_curiosity_flavors/
 ```
 
 Copy-ready examples are included here:
@@ -15,6 +16,29 @@ Copy-ready examples are included here:
 PLAYER_GUIDE/examples/custom_content/items/morning_glory_seeds.json
 PLAYER_GUIDE/examples/custom_content/world_profiles/canal_slums.json
 ```
+
+## Generated Rewards
+
+Successful non-tutorial runs can write optional generated reward files under:
+
+```bash
+saves/rewards/
+```
+
+The first version writes one item file, one area profile file, one receipt, and one ledger row:
+
+```bash
+saves/rewards/items/
+saves/rewards/world_profiles/
+saves/rewards/receipts/
+saves/rewards/earned_rewards.json
+```
+
+These files are not enabled automatically. To use a generated reward in a future run, copy the item JSON into `config/custom_content/items/` and the area profile JSON into `config/custom_content/world_profiles/` before starting a new run.
+
+The receipt and ledger prove that the files were earned from a BAKERRRR run. They are not required for ordinary custom-content loading, and editing a copy of a reward file just makes it normal player-authored custom content.
+
+Generated reward files are also good examples. You can inspect them to see the exact JSON shape the loader accepts.
 
 ## Load Rules
 
@@ -136,3 +160,39 @@ Water values mean:
 - `high`: wider waterfront-like local water.
 
 Profile water is placed only on safe outdoor cells and avoids buildings, returns, doors, and roads.
+
+## Room Curiosity Flavor Files
+
+Room curiosity flavors bias existing upstairs, backroom, and tucked-away room payoff families. They do not create brand-new NPC AI, loot scripts, businesses, or services. They can make an existing family show up in different known building/room contexts and give it a custom telegraph line.
+
+```json
+{
+  "_meta": {
+    "schema_version": 1
+  },
+  "quiet_counter_offices": {
+    "label": "Quiet Counter Offices",
+    "base_profile": "quiet_contact",
+    "selection_weight": 2.0,
+    "archetypes": ["corner_store"],
+    "room_kinds": ["back_office"],
+    "room_curiosity_signal": "A quiet knock pattern keeps returning to the back office."
+  }
+}
+```
+
+Allowed room-curiosity flavor fields:
+
+`label`, `base_profile`, `selection_weight`, `archetypes`, `room_kinds`, `room_curiosity_signal`
+
+Allowed `base_profile` values:
+
+`afterhours_pusher`, `backroom_doctor`, `backroom_entrepreneur`, `backstage_worker`, `hotel_afterhours_guest`, `quiet_contact`, `records_keeper`, `stash_ledger`, `transit_staff_roamer`
+
+Allowed `selection_weight` is `0.01` through `4.0`.
+
+Allowed `room_kinds` values:
+
+`archive`, `back_office`, `backstage`, `balcony`, `boardroom`, `clerk_office`, `evidence_lockup`, `executive_office`, `front_desk`, `green_room`, `guest_floor`, `guest_lounge`, `linen_closet`, `locker_wall`, `meeting_room`, `office`, `platform`, `quiet_room`, `records`, `records_office`, `records_room`, `screening_room`, `server_room`, `service_corridor`, `service_office`, `sound_booth`, `stock_room`, `storage`, `surveillance_room`, `ticketing`, `vip_lounge`
+
+`archetypes` uses the same allowed building ids listed above for world profiles.

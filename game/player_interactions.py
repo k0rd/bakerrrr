@@ -1266,6 +1266,19 @@ class PlayerInteractionRuntime:
         if cache_prop is not None:
             self.player_interact_cache(eid, pos, cache_prop)
             return
+        hard_traversal_prop = self.action_system.property_actions.hard_traversal_property_at(pos)
+        if hard_traversal_prop is not None:
+            self.action_system.property_actions.remember_player_property_discovery(
+                eid,
+                hard_traversal_prop,
+                discovery_mode="interact",
+            )
+            self.action_system.property_actions._emit_property_interact(
+                eid,
+                hard_traversal_prop,
+                interaction_mode="physical",
+            )
+            return
         return self.action_system.property_actions.handle_interact_action(
             eid,
             pos,

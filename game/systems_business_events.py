@@ -26,6 +26,7 @@ from game.property_runtime import (
     property_is_public as _property_is_public,
     property_is_storefront as _property_is_storefront,
     property_metadata as _property_metadata,
+    property_services as _property_services,
     property_status_text as _property_status_text,
     property_runtime_container_entries as _property_runtime_container_entries,
 )
@@ -1961,6 +1962,18 @@ def _business_event_property_category(sim, prop):
     return ""
 
 
+def _business_event_regional_coach_hub(prop):
+    if not isinstance(prop, dict):
+        return False
+    services = {
+        str(service).strip().lower()
+        for service in tuple(_property_services(prop) or ())
+        if str(service).strip()
+    }
+    archetype = _property_archetype(prop)
+    return "coach_transit" in services or archetype in {"relay_post", "truck_stop", "roadhouse"}
+
+
 def _business_event_aftermath_state(sim):
     state = getattr(sim, "business_event_aftermath_state", None)
     if isinstance(state, dict):
@@ -3101,6 +3114,7 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
     controller = _property_access_controller(sim, prop)
     hours_text = _dialogue_hours_text(controller.get("opening_window")) if isinstance(controller, dict) else ""
     requirement = _controller_access_requirement_text(controller) if isinstance(controller, dict) else ""
+    regional_coach_hub = category == "transit" and _business_event_regional_coach_hub(prop)
 
     if scene_type == "queue" and career == "block_regular":
         local_line = f"We keep an eye on {current_name}; when a place comes through for the block, the block comes through for it."
@@ -3448,11 +3462,21 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
         }
 
     if event_phase == "loading_push":
-        if career == "dockhand":
+        if regional_coach_hub:
+            local_line = f"The coach side at {current_name} is all road freight, tagged bags, and people trying to keep the regional run from stacking up."
+        elif career == "dockhand":
             local_line = f"The freight only looks chaotic at {current_name} because the crew is shoving it through in short bursts instead of letting it stack."
         else:
             local_line = f"We are trying to clear the load at {current_name} before the next burst lands on top of this one."
-        if hours_text and requirement:
+        if regional_coach_hub and hours_text and requirement:
+            detail_line = f"{current_name} is in a regional coach loading push during {hours_text}. Once the bay calms down, the front still wants {requirement}."
+        elif regional_coach_hub and hours_text:
+            detail_line = f"{current_name} is in a regional coach loading push during {hours_text}, where road bags and route crates move in clipped bursts."
+        elif regional_coach_hub and requirement:
+            detail_line = f"The crew is trying to keep regional coach freight from backing up at {current_name}, but the front still wants {requirement} once the push eases."
+        elif regional_coach_hub:
+            detail_line = f"This is the regional coach load pressure at {current_name}: tagged bags, route crates, and a road crew trying not to let one run bury the next."
+        elif hours_text and requirement:
             detail_line = f"{current_name} is in a loading push during {hours_text}. Once the gate calms down, the front still wants {requirement}."
         elif hours_text:
             detail_line = f"{current_name} is in one of those short loading bursts during {hours_text}, where freight starts moving faster than anyone wants to narrate."
@@ -3484,7 +3508,26 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
             target_label = ""
             target_property_id = ""
         time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(0, 2))
-        if career == "dispatcher":
+        if regional_coach_hub and career == "dispatcher":
+            local_line = (
+                f"We are trying to board the coach side of {current_name} cleanly"
+                + (
+                    f" so the road connection for {target_name} holds at {time_text}."
+                    if target_name
+                    else " before the regional board slips."
+                )
+            )
+        elif regional_coach_hub and career == "commuter":
+            local_line = (
+                f"If the coach line at {current_name} stalls, half the people here miss the road window"
+                + (f" for {target_name}." if target_name else ".")
+            )
+        elif regional_coach_hub:
+            local_line = (
+                f"The stop only looks messy because {current_name} is clearing a coach boarding crush"
+                + (f" toward {target_name}." if target_name else " before the road run slips.")
+            )
+        elif career == "dispatcher":
             local_line = (
                 f"We are trying to board {current_name} cleanly"
                 + (
@@ -3503,7 +3546,26 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
                 f"The stop only looks messy because {current_name} is trying to clear a boarding crush"
                 + (f" toward {target_name}." if target_name else " before the posted run slips.")
             )
-        if target_name and hours_text and requirement:
+        if regional_coach_hub and target_name and hours_text and requirement:
+            detail_line = (
+                f"{current_name} is boarding coaches hard during {hours_text}. Staff keep calling {target_label or target_name} for around {time_text}, "
+                f"but the stop still wants {requirement} while the road line is hot."
+            )
+        elif regional_coach_hub and target_name and hours_text:
+            detail_line = f"{current_name} is in a regional coach boarding crush during {hours_text}, with the next clean road connection toward {target_label or target_name} getting called for around {time_text}."
+        elif regional_coach_hub and target_name and requirement:
+            detail_line = f"They are clearing the coach crush at {current_name} without losing the {target_label or target_name} road connection around {time_text}, and the stop still wants {requirement}."
+        elif regional_coach_hub and target_name:
+            detail_line = f"Fare talk at {current_name} keeps circling back to {target_label or target_name} as the next clean coach connection once this boarding crush clears."
+        elif regional_coach_hub and hours_text and requirement:
+            detail_line = f"{current_name} is boarding coaches hard during {hours_text}, and the stop still wants {requirement} while fares, bags, and shouted road calls knot up at the edge."
+        elif regional_coach_hub and hours_text:
+            detail_line = f"{current_name} is in a regional coach boarding crush during {hours_text}, all clipped road calls, fare checks, and people trying to hit the coach before it closes."
+        elif regional_coach_hub and requirement:
+            detail_line = f"The coach boarding crush at {current_name} has fares and bags bunching at the edge, and the stop still wants {requirement} once the pressure breaks."
+        elif regional_coach_hub:
+            detail_line = f"This is a regional coach boarding crush at {current_name}: fare checks, road calls, and a stop suddenly honest about how many lives are trying to get farther out."
+        elif target_name and hours_text and requirement:
             detail_line = (
                 f"{current_name} is boarding hard during {hours_text}. Staff keep calling {target_label or target_name} for around {time_text}, "
                 f"but the stop still wants {requirement} while the line is hot."
@@ -3576,7 +3638,22 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
         target_hours_text = _dialogue_hours_text(target_controller.get("opening_window")) if isinstance(target_controller, dict) else ""
         target_requirement = _controller_access_requirement_text(target_controller) if isinstance(target_controller, dict) else ""
         time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(1, 3))
-        if career == "specialist":
+        if regional_coach_hub and career == "specialist":
+            local_line = (
+                f"I came through the coach side at {current_name} because somebody farther out is short enough on hands to pay for the ride"
+                + (f" to {target_name}." if target_name else ".")
+            )
+        elif regional_coach_hub and career == "dispatcher":
+            local_line = (
+                f"This coach arrival is not meant to stay at {current_name}; we are turning it onward"
+                + (f" to {target_name} once the handoff is clean." if target_name else " as soon as the handoff is clean.")
+            )
+        elif regional_coach_hub:
+            local_line = (
+                f"They are meeting a regional coach at {current_name}"
+                + (f" and pointing people toward {target_name} before the frontage clogs." if target_name else " before the frontage clogs.")
+            )
+        elif career == "specialist":
             local_line = (
                 f"I came through {current_name} because somebody farther in is short enough on hands to pay for the trip"
                 + (f" to {target_name}." if target_name else ".")
@@ -3591,7 +3668,23 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
                 f"They are meeting an incoming transfer at {current_name}"
                 + (f" and pointing it toward {target_name} before the frontage clogs." if target_name else " before the frontage clogs.")
             )
-        if target_name and target_hours_text and target_requirement:
+        if regional_coach_hub and target_name and target_hours_text and target_requirement:
+            detail_line = f"The coach board at {current_name} says the incoming relief for {target_label or target_name} should land around {time_text}. They usually move during {target_hours_text}, though they still want {target_requirement}."
+        elif regional_coach_hub and target_name and target_hours_text:
+            detail_line = f"Coach chatter at {current_name} says the incoming transfer for {target_label or target_name} is supposed to land around {time_text}, and they usually receive it during {target_hours_text}."
+        elif regional_coach_hub and target_name and target_requirement:
+            detail_line = f"Someone coming through the coach side at {current_name} is supposed to push onward to {target_label or target_name} around {time_text}, but they still want {target_requirement} at the door."
+        elif regional_coach_hub and target_name:
+            detail_line = f"Coach talk at {current_name} says this incoming handoff is bound for {target_label or target_name} around {time_text}, the kind of transfer that usually means somebody there is short on either staff or supplies."
+        elif regional_coach_hub and hours_text and requirement:
+            detail_line = f"{current_name} is handling a regional coach arrival during {hours_text}, and the stop still wants {requirement} while inbound riders, relief bags, and pickup chatter bunch at the edge."
+        elif regional_coach_hub and hours_text:
+            detail_line = f"{current_name} is running a regional coach arrival handoff during {hours_text}, with incoming riders, quick pickups, and onward road directions clipping the frontage."
+        elif regional_coach_hub and requirement:
+            detail_line = f"Coach riders and pickup chatter are bunching at {current_name}, and the stop still wants {requirement} once the handoff clears."
+        elif regional_coach_hub:
+            detail_line = f"This is a regional coach arrival handoff at {current_name}: incoming riders, relief pickups, and the sense that somebody here came from farther out because they were needed."
+        elif target_name and target_hours_text and target_requirement:
             detail_line = f"The arrival board at {current_name} says the incoming relief for {target_label or target_name} should land around {time_text}. They usually move during {target_hours_text}, though they still want {target_requirement}."
         elif target_name and target_hours_text:
             detail_line = f"Transit chatter at {current_name} says the incoming transfer for {target_label or target_name} is supposed to land around {time_text}, and they usually receive it during {target_hours_text}."
@@ -3654,7 +3747,17 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
         target_label = _business_event_followup_target_label(target_anchor) if target_anchor else target_name
         target_property_id = str(target_prop.get("id", "") or "").strip() if isinstance(target_prop, dict) else ""
         time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(1, 3))
-        if career == "dispatcher":
+        if regional_coach_hub and career == "dispatcher":
+            local_line = (
+                f"Regional dispatch is trying to keep {current_name} from clogging up, "
+                + (f"and the next coach handoff is pointed at {target_name} around {time_text}." if target_name else "with the next road handoff already being called.")
+            )
+        elif regional_coach_hub:
+            local_line = (
+                f"Everything here is being routed in a hurry, "
+                + (f"with another coach stop lined up at {target_name} around {time_text}." if target_name else "and nobody wanting to be the reason the road line stalls.")
+            )
+        elif career == "dispatcher":
             local_line = (
                 f"Dispatch is trying to keep {current_name} from clogging up, "
                 + (f"and the next handoff is pointed at {target_name} around {time_text}." if target_name else "with the next handoff already being called.")
@@ -3664,7 +3767,23 @@ def _business_event_followup_note(sim, scene, prop, actor_spec, *, rng):
                 f"Everything here is being routed in a hurry, "
                 + (f"with another stop lined up at {target_name} around {time_text}." if target_name else "and nobody wanting to be the reason the line stalls.")
             )
-        if target_name and hours_text and requirement:
+        if regional_coach_hub and target_name and hours_text and requirement:
+            detail_line = f"The regional dispatch board says {target_label or target_name} is the next useful coach stop after {current_name}, around {time_text}. Until then the front still wants {requirement}."
+        elif regional_coach_hub and target_name and hours_text:
+            detail_line = f"Regional dispatch talk says the next useful coach handoff after {current_name} lands at {target_label or target_name} around {time_text}, while this window is still hot during {hours_text}."
+        elif regional_coach_hub and target_name and requirement:
+            detail_line = f"They keep routing coach traffic from {current_name} toward {target_label or target_name} around {time_text}, but this frontage still wants {requirement} while the surge is live."
+        elif regional_coach_hub and target_name:
+            detail_line = f"The regional dispatch chatter here keeps circling back to {target_label or target_name} as the next road handoff once {current_name} finishes clearing the current burst."
+        elif regional_coach_hub and hours_text and requirement:
+            detail_line = f"{current_name} is running a regional coach dispatch surge during {hours_text}, and the front still wants {requirement} while road traffic is clipping the edge of the site."
+        elif regional_coach_hub and hours_text:
+            detail_line = f"{current_name} is in a regional coach dispatch surge during {hours_text}, with road routes getting called faster than the frontage can hide it."
+        elif regional_coach_hub and requirement:
+            detail_line = f"The regional dispatch chatter at {current_name} is spilling outward, but the front still wants {requirement} while the road hub is routing the next burst."
+        elif regional_coach_hub:
+            detail_line = f"This is a regional coach dispatch surge at {current_name}: route calls, clipped orders, and enough road traffic to make the stop readable from the street."
+        elif target_name and hours_text and requirement:
             detail_line = f"The dispatch board says {target_label or target_name} is the next useful stop after {current_name}, around {time_text}. Until then the front still wants {requirement}."
         elif target_name and hours_text:
             detail_line = f"Dispatch talk says the next useful handoff after {current_name} lands at {target_label or target_name} around {time_text}, while this window is still hot during {hours_text}."
@@ -4373,6 +4492,7 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
     controller = _property_access_controller(sim, prop)
     hours_text = _dialogue_hours_text(controller.get("opening_window")) if isinstance(controller, dict) else ""
     requirement = _controller_access_requirement_text(controller) if isinstance(controller, dict) else ""
+    regional_coach_hub = category == "transit" and _business_event_regional_coach_hub(prop)
     container_label = "Cargo"
     note = ""
     pool = []
@@ -4453,7 +4573,18 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             read_only_reason = "You can pull something from the restock crate, but using live bar reset stock as your stash would get ugly fast."
         elif fixture_type == "loading_dolly" or event_phase == "loading_push":
             container_label = "Freight Dolly"
-            if hours_text and requirement:
+            if regional_coach_hub and hours_text and requirement:
+                note = (
+                    f"Freight dolly: {prop_name} is in a regional coach loading push during {hours_text}, clearing road bags and route crates in short bursts. "
+                    f"After that the front still wants {requirement}."
+                )
+            elif regional_coach_hub and hours_text:
+                note = f"Freight dolly: {prop_name} is in a regional coach loading push during {hours_text}, with road bags and route crates moving in start-stop bursts."
+            elif regional_coach_hub and requirement:
+                note = f"Freight dolly: the crew at {prop_name} is trying to keep coach freight from stacking up, but the front still wants {requirement} while the push is live."
+            elif regional_coach_hub:
+                note = f"Freight dolly: {prop_name} is under regional coach load pressure, all tagged bags, route crates, and a crew trying to keep the next run from landing on the last one."
+            elif hours_text and requirement:
                 note = (
                     f"Freight dolly: {prop_name} is in a loading push during {hours_text}, clearing freight in short bursts. "
                     f"After that the front still wants {requirement}."
@@ -4482,7 +4613,26 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             if str((boarding_target or {}).get("id", "") or "").strip() == str(prop.get("id", "") or "").strip():
                 target_name = ""
             time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(0, 2))
-            if target_name and hours_text and requirement:
+            if regional_coach_hub and target_name and hours_text and requirement:
+                note = (
+                    f"Fare rack: {prop_name} is in a regional coach boarding crush during {hours_text}, with posted road connections for {target_name} around {time_text}. "
+                    f"The stop still wants {requirement} while fares and bags knot up at the edge."
+                )
+            elif regional_coach_hub and target_name and hours_text:
+                note = f"Fare rack: {prop_name} is boarding coaches hard during {hours_text}, with clipped road calls and the clean next connection toward {target_name} posted for around {time_text}."
+            elif regional_coach_hub and target_name and requirement:
+                note = f"Fare rack: the coach line at {prop_name} is trying not to miss the {target_name} connection around {time_text}, and the stop still wants {requirement} while the crush is live."
+            elif regional_coach_hub and target_name:
+                note = f"Fare rack: tokens, daypasses, and scratched road notes at {prop_name} keep circling back to {target_name} as the next clean coach connection once boarding clears."
+            elif regional_coach_hub and hours_text and requirement:
+                note = f"Fare rack: {prop_name} is in a regional coach boarding crush during {hours_text}, and the stop still wants {requirement} while fares, bags, and shouted road calls bunch at the edge."
+            elif regional_coach_hub and hours_text:
+                note = f"Fare rack: {prop_name} is boarding coaches hard during {hours_text}, all fares, clipped road calls, and people trying to hit the coach before it slips."
+            elif regional_coach_hub and requirement:
+                note = f"Fare rack: the coach stop at {prop_name} is under boarding pressure, and it still wants {requirement} once the line unclenches."
+            elif regional_coach_hub:
+                note = f"Fare rack: {prop_name} is under a regional coach boarding crush, all tokens, passes, and route scribbles from people trying not to miss the clean run."
+            elif target_name and hours_text and requirement:
                 note = (
                     f"Fare rack: {prop_name} is in a boarding crush during {hours_text}, with posted connections for {target_name} around {time_text}. "
                     f"The stop still wants {requirement} while fares and bags knot up at the edge."
@@ -4517,7 +4667,26 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             if str((arrival_target or {}).get("id", "") or "").strip() == str(prop.get("id", "") or "").strip():
                 target_name = ""
             time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(1, 3))
-            if target_name and hours_text and requirement:
+            if regional_coach_hub and target_name and hours_text and requirement:
+                note = (
+                    f"Transfer clipboard: {prop_name} is handling a regional coach arrival during {hours_text}, with an incoming relief run marked for {target_name} around {time_text}. "
+                    f"The stop still wants {requirement} while the pickup is live."
+                )
+            elif regional_coach_hub and target_name and hours_text:
+                note = f"Transfer clipboard: {prop_name} is running a coach arrival handoff during {hours_text}, with an incoming rider or relief bag marked onward to {target_name} around {time_text}."
+            elif regional_coach_hub and target_name and requirement:
+                note = f"Transfer clipboard: somebody coming through the coach side at {prop_name} is tagged for {target_name} around {time_text}, and the stop still wants {requirement} while the handoff clears."
+            elif regional_coach_hub and target_name:
+                note = f"Transfer clipboard: coach arrival notes at {prop_name} keep pointing toward {target_name} around {time_text}, the kind of onward handoff that usually means somebody there needs either staff or supplies."
+            elif regional_coach_hub and hours_text and requirement:
+                note = f"Transfer clipboard: {prop_name} is handling a regional coach arrival during {hours_text}, and the stop still wants {requirement} while inbound riders and pickup chatter bunch at the edge."
+            elif regional_coach_hub and hours_text:
+                note = f"Transfer clipboard: {prop_name} is in a coach arrival handoff during {hours_text}, all incoming riders, clipped greetings, and onward road directions."
+            elif regional_coach_hub and requirement:
+                note = f"Transfer clipboard: coach riders and pickup chatter are bunching at {prop_name}, and the stop still wants {requirement} once the handoff clears."
+            elif regional_coach_hub:
+                note = f"Transfer clipboard: {prop_name} is handling a regional coach arrival, all incoming names, onward notes, and the sense that somebody here came from farther out because they were needed."
+            elif target_name and hours_text and requirement:
                 note = (
                     f"Transfer clipboard: {prop_name} is handling an arrival handoff during {hours_text}, with an incoming relief run marked for {target_name} around {time_text}. "
                     f"The stop still wants {requirement} while the pickup is live."
@@ -4576,7 +4745,26 @@ def _business_event_scene_fixture_interaction(sim, scene, prop, *, fixture_type=
             )
             target_name = str(dispatch_target.get("name", dispatch_target.get("id", "the place"))).strip() if isinstance(dispatch_target, dict) else ""
             time_text = _business_event_time_point_text(sim, offset_hours=1 + rng.randint(1, 3))
-            if target_name and hours_text and requirement:
+            if regional_coach_hub and target_name and hours_text and requirement:
+                note = (
+                    f"Dispatch satchel: regional route slips at {prop_name} keep pointing toward {target_name} around {time_text}, "
+                    f"while this frontage is still hot during {hours_text} and still wants {requirement}."
+                )
+            elif regional_coach_hub and target_name and hours_text:
+                note = f"Dispatch satchel: clipped coach-route slips at {prop_name} point toward {target_name} around {time_text}, while this window is live during {hours_text}."
+            elif regional_coach_hub and target_name and requirement:
+                note = f"Dispatch satchel: somebody at {prop_name} has marked {target_name} for the next coach handoff around {time_text}, but this edge still wants {requirement}."
+            elif regional_coach_hub and target_name:
+                note = f"Dispatch satchel: the road slips here keep circling back to {target_name} as the next coach handoff once {prop_name} clears the current surge."
+            elif regional_coach_hub and hours_text and requirement:
+                note = f"Dispatch satchel: {prop_name} is routing the next coach burst during {hours_text}, and the front still wants {requirement} while the board is hot."
+            elif regional_coach_hub and hours_text:
+                note = f"Dispatch satchel: {prop_name} is in a regional coach dispatch surge during {hours_text}, with route notes and clipped road orders spilling closer to the street."
+            elif regional_coach_hub and requirement:
+                note = f"Dispatch satchel: clipped coach orders are spilling outward at {prop_name}, and the front still wants {requirement} while the surge is live."
+            elif regional_coach_hub:
+                note = f"Dispatch satchel: {prop_name} is under a regional coach dispatch surge, all route slips, clipped road orders, and edge traffic that should have stayed deeper inside."
+            elif target_name and hours_text and requirement:
                 note = (
                     f"Dispatch satchel: route slips at {prop_name} keep pointing toward {target_name} around {time_text}, "
                     f"while this frontage is still hot during {hours_text} and still wants {requirement}."

@@ -288,7 +288,17 @@ class PropertyActionRuntime:
     def same_space_service_property(self, pos):
         candidates = []
         seen = set()
-        for candidate in (
+        anchor_ids = tuple(
+            getattr(self.sim, "property_anchor_index", {}).get(
+                (int(pos.x), int(pos.y), int(pos.z)),
+                (),
+            )
+        )
+        anchored = [
+            getattr(self.sim, "properties", {}).get(str(prop_id))
+            for prop_id in anchor_ids
+        ]
+        for candidate in tuple(anchored) + (
             self.sim.property_at(pos.x, pos.y, pos.z),
             _property_covering(self.sim, pos.x, pos.y, pos.z),
         ):
@@ -315,20 +325,37 @@ class PropertyActionRuntime:
     def hard_traversal_property_at(self, pos):
         if pos is None:
             return None
-        prop = self.sim.property_at(pos.x, pos.y, pos.z)
-        if not isinstance(prop, dict):
+        try:
+            key = (int(pos.x), int(pos.y), int(pos.z))
+        except (TypeError, ValueError):
             return None
-        metadata = prop.get("metadata", {}) if isinstance(prop.get("metadata"), dict) else {}
-        if not bool(metadata.get("hard_traversal")):
-            return None
-        services = {
-            str(service).strip().lower()
-            for service in tuple(metadata.get("site_services", ()) or ())
-            if str(service).strip()
-        }
-        if not services:
-            return None
-        return prop
+        candidate_ids = tuple(getattr(self.sim, "property_anchor_index", {}).get(key, ()) or ())
+        candidates = [
+            getattr(self.sim, "properties", {}).get(str(prop_id))
+            for prop_id in candidate_ids
+        ]
+        first = self.sim.property_at(pos.x, pos.y, pos.z)
+        if isinstance(first, dict):
+            candidates.append(first)
+        seen = set()
+        for prop in candidates:
+            if not isinstance(prop, dict):
+                continue
+            prop_id = str(prop.get("id", "") or "").strip()
+            if prop_id in seen:
+                continue
+            seen.add(prop_id)
+            metadata = prop.get("metadata", {}) if isinstance(prop.get("metadata"), dict) else {}
+            if not bool(metadata.get("hard_traversal")):
+                continue
+            services = {
+                str(service).strip().lower()
+                for service in tuple(metadata.get("site_services", ()) or ())
+                if str(service).strip()
+            }
+            if services:
+                return prop
+        return None
 
     def handle_door_interaction(self, eid, pos, *, target=None):
         candidate = _door_interaction_candidate(

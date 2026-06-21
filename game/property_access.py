@@ -200,6 +200,134 @@ COMMON_AREA_ROOM_KINDS = frozenset({
     "drain_junction",
     "platform",
 })
+STAFF_ONLY_COMMON_AREA_ROOM_KINDS = frozenset({
+    "drain_junction",
+    "maintenance_tunnel",
+    "service_basement",
+    "service_corridor",
+    "service_hall",
+    "utility_corridor",
+})
+PUBLIC_ROOM_KINDS = COMMON_AREA_ROOM_KINDS | frozenset({
+    "bar",
+    "bar_top",
+    "booth_row",
+    "counter",
+    "dining",
+    "entrance",
+    "front_counter",
+    "front_desk",
+    "host_desk",
+    "main_floor",
+    "public_hall",
+    "reception",
+    "sales",
+    "seating",
+    "service_counter",
+    "showroom",
+    "ticketing",
+    "visitation",
+    "waiting",
+})
+STAFF_ONLY_ROOM_KINDS = frozenset({
+    "archive",
+    "assembly",
+    "assembly_line",
+    "back_office",
+    "backstage",
+    "boardroom",
+    "breakroom",
+    "briefing_room",
+    "clerk_office",
+    "cold_storage",
+    "conference",
+    "control_booth",
+    "dispatch",
+    "dispatch_desk",
+    "exam",
+    "front_office",
+    "green_room",
+    "housekeeping",
+    "intake",
+    "kitchen",
+    "kitchenette",
+    "lab_floor",
+    "laundry",
+    "linen_closet",
+    "loading_bay",
+    "loading_lane",
+    "manager_office",
+    "meeting_room",
+    "office",
+    "parts",
+    "parts_room",
+    "parts_store",
+    "prep_kitchen",
+    "records",
+    "records_office",
+    "records_room",
+    "repair_bench",
+    "screening_room",
+    "service_bay",
+    "service_office",
+    "shop_floor",
+    "sorting_floor",
+    "staff",
+    "stock_rack",
+    "stock_room",
+    "storage",
+    "testing_lab",
+    "tool_crib",
+    "treatment_room",
+    "workshop",
+})
+PRIVATE_ROOM_KINDS = frozenset({
+    "apartment",
+    "bathroom",
+    "bedroom",
+    "bunk",
+    "bunk_room",
+    "executive_office",
+    "executive_suite",
+    "guest_floor",
+    "guest_room",
+    "living",
+    "nap_room",
+    "private_office",
+    "recovery",
+    "shared_room",
+    "sleeping_room",
+    "tenant_room",
+    "unit",
+    "units",
+    "vip_lounge",
+    "washroom",
+})
+SECURE_ROOM_KINDS = frozenset({
+    "airlock",
+    "armored_store",
+    "cash_cage",
+    "cell_block",
+    "chemical_storage",
+    "clean_room",
+    "cold_backup",
+    "control_room",
+    "count_room",
+    "evidence_lockup",
+    "holding",
+    "lockup",
+    "noc",
+    "racks",
+    "secure_cage",
+    "secure_storage",
+    "security_room",
+    "server_room",
+    "signals_room",
+    "specimen_vault",
+    "surveillance_room",
+    "vault",
+})
+ROOM_ACCESS_LEVELS = {"public", "semi_public", "staff_only", "private", "secure"}
 BADGE_CONTROLLER_ARCHETYPES = {
     "armory",
     "bank",
@@ -291,15 +419,15 @@ DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "hotel": ("rest",),
     "makeup_counter": ("appearance_style",),
     "metro_exchange": ("rail_transit", "bus_transit"),
-    "relay_post": ("bus_transit", "shuttle_transit"),
+    "relay_post": ("bus_transit", "shuttle_transit", "coach_transit"),
     "recruitment_office": ("agency_jobs",),
-    "roadhouse": ("shuttle_transit",),
+    "roadhouse": ("shuttle_transit", "coach_transit"),
     "salon": ("appearance_style",),
     "bounty_office": ("bounty_jobs",),
     "service_station": ("fuel", "repair", "vending"),
     "tavern": ("intel",),
     "tide_station": ("intel", "ferry_transit"),
-    "truck_stop": ("bus_transit", "shuttle_transit"),
+    "truck_stop": ("bus_transit", "shuttle_transit", "coach_transit"),
 }
 OPTIONAL_SITE_SERVICES_BY_ARCHETYPE = {
     "tavern": {
@@ -790,6 +918,155 @@ def _structure_context_for_position(sim, x, y, z):
     return structure, building_id, room_kind, common_area_kind
 
 
+def _normalize_room_access_level(value):
+    clean = _clean_key(value)
+    aliases = {
+        "open": "public",
+        "front": "public",
+        "front_of_house": "public",
+        "customer": "public",
+        "customer_only": "semi_public",
+        "staff": "staff_only",
+        "staff_only": "staff_only",
+        "employee": "staff_only",
+        "employees_only": "staff_only",
+        "back_of_house": "staff_only",
+        "backroom": "staff_only",
+        "protected": "staff_only",
+        "resident": "private",
+        "residential": "private",
+        "tenant": "private",
+        "restricted": "secure",
+        "security": "secure",
+    }
+    clean = aliases.get(clean, clean)
+    if clean in ROOM_ACCESS_LEVELS:
+        return clean
+    return ""
+
+
+def _configured_room_access_level(metadata, room_kind):
+    if not isinstance(metadata, dict):
+        return "", ""
+    room_kind = _clean_key(room_kind)
+    if not room_kind:
+        return "", ""
+
+    overrides = metadata.get("room_access_overrides")
+    if isinstance(overrides, dict):
+        for key, value in overrides.items():
+            key_clean = _clean_key(key)
+            if key_clean != room_kind:
+                continue
+            level = _normalize_room_access_level(value)
+            if level:
+                return level, f"metadata:{level}"
+
+    configured_groups = (
+        ("public", ("public_room_kinds", "open_room_kinds", "customer_room_kinds")),
+        ("semi_public", ("semi_public_room_kinds", "semi_open_room_kinds")),
+        ("staff_only", ("staff_only_room_kinds", "protected_room_kinds", "backroom_room_kinds")),
+        ("private", ("private_room_kinds", "tenant_room_kinds", "residential_room_kinds")),
+        ("secure", ("secure_room_kinds", "restricted_room_kinds")),
+    )
+    for level, keys in configured_groups:
+        for key in keys:
+            if room_kind in _normalize_key_set(metadata.get(key)):
+                return level, f"metadata:{level}"
+    return "", ""
+
+
+def _room_access_level_for_kind(room_kind, *, common_area_kind="", metadata=None):
+    room_kind = _clean_key(room_kind)
+    common_area_kind = _clean_key(common_area_kind)
+    configured, reason = _configured_room_access_level(metadata, room_kind)
+    if configured:
+        return configured, reason
+    public_span_parent_common = bool(
+        isinstance(metadata, dict)
+        and metadata.get("public")
+        and metadata.get("span_parent")
+    )
+    if room_kind in STAFF_ONLY_COMMON_AREA_ROOM_KINDS and not public_span_parent_common:
+        return "staff_only", "shared_service_area"
+    if common_area_kind or room_kind in COMMON_AREA_ROOM_KINDS:
+        return "public", "common_area"
+    if room_kind in PUBLIC_ROOM_KINDS:
+        return "public", "public_room"
+    if room_kind in SECURE_ROOM_KINDS:
+        return "secure", "secure_room"
+    if room_kind in PRIVATE_ROOM_KINDS:
+        return "private", "private_room"
+    if room_kind in STAFF_ONLY_ROOM_KINDS:
+        return "staff_only", "staff_room"
+
+    if any(token in room_kind for token in ("vault", "security", "surveillance", "cage", "holding", "armored", "airlock", "lockup")):
+        return "secure", "secure_room"
+    if any(token in room_kind for token in ("bed", "bunk", "living", "unit", "tenant", "apartment", "guest_room")):
+        return "private", "private_room"
+    if any(token in room_kind for token in ("office", "records", "archive", "stock", "storage", "kitchen", "service", "repair", "loading", "parts", "workshop", "lab", "exam", "treatment")):
+        return "staff_only", "staff_room"
+    if any(token in room_kind for token in ("entry", "lobby", "reception", "foyer", "waiting", "counter", "showroom", "sales", "dining", "bar", "seating", "concourse", "platform", "aisle")):
+        return "public", "public_room"
+    return "property", "property_default"
+
+
+def room_access_level_for_kind(room_kind, *, common_area_kind="", prop=None):
+    level, reason = _room_access_level_for_kind(
+        room_kind,
+        common_area_kind=common_area_kind,
+        metadata=_property_metadata(prop),
+    )
+    return {
+        "room_access_level": level,
+        "room_access_reason": reason,
+        "common_area_kind": _clean_key(common_area_kind),
+    }
+
+
+def _effective_access_level_for_room(base_access_level, room_access_level):
+    base = _clean_key(base_access_level) or "protected"
+    room_level = _clean_key(room_access_level)
+    if room_level == "secure":
+        return "restricted"
+    if room_level in {"staff_only", "private"} and base == "public":
+        return "protected"
+    return base
+
+
+def room_access_context(sim, prop, x=None, y=None, z=None, *, base_access_level=None):
+    base_access_level = _clean_key(base_access_level) or property_access_level(prop)
+    structure = {}
+    building_id = ""
+    room_kind = ""
+    common_area_kind = ""
+    if x is not None and y is not None and z is not None:
+        structure, building_id, room_kind, common_area_kind = _structure_context_for_position(sim, x, y, z)
+    metadata = _property_metadata(prop)
+    room_access_level, room_access_reason = _room_access_level_for_kind(
+        room_kind,
+        common_area_kind=common_area_kind,
+        metadata=metadata,
+    )
+    inherit_room_access = bool(metadata.get("inherit_room_access", str((prop or {}).get("kind", "") or "").strip().lower() == "building"))
+    effective_access_level = (
+        _effective_access_level_for_room(base_access_level, room_access_level)
+        if inherit_room_access
+        else base_access_level
+    )
+    return RoomAccessContext(
+        property_id=_property_id(prop) or None,
+        building_id=building_id or _property_building_id(prop),
+        room_kind=room_kind,
+        room_access_level=room_access_level,
+        room_access_reason=room_access_reason,
+        common_area_kind=common_area_kind,
+        property_access_level=base_access_level,
+        effective_access_level=effective_access_level,
+        floor=int((structure or {}).get("floor", z if z is not None else 0) or 0),
+    )
+
+
 def _common_area_kind_for_property(prop, *, room_kind="", common_area_kind=""):
     metadata = _property_metadata(prop)
     room_kind = _clean_key(room_kind)
@@ -1111,6 +1388,17 @@ def shared_property_interest_event_payload(interests):
         "interest_property_ids": property_ids,
         "interest_reasons": reasons,
         "common_area_kind": common_area_kind,
+    }
+
+
+def room_access_event_payload(access):
+    return {
+        "property_access_level": str(getattr(access, "property_access_level", "") or "").strip().lower(),
+        "room_kind": str(getattr(access, "room_kind", "") or "").strip().lower(),
+        "room_access_level": str(getattr(access, "room_access_level", "") or "").strip().lower(),
+        "room_access_reason": str(getattr(access, "room_access_reason", "") or "").strip().lower(),
+        "room_floor": int(getattr(access, "room_floor", 0) or 0),
+        "common_area_kind": str(getattr(access, "common_area_kind", "") or "").strip().lower(),
     }
 
 
@@ -1943,6 +2231,19 @@ def _standing_candidate(best_score, best_reason, score, reason):
 
 
 @dataclass(frozen=True)
+class RoomAccessContext:
+    property_id: str | None
+    building_id: str
+    room_kind: str
+    room_access_level: str
+    room_access_reason: str
+    common_area_kind: str
+    property_access_level: str
+    effective_access_level: str
+    floor: int = 0
+
+
+@dataclass(frozen=True)
 class PropertyAccessResult:
     property_id: str | None
     access_level: str
@@ -1965,6 +2266,12 @@ class PropertyAccessResult:
     organization_denied_entry: bool = False
     organization_denied_service: bool = False
     organization_guard_grace: bool = False
+    property_access_level: str = ""
+    room_kind: str = ""
+    room_access_level: str = ""
+    room_access_reason: str = ""
+    common_area_kind: str = ""
+    room_floor: int = 0
 
 
 @dataclass(frozen=True)
@@ -2139,7 +2446,16 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
             severity_label="clear",
         )
 
-    access_level = property_access_level(prop)
+    property_level = property_access_level(prop)
+    room_context = room_access_context(
+        sim,
+        prop,
+        x=x,
+        y=y,
+        z=z,
+        base_access_level=property_level,
+    )
+    access_level = room_context.effective_access_level or property_level
     public_facing = access_level == "public"
     hour = world_hour(sim)
     opening_window = property_open_window(sim, prop)
@@ -2161,7 +2477,7 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
                 property_id=prop.get("id"),
                 access_level=access_level,
                 inside_bounds=True,
-                public_facing=access_level == "public",
+                public_facing=public_facing,
                 current_hour=hour,
                 opening_window=opening_window,
                 currently_open=currently_open,
@@ -2173,13 +2489,19 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
                 can_use_services=False,
                 severity_score=0,
                 severity_label="clear",
+                property_access_level=property_level,
+                room_kind=room_context.room_kind,
+                room_access_level=room_context.room_access_level,
+                room_access_reason=room_context.room_access_reason,
+                common_area_kind=room_context.common_area_kind,
+                room_floor=room_context.floor,
             )
         if _custody_release_grace_active(sim, actor_eid, prop.get("id")):
             return PropertyAccessResult(
                 property_id=prop.get("id"),
                 access_level=access_level,
                 inside_bounds=True,
-                public_facing=access_level == "public",
+                public_facing=public_facing,
                 current_hour=hour,
                 opening_window=opening_window,
                 currently_open=currently_open,
@@ -2191,6 +2513,12 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
                 can_use_services=False,
                 severity_score=0,
                 severity_label="clear",
+                property_access_level=property_level,
+                room_kind=room_context.room_kind,
+                room_access_level=room_context.room_access_level,
+                room_access_reason=room_context.room_access_reason,
+                common_area_kind=room_context.common_area_kind,
+                room_floor=room_context.floor,
             )
 
     standing = 0.0
@@ -2418,6 +2746,12 @@ def evaluate_property_access(sim, actor_eid, prop, x=None, y=None, z=None, breac
         organization_denied_entry=bool(org_posture.get("deny_entry")),
         organization_denied_service=bool(org_posture.get("deny_service")),
         organization_guard_grace=bool(org_posture.get("guard_grace")),
+        property_access_level=property_level,
+        room_kind=room_context.room_kind,
+        room_access_level=room_context.room_access_level,
+        room_access_reason=room_context.room_access_reason,
+        common_area_kind=room_context.common_area_kind,
+        room_floor=room_context.floor,
     )
 
 

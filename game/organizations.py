@@ -352,6 +352,7 @@ SERVICE_FIELD_DOMAIN_BY_SERVICE = {
     "bus_transit": "transit",
     "shuttle_transit": "transit",
     "ferry_transit": "transit",
+    "coach_transit": "transit",
 }
 ARCHETYPE_FIELD_DOMAINS = {
     "auto_garage": ("repair", "mobility"),

@@ -16,6 +16,7 @@ from game.property_access import (
     evaluate_property_access as _evaluate_property_access,
     property_claim_reason as _property_claim_reason,
     property_ingress_context as _property_ingress_context,
+    room_access_event_payload as _room_access_event_payload,
     shared_property_interest_event_payload as _shared_property_interest_event_payload,
     shared_property_interests_for_position as _shared_property_interests_for_position,
 )
@@ -341,6 +342,12 @@ def maybe_emit_accidental_trespass_boundary(
         y=y,
         z=z,
         access_level=getattr(access, "access_level", ""),
+        property_access_level=getattr(access, "property_access_level", ""),
+        room_kind=getattr(access, "room_kind", ""),
+        room_access_level=getattr(access, "room_access_level", ""),
+        room_access_reason=getattr(access, "room_access_reason", ""),
+        room_floor=getattr(access, "room_floor", 0),
+        common_area_kind=getattr(access, "common_area_kind", ""),
         currently_open=getattr(access, "currently_open", None),
         current_hour=getattr(access, "current_hour", None),
         ingress_kind=getattr(ingress, "ingress_kind", ""),
@@ -959,7 +966,14 @@ class PropertyIngressRuntime:
             candidate["z"],
             primary_prop=prop,
         )
+        room_access_payload = _room_access_event_payload(access)
+        room_common_area_kind = room_access_payload.pop("common_area_kind", "")
         shared_interest_payload = _shared_property_interest_event_payload(shared_interests)
+        if (
+            room_common_area_kind
+            and not shared_interest_payload.get("common_area_kind")
+        ):
+            shared_interest_payload["common_area_kind"] = room_common_area_kind
 
         if hostile:
             severity_score = max(
@@ -985,6 +999,7 @@ class PropertyIngressRuntime:
                 aperture_kind=ingress.aperture_kind,
                 ingress_method=ingress_method,
                 breach_severity=ingress.breach_severity,
+                **room_access_payload,
                 **shared_interest_payload,
             ))
             offense_score = min(
@@ -1052,6 +1067,7 @@ class PropertyIngressRuntime:
                 aperture_kind=ingress.aperture_kind,
                 ingress_method=ingress_method,
                 breach_severity=ingress.breach_severity,
+                **room_access_payload,
                 **shared_interest_payload,
             ))
             self.action_system._emit_action_offense(

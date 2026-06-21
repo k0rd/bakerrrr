@@ -2008,6 +2008,26 @@
     "legal_status": "legal",
     "effects": []
   },
+  "room_ledger_note": {
+    "name": "Marked Ledger Note",
+    "glyph": "=",
+    "stack_max": 3,
+    "tags": [
+      "token",
+      "junk",
+      "paper",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [],
+    "lead_profile": {
+      "lead_kind": "location",
+      "confidence": 0.68,
+      "discovery_mode": "room_ledger",
+      "consume_on_use": true,
+      "hidden_on_learn": false
+    }
+  },
   "deck_of_cards": {
     "name": "Deck of Cards",
     "glyph": "=",
@@ -3692,14 +3712,14 @@
       "cloud_radius": 1,
       "cloud_duration": 4,
       "aerosol_status": "toxin_exposure",
-      "aerosol_duration": 16,
+      "aerosol_duration": 14,
       "aerosol_modifiers": {
         "move_speed_mult": -0.08,
         "ranged_accuracy_mult": -0.1,
-        "toxicity_tick_delta": 0.12,
+        "toxicity_tick_delta": 0.1,
         "safety_tick_delta": -0.12
       },
-      "aerosol_exposure_cooldown": 7,
+      "aerosol_exposure_cooldown": 8,
       "aerosol_label": "toxic aerosol",
       "consume_on_throw": true,
       "shatter": false
@@ -3729,11 +3749,11 @@
       "cloud_radius": 1,
       "cloud_duration": 3,
       "aerosol_status": "dissociated",
-      "aerosol_duration": 12,
+      "aerosol_duration": 10,
       "aerosol_modifiers": {
         "move_speed_mult": -0.18,
         "ranged_accuracy_mult": -0.18,
-        "control_lapse_chance": 0.22,
+        "control_lapse_chance": 0.18,
         "control_lapse_ticks": 2,
         "retreat_bias_delta": 0.12
       },
@@ -3768,14 +3788,14 @@
       "cloud_radius": 1,
       "cloud_duration": 3,
       "aerosol_status": "tripping",
-      "aerosol_duration": 16,
+      "aerosol_duration": 12,
       "aerosol_modifiers": {
         "move_speed_mult": 0.02,
         "ranged_accuracy_mult": -0.2,
         "projectile_spread_mod": 2,
-        "movement_misdirect_chance": 0.08,
-        "hallucination_intensity": 0.85,
-        "hallucination_read_chance": 0.45
+        "movement_misdirect_chance": 0.06,
+        "hallucination_intensity": 0.65,
+        "hallucination_read_chance": 0.3
       },
       "aerosol_exposure_cooldown": 8,
       "aerosol_label": "hallucinogen aerosol",

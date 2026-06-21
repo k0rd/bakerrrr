@@ -828,6 +828,7 @@ class SiteServiceSystem(System):
         underpass_id = str(underpass_prop.get("id", "") or "").strip()
         if not underpass_id:
             return False
+        return_coords = set()
         for candidate in tuple(getattr(self.sim, "properties", {}).values()):
             metadata = _property_metadata(candidate)
             if str(metadata.get("linked_property_id", "") or "").strip() != underpass_id:
@@ -844,7 +845,82 @@ class SiteServiceSystem(System):
             if dest_z < 0:
                 continue
             if self._linked_access_destination_available(destination):
+                try:
+                    return_coords.add((int(candidate.get("x")), int(candidate.get("y")), int(candidate.get("z", z))))
+                except (TypeError, ValueError):
+                    continue
+        if not return_coords:
+            return False
+        return self._underground_component_reaches_any_return(
+            int(x),
+            int(y),
+            int(z),
+            underpass_prop,
+            return_coords,
+        )
+
+    def _underground_component_reaches_any_return(self, x, y, z, underpass_prop, return_coords):
+        if not isinstance(underpass_prop, dict):
+            return False
+        try:
+            start = (int(x), int(y), int(z))
+        except (TypeError, ValueError):
+            return False
+        tile = self.sim.tilemap.tile_at(start[0], start[1], start[2])
+        if not tile or not tile.walkable:
+            return False
+        metadata = _property_metadata(underpass_prop)
+        building_id = str(metadata.get("building_id", "") or "").strip()
+        underpass_id = str(underpass_prop.get("id", "") or "").strip()
+        if not building_id and not underpass_id:
+            return False
+
+        def belongs(cell_x, cell_y, cell_z):
+            tile = self.sim.tilemap.tile_at(int(cell_x), int(cell_y), int(cell_z))
+            if not tile or not tile.walkable:
+                return False
+            structure = getattr(self.sim, "structure_cells", {}).get((int(cell_x), int(cell_y), int(cell_z)))
+            if building_id and str((structure or {}).get("building_id", "") or "").strip() == building_id:
                 return True
+            if underpass_id:
+                cover_ids = tuple(getattr(self.sim, "property_cover_index", {}).get((int(cell_x), int(cell_y), int(cell_z)), ()) or ())
+                if underpass_id in {str(value).strip() for value in cover_ids}:
+                    return True
+                prop = self.sim.property_at(int(cell_x), int(cell_y), int(cell_z))
+                if isinstance(prop, dict) and str(prop.get("id", "") or "").strip() == underpass_id:
+                    return True
+                linked_id = str(_property_metadata(prop).get("linked_property_id", "") or "").strip() if isinstance(prop, dict) else ""
+                if linked_id == underpass_id:
+                    return True
+            return False
+
+        normalized_returns = {
+            (int(cell_x), int(cell_y), int(cell_z))
+            for cell_x, cell_y, cell_z in tuple(return_coords or ())
+            if int(cell_z) == start[2]
+        }
+        if start in normalized_returns:
+            return True
+
+        frontier = [start]
+        seen = {start}
+        while frontier and len(seen) <= 1200:
+            cell_x, cell_y, cell_z = frontier.pop(0)
+            for next_x, next_y in (
+                (cell_x + 1, cell_y),
+                (cell_x - 1, cell_y),
+                (cell_x, cell_y + 1),
+                (cell_x, cell_y - 1),
+            ):
+                candidate = (int(next_x), int(next_y), int(cell_z))
+                if candidate in seen:
+                    continue
+                if not belongs(candidate[0], candidate[1], candidate[2]):
+                    continue
+                if candidate in normalized_returns:
+                    return True
+                seen.add(candidate)
+                frontier.append(candidate)
         return False
 
     def _allows_physical_service_interact(self, prop):

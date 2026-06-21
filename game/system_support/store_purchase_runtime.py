@@ -22,7 +22,7 @@ INTEREST_LABELS = {
     INTEREST_WANTED: "wanted here",
     INTEREST_ADJACENT: "they may take this cheap",
     INTEREST_UNUSUAL: "unusual ask",
-    INTEREST_REFUSED: "not their usual trade",
+    INTEREST_REFUSED: "not their line",
 }
 
 INTEREST_COLORS = {
@@ -63,6 +63,22 @@ TACTICAL_BUYER_ARCHETYPES = {
 }
 
 DANGEROUS_TAGS = {"weapon", "ammo", "throwable", "tactical", "armor"}
+
+STYLE_BUYER_ARCHETYPES = {
+    "top_shop",
+    "bottom_shop",
+    "dress_shop",
+    "shoe_shop",
+    "outerwear_shop",
+    "headwear_shop",
+    "jewelry_shop",
+    "accessory_shop",
+    "clothing_superstore",
+    "salon",
+    "barbershop",
+    "hair_studio",
+    "makeup_counter",
+}
 
 
 def canonical_store_item_id(item_id):
@@ -172,12 +188,35 @@ def _profile_for_archetype(archetype):
             "adjacent": {"medical", "food", "drink", "ammo", "throwable", "tactical"},
             "refuse_dangerous": False,
         })
-    elif archetype in {"top_shop", "bottom_shop", "dress_shop", "shoe_shop", "outerwear_shop", "headwear_shop", "jewelry_shop", "accessory_shop", "clothing_superstore", "salon", "barbershop", "hair_studio", "makeup_counter"}:
+    elif archetype in STYLE_BUYER_ARCHETYPES:
         profile.update({
             "summary": "clothing, accessories, wearable style goods, and light counter stock",
             "wanted": {"clothing", "wearable", "disguise", "social", "fashion", "jewelry"},
             "adjacent": {"token", "food", "drink", "medical", "phone", "communication"},
             "refuse_dangerous": True,
+        })
+    elif archetype == "tattoo_parlor":
+        profile.update({
+            "summary": "tattoo appointments, clean style goods, and small counter stock",
+            "wanted": {"service", "appearance"},
+            "adjacent": {"clothing", "wearable", "fashion", "jewelry", "social"},
+            "refuse_dangerous": True,
+            "service_counter": True,
+        })
+    elif archetype == "casino":
+        profile.update({
+            "summary": "game tokens, cards, drinks, and small entertainment-counter goods",
+            "wanted": {"token", "social", "cash", "credit", "drink", "book", "paper"},
+            "adjacent": {"food", "phone", "communication", "junk"},
+            "refuse_dangerous": True,
+        })
+    elif archetype in {"courier_office", "employment_agency", "recruitment_office", "bounty_office"}:
+        profile.update({
+            "summary": "paperwork, phones, tokens, and job-counter supplies",
+            "wanted": {"paper", "book", "phone", "communication", "token", "cash", "credit", "social"},
+            "adjacent": {"food", "drink", "medical", "tool", "safety"},
+            "refuse_dangerous": True,
+            "service_counter": True,
         })
     elif archetype in {"outfitter", "bait_shop", "dock_shack"}:
         profile.update({
@@ -329,6 +368,10 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
         actual = INTEREST_WANTED
         price_mult = 1.0
         reason = "already stocked"
+    elif bool(profile.get("service_counter")) and not tags.intersection(profile["wanted"]):
+        actual = INTEREST_REFUSED
+        price_mult = 0.0
+        reason = "service counter does not buy carried stock"
     elif archetype in BROAD_BUYER_ARCHETYPES:
         actual = INTEREST_WANTED if tags.intersection(profile["wanted"]) else INTEREST_ADJACENT
         price_mult = 0.86 if actual == INTEREST_WANTED else 0.68
@@ -369,6 +412,15 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
         pressure_weight = 2 if illegal or dangerous else 1
     elif actual == INTEREST_UNUSUAL and not accepted:
         pressure_weight = 2 if illegal or dangerous else 1
+    risk_label = ""
+    if "stolen" in tags:
+        risk_label = "stolen risk"
+    elif "illegal" in tags:
+        risk_label = "contraband"
+    elif restricted:
+        risk_label = "restricted"
+    elif dangerous:
+        risk_label = "dangerous goods"
 
     return {
         "purchase_interest": visible,
@@ -386,6 +438,8 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
         "can_attempt": actual in {INTEREST_WANTED, INTEREST_ADJACENT, INTEREST_UNUSUAL},
         "dangerous": bool(dangerous),
         "illegal": bool(illegal),
+        "restricted": bool(restricted),
+        "risk_label": risk_label,
     }
 
 

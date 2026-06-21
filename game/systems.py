@@ -308,6 +308,8 @@ from game.property_access import (
     property_apertures as _property_apertures,
     property_ingress_context as _property_ingress_context,
     property_claim_reason as _property_claim_reason,
+    room_access_event_payload as _room_access_event_payload,
+    room_access_level_for_kind as _room_access_level_for_kind,
     shared_property_interest_event_payload as _shared_property_interest_event_payload,
     shared_property_interests_for_position as _shared_property_interests_for_position,
     property_status_text as _property_status_text,
@@ -2146,7 +2148,14 @@ def _emit_move_access_events(
                 target_z,
                 primary_prop=prop,
             )
+            room_access_payload = _room_access_event_payload(access)
+            room_common_area_kind = room_access_payload.pop("common_area_kind", "")
             shared_interest_payload = _shared_property_interest_event_payload(shared_interests)
+            if (
+                room_common_area_kind
+                and not shared_interest_payload.get("common_area_kind")
+            ):
+                shared_interest_payload["common_area_kind"] = room_common_area_kind
             if maybe_emit_accidental_trespass_boundary(
                 sim,
                 eid=eid,
@@ -2183,6 +2192,7 @@ def _emit_move_access_events(
                 aperture_kind=ingress.aperture_kind,
                 ingress_method=ingress_method,
                 breach_severity=ingress.breach_severity,
+                **room_access_payload,
                 **shared_interest_payload,
             ))
             if witnesses:
@@ -3358,6 +3368,92 @@ def _room_floor_sentence(structure, rng):
     return ""
 
 
+def _room_access_sentence(prop, room_kind, common_area_kind, rng):
+    access = _room_access_level_for_kind(room_kind, common_area_kind=common_area_kind, prop=prop)
+    level = str(access.get("room_access_level", "") or "").strip().lower()
+    reason = str(access.get("room_access_reason", "") or "").strip().lower()
+    if level == "public":
+        if reason == "common_area":
+            return _description_choice(
+                rng,
+                (
+                    "It reads as shared passage, not a tenant room.",
+                    "The space feels meant for crossing through, with eyes from more than one doorway.",
+                ),
+            )
+        return _description_choice(
+            rng,
+            (
+                "The room presents itself as public-facing space.",
+                "Nothing about the layout asks you to pretend you do not belong here yet.",
+            ),
+        )
+    if level == "semi_public":
+        return _description_choice(
+            rng,
+            (
+                "It feels open enough for business, but not loose enough to disappear into.",
+                "The room allows visitors, with an edge of being accounted for.",
+            ),
+        )
+    if level == "staff_only":
+        return _description_choice(
+            rng,
+            (
+                "The room has the clipped feel of staff-only space.",
+                "This is where casual traffic starts needing a reason.",
+            ),
+        )
+    if level == "private":
+        return _description_choice(
+            rng,
+            (
+                "The room feels private enough that lingering would get remembered.",
+                "It has the hush of space meant for people with a claim here.",
+            ),
+        )
+    if level == "secure":
+        return _description_choice(
+            rng,
+            (
+                "The room presents itself as controlled space, not casual access.",
+                "Even before anyone speaks, the room feels like it keeps records of strangers.",
+            ),
+        )
+    return ""
+
+
+def _room_curiosity_signal_sentence(prop, room_kind, floor, rng):
+    metadata = _property_metadata(prop)
+    rows = metadata.get("room_curiosities") if isinstance(metadata, dict) else None
+    if not isinstance(rows, (list, tuple)):
+        return ""
+    room_kind = str(room_kind or "").strip().lower()
+    try:
+        floor = int(floor)
+    except (TypeError, ValueError):
+        floor = 0
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_room = str(row.get("room_kind", "") or "").strip().lower()
+        if row_room and row_room != room_kind:
+            continue
+        try:
+            row_floor = int(row.get("floor", floor))
+        except (TypeError, ValueError):
+            row_floor = floor
+        if row_floor != floor:
+            continue
+        signal = str(row.get("room_curiosity_signal", "") or "").strip()
+        if signal:
+            candidates.append(signal)
+    if not candidates:
+        return ""
+    return _description_choice(rng, tuple(dict.fromkeys(candidates)))
+
+
 def _room_display_label(structure):
     info = structure if isinstance(structure, dict) else {}
     room_label = _humanize_slug(info.get("room_kind"), title=True) or "Room"
@@ -3401,9 +3497,20 @@ def _room_entry_description(sim, structure, prop=None):
         ROOM_KIND_SENTENCES.get(room_kind, ROOM_CATEGORY_SENTENCES.get(category, ROOM_CATEGORY_SENTENCES["general"])),
     )
     extra = _room_floor_sentence(structure, rng) or _room_position_sentence(structure, rng)
+    access_sentence = _room_access_sentence(
+        prop,
+        room_kind,
+        str(structure.get("common_area_kind", "") or "").strip().lower(),
+        rng,
+    )
+    curiosity_sentence = _room_curiosity_signal_sentence(prop, room_kind, floor, rng)
     parts = [f"{_room_display_label(structure)}: {core}"]
     if extra:
         parts.append(extra)
+    if access_sentence:
+        parts.append(access_sentence)
+    if curiosity_sentence:
+        parts.append(curiosity_sentence)
     return " ".join(part for part in parts if part).strip()
 
 

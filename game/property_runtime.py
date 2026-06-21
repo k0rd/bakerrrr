@@ -358,19 +358,69 @@ def property_enclosing_structure(sim, x, y, z=0, *, prop=None):
             seen.add(candidate_id)
         candidates.append(candidate)
 
+    cover_index = getattr(sim, "property_cover_index", {})
+    indexed_candidates = []
+    if isinstance(cover_index, dict):
+        for property_id in tuple(cover_index.get(key, ()) or ()):
+            candidate = getattr(sim, "properties", {}).get(property_id)
+            candidate_id = str((candidate or {}).get("id", "") or "").strip()
+            if candidate_id and candidate_id in seen:
+                continue
+            if candidate_id:
+                seen.add(candidate_id)
+            indexed_candidates.append(candidate)
+
+    structure = None
+    if sim is not None and hasattr(sim, "structure_at"):
+        try:
+            structure = sim.structure_at(key[0], key[1], key[2])
+        except (TypeError, ValueError):
+            structure = None
+    structure = structure if isinstance(structure, dict) else {}
+    room_kind = str(structure.get("room_kind", "") or "").strip().lower()
+    common_area_kind = str(structure.get("common_area_kind", "") or "").strip().lower()
+    if room_kind or common_area_kind:
+        common_candidates = []
+        for candidate in candidates + indexed_candidates:
+            if not _is_structured(candidate):
+                continue
+            metadata = property_metadata(candidate)
+            common_rooms = {
+                str(value or "").strip().lower()
+                for value in tuple(metadata.get("common_area_room_kinds", ()) or ())
+                if str(value or "").strip()
+            }
+            common_kinds = {
+                str(value or "").strip().lower()
+                for value in tuple(metadata.get("common_area_kinds", ()) or ())
+                if str(value or "").strip()
+            }
+            configured_kind = str(metadata.get("common_area_kind", "") or "").strip().lower()
+            if (
+                (room_kind and room_kind in common_rooms)
+                or (common_area_kind and common_area_kind in common_kinds)
+                or (common_area_kind and configured_kind == common_area_kind)
+            ):
+                common_candidates.append(candidate)
+        if common_candidates:
+            common_candidates.sort(
+                key=lambda candidate: (
+                    0 if bool(property_metadata(candidate).get("span_parent")) else 1,
+                    0 if property_is_public(candidate) else 1,
+                    1 if str(property_metadata(candidate).get("span_child_kind", "") or "").strip() else 0,
+                    str(candidate.get("id", "") or ""),
+                )
+            )
+            return common_candidates[0]
+
     for candidate in candidates:
         if _is_structured(candidate):
             return candidate
 
-    cover_index = getattr(sim, "property_cover_index", {})
     if not isinstance(cover_index, dict):
         return None
 
-    for property_id in tuple(cover_index.get(key, ()) or ()):
-        candidate = getattr(sim, "properties", {}).get(property_id)
-        candidate_id = str((candidate or {}).get("id", "") or "").strip()
-        if candidate_id and candidate_id in seen:
-            continue
+    for candidate in indexed_candidates:
         if _is_structured(candidate):
             return candidate
     return None

@@ -1146,6 +1146,9 @@ def _salon_sentence(loadout):
 
 def player_appearance_summary(sim, player_eid):
     identity = sim.ecs.get(CreatureIdentity).get(player_eid) if sim is not None else None
+    loadout = appearance_loadout_for(sim, player_eid, create=True)
+    overrides = dict(getattr(loadout, "body_overrides", {}) or {})
+    omit_seeded_hair = bool(_text(overrides.get("hair_style")) or _text(overrides.get("hair_color")))
     base = ""
     if identity is not None:
         base = human_self_physical_summary(
@@ -1154,8 +1157,8 @@ def player_appearance_summary(sim, player_eid):
             identity=identity,
             personal_name=getattr(identity, "personal_name", ""),
             omit_structured_mark=True,
+            omit_hair=omit_seeded_hair,
         )
-    loadout = appearance_loadout_for(sim, player_eid, create=True)
     sentences = [base] if base else []
     salon = _salon_sentence(loadout)
     skin = _skin_mark_sentence(loadout)

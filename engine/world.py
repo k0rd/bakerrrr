@@ -668,6 +668,7 @@ class World:
     }
     NON_CITY_SITE_SERVICE_SUPPORTS = {
         "bus_transit": ("services",),
+        "coach_transit": ("services",),
         "ferry_transit": ("services",),
         "fuel": ("services",),
         "intel": ("intel",),

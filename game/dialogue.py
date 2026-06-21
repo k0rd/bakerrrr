@@ -41,6 +41,7 @@ TOPIC_ORDER = (
     "service_bus",
     "service_shuttle",
     "service_ferry",
+    "service_coach",
     "service_intel",
     "service_trade",
     "service_discreet_trade",
@@ -232,6 +233,7 @@ TOPIC_DEFS = {
             "service_bus",
             "service_shuttle",
             "service_ferry",
+            "service_coach",
             "service_intel",
             "service_trade",
             "service_discreet_trade",
@@ -297,6 +299,11 @@ TOPIC_DEFS = {
     },
     "service_ferry": {
         "label": "Any ferry landing around here?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_coach": {
+        "label": "Where can I catch a coach?",
         "root": False,
         "unlocks": (),
     },
@@ -415,6 +422,7 @@ TOPIC_DEFS = {
             "service_bus",
             "service_shuttle",
             "service_ferry",
+            "service_coach",
             "service_intel",
             "service_trade",
             "service_discreet_trade",
@@ -1193,6 +1201,12 @@ PLAYER_TOPIC_BANKS = {
         "Where do people catch the ferry?",
         "Is there a landing close by?",
         "Which way to the nearest ferry?",
+    ),
+    "service_coach": (
+        "Where can I catch a coach?",
+        "Any coach stop around here?",
+        "Which way to the regional coach?",
+        "How do people get farther out by road?",
     ),
     "service_intel": (
         "Where does someone buy useful information?",
@@ -4944,6 +4958,8 @@ def topic_label(topic_id, context=None):
         return "Any shuttle stop around here?"
     if topic_id == "service_ferry":
         return "Any ferry landing around here?"
+    if topic_id == "service_coach":
+        return "Where can I catch a coach?"
     if topic_id == "service_intel":
         return "Anywhere selling intel nearby?"
     if topic_id == "service_trade":

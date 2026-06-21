@@ -32,6 +32,7 @@ from game.justice_runtime import justice_summary_rows
 from game.organization_reputation import top_organization_snapshots
 from game.property_runtime import property_covering as _property_covering
 from game.run_echoes import archive_run_echoes
+from game.run_rewards import export_success_reward_bundle
 from game.run_pressure import pressure_snapshot
 from game.system_support.entity_naming import _entity_display_name
 from game.weapons import weapon_by_id
@@ -561,10 +562,16 @@ class RunEpilogueLedgerSystem(System):
                 objective_title=str(event.data.get("objective_title", "") or ""),
                 summary_lines=tuple(event.data.get("summary_lines", ()) or ()),
             )
+        reward_result = {"summary_lines": [], "files": [], "receipt": None}
+        if not tutorial and str(event.data.get("outcome", "") or "").strip().lower() == "success":
+            reward_result = export_success_reward_bundle(self.sim, self.player_eid, event.data)
         echo_lines = list((echo_result or {}).get("lines", ()) or ())
         echo_records = list((echo_result or {}).get("records", ()) or ())
         if echo_lines:
             lines = list(lines) + echo_lines
+        reward_lines = list((reward_result or {}).get("summary_lines", ()) or ())
+        if reward_lines:
+            lines = list(lines) + reward_lines
         traits = getattr(self.sim, "world_traits", None)
         if not isinstance(traits, dict):
             self.sim.world_traits = {}
@@ -578,6 +585,14 @@ class RunEpilogueLedgerSystem(System):
         run_end["epilogue_lines"] = list(lines)
         run_end["echo_lines"] = list(echo_lines)
         run_end["echo_records"] = list(echo_records)
+        reward_files = list((reward_result or {}).get("files", ()) or ())
+        reward_receipt = (reward_result or {}).get("receipt")
+        run_end["reward_files"] = reward_files
+        run_end["reward_receipts"] = [reward_receipt] if isinstance(reward_receipt, dict) else []
+        if (reward_result or {}).get("receipt_path"):
+            run_end["reward_receipt_paths"] = [str((reward_result or {}).get("receipt_path"))]
+        if (reward_result or {}).get("readme_path"):
+            run_end["reward_readme_paths"] = [str((reward_result or {}).get("readme_path"))]
         self._record("run_epilogue_rendered", "The run epilogue was rendered.", event, weight=0.0)
 
     # ------------------------------------------------------------------

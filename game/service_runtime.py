@@ -178,6 +178,9 @@ SHUTTLE_TRANSIT_TOKEN_DISTANCE_STEP = 2
 FERRY_TRANSIT_SEARCH_RADIUS = 10
 FERRY_TRANSIT_MENU_LIMIT = 6
 FERRY_TRANSIT_TOKEN_DISTANCE_STEP = 2
+COACH_TRANSIT_SEARCH_RADIUS = 18
+COACH_TRANSIT_MENU_LIMIT = 8
+COACH_TRANSIT_TOKEN_DISTANCE_STEP = 4
 
 TRANSIT_SERVICE_PROFILES = {
     "rail_transit": {
@@ -344,6 +347,47 @@ TRANSIT_SERVICE_PROFILES = {
         "max_token_cost": 5,
         "travel_base_hours": 0.45,
         "travel_hours_per_chunk": 0.28,
+    },
+    "coach_transit": {
+        "title": "Coach",
+        "service_label": "regional coach travel",
+        "menu_label": "Take the coach",
+        "subtitle": "Regional departures",
+        "summary_lines": (
+            "Coaches run stop to stop between regional road hubs. You will arrive at the destination stop, not a private address.",
+            "Long rides take city tokens. Transit daypasses cover the seat if you already have one.",
+        ),
+        "no_destinations_line": "No outbound coach departures are posted from {prop_name} right now.",
+        "invalid_destination_lines": (
+            "That coach departure cleared before boarding.",
+            "Pick a fresh regional stop from the board.",
+        ),
+        "leave_vehicle_lines": (
+            "Leave your vehicle before boarding the coach.",
+            "Coaches carry passengers, not your car.",
+        ),
+        "blocked_no_fare_lines": (
+            "Coach fare to {destination_name} is {fare_label}.",
+            "You only have {inventory_label} on hand.",
+        ),
+        "success_lines": (
+            "You ride the coach out from {prop_name} and step down at {destination_name}.",
+            "{distance} chunks by coach.",
+        ),
+        "log_prefix": "Coach",
+        "travel_mode": "coach",
+        "node_archetypes": frozenset({"relay_post", "truck_stop", "roadhouse"}),
+        "scan_buildings": True,
+        "scan_sites": True,
+        "search_radius": COACH_TRANSIT_SEARCH_RADIUS,
+        "menu_limit": COACH_TRANSIT_MENU_LIMIT,
+        "token_only": True,
+        "allow_daypass": True,
+        "prefer_tokens": False,
+        "token_distance_step": COACH_TRANSIT_TOKEN_DISTANCE_STEP,
+        "max_token_cost": 6,
+        "travel_base_hours": 0.7,
+        "travel_hours_per_chunk": 0.35,
     },
 }
 TRANSIT_SERVICE_IDS = tuple(TRANSIT_SERVICE_PROFILES.keys())
@@ -874,6 +918,10 @@ def _ferry_transit_destinations(sim, origin_prop, *, radius=None, limit=None):
     return _transit_destinations(sim, origin_prop, "ferry_transit", radius=radius, limit=limit)
 
 
+def _coach_transit_destinations(sim, origin_prop, *, radius=None, limit=None):
+    return _transit_destinations(sim, origin_prop, "coach_transit", radius=radius, limit=limit)
+
+
 def _rail_transit_quote(distance, *, price_mult=1.0):
     return _transit_quote("rail_transit", distance, price_mult=price_mult)
 
@@ -888,6 +936,10 @@ def _shuttle_transit_quote(distance, *, price_mult=1.0):
 
 def _ferry_transit_quote(distance, *, price_mult=1.0):
     return _transit_quote("ferry_transit", distance, price_mult=price_mult)
+
+
+def _coach_transit_quote(distance, *, price_mult=1.0):
+    return _transit_quote("coach_transit", distance, price_mult=price_mult)
 
 
 def _rail_transit_payment_profile(distance, *, price_mult=1.0, city_tokens=0, daypasses=0):
@@ -930,6 +982,16 @@ def _ferry_transit_payment_profile(distance, *, price_mult=1.0, city_tokens=0, d
     )
 
 
+def _coach_transit_payment_profile(distance, *, price_mult=1.0, city_tokens=0, daypasses=0):
+    return _transit_payment_profile(
+        "coach_transit",
+        distance,
+        price_mult=price_mult,
+        city_tokens=city_tokens,
+        daypasses=daypasses,
+    )
+
+
 def _rail_transit_travel_ticks(sim, distance):
     return _transit_travel_ticks(sim, "rail_transit", distance)
 
@@ -944,6 +1006,10 @@ def _shuttle_transit_travel_ticks(sim, distance):
 
 def _ferry_transit_travel_ticks(sim, distance):
     return _transit_travel_ticks(sim, "ferry_transit", distance)
+
+
+def _coach_transit_travel_ticks(sim, distance):
+    return _transit_travel_ticks(sim, "coach_transit", distance)
 
 
 OVERWORLD_DISTRICT_GLYPHS = {
@@ -4634,6 +4700,10 @@ __all__ = [
     "_casino_video_poker_start",
     "_casino_video_poker_toggle_hold",
     "_chunk_site_kinds",
+    "_coach_transit_destinations",
+    "_coach_transit_payment_profile",
+    "_coach_transit_quote",
+    "_coach_transit_travel_ticks",
     "_clamp",
     "_credit_amount_label",
     "_int_or_default",

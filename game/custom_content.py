@@ -20,6 +20,9 @@ from game.public_content import (
     PUBLIC_DENSITY_LEVELS,
     PUBLIC_ITEM_EFFECT_TYPES,
     PUBLIC_ITEM_NEEDS,
+    PUBLIC_ROOM_CURIOSITY_BASE_PROFILES,
+    PUBLIC_ROOM_CURIOSITY_FLAVOR_FIELDS,
+    PUBLIC_ROOM_CURIOSITY_ROOM_KINDS,
     PUBLIC_STATUS_MODIFIERS,
     PUBLIC_WATER_LEVELS,
     PUBLIC_WORLD_PROFILE_FIELDS,
@@ -34,7 +37,8 @@ CUSTOM_CONTENT_SCHEMA_VERSION = SCHEMA_VERSION
 CUSTOM_CONTENT_ROOT = REPO_ROOT / "config" / "custom_content"
 ITEM_DOMAIN = "items"
 WORLD_PROFILE_DOMAIN = "world_profiles"
-CUSTOM_CONTENT_DOMAINS = (ITEM_DOMAIN, WORLD_PROFILE_DOMAIN)
+ROOM_CURIOSITY_FLAVOR_DOMAIN = "room_curiosity_flavors"
+CUSTOM_CONTENT_DOMAINS = (ITEM_DOMAIN, WORLD_PROFILE_DOMAIN, ROOM_CURIOSITY_FLAVOR_DOMAIN)
 IDENTIFIER_RE = re.compile(r"^[a-z0-9_]+$")
 
 CUSTOM_ITEM_ALLOWED_FIELDS = {
@@ -77,6 +81,7 @@ class CustomContentResult:
     manifest: dict = field(default_factory=dict)
     item_definitions: dict = field(default_factory=dict)
     world_profiles: dict = field(default_factory=dict)
+    room_curiosity_flavors: dict = field(default_factory=dict)
     notices: list[dict] = field(default_factory=list)
     blocking: bool = False
 
@@ -549,12 +554,141 @@ def _validate_world_profile_domain(files, *, root=CUSTOM_CONTENT_ROOT):
     return profiles, file_records, issues
 
 
+def _validate_room_curiosity_signal(issues, source, flavor_id, value, *, root=CUSTOM_CONTENT_ROOT):
+    if value is None:
+        return ""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    path = f"$.{flavor_id}.room_curiosity_signal"
+    if len(text) > 220:
+        _issue(issues, "error", ROOM_CURIOSITY_FLAVOR_DOMAIN, source, path, "signal must be 220 characters or shorter", root=root)
+        return text[:220].strip()
+    if "{" in text or "}" in text:
+        _issue(issues, "error", ROOM_CURIOSITY_FLAVOR_DOMAIN, source, path, "signal cannot contain template braces", root=root)
+    return text
+
+
+def _validate_room_curiosity_flavor(issues, source, flavor_id, flavor, *, root=CUSTOM_CONTENT_ROOT):
+    domain = ROOM_CURIOSITY_FLAVOR_DOMAIN
+    if not isinstance(flavor, dict):
+        _issue(issues, "error", domain, source, f"$.{flavor_id}", "room curiosity flavor must be an object", root=root)
+        return None
+    for key in sorted(flavor):
+        if str(key) not in PUBLIC_ROOM_CURIOSITY_FLAVOR_FIELDS:
+            _issue(issues, "error", domain, source, f"$.{flavor_id}.{key}", "unknown field for v1 room curiosity flavors", root=root)
+
+    label = str(flavor.get("label", flavor_id.replace("_", " ").title()) or "").strip()
+    if not label:
+        _issue(issues, "error", domain, source, f"$.{flavor_id}.label", "label cannot be empty", root=root)
+        label = flavor_id.replace("_", " ").title()
+
+    base_profile = _clean_identifier(flavor.get("base_profile"))
+    if base_profile not in PUBLIC_ROOM_CURIOSITY_BASE_PROFILES:
+        _issue(
+            issues,
+            "error",
+            domain,
+            source,
+            f"$.{flavor_id}.base_profile",
+            f"base_profile must be one of {list(PUBLIC_ROOM_CURIOSITY_BASE_PROFILES)}",
+            root=root,
+        )
+        base_profile = ""
+
+    raw_weight = flavor.get("selection_weight", 1.0)
+    if not _validate_number(issues, domain, source, f"$.{flavor_id}.selection_weight", raw_weight, minimum=0.01, root=root):
+        raw_weight = 1.0
+    try:
+        selection_weight = float(raw_weight)
+    except (TypeError, ValueError):
+        selection_weight = 1.0
+    if selection_weight > 4.0:
+        _issue(issues, "error", domain, source, f"$.{flavor_id}.selection_weight", "selection_weight must be <= 4.0", root=root)
+        selection_weight = 4.0
+
+    archetypes = _validate_string_list(
+        issues,
+        domain,
+        source,
+        f"$.{flavor_id}.archetypes",
+        flavor.get("archetypes", []),
+        public_building_archetype_ids(),
+        root=root,
+    )
+    room_kinds = _validate_string_list(
+        issues,
+        domain,
+        source,
+        f"$.{flavor_id}.room_kinds",
+        flavor.get("room_kinds", []),
+        PUBLIC_ROOM_CURIOSITY_ROOM_KINDS,
+        root=root,
+    )
+    signal = _validate_room_curiosity_signal(issues, source, flavor_id, flavor.get("room_curiosity_signal"), root=root)
+    clean = {
+        "id": flavor_id,
+        "label": label,
+        "base_profile": base_profile,
+        "selection_weight": float(selection_weight),
+        "archetypes": archetypes,
+        "room_kinds": room_kinds,
+    }
+    if signal:
+        clean["room_curiosity_signal"] = signal
+    return clean
+
+
+def _validate_room_curiosity_flavor_domain(files, *, root=CUSTOM_CONTENT_ROOT):
+    issues = []
+    flavors = {}
+    file_records = []
+    seen = set()
+    for path in files:
+        raw = _read_json_object(path, issues, ROOM_CURIOSITY_FLAVOR_DOMAIN, root=root)
+        if not isinstance(raw, dict):
+            continue
+        payload, meta = split_object_document(raw)
+        file_ids = []
+        if not isinstance(payload, dict):
+            _issue(issues, "error", ROOM_CURIOSITY_FLAVOR_DOMAIN, path, "$", "room curiosity flavor payload must be an object", root=root)
+            continue
+        for raw_id, raw_flavor in payload.items():
+            flavor_id = _clean_identifier(raw_id)
+            flavor_path = _json_path([raw_id])
+            if not flavor_id:
+                _issue(issues, "error", ROOM_CURIOSITY_FLAVOR_DOMAIN, path, flavor_path, "flavor id must be a lowercase identifier", root=root)
+                continue
+            if flavor_id in seen:
+                _issue(issues, "error", ROOM_CURIOSITY_FLAVOR_DOMAIN, path, flavor_path, "flavor id is duplicated by another room curiosity flavor file", root=root)
+                continue
+            seen.add(flavor_id)
+            clean = _validate_room_curiosity_flavor(issues, path, flavor_id, raw_flavor, root=root)
+            if clean is not None:
+                flavors[flavor_id] = clean
+                file_ids.append(flavor_id)
+        try:
+            sha = _sha256_file(path)
+        except OSError:
+            sha = ""
+        file_records.append({
+            "path": _manifest_rel_path(path, root=root),
+            "schema_version": _schema_version_from_meta(meta),
+            "sha256": sha,
+            "loaded_ids": sorted(file_ids),
+        })
+    if issues:
+        return {}, [], issues
+    return flavors, file_records, issues
+
+
 def _empty_manifest():
     return {
         "schema_version": int(CUSTOM_CONTENT_SCHEMA_VERSION),
         "domains": {
             ITEM_DOMAIN: {"files": [], "loaded_ids": []},
             WORLD_PROFILE_DOMAIN: {"files": [], "loaded_ids": []},
+            ROOM_CURIOSITY_FLAVOR_DOMAIN: {"files": [], "loaded_ids": []},
         },
     }
 
@@ -592,6 +726,7 @@ def load_custom_content_for_new_run(*, root=CUSTOM_CONTENT_ROOT):
     notices = []
     item_definitions = {}
     world_profiles = {}
+    room_curiosity_flavors = {}
 
     item_files = discovered.get(ITEM_DOMAIN, [])
     if item_files:
@@ -621,10 +756,25 @@ def load_custom_content_for_new_run(*, root=CUSTOM_CONTENT_ROOT):
             world_profiles = parsed_profiles
             manifest["domains"][WORLD_PROFILE_DOMAIN] = _domain_manifest(file_records)
 
+    room_curiosity_files = discovered.get(ROOM_CURIOSITY_FLAVOR_DOMAIN, [])
+    if room_curiosity_files:
+        parsed_flavors, file_records, issues = _validate_room_curiosity_flavor_domain(room_curiosity_files, root=root)
+        if issues:
+            notices.append(_notice_from_issues(
+                "Custom room curiosity flavors were rejected",
+                issues,
+                severity="warning",
+                tail=("No custom room-curiosity flavor files were loaded for this run.",),
+            ))
+        else:
+            room_curiosity_flavors = parsed_flavors
+            manifest["domains"][ROOM_CURIOSITY_FLAVOR_DOMAIN] = _domain_manifest(file_records)
+
     return CustomContentResult(
         manifest=manifest,
         item_definitions=item_definitions,
         world_profiles=world_profiles,
+        room_curiosity_flavors=room_curiosity_flavors,
         notices=notices,
         blocking=False,
     )
@@ -708,6 +858,7 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
     blocking_issues = []
     item_definitions = {}
     world_profiles = {}
+    room_curiosity_flavors = {}
 
     if int(manifest.get("schema_version", 0) or 0) != CUSTOM_CONTENT_SCHEMA_VERSION:
         blocking_issues.append(CustomContentIssue(
@@ -721,6 +872,8 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
     item_files, issues = _validate_required_manifest_files(manifest, ITEM_DOMAIN, root=root)
     blocking_issues.extend(issues)
     profile_files, issues = _validate_required_manifest_files(manifest, WORLD_PROFILE_DOMAIN, root=root)
+    blocking_issues.extend(issues)
+    room_curiosity_files, issues = _validate_required_manifest_files(manifest, ROOM_CURIOSITY_FLAVOR_DOMAIN, root=root)
     blocking_issues.extend(issues)
 
     if not blocking_issues and item_files:
@@ -737,6 +890,13 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
         else:
             world_profiles = parsed_profiles
 
+    if not blocking_issues and room_curiosity_files:
+        parsed_flavors, _file_records, issues = _validate_room_curiosity_flavor_domain(room_curiosity_files, root=root)
+        if issues:
+            blocking_issues.extend(issues)
+        else:
+            room_curiosity_flavors = parsed_flavors
+
     if blocking_issues:
         notices.append(_notice_from_issues(
             "Saved run cannot resume until custom content matches",
@@ -751,6 +911,7 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
             manifest=manifest,
             item_definitions={},
             world_profiles={},
+            room_curiosity_flavors={},
             notices=notices,
             blocking=True,
         )
@@ -763,6 +924,7 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
         manifest=manifest,
         item_definitions=item_definitions,
         world_profiles=world_profiles,
+        room_curiosity_flavors=room_curiosity_flavors,
         notices=notices,
         blocking=False,
     )
@@ -777,6 +939,7 @@ def apply_custom_content(result, sim=None):
         world = getattr(sim, "world", None)
         if world is not None and hasattr(world, "set_custom_world_profiles"):
             world.set_custom_world_profiles(result.world_profiles)
+        sim.custom_room_curiosity_flavors = copy.deepcopy(result.room_curiosity_flavors)
     return result
 
 

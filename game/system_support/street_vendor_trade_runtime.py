@@ -44,8 +44,8 @@ DRUG_STOCK_POOL = (
 AEROSOL_STOCK_POOL = (
     "dissociative_aerosol",
     "hallucinogen_aerosol",
-    "toxic_aerosol_canister",
     "tear_gas_canister",
+    "toxic_aerosol_canister",
     "smoke_grenade",
 )
 
@@ -166,7 +166,7 @@ def _pusher_pressure_gate(vendor_kind, prefs, context):
     attention = _safe_int(context.get("pressure_attention"), 0)
     tolerance = _heat_tolerance_score(prefs.get("heat_tolerance", prefs.get("street_heat_tolerance", "low")))
     trusted = _context_standing(context) >= 0.58
-    if pressure >= 2:
+    if pressure >= 2 and not (trusted and tolerance >= 2 and attention < 90):
         return {
             "blocked": True,
             "blocked_reason": "ambient_heat",
@@ -284,9 +284,25 @@ def _stock_pool_for_kind(vendor_kind):
     if kind == "gang_fence":
         return GANG_STOCK_POOL
     if kind == "alley_market":
-        return CONTRABAND_STOCK_POOL + GUN_STOCK_POOL[:3]
+        return (
+            "lockpick_kit",
+            "glass_cutter",
+            "hotwire_leads",
+            "forged_badge",
+            "cloned_thumb",
+            "smoke_grenade",
+            "tear_gas_canister",
+            "holdout_pistol",
+            "rust_revolver",
+        )
     if kind == "friend_of_friend":
-        return DRUG_STOCK_POOL[:4] + CONTRABAND_STOCK_POOL[:5]
+        return (
+            "smoke_tab",
+            "mdma_capsule",
+            "lockpick_kit",
+            "hotwire_leads",
+            "forged_badge",
+        )
     return ()
 
 
@@ -297,11 +313,11 @@ def _stock_count_for_kind(vendor_kind):
     if kind == "gang_fence":
         return 4
     if kind == "alley_market":
-        return 4
+        return 3
     if kind == "friend_of_friend":
         return 2
     if kind == "drug_pusher":
-        return 3
+        return 2
     return 0
 
 
@@ -318,18 +334,18 @@ def _sell_price_mult_for_kind(vendor_kind, *, entry=None):
     if kind == "vehicle_gun_vendor":
         return 1.22
     if kind == "drug_pusher":
-        return 1.28
+        return 1.34
     return 1.0
 
 
 def _buy_note_for_kind(vendor_kind):
     kind = _key(vendor_kind)
     if kind == "gang_fence":
-        return "gang contact; hot goods move cheap"
+        return "gang contact; hot/stolen goods move cheap"
     if kind == "vehicle_gun_vendor":
         return "vehicle-side arms trade"
     if kind == "drug_pusher":
-        return "street drug stock"
+        return "street drug stock; heat changes the handoff"
     if kind == "alley_market":
         return "alley market stock"
     if kind == "friend_of_friend":
@@ -342,9 +358,9 @@ def _sell_note_for_kind(vendor_kind):
     if kind == "drug_seeker":
         return "looking for specific stock"
     if kind == "drug_pusher":
-        return "moves drug stock both ways"
+        return "moves drug stock, but heat can close the window"
     if kind == "gang_fence":
-        return "will move contraband and hot goods"
+        return "will move contraband and hot/stolen goods"
     if kind == "vehicle_gun_vendor":
         return "will move weapons and ammunition"
     if kind == "alley_market":
@@ -429,7 +445,7 @@ def street_vendor_sell_rows(sim, contact_eid, player_eid, profile=None):
             "interest_actual_label": label,
             "row_color": "property_service" if desired else ("item_illegal" if illegal else "item_tool"),
             "row_badge": "premium" if desired else ("contraband" if illegal else "wanted"),
-            "risk_label": "contraband" if illegal else "",
+            "risk_label": "contraband risk" if illegal else "",
             "source_kind": STREET_TRADE_SOURCE_KIND,
         })
     return out
@@ -443,11 +459,11 @@ def _entry_is_vendor_stock(entry):
 def _stock_entry_label(entry):
     metadata = entry.get("metadata") if isinstance(entry, Mapping) and isinstance(entry.get("metadata"), Mapping) else {}
     if metadata.get("street_vendor_hot"):
-        return "hot discount"
+        return "hot/stolen discount"
     if _item_legal_status(entry, item_catalog=ITEM_CATALOG) in {"illegal", "stolen"}:
-        return "contraband"
+        return "contraband risk"
     if _item_legal_status(entry, item_catalog=ITEM_CATALOG) == "restricted":
-        return "restricted"
+        return "restricted street stock"
     return "street stock"
 
 
@@ -496,7 +512,7 @@ def street_vendor_buy_rows(sim, contact_eid, player_eid, profile=None):
             "purchase_interest": "street_stock",
             "row_color": _stock_entry_color(entry),
             "row_badge": "hot" if hot else ("contraband" if illegal else "stock"),
-            "risk_label": "stolen risk" if hot else ("contraband" if illegal else ""),
+            "risk_label": "stolen risk" if hot else ("contraband risk" if illegal else ""),
             "hot": bool(hot),
             "illegal": bool(illegal),
             "source_kind": STREET_TRADE_SOURCE_KIND,

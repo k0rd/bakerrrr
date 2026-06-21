@@ -69,6 +69,7 @@ from game.service_runtime import (
     _service_menu_option_label,
     _site_service_label,
     _storefront_service_profile,
+    _transit_destinations,
     _transit_inventory_label,
     _transit_services_connecting_chunks,
     _transit_service_log_prefix,
@@ -477,6 +478,7 @@ class NPCInteractionSystem(System):
         "service_bus",
         "service_shuttle",
         "service_ferry",
+        "service_coach",
         "service_trade",
         "service_used_cars",
         "service_vehicle_fetch",
@@ -677,6 +679,14 @@ class NPCInteractionSystem(System):
             "lead_kind": "service_ferry",
             "local_summary": "In this chunk, {names_text} posts ferry departures.",
             "near_summary": "Nearest ferry landing I know is {distance_phrase} at {names_text}.",
+        },
+        "service_coach": {
+            "services": ("coach_transit",),
+            "service_label": "coach stop",
+            "offer_label": "regional coach travel",
+            "lead_kind": "service_coach",
+            "local_summary": "In this chunk, {names_text} posts coach departures.",
+            "near_summary": "Nearest coach stop I know is {distance_phrase} at {names_text}.",
         },
         "service_intel": {
             "services": ("intel",),
@@ -5038,6 +5048,80 @@ class NPCInteractionSystem(System):
             summary = f"{summary}."
         return f"{summary} {clause}"
 
+    def _service_locator_transit_onward_clause(self, spec, lead_prop):
+        if not isinstance(spec, dict) or not isinstance(lead_prop, dict):
+            return ""
+        transit_ids = {str(service).strip().lower() for service in TRANSIT_SERVICE_IDS}
+        requested = self._service_locator_service_keys(spec) & transit_ids
+        if not requested:
+            return ""
+        prop_services = {
+            str(service).strip().lower()
+            for service in tuple(_property_services(lead_prop) or ())
+            if str(service).strip().lower() in transit_ids
+        }
+        if not prop_services:
+            return ""
+
+        route_words = {
+            "coach_transit": "coaches run",
+            "rail_transit": "rail lines run",
+            "ferry_transit": "ferries cross",
+            "bus_transit": "buses run",
+            "shuttle_transit": "shuttles cover",
+        }
+        service_priority = (
+            "coach_transit",
+            "rail_transit",
+            "ferry_transit",
+            "bus_transit",
+            "shuttle_transit",
+        )
+        if requested == transit_ids:
+            candidate_services = [service for service in service_priority if service in prop_services]
+        else:
+            candidate_services = [
+                service for service in service_priority if service in requested and service in prop_services
+            ]
+            candidate_services.extend(
+                service
+                for service in service_priority
+                if service in prop_services and service not in candidate_services
+            )
+
+        clauses = []
+        for service in candidate_services:
+            departures = tuple(_transit_destinations(self.sim, lead_prop, service, limit=2) or ())
+            if not departures:
+                continue
+            destination = departures[0]
+            destination_name = str(destination.get("destination_name", "") or destination.get("station_name", "") or "").strip()
+            if not destination_name:
+                continue
+            direction = str(destination.get("direction_label", "") or "").strip()
+            route_word = route_words.get(service, "routes run")
+            if direction:
+                clauses.append(f"{route_word} {direction} toward {destination_name}")
+            else:
+                clauses.append(f"{route_word} toward {destination_name}")
+            if len(clauses) >= 2:
+                break
+
+        if not clauses:
+            return ""
+        return f"From there, {'; '.join(clauses)}."
+
+    def _service_locator_summary_with_transit_onward(self, summary, spec, lead_prop):
+        summary = str(summary or "").strip()
+        clause = self._service_locator_transit_onward_clause(spec, lead_prop)
+        if not clause:
+            return summary
+        if not summary:
+            return clause
+        if summary[-1] not in ".!?":
+            summary = f"{summary}."
+        return f"{summary} {clause}"
+
     def _covert_service_locator_caution(self, spec, lead_prop):
         if not bool((spec or {}).get("covert")) or not isinstance(lead_prop, dict):
             return ""
@@ -5093,6 +5177,7 @@ class NPCInteractionSystem(System):
                     best_chunk,
                     lead_prop=lead_prop,
                 )
+                summary = self._service_locator_summary_with_transit_onward(summary, spec, lead_prop)
                 caution = self._covert_service_locator_caution(spec, lead_prop)
                 if caution:
                     summary = f"{summary} {caution}" if summary else caution
@@ -5119,6 +5204,7 @@ class NPCInteractionSystem(System):
                 best_chunk,
                 lead_prop=lead_prop,
             )
+            summary = self._service_locator_summary_with_transit_onward(summary, spec, lead_prop)
             caution = self._covert_service_locator_caution(spec, lead_prop)
             if caution:
                 summary = f"{summary} {caution}" if summary else caution

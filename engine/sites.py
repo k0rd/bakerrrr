@@ -77,12 +77,12 @@ SITE_GAMEPLAY_PROFILES = {
     },
     "relay_post": {
         "public": True,
-        "site_services": ("intel", "bus_transit", "shuttle_transit"),
+        "site_services": ("intel", "bus_transit", "shuttle_transit", "coach_transit"),
     },
     "roadhouse": {
         "public": True,
         "is_storefront": True,
-        "site_services": ("shuttle_transit",),
+        "site_services": ("shuttle_transit", "coach_transit"),
     },
     "outfitter": {
         "public": True,
@@ -95,7 +95,7 @@ SITE_GAMEPLAY_PROFILES = {
     "truck_stop": {
         "public": True,
         "is_storefront": True,
-        "site_services": ("shelter", "bus_transit", "shuttle_transit"),
+        "site_services": ("shelter", "bus_transit", "shuttle_transit", "coach_transit"),
     },
     "inspection_shed": {
         "public": True,

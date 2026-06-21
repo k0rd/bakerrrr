@@ -3585,7 +3585,163 @@ ROOM_BONUS_LOOT_ROWS = {
     ),
 }
 
+ROOM_CURIOSITY_SIGNAL_SENTENCES = {
+    "quiet_contact": (
+        "Muffled voices keep finding the edge of the door.",
+        "The room has the small, patient traffic of people who know who to ask for.",
+        "Someone has been using this room like a quiet meeting point.",
+    ),
+    "stash_ledger": (
+        "A too-careful stack of papers breaks the room's rhythm.",
+        "One shelf looks handled more often than the rest.",
+        "The room carries the little signs of somebody hiding a trail in plain sight.",
+    ),
+    "backroom_market": (
+        "A private trade rhythm hides behind the room's ordinary business.",
+        "The room has that careful pause people use around hot goods.",
+    ),
+    "backroom_clinic": (
+        "A clean medicinal edge slips through the room's older smells.",
+        "The room has the scrubbed quiet of care given off the books.",
+    ),
+    "room_contact": (
+        "The room feels watched in a practical, human way.",
+        "There is enough foot traffic here to make one person hard to call accidental.",
+    ),
+}
+
+ROOM_STASH_LEDGER_ROWS = {
+    "archive": (("room_ledger_note", 5), ("pocket_notebook", 3), ("credstick_chip", 2)),
+    "records": (("room_ledger_note", 5), ("pocket_notebook", 3), ("phone", 1)),
+    "records_room": (("room_ledger_note", 5), ("pocket_notebook", 3), ("credstick_chip", 2)),
+    "records_office": (("room_ledger_note", 5), ("pocket_notebook", 3), ("city_pass_token", 1)),
+    "clerk_office": (("room_ledger_note", 4), ("pocket_notebook", 3), ("phone", 2)),
+    "office": (("room_ledger_note", 4), ("pocket_notebook", 3), ("phone", 1)),
+    "back_office": (("room_ledger_note", 4), ("pocket_notebook", 3), ("credstick_chip", 2)),
+    "service_office": (("room_ledger_note", 4), ("pocket_notebook", 3), ("battery_pack", 2)),
+    "stock_room": (("room_ledger_note", 3), ("pocket_notebook", 2), ("scrap_circuit", 3)),
+    "storage": (("room_ledger_note", 3), ("pocket_notebook", 2), ("battery_pack", 3)),
+    "service_corridor": (("room_ledger_note", 3), ("scrap_circuit", 3), ("lockpick_kit", 1)),
+    "evidence_lockup": (("room_ledger_note", 3), ("forged_badge", 1), ("signal_jammer", 1)),
+    "surveillance_room": (("room_ledger_note", 3), ("signal_jammer", 2), ("phone", 2)),
+    "server_room": (("room_ledger_note", 3), ("scrap_circuit", 3), ("signal_jammer", 1)),
+}
+
+
+def _room_curiosity_signal(kind, room_kind, rng):
+    kind = str(kind or "room_contact").strip().lower() or "room_contact"
+    rows = ROOM_CURIOSITY_SIGNAL_SENTENCES.get(kind) or ROOM_CURIOSITY_SIGNAL_SENTENCES["room_contact"]
+    if room_kind in {"archive", "records", "records_room", "records_office", "clerk_office"} and kind == "stash_ledger":
+        rows = (
+            "The papers here look sorted by someone expecting to come back.",
+            "One ledger stack sits slightly apart from the honest clutter.",
+        ) + tuple(rows)
+    return str(_weighted_choice(rng, [(row, 1.0) for row in rows]) or rows[0]).strip()
+
+
+def _record_room_curiosity(prop, *, kind, signal, room_kind, tile=None, source_eid=None, source_property_id=None, profile_id=""):
+    if not isinstance(prop, dict):
+        return
+    metadata = prop.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        return
+    rows = list(metadata.get("room_curiosities", ()) or ())
+    try:
+        prop_z = int(prop.get("z", 0) or 0)
+    except (TypeError, ValueError):
+        prop_z = 0
+    try:
+        tx, ty, tz = (int(tile[0]), int(tile[1]), int(tile[2])) if tile else (None, None, prop_z)
+    except (TypeError, ValueError):
+        tx, ty, tz = None, None, prop_z
+    record = {
+        "room_curiosity_kind": str(kind or "room_contact").strip().lower() or "room_contact",
+        "room_curiosity_signal": str(signal or "").strip() or None,
+        "room_kind": str(room_kind or "").strip().lower() or None,
+        "floor": tz,
+        "x": tx,
+        "y": ty,
+        "source_eid": int(source_eid) if source_eid is not None else None,
+        "source_property_id": str(source_property_id or "").strip() or None,
+        "profile_id": str(profile_id or "").strip().lower() or None,
+    }
+    clean_record = {key: value for key, value in record.items() if value not in (None, "", ())}
+    dedupe_key = (
+        clean_record.get("room_curiosity_kind"),
+        clean_record.get("room_kind"),
+        clean_record.get("floor"),
+        clean_record.get("source_property_id"),
+        clean_record.get("source_eid"),
+    )
+    existing_keys = {
+        (
+            str(row.get("room_curiosity_kind", "") or "").strip().lower(),
+            str(row.get("room_kind", "") or "").strip().lower() or None,
+            row.get("floor"),
+            str(row.get("source_property_id", "") or "").strip() or None,
+            row.get("source_eid"),
+        )
+        for row in rows
+        if isinstance(row, dict)
+    }
+    if dedupe_key not in existing_keys:
+        rows.append(clean_record)
+    metadata["room_curiosities"] = rows[-8:]
+
+
 ROOM_CURIOSITY_ENCOUNTER_ROWS = (
+    {
+        "profile_id": "quiet_contact",
+        "room_curiosity_kind": "quiet_contact",
+        "weight": 2.4,
+        "archetypes": (
+            "hotel",
+            "flophouse",
+            "office",
+            "tower",
+            "brokerage",
+            "co_working_hub",
+            "theater",
+            "music_venue",
+            "nightclub",
+            "gaming_hall",
+            "casino",
+            "courthouse",
+            "metro_exchange",
+        ),
+        "room_kinds": (
+            "archive",
+            "back_office",
+            "backstage",
+            "balcony",
+            "boardroom",
+            "clerk_office",
+            "executive_office",
+            "green_room",
+            "guest_lounge",
+            "meeting_room",
+            "quiet_room",
+            "records",
+            "records_office",
+            "records_room",
+            "service_office",
+        ),
+        "role": "civilian",
+        "career_rows": (
+            ("runner", 3),
+            ("building_fixer", 3),
+            ("floor_watcher", 2),
+            ("archive_runner", 2),
+            ("night_attendant", 1),
+        ),
+        "assign_workplace": False,
+        "bonus_item_rows": (
+            ("phone", 4),
+            ("pocket_notebook", 3),
+            ("city_pass_token", 2),
+            ("meal_voucher", 1),
+        ),
+    },
     {
         "profile_id": "transit_staff_roamer",
         "weight": 5,
@@ -3726,6 +3882,102 @@ ROOM_CURIOSITY_ENCOUNTER_ROWS = (
         ),
     },
 )
+
+
+def _custom_room_curiosity_flavors(sim):
+    raw = getattr(sim, "custom_room_curiosity_flavors", None)
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(flavor_id or "").strip().lower(): dict(flavor)
+        for flavor_id, flavor in raw.items()
+        if str(flavor_id or "").strip() and isinstance(flavor, dict)
+    }
+
+
+def _custom_room_curiosity_encounter_rows(sim):
+    flavors = _custom_room_curiosity_flavors(sim)
+    if not flavors:
+        return ()
+    base_rows = {
+        str(row.get("profile_id", "") or "").strip().lower(): row
+        for row in ROOM_CURIOSITY_ENCOUNTER_ROWS
+        if isinstance(row, dict)
+    }
+    rows = []
+    for flavor_id, flavor in sorted(flavors.items()):
+        base_profile = str(flavor.get("base_profile", "") or "").strip().lower()
+        if base_profile == "stash_ledger":
+            continue
+        base = base_rows.get(base_profile)
+        if not isinstance(base, dict):
+            continue
+        row = dict(base)
+        try:
+            weight_mult = max(0.01, min(4.0, float(flavor.get("selection_weight", 1.0) or 1.0)))
+        except (TypeError, ValueError):
+            weight_mult = 1.0
+        row["profile_id"] = f"custom:{flavor_id}"
+        row["custom_room_curiosity_flavor_id"] = flavor_id
+        row["custom_room_curiosity_label"] = str(flavor.get("label", "") or "").strip()
+        row["weight"] = float(base.get("weight", 1.0) or 1.0) * weight_mult
+        archetypes = tuple(str(value or "").strip().lower() for value in tuple(flavor.get("archetypes", ()) or ()) if str(value or "").strip())
+        room_kinds = tuple(str(value or "").strip().lower() for value in tuple(flavor.get("room_kinds", ()) or ()) if str(value or "").strip())
+        if archetypes:
+            row["archetypes"] = archetypes
+        if room_kinds:
+            row["room_kinds"] = room_kinds
+        signal = str(flavor.get("room_curiosity_signal", "") or "").strip()
+        if signal:
+            row["room_curiosity_signal"] = signal
+        rows.append(row)
+    return tuple(rows)
+
+
+def _room_curiosity_encounter_rows(sim):
+    custom_rows = _custom_room_curiosity_encounter_rows(sim)
+    if not custom_rows:
+        return ROOM_CURIOSITY_ENCOUNTER_ROWS
+    return tuple(ROOM_CURIOSITY_ENCOUNTER_ROWS) + tuple(custom_rows)
+
+
+def _matching_stash_ledger_flavors(sim, prop, room_tiles):
+    flavors = _custom_room_curiosity_flavors(sim)
+    if not flavors or not isinstance(prop, dict):
+        return ()
+    archetype = _property_archetype(prop)
+    available_rooms = {str(room_kind or "").strip().lower() for room_kind in (room_tiles or {})}
+    rows = []
+    for flavor_id, flavor in sorted(flavors.items()):
+        if str(flavor.get("base_profile", "") or "").strip().lower() != "stash_ledger":
+            continue
+        archetypes = {str(value or "").strip().lower() for value in tuple(flavor.get("archetypes", ()) or ()) if str(value or "").strip()}
+        if archetypes and archetype not in archetypes:
+            continue
+        room_kinds = {
+            str(value or "").strip().lower()
+            for value in tuple(flavor.get("room_kinds", ()) or ())
+            if str(value or "").strip()
+        }
+        if room_kinds:
+            eligible_rooms = tuple(sorted(room_kinds.intersection(available_rooms).intersection(ROOM_STASH_LEDGER_ROWS)))
+        else:
+            eligible_rooms = tuple(sorted(available_rooms.intersection(ROOM_STASH_LEDGER_ROWS)))
+        if not eligible_rooms:
+            continue
+        try:
+            weight = max(0.01, min(4.0, float(flavor.get("selection_weight", 1.0) or 1.0)))
+        except (TypeError, ValueError):
+            weight = 1.0
+        rows.append({
+            "id": flavor_id,
+            "label": str(flavor.get("label", "") or "").strip(),
+            "selection_weight": weight,
+            "room_kinds": eligible_rooms,
+            "room_curiosity_signal": str(flavor.get("room_curiosity_signal", "") or "").strip(),
+        })
+    return tuple(rows)
+
 
 _HIDDEN_STOREFRONT_PROFILES = {
     "backroom_market": (
@@ -3982,10 +4234,107 @@ def _spawn_hidden_contact_lead_item(sim, hidden_storefront, room_tiles, rng, *, 
             "placement_zone": "room_curiosity_lead",
             "placement_room_kind": str((hidden_storefront.get("metadata", {}) or {}).get("placement_room_kind", "")).strip().lower() or None,
             "hidden_contact_kind": str((hidden_storefront.get("metadata", {}) or {}).get("hidden_contact_kind", "")).strip().lower() or None,
+            "room_curiosity_kind": str((hidden_storefront.get("metadata", {}) or {}).get("room_curiosity_kind", "")).strip().lower() or None,
+            "room_curiosity_signal": str((hidden_storefront.get("metadata", {}) or {}).get("room_curiosity_signal", "")).strip() or None,
             "backroom_profile": str((hidden_storefront.get("metadata", {}) or {}).get("backroom_profile", "")).strip().lower() or None,
             "covert_hint": str((hidden_storefront.get("metadata", {}) or {}).get("covert_hint", "")).strip() or None,
         },
     )
+
+
+def _spawn_room_stash_ledger_payoff_for_property(sim, chunk_key, prop, rng):
+    if not isinstance(prop, dict):
+        return None
+    if str(prop.get("kind", "")).strip().lower() != "building":
+        return None
+    if _property_total_levels(prop) <= 1 and int(_property_metadata(prop).get("basement_levels", 0) or 0) <= 0:
+        return None
+
+    room_tiles = _property_room_tiles(sim, prop)
+    candidate_rows = [
+        room_kind
+        for room_kind in sorted(room_tiles.keys())
+        if room_kind in ROOM_STASH_LEDGER_ROWS
+    ]
+    if not candidate_rows:
+        return None
+
+    stash_flavors = _matching_stash_ledger_flavors(sim, prop, room_tiles)
+    total_levels = _property_total_levels(prop)
+    base_chance = 0.1 + min(0.12, 0.025 * max(1, total_levels - 1))
+    if int(_property_metadata(prop).get("basement_levels", 0) or 0) > 0:
+        base_chance += 0.03
+    if stash_flavors:
+        base_chance += min(0.28, 0.06 * sum(float(row.get("selection_weight", 1.0) or 1.0) for row in stash_flavors))
+    if rng.random() > base_chance:
+        return None
+
+    base_z = int(prop.get("z", 0) or 0)
+    weighted_rooms = []
+    flavor_by_room = {}
+    for flavor in stash_flavors:
+        for room_kind in tuple(flavor.get("room_kinds", ()) or ()):
+            current = flavor_by_room.get(room_kind)
+            if current is None or float(flavor.get("selection_weight", 1.0) or 1.0) > float(current.get("selection_weight", 1.0) or 1.0):
+                flavor_by_room[room_kind] = flavor
+    for room_kind in candidate_rows:
+        tiles = tuple(room_tiles.get(room_kind, ()) or ())
+        if not tiles:
+            continue
+        vertical_bonus = 0.75 if any(int(tile[2]) != base_z for tile in tiles) else 0.0
+        secure_bonus = 0.4 if room_kind in {"evidence_lockup", "surveillance_room", "server_room", "service_corridor"} else 0.0
+        flavor_bonus = float((flavor_by_room.get(room_kind) or {}).get("selection_weight", 0.0) or 0.0)
+        weighted_rooms.append((room_kind, 1.0 + (0.08 * len(tiles)) + vertical_bonus + secure_bonus + flavor_bonus))
+    room_kind = _weighted_choice(rng, weighted_rooms)
+    if not room_kind:
+        return None
+
+    item_id = _weighted_choice(rng, list(ROOM_STASH_LEDGER_ROWS.get(room_kind, ())))
+    item_def = ITEM_CATALOG.get(str(item_id or "").strip().lower())
+    if not item_def:
+        return None
+
+    flavor = flavor_by_room.get(room_kind) if isinstance(flavor_by_room, dict) else None
+    signal = str((flavor or {}).get("room_curiosity_signal", "") or "").strip() or _room_curiosity_signal("stash_ledger", room_kind, rng)
+    source = f"custom:{flavor.get('id')}" if isinstance(flavor, dict) and str(flavor.get("id", "")).strip() else "stash_ledger"
+    tile = _pick_tile(
+        sim,
+        room_tiles.get(room_kind, ()),
+        rng,
+        allow_entities=True,
+        weight_fn=lambda pos: 1.0 + (1.5 if int(pos[2]) != base_z else 0.0),
+    )
+    if not tile:
+        return None
+
+    ground_id = sim.register_ground_item(
+        item_id=str(item_id).strip().lower(),
+        x=tile[0],
+        y=tile[1],
+        z=tile[2],
+        quantity=1,
+        owner_eid=None,
+        owner_tag="city",
+        metadata={
+            "source_property_id": prop.get("id"),
+            "chunk": tuple(chunk_key),
+            "placement_zone": "room_curiosity_stash",
+            "placement_room_kind": room_kind,
+            "room_curiosity_kind": "stash_ledger",
+            "room_curiosity_signal": signal,
+            "room_curiosity_source": source,
+        },
+    )
+    _record_room_curiosity(
+        prop,
+        kind="stash_ledger",
+        signal=signal,
+        room_kind=room_kind,
+        tile=tile,
+        source_property_id=prop.get("id"),
+        profile_id=source,
+    )
+    return ground_id
 
 
 def _property_skips_ambient_population(prop):
@@ -4123,7 +4472,7 @@ def _spawn_room_curiosity_encounter(sim, chunk, prop, rng, *, economy_profile=No
         return None
 
     profile_rows = []
-    for row in ROOM_CURIOSITY_ENCOUNTER_ROWS:
+    for row in _room_curiosity_encounter_rows(sim):
         row_archetypes = {str(value or "").strip().lower() for value in tuple(row.get("archetypes", ()) or ())}
         if archetype not in row_archetypes:
             continue
@@ -4167,6 +4516,17 @@ def _spawn_room_curiosity_encounter(sim, chunk, prop, rng, *, economy_profile=No
     if not tile:
         return None
 
+    hidden_store = profile.get("hidden_storefront") if isinstance(profile.get("hidden_storefront"), dict) else {}
+    hidden_kind = str(hidden_store.get("archetype", "") or "").strip().lower()
+    curiosity_kind = (
+        str(profile.get("room_curiosity_kind", "") or "").strip().lower()
+        or hidden_kind
+        or "room_contact"
+    )
+    curiosity_signal = str(profile.get("room_curiosity_signal", "") or "").strip()
+    if not curiosity_signal:
+        curiosity_signal = _room_curiosity_signal(curiosity_kind, room_kind, rng)
+
     role = str(profile.get("role", "civilian") or "civilian").strip().lower() or "civilian"
     career = _weighted_choice(rng, list(tuple(profile.get("career_rows", ()) or ()))) or "resident"
     career = str(career or "resident").strip().lower() or "resident"
@@ -4200,7 +4560,15 @@ def _spawn_room_curiosity_encounter(sim, chunk, prop, rng, *, economy_profile=No
         home_prop=home_prop,
         economy_profile=economy_profile if isinstance(economy_profile, dict) else chunk_economy_profile(sim, chunk),
     )
-    hidden_store = profile.get("hidden_storefront") if isinstance(profile.get("hidden_storefront"), dict) else {}
+    _record_room_curiosity(
+        prop,
+        kind=curiosity_kind,
+        signal=curiosity_signal,
+        room_kind=room_kind,
+        tile=tile,
+        source_eid=eid,
+        profile_id=str(profile.get("profile_id", "") or "").strip().lower(),
+    )
     if hidden_store:
         hidden_storefront_id = _spawn_hidden_storefront(
             sim,
@@ -4224,6 +4592,21 @@ def _spawn_room_curiosity_encounter(sim, chunk, prop, rng, *, economy_profile=No
         if routine is not None:
             routine.work = tile
         if isinstance(hidden_storefront, dict):
+            hidden_meta = hidden_storefront.setdefault("metadata", {})
+            if isinstance(hidden_meta, dict):
+                hidden_meta["room_curiosity_kind"] = curiosity_kind
+                hidden_meta["room_curiosity_signal"] = curiosity_signal
+                hidden_meta["room_curiosity_source"] = str(profile.get("profile_id", "") or "").strip().lower() or None
+            _record_room_curiosity(
+                prop,
+                kind=curiosity_kind,
+                signal=curiosity_signal,
+                room_kind=room_kind,
+                tile=tile,
+                source_eid=eid,
+                source_property_id=hidden_storefront_id,
+                profile_id=str(profile.get("profile_id", "") or "").strip().lower(),
+            )
             _spawn_hidden_contact_lead_item(
                 sim,
                 hidden_storefront,
@@ -4320,9 +4703,20 @@ def spawn_chunk_special_population(sim, chunk, property_records):
 
     room_curiosity_props.sort(key=lambda row: str(row.get("id", "")))
     room_encounter_budget = 1 + int(len(room_curiosity_props) >= 5 and rng.random() < 0.18)
+    room_stash_budget = 1 + int(len(room_curiosity_props) >= 6 and rng.random() < 0.12)
     for prop in room_curiosity_props:
-        if room_encounter_budget <= 0:
+        if room_encounter_budget <= 0 and room_stash_budget <= 0:
             break
+        if room_stash_budget > 0:
+            ground_id = _spawn_room_stash_ledger_payoff_for_property(
+                sim,
+                key,
+                prop,
+                rng,
+            )
+            if ground_id is not None:
+                spawned.append(ground_id)
+                room_stash_budget -= 1
         encounter_profile = _ambient_encounter_profile(prop)
         total_levels = _property_total_levels(prop)
         chance = 0.05 + min(0.08, 0.02 * max(0, total_levels - 1))
@@ -4330,6 +4724,8 @@ def spawn_chunk_special_population(sim, chunk, property_records):
             chance += 0.02
         if encounter_profile:
             chance *= 0.72
+        if room_encounter_budget <= 0:
+            continue
         if rng.random() > chance:
             continue
         eid = _spawn_room_curiosity_encounter(

@@ -771,6 +771,13 @@ def _property_summary(sim, prop, viewer_eid=None, x=None, y=None, z=None):
     if access.currently_open is not None:
         access_text = f"{access_text}/{_property_status_text(sim, prop, hour=access.current_hour)}"
     bits.append(access_text)
+    room_access_level = str(getattr(access, "room_access_level", "") or "").strip().lower()
+    room_kind = str(getattr(access, "room_kind", "") or "").strip().lower()
+    if room_kind and room_access_level and room_access_level != "property":
+        bits.append(f"room_access:{room_access_level.replace('_', ' ')}")
+    room_hint = _room_curiosity_hint_for_tile(prop, room_kind=room_kind, x=x, y=y, z=z)
+    if room_hint:
+        bits.append("room_hint:" + room_hint)
     if _property_is_storefront(prop):
         service = _storefront_service_profile(sim, prop)
         service_label = str(service.get("summary_label", "")).strip()
@@ -953,6 +960,45 @@ def _location_description_snapshot(sim, x, y, z):
         "building_token": str(building_token or "").strip(),
         "room_token": room_token,
     }
+
+
+def _room_curiosity_hint_for_tile(prop, *, room_kind="", x=None, y=None, z=None):
+    metadata = _property_metadata(prop)
+    rows = metadata.get("room_curiosities") if isinstance(metadata, dict) else None
+    if not isinstance(rows, (list, tuple)):
+        return ""
+    room_kind = str(room_kind or "").strip().lower()
+    try:
+        x = int(x) if x is not None else None
+        y = int(y) if y is not None else None
+        z = int(z) if z is not None else None
+    except (TypeError, ValueError):
+        x = y = z = None
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_room = str(row.get("room_kind", "") or "").strip().lower()
+        if row_room and room_kind and row_room != room_kind:
+            continue
+        try:
+            row_floor = int(row.get("floor", z if z is not None else 0))
+        except (TypeError, ValueError):
+            row_floor = z
+        if z is not None and row_floor is not None and int(row_floor) != int(z):
+            continue
+        try:
+            row_x = int(row.get("x")) if row.get("x") is not None else None
+            row_y = int(row.get("y")) if row.get("y") is not None else None
+        except (TypeError, ValueError):
+            row_x = row_y = None
+        if row_x is not None and row_y is not None and x is not None and y is not None:
+            if abs(row_x - x) + abs(row_y - y) > 2:
+                continue
+        signal = str(row.get("room_curiosity_signal", "") or "").strip()
+        if signal:
+            candidates.append(signal)
+    return candidates[0] if candidates else ""
 
 
 def _property_knowledge_hint(sim, viewer_eid, prop):

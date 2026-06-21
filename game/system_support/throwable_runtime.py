@@ -29,6 +29,9 @@ def throwable_summary_bits(throw_profile, *, include_consumed=False):
         smoke_text = "smoke"
         if cloud_radius > 0:
             smoke_text += f" r{cloud_radius}"
+        cloud_duration = max(0, _int_or_default(throw_profile.get("cloud_duration"), 0))
+        if cloud_duration > 0:
+            smoke_text += f" {cloud_duration}t"
         bits.append(smoke_text)
     if max(0, _int_or_default(throw_profile.get("fire_intensity"), 0)) > 0:
         bits.append("fire")
@@ -43,6 +46,9 @@ def throwable_summary_bits(throw_profile, *, include_consumed=False):
             limit=2,
         )
         bits.append(f"{aerosol_label or 'aerosol'} {status_text}")
+        cooldown = max(0, _int_or_default(throw_profile.get("aerosol_exposure_cooldown"), 0))
+        if cooldown > 0:
+            bits.append(f"re-expose {cooldown}t")
     if include_consumed and bool(throw_profile.get("consume_on_throw", True)):
         bits.append("consumed")
     return bits

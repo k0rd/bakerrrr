@@ -66,6 +66,61 @@ PUBLIC_WORLD_PROFILE_FIELDS = (
     "service_building_weights",
 )
 
+PUBLIC_ROOM_CURIOSITY_FLAVOR_FIELDS = (
+    "label",
+    "base_profile",
+    "selection_weight",
+    "archetypes",
+    "room_kinds",
+    "room_curiosity_signal",
+)
+
+PUBLIC_ROOM_CURIOSITY_BASE_PROFILES = (
+    "afterhours_pusher",
+    "backroom_doctor",
+    "backroom_entrepreneur",
+    "backstage_worker",
+    "hotel_afterhours_guest",
+    "quiet_contact",
+    "records_keeper",
+    "stash_ledger",
+    "transit_staff_roamer",
+)
+
+PUBLIC_ROOM_CURIOSITY_ROOM_KINDS = (
+    "archive",
+    "back_office",
+    "backstage",
+    "balcony",
+    "boardroom",
+    "clerk_office",
+    "evidence_lockup",
+    "executive_office",
+    "front_desk",
+    "green_room",
+    "guest_floor",
+    "guest_lounge",
+    "linen_closet",
+    "locker_wall",
+    "meeting_room",
+    "office",
+    "platform",
+    "quiet_room",
+    "records",
+    "records_office",
+    "records_room",
+    "screening_room",
+    "server_room",
+    "service_corridor",
+    "service_office",
+    "sound_booth",
+    "stock_room",
+    "storage",
+    "surveillance_room",
+    "ticketing",
+    "vip_lounge",
+)
+
 
 def public_building_archetype_ids():
     from engine.world import World
@@ -84,4 +139,3 @@ def public_district_types():
     from engine.world import World
 
     return tuple(World.DISTRICT_TYPES)
-
