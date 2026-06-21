@@ -151,6 +151,15 @@ class Simulation:
             self.entity_chunk_membership = {}
         if not isinstance(getattr(self, "entity_identity_records", None), dict):
             self.entity_identity_records = {}
+        if not isinstance(getattr(self, "hunting_carcasses", None), dict):
+            self.hunting_carcasses = {}
+        if not hasattr(self, "next_hunting_carcass_id"):
+            self.next_hunting_carcass_id = 1
+        if not isinstance(getattr(self, "local_trade_pressures", None), dict):
+            self.local_trade_pressures = {"properties": {}, "chunks": {}}
+        else:
+            self.local_trade_pressures.setdefault("properties", {})
+            self.local_trade_pressures.setdefault("chunks", {})
         self._bind_tilemap_runtime_state()
 
     def _bind_tilemap_runtime_state(self):

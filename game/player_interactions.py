@@ -6,6 +6,7 @@ from game.appearance_loadout import is_entry_worn
 from game.components import AI, Position, SuppressionState, Vitality
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
+from game.hunting_runtime import field_dress_carcass, nearest_hunting_carcass
 from game.opportunities import _item_label, mark_bounty_target_restrained, resolve_opportunities
 from game.property_access import (
     property_access_controller as _property_access_controller,
@@ -35,6 +36,7 @@ from game.system_support.item_provenance_runtime import (
     item_entitlement_for_actor,
     stamp_item_provenance,
 )
+from game.justice_dispatch_runtime import request_player_justice_dispatch
 from game.system_support.player_feedback import _log_player_feedback
 
 
@@ -650,6 +652,38 @@ class PlayerInteractionRuntime:
             disabled_until=now + duration,
         ))
 
+    def player_trigger_alarm_dispatch(self, eid, pos, prop):
+        now = self.sim.tick
+        prop_id = prop["id"]
+        alarm_name = prop.get("name", "alarm panel")
+        disabled = getattr(self.sim, "camera_disabled", None)
+        if isinstance(disabled, dict) and disabled.get(prop_id, 0) > now:
+            _log_player_feedback(
+                self.sim,
+                f"The {alarm_name} is offline.",
+                kind="interaction",
+            )
+            return
+        target_prop = self.security_fixture_target_property(prop)
+        target_name = str((target_prop or {}).get("name", "")).strip()
+        target_x = int(pos.x)
+        target_y = int(pos.y)
+        target_z = int(pos.z)
+        if isinstance(target_prop, dict):
+            target_x = int(target_prop.get("x", target_x) or target_x)
+            target_y = int(target_prop.get("y", target_y) or target_y)
+            target_z = int(target_prop.get("z", target_z) or target_z)
+        request_player_justice_dispatch(
+            self.sim,
+            eid,
+            target_x,
+            target_y,
+            target_z,
+            source="alarm",
+            property_id=(target_prop or prop).get("id") if isinstance((target_prop or prop), dict) else prop_id,
+            property_name=target_name or str(alarm_name or "alarm").strip(),
+        )
+
     def equipped_worn_container(self, eid, container_instance_id=None):
         inventory = self.action_system._inventory_for(eid)
         if not inventory:
@@ -1212,6 +1246,19 @@ class PlayerInteractionRuntime:
         if downed_actor is not None and self.player_stabilize_downed_actor(eid, pos, downed_actor):
             return
 
+        carcass = nearest_hunting_carcass(
+            self.sim,
+            pos.x,
+            pos.y,
+            pos.z,
+            radius=1,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
+        if carcass is not None:
+            field_dress_carcass(self.sim, eid, carcass.get("carcass_id"))
+            return
+
         sabotage_prop = self.nearest_sabotage_fixture(
             eid,
             pos,
@@ -1237,7 +1284,7 @@ class PlayerInteractionRuntime:
             exact_direction=exact_direction,
         )
         if alarm_prop is not None:
-            self.player_disable_alarm(eid, pos, alarm_prop)
+            self.player_trigger_alarm_dispatch(eid, pos, alarm_prop)
             return
         business_scene_cache = self.nearest_business_scene_cache(
             eid,

@@ -15,6 +15,7 @@ SITE_LAYOUT_OFFSETS = (
 WIDE_SITE_KINDS = {
     "beacon_house",
     "breaker_yard",
+    "butcher_shop",
     "dock_shack",
     "drydock_yard",
     "ferry_post",
@@ -30,6 +31,7 @@ WIDE_SITE_KINDS = {
 PUBLIC_SITE_KINDS = {
     "bait_shop",
     "breaker_yard",
+    "butcher_shop",
     "coast_watch",
     "dock_shack",
     "drydock_yard",
@@ -38,6 +40,7 @@ PUBLIC_SITE_KINDS = {
     "firewatch_tower",
     "herbalist_camp",
     "inspection_shed",
+    "ranger_hut",
     "relay_post",
     "roadhouse",
     "salvage_camp",
@@ -49,6 +52,7 @@ PUBLIC_SITE_KINDS = {
 WINDOWED_SITE_KINDS = {
     "bait_shop",
     "beacon_house",
+    "butcher_shop",
     "dock_shack",
     "firewatch_tower",
     "ferry_post",
@@ -67,6 +71,11 @@ WINDOWED_SITE_KINDS = {
 }
 
 SITE_GAMEPLAY_PROFILES = {
+    "butcher_shop": {
+        "public": True,
+        "is_storefront": True,
+        "site_services": ("butcher_prepare",),
+    },
     "breaker_yard": {
         "public": True,
         "is_storefront": True,
@@ -125,7 +134,9 @@ SITE_GAMEPLAY_PROFILES = {
         "site_services": ("intel",),
     },
     "ranger_hut": {
-        "site_services": ("shelter",),
+        "public": True,
+        "is_storefront": True,
+        "site_services": ("shelter", "intel", "agency_jobs"),
     },
     "ruin_shelter": {
         "site_services": ("shelter",),
@@ -144,6 +155,7 @@ SITE_GAMEPLAY_PROFILES = {
     "herbalist_camp": {
         "public": True,
         "is_storefront": True,
+        "site_services": ("herbal_care",),
     },
     "dock_shack": {
         "public": True,

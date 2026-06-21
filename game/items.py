@@ -44,6 +44,9 @@ ZERO_SLOT_ITEM_IDS = frozenset({
     "access_badge",
     "manager_badge",
 })
+HUNTING_SACK_REDUCED_SLOT_ITEM_IDS = frozenset({
+    "bagged_game_meat",
+})
 
 
 def _normalize_item_category(item_id, tags, item):
@@ -202,6 +205,8 @@ def item_inventory_slot_cost(item_or_entry):
     if not item_key:
         return 1
     if bool(metadata.get("appearance_worn")):
+        return 0
+    if item_key in HUNTING_SACK_REDUCED_SLOT_ITEM_IDS and bool(metadata.get("kill_bag_used")):
         return 0
     return 0 if item_key in ZERO_SLOT_ITEM_IDS else 1
 

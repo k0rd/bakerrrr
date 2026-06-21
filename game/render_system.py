@@ -85,6 +85,7 @@ from game.items import (
     merge_item_stack_metadata,
     prepare_item_stack_metadata,
 )
+from game.hunting_runtime import hunting_carcasses_at
 from game.item_semantics import (
     appraise_item_for_actor,
     item_display_name_for_actor,
@@ -2439,6 +2440,35 @@ class RenderSystem(System):
                 item_def = ITEM_CATALOG.get(ground["item_id"], {})
                 appearance = self.sim.appearance.item(item_def)
                 attrs = getattr(curses, "A_BOLD", 0) | _ambient_attr(ground["x"], ground["y"], active_z)
+                self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
+
+            for record in tuple(getattr(self.sim, "hunting_carcasses", {}).values()):
+                if bool(record.get("harvested")):
+                    continue
+                wx = int(record.get("x", -999999))
+                wy = int(record.get("y", -999999))
+                wz = int(record.get("z", 0))
+                if wz != active_z:
+                    continue
+                screen_x = wx - camera_x
+                screen_y = wy - camera_y
+                if not (0 <= screen_x < map_w and 0 <= screen_y < map_h):
+                    continue
+                if self.sim.detail_for_xy(wx, wy) == "unloaded":
+                    continue
+                if not _is_visible(wx, wy, active_z):
+                    continue
+                if not hunting_carcasses_at(self.sim, wx, wy, wz):
+                    continue
+                appearance = self.sim.appearance.snapshot(
+                    "%",
+                    color="item_food",
+                    semantic_id="item_food",
+                    preferred_categories=("items",),
+                    layer="items",
+                    priority=40,
+                )
+                attrs = getattr(curses, "A_BOLD", 0) | _ambient_attr(wx, wy, active_z)
                 self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
 
             for projectile in self.sim.projectiles.values():

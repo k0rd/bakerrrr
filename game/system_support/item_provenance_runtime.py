@@ -31,6 +31,8 @@ SALVAGE_OWNER_TAGS = {"bones", "scene", "cache", "opportunity_reward"}
 SCENE_SALVAGE_CONTEXTS = {"scene_salvage", "cache", "bones", "salvage", "cache_withdraw"}
 MERCHANDISE_CONTEXTS = {"store_stock", "trade_purchase", "trade_stock"}
 PRIVATE_CONTEXTS = {"actor_drop", "corpse_loot", "corpse_drop", "personal_drop"}
+KNOWN_HOT_CONTEXTS = {"street_vendor_hot_goods", "hot_goods", "black_market", "black_market_window"}
+FENCE_CONTEXTS = {"fence_purchase", "fenced_goods", "alley_market", "swap_hot_goods"}
 
 
 def _text(value):
@@ -405,6 +407,28 @@ def _match_label(match):
     return summary or reason_label or "reported incident"
 
 
+def stolen_goods_intent_label(item_entry, claim=None, match=None):
+    """Return the justice-facing possession intent read for a searched item."""
+    metadata = _entry_metadata(item_entry)
+    claim = claim if isinstance(claim, dict) else {}
+    source_context = _text(metadata.get("source_context") or claim.get("source_context")).lower()
+    if bool(metadata.get("justice_stolen")) and not bool(metadata.get("latent_claim_violation")):
+        return "direct_theft"
+    if bool(metadata.get("direct_theft")) or source_context in {"theft", "stolen_pickup", "shoplift"}:
+        return "direct_theft"
+    if bool(metadata.get("street_vendor_hot")) or source_context in KNOWN_HOT_CONTEXTS:
+        return "known_hot_purchase"
+    if bool(metadata.get("fenced_goods")) or source_context in FENCE_CONTEXTS:
+        return "fenced_possession"
+    if isinstance(match, dict) and match.get("match_kind") == "reported_stolen":
+        return "reported_match"
+    if bool(metadata.get("justice_reported_stolen")):
+        return "reported_match"
+    if bool(metadata.get("latent_claim_violation")) or bool(claim.get("latent_claim_violation")):
+        return "unclear_possession"
+    return ""
+
+
 def match_item_against_reported_crime(sim, item_entry, *, offender_eid=None, inspector_eid=None):
     entry = item_entry if isinstance(item_entry, dict) else {}
     metadata = _entry_metadata(entry)
@@ -530,6 +554,8 @@ def evaluate_inventory_for_justice(sim, offender_eid, *, current_tick=None, inve
     summaries = []
     match_labels = []
     match_reasons = []
+    intent_labels = []
+    intent_counts = {}
 
     for entry in list(getattr(actor_inventory, "items", ()) or ()):
         item_id = _text(entry.get("item_id")).lower()
@@ -586,6 +612,16 @@ def evaluate_inventory_for_justice(sim, offender_eid, *, current_tick=None, inve
             "claim_class": claim.get("claim_class"),
             "match": dict(match) if isinstance(match, dict) else None,
         }
+        intent_label = ""
+        if target_bucket in {"reported_stolen", "incident_evidence"}:
+            intent_label = stolen_goods_intent_label({**entry, "metadata": updated_metadata}, claim=claim, match=match)
+            if intent_label:
+                row["stolen_intent"] = intent_label
+                updated_metadata["justice_stolen_intent"] = intent_label
+                if update_inventory and hasattr(actor_inventory, "update_item_metadata"):
+                    actor_inventory.update_item_metadata(entry.get("instance_id"), updated_metadata, replace=True)
+                intent_labels.append(intent_label)
+                intent_counts[intent_label] = int(intent_counts.get(intent_label, 0)) + int(row["quantity"])
         buckets[target_bucket].append(row)
         if match:
             label = _match_label(match)
@@ -617,6 +653,8 @@ def evaluate_inventory_for_justice(sim, offender_eid, *, current_tick=None, inve
         "match_summaries": tuple(dict.fromkeys(summary for summary in summaries if summary))[:4],
         "incident_match_labels": tuple(dict.fromkeys(label for label in match_labels if label))[:4],
         "incident_match_reasons": tuple(dict.fromkeys(reason for reason in match_reasons if reason))[:4],
+        "stolen_intent_labels": tuple(dict.fromkeys(label for label in intent_labels if label))[:4],
+        "stolen_intent_counts": dict(intent_counts),
     }
 
 

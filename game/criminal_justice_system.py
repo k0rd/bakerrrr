@@ -214,7 +214,13 @@ from game.system_support.item_provenance_runtime import (
     evaluate_inventory_for_justice,
     justice_enforcement_profile,
 )
+from game.justice_force_runtime import (
+    classify_lawful_force,
+    force_payload,
+    mitigated_force_severity,
+)
 from game.organizations import local_protective_pressure_snapshot
+from game.skills import actor_skill
 from game.player_businesses import (
     actor_player_business_employment,
     fire_actor_from_player_business,
@@ -487,6 +493,64 @@ class CriminalJusticeSystem(System):
         if context not in VIOLENT_OFFENSE_CONTEXTS:
             return True
         return offender_eid == self.player_eid
+
+    def _remember_force_context(self, offender_eid, force_read):
+        if offender_eid is None or not isinstance(force_read, dict):
+            return
+        state = getattr(self.sim, "world_traits", None)
+        if not isinstance(state, dict):
+            self.sim.world_traits = {}
+            state = self.sim.world_traits
+        force_state = state.setdefault("justice_force_contexts", {})
+        if not isinstance(force_state, dict):
+            force_state = {}
+            state["justice_force_contexts"] = force_state
+        payload = force_payload(force_read)
+        payload["tick"] = int(getattr(self.sim, "tick", 0))
+        force_state[str(offender_eid)] = payload
+
+    def _latest_force_context(self, offender_eid=None):
+        offender_eid = self.player_eid if offender_eid is None else offender_eid
+        state = getattr(self.sim, "world_traits", None)
+        if not isinstance(state, dict):
+            return {"force_context": "unclear", "force_reason": "", "severity_mitigation": 0}
+        force_state = state.get("justice_force_contexts")
+        if not isinstance(force_state, dict):
+            return {"force_context": "unclear", "force_reason": "", "severity_mitigation": 0}
+        row = force_state.get(str(offender_eid))
+        if not isinstance(row, dict):
+            return {"force_context": "unclear", "force_reason": "", "severity_mitigation": 0}
+        return force_payload(row)
+
+    def _force_event_payload(self, offender_eid):
+        return self._latest_force_context(offender_eid)
+
+    def _force_context_line(self, offender_eid=None):
+        payload = self._latest_force_context(self.player_eid if offender_eid is None else offender_eid)
+        context = str(payload.get("force_context", "unclear") or "unclear").strip().lower()
+        reason = str(payload.get("force_reason", "") or "").strip()
+        if context == "lawful_defense":
+            return f"Force read: they read the violence as self-defense ({reason})." if reason else "Force read: they read the violence as self-defense."
+        if context == "defense_of_property":
+            return f"Force read: they read the violence as property defense ({reason})." if reason else "Force read: they read the violence as property defense."
+        if context == "defense_of_other":
+            return f"Force read: they read the violence as defense of another person ({reason})." if reason else "Force read: they read the violence as defense of another person."
+        if context == "mutual_fight":
+            return f"Force read: they read the violence as a mutual fight ({reason})." if reason else "Force read: they read the violence as a mutual fight."
+        if context == "criminal_attack":
+            return f"Force read: they do not have a defensive threat in the observed scene ({reason})." if reason else "Force read: they do not have a defensive threat in the observed scene."
+        return ""
+
+    def _questioning_skill_bonus(self, choice_id):
+        choice_id = str(choice_id or "").strip().lower()
+        if choice_id not in {"explain", "deflect"}:
+            return 0.0
+        conversation = float(actor_skill(self.sim, self.player_eid, "conversation", default=5.0))
+        streetwise = float(actor_skill(self.sim, self.player_eid, "streetwise", default=5.0))
+        score = (conversation * 0.58) + (streetwise * 0.42)
+        if choice_id == "explain":
+            return max(0.0, min(0.16, (score - 5.0) * 0.04))
+        return max(0.0, min(0.08, (score - 6.0) * 0.025))
 
     def _incident_type_from_context(self, context):
         return {
@@ -986,7 +1050,8 @@ class CriminalJusticeSystem(System):
 
     def _justice_status_lines(self, *, current_prop=None):
         current_prop = current_prop if isinstance(current_prop, dict) else None
-        lines = list(_justice_summary_rows(self.sim, self.player_eid) or ())
+        lines = list(self._justice_case_review_lines(current_prop=current_prop) or ())
+        lines.extend(list(_justice_summary_rows(self.sim, self.player_eid) or ()))
         debt_balance = int(self._player_justice_debt_balance())
         held = self._player_held_property_snapshot()
         held_site_name = str(held.get("property_name", "") or "").strip()
@@ -995,8 +1060,104 @@ class CriminalJusticeSystem(System):
         if held_site_id and held_site_name and current_property_id and held_site_id != current_property_id:
             lines.append(f"Released property is logged at {held_site_name}.")
         if debt_balance > 0:
-            lines.append("Any banking service can take a justice-debt payment.")
+            lines.append("Any justice desk or banking service can take a justice-debt payment.")
         return [str(line).strip() for line in lines if str(line).strip()]
+
+    def _justice_case_review_lines(self, *, current_prop=None):
+        snapshot = _justice_snapshot(self.sim, self.player_eid)
+        held = self._player_held_property_snapshot()
+        restitution = self._player_restitution_snapshot()
+        tier = str(snapshot.get("wanted_tier", "clear") or "clear").strip().lower() or "clear"
+        score = int(snapshot.get("active_score", 0) or 0)
+        incident_count = int(snapshot.get("incident_count", 0) or 0)
+        debt_balance = int(self._player_justice_debt_balance())
+        restitution_due = int(restitution.get("total_due", restitution.get("amount_due", 0)) or 0)
+        held_count = int(held.get("item_count", 0) or 0)
+        lines = [f"Case review: {tier.replace('_', ' ')} ({score}) | incident(s) {incident_count}."]
+        if debt_balance > 0:
+            lines.append(f"Justice debt: {debt_balance}c.")
+        if restitution_due > 0:
+            lines.append(f"Restitution: {restitution_due}c.")
+        inspected = []
+        reported = int(snapshot.get("last_inspected_reported_stolen_count", 0) or 0)
+        latent = int(snapshot.get("last_inspected_latent_claim_count", 0) or 0)
+        if reported > 0:
+            inspected.append(f"{reported} reported stolen")
+        if latent > 0:
+            inspected.append(f"{latent} suspicious")
+        if inspected:
+            lines.append(f"Strongest evidence read: {', '.join(inspected)}.")
+        if held_count > 0:
+            held_site = str(held.get("property_name", "") or "").strip() or "the property locker"
+            lines.append(f"Held property: {held_count} item(s) at {held_site}.")
+            current_id = str((current_prop or {}).get("id", "") or "").strip() if isinstance(current_prop, dict) else ""
+            held_id = str(held.get("property_id", "") or "").strip()
+            if held_id and current_id and held_id != current_id:
+                lines.append(f"Release blocker: correct locker is {held_site}.")
+            if debt_balance > 0:
+                lines.append(f"Release blocker: {debt_balance}c justice debt.")
+        return lines
+
+    def _pay_player_justice_debt_at_desk(self, prop, *, amount=None):
+        profile = self._player_finance_profile(create=False)
+        assets = self._player_assets(create=False)
+        debt_balance = int(self._player_justice_debt_balance())
+        if profile is None or debt_balance <= 0:
+            return {"paid": 0, "debt_balance": debt_balance, "reason": "no_debt_balance"}
+        requested = debt_balance if amount is None else int(max(0, amount or 0))
+        wallet_available = int(max(0, getattr(assets, "credits", 0) or 0)) if assets is not None else 0
+        bank_available = int(max(0, getattr(profile, "bank_balance", 0) or 0))
+        liquid = int(wallet_available + bank_available)
+        if requested <= 0:
+            return {"paid": 0, "debt_balance": debt_balance, "reason": "invalid_amount"}
+        if liquid <= 0:
+            return {"paid": 0, "debt_balance": debt_balance, "reason": "insufficient_liquid_funds", "available_liquid": 0}
+        payment = min(int(requested), int(debt_balance), int(liquid))
+        wallet_paid = min(wallet_available, payment)
+        if assets is not None:
+            assets.credits = int(max(0, wallet_available - wallet_paid))
+        remaining = max(0, payment - wallet_paid)
+        bank_paid = min(bank_available, remaining)
+        profile.bank_balance = int(max(0, bank_available - bank_paid))
+        pay_debt = getattr(profile, "pay_debt", None)
+        paid = int(pay_debt(self.JUSTICE_DEBT_KEY, int(wallet_paid + bank_paid)) if callable(pay_debt) else wallet_paid + bank_paid)
+        debt_after = int(self._player_justice_debt_balance())
+        self.sim.emit(Event(
+            "bank_transaction",
+            eid=self.player_eid,
+            property_id=(prop or {}).get("id") if isinstance(prop, dict) else None,
+            provider_name=str((prop or {}).get("name", "Justice Desk") if isinstance(prop, dict) else "Justice Desk").strip() or "Justice Desk",
+            kind="debt_payment",
+            amount=int(paid),
+            requested_amount=int(requested),
+            wallet_debt_paid=int(wallet_paid),
+            bank_debt_paid=int(bank_paid),
+            wallet_credits=int(getattr(assets, "credits", 0) or 0) if assets is not None else 0,
+            bank_balance=int(getattr(profile, "bank_balance", 0) or 0),
+            debt_key=self.JUSTICE_DEBT_KEY,
+            debt_balance=int(debt_after),
+            account_kind="personal",
+        ))
+        return {
+            "paid": int(paid),
+            "wallet_paid": int(wallet_paid),
+            "bank_paid": int(bank_paid),
+            "debt_balance": int(debt_after),
+            "reason": "paid" if paid > 0 else "blocked",
+        }
+
+    def _justice_desk_debt_lines(self, payment):
+        payment = payment if isinstance(payment, dict) else {}
+        paid = int(payment.get("paid", 0) or 0)
+        debt_balance = int(payment.get("debt_balance", 0) or 0)
+        reason = str(payment.get("reason", "") or "").strip().lower()
+        if paid > 0:
+            return [f"Paid {paid}c toward justice debt. Remaining debt: {debt_balance}c."]
+        if reason == "insufficient_liquid_funds":
+            return [f"Justice debt remains {debt_balance}c; no liquid funds are available here."]
+        if reason == "no_debt_balance":
+            return []
+        return [f"Justice debt remains {debt_balance}c."]
 
     def _player_funds_snapshot(self):
         carried_credits = int(self._player_cash_on_hand())
@@ -1428,6 +1589,22 @@ class CriminalJusticeSystem(System):
             return 0
         return int(evidence_count) * int(self.EVIDENCE_SURCHARGE_PER_ITEM)
 
+    def _stolen_intent_read_text(self, inspection):
+        labels = tuple((inspection or {}).get("stolen_intent_labels", ()) or ())
+        mapping = {
+            "direct_theft": "direct theft",
+            "known_hot_purchase": "knowingly risky hot purchase",
+            "fenced_possession": "fenced possession",
+            "reported_match": "reported-property match",
+            "unclear_possession": "unclear possession",
+        }
+        reads = [
+            mapping.get(str(label).strip().lower(), str(label).strip().lower().replace("_", " "))
+            for label in labels
+            if str(label).strip()
+        ]
+        return ", ".join(tuple(dict.fromkeys(reads))[:3])
+
     def _inspection_summary_text(self, inspection):
         inspection = inspection if isinstance(inspection, dict) else {}
         counts = inspection.get("counts") if isinstance(inspection.get("counts"), dict) else {}
@@ -1445,10 +1622,17 @@ class CriminalJusticeSystem(System):
             return f"Search match: {incident_evidence} item(s) tie you to a reported violent incident."
         if reported_stolen > 0:
             if strongest_match:
-                return (
+                text = (
                     f"Search match: {reported_stolen} item(s) match reported stolen property. "
                     f"Strongest read: {strongest_match}."
                 )
+                intent_read = self._stolen_intent_read_text(inspection)
+                if intent_read:
+                    text += f" Intent read: {intent_read}."
+                return text
+            intent_read = self._stolen_intent_read_text(inspection)
+            if intent_read:
+                return f"Search match: {reported_stolen} item(s) match reported stolen property. Intent read: {intent_read}."
             return f"Search match: {reported_stolen} item(s) match reported stolen property."
         if contraband > 0:
             return f"Search result: {contraband} contraband item(s) on you."
@@ -1480,6 +1664,8 @@ class CriminalJusticeSystem(System):
             match_summaries=tuple(inspection.get("match_summaries", ()) or ()),
             incident_match_labels=self._inspection_match_labels(inspection),
             incident_match_reasons=self._inspection_match_reasons(inspection),
+            stolen_intent_labels=tuple(inspection.get("stolen_intent_labels", ()) or ()),
+            stolen_intent_counts=dict(inspection.get("stolen_intent_counts", {}) or {}),
             evidence_surcharge=int(self._inspection_evidence_surcharge(inspection)),
         ))
         return inspection
@@ -1701,12 +1887,16 @@ class CriminalJusticeSystem(System):
             "explain": 0.82,
             "deflect": 0.38,
         }.get(choice_id, 0.0)
+        cooperation_score = min(1.0, max(0.0, float(cooperation_score) + self._questioning_skill_bonus(choice_id)))
         inspection = self._inspect_actor_inventory(self.player_eid, update_inventory=True, inspector_eid=by_eid)
         counts = inspection.get("counts", {}) if isinstance(inspection, dict) else {}
         severity_bucket = str(inspection.get("severity_bucket", "clear") or "clear").strip().lower()
         profile = self._justice_enforcement_profile(snapshot=snapshot, source_prop=source_prop)
         match_labels = self._inspection_match_labels(inspection)
         match_reasons = self._inspection_match_reasons(inspection)
+        stolen_intent_labels = tuple(inspection.get("stolen_intent_labels", ()) or ()) if isinstance(inspection, dict) else ()
+        stolen_intent_counts = dict(inspection.get("stolen_intent_counts", {}) or {}) if isinstance(inspection, dict) else {}
+        force_context = self._force_event_payload(self.player_eid)
         evidence_surcharge = int(self._inspection_evidence_surcharge(inspection))
         protective = (
             local_protective_pressure_snapshot(
@@ -1790,6 +1980,9 @@ class CriminalJusticeSystem(System):
                 match_summaries=tuple(inspection.get("match_summaries", ()) or ()),
                 incident_match_labels=match_labels,
                 incident_match_reasons=match_reasons,
+                stolen_intent_labels=stolen_intent_labels,
+                stolen_intent_counts=stolen_intent_counts,
+                **force_context,
                 evidence_surcharge=evidence_surcharge,
                 protective_posture_label=str((protective or {}).get("state_label", "") or "").strip(),
             ))
@@ -1880,6 +2073,9 @@ class CriminalJusticeSystem(System):
             match_summaries=tuple(inspection.get("match_summaries", ()) or ()),
             incident_match_labels=match_labels,
             incident_match_reasons=match_reasons,
+            stolen_intent_labels=stolen_intent_labels,
+            stolen_intent_counts=stolen_intent_counts,
+            **force_context,
             evidence_surcharge=evidence_surcharge,
             protective_posture_label=str((protective or {}).get("state_label", "") or "").strip(),
         ))
@@ -1896,6 +2092,9 @@ class CriminalJusticeSystem(System):
         lines = [
             self._inspection_summary_text(inspection),
         ]
+        force_line = self._force_context_line(self.player_eid)
+        if force_line:
+            lines.append(force_line)
         strongest_match = self._strongest_inspection_match_text(inspection)
         if strongest_match:
             lines.append(f"Recorded match: {strongest_match}.")
@@ -3105,6 +3304,9 @@ class CriminalJusticeSystem(System):
         lines = [f"Processed at {booking_name}."]
         if hold_hours > 0:
             lines.append(f"Custody time served: about {hold_hours:g}h.")
+        force_line = self._force_context_line(self.player_eid)
+        if force_line:
+            lines.append(force_line)
 
         fine_due = int(max(0, fine_due or 0))
         if fine_due > 0:
@@ -3234,6 +3436,9 @@ class CriminalJusticeSystem(System):
         counts = inspection.get("counts", {}) if isinstance(inspection, dict) else {}
         match_labels = self._inspection_match_labels(inspection)
         match_reasons = self._inspection_match_reasons(inspection)
+        stolen_intent_labels = tuple(inspection.get("stolen_intent_labels", ()) or ()) if isinstance(inspection, dict) else ()
+        stolen_intent_counts = dict(inspection.get("stolen_intent_counts", {}) or {}) if isinstance(inspection, dict) else {}
+        force_context = self._force_event_payload(self.player_eid)
         evidence_surcharge = int(self._inspection_evidence_surcharge(inspection))
         protective = (
             local_protective_pressure_snapshot(
@@ -3334,6 +3539,9 @@ class CriminalJusticeSystem(System):
             questioning_disposition=str(questioning_disposition or "").strip().lower(),
             incident_match_labels=match_labels,
             incident_match_reasons=match_reasons,
+            stolen_intent_labels=stolen_intent_labels,
+            stolen_intent_counts=stolen_intent_counts,
+            **force_context,
             evidence_surcharge=int(evidence_surcharge),
             penalty_breakdown=penalty_breakdown,
             protective_posture_label=str((protective or {}).get("state_label", "") or "").strip(),
@@ -3482,26 +3690,38 @@ class CriminalJusticeSystem(System):
         context = str(event.data.get("context", "ordinary") or "").strip().lower() or "ordinary"
         if context not in {"contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
             return
-        if not self._violent_offense_allowed(offender_eid, context):
-            # NPC violence needs lawful-force context before it can share the
-            # same consequences as the player. Keep first-pass NPC justice to
-            # clearer property and theft offenses.
-            return
         observation = self._event_accountability(event, offender_eid=offender_eid)
         if not bool(observation.get("has_accountable_observation")):
             return
         if not self._event_has_justice_report_channel(event, offender_eid=offender_eid):
             return
+        force_read = None
+        severity = int(event.data.get("offense_score", 0) or 0)
+        if context in VIOLENT_OFFENSE_CONTEXTS:
+            force_read = classify_lawful_force(self.sim, event.data, offender_eid=offender_eid)
+            self._remember_force_context(offender_eid, force_read)
+            self.sim.emit(Event(
+                "justice_force_classified",
+                eid=offender_eid,
+                action=str(event.data.get("action", "action") or "action").strip().lower(),
+                context=context,
+                recordable=bool(force_read.get("recordable", True)),
+                suppressed=bool(force_read.get("suppressed", False)),
+                **force_payload(force_read),
+            ))
+            severity = mitigated_force_severity(severity, force_read)
+            if severity <= 0:
+                return
         incident_type = self._incident_type_from_context(context)
         change = self._record_incident(
             offender_eid,
             incident_type=incident_type,
-            severity=int(event.data.get("offense_score", 0) or 0),
+            severity=severity,
             source_event="action_offense",
             x=event.data.get("x"),
             y=event.data.get("y"),
             witnessed=True,
-            note=f"{str(event.data.get('action', 'action') or '').strip().lower()}/{context}",
+            note=f"{str(event.data.get('action', 'action') or '').strip().lower()}/{context}/{(force_read or {}).get('force_context', '')}".strip("/"),
         )
         if change is not None:
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
@@ -3585,22 +3805,33 @@ class CriminalJusticeSystem(System):
             context = str(incident.get("context", "") or "").strip().lower() or str(incident.get("merge_subject", "") or "").split(":")[-1].strip().lower()
             if context not in {"contraband_use", *VIOLENT_OFFENSE_CONTEXTS}:
                 return
-            if context not in VIOLENT_OFFENSE_CONTEXTS and not self._violent_offense_allowed(offender_eid, context):
-                return
-            # Authority-reported violent incidents can become official justice
-            # records even when the original offender was not the player. This
-            # keeps later booking and evidence discovery honest without making
-            # every witnessed NPC-on-NPC fight immediately share the player's
-            # direct wanted-state path.
+            force_read = None
+            effective_severity = severity_score
+            if context in VIOLENT_OFFENSE_CONTEXTS:
+                force_read = classify_lawful_force(self.sim, incident, offender_eid=offender_eid)
+                self._remember_force_context(offender_eid, force_read)
+                self.sim.emit(Event(
+                    "justice_force_classified",
+                    eid=offender_eid,
+                    action=str(incident.get("action", "action") or "action").strip().lower(),
+                    context=context,
+                    recordable=bool(force_read.get("recordable", True)),
+                    suppressed=bool(force_read.get("suppressed", False)),
+                    **force_payload(force_read),
+                ))
+                effective_severity = mitigated_force_severity(effective_severity, force_read)
+                if effective_severity <= 0:
+                    self._mark_incident_accounted(incident.get("id"), field="justice_force_reviewed")
+                    return
             change = self._record_incident(
                 offender_eid,
                 incident_type=self._incident_type_from_context(context),
-                severity=severity_score,
+                severity=effective_severity,
                 source_event="action_offense",
                 x=incident.get("x"),
                 y=incident.get("y"),
                 witnessed=True,
-                note=f"{str(incident.get('action', 'action') or '').strip().lower()}/{context}",
+                note=f"{str(incident.get('action', 'action') or '').strip().lower()}/{context}/{(force_read or {}).get('force_context', '')}".strip("/"),
             )
         else:
             return
@@ -3644,11 +3875,17 @@ class CriminalJusticeSystem(System):
         held_property_id = str(held.get("property_id", "") or "").strip()
         held_property_name = str(held.get("property_name", "") or "").strip()
         title = f"Justice Desk: {prop_name}"
+        payment_lines = []
+        if debt_balance > 0:
+            payment = self._pay_player_justice_debt_at_desk(prop)
+            payment_lines = self._justice_desk_debt_lines(payment)
+            debt_balance = int(self._player_justice_debt_balance())
 
         if held_count > 0 and held_property_id and held_property_id != current_property_id:
             lines = [
                 "This desk is not holding your seized property.",
                 *self._justice_status_lines(current_prop=prop),
+                *payment_lines,
             ]
             if held_property_name:
                 if debt_balance > 0:
@@ -3662,6 +3899,7 @@ class CriminalJusticeSystem(System):
             lines = [
                 f"Release is blocked until your {debt_balance}c justice debt is cleared.",
                 *self._justice_status_lines(current_prop=prop),
+                *payment_lines,
             ]
             if held_property_name:
                 lines.append(f"Your held property is logged at {held_property_name}.")
@@ -3688,7 +3926,12 @@ class CriminalJusticeSystem(System):
                     lines.append(f"Still held: {', '.join(remaining_labels[:3])}.")
             if not lines:
                 lines.append("No held property was released.")
+            lines = list(payment_lines) + lines
             self._present_justice_result(title, lines, property_id=prop.get("id"))
+            return
+
+        if payment_lines:
+            self._present_justice_result(title, [*self._justice_status_lines(current_prop=prop), *payment_lines], property_id=prop.get("id"))
             return
 
         self._present_justice_result(

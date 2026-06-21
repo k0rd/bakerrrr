@@ -80,6 +80,7 @@ from game.system_support.crime_plan_runtime import (
     CRIME_PLAN_OBSERVATION_WITNESS,
     record_crime_plan_observation,
 )
+from game.world_event_presentation import world_event_effect_summary
 from game.objective_progress import (
     award_objective_progress,
     objective_progress_explain_delta,
@@ -383,8 +384,10 @@ class EventLogSystem(System):
             _mark_world_event_revealed(self.sim, event_id)
         label = event.data.get("label", "World Event")
         flavor = event.data.get("flavor", "Something unusual is happening in the world.")
+        effect = world_event_effect_summary(event.data)
+        effect_text = f" Effect: {effect}." if effect else ""
         self._log(
-            f"[WORLD EVENT BEGINS] {label}: {flavor}",
+            f"[WORLD EVENT BEGINS] {label}: {flavor}{effect_text}",
             channel="world",
             priority="high",
             dedupe_window=10,
@@ -398,8 +401,10 @@ class EventLogSystem(System):
         # Log the end of a world event with its label
         event_id = _int_or_default(event.data.get("event_id"), 0)
         label = event.data.get("label", "World Event")
+        effect = world_event_effect_summary(event.data, ending=True)
+        effect_text = f" Effect: {effect}." if effect else ""
         self._log(
-            f"[WORLD EVENT ENDED] {label} has concluded.",
+            f"[WORLD EVENT ENDED] {label} has concluded.{effect_text}",
             channel="world",
             priority="normal",
             dedupe_window=10,
@@ -449,6 +454,8 @@ class EventLogSystem(System):
         self.sim.events.subscribe("contact_learned", self.on_contact_learned)
         self.sim.events.subscribe("site_service_used", self.on_site_service_used)
         self.sim.events.subscribe("site_service_blocked", self.on_site_service_blocked)
+        self.sim.events.subscribe("hunting_carcass_harvested", self.on_hunting_carcass_harvested)
+        self.sim.events.subscribe("hunting_carcass_blocked", self.on_hunting_carcass_blocked)
         self.sim.events.subscribe("site_intel_report", self.on_site_intel_report)
         self.sim.events.subscribe("vehicle_delivered", self.on_vehicle_delivered)
         self.sim.events.subscribe("property_closing_time_warning", self.on_property_closing_time_warning)
@@ -2475,6 +2482,31 @@ class EventLogSystem(System):
             return
         self.sim.log.add(f"Contact: {source_name} gives you a lead at {prop_name}.")
 
+    def on_hunting_carcass_harvested(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        animal = str(event.data.get("animal_name") or event.data.get("species_label") or "wildlife").strip()
+        output_name = str(event.data.get("output_item_name", "meat")).strip() or "meat"
+        quantity = int(event.data.get("quantity", 0) or 0)
+        bag_note = " with the kill bag" if bool(event.data.get("kill_bag_used")) else ""
+        self.sim.log.add(f"Field dressed {animal}{bag_note}: {output_name} x{quantity}.")
+
+    def on_hunting_carcass_blocked(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        reason = str(event.data.get("reason", "blocked") or "blocked").strip().lower()
+        animal = str(event.data.get("animal_name") or "the carcass").strip()
+        if reason == "no_tool":
+            self.sim.log.add(f"Need a blade or field knife to dress {animal}.")
+            return
+        if reason == "inventory_full":
+            self.sim.log.add("No room for the field-dressed meat. Free up space and try again.")
+            return
+        if reason == "no_usable_meat":
+            self.sim.log.add(f"{animal} has no usable cuts worth packing.")
+            return
+        self.sim.log.add("That carcass is no longer available.")
+
     def on_site_service_used(self, event):
         if event.data.get("eid") != self.player_eid:
             return
@@ -2530,6 +2562,19 @@ class EventLogSystem(System):
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             credits_spent = int(event.data.get("credits_spent", 0))
             self.sim.log.add(f"Vending: {prop_name} drops {item_name} into your bag (-{credits_spent}c).")
+            return
+        if service == "campfire_cook":
+            input_units = int(event.data.get("input_units", 0) or 0)
+            output_units = int(event.data.get("output_units", 0) or 0)
+            item_name = str(event.data.get("output_item_name", "cooked meat")).strip() or "cooked meat"
+            self.sim.log.add(f"Campfire: cooked {input_units} meat into {output_units} {item_name}.")
+            return
+        if service == "butcher_prepare":
+            input_units = int(event.data.get("input_units", 0) or 0)
+            output_units = int(event.data.get("output_units", 0) or 0)
+            item_name = str(event.data.get("output_item_name", "packaged meat")).strip() or "packaged meat"
+            credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            self.sim.log.add(f"Butcher: {prop_name} prepares {input_units} meat into {output_units} {item_name} (-{credits_spent}c).")
             return
         if service in TRANSIT_SERVICE_IDS:
             profile = _transit_service_profile(service) or {}
@@ -2746,6 +2791,20 @@ class EventLogSystem(System):
             credits = int(event.data.get("credits", 0))
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             self.sim.log.add(f"Vending: {item_name} costs {cost}c at {prop_name}; you only have {credits}c.")
+            return
+        if reason == "no_meat" and service == "campfire_cook":
+            self.sim.log.add(f"Campfire: bring raw or bagged game meat to cook at {prop_name}.")
+            return
+        if reason == "no_meat" and service == "butcher_prepare":
+            self.sim.log.add(f"Butcher: bring raw or bagged game meat to {prop_name}.")
+            return
+        if reason == "inventory_full" and service in {"campfire_cook", "butcher_prepare"}:
+            self.sim.log.add(f"{prop_name} cannot return prepared meat until you free up inventory space.")
+            return
+        if reason == "no_credits" and service == "butcher_prepare":
+            cost = int(event.data.get("cost", 0))
+            credits = int(event.data.get("credits", 0))
+            self.sim.log.add(f"Butcher: {prop_name} needs {cost}c to start; you have {credits}c.")
             return
         if reason == "no_tokens" and service in TRANSIT_SERVICE_IDS:
             title = _transit_service_log_prefix(service)
@@ -6707,12 +6766,14 @@ class EventLogSystem(System):
                 continue
             label = str(active_event.get("label", "World Event")).strip() or "World Event"
             flavor = str(active_event.get("flavor_start", "")).strip()
+            effect = world_event_effect_summary(active_event)
+            effect_text = f" Effect: {effect}." if effect else ""
             distance = _chunk_chebyshev_distance((cx, cy), _world_event_chunk_coord(active_event))
             if distance == 0:
-                message = f"[WORLD EVENT ACTIVE] {label}: {flavor}" if flavor else f"[WORLD EVENT ACTIVE] {label}."
+                message = f"[WORLD EVENT ACTIVE] {label}: {flavor}{effect_text}" if flavor else f"[WORLD EVENT ACTIVE] {label}.{effect_text}"
                 priority = "high"
             else:
-                message = f"[WORLD EVENT NEARBY] {label}: {flavor}" if flavor else f"[WORLD EVENT NEARBY] {label} close by."
+                message = f"[WORLD EVENT NEARBY] {label}: {flavor}{effect_text}" if flavor else f"[WORLD EVENT NEARBY] {label} close by.{effect_text}"
                 priority = "normal"
             self._log(
                 message,

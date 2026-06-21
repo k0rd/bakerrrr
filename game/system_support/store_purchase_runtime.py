@@ -10,6 +10,7 @@ import hashlib
 from collections.abc import Mapping
 
 from game.components import NPCSocial, PlayerAssets
+from game.economy import item_trade_pressure_bias
 from game.items import ITEM_CATALOG
 
 
@@ -160,18 +161,25 @@ def _profile_for_archetype(archetype):
         "adjacent": {"food", "drink", "medical", "tool", "clothing"},
         "refuse_dangerous": False,
     }
-    if archetype in {"corner_store", "restaurant", "soup_kitchen", "street_kitchen", "daycare", "hotel", "flophouse"}:
+    if archetype == "butcher_shop":
+        profile.update({
+            "summary": "raw game meat, prepared cuts, packaged meat, and field dressing gear",
+            "wanted": {"food", "meat", "raw_meat", "field_dressed", "packaged_meat", "hunting"},
+            "adjacent": {"tool", "blade", "survival", "medical", "drink"},
+            "refuse_dangerous": True,
+        })
+    elif archetype in {"corner_store", "restaurant", "soup_kitchen", "street_kitchen", "daycare", "hotel", "flophouse"}:
         profile.update({
             "summary": "food, drinks, vouchers, and small counter goods",
             "wanted": {"food", "drink", "meal", "voucher", "token", "social"},
-            "adjacent": {"medical", "safety", "survival", "phone", "communication"},
+            "adjacent": {"medical", "safety", "survival", "phone", "communication", "meat", "packaged_meat"},
             "refuse_dangerous": True,
         })
     elif archetype in {"bar", "nightclub", "roadhouse", "tavern", "pool_hall", "karaoke_box", "music_venue"}:
         profile.update({
             "summary": "drinks, social goods, tokens, and nightlife stock",
             "wanted": {"drink", "social", "token", "drug", "stimulant", "phone", "communication"},
-            "adjacent": {"food", "medical", "clothing"},
+            "adjacent": {"food", "medical", "clothing", "meat", "packaged_meat"},
             "refuse_dangerous": True,
         })
     elif archetype in {"pharmacy", "backroom_clinic", "herbalist_camp"}:
@@ -422,12 +430,36 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
     elif dangerous:
         risk_label = "dangerous goods"
 
+    pressure_label = ""
+    pressure_note = ""
+    pressure_value = 0.0
+    if sim is not None and actual != INTEREST_REFUSED and isinstance(prop, Mapping):
+        pressure = item_trade_pressure_bias(sim, prop, item_id)
+        pressure_label = str(pressure.get("label", "") or "").strip()
+        pressure_note = str(pressure.get("note", "") or "").strip()
+        try:
+            pressure_value = float(pressure.get("value", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pressure_value = 0.0
+        try:
+            price_mult *= float(pressure.get("sell_price_mult", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            pass
+        if pressure_label:
+            reason = f"{reason}; {pressure_note or pressure_label}"
+
+    visible_label = INTEREST_LABELS.get(visible, INTEREST_LABELS[INTEREST_UNUSUAL])
+    actual_label = INTEREST_LABELS.get(actual, INTEREST_LABELS[INTEREST_UNUSUAL])
+    if pressure_label and actual != INTEREST_REFUSED:
+        visible_label = f"{visible_label}; {pressure_label}"
+        actual_label = f"{actual_label}; {pressure_label}"
+
     return {
         "purchase_interest": visible,
         "interest_actual": actual,
         "interest_known": bool(known),
-        "interest_label": INTEREST_LABELS.get(visible, INTEREST_LABELS[INTEREST_UNUSUAL]),
-        "actual_label": INTEREST_LABELS.get(actual, INTEREST_LABELS[INTEREST_UNUSUAL]),
+        "interest_label": visible_label,
+        "actual_label": actual_label,
         "row_color": INTEREST_COLORS.get(visible, "item_restricted"),
         "price_mult": float(price_mult),
         "accepted": bool(accepted),
@@ -440,6 +472,9 @@ def classify_store_purchase_interest(sim, actor_eid, prop, store, entry, *, serv
         "illegal": bool(illegal),
         "restricted": bool(restricted),
         "risk_label": risk_label,
+        "trade_pressure_label": pressure_label,
+        "trade_pressure_note": pressure_note,
+        "trade_pressure_value": round(float(pressure_value), 3),
     }
 
 

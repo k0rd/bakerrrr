@@ -1,7 +1,25 @@
-from game.items import ITEM_CATALOG
+from engine.systems import System
+from game.items import ITEM_CATALOG, item_display_name
 
 
 LEGAL_TAGS = {"legal", "restricted", "illegal"}
+LOCAL_TRADE_PRESSURE_HALF_LIFE_HOURS = 24
+LOCAL_TRADE_PRESSURE_PRUNE_HOURS = 72
+LOCAL_TRADE_PROPERTY_WEIGHT = 1.0
+LOCAL_TRADE_CHUNK_WEIGHT = 0.34
+LOCAL_TRADE_TAG_WEIGHT = 0.52
+LOCAL_TRADE_CHUNK_READ_WEIGHT = 0.42
+NOISY_TRADE_PRESSURE_TAGS = {
+    "",
+    "legal",
+    "restricted",
+    "illegal",
+    "stolen",
+    "unknown",
+    "cash",
+    "credit",
+    "misc",
+}
 
 
 DISTRICT_CONTEXTS = {
@@ -385,6 +403,385 @@ def _merge_keywords(existing, new_values):
             existing.append(text)
 
 
+def _clock_ticks_per_hour(sim):
+    traits = getattr(sim, "world_traits", {}) if sim is not None else {}
+    clock = traits.get("clock", {}) if isinstance(traits, dict) else {}
+    return max(1, int(_num(clock.get("ticks_per_hour", 600), 600)))
+
+
+def _local_trade_pressure_state(sim):
+    state = getattr(sim, "local_trade_pressures", None)
+    if not isinstance(state, dict):
+        state = {}
+        sim.local_trade_pressures = state
+    properties = state.get("properties")
+    if not isinstance(properties, dict):
+        properties = {}
+        state["properties"] = properties
+    chunks = state.get("chunks")
+    if not isinstance(chunks, dict):
+        chunks = {}
+        state["chunks"] = chunks
+    return state
+
+
+def _pressure_bucket(container, key):
+    key = str(key or "").strip()
+    if not key:
+        return None
+    bucket = container.get(key)
+    if not isinstance(bucket, dict):
+        bucket = {}
+        container[key] = bucket
+    for field in ("items", "tags", "shelf_items", "shelf_tags"):
+        if not isinstance(bucket.get(field), dict):
+            bucket[field] = {}
+    return bucket
+
+
+def _chunk_key(cx, cy):
+    return f"{int(cx)},{int(cy)}"
+
+
+def _chunk_key_for_property(sim, prop):
+    if sim is None or not isinstance(prop, dict):
+        return ""
+    try:
+        cx, cy = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+    except Exception:
+        return ""
+    return _chunk_key(cx, cy)
+
+
+def _pressure_decay_factor(sim, last_tick, now_tick=None):
+    now_tick = int(getattr(sim, "tick", 0) if now_tick is None else now_tick)
+    try:
+        elapsed = max(0, now_tick - int(last_tick or 0))
+    except (TypeError, ValueError):
+        elapsed = 0
+    if elapsed <= 0:
+        return 1.0
+    half_life = max(1, _clock_ticks_per_hour(sim) * LOCAL_TRADE_PRESSURE_HALF_LIFE_HOURS)
+    return 0.5 ** (float(elapsed) / float(half_life))
+
+
+def _decayed_pressure_value(sim, row, now_tick=None):
+    if not isinstance(row, dict):
+        return 0.0
+    return float(_num(row.get("value", 0.0), 0.0)) * _pressure_decay_factor(sim, row.get("last_tick", 0), now_tick=now_tick)
+
+
+def _decay_pressure_rows(sim, rows, now_tick=None):
+    if not isinstance(rows, dict):
+        return
+    now_tick = int(getattr(sim, "tick", 0) if now_tick is None else now_tick)
+    prune_ticks = max(1, _clock_ticks_per_hour(sim) * LOCAL_TRADE_PRESSURE_PRUNE_HOURS)
+    for key, row in list(rows.items()):
+        if not isinstance(row, dict):
+            rows.pop(key, None)
+            continue
+        value = _decayed_pressure_value(sim, row, now_tick=now_tick)
+        try:
+            elapsed = max(0, now_tick - int(row.get("last_tick", 0) or 0))
+        except (TypeError, ValueError):
+            elapsed = 0
+        if abs(value) < 0.05 or (elapsed >= prune_ticks and abs(value) < 0.35):
+            rows.pop(key, None)
+            continue
+        row["value"] = round(float(value), 4)
+        row["last_tick"] = now_tick
+
+
+def _decay_pressure_bucket(sim, bucket, now_tick=None):
+    if not isinstance(bucket, dict):
+        return
+    for field in ("items", "tags", "shelf_items", "shelf_tags"):
+        _decay_pressure_rows(sim, bucket.get(field), now_tick=now_tick)
+
+
+def _pressure_tags_for_item(item_id):
+    item = ITEM_CATALOG.get(str(item_id or "").strip().lower(), {})
+    tags = {
+        str(tag or "").strip().lower()
+        for tag in tuple(item.get("tags", ()) or ())
+        if str(tag or "").strip()
+    }
+    category = str(item.get("category", "") or "").strip().lower()
+    if category:
+        tags.add(category)
+    legal_status = str(item.get("legal_status", "") or "").strip().lower()
+    tags.discard(legal_status)
+    return tuple(sorted(tag for tag in tags if tag not in NOISY_TRADE_PRESSURE_TAGS))
+
+
+def _write_pressure_rows(sim, rows, key, delta, *, item_id="", item_name=""):
+    if not isinstance(rows, dict):
+        return
+    key = str(key or "").strip().lower()
+    if not key:
+        return
+    now_tick = int(getattr(sim, "tick", 0))
+    row = rows.get(key)
+    if not isinstance(row, dict):
+        row = {"value": 0.0, "last_tick": now_tick, "created_tick": now_tick}
+        rows[key] = row
+    value = _decayed_pressure_value(sim, row, now_tick=now_tick) + float(delta)
+    if abs(value) < 0.05:
+        rows.pop(key, None)
+        return
+    row["value"] = round(float(value), 4)
+    row["last_tick"] = now_tick
+    row.setdefault("created_tick", now_tick)
+    if item_id:
+        row["item_id"] = str(item_id)
+    if item_name:
+        row["item_name"] = str(item_name)
+
+
+def _pressure_direction_value(direction, quantity):
+    direction = str(direction or "").strip().lower()
+    quantity = max(1, int(_num(quantity, 1)))
+    if direction in {"sold_to_store", "trade_sold", "sell", "supply"}:
+        return float(quantity)
+    if direction in {"bought_from_store", "trade_bought", "buy", "demand"}:
+        return -float(quantity)
+    return 0.0
+
+
+def record_local_trade_pressure(sim, prop, item_id, *, quantity=1, direction="", owner_transfer=False, item_name=""):
+    """Record a decaying local pressure offset from an actual trade flow."""
+    if sim is None or not isinstance(prop, dict):
+        return None
+    item_id = str(item_id or "").strip().lower()
+    property_id = str(prop.get("id", "") or "").strip()
+    if not item_id or not property_id:
+        return None
+    delta = _pressure_direction_value(direction, quantity)
+    if abs(delta) <= 0.0:
+        return None
+    state = _local_trade_pressure_state(sim)
+    property_bucket = _pressure_bucket(state["properties"], property_id)
+    if property_bucket is None:
+        return None
+    _decay_pressure_bucket(sim, property_bucket)
+    item_name = str(item_name or item_display_name(item_id, item_catalog=ITEM_CATALOG)).strip()
+    if owner_transfer:
+        _write_pressure_rows(sim, property_bucket["shelf_items"], item_id, delta, item_id=item_id, item_name=item_name)
+        for tag in _pressure_tags_for_item(item_id):
+            _write_pressure_rows(sim, property_bucket["shelf_tags"], tag, delta * LOCAL_TRADE_TAG_WEIGHT, item_id=item_id, item_name=item_name)
+        return {"property_id": property_id, "item_id": item_id, "delta": delta, "chunk_delta": 0.0}
+
+    _write_pressure_rows(sim, property_bucket["items"], item_id, delta * LOCAL_TRADE_PROPERTY_WEIGHT, item_id=item_id, item_name=item_name)
+    for tag in _pressure_tags_for_item(item_id):
+        _write_pressure_rows(sim, property_bucket["tags"], tag, delta * LOCAL_TRADE_TAG_WEIGHT, item_id=item_id, item_name=item_name)
+
+    chunk_key = _chunk_key_for_property(sim, prop)
+    if chunk_key:
+        chunk_bucket = _pressure_bucket(state["chunks"], chunk_key)
+        _decay_pressure_bucket(sim, chunk_bucket)
+        chunk_delta = delta * LOCAL_TRADE_CHUNK_WEIGHT
+        _write_pressure_rows(sim, chunk_bucket["items"], item_id, chunk_delta, item_id=item_id, item_name=item_name)
+        for tag in _pressure_tags_for_item(item_id):
+            _write_pressure_rows(sim, chunk_bucket["tags"], tag, chunk_delta * LOCAL_TRADE_TAG_WEIGHT, item_id=item_id, item_name=item_name)
+    else:
+        chunk_delta = 0.0
+    return {"property_id": property_id, "item_id": item_id, "delta": delta, "chunk_delta": chunk_delta}
+
+
+def _bucket_value_for_item(sim, bucket, item_id, *, tag_weight=0.32, item_weight=1.0):
+    if not isinstance(bucket, dict):
+        return 0.0
+    item_id = str(item_id or "").strip().lower()
+    total = 0.0
+    item_row = (bucket.get("items") or {}).get(item_id)
+    total += _decayed_pressure_value(sim, item_row) * float(item_weight)
+    tag_rows = bucket.get("tags") or {}
+    for tag in _pressure_tags_for_item(item_id):
+        total += _decayed_pressure_value(sim, tag_rows.get(tag)) * float(tag_weight)
+    return float(total)
+
+
+def _pressure_label(value):
+    value = float(value or 0.0)
+    if value >= 5.5:
+        return "overstocked"
+    if value >= 1.6:
+        return "well stocked"
+    if value <= -4.0:
+        return "wanted right now"
+    if value <= -1.3:
+        return "short here"
+    return ""
+
+
+def _pressure_note_for_label(label):
+    label = str(label or "").strip().lower()
+    if label == "overstocked":
+        return "too much here today"
+    if label == "well stocked":
+        return "cheap offer"
+    if label == "wanted right now":
+        return "wanted right now"
+    if label == "short here":
+        return "short here"
+    return ""
+
+
+def local_trade_pressure_snapshot(sim, prop=None, item_id=None):
+    """Return decayed local trade pressure for an item/property without creating pressure."""
+    state = _local_trade_pressure_state(sim)
+    prop_bucket = None
+    chunk_bucket = None
+    property_id = ""
+    if isinstance(prop, dict):
+        property_id = str(prop.get("id", "") or "").strip()
+        prop_bucket = state["properties"].get(property_id)
+        chunk_key = _chunk_key_for_property(sim, prop)
+        chunk_bucket = state["chunks"].get(chunk_key) if chunk_key else None
+    if isinstance(prop_bucket, dict):
+        _decay_pressure_bucket(sim, prop_bucket)
+    if isinstance(chunk_bucket, dict):
+        _decay_pressure_bucket(sim, chunk_bucket)
+    item_id = str(item_id or "").strip().lower()
+    if not item_id:
+        return {
+            "property_id": property_id,
+            "value": 0.0,
+            "property_value": 0.0,
+            "chunk_value": 0.0,
+            "label": "",
+            "note": "",
+        }
+    property_value = _bucket_value_for_item(sim, prop_bucket, item_id, tag_weight=0.36, item_weight=1.0)
+    chunk_value = _bucket_value_for_item(sim, chunk_bucket, item_id, tag_weight=0.16, item_weight=LOCAL_TRADE_CHUNK_READ_WEIGHT)
+    value = property_value + chunk_value
+    label = _pressure_label(value)
+    return {
+        "property_id": property_id,
+        "item_id": item_id,
+        "item_name": item_display_name(item_id, item_catalog=ITEM_CATALOG),
+        "value": round(float(value), 3),
+        "property_value": round(float(property_value), 3),
+        "chunk_value": round(float(chunk_value), 3),
+        "label": label,
+        "note": _pressure_note_for_label(label),
+    }
+
+
+def item_trade_pressure_bias(sim, prop, item_id):
+    snapshot = local_trade_pressure_snapshot(sim, prop=prop, item_id=item_id)
+    value = float(snapshot.get("value", 0.0) or 0.0)
+    oversupply = max(0.0, min(8.0, value))
+    shortage = max(0.0, min(6.0, -value))
+    sell_price_mult = _clamp(1.0 - (oversupply * 0.04) + (shortage * 0.035), 0.75, 1.2)
+    buy_price_mult = _clamp(1.0 - (oversupply * 0.018) + (shortage * 0.032), 0.85, 1.2)
+    stock_mult = _clamp(1.0 + (oversupply * 0.055) - (shortage * 0.055), 0.68, 1.38)
+    weight_mult = _clamp(1.0 + (oversupply * 0.045) - (shortage * 0.045), 0.72, 1.3)
+    return {
+        **snapshot,
+        "sell_price_mult": round(float(sell_price_mult), 3),
+        "buy_price_mult": round(float(buy_price_mult), 3),
+        "stock_mult": round(float(stock_mult), 3),
+        "weight_mult": round(float(weight_mult), 3),
+    }
+
+
+def local_trade_pressure_notes_for_property(sim, prop, *, limit=2, min_abs=1.6):
+    if sim is None or not isinstance(prop, dict):
+        return ()
+    state = _local_trade_pressure_state(sim)
+    property_id = str(prop.get("id", "") or "").strip()
+    bucket = state["properties"].get(property_id)
+    if not isinstance(bucket, dict):
+        return ()
+    _decay_pressure_bucket(sim, bucket)
+    rows = []
+    for item_id, row in tuple((bucket.get("items") or {}).items()):
+        value = _decayed_pressure_value(sim, row)
+        if abs(value) < float(min_abs):
+            continue
+        label = _pressure_label(value)
+        if not label:
+            continue
+        item_name = str(row.get("item_name") or item_display_name(item_id, item_catalog=ITEM_CATALOG)).strip()
+        rows.append((abs(value), value, item_name, label))
+    rows.sort(key=lambda row: (-row[0], row[2]))
+    notes = []
+    for _abs_value, value, item_name, label in rows[: max(0, int(limit))]:
+        if value >= 0:
+            notes.append(f"{item_name} {label}")
+        else:
+            notes.append(f"{item_name} {label}")
+    return tuple(notes)
+
+
+def strongest_local_trade_pressure_for_property(sim, prop, *, min_abs=3.0):
+    notes = local_trade_pressure_notes_for_property(sim, prop, limit=1, min_abs=min_abs)
+    if not notes:
+        return None
+    state = _local_trade_pressure_state(sim)
+    bucket = state["properties"].get(str(prop.get("id", "") or "").strip())
+    best = None
+    for item_id, row in tuple((bucket.get("items") or {}).items()):
+        value = _decayed_pressure_value(sim, row)
+        if abs(value) < float(min_abs):
+            continue
+        if best is None or abs(value) > abs(best["value"]):
+            label = _pressure_label(value)
+            best = {
+                "item_id": item_id,
+                "item_name": str(row.get("item_name") or item_display_name(item_id, item_catalog=ITEM_CATALOG)).strip(),
+                "value": round(float(value), 3),
+                "label": label,
+                "note": _pressure_note_for_label(label),
+            }
+    return best
+
+
+class LocalTradePressureSystem(System):
+    """Records decaying local economy offsets from completed trade events."""
+
+    def __init__(self, sim):
+        super().__init__(sim)
+        _local_trade_pressure_state(sim)
+        self.sim.events.subscribe("trade_bought", self.on_trade_bought)
+        self.sim.events.subscribe("trade_sold", self.on_trade_sold)
+        self.runs_without_turn = True
+
+    def _property_for_event(self, event):
+        property_id = str(event.data.get("property_id", "") or "").strip()
+        if not property_id:
+            return None
+        return getattr(self.sim, "properties", {}).get(property_id)
+
+    def on_trade_bought(self, event):
+        if bool(event.data.get("owner_transfer")) or bool(event.data.get("service_stock")):
+            return
+        if str(event.data.get("transfer_mode", "") or "").strip().lower() == "service":
+            return
+        prop = self._property_for_event(event)
+        record_local_trade_pressure(
+            self.sim,
+            prop,
+            event.data.get("item_id"),
+            quantity=event.data.get("quantity", 1),
+            direction="bought_from_store",
+            item_name=event.data.get("item_name", ""),
+        )
+
+    def on_trade_sold(self, event):
+        prop = self._property_for_event(event)
+        record_local_trade_pressure(
+            self.sim,
+            prop,
+            event.data.get("item_id"),
+            quantity=event.data.get("quantity", 1),
+            direction="sold_to_store",
+            owner_transfer=bool(event.data.get("owner_transfer")),
+            item_name=event.data.get("item_name", ""),
+        )
+
+
 def _active_market_pressures(sim):
     traits = getattr(sim, "world_traits", {}) or {}
     raw = traits.get("market_pressures", [])
@@ -551,7 +948,11 @@ def store_supply_profile(sim, prop):
 
     context_label = str(profile.get("context_label", "local trade")).strip() or "local trade"
     pressure_note = str(profile.get("pressure_note", "")).strip()
-    profile["store_note"] = context_label if not pressure_note else f"{context_label}; {pressure_note}"
+    local_pressure_note = ", ".join(local_trade_pressure_notes_for_property(sim, prop, limit=2, min_abs=1.8))
+    profile["local_trade_pressure_note"] = local_pressure_note
+    combined_pressure = ", ".join(bit for bit in (pressure_note, local_pressure_note) if bit)
+    profile["pressure_note"] = combined_pressure
+    profile["store_note"] = context_label if not combined_pressure else f"{context_label}; {combined_pressure}"
     return profile
 
 

@@ -1,7 +1,7 @@
 from engine.events import Event
 from engine.systems import System
 from game.appearance_loadout import STYLE_SERVICE_OPTIONS, style_service_kinds_for_property
-from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position
+from game.components import FinancialProfile, Inventory, NPCNeeds, NPCSettlement, NPCRoutine, Occupation, PlayerAssets, Position
 from game.casino_ui_runtime import (
     CASINO_FLOOR_ARCHETYPES,
     CASINO_MACHINE_SERVICE_IDS,
@@ -36,11 +36,13 @@ from game.player_businesses import (
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_runtime import (
     finance_services_for_property as _finance_services_for_property,
+    property_covering as _property_covering,
     property_infrastructure_role as _property_infrastructure_role,
     property_is_storefront as _property_is_storefront,
     resolve_property_record as _resolve_property_record,
     site_services_for_property as _site_services_for_property,
 )
+from game.justice_dispatch_runtime import request_player_justice_dispatch
 from game.service_runtime import (
     CASINO_KENO_DRAW_COUNT,
     CASINO_KENO_MAX_PICKS,
@@ -228,6 +230,56 @@ class ServiceMenuSystem(System):
             return False
         property_id = str(prop.get("id", "")).strip()
         return bool(property_id and property_id in getattr(assets, "owned_property_ids", set()))
+
+    def _anchor_matches_property(self, anchor, prop):
+        if not isinstance(prop, dict) or not anchor:
+            return False
+        prop_id = str(prop.get("id", "") or "").strip()
+        if isinstance(anchor, dict):
+            anchor_prop = str(anchor.get("property_id", "") or anchor.get("prop_id", "") or "").strip()
+            if anchor_prop and anchor_prop == prop_id:
+                return True
+            x = anchor.get("x")
+            y = anchor.get("y")
+            z = anchor.get("z", prop.get("z", 0))
+        elif isinstance(anchor, (tuple, list)) and len(anchor) >= 2:
+            x = anchor[0]
+            y = anchor[1]
+            z = anchor[2] if len(anchor) >= 3 else prop.get("z", 0)
+        else:
+            return False
+        try:
+            covered = _property_covering(self.sim, int(x), int(y), int(z or 0))
+        except (TypeError, ValueError):
+            return False
+        return isinstance(covered, dict) and str(covered.get("id", "") or "").strip() == prop_id
+
+    def _player_can_call_justice_from_property(self, eid, prop, pos):
+        if not isinstance(prop, dict):
+            return False
+        if self._player_owns_property(prop):
+            return True
+        prop_id = str(prop.get("id", "") or "").strip()
+        settlement = self.sim.ecs.get(NPCSettlement).get(eid)
+        if settlement is not None:
+            if prop_id and prop_id == str(getattr(settlement, "home_property_id", "") or "").strip():
+                return True
+            if prop_id and prop_id == str(getattr(settlement, "work_property_id", "") or "").strip():
+                return True
+        occupation = self.sim.ecs.get(Occupation).get(eid)
+        if occupation is not None:
+            workplace = getattr(occupation, "workplace", None)
+            if self._anchor_matches_property(workplace, prop):
+                return True
+            if isinstance(workplace, str) and workplace.strip() == prop_id:
+                return True
+        routine = self.sim.ecs.get(NPCRoutine).get(eid)
+        if routine is not None:
+            if self._anchor_matches_property(getattr(routine, "home", None), prop):
+                return True
+            if self._anchor_matches_property(getattr(routine, "work", None), prop):
+                return True
+        return False
 
     def _inventory_item_count(self, item_id):
         inventory = self.sim.ecs.get(Inventory).get(self.player_eid)
@@ -2652,6 +2704,7 @@ class ServiceMenuSystem(System):
         return ""
 
     def _service_menu_options(self, eid, prop, pos):
+        dispatch_ok = self._player_can_call_justice_from_property(eid, prop, pos)
         access = _evaluate_property_access(
             self.sim,
             eid,
@@ -2660,28 +2713,31 @@ class ServiceMenuSystem(System):
             y=pos.y,
             z=pos.z,
         )
-        if not access.can_use_services:
+        if not access.can_use_services and not dispatch_ok:
             return [], None
 
         options = []
         storefront_service = None
-        if _property_is_storefront(prop):
+        if access.can_use_services and _property_is_storefront(prop):
             storefront_service = _storefront_service_profile(self.sim, prop, actor_eid=eid)
             if storefront_service.get("available") and not self._machine_service_profile(prop):
                 options.append({"id": "trade_buy", "label": _service_menu_option_label("trade_buy")})
                 options.append({"id": "trade_sell", "label": _service_menu_option_label("trade_sell")})
 
-        finance_services = set(_finance_services_for_property(prop))
+        finance_services = set(_finance_services_for_property(prop)) if access.can_use_services else set()
         if "banking" in finance_services:
             options.append({"id": "banking", "label": _service_menu_option_label("banking")})
         if "insurance" in finance_services:
             options.append({"id": "insurance", "label": _service_menu_option_label("insurance")})
 
-        if self._player_can_redeem_meal_voucher(prop):
+        if access.can_use_services and self._player_can_redeem_meal_voucher(prop):
             options.append({"id": "redeem_meal_voucher", "label": "Redeem meal voucher"})
 
-        for site_service in _site_services_for_property(prop):
+        for site_service in _site_services_for_property(prop) if access.can_use_services else ():
             options.append({"id": site_service, "label": _service_menu_option_label(site_service)})
+
+        if dispatch_ok:
+            options.append({"id": "justice_dispatch", "label": _service_menu_option_label("justice_dispatch")})
 
         deduped = []
         seen = set()
@@ -3101,6 +3157,43 @@ class ServiceMenuSystem(System):
                 f"Bought {item_name} for {_credit_amount_label(credits_spent)}.",
                 f"{item_name} drops into your bag.",
             ]
+        if service == "herbal_care":
+            hp_gain = int(event.data.get("hp_gain", 0))
+            hunger_gain = int(event.data.get("hunger_gain", 0))
+            thirst_gain = int(event.data.get("thirst_gain", 0))
+            credits_spent = int(event.data.get("credits_spent", 0))
+            gain_bits = []
+            if hp_gain > 0:
+                gain_bits.append(f"HP +{hp_gain}")
+            if hunger_gain > 0:
+                gain_bits.append(f"food +{hunger_gain}")
+            if thirst_gain > 0:
+                gain_bits.append(f"water +{thirst_gain}")
+            lines = [
+                f"{prop_name} mixes a quick restorative for {_credit_amount_label(credits_spent)}.",
+                " ".join(gain_bits) if gain_bits else "You come away steadier.",
+            ]
+            practice_note = _sentence_from_note(event.data.get("practice_note", ""))
+            if practice_note:
+                lines.append(practice_note)
+            return f"Herbal Care: {prop_name}", lines
+        if service == "campfire_cook":
+            input_units = int(event.data.get("input_units", 0) or 0)
+            output_units = int(event.data.get("output_units", 0) or 0)
+            output_item_name = str(event.data.get("output_item_name", "cooked meat")).strip() or "cooked meat"
+            return f"Campfire Cooking: {prop_name}", [
+                f"You cook {input_units} raw meat into {output_units} {output_item_name}.",
+                "The campfire method is rough, but the result is pack-ready food.",
+            ]
+        if service == "butcher_prepare":
+            input_units = int(event.data.get("input_units", 0) or 0)
+            output_units = int(event.data.get("output_units", 0) or 0)
+            output_item_name = str(event.data.get("output_item_name", "packaged meat")).strip() or "packaged meat"
+            credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            return f"Butcher Prep: {prop_name}", [
+                f"{prop_name} prepares {input_units} raw meat into {output_units} {output_item_name}.",
+                f"Fee {_credit_amount_label(credits_spent)}.",
+            ]
         if service in {"vehicle_sales_new", "vehicle_sales_used"}:
             vehicle_name = str(event.data.get("vehicle_name", "vehicle")).strip() or "vehicle"
             price = int(event.data.get("price", 0))
@@ -3345,6 +3438,12 @@ class ServiceMenuSystem(System):
             return f"{title}: {prop_name}", lines
         if reason == "no_need" and service == "shelter":
             return title, [f"You do not need shelter at {prop_name} right now."]
+        if reason == "no_need" and service == "herbal_care":
+            return f"Herbal Care: {prop_name}", [f"You do not need restorative care at {prop_name} right now."]
+        if reason == "no_meat" and service == "campfire_cook":
+            return f"Campfire Cooking: {prop_name}", ["You need raw or bagged game meat to cook here."]
+        if reason == "no_meat" and service == "butcher_prepare":
+            return f"Butcher Prep: {prop_name}", ["Bring raw or bagged game meat for the butcher to prepare."]
         if reason == "no_leads" and service == "intel":
             return f"Intel: {prop_name}", [f"{prop_name} has no fresh routes or leads right now."]
         if reason == "no_vehicle" and service == "fuel":
@@ -3412,6 +3511,26 @@ class ServiceMenuSystem(System):
             return f"Vending: {prop_name}", [
                 f"{item_name} costs {_credit_amount_label(cost)} here.",
                 f"You only have {_credit_amount_label(credits)} on hand.",
+            ]
+        if reason == "no_credits" and service == "herbal_care":
+            cost = int(event.data.get("cost", 0))
+            credits = int(event.data.get("credits", 0))
+            return f"Herbal Care: {prop_name}", [
+                f"{prop_name} charges {_credit_amount_label(cost)} for restorative care.",
+                f"You only have {_credit_amount_label(credits)} on hand.",
+            ]
+        if reason == "no_credits" and service == "butcher_prepare":
+            cost = int(event.data.get("cost", 0))
+            credits = int(event.data.get("credits", 0))
+            return f"Butcher Prep: {prop_name}", [
+                f"{prop_name} charges {_credit_amount_label(cost)} per first batch.",
+                f"You only have {_credit_amount_label(credits)} on hand.",
+            ]
+        if reason == "inventory_full" and service in {"campfire_cook", "butcher_prepare"}:
+            item_name = "cooked meat" if service == "campfire_cook" else "packaged meat"
+            return title, [
+                f"No room for the {item_name}.",
+                "Free up inventory space before handing over the meat.",
             ]
         if reason == "no_tokens" and service in TRANSIT_SERVICE_IDS:
             profile = _transit_service_profile(service) or {}
@@ -4017,6 +4136,34 @@ class ServiceMenuSystem(System):
             else:
                 title, lines = self._bank_blocked_lines(Event("banking_action_blocked", eid=self.player_eid, reason="no_banking_service"))
                 self._present_service_result(title, lines)
+            return
+        if option_id == "justice_dispatch":
+            if not isinstance(prop, dict):
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+                return
+            pos = self._position_for(self.player_eid)
+            if pos is None:
+                self._present_service_result("Dispatch", ["No valid position is available for the call."], property_id=property_id)
+                return
+            if not self._player_can_call_justice_from_property(self.player_eid, prop, pos):
+                self._present_service_result("Dispatch", ["This place cannot place a clean dispatch call for you."], property_id=property_id)
+                return
+            result = request_player_justice_dispatch(
+                self.sim,
+                self.player_eid,
+                int(pos.x),
+                int(pos.y),
+                int(pos.z),
+                source="property_service",
+                property_id=property_id,
+                property_name=str(prop.get("name", property_id) or property_id).strip(),
+            )
+            self._present_service_result(
+                "Dispatch",
+                tuple(result.get("lines", ()) or ("Dispatch request sent.",)),
+                property_id=property_id,
+            )
             return
         if option_id == "redeem_meal_voucher":
             if not isinstance(prop, dict):

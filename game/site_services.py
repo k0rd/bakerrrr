@@ -6,6 +6,7 @@ from game.appearance_loadout import apply_appearance_service
 from engine.underground import UNDERGROUND_ACCESS_SERVICE
 from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, PropertyKnowledge, StatusEffects, VehicleState, Vitality
 from game.items import ITEM_CATALOG, item_display_name
+from game.hunting_runtime import convert_meat_stack
 from game.opportunities import accept_service_job_offer, append_external_opportunity, opportunity_instruction_lines
 from game.organization_response import property_vigilante_denial
 from game.organizations import effective_org_access_posture, property_service_practice_bundle
@@ -229,6 +230,8 @@ class SiteServiceSystem(System):
     REST_STAY_HOURS = 8
     REST_COOLDOWN_TICKS = 1800
     REST_WELL_RESTED_TICKS = 900
+    HERBAL_CARE_COST = 14
+    HERBAL_CARE_COOLDOWN_TICKS = 120
     FETCH_BASE_COST = 15
     FETCH_DISTANCE_MULT = 4
     FETCH_EMPTY_SURCHARGE = 20
@@ -1981,6 +1984,14 @@ class SiteServiceSystem(System):
             return "vehicle_sales_new"
         if "vehicle_sales_used" in services:
             return "vehicle_sales_used"
+        if "herbal_care" in services:
+            wants_herbal_care = False
+            if needs:
+                wants_herbal_care = float(getattr(needs, "hunger", 86.0)) < 88.0 or float(getattr(needs, "thirst", 90.0)) < 88.0
+            if vitality and int(vitality.hp) < int(vitality.max_hp):
+                wants_herbal_care = True
+            if wants_herbal_care:
+                return "herbal_care"
         if "rest" in services and wants_shelter:
             return "rest"
         if "shelter" in services and wants_shelter:
@@ -2081,6 +2092,15 @@ class SiteServiceSystem(System):
             return True
         if service == "rest":
             self._apply_rest(eid, prop)
+            return True
+        if service == "herbal_care":
+            self._apply_herbal_care(eid, prop)
+            return True
+        if service == "campfire_cook":
+            self._apply_meat_conversion_service(eid, prop, service)
+            return True
+        if service == "butcher_prepare":
+            self._apply_meat_conversion_service(eid, prop, service)
             return True
         if service == "intel":
             self._emit_intel(eid, prop, pos)
@@ -2334,6 +2354,127 @@ class SiteServiceSystem(System):
             practice_note=practice_note,
             well_rested_ticks=self.REST_WELL_RESTED_TICKS,
         )
+
+    def _apply_herbal_care(self, eid, prop):
+        ready_in = self._service_ready_in(eid, prop, "herbal_care")
+        if ready_in > 0:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="herbal_care",
+                reason="cooldown",
+                ready_in=ready_in,
+            ))
+            return
+
+        practice = self._service_practice_bundle(eid, prop, "herbal_care")
+        practice_modifiers = dict(practice.get("effect_modifiers", {}))
+        practice_note = str(practice.get("note_text", "") or "").strip()
+        quality_mult = self._service_quality_mult(practice_modifiers)
+        care_cost = max(1, int(round(float(self.HERBAL_CARE_COST) * self._service_cost_mult(practice_modifiers))))
+        assets = self._assets_for(eid)
+        credits = int(getattr(assets, "credits", 0)) if assets else 0
+        if credits < care_cost:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="herbal_care",
+                reason="no_credits",
+                cost=care_cost,
+                credits=credits,
+            ))
+            return
+
+        needs = self.sim.ecs.get(NPCNeeds).get(eid)
+        vitality = self.sim.ecs.get(Vitality).get(eid)
+        hunger_before = thirst_before = hp_before = None
+        hunger_gain = thirst_gain = hp_gain = 0
+
+        if needs:
+            hunger_before = float(getattr(needs, "hunger", 86.0))
+            thirst_before = float(getattr(needs, "thirst", 90.0))
+            if hunger_before < 96.0:
+                hunger_gain = min(45, max(10, int(round((100.0 - hunger_before) * 0.55 * quality_mult))))
+            if thirst_before < 96.0:
+                thirst_gain = min(50, max(12, int(round((100.0 - thirst_before) * 0.62 * quality_mult))))
+        if vitality:
+            hp_before = int(vitality.hp)
+            missing_hp = max(0, int(vitality.max_hp) - int(vitality.hp))
+            if missing_hp > 0:
+                hp_gain = min(missing_hp, max(3, int(round(min(14, missing_hp * 0.42) * quality_mult))))
+
+        if hunger_gain <= 0 and thirst_gain <= 0 and hp_gain <= 0:
+            self.sim.emit(Event(
+                "site_service_blocked",
+                eid=eid,
+                property_id=prop["id"],
+                property_name=prop.get("name", prop["id"]),
+                service="herbal_care",
+                reason="no_need",
+                cost=care_cost,
+                credits=credits,
+            ))
+            return
+
+        if assets:
+            assets.credits = max(0, int(assets.credits) - int(care_cost))
+        if needs:
+            if hunger_gain > 0:
+                needs.hunger = _clamp(hunger_before + hunger_gain)
+            if thirst_gain > 0:
+                needs.thirst = _clamp(thirst_before + thirst_gain)
+        if vitality and hp_gain > 0:
+            vitality.hp = min(int(vitality.max_hp), int(vitality.hp) + hp_gain)
+
+        cooldown_ticks = max(1, int(round(float(self.HERBAL_CARE_COOLDOWN_TICKS) * self._service_cooldown_mult(practice_modifiers))))
+        self._set_service_cooldown(eid, prop, "herbal_care", cooldown_ticks)
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service="herbal_care",
+            credits_spent=care_cost,
+            hunger_gain=int(hunger_gain),
+            thirst_gain=int(thirst_gain),
+            hp_gain=int(hp_gain),
+            hunger_before=hunger_before,
+            thirst_before=thirst_before,
+            hp_before=hp_before,
+            practice_note=practice_note,
+        ))
+
+    def _apply_meat_conversion_service(self, eid, prop, service):
+        result = convert_meat_stack(self.sim, eid, service)
+        if not result.get("ok"):
+            payload = {
+                "eid": eid,
+                "property_id": prop["id"],
+                "property_name": prop.get("name", prop["id"]),
+                "service": service,
+                "reason": str(result.get("reason", "blocked") or "blocked").strip().lower(),
+            }
+            for key in ("cost", "credits", "output_item_id", "quantity"):
+                if key in result:
+                    payload[key] = result.get(key)
+            self.sim.emit(Event("site_service_blocked", **payload))
+            return
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service=service,
+            input_units=int(result.get("input_units", 0) or 0),
+            output_units=int(result.get("output_units", 0) or 0),
+            output_item_id=result.get("output_item_id"),
+            output_item_name=result.get("output_item_name"),
+            credits_spent=int(result.get("credits_spent", 0) or 0),
+        ))
 
     def _transit_destinations(self, prop, service):
         service = str(service or "").strip().lower()

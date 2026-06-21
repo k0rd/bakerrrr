@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from game.components import AI, Position
 from game.components import PlayerAssets
+from game.economy import strongest_local_trade_pressure_for_property
 from game.incident_runtime import incident_record
 from game.organization_presence import format_visible_property_org_presence
 from game.organizations import local_protective_pressure_snapshot
@@ -15,10 +16,15 @@ from game.property_runtime import (
     building_id_from_property,
     property_display_position,
     property_focus_position,
+    property_is_storefront,
     property_metadata,
     property_supports_business_relevance,
 )
 from game.system_support.crime_plan_runtime import crime_plan_surface_rows
+from game.world_event_presentation import (
+    world_event_effect_summary,
+    world_event_uses_direct_row,
+)
 
 
 _PHASE_PROFILES = {
@@ -207,31 +213,31 @@ _SCENE_TYPE_PROFILES = {
 _WORLD_EVENT_PROFILES = {
     "market_day": {
         "title": "Market Day",
-        "summary": "a temporary market has opened in public view",
-        "action": "trade, question the vendor, or watch who uses the stall",
+        "summary": "a temporary market has opened in public view with a real stall to use",
+        "action": "trade, question the vendor, or watch who uses the crowd cover",
         "property_name": "temporary market",
     },
     "black_market_window": {
         "title": "Black Market Window",
-        "summary": "an off-book seller is taking quiet traffic",
-        "action": "browse carefully, talk to the seller, or keep the lead to yourself",
+        "summary": "an off-book seller is taking quiet traffic through a visible stall",
+        "action": "browse carefully, talk to the seller, or decide whether the cheap goods are worth the risk",
         "property_name": "off-book stall",
     },
     "hunter_party": {
         "title": "Hunter Party",
         "summary": "hunters have set up field work around a visible game rack",
-        "action": "inspect the rack or talk to the field crew",
+        "action": "inspect the rack, trade field talk, or ask the crew what moved nearby",
         "property_name": "field work site",
     },
     "campout": {
         "title": "Campout",
-        "summary": "a temporary camp is holding local trail traffic",
-        "action": "read the camp setup or talk to the people holding it",
+        "summary": "a temporary camp is holding local trail traffic around a fire ring",
+        "action": "read the camp setup, ask for trail news, or use the light and people as cover",
         "property_name": "temporary camp",
     },
     "security_sweep": {
         "title": "Security Sweep",
-        "summary": "extra guards are sweeping this block",
+        "summary": "extra guards are sweeping this block and widening who gets noticed",
         "action": "watch patrol routes, ask what triggered the sweep, or stay clean",
         "property_name": "this block",
     },
@@ -248,6 +254,7 @@ _ROW_PRIORITY_BY_SOURCE = {
     "reported_incident_hold": 30,
     "crime_plan": 40,
     "protective_pressure": 50,
+    "trade_pressure": 55,
 }
 
 _HIGH_URGENCY_PHASES = {"fire_response", "street_triage"}
@@ -583,6 +590,10 @@ def _row_from_scene(sim, scene_id, scene, *, player_pos=None, player_eid=None):
     organization_presence = format_visible_property_org_presence(sim, prop)
     source_kind = _text(scene.get("source_kind")).lower() or "business_scene"
     ownership = _ownership_fields(sim, prop, player_eid=player_eid)
+    world_event_context_key = _text(scene.get("world_event_context_key")).lower()
+    world_event_context_label = _text(scene.get("world_event_context_label"))
+    world_event_context_note = _text(scene.get("world_event_context_note"))
+    world_event_context_effect = _text(scene.get("world_event_context_effect"))
     return {
         "scene_id": _text(scene.get("scene_id")) or _text(scene_id),
         "property_id": property_id,
@@ -598,6 +609,10 @@ def _row_from_scene(sim, scene_id, scene, *, player_pos=None, player_eid=None):
         "anchor": anchor,
         "fixture_names": fixture_names,
         "organization_presence": organization_presence,
+        "world_event_context_key": world_event_context_key,
+        "world_event_context_label": world_event_context_label,
+        "world_event_context_note": world_event_context_note,
+        "world_event_context_effect": world_event_context_effect,
         "priority": _source_priority(source_kind, default=10),
         **_distance_fields(anchor, player_pos),
         **ownership,
@@ -651,7 +666,7 @@ def _row_from_world_event_property(sim, event, prop, *, player_pos=None, player_
     if not isinstance(event, dict) or not isinstance(prop, dict):
         return None
     key = _text(event.get("key")).lower()
-    if key not in _WORLD_EVENT_PROFILES:
+    if key not in _WORLD_EVENT_PROFILES or not world_event_uses_direct_row(key):
         return None
     anchor = property_focus_position(prop) or property_display_position(prop)
     anchor = _anchor_tuple(anchor)
@@ -661,6 +676,7 @@ def _row_from_world_event_property(sim, event, prop, *, player_pos=None, player_
     property_id = _text(prop.get("id"))
     event_id = _int(event.get("id"), 0)
     title = _text(profile.get("title")) or _text(event.get("label")) or _title_from_slug(key)
+    effect_summary = world_event_effect_summary(event)
     return {
         "scene_id": f"world_event:{event_id}:{key}:{property_id}",
         "property_id": property_id,
@@ -679,6 +695,7 @@ def _row_from_world_event_property(sim, event, prop, *, player_pos=None, player_
         "priority": _source_priority("world_event"),
         "world_event_id": event_id,
         "world_event_key": key,
+        "effect_summary": effect_summary,
         **_distance_fields(anchor, player_pos),
         **_ownership_fields(sim, prop, player_eid=player_eid),
     }
@@ -711,13 +728,14 @@ def _row_from_world_event_actor(sim, event, *, player_pos=None):
     if not isinstance(event, dict):
         return None
     key = _text(event.get("key")).lower()
-    if key not in _WORLD_EVENT_PROFILES:
+    if key not in _WORLD_EVENT_PROFILES or not world_event_uses_direct_row(key):
         return None
     anchor = _event_actor_anchor(sim, event, player_pos=player_pos)
     if anchor is None:
         return None
     event_id = _int(event.get("id"), 0)
     profile = _world_event_profile(event)
+    effect_summary = world_event_effect_summary(event)
     return {
         "scene_id": f"world_event:{event_id}:{key}",
         "property_id": "",
@@ -736,6 +754,7 @@ def _row_from_world_event_actor(sim, event, *, player_pos=None):
         "priority": _source_priority("world_event"),
         "world_event_id": event_id,
         "world_event_key": key,
+        "effect_summary": effect_summary,
         "is_player_owned_site": False,
         "player_business_relevance": False,
         **_distance_fields(anchor, player_pos),
@@ -746,7 +765,7 @@ def _world_event_rows(sim, *, player_pos=None, player_eid=None):
     rows = []
     for event in _active_world_event_store(sim):
         key = _text(event.get("key")).lower()
-        if key not in _WORLD_EVENT_PROFILES:
+        if key not in _WORLD_EVENT_PROFILES or not world_event_uses_direct_row(key):
             continue
         if not bool(event.get("materialized")):
             continue
@@ -783,7 +802,7 @@ def _world_event_row_for_property(sim, prop, *, player_pos=None, player_eid=None
         if not bool(event.get("materialized")):
             continue
         key = _text(event.get("key")).lower()
-        if key not in _WORLD_EVENT_PROFILES:
+        if key not in _WORLD_EVENT_PROFILES or not world_event_uses_direct_row(key):
             continue
         event_id = _int(event.get("id"), 0)
         spawned_ids = {_text(pid) for pid in tuple(event.get("spawned_property_ids", ()) or ())}
@@ -932,6 +951,51 @@ def _row_from_protective_pressure(sim, prop, pressure, *, player_pos=None, playe
     }
 
 
+def _row_from_trade_pressure(sim, prop, pressure, *, player_pos=None, player_eid=None):
+    if not isinstance(prop, dict) or not isinstance(pressure, dict):
+        return None
+    anchor = property_focus_position(prop) or property_display_position(prop)
+    anchor = _anchor_tuple(anchor)
+    if anchor is None:
+        return None
+    property_id = _text(prop.get("id"))
+    item_name = _text(pressure.get("item_name")) or "stock"
+    label = _text(pressure.get("label")) or "pressure"
+    try:
+        value = float(pressure.get("value", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    if value >= 0:
+        summary = f"the counter has plenty of {item_name} right now"
+        action = "buy cheap, sell elsewhere, or wait for the shelf to clear"
+    else:
+        summary = f"the counter is short on {item_name} right now"
+        action = "bring some in, buy before it tightens, or ask who needs it"
+    return {
+        "scene_id": f"trade_pressure:{property_id}:{_text(pressure.get('item_id'))}",
+        "property_id": property_id,
+        "property_name": _property_name(prop),
+        "title": "Trade Pressure",
+        "summary": summary,
+        "action": action,
+        "event_phase": "trade_pressure",
+        "scene_type": "trade_pressure",
+        "traffic_state": "",
+        "community_tone": label,
+        "source_kind": "trade_pressure",
+        "anchor": anchor,
+        "fixture_names": (),
+        "organization_presence": format_visible_property_org_presence(sim, prop),
+        "priority": _source_priority("trade_pressure"),
+        "trade_pressure_item_id": _text(pressure.get("item_id")),
+        "trade_pressure_item_name": item_name,
+        "trade_pressure_label": label,
+        "trade_pressure_value": round(float(value), 3),
+        **_distance_fields(anchor, player_pos),
+        **_ownership_fields(sim, prop, player_eid=player_eid),
+    }
+
+
 def _row_dedupe_key(row):
     property_id = _text(row.get("property_id")).lower()
     if property_id:
@@ -1036,6 +1100,25 @@ def local_situation_rows(sim, player_eid=None, *, limit=4, current_chunk_only=Tr
         if row:
             rows.append(row)
 
+    for prop in getattr(sim, "properties", {}).values():
+        if not isinstance(prop, dict) or not property_is_storefront(prop):
+            continue
+        anchor = property_focus_position(prop) or property_display_position(prop)
+        if anchor is None:
+            continue
+        if current_chunk_only and not _same_chunk(sim, player_pos, anchor):
+            continue
+        pressure = strongest_local_trade_pressure_for_property(sim, prop, min_abs=3.0)
+        row = _row_from_trade_pressure(
+            sim,
+            prop,
+            pressure,
+            player_pos=player_pos,
+            player_eid=player_eid,
+        )
+        if row:
+            rows.append(row)
+
     return _dedupe_and_sort_rows(rows, limit=limit)
 
 
@@ -1049,6 +1132,10 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
         org_text = f" Orgs: {row['organization_presence']}." if _text(row.get("organization_presence")) else ""
         owner_cue = _text(row.get("player_business_cue"))
         owner_style = _text(row.get("operating_style_label"))
+        effect_summary = _text(row.get("effect_summary"))
+        effect_text = f" Effect: {effect_summary}." if effect_summary else ""
+        world_event_context = _text(row.get("world_event_context_note"))
+        context_text = f" World event pressure: {world_event_context}." if world_event_context else ""
         if row.get("player_business_relevance") and owner_cue:
             owner_text = f" Your business is directly involved: {owner_cue}."
         elif row.get("player_business_relevance") and owner_style:
@@ -1059,7 +1146,7 @@ def local_situation_report_lines(sim, player_eid, *, limit=4):
             owner_text = ""
         lines.append(
             f"{row['title']} at {row['property_name']} ({row['distance_text']}): "
-            f"{row['summary']}; {row['action']}.{org_text}{fixture_text}{owner_text}"
+            f"{row['summary']}; {row['action']}.{org_text}{fixture_text}{effect_text}{context_text}{owner_text}"
         )
     return tuple(lines)
 
@@ -1080,12 +1167,23 @@ def _look_org_text(row):
     return f"; orgs {row['organization_presence']}" if _text(row.get("organization_presence")) else ""
 
 
+def _look_effect_text(row):
+    effect = _text(row.get("effect_summary"))
+    if effect:
+        return f"; effect {effect}"
+    context_note = _text(row.get("world_event_context_note"))
+    if context_note:
+        return f"; world event pressure {context_note}"
+    return ""
+
+
 def _format_property_look_row(row):
     if not row:
         return ""
     return (
         f"situation:{row['title']} active here - {row['summary']}; {row['action']}"
         + _look_org_text(row)
+        + _look_effect_text(row)
         + _look_owner_text(row)
     )
 
@@ -1178,6 +1276,18 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
     if pressure_row:
         candidates.append(pressure_row)
 
+    if property_is_storefront(prop):
+        trade_pressure = strongest_local_trade_pressure_for_property(sim, prop, min_abs=3.0)
+        trade_pressure_row = _row_from_trade_pressure(
+            sim,
+            prop,
+            trade_pressure,
+            player_pos=player_pos,
+            player_eid=viewer_eid,
+        )
+        if trade_pressure_row:
+            candidates.append(trade_pressure_row)
+
     rows = _dedupe_and_sort_rows(candidates, limit=1)
     if not rows:
         return ""
@@ -1195,6 +1305,7 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
             f"situation:{row['title']} for {row['property_name']} - "
             f"{fixture_name} is the visible handle; {row['action']}"
             + _look_org_text(row)
+            + _look_effect_text(row)
             + _look_owner_text(row)
         )
     if row.get("source_kind") == "world_event":
@@ -1202,6 +1313,7 @@ def local_situation_look_text_for_property(sim, prop, viewer_eid=None):
         return (
             f"situation:{row['title']} active here - "
             f"{fixture_name} is the visible handle; {row['action']}"
+            + _look_effect_text(row)
             + _look_owner_text(row)
         )
     return _format_property_look_row(row)

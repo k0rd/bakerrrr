@@ -22,6 +22,7 @@ from game.components import (
 )
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
+from game.hunting_runtime import hunting_carcass_look_text, hunting_carcasses_at
 from game.human_description import human_look_description_clause
 from game.human_identity import is_human_identity
 from game.local_situations import local_situation_look_text_for_property
@@ -228,6 +229,12 @@ class PlayerLookRuntime:
             if remaining > 0:
                 item_text += f" +{remaining}"
             bits.append(f"items:{item_text}")
+
+        carcass_rows = () if map_mode_active(self.sim) else hunting_carcasses_at(self.sim, x, y, z=z)
+        if carcass_rows:
+            carcass_text = hunting_carcass_look_text(carcass_rows[0])
+            if carcass_text:
+                bits.append(carcass_text)
 
         projectiles = [
             projectile

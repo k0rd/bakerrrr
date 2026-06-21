@@ -65,7 +65,12 @@ from game.components import (
     WeaponUseProfile,
 )
 from game.bones import maybe_seed_bones_for_chunk, prime_bones_runtime
-from game.economy import chunk_economy_profile, pick_career_for_workplace, workplace_archetype_weight
+from game.economy import (
+    LocalTradePressureSystem,
+    chunk_economy_profile,
+    pick_career_for_workplace,
+    workplace_archetype_weight,
+)
 from game.finance_services import FinanceSystem
 from game.custom_content import (
     apply_custom_content,
@@ -74,6 +79,7 @@ from game.custom_content import (
 )
 from game.final_notice import show_final_notice, show_run_end_notice
 from game.items import ITEM_CATALOG
+from game.hunting_runtime import HuntingCarcassSystem
 from game.large_span_places import register_large_span_child_properties
 from game.npc_names import (
     generate_human_household_names,
@@ -729,6 +735,7 @@ def _register_runtime_systems(sim, view, player):
     criminal_justice_system = CriminalJusticeSystem(sim, player)
     service_menu_system = ServiceMenuSystem(sim, player)
     trade_system = TradeSystem(sim, player)
+    local_trade_pressure_system = LocalTradePressureSystem(sim)
     weapon_system = WeaponSystem(sim, player)
     finance_system = FinanceSystem(sim, player)
     site_service_system = SiteServiceSystem(sim, player)
@@ -743,6 +750,7 @@ def _register_runtime_systems(sim, view, player):
     creature_hazard_system = CreatureHazardSystem(sim, player)
     environmental_hazard_system = EnvironmentalHazardSystem(sim)
     fire_system = FireSystem(sim)
+    hunting_carcass_system = HuntingCarcassSystem(sim)
 
     property_system = PropertySystem(sim, player)
     player_business_system = PlayerBusinessSystem(sim, player)
@@ -801,6 +809,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(skill_progression_system, 0)
     _live_timeskip_stride(service_menu_system, 0)
     _live_timeskip_stride(trade_system, 0)
+    _live_timeskip_stride(local_trade_pressure_system, 0)
     _live_timeskip_stride(finance_system, 12)
     _live_timeskip_stride(npc_interaction_system, 0)
     _live_timeskip_stride(weapon_system, 0)
@@ -827,6 +836,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(npc_settlement_system, 600)
     _live_timeskip_stride(status_effect_system, 5)
     _live_timeskip_stride(altered_state_system, 0)
+    _live_timeskip_stride(hunting_carcass_system, 0)
     _live_timeskip_stride(npc_item_use_system, 5)
     _live_timeskip_stride(npc_social_system, 10)
     _live_timeskip_stride(eavesdrop_system, 0)
@@ -869,6 +879,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(observed_incident_dispatch_system)
     sim.register_system(service_menu_system)
     sim.register_system(trade_system)
+    sim.register_system(local_trade_pressure_system)
     sim.register_system(finance_system)
     sim.register_system(site_service_system)
     sim.register_system(npc_interaction_system)
@@ -879,6 +890,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(creature_hazard_system)
     sim.register_system(environmental_hazard_system)
     sim.register_system(fire_system)
+    sim.register_system(hunting_carcass_system)
 
     sim.register_system(property_system)
     sim.register_system(player_business_system)

@@ -14,7 +14,7 @@ from game.appearance_loadout import (
     tattoo_service_metadata,
 )
 from game.components import Inventory, NPCSocial, PlayerAssets, Position, VehicleState
-from game.economy import item_market_bias, store_supply_profile
+from game.economy import item_market_bias, item_trade_pressure_bias, store_supply_profile
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
 from game.organization_reputation import organization_instability_profile
@@ -263,6 +263,10 @@ class TradeSystem(System):
     ITEM_BASE_VALUES = {
         "street_ration": 10,
         "protein_wrap": 11,
+        "raw_game_meat": 6,
+        "bagged_game_meat": 8,
+        "cooked_game_meat": 10,
+        "packaged_game_meat": 14,
         "noodle_cup": 9,
         "spark_brew": 14,
         "calm_patch": 18,
@@ -312,6 +316,8 @@ class TradeSystem(System):
         "rifle_mag_crate": 32,
         "rocket_tube_pack": 48,
         "pocket_multitool": 28,
+        "field_knife": 26,
+        "kill_bag": 34,
         "lucky_charm": 9,
         "lockpick_kit": 36,
         "prybar": 32,
@@ -424,6 +430,8 @@ class TradeSystem(System):
             "item_pool": (
                 ("street_ration", 35),
                 ("protein_wrap", 28),
+                ("packaged_game_meat", 10),
+                ("cooked_game_meat", 8),
                 ("noodle_cup", 22),
                 ("instant_soup_pack", 18),
                 ("spark_brew", 26),
@@ -433,6 +441,25 @@ class TradeSystem(System):
                 ("caff_shot", 10),
                 ("cheap_whiskey", 8),
                 ("calm_patch", 6),
+            ),
+        },
+        "butcher_shop": {
+            "min_slots": 3,
+            "max_slots": 6,
+            "buy_mult_lo": 0.95,
+            "buy_mult_hi": 1.22,
+            "sell_ratio": 0.54,
+            "unlisted_sell_ratio": 0.32,
+            "item_pool": (
+                ("packaged_game_meat", 34),
+                ("cooked_game_meat", 18),
+                ("street_ration", 12),
+                ("protein_wrap", 10),
+                ("field_knife", 12),
+                ("kill_bag", 8),
+                ("bandage_roll", 8),
+                ("field_dressing", 7),
+                ("bottled_water", 8),
             ),
         },
         "pawn_shop": {
@@ -666,6 +693,7 @@ class TradeSystem(System):
             "item_pool": (
                 ("street_ration", 34),
                 ("protein_wrap", 22),
+                ("packaged_game_meat", 8),
                 ("noodle_cup", 18),
                 ("energy_bar", 12),
                 ("bottled_water", 14),
@@ -1117,6 +1145,8 @@ class TradeSystem(System):
                 ("rifle_mag_crate", 10),
                 ("rifle_strip_pack", 8),
                 ("trail_machete", 12),
+                ("field_knife", 10),
+                ("kill_bag", 8),
                 ("fire_axe", 9),
                 ("holdout_pistol", 10),
                 ("snub_revolver", 7),
@@ -1142,6 +1172,7 @@ class TradeSystem(System):
                 ("water_purifier_tabs", 7),
                 ("emergency_blanket", 7),
                 ("energy_bar", 10),
+                ("packaged_game_meat", 5),
                 ("bottled_water", 10),
                 ("tee", 12),
                 ("button_up", 10),
@@ -1172,6 +1203,39 @@ class TradeSystem(System):
                 ("bracelet", 6),
                 ("gloves", 6),
                 ("watch", 5),
+            ),
+        },
+        "ranger_hut": {
+            "min_slots": 3,
+            "max_slots": 6,
+            "buy_mult_lo": 0.96,
+            "buy_mult_hi": 1.28,
+            "sell_ratio": 0.46,
+            "unlisted_sell_ratio": 0.26,
+            "item_pool": (
+                ("street_ration", 30),
+                ("protein_wrap", 22),
+                ("energy_bar", 20),
+                ("bottled_water", 28),
+                ("electrolyte_drink", 16),
+                ("hydration_salts", 18),
+                ("water_purifier_tabs", 16),
+                ("bandage_roll", 16),
+                ("field_dressing", 14),
+                ("med_gel", 10),
+                ("emergency_blanket", 12),
+                ("pocket_multitool", 12),
+                ("field_knife", 10),
+                ("kill_bag", 7),
+                ("inspection_mirror", 7),
+                ("trail_machete", 8),
+                ("tire_iron", 5),
+                ("rifle_strip_pack", 10),
+                ("varmint_rifle", 7),
+                ("hunting_rifle", 4),
+                ("shell_bandolier", 5),
+                ("buckshot_pouch", 4),
+                ("packaged_game_meat", 6),
             ),
         },
         "surplus_store": {
@@ -1502,6 +1566,8 @@ class TradeSystem(System):
             "item_pool": (
                 ("street_ration", 38),
                 ("protein_wrap", 28),
+                ("cooked_game_meat", 8),
+                ("packaged_game_meat", 6),
                 ("instant_soup_pack", 20),
                 ("spark_brew", 18),
                 ("canteen_coffee", 16),
@@ -1516,6 +1582,7 @@ class TradeSystem(System):
             "item_pool": (
                 ("street_ration", 18),
                 ("protein_wrap", 16),
+                ("packaged_game_meat", 4),
                 ("instant_soup_pack", 14),
                 ("bottled_water", 18),
                 ("spark_brew", 12),
@@ -1705,6 +1772,44 @@ class TradeSystem(System):
     def _effective_sell_price(self, base_price, terms):
         return max(1, int(round(int(base_price) * float(terms.get("sell_mult", 1.0)))))
 
+    def _store_prop_for_state(self, store):
+        if not isinstance(store, dict):
+            return None
+        property_id = str(store.get("property_id", "") or "").strip()
+        if not property_id:
+            return None
+        return self.sim.properties.get(property_id)
+
+    def _pressure_buy_price_mult(self, store, item_id):
+        prop = self._store_prop_for_state(store)
+        if not isinstance(prop, dict):
+            return 1.0
+        bias = item_trade_pressure_bias(self.sim, prop, item_id)
+        try:
+            return float(bias.get("buy_price_mult", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            return 1.0
+
+    def _effective_store_buy_price(self, entry, store, terms):
+        base_price = int(max(1, (entry or {}).get("buy_price", 1) or 1))
+        pressure_mult = self._pressure_buy_price_mult(store, (entry or {}).get("item_id"))
+        pressured_price = max(1, int(round(base_price * pressure_mult)))
+        return self._effective_buy_price(pressured_price, terms or {"buy_mult": 1.0})
+
+    def _trade_pressure_row_fields(self, store, item_id):
+        prop = self._store_prop_for_state(store)
+        if not isinstance(prop, dict):
+            return {}
+        bias = item_trade_pressure_bias(self.sim, prop, item_id)
+        label = str(bias.get("label", "") or "").strip()
+        fields = {
+            "trade_pressure_value": float(bias.get("value", 0.0) or 0.0),
+            "trade_pressure_note": str(bias.get("note", "") or "").strip(),
+        }
+        if label:
+            fields["trade_pressure_label"] = label
+        return fields
+
     def _trade_ui_state(self):
         state = getattr(self.sim, "trade_ui", None)
         if state is None:
@@ -1881,7 +1986,7 @@ class TradeSystem(System):
                 item_id = str(entry.get("item_id", "") or "").strip().lower()
                 if not item_id or int(entry.get("stock", 0) or 0) <= 0:
                     continue
-                price = self._effective_buy_price(entry.get("buy_price", 1), terms)
+                price = self._effective_store_buy_price(entry, store, terms)
                 if max_price is not None and price > max_price:
                     continue
                 if price > wallet:
@@ -2155,7 +2260,13 @@ class TradeSystem(System):
         weighted_pool = []
         for item_id, weight in profile.get("item_pool", ()):
             bias = item_market_bias(item_id, market_profile)
-            adjusted = float(weight) * float(bias.get("weight_mult", 1.0)) * float(weight_mults.get(item_id, 1.0))
+            pressure_bias = item_trade_pressure_bias(self.sim, prop, item_id)
+            adjusted = (
+                float(weight)
+                * float(bias.get("weight_mult", 1.0))
+                * float(pressure_bias.get("weight_mult", 1.0))
+                * float(weight_mults.get(item_id, 1.0))
+            )
             if owner_stock_tags:
                 overlap = set(item_purchase_tags(item_id)) & owner_stock_tags
                 if overlap:
@@ -2205,13 +2316,23 @@ class TradeSystem(System):
             else:
                 entry_metadata = {}
             bias = item_market_bias(item_id, market_profile)
+            pressure_bias = item_trade_pressure_bias(self.sim, prop, item_id)
             base = int(max(1, self.ITEM_BASE_VALUES.get(item_id, 10)))
             buy_price = max(
                 1,
-                int(round(base * rng.uniform(buy_mult_lo, buy_mult_hi) * float(bias.get("price_mult", 1.0)))),
+                int(round(
+                    base
+                    * rng.uniform(buy_mult_lo, buy_mult_hi)
+                    * float(bias.get("price_mult", 1.0))
+                    * float(pressure_bias.get("buy_price_mult", 1.0))
+                )),
             )
             sell_price = max(1, int(round(buy_price * sell_ratio)))
-            stock_mult = float(bias.get("stock_mult", 1.0)) * trade_stock_mult
+            stock_mult = (
+                float(bias.get("stock_mult", 1.0))
+                * float(pressure_bias.get("stock_mult", 1.0))
+                * trade_stock_mult
+            )
             item_min_stock = max(1, int(round(min_stock * max(0.6, stock_mult * 0.8))))
             item_max_stock = max(item_min_stock, int(round(max_stock * stock_mult)))
             entries.append({
@@ -2288,13 +2409,13 @@ class TradeSystem(System):
 
         candidates.sort(
             key=lambda row: (
-                self._effective_buy_price(row.get("buy_price", 0), terms),
+                self._effective_store_buy_price(row, state, terms),
                 row.get("item_id", ""),
             )
         )
         cheapest = candidates[0]
         for entry in candidates:
-            if credits >= self._effective_buy_price(entry.get("buy_price", 0), terms):
+            if credits >= self._effective_store_buy_price(entry, state, terms):
                 return entry, cheapest
         return None, cheapest
 
@@ -2508,6 +2629,9 @@ class TradeSystem(System):
                 "interest_accepted": bool(interest.get("accepted", True)),
                 "interest_pressure_weight": int(max(0, interest.get("pressure_weight", 0) or 0)),
                 "risk_label": interest.get("risk_label", ""),
+                "trade_pressure_label": interest.get("trade_pressure_label", ""),
+                "trade_pressure_note": interest.get("trade_pressure_note", ""),
+                "trade_pressure_value": float(interest.get("trade_pressure_value", 0.0) or 0.0),
             })
 
         if owner_transfer:
@@ -2529,7 +2653,7 @@ class TradeSystem(System):
         rows = []
         for entry in sorted(
             list(store.get("entries", [])),
-            key=lambda row: (self._effective_buy_price(row.get("buy_price", 0), terms), row.get("item_id", "")),
+            key=lambda row: (self._effective_store_buy_price(row, store, terms), row.get("item_id", "")),
         ):
             item_id = entry.get("item_id")
             item_def = ITEM_CATALOG.get(item_id, {"name": item_id, "glyph": "*"})
@@ -2541,9 +2665,10 @@ class TradeSystem(System):
                 "item_id": item_id,
                 "item_name": item_display_name_for_actor(self.sim, self.player_eid, row_entry, item_catalog=ITEM_CATALOG),
                 "glyph": _item_display_glyph(item_def),
-                "price": 0 if owner_transfer else self._effective_buy_price(entry.get("buy_price", 1), terms),
+                "price": 0 if owner_transfer else self._effective_store_buy_price(entry, store, terms),
                 "stock": int(max(0, entry.get("stock", 0))),
                 "action_label": "withdraw" if owner_transfer else "",
+                **({} if owner_transfer else self._trade_pressure_row_fields(store, item_id)),
             })
         return rows
 
@@ -2575,6 +2700,9 @@ class TradeSystem(System):
                 "interest_reason": row.get("interest_reason", ""),
                 "interest_price_mult": float(max(0.0, row.get("interest_price_mult", 1.0) or 1.0)),
                 "risk_label": row.get("risk_label", ""),
+                "trade_pressure_label": row.get("trade_pressure_label", ""),
+                "trade_pressure_note": row.get("trade_pressure_note", ""),
+                "trade_pressure_value": float(row.get("trade_pressure_value", 0.0) or 0.0),
             })
         return rows
 
@@ -2602,7 +2730,8 @@ class TradeSystem(System):
             else:
                 interest_text = str(row.get("interest_label", "") or "").strip()
                 risk_text = str(row.get("risk_label", "") or "").strip()
-                extra_bits = [bit for bit in (interest_text, risk_text) if bit]
+                pressure_text = str(row.get("trade_pressure_label", "") or "").strip()
+                extra_bits = [bit for bit in (pressure_text, interest_text, risk_text) if bit]
                 extra_text = f"; {'; '.join(extra_bits)}" if extra_bits else ""
                 state["inspect_text"] = _item_legend_line(
                     row.get("item_id"),
@@ -2636,11 +2765,14 @@ class TradeSystem(System):
         listed_text = "listed" if row.get("listed") else "unlisted"
         interest_text = str(row.get("interest_label", "") or "").strip()
         risk_text = str(row.get("risk_label", "") or "").strip()
+        pressure_text = str(row.get("trade_pressure_label", "") or "").strip()
         read_text = ""
         if interest_text:
             read_text = f"; {interest_text}"
             if not bool(row.get("interest_known", True)):
                 read_text += " (your read)"
+        if pressure_text:
+            read_text += f"; {pressure_text}"
         if risk_text:
             read_text += f"; {risk_text}"
         state["inspect_text"] = _item_legend_line(
@@ -3101,7 +3233,7 @@ class TradeSystem(System):
 
         terms = self._trade_terms(actor_eid, store_prop)
         base_price = int(max(1, choice.get("buy_price", 1)))
-        price = self._effective_buy_price(base_price, terms)
+        price = self._effective_store_buy_price(choice, store, terms)
         wallet_before = inventory_liquid_credits(inventory)
         if wallet_before < price:
             self.sim.emit(Event(
@@ -3626,7 +3758,7 @@ class TradeSystem(System):
                     property_id=store_prop["id"],
                 ))
                 return False
-            effective_price = self._effective_buy_price(choice.get("buy_price", 0), terms)
+            effective_price = self._effective_store_buy_price(choice, store, terms)
             if not owner_transfer and assets.credits < effective_price:
                 self.sim.emit(Event(
                     "trade_buy_blocked",
@@ -3646,7 +3778,7 @@ class TradeSystem(System):
                     eid=eid,
                     reason="insufficient_funds",
                     credits=assets.credits,
-                    cheapest_price=self._effective_buy_price(cheapest.get("buy_price", 0), terms),
+                    cheapest_price=self._effective_store_buy_price(cheapest, store, terms),
                     property_id=store_prop["id"],
                 ))
             else:
@@ -3737,7 +3869,7 @@ class TradeSystem(System):
             return False
 
         base_price = int(max(1, choice.get("buy_price", 1)))
-        price = 0 if owner_transfer else self._effective_buy_price(base_price, terms)
+        price = 0 if owner_transfer else self._effective_store_buy_price(choice, store, terms)
         if not owner_transfer:
             assets.credits -= price
         self._consume_store_stock(choice, 1)

@@ -7,10 +7,12 @@ from engine.systems import System
 from engine.visibility import has_line_of_sight as _has_line_of_sight
 from game.components import (
     AI,
+    AnimalPhysicalProfile,
     ArmorLoadout,
     Collider,
     CoverState,
     CreatureIdentity,
+    EcologyProfile,
     Inventory,
     ItemUseProfile,
     JusticeProfile,
@@ -1030,6 +1032,23 @@ class WeaponSystem(System):
 
             ai = ais.get(eid)
             npc_role = str(getattr(ai, "role", "")).strip().lower() if ai else ""
+            animal_payload = {}
+            identity = self.sim.ecs.get(CreatureIdentity).get(eid)
+            physical = self.sim.ecs.get(AnimalPhysicalProfile).get(eid)
+            ecology = self.sim.ecs.get(EcologyProfile).get(eid)
+            if identity and str(getattr(identity, "creature_type", "") or "").strip().lower() == "animal":
+                animal_payload = {
+                    "creature_type": str(getattr(identity, "creature_type", "") or "").strip().lower(),
+                    "taxonomy_class": str(getattr(identity, "taxonomy_class", "") or "").strip().lower(),
+                    "species": str(getattr(identity, "species", "") or "").strip().lower(),
+                    "common_name": str(getattr(identity, "common_name", "") or "").strip(),
+                    "display_name": str(identity.display_name() or "").strip(),
+                }
+                if physical:
+                    animal_payload["size_score"] = float(getattr(physical, "size_score", 0.0) or 0.0)
+                    animal_payload["juvenile"] = bool(getattr(physical, "juvenile", False))
+                if ecology:
+                    animal_payload["ecology_species"] = str(getattr(ecology, "species", "") or "").strip().lower()
             npc_credits = 0
             if inv:
                 for entry in list(inv.items):
@@ -1071,6 +1090,7 @@ class WeaponSystem(System):
                 npc_role=npc_role,
                 npc_credits=npc_credits,
                 p2p_bonus=p2p_bonus,
+                animal_payload=animal_payload,
             ))
 
     def _explode(self, projectile, x, y, z):

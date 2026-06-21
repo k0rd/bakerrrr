@@ -282,6 +282,98 @@
       }
     ]
   },
+  "raw_game_meat": {
+    "name": "Raw Game Meat",
+    "glyph": "%",
+    "stack_max": 2,
+    "tags": [
+      "meat",
+      "raw_meat",
+      "hunting",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "bagged_game_meat": {
+    "name": "Bagged Game Meat",
+    "glyph": "%",
+    "stack_max": 5,
+    "tags": [
+      "meat",
+      "raw_meat",
+      "field_dressed",
+      "hunting",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "cooked_game_meat": {
+    "name": "Cooked Game Meat",
+    "glyph": "%",
+    "stack_max": 3,
+    "tags": [
+      "consumable",
+      "energy",
+      "food",
+      "meal",
+      "meat",
+      "hunting",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 16
+      },
+      {
+        "type": "modify_need",
+        "need": "hunger",
+        "delta": 34
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 2
+      }
+    ]
+  },
+  "packaged_game_meat": {
+    "name": "Packaged Game Meat",
+    "glyph": "%",
+    "stack_max": 5,
+    "tags": [
+      "consumable",
+      "energy",
+      "food",
+      "meal",
+      "meat",
+      "packaged_meat",
+      "hunting",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 18
+      },
+      {
+        "type": "modify_need",
+        "need": "hunger",
+        "delta": 38
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 4
+      }
+    ]
+  },
   "noodle_cup": {
     "name": "Noodle Cup",
     "glyph": "%",
@@ -2157,6 +2249,21 @@
     "effects": [],
     "weapon_id": "shiv_knife"
   },
+  "field_knife": {
+    "name": "Field Knife",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "tool",
+      "knife",
+      "blade",
+      "survival",
+      "hunting",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
   "crowbar_club": {
     "name": "Crowbar Club",
     "glyph": ")",
@@ -3332,6 +3439,19 @@
     "container": {
       "bonus_slots": 3
     }
+  },
+  "kill_bag": {
+    "name": "Kill Bag",
+    "glyph": "{",
+    "stack_max": 1,
+    "tags": [
+      "gear",
+      "hunting",
+      "survival",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
   },
   "backpack": {
     "name": "Backpack",

@@ -21,6 +21,7 @@ from game.property_access import evaluate_property_access as _evaluate_property_
 from game.property_runtime import (
     property_covering as _property_covering,
     property_distance as _property_distance,
+    property_infrastructure_role as _property_infrastructure_role,
     property_services as _property_services,
     remember_property_lead_for_actor as _remember_property_lead_for_actor,
 )
@@ -48,6 +49,7 @@ from game.system_support.item_provenance_runtime import (
     item_entitlement_for_actor,
     stamp_item_provenance,
 )
+from game.justice_dispatch_runtime import request_player_justice_dispatch
 from game.system_support.player_feedback import _log_player_feedback
 from game.skills import actor_skill
 from game.weapons import roll_weapon_instance, weapon_by_id
@@ -55,6 +57,8 @@ from game.weapons import roll_weapon_instance, weapon_by_id
 
 RADIO_SCAN_JUSTICE_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
 RADIO_SCAN_MIN_MECHANICS = 6.0
+ALARM_TOOL_CONTEXTS = {"relay_controller", "schedule_controller", "badge_controller", "biometric_controller"}
+ALARM_DISABLE_BASE_REQUIREMENT = 7.0
 
 
 class ItemActionRuntime:
@@ -615,6 +619,151 @@ class ItemActionRuntime:
         tags = _item_tags(item_def)
         return item_id in {"two_way_radio", "radio", "walkie_talkie"} or "radio" in tags
 
+    def _is_phone_dispatch_item(self, entry, item_def):
+        item_id = str((entry or {}).get("item_id") or item_def.get("id", "") or "").strip().lower()
+        tags = _item_tags(item_def)
+        return item_id in {"phone", "burner_phone", "cell_phone"} or "phone" in tags or "cellular" in tags
+
+    def _nearest_alarm_fixture(self, x, y, z, *, radius=1):
+        for prop in self.sim.properties_in_radius(int(x), int(y), int(z), r=int(radius)):
+            if _property_infrastructure_role(prop) == "alarm_target":
+                return prop
+        return None
+
+    def _selected_item_alarm_terms(self, item_def):
+        terms = {
+            "enabled": False,
+            "intrusion_bonus": 0.0,
+            "mechanics_bonus": 0.0,
+            "perception_bonus": 0.0,
+            "score_bonus": 0.0,
+            "requirement_delta": 0.0,
+        }
+        for profile in tuple(item_def.get("tool_profiles", ()) or ()):
+            if not isinstance(profile, dict):
+                continue
+            contexts = {
+                str(context or "").strip().lower()
+                for context in tuple(profile.get("contexts", ()) or ())
+                if str(context or "").strip()
+            }
+            if not contexts.intersection(ALARM_TOOL_CONTEXTS) and "any" not in contexts:
+                continue
+            terms["enabled"] = True
+            for key in ("intrusion_bonus", "mechanics_bonus", "perception_bonus", "score_bonus", "requirement_delta"):
+                try:
+                    terms[key] += float(profile.get(key, 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    pass
+        return terms
+
+    def _use_phone_dispatch(self, eid, x, y, z, inventory, entry, item_def, *, reason="manual"):
+        item_id = str(entry.get("item_id", item_def.get("id", "phone")) or "phone").strip().lower()
+        item_name = self._display_name_for_actor(eid, entry)
+        entry_metadata = dict(entry.get("metadata") or {}) if isinstance(entry.get("metadata"), dict) else {}
+        result = request_player_justice_dispatch(
+            self.sim,
+            eid,
+            int(x),
+            int(y),
+            int(z),
+            source="phone",
+            property_name="your call",
+        )
+        self.sim.emit(Event(
+            "item_used",
+            eid=eid,
+            item_id=item_id,
+            item_name=item_name,
+            reason=reason,
+            applied=[],
+            usage_kind="justice_dispatch_call",
+            success=bool(result.get("ok")),
+            dispatch_reason=str(result.get("reason", "") or "").strip(),
+            responder_eid=result.get("responder_eid"),
+            consumed=False,
+            item_metadata=entry_metadata,
+        ))
+        return True
+
+    def _use_alarm_disable_tool(self, eid, x, y, z, inventory, entry, item_def, *, reason="manual"):
+        alarm_prop = self._nearest_alarm_fixture(x, y, z, radius=1)
+        if not isinstance(alarm_prop, dict):
+            return None
+        terms = self._selected_item_alarm_terms(item_def)
+        if not bool(terms.get("enabled")):
+            return None
+        prop_id = str(alarm_prop.get("id", "") or "").strip()
+        alarm_name = str(alarm_prop.get("name", "alarm panel") or "alarm panel").strip() or "alarm panel"
+        disabled = getattr(self.sim, "camera_disabled", None)
+        if not isinstance(disabled, dict):
+            self.sim.camera_disabled = {}
+            disabled = self.sim.camera_disabled
+        now = int(getattr(self.sim, "tick", 0))
+        if disabled.get(prop_id, 0) > now:
+            _log_player_feedback(self.sim, f"The {alarm_name} is already offline.", kind="interaction")
+            return True
+        intrusion = float(actor_skill(self.sim, eid, "intrusion", default=5.0))
+        mechanics = float(actor_skill(self.sim, eid, "mechanics", default=5.0))
+        perception = float(actor_skill(self.sim, eid, "perception", default=5.0))
+        score = (
+            intrusion
+            + (mechanics * 0.36)
+            + (perception * 0.18)
+            + float(terms.get("intrusion_bonus", 0.0) or 0.0)
+            + float(terms.get("mechanics_bonus", 0.0) or 0.0)
+            + float(terms.get("perception_bonus", 0.0) or 0.0)
+            + float(terms.get("score_bonus", 0.0) or 0.0)
+        )
+        requirement = ALARM_DISABLE_BASE_REQUIREMENT + float(terms.get("requirement_delta", 0.0) or 0.0)
+        success = score >= requirement
+        self.item_system._emit_action_offense(
+            eid=eid,
+            action="use_item",
+            context="tamper",
+            x=int(x),
+            y=int(y),
+            z=int(z),
+            property_id=prop_id,
+            target_property_id=prop_id,
+            target_name=alarm_name,
+        )
+        duration = 0
+        if success:
+            duration = 150 + (int(getattr(self.sim, "seed", 0) or 0) % 40)
+            disabled[prop_id] = now + duration
+            _log_player_feedback(self.sim, f"You take the {alarm_name} offline with {self._display_name_for_actor(eid, entry)}.", kind="interaction")
+            self.sim.emit(Event(
+                "alarm_disabled",
+                eid=eid,
+                property_id=prop_id,
+                disabled_until=now + duration,
+                item_id=item_def["id"],
+                item_name=self._display_name_for_actor(eid, entry),
+                score=round(float(score), 2),
+                requirement=round(float(requirement), 2),
+            ))
+        else:
+            _log_player_feedback(self.sim, f"You fail to get the {alarm_name} offline.", kind="interaction")
+        self.sim.emit(Event(
+            "item_used",
+            eid=eid,
+            item_id=item_def["id"],
+            item_name=self._display_name_for_actor(eid, entry),
+            reason=reason,
+            applied=[],
+            usage_kind="alarm_disable_tool",
+            success=bool(success),
+            property_id=prop_id,
+            property_name=alarm_name,
+            score=round(float(score), 2),
+            requirement=round(float(requirement), 2),
+            duration=int(duration),
+            consumed=False,
+            item_metadata=dict(entry.get("metadata") or {}) if isinstance(entry.get("metadata"), dict) else {},
+        ))
+        return True
+
     def _justice_radio_scan_rows(self, eid, x, y, z, *, radius, limit):
         positions = self.sim.ecs.get(Position)
         ais = self.sim.ecs.get(AI)
@@ -1009,6 +1158,31 @@ class ItemActionRuntime:
                 item_name=item_name,
             ))
             return False
+
+        alarm_tool_result = self._use_alarm_disable_tool(
+            eid,
+            x,
+            y,
+            z,
+            inventory,
+            entry,
+            item_def,
+            reason=reason,
+        )
+        if alarm_tool_result is not None:
+            return bool(alarm_tool_result)
+
+        if self._is_phone_dispatch_item(entry, item_def):
+            return self._use_phone_dispatch(
+                eid,
+                x,
+                y,
+                z,
+                inventory,
+                entry,
+                item_def,
+                reason=reason,
+            )
 
         if self._is_radio_scanner_item(entry, item_def):
             return self._use_radio_scan(

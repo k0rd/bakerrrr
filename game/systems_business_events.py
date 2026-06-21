@@ -40,6 +40,7 @@ from game.system_support.business_event_state import (
     _business_event_seed_state,
 )
 from game.system_support.entity_naming import _entity_display_name
+from game.world_event_presentation import world_event_business_scene_context
 from game import systems as _systems
 
 _REQUIRED_SYSTEM_EXPORTS = (
@@ -871,6 +872,16 @@ def _player_business_owner_scene_fields(sim, prop, *, event_phase=""):
     return fields
 
 
+def _business_event_world_event_context(sim, prop, *, event_phase="", category=""):
+    if sim is None or not isinstance(prop, dict):
+        return {}
+    try:
+        chunk = sim.chunk_coords(int(prop.get("x", 0)), int(prop.get("y", 0)))
+    except (TypeError, ValueError):
+        return {}
+    return world_event_business_scene_context(sim, chunk, event_phase, category=category)
+
+
 def _with_player_business_owner_scene_fields(sim, prop, event):
     if not isinstance(event, dict):
         return {}
@@ -1037,6 +1048,17 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
             bias += float(owner_fields.get("owner_signal_scene_bias", 0.0) or 0.0)
         deterministic_bias = float(_deterministic_back_office_bias(prop, base_pulse, event_item) or 0.0)
         bias += deterministic_bias
+        world_event_context = _business_event_world_event_context(
+            sim,
+            prop,
+            event_phase=str(event_item.get("phase", "") or "").strip().lower(),
+            category=category,
+        )
+        if world_event_context:
+            world_event_bias = float(world_event_context.get("bias", 0.0) or 0.0)
+            bias += world_event_bias
+            if world_event_bias >= 0.7:
+                has_deterministic_site_bias = True
         if abs(bias) > 1e-6:
             has_bias = True
         if abs(deterministic_bias) > 1e-6:
@@ -1082,18 +1104,34 @@ def _raw_building_micro_event_snapshot(sim, prop=None, structure=None, base_puls
         if rarity_rng.random() > float(rare_phase_chance):
             return {}
 
+    world_event_context = _business_event_world_event_context(
+        sim,
+        prop,
+        event_phase=event_phase,
+        category=category,
+    )
+    perimeter_bonus = max(0.0, float(event.get("perimeter_bonus", 0.0) or 0.0))
+    if world_event_context:
+        perimeter_bonus += min(0.75, max(0.0, float(world_event_context.get("bias", 0.0) or 0.0)) * 0.55)
+
     outcome = {
         "phase": str(event.get("phase", "") or "").strip().lower(),
         "label": str(event.get("label", "") or "").strip(),
         "street_label": str(event.get("street_label", "") or "").strip(),
         "entry_sentence": str(event.get("entry_sentence", "") or "").strip(),
         "emphasis": str(event.get("emphasis", "") or "").strip().lower(),
-        "perimeter_bonus": max(0.0, float(event.get("perimeter_bonus", 0.0) or 0.0)),
+        "perimeter_bonus": perimeter_bonus,
         "player_business_cue": str(event.get("player_business_cue", "") or "").strip(),
         "owner_signal_kind": str(event.get("owner_signal_kind", "") or "").strip().lower(),
         "owner_signal_reason": str(event.get("owner_signal_reason", "") or "").strip(),
         "owner_signal_scene_bias": float(event.get("owner_signal_scene_bias", 0.0) or 0.0),
     }
+    if world_event_context:
+        outcome["world_event_context_key"] = str(world_event_context.get("key", "") or "").strip().lower()
+        outcome["world_event_context_label"] = str(world_event_context.get("label", "") or "").strip()
+        outcome["world_event_context_note"] = str(world_event_context.get("note", "") or "").strip()
+        outcome["world_event_context_effect"] = str(world_event_context.get("effect_summary", "") or "").strip()
+        outcome["world_event_context_bias"] = float(world_event_context.get("bias", 0.0) or 0.0)
     traffic_state = str(traffic_profile.get("state", "") or "").strip().lower()
     if traffic_state:
         outcome["traffic_state"] = traffic_state
@@ -1907,6 +1945,14 @@ def _building_pulse_snapshot(sim, prop=None, structure=None, *, respect_chunk_ca
             pulse["owner_signal_scene_bias"] = float(event.get("owner_signal_scene_bias", 0.0) or 0.0)
         except (TypeError, ValueError):
             pulse["owner_signal_scene_bias"] = 0.0
+        pulse["world_event_context_key"] = str(event.get("world_event_context_key", "") or "").strip().lower()
+        pulse["world_event_context_label"] = str(event.get("world_event_context_label", "") or "").strip()
+        pulse["world_event_context_note"] = str(event.get("world_event_context_note", "") or "").strip()
+        pulse["world_event_context_effect"] = str(event.get("world_event_context_effect", "") or "").strip()
+        try:
+            pulse["world_event_context_bias"] = float(event.get("world_event_context_bias", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pulse["world_event_context_bias"] = 0.0
     consequence_profile = _business_reputation_scene_consequence_profile(sim, prop=prop, base_pulse=pulse)
     pulse["community_tone"] = str(consequence_profile.get("tone", "") or "").strip().lower()
     return pulse
@@ -6010,6 +6056,10 @@ class BusinessPulseSceneSystem(System):
             "operating_style_reason",
             "customer_mix_label",
             "staff_mood_label",
+            "world_event_context_key",
+            "world_event_context_label",
+            "world_event_context_note",
+            "world_event_context_effect",
         ):
             value = str(scene.get(key, "") or "").strip()
             if value:
@@ -6071,6 +6121,10 @@ class BusinessPulseSceneSystem(System):
             "operating_style_reason",
             "customer_mix_label",
             "staff_mood_label",
+            "world_event_context_key",
+            "world_event_context_label",
+            "world_event_context_note",
+            "world_event_context_effect",
         ):
             value = str(scene.get(key, "") or "").strip()
             if value:
@@ -6608,6 +6662,11 @@ class BusinessPulseSceneSystem(System):
             "operating_style_reason": str((spec.get("pulse") or {}).get("operating_style_reason", "") or "").strip(),
             "customer_mix_label": str((spec.get("pulse") or {}).get("customer_mix_label", "") or "").strip(),
             "staff_mood_label": str((spec.get("pulse") or {}).get("staff_mood_label", "") or "").strip(),
+            "world_event_context_key": str((spec.get("pulse") or {}).get("world_event_context_key", "") or "").strip().lower(),
+            "world_event_context_label": str((spec.get("pulse") or {}).get("world_event_context_label", "") or "").strip(),
+            "world_event_context_note": str((spec.get("pulse") or {}).get("world_event_context_note", "") or "").strip(),
+            "world_event_context_effect": str((spec.get("pulse") or {}).get("world_event_context_effect", "") or "").strip(),
+            "world_event_context_bias": float((spec.get("pulse") or {}).get("world_event_context_bias", 0.0) or 0.0),
             "scene_type": str(blueprint.get("scene_type", "") or "").strip().lower(),
             "source_kind": str(spec.get("source_kind", "pulse") or "pulse").strip().lower(),
             "seed_id": str(spec.get("seed_id", "") or "").strip(),

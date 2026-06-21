@@ -668,7 +668,8 @@
       },
       "public": true,
       "services": [
-        "rest"
+        "rest",
+        "campfire_cook"
       ],
       "light": {
         "enabled": true,

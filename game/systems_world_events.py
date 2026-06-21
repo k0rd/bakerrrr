@@ -9,6 +9,7 @@ import random
 
 from engine.events import Event
 from engine.systems import System
+from game.world_event_presentation import world_event_effect_summary
 from game import systems as _systems
 
 AI = _systems.AI
@@ -223,6 +224,9 @@ class WorldEventsSystem(System):
             return
         label = event.data.get("label", "World Event")
         text = event.data.get("flavor") or f"World event started: {label}"
+        effect = world_event_effect_summary(event.data)
+        if effect:
+            text = f"{text} Effect: {effect}."
         self.sim.log.add(text, channel="status", priority=LOG_PRIORITY_HIGH)
         self.sim.log.add(f"[{label}] event started", channel="status", priority=LOG_PRIORITY_NORMAL)
 
@@ -231,6 +235,9 @@ class WorldEventsSystem(System):
             return
         label = event.data.get("label", "World Event")
         text = event.data.get("flavor") or f"World event ended: {label}"
+        effect = world_event_effect_summary(event.data, ending=True)
+        if effect:
+            text = f"{text} Effect: {effect}."
         self.sim.log.add(text, channel="status", priority=LOG_PRIORITY_HIGH)
         self.sim.log.add(f"[{label}] event ended", channel="status", priority=LOG_PRIORITY_NORMAL)
 
@@ -861,6 +868,13 @@ class WorldEventsSystem(System):
                     cy=event["cy"],
                     district_type=event.get("district_type", "unknown"),
                     flavor=event.get("flavor_end", ""),
+                    trade_buy_mult=event.get("trade_buy_mult", 1.0),
+                    trade_sell_mult=event.get("trade_sell_mult", 1.0),
+                    pressure_delta=event.get("pressure_delta", 0),
+                    observer_notice_delta=event.get("observer_notice_delta", 0),
+                    fixture_light_mult=event.get("fixture_light_mult", 1.0),
+                    spawn_market_stall=bool(event.get("spawn_market_stall")),
+                    guard_count=event.get("guard_count", 0),
                 ))
                 pdelta = int(event.get("pressure_delta", 0))
                 if pdelta != 0:
@@ -921,5 +935,9 @@ class WorldEventsSystem(System):
             trade_buy_mult=event.get("trade_buy_mult", 1.0),
             trade_sell_mult=event.get("trade_sell_mult", 1.0),
             pressure_delta=pdelta,
+            observer_notice_delta=event.get("observer_notice_delta", 0),
+            fixture_light_mult=event.get("fixture_light_mult", 1.0),
+            spawn_market_stall=bool(event.get("spawn_market_stall")),
+            guard_count=event.get("guard_count", 0),
         ))
         self._sync_event_materialization(event)
