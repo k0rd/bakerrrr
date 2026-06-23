@@ -142,6 +142,14 @@
       "default": "floor_generic"
     },
     "#": {
+      "building_roof": "terrain_building_roof",
+      "building_roof_residential": "terrain_building_roof",
+      "building_roof_storefront": "terrain_building_roof",
+      "building_roof_industrial": "terrain_building_roof",
+      "building_roof_corporate": "terrain_building_roof",
+      "building_roof_civic": "terrain_building_roof",
+      "building_roof_secure": "terrain_building_roof",
+      "building_roof_entertainment": "terrain_building_roof",
       "building_edge": "wall_building",
       "terrain_block": "terrain_block",
       "default": "wall_generic"
