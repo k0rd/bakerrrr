@@ -327,7 +327,7 @@
   "entities": {
     "@": {
       "player": "entity_player",
-      "default": "entity_player"
+      "default": "npc_civilian"
     },
     "hominid": {
       "human": "npc_civilian",

@@ -1299,11 +1299,15 @@ class AppearanceManager:
                 preferred_categories=("entities",),
             )
 
+        actor_layer = owned.layer if owned.layer is not None else defaults.layer
+        if actor_layer is None and taxonomy == "hominid":
+            actor_layer = "actor"
+
         return AppearanceSnapshot(
             glyph=glyph,
             color=owned_color if owned_color is not None else defaults.color,
             semantic_id=semantic_id,
-            layer=owned.layer if owned.layer is not None else defaults.layer,
+            layer=actor_layer,
             priority=owned.priority if owned.priority is not None else defaults.priority,
             attrs=int(defaults.attrs or 0) | int(owned.attrs or 0),
             effects=tuple(dict.fromkeys(tuple(defaults.effects or ()) + tuple(owned.effects or ()))),

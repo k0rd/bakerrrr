@@ -2522,7 +2522,7 @@ class RenderSystem(System):
                     color="item_food",
                     semantic_id="item_food",
                     preferred_categories=("items",),
-                    layer="items",
+                    layer="item",
                     priority=40,
                 )
                 attrs = getattr(curses, "A_BOLD", 0) | _ambient_attr(wx, wy, active_z)
