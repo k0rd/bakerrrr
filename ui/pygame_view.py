@@ -4034,12 +4034,15 @@ class PygameView:
         if semantic_key in {"hazard_smoke", "smoke_choke"} or color_key == "hazard_smoke":
             self._draw_smoke_overlay(x, y, color=color or "hazard_smoke", attrs=attrs)
             return "hazard_smoke"
-        if glyph == "%" and color_key == "floor_downtown":
-            self._draw_district_floor_overlay(x, y, color=color, attrs=attrs, kind="downtown")
-            return "floor_downtown"
-        if glyph == "*" and color_key == "floor_entertainment":
-            self._draw_district_floor_overlay(x, y, color=color, attrs=attrs, kind="entertainment")
-            return "floor_entertainment"
+        if glyph != " " and color_key.startswith("floor_"):
+            self._draw_district_floor_overlay(
+                x,
+                y,
+                color=color,
+                attrs=attrs,
+                kind=color_key.removeprefix("floor_") or "generic",
+            )
+            return color_key
         outfit_overlay_kind = {
             "ui_actor_outfit_secondary": "secondary",
             "ui_actor_outfit_footwear": "footwear",
@@ -4123,7 +4126,12 @@ class PygameView:
                 actor_kind = "guard"
             elif semantic_key == "npc_scout" or color_key == "scout":
                 actor_kind = "scout"
-            elif semantic_key in {"npc_civilian", "npc_hominid"} or color_key == "human":
+            elif (
+                semantic_key in {"npc_civilian", "npc_hominid"}
+                or color_key == "human"
+                or color_key.startswith("human_")
+                or color_key.startswith("clothing_")
+            ):
                 actor_kind = "civilian"
         if actor_kind:
             self._draw_actor_token_overlay(x, y, glyph, color=color, attrs=attrs, kind=actor_kind)

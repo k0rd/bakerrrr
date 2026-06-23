@@ -147,11 +147,14 @@
       "default": "wall_generic"
     },
     "=": {
+      "floor_military": "floor_military",
       "terrain_road": "terrain_road",
       "building_fill": "floor_building_fill",
       "default": "terrain_road"
     },
     ",": {
+      "floor_slums": "floor_slums",
+      "floor_frontier": "floor_frontier",
       "terrain_brush": "terrain_brush",
       "default": "terrain_brush"
     },
@@ -164,13 +167,31 @@
       "default": "terrain_water"
     },
     "_": {
+      "floor_coastal": "floor_coastal",
       "terrain_salt": "terrain_salt",
       "default": "terrain_salt"
     },
     ":": {
+      "floor_industrial": "floor_industrial",
       "terrain_trail": "terrain_trail",
       "transit": "transit_stair_landing",
       "default": "terrain_trail"
+    },
+    "%": {
+      "floor_downtown": "floor_downtown",
+      "default": "floor_downtown"
+    },
+    ";": {
+      "floor_corporate": "floor_corporate",
+      "default": "floor_corporate"
+    },
+    "*": {
+      "floor_entertainment": "floor_entertainment",
+      "default": "floor_entertainment"
+    },
+    "'": {
+      "floor_wilderness": "floor_wilderness",
+      "default": "floor_wilderness"
     }
   },
   "features": {
