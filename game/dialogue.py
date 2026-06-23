@@ -43,11 +43,19 @@ TOPIC_ORDER = (
     "service_ferry",
     "service_coach",
     "service_intel",
+    "service_work",
+    "service_courier",
+    "service_agency",
+    "service_bounty",
     "service_trade",
     "service_discreet_trade",
     "service_street_doctor",
+    "service_herbal",
+    "service_butcher",
+    "service_appearance",
     "service_outfitter",
     "service_justice",
+    "service_vehicle_sales",
     "service_used_cars",
     "service_vehicle_fetch",
     "service_gaming",
@@ -235,11 +243,19 @@ TOPIC_DEFS = {
             "service_ferry",
             "service_coach",
             "service_intel",
+            "service_work",
+            "service_courier",
+            "service_agency",
+            "service_bounty",
             "service_trade",
             "service_discreet_trade",
             "service_street_doctor",
+            "service_herbal",
+            "service_butcher",
+            "service_appearance",
             "service_outfitter",
             "service_justice",
+            "service_vehicle_sales",
             "service_used_cars",
             "service_vehicle_fetch",
             "service_gaming",
@@ -312,6 +328,26 @@ TOPIC_DEFS = {
         "root": False,
         "unlocks": (),
     },
+    "service_work": {
+        "label": "Any posted work nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_courier": {
+        "label": "Any courier board nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_agency": {
+        "label": "Any agency work nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_bounty": {
+        "label": "Any bounty board nearby?",
+        "root": False,
+        "unlocks": (),
+    },
     "service_trade": {
         "label": "Any shopping around here?",
         "root": False,
@@ -327,6 +363,21 @@ TOPIC_DEFS = {
         "root": False,
         "unlocks": (),
     },
+    "service_herbal": {
+        "label": "Any herbal care nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_butcher": {
+        "label": "Any butcher nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_appearance": {
+        "label": "Anywhere for hair, makeup, or tattoos?",
+        "root": False,
+        "unlocks": (),
+    },
     "service_outfitter": {
         "label": "Any outfitter nearby?",
         "root": False,
@@ -334,6 +385,11 @@ TOPIC_DEFS = {
     },
     "service_justice": {
         "label": "Where's the nearest jail or courthouse?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_vehicle_sales": {
+        "label": "Anyone selling vehicles nearby?",
         "root": False,
         "unlocks": (),
     },
@@ -424,11 +480,19 @@ TOPIC_DEFS = {
             "service_ferry",
             "service_coach",
             "service_intel",
+            "service_work",
+            "service_courier",
+            "service_agency",
+            "service_bounty",
             "service_trade",
             "service_discreet_trade",
             "service_street_doctor",
+            "service_herbal",
+            "service_butcher",
+            "service_appearance",
             "service_outfitter",
             "service_justice",
+            "service_vehicle_sales",
             "service_used_cars",
             "service_vehicle_fetch",
             "service_gaming",
@@ -1214,6 +1278,30 @@ PLAYER_TOPIC_BANKS = {
         "Who trades in local information nearby?",
         "If I need a lead, who sells one?",
     ),
+    "service_work": (
+        "Any posted work nearby?",
+        "Where do people pick up paid jobs around here?",
+        "Who has work boards close by?",
+        "If I need paying work, where do I start?",
+    ),
+    "service_courier": (
+        "Any courier board nearby?",
+        "Who posts delivery work close by?",
+        "Where do couriers pick up runs around here?",
+        "If I want a route job, who has one?",
+    ),
+    "service_agency": (
+        "Any agency work nearby?",
+        "Where do people get day work around here?",
+        "Who posts local errands or labor jobs?",
+        "If I need agency work, who is close?",
+    ),
+    "service_bounty": (
+        "Any bounty board nearby?",
+        "Who posts alive-capture work around here?",
+        "Where do fighters pick up legal targets?",
+        "If I want a bounty job, who handles that?",
+    ),
     "service_trade": (
         "Any shopping around here?",
         "Where can I buy supplies nearby?",
@@ -1232,6 +1320,24 @@ PLAYER_TOPIC_BANKS = {
         "Where does someone go when a clinic is too loud?",
         "Any doctor around here who does not ask much?",
     ),
+    "service_herbal": (
+        "Any herbal care nearby?",
+        "Who handles hunger or thirst without a full clinic?",
+        "Where do people get herbal help around here?",
+        "If I need restorative care, who is close?",
+    ),
+    "service_butcher": (
+        "Any butcher nearby?",
+        "Who prepares game meat around here?",
+        "Where would someone sell or pack meat close by?",
+        "If I need meat prepared, who handles it?",
+    ),
+    "service_appearance": (
+        "Anywhere for hair, makeup, or tattoos?",
+        "Who handles styling around here?",
+        "Where do people change up their look nearby?",
+        "Any salon, counter, or tattoo place close?",
+    ),
     "service_outfitter": (
         "Any outfitter nearby?",
         "Where do people gear up around here?",
@@ -1243,6 +1349,12 @@ PLAYER_TOPIC_BANKS = {
         "Who handles legal trouble around here?",
         "Where does law business happen nearby?",
         "If someone gets booked, where do they go?",
+    ),
+    "service_vehicle_sales": (
+        "Anyone selling vehicles nearby?",
+        "Where do people buy vehicles around here?",
+        "Any vehicle lot close?",
+        "Who has cars for sale nearby?",
     ),
     "service_used_cars": (
         "Anyone selling used cars nearby?",
@@ -4962,16 +5074,32 @@ def topic_label(topic_id, context=None):
         return "Where can I catch a coach?"
     if topic_id == "service_intel":
         return "Anywhere selling intel nearby?"
+    if topic_id == "service_work":
+        return "Any posted work nearby?"
+    if topic_id == "service_courier":
+        return "Any courier board nearby?"
+    if topic_id == "service_agency":
+        return "Any agency work nearby?"
+    if topic_id == "service_bounty":
+        return "Any bounty board nearby?"
     if topic_id == "service_trade":
         return "Any shopping around here?"
     if topic_id == "service_discreet_trade":
         return "Know any discreet sellers?"
     if topic_id == "service_street_doctor":
         return "Know any quiet doctors?"
+    if topic_id == "service_herbal":
+        return "Any herbal care nearby?"
+    if topic_id == "service_butcher":
+        return "Any butcher nearby?"
+    if topic_id == "service_appearance":
+        return "Anywhere for hair, makeup, or tattoos?"
     if topic_id == "service_outfitter":
         return "Any outfitter nearby?"
     if topic_id == "service_justice":
         return "Where's the nearest jail or courthouse?"
+    if topic_id == "service_vehicle_sales":
+        return "Anyone selling vehicles nearby?"
     if topic_id == "service_used_cars":
         return "Any used cars nearby?"
     if topic_id == "service_vehicle_fetch":

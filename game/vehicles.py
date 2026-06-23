@@ -227,6 +227,12 @@ USED_VEHICLE_PAINT_KEYS = (
     "vehicle_paint_teal",
     "vehicle_paint_rust",
     "vehicle_paint_brown",
+    "vehicle_paint_cream",
+    "vehicle_paint_charcoal",
+    "vehicle_paint_navy",
+    "vehicle_paint_olive",
+    "vehicle_paint_orange",
+    "vehicle_paint_silver",
 )
 
 NEW_VEHICLE_PAINT_KEYS = (
@@ -236,6 +242,12 @@ NEW_VEHICLE_PAINT_KEYS = (
     "vehicle_paint_white",
     "vehicle_paint_teal",
     "vehicle_paint_yellow",
+    "vehicle_paint_orange",
+    "vehicle_paint_purple",
+    "vehicle_paint_silver",
+    "vehicle_paint_cream",
+    "vehicle_paint_navy",
+    "vehicle_paint_olive",
 )
 
 

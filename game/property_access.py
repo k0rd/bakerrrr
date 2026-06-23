@@ -436,6 +436,11 @@ DEFAULT_SITE_SERVICES_BY_ARCHETYPE = {
     "tide_station": ("intel", "ferry_transit"),
     "truck_stop": ("bus_transit", "shuttle_transit", "coach_transit"),
 }
+DEFAULT_SITE_SERVICE_EXTEND_ARCHETYPES = frozenset({
+    "relay_post",
+    "roadhouse",
+    "truck_stop",
+})
 OPTIONAL_SITE_SERVICES_BY_ARCHETYPE = {
     "tavern": {
         "chance": 0.34,
@@ -822,6 +827,14 @@ def site_services_for_property(prop):
             metadata.get("archetype"),
             seed_token=_optional_site_service_seed_token(prop),
         ))
+    elif not bool(metadata.get("site_services_replace_defaults", False)):
+        archetype = str(metadata.get("archetype", "") or "").strip().lower()
+        extend_defaults = bool(metadata.get("site_services_extend_defaults", False))
+        if extend_defaults or archetype in DEFAULT_SITE_SERVICE_EXTEND_ARCHETYPES:
+            for service in DEFAULT_SITE_SERVICES_BY_ARCHETYPE.get(archetype, ()):
+                clean_service = str(service).strip().lower()
+                if clean_service and clean_service not in services:
+                    services.append(clean_service)
 
     return _dedupe_service_ids(services)
 

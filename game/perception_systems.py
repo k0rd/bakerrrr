@@ -5,7 +5,19 @@ from engine.systems import System
 from engine.visibility import update_player_visibility as _update_player_visibility
 from game.checks import crime_sensitivity as _crime_sensitivity, justice_level as _justice_level
 from game.lighting import update_lighting_state as _update_lighting_state
-from game.components import AI, CoverState, JusticeProfile, NPCMemory, NPCNeeds, NPCTraits, NoiseProfile, PlayerModeState, Position
+from game.components import (
+    AI,
+    CoverState,
+    JusticeProfile,
+    NPCMemory,
+    NPCNeeds,
+    NPCTraits,
+    NoiseProfile,
+    PlayerModeState,
+    Position,
+    SuppressionState,
+    Vitality,
+)
 from game.property_access import evaluate_property_access as _evaluate_property_access
 from game.property_runtime import (
     property_cover_intended as _property_cover_intended,
@@ -89,6 +101,7 @@ class CoverSystem(System):
 
 
 class CombatPacingSystem(System):
+    RECENT_HIT_DAMAGE_KINDS = {"melee", "ballistic", "explosive"}
 
     def __init__(
         self,
@@ -109,6 +122,103 @@ class CombatPacingSystem(System):
         self.runs_without_turn = True
 
         _combat_overlay_state(self.sim)
+        self.sim.events.subscribe("entity_damaged", self.on_entity_damaged)
+
+    @staticmethod
+    def _int_or_none(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _clear_recent_hit_target(self, overlay=None):
+        overlay = overlay if isinstance(overlay, dict) else _combat_overlay_state(self.sim)
+        overlay["recent_hit_target"] = None
+        overlay["pursuit_target_count"] = 0
+
+    def _target_available_for_recent_hit_pacing(self, target_eid):
+        if target_eid is None:
+            return False
+        if int(target_eid) == int(self.player_eid):
+            return False
+        if self.sim.ecs.get(AI).get(target_eid) is None:
+            return False
+        vitality = self.sim.ecs.get(Vitality).get(target_eid)
+        if vitality is None:
+            return False
+        if int(getattr(vitality, "hp", 0) or 0) <= 0:
+            return False
+        if bool(getattr(vitality, "downed", False)):
+            return False
+        suppression = self.sim.ecs.get(SuppressionState).get(target_eid)
+        if suppression and bool(getattr(suppression, "surrendered", False)):
+            return False
+        return True
+
+    def _recent_hit_pursuit_target(self, player_pos, counted_eids):
+        overlay = _combat_overlay_state(self.sim)
+        record = overlay.get("recent_hit_target")
+        if not isinstance(record, dict):
+            self._clear_recent_hit_target(overlay)
+            return None
+
+        target_eid = self._int_or_none(record.get("target_eid"))
+        if target_eid is None:
+            self._clear_recent_hit_target(overlay)
+            return None
+        if target_eid in counted_eids:
+            overlay["pursuit_target_count"] = 0
+            return None
+        if not self._target_available_for_recent_hit_pacing(target_eid):
+            self._clear_recent_hit_target(overlay)
+            return None
+
+        positions = self.sim.ecs.get(Position)
+        target_pos = positions.get(target_eid)
+        if not player_pos or not target_pos or int(player_pos.z) != int(target_pos.z):
+            self._clear_recent_hit_target(overlay)
+            return None
+        if not _entity_visible_to_player(self.sim, self.player_eid, target_eid):
+            self._clear_recent_hit_target(overlay)
+            return None
+
+        return target_eid, target_pos
+
+    def on_entity_damaged(self, event):
+        source_eid = self._int_or_none(event.data.get("source_eid"))
+        target_eid = self._int_or_none(event.data.get("target_eid"))
+        if source_eid is None or target_eid is None:
+            return
+        if int(source_eid) != int(self.player_eid):
+            return
+        if int(target_eid) == int(self.player_eid):
+            return
+        try:
+            damage = int(event.data.get("damage", 0) or 0)
+        except (TypeError, ValueError):
+            damage = 0
+        if damage <= 0:
+            return
+
+        damage_kind = str(event.data.get("damage_kind", "") or "").strip().lower()
+        if damage_kind not in self.RECENT_HIT_DAMAGE_KINDS:
+            return
+        if not self._target_available_for_recent_hit_pacing(target_eid):
+            return
+
+        target_pos = self.sim.ecs.get(Position).get(target_eid)
+        if target_pos is None:
+            return
+
+        overlay = _combat_overlay_state(self.sim)
+        overlay["recent_hit_target"] = {
+            "target_eid": int(target_eid),
+            "last_hit_tick": int(getattr(self.sim, "tick", 0) or 0),
+            "damage_kind": damage_kind,
+            "last_x": int(target_pos.x),
+            "last_y": int(target_pos.y),
+            "last_z": int(target_pos.z),
+        }
 
     def _threat_snapshot(self):
         positions = self.sim.ecs.get(Position)
@@ -125,7 +235,9 @@ class CombatPacingSystem(System):
         threat_count = 0
         direct_count = 0
         ambient_count = 0
+        pursuit_count = 0
         nearest = None
+        counted_eids = set()
         for eid, _ai in ais.items():
             if eid == self.player_eid:
                 continue
@@ -151,7 +263,17 @@ class CombatPacingSystem(System):
             else:
                 continue
 
+            counted_eids.add(int(eid))
             threat_count += 1
+            if nearest is None or dist < nearest:
+                nearest = dist
+
+        recent = self._recent_hit_pursuit_target(player_pos, counted_eids)
+        if recent is not None:
+            target_eid, target_pos = recent
+            pursuit_count = 1
+            threat_count += 1
+            dist = _manhattan(player_pos.x, player_pos.y, target_pos.x, target_pos.y)
             if nearest is None or dist < nearest:
                 nearest = dist
 
@@ -159,6 +281,7 @@ class CombatPacingSystem(System):
             "count": threat_count,
             "direct_count": direct_count,
             "ambient_count": ambient_count,
+            "pursuit_count": pursuit_count,
             "nearest_dist": nearest,
         }
 
@@ -171,6 +294,7 @@ class CombatPacingSystem(System):
         overlay["threat_count"] = threat_count
         overlay["direct_threat_count"] = snapshot.get("direct_count", 0)
         overlay["ambient_threat_count"] = snapshot.get("ambient_count", 0)
+        overlay["pursuit_target_count"] = snapshot.get("pursuit_count", 0)
         overlay["nearest_threat_dist"] = nearest
         manual_pacing = bool(overlay.get("manual_pacing"))
         player_cover = self.sim.ecs.get(CoverState).get(self.player_eid)
@@ -180,7 +304,9 @@ class CombatPacingSystem(System):
         should_engage = False
         exposed = player_exposure >= self.exposure_threshold
         retain_exposed = player_exposure >= max(0.35, self.exposure_threshold - 0.12)
-        if threat_count > 0:
+        if int(snapshot.get("pursuit_count", 0) or 0) > 0:
+            should_engage = True
+        elif threat_count > 0:
             if nearest is None:
                 should_engage = exposed
             elif nearest <= self.danger_radius:
@@ -200,6 +326,7 @@ class CombatPacingSystem(System):
                     threat_count=threat_count,
                     direct_threat_count=snapshot.get("direct_count", 0),
                     ambient_threat_count=snapshot.get("ambient_count", 0),
+                    pursuit_target_count=snapshot.get("pursuit_count", 0),
                     nearest_threat_dist=nearest,
                 ))
             return

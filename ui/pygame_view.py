@@ -7,6 +7,7 @@ from pathlib import Path
 
 from game.appearance_palette import pygame_palette_entries
 from game.semantic_catalog import DEFAULT_RENDER_SEMANTICS_PATH, get_runtime_semantic_catalog
+from game.symbolic_palette import pygame_symbolic_palette_entries
 from game.world_palette import pygame_world_palette_entries
 from ui.input_keys import (
     KEY_DOWN,
@@ -119,91 +120,8 @@ class PygameView:
 
         self.palette = {
             "default": (240, 240, 240),
-            "player": (100, 220, 255),
-            "human": (230, 230, 230),
-            "human_charcoal": (198, 200, 208),
-            "human_olive": (166, 181, 118),
-            "human_denim": (146, 171, 208),
-            "human_accent": (228, 196, 118),
-            "human_monochrome": (238, 238, 238),
-            "human_rust": (205, 152, 112),
-            "human_slate": (142, 166, 188),
-            "human_wine": (196, 142, 172),
-            "guard": (95, 140, 255),
-            "scout": (120, 220, 120),
-            "actor_outline": (16, 20, 28),
-            "actor_highlight": (232, 246, 255),
-            "feline": (255, 220, 90),
-            "canine": (220, 220, 220),
-            "avian": (220, 120, 220),
-            "insect": (110, 200, 110),
-            "rodent": (205, 170, 105),
-            "reptile": (120, 185, 120),
-            "amphibian": (100, 210, 190),
-            "fish": (110, 185, 235),
-            "ungulate": (200, 185, 120),
-            "other": (205, 145, 205),
-            "feature_door": (205, 190, 110),
-            "feature_window": (110, 180, 220),
-            "feature_breach": (220, 100, 100),
-            "hazard_fire": (242, 132, 68),
-            "hazard_smoke": (150, 150, 158),
-            "survival_meter_high": (100, 170, 240),
-            "survival_meter_mid": (120, 210, 130),
-            "survival_meter_low": (230, 95, 95),
-            "transit": (220, 220, 140),
-            "property_building": (220, 210, 190),
-            "property_fixture": (130, 180, 235),
-            "property_asset": (225, 190, 95),
-            "property_service": (140, 200, 140),
-            "vehicle_parked": (190, 190, 190),
-            "vehicle_new": (235, 190, 95),
-            "vehicle_player": (80, 210, 240),
-            "vehicle_police": (76, 126, 232),
-            "vehicle_paint_red": (198, 90, 90),
-            "vehicle_paint_blue": (92, 132, 208),
-            "vehicle_paint_green": (96, 168, 104),
-            "vehicle_paint_white": (215, 215, 215),
-            "vehicle_paint_black": (96, 96, 104),
-            "vehicle_paint_teal": (82, 170, 170),
-            "vehicle_paint_rust": (156, 96, 64),
-            "vehicle_paint_brown": (150, 118, 82),
-            "vehicle_paint_yellow": (214, 186, 86),
-            "item_ground": (225, 185, 95),
-            "item_token": (240, 220, 110),
-            "item_tool": (200, 170, 120),
-            "item_medical": (120, 220, 140),
-            "item_restricted": (230, 150, 100),
-            "item_illegal": (220, 90, 90),
-            "item_weapon": (210, 130, 110),
-            "item_armor": (170, 190, 225),
-            "item_outline": (18, 22, 28),
-            "item_highlight": (248, 242, 204),
-            "inventory_equipped_clothing": (145, 205, 215),
-            "inventory_equipped_weapon": (230, 145, 95),
-            "inventory_equipped_consequence": (198, 160, 230),
-            "inventory_critical_quest": (95, 230, 210),
-            "item_food": (220, 185, 105),
-            "item_drink": (120, 190, 235),
-            "item_access": (200, 220, 160),
-            "item_objective": (245, 220, 110),
-            "projectile": (220, 110, 110),
-            "objective": (245, 220, 110),
-            "cat_orange": (230, 140, 70),
-            "cat_black": (90, 90, 90),
-            "cat_tabby": (190, 140, 100),
-            "cat_calico": (235, 150, 110),
-            "cat_white": (240, 240, 240),
-            "cat_gray": (170, 170, 170),
-            "cat_tuxedo": (215, 215, 215),
-            "cat_purple": (175, 125, 220),
-            "casino_felt": (34, 112, 74),
-            "casino_gold": (228, 196, 74),
-            "casino_red": (210, 82, 68),
-            "casino_black": (78, 82, 88),
-            "casino_chip": (84, 182, 198),
-            "casino_cursor": (198, 240, 214),
         }
+        self.palette.update(pygame_symbolic_palette_entries())
         self.palette.update(pygame_world_palette_entries())
         self.palette.update(pygame_palette_entries())
 
@@ -1350,6 +1268,11 @@ class PygameView:
         dark = self._darkened_rgba(frame, 166, amount=0.55)
         outline = self._alpha_color("item_outline", 172)
         highlight = self._alpha_color("item_highlight", 156)
+        metal = self._alpha_color("item_metal", 184)
+        glass = self._alpha_color("item_glass", 148)
+        paper = self._alpha_color("item_paper", 142)
+        cloth = self._alpha_color("item_cloth", 132)
+        chemical = self._alpha_color("item_chemical", 150)
         backing_rect = self._local_tile_rect(inset=max(2, self.cell_px // 7), min_size=6)
         self._draw_legibility_backing(overlay, backing_rect, color="item_outline", alpha=72)
 
@@ -1392,13 +1315,13 @@ class PygameView:
                 horizontal,
                 stroke_w,
             )
-            self.pygame.draw.circle(overlay, highlight, (mid_x, mid_y), max(2, stroke_w + 1))
+            self.pygame.draw.circle(overlay, chemical, (mid_x, mid_y), max(2, stroke_w + 1))
         elif kind == "token":
             radius = max(3, self.cell_px // 4)
             self.pygame.draw.circle(overlay, outline, (mid_x + 1, mid_y + 1), radius)
             self.pygame.draw.circle(overlay, fill, (mid_x, mid_y), radius)
             self.pygame.draw.circle(overlay, stroke, (mid_x, mid_y), radius, stroke_w)
-            self.pygame.draw.circle(overlay, dark, (mid_x, mid_y), max(1, radius // 2), max(1, stroke_w - 1))
+            self.pygame.draw.circle(overlay, metal, (mid_x, mid_y), max(1, radius // 2), max(1, stroke_w - 1))
             shine_y = mid_y - max(1, radius // 3)
             self.pygame.draw.arc(
                 overlay,
@@ -1414,9 +1337,9 @@ class PygameView:
             handle_x1 = self.cell_px - max(4, self.cell_px // 4)
             handle_y1 = max(3, self.cell_px // 3)
             self.pygame.draw.line(overlay, outline, (handle_x0 + 1, handle_y0 + 1), (handle_x1 + 1, handle_y1 + 1), max(3, stroke_w + 2))
-            self.pygame.draw.line(overlay, stroke, (handle_x0, handle_y0), (handle_x1, handle_y1), max(2, stroke_w + 1))
+            self.pygame.draw.line(overlay, metal, (handle_x0, handle_y0), (handle_x1, handle_y1), max(2, stroke_w + 1))
             jaw_r = max(2, self.cell_px // 7)
-            self.pygame.draw.circle(overlay, fill, (handle_x1, handle_y1), jaw_r)
+            self.pygame.draw.circle(overlay, metal, (handle_x1, handle_y1), jaw_r)
             self.pygame.draw.circle(overlay, outline, (handle_x1 + max(1, jaw_r // 2), handle_y1 - max(1, jaw_r // 2)), max(1, jaw_r - 1))
             self.pygame.draw.line(
                 overlay,
@@ -1435,7 +1358,7 @@ class PygameView:
             )
             self.pygame.draw.line(
                 overlay,
-                stroke,
+                metal,
                 (max(2, self.cell_px // 4), self.cell_px - max(3, self.cell_px // 4)),
                 (self.cell_px - max(2, self.cell_px // 4), max(2, self.cell_px // 4)),
                 max(2, stroke_w + 1),
@@ -1455,7 +1378,7 @@ class PygameView:
                 max(3, self.cell_px // 6),
                 max(2, self.cell_px // 10),
             )
-            self.pygame.draw.rect(overlay, stroke, muzzle, border_radius=max(1, self.cell_px // 24))
+            self.pygame.draw.rect(overlay, metal, muzzle, border_radius=max(1, self.cell_px // 24))
         elif kind == "armor":
             points = [
                 (mid_x, max(2, self.cell_px // 5)),
@@ -1470,7 +1393,7 @@ class PygameView:
             self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
             self.pygame.draw.line(
                 overlay,
-                highlight,
+                metal,
                 (mid_x, max(3, self.cell_px // 4)),
                 (mid_x, self.cell_px - max(3, self.cell_px // 4)),
                 max(1, stroke_w),
@@ -1489,7 +1412,7 @@ class PygameView:
                 max(5, self.cell_px // 3),
             )
             self.pygame.draw.ellipse(overlay, outline, plate.move(1, 1))
-            self.pygame.draw.ellipse(overlay, (245, 232, 172, 110), plate)
+            self.pygame.draw.ellipse(overlay, paper, plate)
             self.pygame.draw.arc(overlay, stroke, bowl, 0.0, 3.14, max(2, stroke_w + 1))
             self.pygame.draw.rect(
                 overlay,
@@ -1520,14 +1443,14 @@ class PygameView:
             neck_rect = self.pygame.Rect(mid_x - (neck_w // 2), body_rect.top - neck_h + 1, neck_w, neck_h)
             cap_rect = self.pygame.Rect(neck_rect.left - 1, max(1, neck_rect.top - max(1, self.cell_px // 18)), neck_rect.w + 2, max(2, self.cell_px // 12))
             self.pygame.draw.rect(overlay, outline, body_rect.move(1, 1), border_radius=max(2, self.cell_px // 12))
-            self.pygame.draw.rect(overlay, fill, body_rect, border_radius=max(2, self.cell_px // 12))
+            self.pygame.draw.rect(overlay, glass, body_rect, border_radius=max(2, self.cell_px // 12))
             self.pygame.draw.rect(overlay, fill, neck_rect)
             self.pygame.draw.rect(overlay, stroke, body_rect, stroke_w, border_radius=max(2, self.cell_px // 12))
             self.pygame.draw.rect(overlay, stroke, neck_rect, stroke_w)
-            self.pygame.draw.rect(overlay, (230, 246, 255, 138), cap_rect, border_radius=max(1, self.cell_px // 20))
+            self.pygame.draw.rect(overlay, metal, cap_rect, border_radius=max(1, self.cell_px // 20))
             label = self.pygame.Rect(body_rect.left + 1, body_rect.centery - max(1, self.cell_px // 14), max(1, body_rect.w - 2), max(2, self.cell_px // 8))
-            self.pygame.draw.rect(overlay, (245, 248, 232, 96), label, border_radius=max(1, self.cell_px // 24))
-            self.pygame.draw.line(overlay, (255, 255, 255, 132), (body_rect.left + 2, body_rect.top + 2), (body_rect.left + 2, body_rect.bottom - 3), max(1, self.cell_px // 28))
+            self.pygame.draw.rect(overlay, paper, label, border_radius=max(1, self.cell_px // 24))
+            self.pygame.draw.line(overlay, self._alpha_color("item_highlight", 132), (body_rect.left + 2, body_rect.top + 2), (body_rect.left + 2, body_rect.bottom - 3), max(1, self.cell_px // 28))
         elif kind == "access":
             ring_r = max(2, self.cell_px // 8)
             ring_x = max(3, self.cell_px // 3)
@@ -1535,7 +1458,7 @@ class PygameView:
             self.pygame.draw.circle(overlay, stroke, (ring_x, mid_y), ring_r, stroke_w)
             self.pygame.draw.line(
                 overlay,
-                stroke,
+                metal,
                 (ring_x + ring_r, mid_y),
                 (self.cell_px - max(3, self.cell_px // 5), mid_y),
                 stroke_w,
@@ -1556,7 +1479,7 @@ class PygameView:
                 stroke_w,
             )
             card = self.pygame.Rect(max(2, self.cell_px // 5), max(2, self.cell_px // 5), max(5, self.cell_px // 3), max(4, self.cell_px // 4))
-            self.pygame.draw.rect(overlay, (frame[0], frame[1], frame[2], 74), card, border_radius=max(1, self.cell_px // 20))
+            self.pygame.draw.rect(overlay, paper, card, border_radius=max(1, self.cell_px // 20))
             self.pygame.draw.line(overlay, highlight, (card.left + 1, card.centery), (card.right - 1, card.centery), max(1, stroke_w - 1))
         elif kind == "restricted":
             points = [
@@ -1568,6 +1491,13 @@ class PygameView:
             self.pygame.draw.polygon(overlay, outline, [(px + 1, py + 1) for px, py in points], stroke_w + 1)
             self.pygame.draw.polygon(overlay, fill, points)
             self.pygame.draw.polygon(overlay, stroke, points, stroke_w)
+            self.pygame.draw.line(
+                overlay,
+                cloth,
+                (mid_x - max(2, self.cell_px // 7), mid_y),
+                (mid_x + max(2, self.cell_px // 7), mid_y),
+                max(1, stroke_w),
+            )
             self.pygame.draw.line(
                 overlay,
                 dark,
@@ -1593,6 +1523,7 @@ class PygameView:
                 (max(2, self.cell_px // 4), self.cell_px - max(3, self.cell_px // 4)),
                 max(2, stroke_w + 1),
             )
+            self.pygame.draw.circle(overlay, chemical, (mid_x, mid_y), max(1, self.cell_px // 12))
         elif kind == "objective":
             outer_r = max(4, self.cell_px // 3)
             inner_r = max(2, self.cell_px // 6)
@@ -1668,14 +1599,11 @@ class PygameView:
             min(255, int(frame[2] * 1.12)),
             220,
         )
-        shadow = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 132)
-        glass = (
-            min(255, int(frame[0] * 0.92) + 18),
-            min(255, int(frame[1] * 1.02) + 20),
-            min(255, int(frame[2] * 1.08) + 24),
-            144,
-        )
-        headlight = (255, 244, 178, 178)
+        shadow = self._alpha_color("vehicle_tire", 142)
+        glass = self._alpha_color("vehicle_glass", 150)
+        headlight = self._alpha_color("vehicle_light", 190)
+        tail_light = self._alpha_color("vehicle_tail_light", 178)
+        trim = self._alpha_color("vehicle_trim", 178)
 
         body_points = [
             oriented_point(front_len, -front_half_w),
@@ -1702,18 +1630,13 @@ class PygameView:
         self.pygame.draw.polygon(overlay, glass, windshield_points)
         self.pygame.draw.polygon(overlay, glass, rear_window_points)
 
-        self.pygame.draw.line(
-            overlay,
-            shadow,
-            oriented_point(-rear_len * 0.82, 0),
-            oriented_point(front_len * 0.68, 0),
-            max(1, self.cell_px // 22),
-        )
+        self.pygame.draw.line(overlay, trim, oriented_point(-rear_len * 0.82, 0), oriented_point(front_len * 0.68, 0), max(1, self.cell_px // 22))
 
         wheel_r = max(1, self.cell_px // 11)
         for wheel_along in (-rear_len * 0.58, front_len * 0.46):
             for wheel_across in (-rear_half_w - wheel_r * 0.35, rear_half_w + wheel_r * 0.35):
                 self.pygame.draw.circle(overlay, shadow, oriented_point(wheel_along, wheel_across), wheel_r)
+                self.pygame.draw.circle(overlay, trim, oriented_point(wheel_along, wheel_across), max(1, wheel_r - 1), max(1, stroke_w - 1))
 
         nose_across = max(1.0, front_half_w * 0.56)
         self.pygame.draw.line(
@@ -1726,6 +1649,9 @@ class PygameView:
         light_r = max(1, self.cell_px // 24)
         self.pygame.draw.circle(overlay, headlight, oriented_point(front_len + nose_len * 0.28, -nose_across), light_r)
         self.pygame.draw.circle(overlay, headlight, oriented_point(front_len + nose_len * 0.28, nose_across), light_r)
+        tail_across = max(1.0, rear_half_w * 0.58)
+        self.pygame.draw.circle(overlay, tail_light, oriented_point(-rear_len * 0.96, -tail_across), light_r)
+        self.pygame.draw.circle(overlay, tail_light, oriented_point(-rear_len * 0.96, tail_across), light_r)
 
         if color_key == "vehicle_player":
             ring_r = max(2, self.cell_px // 8)
@@ -2037,6 +1963,7 @@ class PygameView:
         outline = self._alpha_color("actor_outline", 188)
         highlight = self._alpha_color("actor_highlight", 142)
         accent = self._lightened_rgba(frame, 184, amount=0.32)
+        role_accent = self._alpha_color("actor_role_accent", 172)
         self._draw_legibility_backing(
             overlay,
             self._local_tile_rect(inset=max(2, self.cell_px // 9), min_size=7),
@@ -2098,9 +2025,10 @@ class PygameView:
                 max(2, self.cell_px // 8),
             )
             self.pygame.draw.rect(overlay, highlight, cap, border_radius=max(1, self.cell_px // 24))
+            self.pygame.draw.rect(overlay, role_accent, cap.inflate(-max(2, self.cell_px // 7), 0), border_radius=max(1, self.cell_px // 28))
             self.pygame.draw.line(
                 overlay,
-                accent,
+                role_accent,
                 (mid_x - max(2, self.cell_px // 6), mid_y - max(1, self.cell_px // 8)),
                 (mid_x + max(2, self.cell_px // 6), mid_y - max(1, self.cell_px // 8)),
                 max(1, stroke_w),
@@ -2151,7 +2079,7 @@ class PygameView:
                 (mid_x + max(2, self.cell_px // 6), mid_y + max(1, self.cell_px // 6)),
                 max(1, stroke_w),
             )
-            self.pygame.draw.circle(overlay, accent, (mid_x, inset + max(2, self.cell_px // 5)), max(1, self.cell_px // 18))
+            self.pygame.draw.circle(overlay, role_accent, (mid_x, inset + max(2, self.cell_px // 5)), max(1, self.cell_px // 18))
         else:
             body = self.pygame.Rect(
                 mid_x - max(3, self.cell_px // 5),
@@ -2169,7 +2097,7 @@ class PygameView:
             self.pygame.draw.circle(overlay, stroke, head_center, head_r, stroke_w)
             self.pygame.draw.line(
                 overlay,
-                accent,
+                role_accent,
                 (body.left + max(1, self.cell_px // 8), body.centery),
                 (body.right - max(1, self.cell_px // 8), body.centery),
                 max(1, stroke_w),

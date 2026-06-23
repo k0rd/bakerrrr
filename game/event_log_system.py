@@ -456,6 +456,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("site_service_blocked", self.on_site_service_blocked)
         self.sim.events.subscribe("hunting_carcass_harvested", self.on_hunting_carcass_harvested)
         self.sim.events.subscribe("hunting_carcass_blocked", self.on_hunting_carcass_blocked)
+        self.sim.events.subscribe("hunter_party_carcass_dressed", self.on_hunter_party_carcass_dressed)
         self.sim.events.subscribe("site_intel_report", self.on_site_intel_report)
         self.sim.events.subscribe("vehicle_delivered", self.on_vehicle_delivered)
         self.sim.events.subscribe("property_closing_time_warning", self.on_property_closing_time_warning)
@@ -2486,10 +2487,19 @@ class EventLogSystem(System):
         if event.data.get("eid") != self.player_eid:
             return
         animal = str(event.data.get("animal_name") or event.data.get("species_label") or "wildlife").strip()
+        size_class = str(event.data.get("animal_size_class") or "").replace("_", " ").strip()
         output_name = str(event.data.get("output_item_name", "meat")).strip() or "meat"
         quantity = int(event.data.get("quantity", 0) or 0)
-        bag_note = " with the kill bag" if bool(event.data.get("kill_bag_used")) else ""
-        self.sim.log.add(f"Field dressed {animal}{bag_note}: {output_name} x{quantity}.")
+        tool_id = str(event.data.get("tool_item_id") or "").strip().lower()
+        tool_name = item_display_name(tool_id, item_catalog=ITEM_CATALOG) if tool_id else "a blade"
+        tool_phrase = f"with your {tool_name}" if tool_id else f"with {tool_name}"
+        animal_text = f"the {size_class} {animal}" if size_class else animal
+        if bool(event.data.get("kill_bag_used")):
+            self.sim.log.add(
+                f"Cut and bagged usable meat from {animal_text} {tool_phrase}: {output_name} x{quantity}."
+            )
+            return
+        self.sim.log.add(f"Cut usable meat from {animal_text} {tool_phrase}: {output_name} x{quantity}.")
 
     def on_hunting_carcass_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -2506,6 +2516,21 @@ class EventLogSystem(System):
             self.sim.log.add(f"{animal} has no usable cuts worth packing.")
             return
         self.sim.log.add("That carcass is no longer available.")
+
+    def on_hunter_party_carcass_dressed(self, event):
+        player_pos = self.sim.ecs.get(Position).get(self.player_eid)
+        if player_pos is None:
+            return
+        try:
+            x = int(event.data.get("x", 0))
+            y = int(event.data.get("y", 0))
+            z = int(event.data.get("z", 0))
+        except (TypeError, ValueError):
+            return
+        if int(player_pos.z) != z or _manhattan(int(player_pos.x), int(player_pos.y), x, y) > 18:
+            return
+        animal = str(event.data.get("animal_name") or "wildlife").strip() or "wildlife"
+        self.sim.log.add(f"Hunters dress {animal} near their game rack.", channel="world", priority="normal")
 
     def on_site_service_used(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -4783,11 +4808,19 @@ class EventLogSystem(System):
         threat_count = event.data.get("threat_count", 0)
         direct_count = event.data.get("direct_threat_count", threat_count)
         ambient_count = event.data.get("ambient_threat_count", 0)
+        pursuit_count = event.data.get("pursuit_target_count", 0)
         nearest = event.data.get("nearest_threat_dist")
         player_cover = self.sim.ecs.get(CoverState).get(self.player_eid)
         exposure = int(float(player_cover.exposure if player_cover else 1.0) * 100)
-        if ambient_count:
-            threat_label = f"{direct_count} direct + {ambient_count} nearby"
+        if ambient_count or pursuit_count:
+            parts = []
+            if direct_count:
+                parts.append(f"{direct_count} direct")
+            if ambient_count:
+                parts.append(f"{ambient_count} nearby")
+            if pursuit_count:
+                parts.append(f"{pursuit_count} pursuit")
+            threat_label = " + ".join(parts) if parts else f"{threat_count} threat"
         else:
             threat_label = f"{threat_count} threat"
         if nearest is None:

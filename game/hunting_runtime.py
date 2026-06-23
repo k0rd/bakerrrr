@@ -9,6 +9,8 @@ from engine.events import Event
 from engine.systems import System
 from game.components import AnimalPhysicalProfile, CreatureIdentity, EcologyProfile, Inventory, PlayerAssets
 from game.items import ITEM_CATALOG, item_display_name
+from game.system_support.awareness_runtime import observation_payload_for_position
+from game.system_support.offense_runtime import _emit_action_offense_event
 from game.system_support.interaction_ordering import _manhattan
 
 
@@ -256,9 +258,10 @@ def hunting_carcass_look_text(record):
     size_class = str(record.get("animal_size_class", "") or "animal").replace("_", " ")
     species = str(record.get("species_label", "") or record.get("animal_name", "") or "wildlife").strip()
     units = int(record.get("base_units", 0) or 0)
+    claim_note = "; hunter claim" if record.get("claimed_by_event_id") else ""
     if units <= 0:
-        return f"carcass:{size_class} {species}; no usable cuts"
-    return f"carcass:{size_class} {species}; field dress with a blade, about {units} meat"
+        return f"carcass:{size_class} {species}{claim_note}; no usable cuts"
+    return f"carcass:{size_class} {species}{claim_note}; field dress with a blade, about {units} meat"
 
 
 def _inventory_for(sim, eid):
@@ -300,6 +303,63 @@ def _inventory_owner_for(sim, eid):
     if eid == getattr(sim, "player_eid", None):
         return eid, "player"
     return eid, "npc"
+
+
+def _emit_claimed_carcass_take_events(sim, eid, record, *, output_item_id, output_item_name, quantity):
+    if not isinstance(record, dict) or not record.get("claimed_by_event_id"):
+        return
+    claimed_hunter = record.get("claimed_by_hunter_eid")
+    try:
+        if claimed_hunter is not None and int(claimed_hunter) == int(eid):
+            return
+    except (TypeError, ValueError):
+        pass
+
+    x = _safe_int(record.get("x"), 0)
+    y = _safe_int(record.get("y"), 0)
+    z = _safe_int(record.get("z"), 0)
+    observation = observation_payload_for_position(
+        sim,
+        x,
+        y,
+        z,
+        exclude_eid=eid,
+        offender_eid=eid,
+        observation_channels=("actor_witness",),
+    )
+    property_id = str(record.get("claimed_property_id", "") or "").strip() or None
+    property_name = str(record.get("claim_label", "") or "hunter claim").strip() or "hunter claim"
+    sim.emit(Event(
+        "item_stolen",
+        offender_eid=eid,
+        item_id=output_item_id,
+        item_name=output_item_name,
+        quantity=max(1, int(quantity)),
+        owner_eid=claimed_hunter,
+        owner_tag=str(record.get("claimed_by_org", "") or "hunter_party").strip() or "hunter_party",
+        property_id=property_id,
+        property_name=property_name,
+        x=x,
+        y=y,
+        z=z,
+        source_context="claimed_hunting_carcass",
+        **observation,
+    ))
+    _emit_action_offense_event(
+        sim,
+        eid,
+        "pickup_item",
+        x,
+        y,
+        z,
+        context="item_theft",
+        item_id=output_item_id,
+        item_name=output_item_name,
+        property_id=property_id,
+        property_name=property_name,
+        source_context="claimed_hunting_carcass",
+        **observation,
+    )
 
 
 def _inventory_can_accept(inventory, item_id, quantity, *, metadata=None, owner_eid=None, owner_tag=None):
@@ -387,6 +447,15 @@ def field_dress_carcass(sim, eid, carcass_id=None):
     record["harvested_by_eid"] = eid
     record["output_item_id"] = output_item_id
     record["output_quantity"] = int(quantity)
+    output_item_name = item_display_name(output_item_id, metadata=metadata, item_catalog=ITEM_CATALOG)
+    _emit_claimed_carcass_take_events(
+        sim,
+        eid,
+        record,
+        output_item_id=output_item_id,
+        output_item_name=output_item_name,
+        quantity=int(quantity),
+    )
     sim.emit(Event(
         "hunting_carcass_harvested",
         eid=eid,
@@ -395,7 +464,7 @@ def field_dress_carcass(sim, eid, carcass_id=None):
         species_label=record.get("species_label"),
         animal_size_class=record.get("animal_size_class"),
         output_item_id=output_item_id,
-        output_item_name=item_display_name(output_item_id, metadata=metadata, item_catalog=ITEM_CATALOG),
+        output_item_name=output_item_name,
         quantity=int(quantity),
         tool_item_id=tool.get("item_id"),
         kill_bag_used=bool(kill_bag),

@@ -491,6 +491,19 @@ def _hud_line_is_read(line):
     return text.startswith("read:") or text.startswith("read ")
 
 
+_HUD_WEAPON_LABEL_WIDTH = 18
+_HUD_ARMOR_LABEL_WIDTH = 14
+_HUD_VEHICLE_LABEL_WIDTH = 20
+
+
+def _hud_compact_label(text, width):
+    text = " ".join(str(text or "").strip().split())
+    if not text:
+        return ""
+    clipped = _clip_display_line(text, max(1, int(width)))
+    return _line_text(clipped)
+
+
 _HELP_SECTION_COLORS = (
     "human_slate",
     "human_olive",
@@ -1846,6 +1859,40 @@ class RenderSystem(System):
         def _remembered_tile_appearance(x, y, z):
             return player_tile_memory.get((int(x), int(y), int(z)))
 
+        occupied_vehicle_choices = {}
+        hidden_vehicle_occupants = set()
+        if zoom_mode != "overworld":
+            for occupant_eid, raw_state in tuple(vehicle_states.items()):
+                state = ensure_vehicle_motion_state(raw_state)
+                if not state or not bool(getattr(state, "in_vehicle", False)):
+                    continue
+                vehicle_id = str(getattr(state, "active_vehicle_id", "") or "").strip()
+                if not vehicle_id:
+                    continue
+                vehicle_prop = self.sim.properties.get(vehicle_id)
+                if not _property_is_vehicle(vehicle_prop):
+                    continue
+                occupant_pos = positions.get(occupant_eid)
+                if not occupant_pos or int(occupant_pos.z) != int(active_z):
+                    continue
+                if not renders.get(occupant_eid):
+                    continue
+                hidden_vehicle_occupants.add(occupant_eid)
+                choice_key = (0 if occupant_eid == self.player_eid else 1, int(occupant_eid))
+                current = occupied_vehicle_choices.get(vehicle_id)
+                if current is None or choice_key < current[0]:
+                    occupied_vehicle_choices[vehicle_id] = (
+                        choice_key,
+                        occupant_eid,
+                        state,
+                        vehicle_prop,
+                        occupant_pos,
+                    )
+        occupied_vehicle_by_driver = {
+            occupant_eid: (state, vehicle_prop)
+            for _vehicle_id, (_choice_key, occupant_eid, state, vehicle_prop, _pos) in occupied_vehicle_choices.items()
+        }
+
         lighting_state = _lighting_state(self.sim)
         if int(lighting_state.get("tick", -1)) != int(getattr(self.sim, "tick", 0)):
             lighting_state = _update_lighting_state(self.sim, player_pos=player_pos)
@@ -2388,6 +2435,12 @@ class RenderSystem(System):
             active_quest_target = active_final_operation_target_property_id(self.sim)
 
             for prop in self.sim.properties.values():
+                prop_id = str(prop.get("id", "") or "").strip()
+                occupied_choice = occupied_vehicle_choices.get(prop_id)
+                if occupied_choice is not None:
+                    _choice_key, occupant_eid, _state, _vehicle_prop, occupant_pos = occupied_choice
+                    if occupant_eid == self.player_eid or _is_visible(occupant_pos.x, occupant_pos.y, occupant_pos.z):
+                        continue
                 display_pos = _property_display_position(prop, active_quest_target=active_quest_target)
                 if not display_pos:
                     continue
@@ -2414,7 +2467,7 @@ class RenderSystem(System):
                 )
                 if (
                     active_vehicle_prop
-                    and str(prop.get("id", "") or "").strip() == str(active_vehicle_prop.get("id", "") or "").strip()
+                    and str(prop_id) == str(active_vehicle_prop.get("id", "") or "").strip()
                     and player_vehicle_state
                     and player_vehicle_state.in_vehicle
                 ):
@@ -2555,6 +2608,8 @@ class RenderSystem(System):
                 render = renders.get(eid)
                 if not render:
                     continue
+                if eid in hidden_vehicle_occupants and eid not in occupied_vehicle_by_driver:
+                    continue
                 if pos.z != active_z:
                     continue
                 screen_x = pos.x - camera_x
@@ -2566,15 +2621,14 @@ class RenderSystem(System):
                 drawables.append((pos.z, eid, pos, render, screen_x, screen_y))
 
             for _, eid, _pos, render, screen_x, screen_y in sorted(drawables, key=lambda item: (item[0], item[1])):
-                if (
-                    eid == self.player_eid
-                    and zoom_mode != "overworld"
-                    and player_vehicle_state
-                    and player_vehicle_state.in_vehicle
-                    and active_vehicle_prop
-                ):
-                    appearance = self.sim.appearance.property(active_vehicle_prop)
-                    appearance = _vehicle_appearance_with_heading(appearance, player_vehicle_state)
+                occupied_vehicle = occupied_vehicle_by_driver.get(eid)
+                if occupied_vehicle:
+                    occupant_vehicle_state, occupant_vehicle_prop = occupied_vehicle
+                    appearance = self.sim.appearance.property(
+                        occupant_vehicle_prop,
+                        active_quest_target=active_quest_target,
+                    )
+                    appearance = _vehicle_appearance_with_heading(appearance, occupant_vehicle_state)
                 else:
                     appearance = _entity_render_style(self.sim, eid, player_eid=self.player_eid)
                 attrs = _ambient_attr(_pos.x, _pos.y, _pos.z)
@@ -2748,6 +2802,7 @@ class RenderSystem(System):
             weapon = weapon_by_id(loadout.current_weapon())
             instance = loadout.weapon_instance(loadout.current_weapon())
             weapon_name = str(instance.get("custom_name") or weapon.get("name", weapon.get("id", "weapon")))
+            weapon_name = _hud_compact_label(weapon_name, _HUD_WEAPON_LABEL_WIDTH) or "weapon"
             if _weapon_uses_ammo(weapon):
                 ammo_type = _weapon_ammo_type_label(weapon)
                 reserve = _weapon_reserve_ammo(loadout, loadout.current_weapon())
@@ -2762,6 +2817,7 @@ class RenderSystem(System):
         armor_name = "none"
         if armor_loadout and armor_loadout.equipped_instance_id:
             armor_name = str(armor_loadout.equipped_name or armor_loadout.equipped_item_id or "armor")
+            armor_name = _hud_compact_label(armor_name, _HUD_ARMOR_LABEL_WIDTH) or "armor"
         hp_text = "?"
         if vitality:
             hp_text = f"{vitality.hp}/{vitality.max_hp}"
@@ -2842,11 +2898,19 @@ class RenderSystem(System):
             threat_count = overlay.get("threat_count", 0)
             direct_count = overlay.get("direct_threat_count", threat_count)
             ambient_count = overlay.get("ambient_threat_count", 0)
+            pursuit_count = overlay.get("pursuit_target_count", 0)
             nearest = overlay.get("nearest_threat_dist")
             nearest_text = "?" if nearest is None else str(nearest)
             exposure = int(float(overlay.get("player_exposure", 1.0)) * 100)
-            if ambient_count:
-                threat_label = f"{direct_count} direct + {ambient_count} nearby"
+            if ambient_count or pursuit_count:
+                parts = []
+                if direct_count:
+                    parts.append(f"{direct_count} direct")
+                if ambient_count:
+                    parts.append(f"{ambient_count} nearby")
+                if pursuit_count:
+                    parts.append(f"{pursuit_count} pursuit")
+                threat_label = " + ".join(parts) if parts else str(threat_count)
             else:
                 threat_label = str(threat_count)
             status_chunks.append(
@@ -2862,7 +2926,7 @@ class RenderSystem(System):
                 )
             )
         if active_vehicle_prop:
-            vehicle_name = _vehicle_label(active_vehicle_prop)
+            vehicle_name = _hud_compact_label(_vehicle_label(active_vehicle_prop), _HUD_VEHICLE_LABEL_WIDTH) or "vehicle"
             fuel, fuel_capacity = _vehicle_fuel_values(active_vehicle_prop)
             in_vehicle = bool(player_vehicle_state and player_vehicle_state.in_vehicle)
             mode_text = "driving" if in_vehicle else "parked"
@@ -2996,30 +3060,34 @@ class RenderSystem(System):
             f"Cr {credits}",
             f"Inv {carried_slots}/{inventory.capacity if inventory else 0} u{carried_units}",
             f"HP {hp_text}",
+        ]
+        if player_needs:
+            economy_chunks.extend(_survival_indicator_chunks(player_needs, rich=True))
+        pressure = _pressure_snapshot(self.sim)
+        pressure_tier = str(pressure.get("tier", "low")).strip().lower()
+        pressure_attention = int(pressure.get("attention", 0))
+        economy_chunks.append(f"Heat {pressure_tier} {pressure_attention}")
+        if player_needs:
+            economy_chunks.append(
+                f"Needs E{player_needs.energy:.0f}/S{player_needs.safety:.0f}/So{player_needs.social:.0f}"
+            )
+        economy_chunks.extend([
             f"Status {active_status_summary if active_status_count else 0}",
             f"Wpn {weapon_name}",
             f"Ammo {ammo_text}",
             f"Arm {armor_name}",
-        ]
+        ])
         if active_vehicle_prop:
             profile = _vehicle_profile_from_property(active_vehicle_prop)
             fuel, fuel_capacity = _vehicle_fuel_values(active_vehicle_prop)
-            economy_chunks.append(f"Veh {_vehicle_label(active_vehicle_prop)} F{fuel}/{fuel_capacity}")
+            vehicle_label = _hud_compact_label(_vehicle_label(active_vehicle_prop), _HUD_VEHICLE_LABEL_WIDTH) or "vehicle"
+            economy_chunks.append(f"Veh {vehicle_label} F{fuel}/{fuel_capacity}")
             economy_chunks.append(
                 "Drive "
                 f"P{_int_or_default(profile.get('power'), 5)}/"
                 f"D{_int_or_default(profile.get('durability'), 5)}/"
                 f"E{_int_or_default(profile.get('fuel_efficiency'), 5)}"
             )
-        if player_needs:
-            economy_chunks.append(
-                f"Needs E{player_needs.energy:.0f}/S{player_needs.safety:.0f}/So{player_needs.social:.0f}"
-            )
-            economy_chunks.extend(_survival_indicator_chunks(player_needs, rich=True))
-        pressure = _pressure_snapshot(self.sim)
-        pressure_tier = str(pressure.get("tier", "low")).strip().lower()
-        pressure_attention = int(pressure.get("attention", 0))
-        economy_chunks.append(f"Heat {pressure_tier} {pressure_attention}")
         if player_cover:
             if player_cover.active:
                 cover_text = f"{player_cover.cover_kind.upper()} {int(player_cover.cover_value * 100)}%"

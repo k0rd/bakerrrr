@@ -9,6 +9,22 @@ import random
 
 from engine.events import Event
 from engine.systems import System
+from game.components import (
+    CreatureIdentity,
+    HumanWildlifePresence,
+    Inventory,
+    Vitality,
+    WeaponLoadout,
+    WeaponUseProfile,
+)
+from game.hunting_runtime import (
+    FIELD_KNIFE_ITEM_ID,
+    KILL_BAG_ITEM_ID,
+    field_dress_carcass,
+    hunting_yield_profile,
+)
+from game.items import ITEM_CATALOG
+from game.weapons import weapon_by_id
 from game.world_event_presentation import world_event_effect_summary
 from game import systems as _systems
 
@@ -29,6 +45,13 @@ _ensure_newcomer_component = _systems._ensure_newcomer_component
 _manhattan = _systems._manhattan
 _release_actor_to_newcomer = _systems._release_actor_to_newcomer
 _spawn_human = _systems._spawn_human
+_path_next_step = _systems._path_next_step
+_try_move_entity = _systems.try_move_entity
+_weapon_target_viability = _systems._weapon_target_viability
+
+HUNTER_PARTY_MAX_KILLS = 2
+HUNTER_PARTY_TARGET_RADIUS = 16
+HUNTER_PARTY_ACTION_COOLDOWN = 2
 
 
 def _normalize_chunk_coord(value):
@@ -249,6 +272,19 @@ class WorldEventsSystem(System):
         if not isinstance(event.get("spawned_property_ids"), list):
             event["spawned_property_ids"] = []
         event["materialized"] = bool(event.get("materialized", False))
+        if str(event.get("key", "")).strip().lower() == "hunter_party":
+            if not isinstance(event.get("hunter_actor_ids"), list):
+                event["hunter_actor_ids"] = []
+            if not isinstance(event.get("hunter_task"), dict):
+                event["hunter_task"] = {}
+            try:
+                event["hunter_kills"] = max(0, int(event.get("hunter_kills", 0) or 0))
+            except (TypeError, ValueError):
+                event["hunter_kills"] = 0
+            try:
+                event["hunter_kill_cap"] = max(0, int(event.get("hunter_kill_cap", HUNTER_PARTY_MAX_KILLS) or HUNTER_PARTY_MAX_KILLS))
+            except (TypeError, ValueError):
+                event["hunter_kill_cap"] = HUNTER_PARTY_MAX_KILLS
         try:
             event["spawn_seed"] = int(event.get("spawn_seed", event.get("id", 0)))
         except (TypeError, ValueError):
@@ -290,6 +326,267 @@ class WorldEventsSystem(System):
         event_id = event.get("id", 0) if isinstance(event, dict) else 0
         seed = event.get("spawn_seed", event_id) if isinstance(event, dict) else event_id
         return random.Random(f"{self.sim.seed}:world-event:{event_id}:{seed}:{salt}")
+
+    def _add_event_actor_item(self, eid, item_id, *, metadata=None):
+        inventory = self.sim.ecs.get(Inventory).get(eid)
+        if inventory is None:
+            inventory = Inventory(capacity=10)
+            self.sim.ecs.add(eid, inventory)
+        inventory.capacity = max(int(getattr(inventory, "capacity", 0) or 0), 10)
+        item_id = str(item_id or "").strip().lower()
+        item_def = ITEM_CATALOG.get(item_id, {})
+        if not item_def:
+            return None
+        added, instance_id = inventory.add_item(
+            item_id=item_id,
+            quantity=1,
+            stack_max=max(1, int(item_def.get("stack_max", 1) or 1)),
+            instance_factory=self.sim.new_item_instance_id,
+            owner_eid=eid,
+            owner_tag="npc",
+            metadata=metadata or {"source": "hunter_party"},
+        )
+        return instance_id if added else None
+
+    def _equip_event_hunter(self, eid, rng, *, career="hunter"):
+        weapon_item_id = "hunting_rifle" if str(career or "").strip().lower() == "hunter" else "varmint_rifle"
+        instance_id = self._add_event_actor_item(
+            eid,
+            weapon_item_id,
+            metadata={"source": "hunter_party", "equipped": True},
+        )
+        self._add_event_actor_item(eid, FIELD_KNIFE_ITEM_ID, metadata={"source": "hunter_party", "field_kit": True})
+        self._add_event_actor_item(eid, KILL_BAG_ITEM_ID, metadata={"source": "hunter_party", "field_kit": True})
+
+        item_def = ITEM_CATALOG.get(weapon_item_id, {})
+        weapon_id = str(item_def.get("weapon_id", "") or "").strip()
+        if weapon_id:
+            loadout = self.sim.ecs.get(WeaponLoadout).get(eid)
+            if loadout is None:
+                loadout = WeaponLoadout()
+                self.sim.ecs.add(eid, loadout)
+            loadout.add_weapon(weapon_id, instance={"inventory_instance_id": instance_id, "source": "hunter_party"})
+            loadout.equip(weapon_id)
+            loadout.set_reserve_ammo_value(weapon_id, 18)
+
+        self.sim.ecs.add(
+            eid,
+            WeaponUseProfile(
+                aggression=0.86,
+                aim_bias=0.72,
+                min_range=1,
+                max_range=14,
+                cooldown_jitter=0,
+                allow_explosives=False,
+            ),
+        )
+        presence = self.sim.ecs.get(HumanWildlifePresence).get(eid)
+        if presence is not None:
+            presence.hunting_intent = True
+            presence.firearm_threat_bonus = max(float(getattr(presence, "firearm_threat_bonus", 0.0) or 0.0), 44.0)
+            presence.perceived_predator_score = max(float(getattr(presence, "perceived_predator_score", 0.0) or 0.0), 78.0)
+        return True
+
+    def _hunter_actor_ids(self, event):
+        ids = []
+        seen = set()
+        raw_ids = event.get("hunter_actor_ids")
+        if not isinstance(raw_ids, list):
+            raw_ids = []
+        identities = self.sim.ecs.get(CreatureIdentity)
+        for raw_eid in list(raw_ids) + list(event.get("spawned_entity_ids", ()) or ()):
+            try:
+                eid = int(raw_eid)
+            except (TypeError, ValueError):
+                continue
+            if eid in seen:
+                continue
+            identity = identities.get(eid)
+            common = str(getattr(identity, "common_name", "") or "").strip().lower()
+            if common not in {"hunter", "trapper"}:
+                continue
+            if self.sim.ecs.get(Position).get(eid) is None:
+                continue
+            seen.add(eid)
+            ids.append(eid)
+        event["hunter_actor_ids"] = ids
+        return ids
+
+    def _event_anchor(self, event):
+        for property_id in tuple(event.get("spawned_property_ids", ()) or ()):
+            prop = self.sim.properties.get(property_id)
+            if prop:
+                return (
+                    int(prop.get("x", 0) or 0),
+                    int(prop.get("y", 0) or 0),
+                    int(prop.get("z", 0) or 0),
+                    str(prop.get("id", "") or "").strip() or None,
+                    str(prop.get("name", "") or "").strip() or "hunter party",
+                )
+        try:
+            origin_x, origin_y = self.sim.chunk_origin(int(event.get("cx", 0)), int(event.get("cy", 0)))
+            return (
+                origin_x + self.sim.chunk_size // 2,
+                origin_y + self.sim.chunk_size // 2,
+                0,
+                None,
+                "hunter party",
+            )
+        except Exception:
+            return (0, 0, 0, None, "hunter party")
+
+    def _event_chunk_contains_pos(self, event, pos):
+        if pos is None:
+            return False
+        try:
+            return tuple(self.sim.chunk_coords(int(pos.x), int(pos.y))) == (int(event.get("cx", 0)), int(event.get("cy", 0)))
+        except (TypeError, ValueError):
+            return False
+
+    def _eligible_hunter_target_rows(self, event, hunter_eid):
+        hunter_pos = self.sim.ecs.get(Position).get(hunter_eid)
+        if hunter_pos is None:
+            return []
+        anchor_x, anchor_y, anchor_z, _anchor_prop_id, _anchor_name = self._event_anchor(event)
+        ais = self.sim.ecs.get(AI)
+        positions = self.sim.ecs.get(Position)
+        vitalities = self.sim.ecs.get(Vitality)
+        rows = []
+        for target_eid, ai in ais.items():
+            if target_eid == hunter_eid:
+                continue
+            if str(getattr(ai, "role", "") or "").strip().lower() != "wildlife":
+                continue
+            target_pos = positions.get(target_eid)
+            if target_pos is None or int(target_pos.z) != int(hunter_pos.z):
+                continue
+            if not self._event_chunk_contains_pos(event, target_pos):
+                continue
+            if self.sim.property_covering(int(target_pos.x), int(target_pos.y), int(target_pos.z)):
+                continue
+            vitality = vitalities.get(target_eid)
+            if vitality is not None and bool(getattr(vitality, "downed", False)):
+                continue
+            if hunting_yield_profile(self.sim, animal_eid=target_eid) is None:
+                continue
+            anchor_dist = _manhattan(anchor_x, anchor_y, int(target_pos.x), int(target_pos.y))
+            hunter_dist = _manhattan(int(hunter_pos.x), int(hunter_pos.y), int(target_pos.x), int(target_pos.y))
+            if anchor_dist > HUNTER_PARTY_TARGET_RADIUS and hunter_dist > HUNTER_PARTY_TARGET_RADIUS:
+                continue
+            rows.append((hunter_dist, anchor_dist, int(target_eid), target_pos))
+        rows.sort(key=lambda row: (row[0], row[1], row[2]))
+        return rows
+
+    def _claim_event_carcasses(self, event):
+        state = getattr(self.sim, "hunting_carcasses", None)
+        if not isinstance(state, dict):
+            return []
+        hunter_ids = set(self._hunter_actor_ids(event))
+        if not hunter_ids:
+            return []
+        anchor_x, anchor_y, anchor_z, anchor_prop_id, anchor_name = self._event_anchor(event)
+        claimed = []
+        for record in state.values():
+            if not isinstance(record, dict):
+                continue
+            try:
+                source_eid = int(record.get("source_eid"))
+            except (TypeError, ValueError):
+                continue
+            if source_eid not in hunter_ids:
+                continue
+            record["claimed_by_event_id"] = int(event.get("id", 0) or 0)
+            record["claimed_by_hunter_eid"] = source_eid
+            record["claimed_by_org"] = "hunter_party"
+            record["claimed_property_id"] = anchor_prop_id
+            record["claim_label"] = anchor_name
+            claimed.append(record)
+        return claimed
+
+    def _move_event_actor_toward(self, eid, target, *, reason="event_hunt"):
+        pos = self.sim.ecs.get(Position).get(eid)
+        if pos is None or not isinstance(target, (tuple, list)) or len(target) < 3:
+            return False
+        try:
+            tx, ty, tz = int(target[0]), int(target[1]), int(target[2])
+        except (TypeError, ValueError):
+            return False
+        if int(pos.z) != tz or (int(pos.x), int(pos.y)) == (tx, ty):
+            return False
+        step = _path_next_step(
+            self.sim,
+            eid,
+            sx=int(pos.x),
+            sy=int(pos.y),
+            tx=tx,
+            ty=ty,
+            z=int(pos.z),
+            max_nodes=256,
+        )
+        if not step:
+            return False
+        moved, _blocked_reason = _try_move_entity(
+            self.sim,
+            eid=eid,
+            new_x=int(step[0]),
+            new_y=int(step[1]),
+            new_z=int(pos.z),
+            reason=reason,
+        )
+        if moved:
+            self.sim.emit(Event(
+                "noise",
+                source_eid=eid,
+                x=int(pos.x),
+                y=int(pos.y),
+                z=int(pos.z),
+                radius=2,
+                cause="move",
+            ))
+        return bool(moved)
+
+    def _hunter_can_fire_at(self, hunter_eid, target_eid):
+        positions = self.sim.ecs.get(Position)
+        loadout = self.sim.ecs.get(WeaponLoadout).get(hunter_eid)
+        hunter_pos = positions.get(hunter_eid)
+        target_pos = positions.get(target_eid)
+        if hunter_pos is None or target_pos is None or int(hunter_pos.z) != int(target_pos.z):
+            return False
+        if loadout is None or not loadout.current_weapon():
+            return False
+        if int(getattr(self.sim, "tick", 0) or 0) < int(getattr(loadout, "cooldown_until_tick", 0) or 0):
+            return False
+        weapon = weapon_by_id(loadout.current_weapon())
+        if not weapon or "melee" in {str(tag).strip().lower() for tag in weapon.get("tags", ()) if str(tag).strip()}:
+            return False
+        profile = self.sim.ecs.get(WeaponUseProfile).get(hunter_eid)
+        max_range = int(getattr(profile, "max_range", weapon.get("range", 1)) if profile else weapon.get("range", 1))
+        if _manhattan(int(hunter_pos.x), int(hunter_pos.y), int(target_pos.x), int(target_pos.y)) > max_range:
+            return False
+        viability = _weapon_target_viability(
+            self.sim,
+            source_eid=hunter_eid,
+            source_pos=hunter_pos,
+            weapon=weapon,
+            target_x=int(target_pos.x),
+            target_y=int(target_pos.y),
+            target_z=int(target_pos.z),
+            target_eid=target_eid,
+        )
+        return bool(viability.get("ok"))
+
+    def _set_hunter_task_intent(self, hunter_eid, *, target=None, target_eid=None, state="hunting"):
+        ai = self.sim.ecs.get(AI).get(hunter_eid)
+        will = self.sim.ecs.get(NPCWill).get(hunter_eid)
+        if ai is not None:
+            ai.state = str(state or "hunting").strip().lower() or "hunting"
+            ai.target = target
+            ai.target_eid = target_eid
+        if will is not None:
+            will.intent = str(state or "hunting").strip().lower() or "hunting"
+            will.score = max(46.0, float(getattr(will, "score", 0.0) or 0.0))
+            will.target = target
+            will.target_eid = target_eid
 
     def _candidate_street_tiles(self, cx, cy, *, reserved=None, min_player_distance=3):
         reserved = {
@@ -632,6 +929,9 @@ class WorldEventsSystem(System):
                 shift_window=(0, 0),
             )
             self._set_event_actor_intent(eid, "holding", hold_spot, score=34.0)
+            if event_key == "hunter_party" and str(career or "").strip().lower() in {"hunter", "trapper"}:
+                self._equip_event_hunter(eid, actor_rng, career=career)
+                event.setdefault("hunter_actor_ids", []).append(eid)
             event["spawned_entity_ids"].append(eid)
 
     def _release_event_entity(self, event, eid):
@@ -679,6 +979,9 @@ class WorldEventsSystem(System):
             self.sim.remove_entity(eid)
         event["spawned_property_ids"] = []
         event["spawned_entity_ids"] = kept
+        if str(event.get("key", "")).strip().lower() == "hunter_party":
+            event["hunter_actor_ids"] = []
+            event["hunter_task"] = {}
         event["materialized"] = False
 
     def _update_guard_patrols(self, event):
@@ -722,6 +1025,189 @@ class WorldEventsSystem(System):
                 will.target = patrol_target
                 will.target_eid = None
 
+    def _task_carcass_for_hunter_event(self, event, task):
+        if not isinstance(task, dict):
+            return None
+        state = getattr(self.sim, "hunting_carcasses", None)
+        if not isinstance(state, dict):
+            return None
+        carcass_id = str(task.get("carcass_id", "") or "").strip()
+        if carcass_id and isinstance(state.get(carcass_id), dict):
+            return state[carcass_id]
+        try:
+            target_eid = int(task.get("target_eid"))
+        except (TypeError, ValueError):
+            target_eid = None
+        try:
+            hunter_eid = int(task.get("hunter_eid"))
+        except (TypeError, ValueError):
+            hunter_eid = None
+        for record in state.values():
+            if not isinstance(record, dict):
+                continue
+            try:
+                animal_eid = int(record.get("animal_eid"))
+            except (TypeError, ValueError):
+                animal_eid = None
+            try:
+                source_eid = int(record.get("source_eid"))
+            except (TypeError, ValueError):
+                source_eid = None
+            if target_eid is not None and animal_eid == target_eid:
+                return record
+            if hunter_eid is not None and source_eid == hunter_eid and not bool(record.get("harvested")):
+                return record
+        return None
+
+    def _clear_hunter_task(self, event):
+        event["hunter_task"] = {}
+
+    def _begin_hunter_task(self, event):
+        if int(event.get("hunter_kills", 0) or 0) >= int(event.get("hunter_kill_cap", HUNTER_PARTY_MAX_KILLS) or HUNTER_PARTY_MAX_KILLS):
+            return None
+        for hunter_eid in self._hunter_actor_ids(event):
+            rows = self._eligible_hunter_target_rows(event, hunter_eid)
+            if not rows:
+                continue
+            _hunter_dist, _anchor_dist, target_eid, target_pos = rows[0]
+            task = {
+                "status": "hunting",
+                "hunter_eid": int(hunter_eid),
+                "target_eid": int(target_eid),
+                "started_tick": int(getattr(self.sim, "tick", 0) or 0),
+                "last_action_tick": -10_000,
+            }
+            event["hunter_task"] = task
+            self._set_hunter_task_intent(
+                hunter_eid,
+                target=(int(target_pos.x), int(target_pos.y), int(target_pos.z)),
+                target_eid=int(target_eid),
+                state="hunting",
+            )
+            self.sim.emit(Event(
+                "hunter_party_targeted_wildlife",
+                event_id=int(event.get("id", 0) or 0),
+                hunter_eid=int(hunter_eid),
+                target_eid=int(target_eid),
+                x=int(target_pos.x),
+                y=int(target_pos.y),
+                z=int(target_pos.z),
+            ))
+            return task
+        return None
+
+    def _update_hunter_task_carcass(self, event, task, hunter_eid, record):
+        if not isinstance(record, dict):
+            return False
+        task["status"] = "field_dressing"
+        task["carcass_id"] = str(record.get("carcass_id", "") or "").strip()
+        record["claimed_by_event_id"] = int(event.get("id", 0) or 0)
+        record["claimed_by_hunter_eid"] = int(hunter_eid)
+        record["claimed_by_org"] = "hunter_party"
+        _anchor_x, _anchor_y, _anchor_z, anchor_prop_id, anchor_name = self._event_anchor(event)
+        record["claimed_property_id"] = anchor_prop_id
+        record["claim_label"] = anchor_name
+
+        if bool(record.get("harvested")):
+            if record.get("harvested_by_eid") == hunter_eid:
+                event["hunter_kills"] = int(event.get("hunter_kills", 0) or 0) + 1
+            self._clear_hunter_task(event)
+            return True
+
+        target = (
+            int(record.get("x", 0) or 0),
+            int(record.get("y", 0) or 0),
+            int(record.get("z", 0) or 0),
+        )
+        hunter_pos = self.sim.ecs.get(Position).get(hunter_eid)
+        if hunter_pos is None:
+            self._clear_hunter_task(event)
+            return False
+        self._set_hunter_task_intent(hunter_eid, target=target, target_eid=None, state="hunting")
+        if int(hunter_pos.z) != target[2] or _manhattan(int(hunter_pos.x), int(hunter_pos.y), target[0], target[1]) > 1:
+            self._move_event_actor_toward(hunter_eid, target, reason="hunter_party_carcass")
+            return True
+
+        if field_dress_carcass(self.sim, hunter_eid, record.get("carcass_id")):
+            event["hunter_kills"] = int(event.get("hunter_kills", 0) or 0) + 1
+            self.sim.emit(Event(
+                "hunter_party_carcass_dressed",
+                event_id=int(event.get("id", 0) or 0),
+                hunter_eid=int(hunter_eid),
+                carcass_id=record.get("carcass_id"),
+                animal_name=record.get("animal_name") or record.get("species_label"),
+                x=target[0],
+                y=target[1],
+                z=target[2],
+            ))
+            self._clear_hunter_task(event)
+            return True
+        task["status"] = "blocked"
+        task["last_action_tick"] = int(getattr(self.sim, "tick", 0) or 0)
+        return False
+
+    def _update_hunter_party(self, event):
+        if str(event.get("key", "")).strip().lower() != "hunter_party":
+            return
+        if not self._event_chunk_is_active(event) or not bool(event.get("materialized")):
+            return
+        self._claim_event_carcasses(event)
+        if int(event.get("hunter_kills", 0) or 0) >= int(event.get("hunter_kill_cap", HUNTER_PARTY_MAX_KILLS) or HUNTER_PARTY_MAX_KILLS):
+            return
+
+        task = event.get("hunter_task") if isinstance(event.get("hunter_task"), dict) else {}
+        if not task:
+            task = self._begin_hunter_task(event)
+            if not task:
+                return
+
+        try:
+            hunter_eid = int(task.get("hunter_eid"))
+        except (TypeError, ValueError):
+            self._clear_hunter_task(event)
+            return
+        hunter_pos = self.sim.ecs.get(Position).get(hunter_eid)
+        hunter_vitality = self.sim.ecs.get(Vitality).get(hunter_eid)
+        if hunter_pos is None or (hunter_vitality is not None and bool(getattr(hunter_vitality, "downed", False))):
+            self._clear_hunter_task(event)
+            return
+
+        carcass = self._task_carcass_for_hunter_event(event, task)
+        if carcass is not None:
+            self._update_hunter_task_carcass(event, task, hunter_eid, carcass)
+            return
+
+        try:
+            target_eid = int(task.get("target_eid"))
+        except (TypeError, ValueError):
+            self._clear_hunter_task(event)
+            return
+        target_pos = self.sim.ecs.get(Position).get(target_eid)
+        target_vitality = self.sim.ecs.get(Vitality).get(target_eid)
+        if target_pos is None:
+            self._clear_hunter_task(event)
+            return
+        target_tuple = (int(target_pos.x), int(target_pos.y), int(target_pos.z))
+        self._set_hunter_task_intent(hunter_eid, target=target_tuple, target_eid=target_eid, state="hunting")
+        if target_vitality is not None and bool(getattr(target_vitality, "downed", False)):
+            if _manhattan(int(hunter_pos.x), int(hunter_pos.y), int(target_pos.x), int(target_pos.y)) > 1:
+                self._move_event_actor_toward(hunter_eid, target_tuple, reason="hunter_party_downed_target")
+            return
+
+        tick = int(getattr(self.sim, "tick", 0) or 0)
+        last_action = int(task.get("last_action_tick", -10_000) or -10_000)
+        if tick - last_action >= HUNTER_PARTY_ACTION_COOLDOWN and self._hunter_can_fire_at(hunter_eid, target_eid):
+            task["last_action_tick"] = tick
+            self.sim.emit(Event(
+                "weapon_fire_request",
+                eid=hunter_eid,
+                target_eid=target_eid,
+                reason="hunter_party",
+            ))
+            return
+
+        self._move_event_actor_toward(hunter_eid, target_tuple, reason="hunter_party_stalk")
+
     def _sync_event_materialization(self, event):
         self._normalize_event_runtime_state(event)
         if self._event_chunk_is_active(event):
@@ -729,6 +1215,7 @@ class WorldEventsSystem(System):
                 self._materialize_event(event)
             if event.get("materialized"):
                 self._update_guard_patrols(event)
+                self._update_hunter_party(event)
             return
 
         if event.get("materialized"):

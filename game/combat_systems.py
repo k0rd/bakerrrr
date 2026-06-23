@@ -456,7 +456,7 @@ class WeaponSystem(System):
         if target_pos is None:
             self.sim.emit(Event("weapon_fire_blocked", eid=eid, reason="no_target"))
             return True
-        offense_profile = self._wildlife_offense_profile(target_eid, action="melee_attack") if eid == self.player_eid else None
+        offense_profile = self._wildlife_offense_profile(target_eid, action="melee_attack")
         target_name = _entity_display_name(self.sim, target_eid, title_case=False)
 
         hit = self._damage_entity(
@@ -511,7 +511,7 @@ class WeaponSystem(System):
         context = "unarmed_assault" if melee_weapon_id == "unarmed" else "melee_assault"
         score = None
         target_taxonomy = ""
-        if eid == self.player_eid and isinstance(offense_profile, dict):
+        if isinstance(offense_profile, dict):
             context = str(offense_profile.get("context", context) or context).strip().lower() or context
             score = int(offense_profile.get("score", 0) or 0)
             target_taxonomy = str((offense_profile or {}).get("target_taxonomy", "") or "").strip().lower()
@@ -1397,7 +1397,7 @@ class WeaponSystem(System):
         context = "explosive_discharge" if int(weapon.get("explosion_radius", 0)) > 0 else "armed_assault"
         score = None
         offense_profile = None
-        if eid == self.player_eid and int(weapon.get("explosion_radius", 0)) <= 0:
+        if int(weapon.get("explosion_radius", 0)) <= 0:
             offense_profile = self._wildlife_offense_profile(target_eid, action="fire_weapon")
             if isinstance(offense_profile, dict):
                 context = str(offense_profile.get("context", context) or context).strip().lower() or context
