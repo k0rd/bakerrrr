@@ -456,7 +456,7 @@ class LightingSystem(System):
 
 class VisibilitySystem(System):
 
-    def __init__(self, sim, player_eid, default_player_radius=11):
+    def __init__(self, sim, player_eid, default_player_radius=24):
         super().__init__(sim)
         self.player_eid = player_eid
         self.default_player_radius = max(4, int(default_player_radius))
@@ -487,14 +487,14 @@ class VisibilitySystem(System):
         except (TypeError, ValueError):
             perception = 5.0
         # 5 is baseline; higher gives up to +25%, lower down to -15%, but keep within reasonable bounds.
-        perception_scale = 0.9 + ((perception - 5.0) / 40.0)
-        perception_scale = max(0.75, min(1.25, perception_scale))
+        perception_scale = 1.0 + ((perception - 5.0) / 40.0)
+        perception_scale = max(0.85, min(1.25, perception_scale))
 
         # Minimum visibility is never below a small baseline to avoid full blindness.
-        scale = (0.5 + (ambient * 0.5)) * perception_scale
+        scale = (0.28 + (ambient * 0.72)) * perception_scale
         radius = int(round(radius * scale))
 
-        return max(4, min(24, radius))
+        return max(4, min(36, radius))
 
     def _state(self):
         state = getattr(self.sim, "visibility_state", None)

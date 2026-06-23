@@ -176,6 +176,7 @@ from game.systems import (
     NPCMemorySystem,
     NPCNeedsSystem,
     NPCSettlementSystem,
+    NPCRelationshipSystem,
     RumorSystem,
     NPCSocialDynamicsSystem,
     SocialKnowledgeInfluenceSystem,
@@ -769,6 +770,7 @@ def _register_runtime_systems(sim, view, player):
     altered_state_system = AlteredStateSystem(sim, player)
     npc_item_use_system = NPCItemUseSystem(sim)
     npc_social_system = NPCSocialDynamicsSystem(sim)
+    npc_relationship_system = NPCRelationshipSystem(sim)
     eavesdrop_system = EavesdropSystem(sim, player)
     door_wait_system = DoorWaitSystem(sim)
     criminal_drive_system = CriminalDriveSystem(sim)
@@ -839,6 +841,7 @@ def _register_runtime_systems(sim, view, player):
     _live_timeskip_stride(hunting_carcass_system, 0)
     _live_timeskip_stride(npc_item_use_system, 5)
     _live_timeskip_stride(npc_social_system, 10)
+    _live_timeskip_stride(npc_relationship_system, 0)
     _live_timeskip_stride(eavesdrop_system, 0)
     _live_timeskip_stride(social_knowledge_influence_system, 12)
     _live_timeskip_stride(business_pulse_aftermath_system, 60)
@@ -909,6 +912,7 @@ def _register_runtime_systems(sim, view, player):
     sim.register_system(altered_state_system)
     sim.register_system(npc_item_use_system)
     sim.register_system(npc_social_system)
+    sim.register_system(npc_relationship_system)
     sim.register_system(eavesdrop_system)
     sim.register_system(business_pulse_aftermath_system)
     sim.register_system(world_events_system)

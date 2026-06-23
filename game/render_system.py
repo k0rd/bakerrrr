@@ -934,10 +934,14 @@ def _vehicle_appearance_with_heading(appearance, state):
     state = ensure_vehicle_motion_state(state)
     if appearance is None or state is None:
         return appearance
+    effects = tuple(getattr(appearance, "effects", ()) or ())
+    if not bool(getattr(state, "headlights_on", True)):
+        effects = tuple(dict.fromkeys(effects + ("vehicle_headlights_off",)))
     return replace(
         appearance,
         glyph=vehicle_heading_glyph(state),
         semantic_id=f"property_vehicle_heading_{vehicle_heading_label(state).lower()}",
+        effects=effects,
     )
 
 def _clip(*args, **kwargs):
@@ -1397,7 +1401,7 @@ class RenderSystem(System):
         for line in (
             "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with space or 5.",
             "Observe: / talks, ' physically interacts, . uses the service on your tile, ; locks or unlocks a nearby door, x opens the look cursor, T takes a tactical read, and X opens the map.",
-            "Vehicles: ' enters a vehicle. Local driving uses forward to accelerate, left/right to turn, back to brake or reverse from rest. X opens a view-only map; drive onto an entrance ramp for quick travel. Boats stay local. Press t to get out.",
+            "Vehicles: ' enters a vehicle. Local driving uses forward to accelerate, left/right to turn, back to brake or reverse from rest. H toggles headlights. X opens a view-only map; drive onto an entrance ramp for quick travel. Boats stay local. Press t to get out.",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
             "Conversation read: + marks newly surfaced topics when your character notices them; at higher Conversation, its color hints safe, neutral, or dangerous.",
             "Ingress: Shift+J door breach, Shift+W window entry, Shift+K wall breach.",
@@ -2934,6 +2938,7 @@ class RenderSystem(System):
             if in_vehicle:
                 vehicle_bits.append(f"H{vehicle_heading_label(player_vehicle_state)}")
                 vehicle_bits.append(f"S{int(getattr(player_vehicle_state, 'speed', 0) or 0)}/{vehicle_top_speed(active_vehicle_prop)}")
+                vehicle_bits.append("Lt on" if bool(getattr(player_vehicle_state, "headlights_on", True)) else "Lt off")
             if player_pos and not (player_vehicle_state and player_vehicle_state.in_vehicle):
                 vehicle_chunk = self.sim.chunk_coords(
                     int(active_vehicle_prop.get("x", player_pos.x)),

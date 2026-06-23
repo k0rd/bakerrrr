@@ -155,6 +155,10 @@ class Simulation:
             self.hunting_carcasses = {}
         if not hasattr(self, "next_hunting_carcass_id"):
             self.next_hunting_carcass_id = 1
+        if not isinstance(getattr(self, "npc_relationships", None), dict):
+            self.npc_relationships = {}
+        if not isinstance(getattr(self, "npc_relationship_tastes", None), dict):
+            self.npc_relationship_tastes = {}
         if not isinstance(getattr(self, "local_trade_pressures", None), dict):
             self.local_trade_pressures = {"properties": {}, "chunks": {}}
         else:

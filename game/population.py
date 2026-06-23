@@ -44,6 +44,7 @@ from game.economy import chunk_economy_profile, pick_career_for_workplace
 from game.items import CREDSTICK_ITEM_ID, ITEM_CATALOG, loot_table_for_property, roll_loot
 from game.human_identity import seed_human_identity_profile
 from game.npc_names import generate_human_personal_name, human_descriptor
+from game.npc_relationships import seed_relationship_from_home_bond
 from game.organizations import ensure_property_organization, sync_actor_organization_affiliations
 from game.property_access import STOREFRONT_ARCHETYPE_HINTS, property_is_open, property_is_public, property_is_storefront, world_hour
 from game.property_runtime import property_is_vehicle, vehicle_fuel_values
@@ -1392,6 +1393,15 @@ def _seed_chunk_social_bonds(sim, actor_contexts):
                 closeness = rng.uniform(0.7, 0.94) if kind in {"family", "partner"} else rng.uniform(0.58, 0.84)
                 trust = rng.uniform(0.7, 0.93) if kind in {"family", "partner"} else rng.uniform(0.52, 0.8)
                 _bond_pair(sim, left_eid, right_eid, kind=kind, closeness=closeness, trust=trust)
+                if kind == "partner":
+                    seed_relationship_from_home_bond(
+                        sim,
+                        left_eid,
+                        right_eid,
+                        closeness=closeness,
+                        trust=trust,
+                        home_property_id=home_id,
+                    )
 
     for work_id, members in work_groups.items():
         members = sorted(set(int(eid) for eid in members))

@@ -4423,6 +4423,10 @@ from game.npc_intent_systems import NPCWillSystem
 
 
 
+from game.npc_relationships import NPCRelationshipSystem
+
+
+
 from game.systems_social import (
     EavesdropSystem,
     NPCSocialDynamicsSystem,

@@ -2674,6 +2674,7 @@ class VehicleState:
         heading_dy=-1,
         speed=0,
         medium="land",
+        headlights_on=True,
     ):
         vehicle_id = str(active_vehicle_id).strip() if active_vehicle_id else ""
         self.active_vehicle_id = vehicle_id or None
@@ -2683,6 +2684,7 @@ class VehicleState:
         self.heading_dx, self.heading_dy = self._normalized_heading(heading_dx, heading_dy)
         self.speed = max(0, min(4, int(speed or 0)))
         self.medium = str(medium or "land").strip().lower() or "land"
+        self.headlights_on = bool(headlights_on)
 
     @staticmethod
     def _normalized_heading(dx, dy):
@@ -2703,6 +2705,10 @@ class VehicleState:
             speed = 0
         self.speed = max(0, min(4, speed))
         self.medium = str(getattr(self, "medium", "land") or "land").strip().lower() or "land"
+        if not hasattr(self, "headlights_on"):
+            self.headlights_on = True
+        else:
+            self.headlights_on = bool(getattr(self, "headlights_on", True))
         return self
 
     def heading(self):
@@ -2726,6 +2732,16 @@ class VehicleState:
     def reset_motion(self, tick=0):
         self.set_speed(0, tick=tick)
         return self
+
+    def set_headlights(self, active, tick=0):
+        self.ensure_motion_defaults()
+        self.headlights_on = bool(active)
+        self.last_changed_tick = int(tick)
+        return bool(self.headlights_on)
+
+    def toggle_headlights(self, tick=0):
+        self.ensure_motion_defaults()
+        return self.set_headlights(not bool(getattr(self, "headlights_on", True)), tick=tick)
 
     def set_active_vehicle(self, vehicle_id, tick=0):
         self.ensure_motion_defaults()

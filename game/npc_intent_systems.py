@@ -84,6 +84,11 @@ from game.population import (
     work_shift_active,
 )
 from game.organizations import organization_profile
+from game.npc_relationships import (
+    maybe_progress_relationship_after_socialized as _maybe_progress_relationship_after_socialized,
+    record_partner_combat_witnesses as _record_partner_combat_witnesses,
+    should_block_solo_vehicle_for_partner as _should_block_solo_vehicle_for_partner,
+)
 from game.property_access import (
     PropertyIngressResult,
     _boundary_tile as _property_boundary_tile,
@@ -1644,6 +1649,15 @@ class NPCWillSystem(System):
             return
         if damage <= 0 or source_eid == target_eid:
             return
+        _record_partner_combat_witnesses(
+            self.sim,
+            source_eid,
+            target_eid,
+            damage=damage,
+            x=event.data.get("x"),
+            y=event.data.get("y"),
+            z=event.data.get("z"),
+        )
         if target_eid == getattr(self.sim, "player_eid", None):
             return
 
@@ -4502,6 +4516,8 @@ class NPCInvestigateSystem(System):
         vehicle_state = self.sim.ecs.get(VehicleState).get(eid)
         if vehicle_state is not None and bool(getattr(vehicle_state, "in_vehicle", False)):
             return None
+        if _should_block_solo_vehicle_for_partner(self.sim, eid, target):
+            return None
 
         for vehicle_prop, claim_vehicle in self._commute_vehicle_candidates(eid, pos):
             vehicle_pos = self._vehicle_position_tuple(vehicle_prop)
@@ -5507,6 +5523,7 @@ class NPCInvestigateSystem(System):
                             partner_eid=eid,
                             source_event="seeking_social_bond",
                         )
+                    relationship_update = _maybe_progress_relationship_after_socialized(self.sim, eid, partner_eid)
                     partner_ai = ais.get(partner_eid)
                     roles = {
                         str(ai.role or "").strip().lower(),
@@ -5516,7 +5533,7 @@ class NPCInvestigateSystem(System):
                         tone = "rambling"
                     elif "thief" in roles:
                         tone = "conspiring"
-                    elif relation in {"family", "partner"}:
+                    elif relation in {"family", "partner"} or relationship_update:
                         tone = "check_in"
                     social_dynamics = getattr(self.sim, "npc_social_dynamics_system", None)
                     chatter = None

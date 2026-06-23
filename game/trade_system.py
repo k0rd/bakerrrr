@@ -15,7 +15,7 @@ from game.appearance_loadout import (
 )
 from game.components import Inventory, NPCSocial, PlayerAssets, Position, VehicleState
 from game.economy import item_market_bias, item_trade_pressure_bias, store_supply_profile
-from game.item_semantics import item_display_name_for_actor
+from game.item_semantics import identify_item_for_actor, item_display_name_for_actor
 from game.items import ITEM_CATALOG
 from game.organization_reputation import organization_instability_profile
 from game.organization_response import property_vigilante_denial
@@ -3328,10 +3328,18 @@ class TradeSystem(System):
         wallet_after = inventory_liquid_credits(inventory)
         self._consume_store_stock(choice, 1)
         choice["sale_count"] = next_sale_count
+        purchased_entry = {"item_id": item_id, "metadata": item_metadata, "instance_id": instance_id}
+        identified_by_trade = identify_item_for_actor(
+            self.sim,
+            actor_eid,
+            purchased_entry,
+            source_kind="trade_buy",
+            item_catalog=ITEM_CATALOG,
+        )
         item_name = item_display_name_for_actor(
             self.sim,
             self.player_eid,
-            {"item_id": item_id, "metadata": item_metadata, "instance_id": instance_id},
+            purchased_entry,
             item_catalog=ITEM_CATALOG,
         )
         sale_result = _player_business_record_direct_sale(
@@ -3360,6 +3368,7 @@ class TradeSystem(System):
             contact_source_eid=terms.get("source_eid"),
             contact_note=terms.get("note", ""),
             practice_note=item_practice.get("note_text", ""),
+            identified_by_trade=bool(identified_by_trade),
         ))
         result = {
             "npc_eid": actor_eid,
@@ -3504,10 +3513,18 @@ class TradeSystem(System):
             return False
 
         assets.credits -= price
+        purchased_entry = {"item_id": item_id, "metadata": metadata, "instance_id": instance_id}
+        identified_by_trade = identify_item_for_actor(
+            self.sim,
+            eid,
+            purchased_entry,
+            source_kind="street_vendor_purchase",
+            item_catalog=ITEM_CATALOG,
+        )
         item_name = item_display_name_for_actor(
             self.sim,
             self.player_eid,
-            {"item_id": item_id, "metadata": metadata, "instance_id": instance_id},
+            purchased_entry,
             item_catalog=ITEM_CATALOG,
         )
         vendor_kind = str(state.get("vendor_kind") or profile.get("vendor_kind", "") or "").strip().lower()
@@ -3527,6 +3544,7 @@ class TradeSystem(System):
             illegal=bool(choice.get("illegal")),
             hot=bool(choice.get("hot")),
             risk_label=str(choice.get("risk_label", "") or "").strip(),
+            identified_by_trade=bool(identified_by_trade),
         ))
         pusher_drug_deal = (
             vendor_kind == "drug_pusher"
@@ -3623,19 +3641,31 @@ class TradeSystem(System):
                 )
 
         item_id = str(removed.get("item_id", choice.get("item_id", "")) or "").strip().lower()
+        identified_by_trade = identify_item_for_actor(
+            self.sim,
+            eid,
+            removed,
+            source_kind="street_vendor_sale",
+            item_catalog=ITEM_CATALOG,
+        )
+        item_name = item_display_name_for_actor(self.sim, self.player_eid, removed, item_catalog=ITEM_CATALOG)
         self.sim.emit(Event(
             "street_buy_transaction",
             eid=eid,
             npc_eid=contact_eid,
             payout=payout,
             item_count=1,
+            item_id=item_id,
+            item_name=item_name,
             illegal_units=int(illegal_units),
             desired_item_id=str((profile.get("sell_terms") or {}).get("desired_item_id", "") or "").strip().lower(),
             sold_items=({
                 "item_id": item_id,
+                "item_name": item_name,
                 "quantity": int(max(1, removed.get("quantity", quantity) or quantity)),
             },),
             credits=int(getattr(assets, "credits", 0) or 0),
+            identified_by_trade=bool(identified_by_trade),
         ))
         return True
 
@@ -3876,6 +3906,16 @@ class TradeSystem(System):
         if owner_transfer:
             _refresh_player_business_runtime(self.sim, store_prop)
         choice["sale_count"] = next_sale_count
+        purchased_entry = {"item_id": item_id, "metadata": item_metadata, "instance_id": instance_id}
+        identified_by_trade = False
+        if not owner_transfer:
+            identified_by_trade = identify_item_for_actor(
+                self.sim,
+                eid,
+                purchased_entry,
+                source_kind="trade_buy",
+                item_catalog=ITEM_CATALOG,
+            )
 
         self.sim.emit(Event(
             "trade_bought",
@@ -3886,7 +3926,7 @@ class TradeSystem(System):
             item_name=item_display_name_for_actor(
                 self.sim,
                 self.player_eid,
-                {"item_id": item_id, "metadata": item_metadata, "instance_id": instance_id},
+                purchased_entry,
                 item_catalog=ITEM_CATALOG,
             ),
             price=price,
@@ -3899,6 +3939,7 @@ class TradeSystem(System):
             contact_source_eid=terms.get("source_eid"),
             contact_note=terms.get("note", ""),
             practice_note=item_practice.get("note_text", ""),
+            identified_by_trade=bool(identified_by_trade),
         ))
         return True
 
@@ -4118,6 +4159,15 @@ class TradeSystem(System):
         payout = 0 if owner_transfer else int(max(1, best["price"]))
         if not owner_transfer:
             assets.credits += payout
+        identified_by_trade = False
+        if not owner_transfer:
+            identified_by_trade = identify_item_for_actor(
+                self.sim,
+                eid,
+                removed,
+                source_kind="trade_sell",
+                item_catalog=ITEM_CATALOG,
+            )
 
         stocked_quantity = int(max(1, removed.get("quantity", 1)))
         existing = self._entry_for_item(store, item_id)
@@ -4168,6 +4218,7 @@ class TradeSystem(System):
             transfer_mode="stock" if owner_transfer else "",
             contact_source_eid=terms.get("source_eid"),
             contact_note=terms.get("note", ""),
+            identified_by_trade=bool(identified_by_trade),
         ))
         return True
 

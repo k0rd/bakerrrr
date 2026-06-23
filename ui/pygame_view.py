@@ -1563,7 +1563,7 @@ class PygameView:
             return 0, -1
         return dx, dy
 
-    def _draw_vehicle_overlay(self, x, y, color=None, attrs=0, *, heading=None):
+    def _draw_vehicle_overlay(self, x, y, color=None, attrs=0, *, heading=None, headlights=True):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
         color_key = str(color or "").strip().lower()
         cell_x = int(x) * self.cell_px
@@ -1647,11 +1647,13 @@ class PygameView:
             max(1, self.cell_px // 24),
         )
         light_r = max(1, self.cell_px // 24)
-        self.pygame.draw.circle(overlay, headlight, oriented_point(front_len + nose_len * 0.28, -nose_across), light_r)
-        self.pygame.draw.circle(overlay, headlight, oriented_point(front_len + nose_len * 0.28, nose_across), light_r)
+        if bool(headlights):
+            self.pygame.draw.circle(overlay, headlight, oriented_point(front_len + nose_len * 0.28, -nose_across), light_r)
+            self.pygame.draw.circle(overlay, headlight, oriented_point(front_len + nose_len * 0.28, nose_across), light_r)
         tail_across = max(1.0, rear_half_w * 0.58)
-        self.pygame.draw.circle(overlay, tail_light, oriented_point(-rear_len * 0.96, -tail_across), light_r)
-        self.pygame.draw.circle(overlay, tail_light, oriented_point(-rear_len * 0.96, tail_across), light_r)
+        if bool(headlights):
+            self.pygame.draw.circle(overlay, tail_light, oriented_point(-rear_len * 0.96, -tail_across), light_r)
+            self.pygame.draw.circle(overlay, tail_light, oriented_point(-rear_len * 0.96, tail_across), light_r)
 
         if color_key == "vehicle_player":
             ring_r = max(2, self.cell_px // 8)
@@ -3878,10 +3880,15 @@ class PygameView:
         self.pygame.draw.polygon(overlay, (frame[0], frame[1], frame[2], 210), down)
         self.surface.blit(overlay, (cell_x, cell_y))
 
-    def _draw_procedural_shape(self, x, y, ch, color=None, attrs=0, semantic_id=None):
+    def _draw_procedural_shape(self, x, y, ch, color=None, attrs=0, semantic_id=None, effects=None):
         glyph = str(ch)[:1] or " "
         color_key = str(color or "").strip().lower()
         semantic_key = str(semantic_id or "").strip().lower()
+        effect_set = {
+            str(effect).strip().lower()
+            for effect in (effects or ())
+            if str(effect).strip()
+        }
 
         if semantic_key.startswith("overworld_fill_city_"):
             self._draw_overworld_fill_overlay(
@@ -4194,7 +4201,14 @@ class PygameView:
             or (color_key.startswith("vehicle_") and glyph in {"&", "V", "v", "^", ">", "<", "7", "J", "L", "F"})
         ):
             heading = self._vehicle_heading_from_render(glyph, semantic_key)
-            self._draw_vehicle_overlay(x, y, color=color, attrs=attrs, heading=heading)
+            self._draw_vehicle_overlay(
+                x,
+                y,
+                color=color,
+                attrs=attrs,
+                heading=heading,
+                headlights="vehicle_headlights_off" not in effect_set,
+            )
             heading_label = _PYGAME_VEHICLE_HEADING_LABELS.get(self._normalized_vehicle_heading(heading))
             return f"vehicle_{heading_label}" if heading_label and heading is not None else "vehicle"
         if color_key == "property_service":
@@ -4424,7 +4438,7 @@ class PygameView:
             return
         attrs = self._attrs_with_effects(attrs, effects)
         x, y, text = region
-        if self._draw_procedural_shape(x, y, text[0], color=color, attrs=attrs, semantic_id=semantic_id):
+        if self._draw_procedural_shape(x, y, text[0], color=color, attrs=attrs, semantic_id=semantic_id, effects=effects):
             self._draw_overlay_stack(x, y, overlays, attrs=attrs)
             return
         preserve_background = self._preserve_background_for_color(color)

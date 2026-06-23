@@ -682,6 +682,32 @@ class InputSystem(System):
     def _player_vehicle_state(self):
         return self.sim.ecs.get(VehicleState).get(self.player_eid)
 
+    def _toggle_vehicle_headlights(self):
+        vehicle_state = self._player_vehicle_state()
+        if not vehicle_state or not bool(getattr(vehicle_state, "in_vehicle", False)):
+            return False
+        tick = int(getattr(self.sim, "tick", 0) or 0)
+        if hasattr(vehicle_state, "toggle_headlights"):
+            active = bool(vehicle_state.toggle_headlights(tick=tick))
+        else:
+            active = not bool(getattr(vehicle_state, "headlights_on", True))
+            vehicle_state.headlights_on = active
+            vehicle_state.last_changed_tick = tick
+        self.sim.emit(Event(
+            "vehicle_headlights_toggled",
+            eid=self.player_eid,
+            vehicle_id=str(getattr(vehicle_state, "active_vehicle_id", "") or "").strip(),
+            headlights_on=active,
+        ))
+        _log_player_feedback(
+            self.sim,
+            "Headlights on." if active else "Headlights off.",
+            kind="movement",
+            dedupe_window=1,
+            dedupe_key=f"vehicle_headlights:{int(active)}",
+        )
+        return True
+
     def _local_drive_repeat_interval(self):
         state = self._player_vehicle_state()
         try:
@@ -4355,6 +4381,10 @@ class InputSystem(System):
 
         if key == ord("t") and self._player_in_vehicle():
             self._emit_turn_action("zoom_city_enter")
+            return
+
+        if key == ord("H") and self._player_in_vehicle() and zoom_mode != "overworld":
+            self._toggle_vehicle_headlights()
             return
 
         if key in self.movement_keys:

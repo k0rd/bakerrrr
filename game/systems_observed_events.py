@@ -34,6 +34,7 @@ from game.components import (
     Position,
 )
 from game.incident_runtime import incident_propagation_allowed, incident_record
+from game.npc_relationships import incident_relationship_override
 from game.organizations import actor_org_memberships
 from game.property_runtime import property_covering as _property_covering
 from game.system_support.social_knowledge_runtime import hydrate_incident_social_knowledge
@@ -682,6 +683,9 @@ class ObservedIncidentConsequenceSystem(System):
         return bool(incident.get("official_reportable")) and bool(source_record.get("firsthand"))
 
     def _choose_urgent_response(self, eid, incident, source_record):
+        relationship_override = incident_relationship_override(self.sim, eid, incident)
+        if relationship_override is not None:
+            return relationship_override
         scores = self._urgent_scores(eid, incident, source_record)
         ordered = sorted(scores.items(), key=lambda row: row[1], reverse=True)
         best_kind, best_score = ordered[0]

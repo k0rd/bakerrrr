@@ -8,6 +8,7 @@ from game.property_access import (
     property_is_storefront,
     site_services_for_property,
 )
+from game.components import Position, VehicleState
 from game.system_support.fire_runtime import fire_state
 
 
@@ -575,6 +576,91 @@ def _fire_light_sources(sim):
     return sources
 
 
+def _active_vehicle_light_cache_key(sim):
+    try:
+        vehicle_states = sim.ecs.get(VehicleState)
+        positions = sim.ecs.get(Position)
+    except AttributeError:
+        return ()
+
+    rows = []
+    for eid, raw_state in tuple(vehicle_states.items()):
+        state = raw_state.ensure_motion_defaults() if hasattr(raw_state, "ensure_motion_defaults") else raw_state
+        if not state or not bool(getattr(state, "in_vehicle", False)):
+            continue
+        vehicle_id = str(getattr(state, "active_vehicle_id", "") or "").strip()
+        if not vehicle_id:
+            continue
+        pos = positions.get(eid)
+        if not pos:
+            continue
+        rows.append((
+            int(eid),
+            vehicle_id,
+            int(getattr(pos, "x", 0)),
+            int(getattr(pos, "y", 0)),
+            int(getattr(pos, "z", 0)),
+            int(getattr(state, "heading_dx", 0) or 0),
+            int(getattr(state, "heading_dy", -1) or -1),
+            int(bool(getattr(state, "headlights_on", True))),
+        ))
+    return tuple(sorted(rows))
+
+
+def _vehicle_headlight_sources(sim):
+    try:
+        vehicle_states = sim.ecs.get(VehicleState)
+        positions = sim.ecs.get(Position)
+    except AttributeError:
+        return []
+
+    bounds = _loaded_property_bounds(sim)
+    sources = []
+    for eid, raw_state in tuple(vehicle_states.items()):
+        state = raw_state.ensure_motion_defaults() if hasattr(raw_state, "ensure_motion_defaults") else raw_state
+        if not state or not bool(getattr(state, "in_vehicle", False)):
+            continue
+        if not bool(getattr(state, "headlights_on", True)):
+            continue
+        vehicle_id = str(getattr(state, "active_vehicle_id", "") or "").strip()
+        vehicle_prop = getattr(sim, "properties", {}).get(vehicle_id) if vehicle_id else None
+        if not isinstance(vehicle_prop, dict) or str(vehicle_prop.get("kind", "") or "").strip().lower() != "vehicle":
+            continue
+        pos = positions.get(eid)
+        if not pos:
+            continue
+        x = int(getattr(pos, "x", vehicle_prop.get("x", 0)))
+        y = int(getattr(pos, "y", vehicle_prop.get("y", 0)))
+        z = int(getattr(pos, "z", vehicle_prop.get("z", 0)))
+        dx = int(getattr(state, "heading_dx", 0) or 0)
+        dy = int(getattr(state, "heading_dy", -1) or -1)
+        dx = 1 if dx > 0 else -1 if dx < 0 else 0
+        dy = 1 if dy > 0 else -1 if dy < 0 else 0
+        if dx == 0 and dy == 0:
+            dx, dy = 0, -1
+
+        if bounds is not None:
+            min_x, max_x, min_y, max_y = bounds
+            margin = 8
+            if not ((min_x - margin) <= x <= (max_x + margin) and (min_y - margin) <= y <= (max_y + margin)):
+                continue
+
+        # A compact two-source beam gives nearby fill and a brighter reach ahead.
+        for step, radius, intensity in ((1, 4, 0.62), (4, 5, 0.42)):
+            sources.append({
+                "x": x + (dx * step),
+                "y": y + (dy * step),
+                "z": z,
+                "radius": int(radius),
+                "intensity": _clamp_unit(intensity),
+                "kind": "vehicle_headlight",
+                "building_id": None,
+                "property_id": vehicle_id,
+                "eid": int(eid),
+            })
+    return sources
+
+
 def _local_light_sources(sim, clock=None):
     if clock is None:
         clock = clock_snapshot(sim)
@@ -587,16 +673,23 @@ def _local_light_sources(sim, clock=None):
         int(len(getattr(sim, "properties", {}))),
         _active_power_cut_cache_key(sim, tick=clock.get("tick", getattr(sim, "tick", 0))),
         _active_fire_cache_key(sim),
+        _active_vehicle_light_cache_key(sim),
     )
     if tuple(state.get("source_cache_key", ())) == cache_key:
         cached = state.get("local_light_sources", ())
         if isinstance(cached, (list, tuple)):
             return tuple(cached)
 
+    vehicle_sources = tuple(_vehicle_headlight_sources(sim))
     if str(clock.get("phase", "day")).strip().lower() not in _LIGHT_PHASES:
-        sources = tuple(_fire_light_sources(sim))
+        sources = tuple(_fire_light_sources(sim) + list(vehicle_sources))
     else:
-        sources = tuple(_authored_fixture_light_sources(sim, clock) + _aperture_light_sources(sim, clock) + _fire_light_sources(sim))
+        sources = tuple(
+            _authored_fixture_light_sources(sim, clock)
+            + _aperture_light_sources(sim, clock)
+            + _fire_light_sources(sim)
+            + list(vehicle_sources)
+        )
 
     state["source_cache_key"] = cache_key
     state["local_light_sources"] = [dict(source) for source in sources]

@@ -509,6 +509,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("stakeout_ended", self.on_stakeout_ended)
         self.sim.events.subscribe("rumor_shared", self.on_rumor_shared)
         self.sim.events.subscribe("npc_socialized", self.on_npc_socialized)
+        self.sim.events.subscribe("npc_partner_acknowledged", self.on_npc_partner_acknowledged)
         self.sim.events.subscribe("animal_socialized", self.on_animal_socialized)
         self.sim.events.subscribe("armor_equipped", self.on_armor_equipped)
         self.sim.events.subscribe("armor_removed", self.on_armor_removed)
@@ -550,6 +551,7 @@ class EventLogSystem(System):
         self.sim.events.subscribe("property_purchase_blocked", self.on_property_purchase_blocked)
         self.sim.events.subscribe("trade_bought", self.on_trade_bought)
         self.sim.events.subscribe("street_vendor_purchase", self.on_street_vendor_purchase)
+        self.sim.events.subscribe("street_buy_transaction", self.on_street_buy_transaction)
         self.sim.events.subscribe("npc_item_purchased", self.on_npc_item_purchased)
         self.sim.events.subscribe("trade_buy_blocked", self.on_trade_buy_blocked)
         self.sim.events.subscribe("trade_sold", self.on_trade_sold)
@@ -4259,6 +4261,36 @@ class EventLogSystem(System):
         else:
             self._log("You hear nearby conversation.", channel="social", priority="low", dedupe_window=4)
 
+    def on_npc_partner_acknowledged(self, event):
+        speaker_eid = event.data.get("speaker_eid")
+        partner_eid = event.data.get("partner_eid")
+        if speaker_eid is None or partner_eid is None:
+            return
+        positions = self.sim.ecs.get(Position)
+        speaker_pos = positions.get(speaker_eid)
+        partner_pos = positions.get(partner_eid)
+        visible = False
+        for pos in (speaker_pos, partner_pos):
+            if pos and self._player_has_los_to_position(pos.x, pos.y, pos.z):
+                visible = True
+                break
+        if not visible:
+            return
+        speaker = self._npc_label(speaker_eid)
+        quote = str(event.data.get("quote", "") or "").strip()
+        if not quote:
+            partner = self._npc_label(partner_eid)
+            quote = f"Hey, {partner}."
+        dedupe_key = f"npc-partner-ack:{speaker_eid}:{partner_eid}:{str(quote).lower()}"
+        self._log_npc_message(
+            speaker_eid,
+            f'{speaker}: "{quote}"',
+            channel="social",
+            priority="low",
+            dedupe_window=12,
+            dedupe_key=dedupe_key,
+        )
+
     def on_animal_socialized(self, event):
         left_eid = event.data.get("eid")
         right_eid = event.data.get("partner_eid")
@@ -5007,6 +5039,14 @@ class EventLogSystem(System):
         risk = str(event.data.get("risk_label", "") or "").strip()
         suffix = f" {risk}." if risk else ""
         self.sim.log.add(f"Bought {item_name} for {price} credits from {npc_name}.{suffix}")
+
+    def on_street_buy_transaction(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        item_name = self._event_item_label(event)
+        payout = int(event.data.get("payout", event.data.get("price", 0)) or 0)
+        npc_name = self._npc_label(event.data.get("npc_eid"), fallback="the street contact")
+        self.sim.log.add(f"Sold {item_name} for {payout} credits to {npc_name}.")
 
     def on_npc_item_purchased(self, event):
         npc_eid = event.data.get("npc_eid", event.data.get("eid"))
