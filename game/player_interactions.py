@@ -6,6 +6,7 @@ from game.appearance_loadout import is_entry_worn
 from game.components import AI, Position, SuppressionState, Vitality
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
+from game.herbal_chemistry_runtime import harvest_flora_patch, nearest_harvestable_flora
 from game.hunting_runtime import field_dress_carcass, nearest_hunting_carcass
 from game.opportunities import _item_label, mark_bounty_target_restrained, resolve_opportunities
 from game.property_access import (
@@ -1257,6 +1258,25 @@ class PlayerInteractionRuntime:
         )
         if carcass is not None:
             field_dress_carcass(self.sim, eid, carcass.get("carcass_id"))
+            return
+
+        flora = nearest_harvestable_flora(
+            self.sim,
+            pos.x,
+            pos.y,
+            pos.z,
+            radius=1,
+            preferred_dir=preferred_dir,
+            exact_direction=exact_direction,
+        )
+        if flora is not None:
+            harvest_flora_patch(
+                self.sim,
+                eid,
+                flora.get("id"),
+                preferred_dir=preferred_dir,
+                exact_direction=exact_direction,
+            )
             return
 
         sabotage_prop = self.nearest_sabotage_fixture(

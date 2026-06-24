@@ -685,6 +685,7 @@ PROPERTY_ARCHETYPE_DISPLAY = {
     "field_hospital": ("M", "item_medical"),
     "tide_station": ("M", "item_medical"),
     "herbalist_camp": ("M", "item_medical"),
+    "herbalist_shop": ("M", "item_medical"),
     "casino": ("C", "building_roof_entertainment"),
     "checkpoint": ("G", "building_roof_secure"),
     "armory": ("G", "building_roof_secure"),

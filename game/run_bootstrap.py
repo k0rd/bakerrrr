@@ -40,6 +40,7 @@ from game.appearance_loadout import (
 )
 from game.human_identity import seed_player_identity_profile
 from game.economy import chunk_economy_profile
+from game.flora_runtime import ensure_chunk_flora
 from game.items import ITEM_CATALOG
 from game.large_span_places import register_large_span_child_properties
 from game.opportunities import seed_run_opportunities
@@ -1391,6 +1392,7 @@ def bootstrap_normal_run(
         vehicle = _ensure_starter_vehicle(sim, player, player_pos, run_rng)
 
     ambient_npc_count = len(spawn_chunk_npcs(sim, sim.active_chunk, property_records, reserved_property_ids=set()))
+    ensure_chunk_flora(sim, sim.active_chunk, property_records=property_records)
 
     sim.stream_world(player_pos[0], player_pos[1])
     sim.ensure_loaded_chunk_terrain()

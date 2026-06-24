@@ -456,6 +456,10 @@ class EventLogSystem(System):
         self.sim.events.subscribe("site_service_blocked", self.on_site_service_blocked)
         self.sim.events.subscribe("hunting_carcass_harvested", self.on_hunting_carcass_harvested)
         self.sim.events.subscribe("hunting_carcass_blocked", self.on_hunting_carcass_blocked)
+        self.sim.events.subscribe("flora_harvested", self.on_flora_harvested)
+        self.sim.events.subscribe("flora_harvest_blocked", self.on_flora_harvest_blocked)
+        self.sim.events.subscribe("herbal_medicine_crafted", self.on_herbal_medicine_crafted)
+        self.sim.events.subscribe("herbal_recipe_purchased", self.on_herbal_recipe_purchased)
         self.sim.events.subscribe("hunter_party_carcass_dressed", self.on_hunter_party_carcass_dressed)
         self.sim.events.subscribe("site_intel_report", self.on_site_intel_report)
         self.sim.events.subscribe("vehicle_delivered", self.on_vehicle_delivered)
@@ -2496,12 +2500,19 @@ class EventLogSystem(System):
         tool_name = item_display_name(tool_id, item_catalog=ITEM_CATALOG) if tool_id else "a blade"
         tool_phrase = f"with your {tool_name}" if tool_id else f"with {tool_name}"
         animal_text = f"the {size_class} {animal}" if size_class else animal
+        output_label = output_name.lower() if output_name else "meat"
         if bool(event.data.get("kill_bag_used")):
-            self.sim.log.add(
-                f"Cut and bagged usable meat from {animal_text} {tool_phrase}: {output_name} x{quantity}."
+            _log_player_feedback(
+                self.sim,
+                f"You cut and bagged {quantity} piece{'s' if quantity != 1 else ''} of {output_label} from the remains of {animal_text} {tool_phrase}.",
+                kind="craft",
             )
             return
-        self.sim.log.add(f"Cut usable meat from {animal_text} {tool_phrase}: {output_name} x{quantity}.")
+        _log_player_feedback(
+            self.sim,
+            f"You were able to cut {quantity} piece{'s' if quantity != 1 else ''} of {output_label} from the remains of {animal_text} {tool_phrase}.",
+            kind="craft",
+        )
 
     def on_hunting_carcass_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -2509,15 +2520,88 @@ class EventLogSystem(System):
         reason = str(event.data.get("reason", "blocked") or "blocked").strip().lower()
         animal = str(event.data.get("animal_name") or "the carcass").strip()
         if reason == "no_tool":
-            self.sim.log.add(f"Need a blade or field knife to dress {animal}.")
+            _log_player_feedback(self.sim, f"You need a blade or field knife to dress {animal}.", kind="craft")
             return
         if reason == "inventory_full":
-            self.sim.log.add("No room for the field-dressed meat. Free up space and try again.")
+            _log_player_feedback(self.sim, "No room for the field-dressed meat. Free up space and try again.", kind="craft")
             return
         if reason == "no_usable_meat":
-            self.sim.log.add(f"{animal} has no usable cuts worth packing.")
+            _log_player_feedback(self.sim, f"{animal} has no usable cuts worth packing.", kind="craft")
             return
-        self.sim.log.add("That carcass is no longer available.")
+        _log_player_feedback(self.sim, "That carcass is no longer available.", kind="craft")
+
+    def on_flora_harvested(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        plant_name = str(event.data.get("plant_name") or "plant").strip() or "plant"
+        output_name = str(event.data.get("output_item_name") or "plant material").strip() or "plant material"
+        units = int(event.data.get("material_units", 1) or 1)
+        method = str(event.data.get("harvest_method") or "harvest").replace("_", " ").strip()
+        tool_id = str(event.data.get("tool_item_id") or "").strip().lower()
+        if tool_id:
+            tool_name = item_display_name(tool_id, item_catalog=ITEM_CATALOG)
+            tool_phrase = f" with your {tool_name}"
+        elif method == "pluck":
+            tool_phrase = " by hand"
+        else:
+            tool_phrase = ""
+        _log_player_feedback(
+            self.sim,
+            f"You {method} {plant_name}{tool_phrase} and pack {output_name} ({units} unit{'s' if units != 1 else ''}).",
+            kind="craft",
+        )
+
+    def on_flora_harvest_blocked(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        reason = str(event.data.get("reason", "blocked") or "blocked").strip().lower()
+        plant_name = str(event.data.get("plant_name") or "the plant").strip() or "the plant"
+        method = str(event.data.get("harvest_method") or "harvest").replace("_", " ").strip() or "harvest"
+        if reason == "no_flora":
+            _log_player_feedback(self.sim, "No harvestable plant is close enough.", kind="craft")
+            return
+        if reason == "picked":
+            _log_player_feedback(self.sim, f"{plant_name} is already picked over.", kind="craft")
+            return
+        if reason == "no_tool":
+            _log_player_feedback(self.sim, f"You need the right tool to {method} {plant_name}.", kind="craft")
+            return
+        if reason == "inventory_full":
+            _log_player_feedback(self.sim, "No room for the plant material. Free up space and try again.", kind="craft")
+            return
+        _log_player_feedback(self.sim, "That plant cannot be harvested right now.", kind="craft")
+
+    def on_herbal_medicine_crafted(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        output_name = str(event.data.get("output_item_name") or "herbal medicine").strip() or "herbal medicine"
+        count = int(event.data.get("ingredient_count", 0) or 0)
+        recipe_name = str(event.data.get("recipe_name") or "recipe").strip() or "recipe"
+        credits = int(event.data.get("credits_spent", 0) or 0)
+        text = f"You turned {count} plant material{'s' if count != 1 else ''} into {output_name} using {recipe_name}."
+        if credits > 0:
+            text = f"You paid {credits} cr and " + text[0].lower() + text[1:]
+        _log_player_feedback(self.sim, text, kind="craft")
+
+    def on_herbal_recipe_purchased(self, event):
+        if event.data.get("eid") != self.player_eid:
+            return
+        recipe_name = str(event.data.get("recipe_name") or "herbal recipe").strip() or "herbal recipe"
+        output_name = str(event.data.get("output_item_name") or "medicine").strip() or "medicine"
+        credits = int(event.data.get("credits_spent", 0) or 0)
+        revealed = tuple(event.data.get("revealed_plants", ()) or ())
+        suffix = ""
+        if revealed:
+            names = []
+            for row in revealed[:2]:
+                if isinstance(row, dict):
+                    name = str(row.get("plant_name") or "").strip()
+                    class_id = str(row.get("chemistry_class") or "").replace("_", " ").strip()
+                    if name and class_id:
+                        names.append(f"{name} is {class_id}")
+            if names:
+                suffix = " " + "; ".join(names) + "."
+        _log_player_feedback(self.sim, f"You bought {recipe_name} for {credits} cr; it makes {output_name}.{suffix}", kind="commerce")
 
     def on_hunter_party_carcass_dressed(self, event):
         player_pos = self.sim.ecs.get(Position).get(self.player_eid)
@@ -2588,20 +2672,50 @@ class EventLogSystem(System):
         if service == "vending":
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             credits_spent = int(event.data.get("credits_spent", 0))
-            self.sim.log.add(f"Vending: {prop_name} drops {item_name} into your bag (-{credits_spent}c).")
+            _log_player_feedback(self.sim, f"You bought {item_name} from {prop_name} for {credits_spent} cr.", kind="commerce")
+            return
+        if service in {"herbal_prepare", "herbal_compound"}:
+            item_name = str(event.data.get("output_item_name", "herbal medicine")).strip() or "herbal medicine"
+            count = int(event.data.get("ingredient_count", 0) or 0)
+            credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            if service == "herbal_prepare":
+                _log_player_feedback(
+                    self.sim,
+                    f"You paid {prop_name} {credits_spent} cr to prepare {count} plant material{'s' if count != 1 else ''} into {item_name}.",
+                    kind="commerce",
+                )
+            else:
+                _log_player_feedback(
+                    self.sim,
+                    f"You compounded {count} plant material{'s' if count != 1 else ''} into {item_name} at {prop_name}.",
+                    kind="craft",
+                )
+            return
+        if service == "herbal_recipe_sales":
+            recipe_name = str(event.data.get("recipe_name", "herbal recipe")).strip() or "herbal recipe"
+            credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            _log_player_feedback(self.sim, f"You bought {recipe_name} from {prop_name} for {credits_spent} cr.", kind="commerce")
             return
         if service == "campfire_cook":
             input_units = int(event.data.get("input_units", 0) or 0)
             output_units = int(event.data.get("output_units", 0) or 0)
             item_name = str(event.data.get("output_item_name", "cooked meat")).strip() or "cooked meat"
-            self.sim.log.add(f"Campfire: cooked {input_units} meat into {output_units} {item_name}.")
+            _log_player_feedback(
+                self.sim,
+                f"You cooked {input_units} meat into {output_units} {item_name} at {prop_name}.",
+                kind="craft",
+            )
             return
         if service == "butcher_prepare":
             input_units = int(event.data.get("input_units", 0) or 0)
             output_units = int(event.data.get("output_units", 0) or 0)
             item_name = str(event.data.get("output_item_name", "packaged meat")).strip() or "packaged meat"
             credits_spent = int(event.data.get("credits_spent", 0) or 0)
-            self.sim.log.add(f"Butcher: {prop_name} prepares {input_units} meat into {output_units} {item_name} (-{credits_spent}c).")
+            _log_player_feedback(
+                self.sim,
+                f"You paid {prop_name} {credits_spent} cr to prepare {input_units} meat into {output_units} {item_name}.",
+                kind="commerce",
+            )
             return
         if service in TRANSIT_SERVICE_IDS:
             profile = _transit_service_profile(service) or {}
@@ -2819,6 +2933,26 @@ class EventLogSystem(System):
             item_name = str(event.data.get("item_name", "snack")).strip() or "snack"
             self.sim.log.add(f"Vending: {item_name} costs {cost}c at {prop_name}; you only have {credits}c.")
             return
+        if reason == "no_recipe" and service in {"herbal_prepare", "herbal_compound"}:
+            self.sim.log.add(f"Herbal prep: learn a recipe before using {prop_name}.")
+            return
+        if reason == "no_ingredients" and service in {"herbal_prepare", "herbal_compound"}:
+            self.sim.log.add(f"Herbal prep: you need known plant materials for a learned recipe at {prop_name}.")
+            return
+        if reason == "invalid_mix" and service in {"herbal_prepare", "herbal_compound"}:
+            self.sim.log.add("Herbal prep: those plant materials do not satisfy the recipe. Nothing was consumed.")
+            return
+        if reason == "no_tool" and service == "herbal_compound":
+            self.sim.log.add(f"Herbal prep: you need a mortar kit to compound herbs at {prop_name}.")
+            return
+        if reason == "all_known" and service == "herbal_recipe_sales":
+            self.sim.log.add(f"Herbal recipe: you already know what {prop_name} is selling.")
+            return
+        if reason == "no_credits" and service in {"herbal_prepare", "herbal_recipe_sales"}:
+            cost = int(event.data.get("cost", 0))
+            credits = int(event.data.get("credits", 0))
+            self.sim.log.add(f"Herbal service: {prop_name} needs {cost}c to start; you have {credits}c.")
+            return
         if reason == "no_meat" and service == "campfire_cook":
             self.sim.log.add(f"Campfire: bring raw or bagged game meat to cook at {prop_name}.")
             return
@@ -2827,6 +2961,9 @@ class EventLogSystem(System):
             return
         if reason == "inventory_full" and service in {"campfire_cook", "butcher_prepare"}:
             self.sim.log.add(f"{prop_name} cannot return prepared meat until you free up inventory space.")
+            return
+        if reason == "inventory_full" and service in {"herbal_prepare", "herbal_compound"}:
+            self.sim.log.add(f"{prop_name} cannot return prepared medicine until you free up inventory space.")
             return
         if reason == "no_credits" and service == "butcher_prepare":
             cost = int(event.data.get("cost", 0))
@@ -3545,6 +3682,7 @@ class EventLogSystem(System):
         eid = event.data.get("eid")
         item_name = event.data.get("item_name", event.data.get("item_id", "item"))
         if eid == self.player_eid:
+            item_id = str(event.data.get("item_id", "") or "").strip().lower()
             usage_kind = str(event.data.get("usage_kind", "") or "").strip().lower()
             if usage_kind == "throw":
                 target_x = event.data.get("target_x")
@@ -3592,6 +3730,24 @@ class EventLogSystem(System):
                     _log_player_feedback(self.sim, f"{item_name} burns out, but flags {len(rows)} justice signal(s) for {duration} ticks.", kind="interaction")
                 return
             applied = list(event.data.get("applied", ()) or ())
+            credits_delta = 0
+            for entry in applied:
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("type", "")).strip().lower() != "credits":
+                    continue
+                try:
+                    credits_delta += int(entry.get("delta", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+            if item_id == "scratch_ticket":
+                if credits_delta > 0:
+                    _log_player_feedback(self.sim, f"You scratch the ticket and win {credits_delta} cr.", kind="game")
+                elif credits_delta < 0:
+                    _log_player_feedback(self.sim, f"You scratch the ticket and lose {abs(credits_delta)} cr.", kind="game")
+                else:
+                    _log_player_feedback(self.sim, "You scratch the ticket and it pays nothing.", kind="game")
+                return
             bits = []
             for entry in applied:
                 if not isinstance(entry, dict):
@@ -3624,6 +3780,14 @@ class EventLogSystem(System):
                     )
                     if status:
                         bits.append(status)
+                    continue
+                if effect_type == "credits":
+                    try:
+                        delta = int(entry.get("delta", 0) or 0)
+                    except (TypeError, ValueError):
+                        delta = 0
+                    if delta:
+                        bits.append(f"Cr {'+' if delta > 0 else ''}{delta}")
             if bits:
                 _log_player_feedback(self.sim, f"Used {item_name} ({', '.join(bits[:4])}).", kind="interaction")
             else:
@@ -5023,12 +5187,12 @@ class EventLogSystem(System):
         store = event.data.get("store_name", "store")
         contact_note = str(event.data.get("contact_note", "")).strip()
         if bool(event.data.get("owner_transfer")):
-            self.sim.log.add(f"Withdrew {item_name} from {store} stock.")
+            _log_player_feedback(self.sim, f"You withdrew {item_name} from {store} stock.", kind="commerce")
             return
         if contact_note and price != base_price:
-            self.sim.log.add(f"Bought {item_name} for {price} credits at {store}. {contact_note}.")
+            _log_player_feedback(self.sim, f"You bought {item_name} for {price} cr at {store}. {contact_note}.", kind="commerce")
             return
-        self.sim.log.add(f"Bought {item_name} for {price} credits at {store}.")
+        _log_player_feedback(self.sim, f"You bought {item_name} for {price} cr at {store}.", kind="commerce")
 
     def on_street_vendor_purchase(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -5038,7 +5202,7 @@ class EventLogSystem(System):
         npc_name = self._npc_label(event.data.get("npc_eid"), fallback="the street contact")
         risk = str(event.data.get("risk_label", "") or "").strip()
         suffix = f" {risk}." if risk else ""
-        self.sim.log.add(f"Bought {item_name} for {price} credits from {npc_name}.{suffix}")
+        _log_player_feedback(self.sim, f"You bought {item_name} for {price} cr from {npc_name}.{suffix}", kind="commerce")
 
     def on_street_buy_transaction(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -5046,7 +5210,7 @@ class EventLogSystem(System):
         item_name = self._event_item_label(event)
         payout = int(event.data.get("payout", event.data.get("price", 0)) or 0)
         npc_name = self._npc_label(event.data.get("npc_eid"), fallback="the street contact")
-        self.sim.log.add(f"Sold {item_name} for {payout} credits to {npc_name}.")
+        _log_player_feedback(self.sim, f"You sold {item_name} for {payout} cr to {npc_name}.", kind="commerce")
 
     def on_npc_item_purchased(self, event):
         npc_eid = event.data.get("npc_eid", event.data.get("eid"))
@@ -5094,35 +5258,35 @@ class EventLogSystem(System):
         store_name = self._event_property_name(event, fallback="That storefront")
         item_name = self._event_item_label(event)
         if reason == "no_store":
-            self.sim.log.add("No storefront nearby to buy from.")
+            _log_player_feedback(self.sim, "No storefront nearby to buy from.", kind="commerce")
             return
         if reason == "no_street_vendor":
-            self.sim.log.add("That street contact is not close enough to buy from.")
+            _log_player_feedback(self.sim, "That street contact is not close enough to buy from.", kind="commerce")
             return
         if reason == "street_vendor_empty":
-            self.sim.log.add("That street contact has nothing to sell right now.")
+            _log_player_feedback(self.sim, "That street contact has nothing to sell right now.", kind="commerce")
             return
         if reason == "no_assets":
-            self.sim.log.add("Cannot buy right now: your wallet is not accessible.")
+            _log_player_feedback(self.sim, "Cannot buy right now: your wallet is not accessible.", kind="commerce")
             return
         if reason == "no_inventory":
-            self.sim.log.add("Cannot buy right now: you have nowhere to carry the purchase.")
+            _log_player_feedback(self.sim, "Cannot buy right now: you have nowhere to carry the purchase.", kind="commerce")
             return
         if reason == "store_empty":
-            self.sim.log.add(f"{store_name} is out of stock.")
+            _log_player_feedback(self.sim, f"{store_name} is out of stock.", kind="commerce")
             return
         if reason == "item_unavailable":
-            self.sim.log.add(f"{store_name} does not have {item_name} available right now.")
+            _log_player_feedback(self.sim, f"{store_name} does not have {item_name} available right now.", kind="commerce")
             return
         if reason == "insufficient_funds":
             cheapest = int(event.data.get("cheapest_price", 0))
             credits = int(event.data.get("credits", 0))
-            self.sim.log.add(f"Cannot buy from {store_name}: you have {credits} credits and need {cheapest}.")
+            _log_player_feedback(self.sim, f"Cannot buy from {store_name}: you have {credits} cr and need {cheapest} cr.", kind="commerce")
             return
         if reason == "inventory_full":
-            self.sim.log.add(f"Cannot buy {item_name}: inventory is full.")
+            _log_player_feedback(self.sim, f"Cannot buy {item_name}: inventory is full.", kind="commerce")
             return
-        self.sim.log.add(f"Purchase of {item_name} at {store_name} could not be finalized.")
+        _log_player_feedback(self.sim, f"Purchase of {item_name} at {store_name} could not be finalized.", kind="commerce")
 
     def on_trade_sold(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -5132,12 +5296,12 @@ class EventLogSystem(System):
         store = event.data.get("store_name", "store")
         contact_note = str(event.data.get("contact_note", "")).strip()
         if bool(event.data.get("owner_transfer")):
-            self.sim.log.add(f"Stocked {item_name} into {store}.")
+            _log_player_feedback(self.sim, f"You stocked {item_name} into {store}.", kind="commerce")
             return
         if contact_note:
-            self.sim.log.add(f"Sold {item_name} for {price} credits at {store}. {contact_note}.")
+            _log_player_feedback(self.sim, f"You sold {item_name} for {price} cr at {store}. {contact_note}.", kind="commerce")
             return
-        self.sim.log.add(f"Sold {item_name} for {price} credits at {store}.")
+        _log_player_feedback(self.sim, f"You sold {item_name} for {price} cr at {store}.", kind="commerce")
 
     def on_trade_sell_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -5146,55 +5310,55 @@ class EventLogSystem(System):
         store_name = self._event_property_name(event, fallback="That storefront")
         item_name = self._event_item_label(event)
         if reason == "no_store":
-            self.sim.log.add("No storefront nearby to sell to.")
+            _log_player_feedback(self.sim, "No storefront nearby to sell to.", kind="commerce")
             return
         if reason == "no_street_vendor":
-            self.sim.log.add("That street contact is not close enough to sell to.")
+            _log_player_feedback(self.sim, "That street contact is not close enough to sell to.", kind="commerce")
             return
         if reason == "no_assets":
-            self.sim.log.add("Cannot sell right now: your wallet is not accessible.")
+            _log_player_feedback(self.sim, "Cannot sell right now: your wallet is not accessible.", kind="commerce")
             return
         if reason == "no_inventory":
-            self.sim.log.add("Cannot sell right now: your carried inventory is not accessible.")
+            _log_player_feedback(self.sim, "Cannot sell right now: your carried inventory is not accessible.", kind="commerce")
             return
         if reason == "inventory_empty":
-            self.sim.log.add("Nothing to sell.")
+            _log_player_feedback(self.sim, "Nothing to sell.", kind="commerce")
             return
         if reason == "no_sellable_item":
-            self.sim.log.add(f"{store_name} has nothing to buy from what you're carrying.")
+            _log_player_feedback(self.sim, f"{store_name} has nothing to buy from what you're carrying.", kind="commerce")
             return
         if reason == "item_not_found":
-            self.sim.log.add(f"That sale item is no longer available in your inventory.")
+            _log_player_feedback(self.sim, "That sale item is no longer available in your inventory.", kind="commerce")
             return
         if reason == "unwanted_item_warning":
-            self.sim.log.add(f"{store_name} does not usually buy {item_name}. The worker waves it off.")
+            _log_player_feedback(self.sim, f"{store_name} does not usually buy {item_name}. The worker waves it off.", kind="commerce")
             return
         if reason == "unwanted_item_firm":
-            self.sim.log.add(f"{store_name} is not taking {item_name}. The worker tells you to stop putting it on the counter.")
+            _log_player_feedback(self.sim, f"{store_name} is not taking {item_name}. The worker tells you to stop putting it on the counter.", kind="commerce")
             return
         if reason == "unwanted_item_eject":
-            self.sim.log.add(f"{store_name} is done with that offer. The worker tells you to leave.")
+            _log_player_feedback(self.sim, f"{store_name} is done with that offer. The worker tells you to leave.", kind="commerce")
             return
         if reason == "vehicle_not_in_chunk":
             vehicle_name = str(event.data.get("vehicle_name", "vehicle") or "vehicle").strip()
-            self.sim.log.add(f"{vehicle_name} is not in this chunk, so nobody here will buy the key.")
+            _log_player_feedback(self.sim, f"{vehicle_name} is not in this chunk, so nobody here will buy the key.", kind="commerce")
             return
         if reason == "vehicle_not_owned":
-            self.sim.log.add("That key does not match a vehicle you own.")
+            _log_player_feedback(self.sim, "That key does not match a vehicle you own.", kind="commerce")
             return
         if reason == "vehicle_not_found":
-            self.sim.log.add("That key no longer points to an available vehicle.")
+            _log_player_feedback(self.sim, "That key no longer points to an available vehicle.", kind="commerce")
             return
         if reason == "invalid_vehicle_key":
-            self.sim.log.add("That key is not tied to a vehicle record.")
+            _log_player_feedback(self.sim, "That key is not tied to a vehicle record.", kind="commerce")
             return
         if reason == "missing_sale_state":
-            self.sim.log.add(f"Cannot price a sale at {store_name} right now.")
+            _log_player_feedback(self.sim, f"Cannot price a sale at {store_name} right now.", kind="commerce")
             return
         if reason == "remove_failed":
-            self.sim.log.add(f"The sale of {item_name} stalled before it left your inventory.")
+            _log_player_feedback(self.sim, f"The sale of {item_name} stalled before it left your inventory.", kind="commerce")
             return
-        self.sim.log.add(f"Sale of {item_name} at {store_name} could not be finalized.")
+        _log_player_feedback(self.sim, f"Sale of {item_name} at {store_name} could not be finalized.", kind="commerce")
 
     def on_bank_transaction(self, event):
         if event.data.get("eid") != self.player_eid:

@@ -12,7 +12,14 @@ from game.components import (
     Position,
 )
 from game.incident_runtime import incident_records
-from game.items import ITEM_CATALOG, ITEM_QUALITY_TIERS, item_condition_profile, normalize_item_quality
+from game.items import (
+    ITEM_CATALOG,
+    ITEM_QUALITY_TIERS,
+    item_condition_profile,
+    item_metadata_has_scratch_roll,
+    item_metadata_with_creation_seed,
+    normalize_item_quality,
+)
 from game.org_names import generate_organization_name
 from game.run_echoes import incident_echo_caution_for_property
 
@@ -3951,6 +3958,9 @@ def realize_item_instance_metadata(
     serial_seed,
 ):
     metadata = dict(base_metadata or {})
+    serial_seed_text = _text(serial_seed)
+    if not item_metadata_has_scratch_roll(item_id, metadata):
+        metadata = item_metadata_with_creation_seed(item_id, metadata, serial_seed_text)
     bundle = practice_bundle if isinstance(practice_bundle, dict) else {}
     modifiers = dict(bundle.get("effect_modifiers", {}))
     if not modifiers and not source_property_id and not source_organization_eid and not source_practice_key:
@@ -4025,7 +4035,6 @@ def realize_item_instance_metadata(
     if abs(tamper_severity_mult - 1.0) > 1e-6:
         metadata["tamper_severity_mult"] = max(0.25, min(4.0, tamper_severity_mult))
 
-    _ = _text(serial_seed)
     return metadata
 
 

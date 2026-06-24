@@ -22,6 +22,7 @@ from game.components import (
 )
 from game.item_semantics import item_display_name_for_actor
 from game.items import ITEM_CATALOG
+from game.flora_runtime import flora_at, flora_look_text
 from game.hunting_runtime import hunting_carcass_look_text, hunting_carcasses_at
 from game.human_description import human_look_description_clause
 from game.human_identity import is_human_identity
@@ -229,6 +230,12 @@ class PlayerLookRuntime:
             if remaining > 0:
                 item_text += f" +{remaining}"
             bits.append(f"items:{item_text}")
+
+        flora_rows = () if map_mode_active(self.sim) else flora_at(self.sim, x, y, z=z)
+        if flora_rows:
+            flora_text = flora_look_text(flora_rows)
+            if flora_text:
+                bits.append(flora_text)
 
         carcass_rows = () if map_mode_active(self.sim) else hunting_carcasses_at(self.sim, x, y, z=z)
         if carcass_rows:

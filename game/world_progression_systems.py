@@ -75,6 +75,7 @@ from game.final_operation import (
     try_complete_final_operation,
     try_fail_final_operation,
 )
+from game.flora_runtime import ensure_chunk_flora
 from game.items import (
     ITEM_CATALOG,
     apply_item_durability_loss,
@@ -1149,6 +1150,11 @@ class WorldStreamingSystem(System):
                 continue
             self._ensure_chunk_properties(loaded_cx, loaded_cy)
             self._ensure_chunk_population(loaded_cx, loaded_cy)
+            ensure_chunk_flora(
+                self.sim,
+                loaded_data.get("chunk", loaded_data) if isinstance(loaded_data, dict) else loaded_data,
+                property_records=self.sim.chunk_property_records.get((loaded_cx, loaded_cy), ()),
+            )
         if not report.get("changed"):
             return
 

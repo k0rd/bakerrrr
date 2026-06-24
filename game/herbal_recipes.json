@@ -1,0 +1,60 @@
+{
+  "_meta": {
+    "schema_version": 1
+  },
+  "_comment": "Small-batch herbal medicine recipes. Component classes are satisfied by run-randomized flora chemistry, not fixed plant ids.",
+  "herbal_poultice": {
+    "name": "herbal poultice",
+    "output_item_id": "herbal_poultice",
+    "component_count": 2,
+    "required_classes": ["mending", "binding"],
+    "service_fee": 8,
+    "recipe_price": 18,
+    "tags": ["healing", "legal", "field"]
+  },
+  "hydrating_tonic": {
+    "name": "hydrating tonic",
+    "output_item_id": "hydrating_tonic",
+    "component_count": 2,
+    "required_classes": ["hydrating", "cooling"],
+    "service_fee": 7,
+    "recipe_price": 16,
+    "tags": ["thirst", "cooling", "legal"]
+  },
+  "calming_tincture": {
+    "name": "calming tincture",
+    "output_item_id": "calming_tincture",
+    "component_count": 2,
+    "required_classes": ["calming", "cleansing"],
+    "service_fee": 7,
+    "recipe_price": 16,
+    "tags": ["safety", "calming", "legal"]
+  },
+  "strong_herbal_poultice": {
+    "name": "strong herbal poultice",
+    "output_item_id": "strong_herbal_poultice",
+    "component_count": 3,
+    "required_classes": ["mending", "binding", "catalyst"],
+    "service_fee": 14,
+    "recipe_price": 32,
+    "tags": ["healing", "potent", "legal"]
+  },
+  "field_restorative": {
+    "name": "field restorative",
+    "output_item_id": "field_restorative",
+    "component_count": 3,
+    "required_classes": ["mending", "hydrating", "energizing"],
+    "service_fee": 13,
+    "recipe_price": 30,
+    "tags": ["restoration", "field", "legal"]
+  },
+  "steadying_draught": {
+    "name": "steadying draught",
+    "output_item_id": "steadying_draught",
+    "component_count": 3,
+    "required_classes": ["calming", "numbing", "catalyst"],
+    "service_fee": 12,
+    "recipe_price": 28,
+    "tags": ["calming", "steady", "legal"]
+  }
+}

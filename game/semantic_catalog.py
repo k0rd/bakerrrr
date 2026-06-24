@@ -9,6 +9,7 @@ DEFAULT_RENDER_SEMANTICS_PATH = REPO_ROOT / "game" / "render_semantics.json"
 
 RUNTIME_CATEGORIES = (
     "terrain",
+    "flora",
     "features",
     "infrastructure",
     "properties",
@@ -30,6 +31,7 @@ DEFAULT_RENDER_LAYERS = {
 
 DEFAULT_CATEGORY_RENDER_DEFAULTS = {
     "terrain": {"layer": "terrain", "priority": 0},
+    "flora": {"layer": "ground_overlay", "priority": -20},
     "features": {"layer": "ground_overlay", "priority": 0},
     "infrastructure": {"layer": "ground_overlay", "priority": 5},
     "properties": {"layer": "ground_overlay", "priority": 10},
@@ -336,6 +338,8 @@ class RuntimeSemanticCatalog:
             return ["entities"] + [name for name in default_order if name != "entities"]
         if key.startswith("item_"):
             return ["items"] + [name for name in default_order if name != "items"]
+        if key.startswith("flora_"):
+            return ["flora"] + [name for name in default_order if name != "flora"]
         if key.startswith("vehicle_"):
             return ["vehicles"] + [name for name in default_order if name != "vehicles"]
         if key.startswith("feature_"):

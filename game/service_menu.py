@@ -3177,6 +3177,42 @@ class ServiceMenuSystem(System):
             if practice_note:
                 lines.append(practice_note)
             return f"Herbal Care: {prop_name}", lines
+        if service in {"herbal_prepare", "herbal_compound"}:
+            output_name = str(event.data.get("output_item_name", "herbal medicine")).strip() or "herbal medicine"
+            recipe_name = str(event.data.get("recipe_name", "recipe")).strip() or "recipe"
+            ingredient_count = int(event.data.get("ingredient_count", 0) or 0)
+            credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            title = "Herbal Prep" if service == "herbal_prepare" else "Herbal Compounding"
+            first = (
+                f"{prop_name} prepares {output_name} from {ingredient_count} plant material{'s' if ingredient_count != 1 else ''}."
+                if service == "herbal_prepare"
+                else f"You compound {output_name} from {ingredient_count} plant material{'s' if ingredient_count != 1 else ''}."
+            )
+            lines = [first, f"Recipe: {recipe_name}."]
+            if credits_spent > 0:
+                lines.append(f"Fee {_credit_amount_label(credits_spent)}.")
+            lines.append(f"{output_name} is now identified for you.")
+            return f"{title}: {prop_name}", lines
+        if service == "herbal_recipe_sales":
+            recipe_name = str(event.data.get("recipe_name", "herbal recipe")).strip() or "herbal recipe"
+            output_name = str(event.data.get("output_item_name", "herbal medicine")).strip() or "herbal medicine"
+            credits_spent = int(event.data.get("credits_spent", 0) or 0)
+            revealed = tuple(event.data.get("revealed_plants", ()) or ())
+            lines = [
+                f"You learned {recipe_name} for {_credit_amount_label(credits_spent)}.",
+                f"It teaches how to make {output_name}.",
+            ]
+            if revealed:
+                names = []
+                for row in revealed[:2]:
+                    if isinstance(row, dict):
+                        name = str(row.get("plant_name") or row.get("plant_id") or "").strip()
+                        class_id = str(row.get("chemistry_class") or "").replace("_", " ").strip()
+                        if name and class_id:
+                            names.append(f"{name}: {class_id}")
+                if names:
+                    lines.append("Known plant affinities: " + "; ".join(names) + ".")
+            return f"Herbal Recipe: {prop_name}", lines
         if service == "campfire_cook":
             input_units = int(event.data.get("input_units", 0) or 0)
             output_units = int(event.data.get("output_units", 0) or 0)
@@ -3440,6 +3476,16 @@ class ServiceMenuSystem(System):
             return title, [f"You do not need shelter at {prop_name} right now."]
         if reason == "no_need" and service == "herbal_care":
             return f"Herbal Care: {prop_name}", [f"You do not need restorative care at {prop_name} right now."]
+        if reason == "no_recipe" and service in {"herbal_prepare", "herbal_compound"}:
+            return title, ["You need to learn an herbal recipe before this prep makes sense.", "Herbalists can sell recipes."]
+        if reason == "no_ingredients" and service in {"herbal_prepare", "herbal_compound"}:
+            return title, ["You do not have the known plant materials for any learned recipe.", "Harvest herbs, then learn which plants carry the needed affinities."]
+        if reason == "invalid_mix" and service in {"herbal_prepare", "herbal_compound"}:
+            return title, ["Those plant materials do not satisfy the recipe.", "Nothing was consumed."]
+        if reason == "no_tool" and service == "herbal_compound":
+            return title, ["You need a mortar kit to compound herbs at a campfire ring."]
+        if reason == "all_known" and service == "herbal_recipe_sales":
+            return f"Herbal Recipe: {prop_name}", ["You already know the recipes this herbalist is selling."]
         if reason == "no_meat" and service == "campfire_cook":
             return f"Campfire Cooking: {prop_name}", ["You need raw or bagged game meat to cook here."]
         if reason == "no_meat" and service == "butcher_prepare":
@@ -3519,6 +3565,14 @@ class ServiceMenuSystem(System):
                 f"{prop_name} charges {_credit_amount_label(cost)} for restorative care.",
                 f"You only have {_credit_amount_label(credits)} on hand.",
             ]
+        if reason == "no_credits" and service in {"herbal_prepare", "herbal_recipe_sales"}:
+            cost = int(event.data.get("cost", 0))
+            credits = int(event.data.get("credits", 0))
+            label = "herbal preparation" if service == "herbal_prepare" else "that recipe"
+            return title, [
+                f"{prop_name} charges {_credit_amount_label(cost)} for {label}.",
+                f"You only have {_credit_amount_label(credits)} on hand.",
+            ]
         if reason == "no_credits" and service == "butcher_prepare":
             cost = int(event.data.get("cost", 0))
             credits = int(event.data.get("credits", 0))
@@ -3531,6 +3585,11 @@ class ServiceMenuSystem(System):
             return title, [
                 f"No room for the {item_name}.",
                 "Free up inventory space before handing over the meat.",
+            ]
+        if reason == "inventory_full" and service in {"herbal_prepare", "herbal_compound"}:
+            return title, [
+                "No room for the prepared medicine.",
+                "Free up inventory space before compounding the herbs.",
             ]
         if reason == "no_tokens" and service in TRANSIT_SERVICE_IDS:
             profile = _transit_service_profile(service) or {}

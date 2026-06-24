@@ -195,6 +195,7 @@ _MEDICAL_ARCHETYPES = frozenset({
     "field_hospital",
     "tide_station",
     "herbalist_camp",
+    "herbalist_shop",
 })
 _SHELTER_CAREER_TOKENS = (
     "drifter",

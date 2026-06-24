@@ -30,6 +30,7 @@ _MEDICAL_ARCHETYPES = frozenset({
     "field_hospital",
     "tide_station",
     "herbalist_camp",
+    "herbalist_shop",
 })
 _SALE_ARCHETYPES = frozenset({
     "pawn_shop",

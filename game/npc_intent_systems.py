@@ -3617,7 +3617,9 @@ class NPCInvestigateSystem(System):
     COMMUTE_VEHICLE_RADIUS = 5
     COMMUTE_OWNED_VEHICLE_RADIUS = 14
     COMMUTE_MIN_TARGET_DISTANCE = 7
-    COMMUTE_ROUTE_STOP_RADIUS = 7
+    COMMUTE_ROUTE_STOP_MIN_DISTANCE = 5
+    COMMUTE_ROUTE_STOP_MAX_DISTANCE = 10
+    COMMUTE_ROUTE_STOP_RADIUS = COMMUTE_ROUTE_STOP_MAX_DISTANCE
 
     DEFAULT_MOVE_COOLDOWNS = {
         "investigating": 2,
@@ -4266,6 +4268,92 @@ class NPCInvestigateSystem(System):
             if hasattr(ai, attr):
                 delattr(ai, attr)
 
+    def _exit_npc_vehicle_at_position(self, eid, pos):
+        state = self.sim.ecs.get(VehicleState).get(eid)
+        if state is None or not bool(getattr(state, "in_vehicle", False)):
+            return None
+        vehicle_id = str(getattr(state, "active_vehicle_id", "") or "").strip()
+        vehicle_prop = _active_vehicle_property_for_state(self.sim, state)
+        _set_vehicle_speed(state, 0, tick=getattr(self.sim, "tick", 0))
+        state.set_in_vehicle(False, tick=getattr(self.sim, "tick", 0))
+        if _property_is_vehicle(vehicle_prop) and pos is not None:
+            _sync_vehicle_property_position(self.sim, vehicle_prop, int(pos.x), int(pos.y), int(pos.z))
+            vehicle_id = str(vehicle_prop.get("id", vehicle_id) or vehicle_id)
+        return vehicle_id or None
+
+    def _abandon_npc_vehicle_commute(self, eid, ai, pos, *, reason="abandoned"):
+        if pos is None:
+            return False
+        vehicle_id = str(getattr(ai, "vehicle_commute_vehicle_id", "") or "").strip()
+        active_vehicle_id = self._exit_npc_vehicle_at_position(eid, pos)
+        if active_vehicle_id:
+            vehicle_id = active_vehicle_id
+
+        final_target = self._tuple3(getattr(ai, "vehicle_commute_final_target", None))
+        if final_target is None:
+            final_target = self._tuple3(getattr(ai, "target", None))
+        original_state = str(getattr(ai, "vehicle_commute_original_state", "") or "").strip().lower()
+        self._clear_npc_vehicle_commute(ai)
+
+        if final_target is not None and int(final_target[2]) == int(pos.z) and (
+            int(final_target[0]) != int(pos.x) or int(final_target[1]) != int(pos.y)
+        ):
+            ai.state = original_state or "patrolling"
+            ai.target = final_target
+        else:
+            ai.state = "idle"
+            ai.target = None
+        ai.target_eid = None
+
+        self.sim.emit(Event(
+            "npc_vehicle_commute_abandoned",
+            npc_eid=int(eid),
+            vehicle_id=vehicle_id or None,
+            reason=str(reason or "abandoned"),
+            final_target=final_target,
+            x=int(pos.x),
+            y=int(pos.y),
+            z=int(pos.z),
+        ))
+        return True
+
+    def _invalid_vehicle_occupancy_reason(self, eid, ai, pos):
+        state = self.sim.ecs.get(VehicleState).get(eid)
+        if state is None or not bool(getattr(state, "in_vehicle", False)):
+            return ""
+        state_name = str(getattr(ai, "state", "") or "").strip().lower()
+        phase = str(getattr(ai, "vehicle_commute_phase", "") or "").strip().lower()
+        if state_name in {"holding", "lounging", "resting", "socializing", "seeking_social", "seeking_companionship"}:
+            return f"{state_name}_in_vehicle"
+        if state_name not in self.MOVING_STATES:
+            return "idle_in_vehicle"
+        target = self._tuple3(_resolve_ai_target(self.sim, ai))
+        if target is None or int(target[2]) != int(pos.z):
+            return "vehicle_without_destination"
+        if phase != "drive" and int(target[0]) == int(pos.x) and int(target[1]) == int(pos.y):
+            return "vehicle_at_destination"
+        vehicle_prop = _active_vehicle_property_for_state(self.sim, state)
+        if not _property_is_vehicle(vehicle_prop):
+            return "missing_vehicle"
+        fuel, _capacity = _vehicle_fuel_values(vehicle_prop)
+        if int(fuel) <= 0:
+            return "out_of_fuel"
+        metadata = _property_metadata(vehicle_prop)
+        medium = str(metadata.get("vehicle_medium", metadata.get("medium", getattr(state, "medium", "land"))) or "land").strip().lower()
+        if medium != "land":
+            return "unsupported_vehicle_medium"
+        vehicle_id = str(vehicle_prop.get("id", "") or "").strip()
+        if not _vehicle_route_accessible_at(
+            self.sim,
+            int(pos.x),
+            int(pos.y),
+            int(pos.z),
+            ignore_property_id=vehicle_id or None,
+            medium="land",
+        ):
+            return "route_required"
+        return ""
+
     def _tuple3(self, value):
         if not isinstance(value, (tuple, list)) or len(value) < 3:
             return None
@@ -4348,9 +4436,6 @@ class NPCInvestigateSystem(System):
         metadata["vehicle_owner_tag"] = "npc"
         metadata["npc_commute_driver_eid"] = int(eid)
         metadata["npc_commute_vehicle"] = True
-        portfolio = self.sim.ecs.get(PropertyPortfolio).get(eid)
-        if portfolio is not None:
-            portfolio.owned_property_ids.add(vehicle_id)
         return True
 
     def _commute_vehicle_candidates(self, eid, pos):
@@ -4481,10 +4566,15 @@ class NPCInvestigateSystem(System):
             return None
         fx, fy, fz = final_target
         candidates = []
-        for radius in range(0, self.COMMUTE_ROUTE_STOP_RADIUS + 1):
-            for dy in range(-radius, radius + 1):
-                for dx in range(-radius, radius + 1):
-                    if max(abs(dx), abs(dy)) != radius:
+        min_stop = max(1, int(self.COMMUTE_ROUTE_STOP_MIN_DISTANCE))
+        max_stop = max(min_stop, int(self.COMMUTE_ROUTE_STOP_MAX_DISTANCE))
+        for walk_distance in range(min_stop, max_stop + 1):
+            ring_candidates = []
+            for dx in range(-walk_distance, walk_distance + 1):
+                dy_abs = walk_distance - abs(dx)
+                dy_values = (0,) if dy_abs == 0 else (-dy_abs, dy_abs)
+                for dy in dy_values:
+                    if abs(dx) + abs(dy) != walk_distance:
                         continue
                     x = int(fx) + dx
                     y = int(fy) + dy
@@ -4492,10 +4582,10 @@ class NPCInvestigateSystem(System):
                         continue
                     if self._vehicle_route_next_step(eid, start, (x, y, fz), vehicle_id) is None and (int(start[0]), int(start[1])) != (x, y):
                         continue
-                    walk_distance = _manhattan(x, y, fx, fy)
                     drive_distance = _manhattan(int(start[0]), int(start[1]), x, y)
-                    candidates.append((int(walk_distance), -int(drive_distance), int(x), int(y), int(fz)))
-            if candidates:
+                    ring_candidates.append((int(walk_distance), -int(drive_distance), int(x), int(y), int(fz)))
+            if ring_candidates:
+                candidates.extend(ring_candidates)
                 break
         if not candidates:
             return None
@@ -4556,13 +4646,13 @@ class NPCInvestigateSystem(System):
         vehicle_id = str(getattr(ai, "vehicle_commute_vehicle_id", "") or "").strip()
         vehicle_prop = self.sim.properties.get(vehicle_id)
         if not self._vehicle_commute_usable_for(eid, vehicle_prop, pos):
-            self._clear_npc_vehicle_commute(ai)
+            self._abandon_npc_vehicle_commute(eid, ai, pos, reason="vehicle_unusable_before_entry")
             return False
         vehicle_pos = self._vehicle_position_tuple(vehicle_prop)
         route_target = self._tuple3(getattr(ai, "vehicle_commute_route_target", None))
         final_target = self._tuple3(getattr(ai, "vehicle_commute_final_target", None))
         if vehicle_pos is None or route_target is None or final_target is None:
-            self._clear_npc_vehicle_commute(ai)
+            self._abandon_npc_vehicle_commute(eid, ai, pos, reason="missing_commute_target")
             return False
         if (int(pos.x), int(pos.y), int(pos.z)) != vehicle_pos:
             return False
@@ -4596,7 +4686,7 @@ class NPCInvestigateSystem(System):
         route_target = self._tuple3(getattr(ai, "vehicle_commute_route_target", None))
         final_target = self._tuple3(getattr(ai, "vehicle_commute_final_target", None))
         if route_target is None or final_target is None:
-            self._clear_npc_vehicle_commute(ai)
+            self._abandon_npc_vehicle_commute(eid, ai, pos, reason="missing_commute_target")
             return False
         if (int(pos.x), int(pos.y), int(pos.z)) != route_target:
             return False
@@ -4804,11 +4894,6 @@ class NPCInvestigateSystem(System):
             ai_items = tuple(ais.items())
 
         for eid, ai in ai_items:
-            if ai.state not in self.MOVING_STATES:
-                if live_timeskip_active:
-                    self._unschedule_move_due(eid)
-                continue
-
             pos = positions.get(eid)
             if not pos:
                 if live_timeskip_active:
@@ -4816,6 +4901,21 @@ class NPCInvestigateSystem(System):
                 continue
             if _entity_is_downed(self.sim, eid):
                 _apply_downed_actor_state(self.sim, eid, tick=self.sim.tick)
+                if live_timeskip_active:
+                    self._unschedule_move_due(eid)
+                continue
+            invalid_vehicle_reason = self._invalid_vehicle_occupancy_reason(eid, ai, pos)
+            if invalid_vehicle_reason:
+                self._abandon_npc_vehicle_commute(eid, ai, pos, reason=invalid_vehicle_reason)
+                throttle = move_throttles.get(eid)
+                if throttle:
+                    throttle.next_move_tick = max(int(getattr(throttle, "next_move_tick", 0) or 0), int(self.sim.tick) + 1)
+                else:
+                    self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), int(self.sim.tick) + 1)
+                if live_timeskip_active:
+                    self._schedule_move_due(eid, int(getattr(self.sim, "tick", 0)) + 1)
+                continue
+            if ai.state not in self.MOVING_STATES:
                 if live_timeskip_active:
                     self._unschedule_move_due(eid)
                 continue
@@ -5744,6 +5844,19 @@ class NPCInvestigateSystem(System):
 
             cooldown = hold_cooldown
             if not moved:
+                current_vehicle_state = self.sim.ecs.get(VehicleState).get(eid)
+                if vehicle_step or bool(current_vehicle_state and getattr(current_vehicle_state, "in_vehicle", False)):
+                    self._abandon_npc_vehicle_commute(
+                        eid,
+                        ai,
+                        pos,
+                        reason=str(blocked_reason or ("vehicle_blocked" if vehicle_step else "vehicle_no_path")),
+                    )
+                    if throttle:
+                        throttle.next_move_tick = max(throttle.next_move_tick, self.sim.tick + 1)
+                    else:
+                        self.next_move_tick[eid] = max(self.next_move_tick.get(eid, 0), self.sim.tick + 1)
+                    continue
                 if routine_path_state:
                     _invalidate_opportunity_active_target_path(self.sim, eid, ai.state)
                 knock_handled = False

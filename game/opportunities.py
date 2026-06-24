@@ -227,6 +227,7 @@ SPECIALTY_FOCUS_SITE_KINDS = {
     "field_refuge": (
         "field_camp",
         "herbalist_camp",
+        "herbalist_shop",
         "ranger_hut",
         "ruin_shelter",
     ),
@@ -401,6 +402,7 @@ SPECIALTY_CONTACT_ROLE_BY_SITE_KIND = {
     "field_camp": "quartermaster",
     "firewatch_tower": "watch keeper",
     "herbalist_camp": "remedy keeper",
+    "herbalist_shop": "remedy keeper",
     "inspection_shed": "inspector",
     "lookout_post": "watch keeper",
     "ranger_hut": "ranger",

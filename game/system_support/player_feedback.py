@@ -32,6 +32,27 @@ PLAYER_FEEDBACK_LOG_STYLES = {
         "badge": "ACT",
         "badge_color": "property_fixture",
     },
+    "commerce": {
+        "channel": "general",
+        "priority": "high",
+        "dedupe_window": 2,
+        "badge": "CR",
+        "badge_color": "item_token",
+    },
+    "craft": {
+        "channel": "general",
+        "priority": "high",
+        "dedupe_window": 2,
+        "badge": "MAKE",
+        "badge_color": "item_tool",
+    },
+    "game": {
+        "channel": "general",
+        "priority": "high",
+        "dedupe_window": 2,
+        "badge": "PLAY",
+        "badge_color": "casino_accent",
+    },
 }
 
 

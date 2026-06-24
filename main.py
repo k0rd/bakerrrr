@@ -78,6 +78,7 @@ from game.custom_content import (
     validate_custom_content_for_resume,
 )
 from game.final_notice import show_final_notice, show_run_end_notice
+from game.flora_runtime import ensure_chunk_flora
 from game.items import ITEM_CATALOG
 from game.hunting_runtime import HuntingCarcassSystem
 from game.large_span_places import register_large_span_child_properties
@@ -2745,6 +2746,7 @@ def _run_new_game_legacy(view, character_name):
             reserved_property_ids=reserved_properties,
         )
     )
+    ensure_chunk_flora(sim, sim.active_chunk, property_records=property_records)
 
     sim.stream_world(player_pos[0], player_pos[1])
     sim.ensure_loaded_chunk_terrain()

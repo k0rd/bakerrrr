@@ -6,6 +6,7 @@ from game.appearance_loadout import apply_appearance_service
 from engine.underground import UNDERGROUND_ACCESS_SERVICE
 from game.components import FinancialProfile, Inventory, NPCNeeds, PlayerAssets, Position, PropertyKnowledge, StatusEffects, VehicleState, Vitality
 from game.items import ITEM_CATALOG, item_display_name
+from game.herbal_chemistry_runtime import craft_herbal_medicine, purchase_herbal_recipe
 from game.hunting_runtime import convert_meat_stack
 from game.opportunities import accept_service_job_offer, append_external_opportunity, opportunity_instruction_lines
 from game.organization_response import property_vigilante_denial
@@ -2096,6 +2097,15 @@ class SiteServiceSystem(System):
         if service == "herbal_care":
             self._apply_herbal_care(eid, prop)
             return True
+        if service == "herbal_prepare":
+            self._apply_herbal_crafting_service(eid, prop, service, mode="herbalist")
+            return True
+        if service == "herbal_recipe_sales":
+            self._apply_herbal_recipe_sale(eid, prop, service)
+            return True
+        if service == "herbal_compound":
+            self._apply_herbal_crafting_service(eid, prop, service, mode="self")
+            return True
         if service == "campfire_cook":
             self._apply_meat_conversion_service(eid, prop, service)
             return True
@@ -2474,6 +2484,67 @@ class SiteServiceSystem(System):
             output_item_id=result.get("output_item_id"),
             output_item_name=result.get("output_item_name"),
             credits_spent=int(result.get("credits_spent", 0) or 0),
+        ))
+
+    def _apply_herbal_crafting_service(self, eid, prop, service, *, mode):
+        result = craft_herbal_medicine(self.sim, eid, mode=mode, prop=prop, emit_event=False)
+        if not result.get("ok"):
+            payload = {
+                "eid": eid,
+                "property_id": prop["id"],
+                "property_name": prop.get("name", prop["id"]),
+                "service": service,
+                "reason": str(result.get("reason", "blocked") or "blocked").strip().lower(),
+            }
+            for key in ("cost", "credits", "recipe_id", "tool_item_id", "output_item_id", "quantity"):
+                if key in result:
+                    payload[key] = result.get(key)
+            self.sim.emit(Event("site_service_blocked", **payload))
+            return
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service=service,
+            recipe_id=result.get("recipe_id"),
+            recipe_name=result.get("recipe_name"),
+            output_item_id=result.get("output_item_id"),
+            output_item_name=result.get("output_item_name"),
+            output_instance_id=result.get("output_instance_id"),
+            ingredient_count=int(result.get("ingredient_count", 0) or 0),
+            ingredient_names=tuple(result.get("ingredient_names", ()) or ()),
+            component_plants=tuple(result.get("component_plants", ()) or ()),
+            credits_spent=int(result.get("credits_spent", 0) or 0),
+        ))
+
+    def _apply_herbal_recipe_sale(self, eid, prop, service):
+        result = purchase_herbal_recipe(self.sim, eid, prop=prop, emit_event=False)
+        if not result.get("ok"):
+            payload = {
+                "eid": eid,
+                "property_id": prop["id"],
+                "property_name": prop.get("name", prop["id"]),
+                "service": service,
+                "reason": str(result.get("reason", "blocked") or "blocked").strip().lower(),
+            }
+            for key in ("cost", "credits", "recipe_id"):
+                if key in result:
+                    payload[key] = result.get(key)
+            self.sim.emit(Event("site_service_blocked", **payload))
+            return
+        self.sim.emit(Event(
+            "site_service_used",
+            eid=eid,
+            property_id=prop["id"],
+            property_name=prop.get("name", prop["id"]),
+            service=service,
+            recipe_id=result.get("recipe_id"),
+            recipe_name=result.get("recipe_name"),
+            output_item_id=result.get("output_item_id"),
+            output_item_name=result.get("output_item_name"),
+            credits_spent=int(result.get("credits_spent", 0) or 0),
+            revealed_plants=tuple(result.get("revealed_plants", ()) or ()),
         ))
 
     def _transit_destinations(self, prop, service):

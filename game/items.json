@@ -160,6 +160,168 @@
       }
     ]
   },
+  "herbal_poultice": {
+    "name": "Herbal Poultice",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": [
+      "consumable",
+      "medical",
+      "herbal_medicine",
+      "safety",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "restore_hp",
+        "delta": 10
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 10
+      }
+    ]
+  },
+  "hydrating_tonic": {
+    "name": "Hydrating Tonic",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": [
+      "consumable",
+      "drink",
+      "medical",
+      "herbal_medicine",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 28
+      },
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 6
+      }
+    ]
+  },
+  "calming_tincture": {
+    "name": "Calming Tincture",
+    "glyph": "!",
+    "stack_max": 2,
+    "tags": [
+      "consumable",
+      "medical",
+      "herbal_medicine",
+      "safety",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 22
+      },
+      {
+        "type": "status",
+        "status": "calm",
+        "duration": 18,
+        "modifiers": {
+          "safety_tick_delta": 0.06,
+          "suppression_resist_mult": 0.24,
+          "ranged_accuracy_mult": 0.06
+        }
+      }
+    ]
+  },
+  "strong_herbal_poultice": {
+    "name": "Strong Herbal Poultice",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "herbal_medicine",
+      "safety",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "restore_hp",
+        "delta": 20
+      },
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 16
+      }
+    ]
+  },
+  "field_restorative": {
+    "name": "Field Restorative",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "drink",
+      "herbal_medicine",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "restore_hp",
+        "delta": 12
+      },
+      {
+        "type": "modify_need",
+        "need": "thirst",
+        "delta": 18
+      },
+      {
+        "type": "modify_need",
+        "need": "energy",
+        "delta": 12
+      }
+    ]
+  },
+  "steadying_draught": {
+    "name": "Steadying Draught",
+    "glyph": "!",
+    "stack_max": 1,
+    "tags": [
+      "consumable",
+      "medical",
+      "herbal_medicine",
+      "safety",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": [
+      {
+        "type": "modify_need",
+        "need": "safety",
+        "delta": 18
+      },
+      {
+        "type": "status",
+        "status": "steady",
+        "duration": 20,
+        "modifiers": {
+          "suppression_resist_mult": 0.3,
+          "incoming_damage_mult": -0.04,
+          "movement_misdirect_chance": -0.04
+        }
+      }
+    ]
+  },
   "focus_inhaler": {
     "name": "Focus Inhaler",
     "glyph": "!",
@@ -2081,6 +2243,40 @@
       "legal"
     ],
     "legal_status": "legal",
+    "scratch_payout_table": [
+      {
+        "credits": 0,
+        "weight": 560
+      },
+      {
+        "credits": 2,
+        "weight": 180
+      },
+      {
+        "credits": 5,
+        "weight": 130
+      },
+      {
+        "credits": 10,
+        "weight": 80
+      },
+      {
+        "credits": 25,
+        "weight": 35
+      },
+      {
+        "credits": 75,
+        "weight": 12
+      },
+      {
+        "credits": 250,
+        "weight": 2
+      },
+      {
+        "credits": 1000,
+        "weight": 1
+      }
+    ],
     "effects": [
       {
         "type": "credits",
@@ -2259,6 +2455,20 @@
       "blade",
       "survival",
       "hunting",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "pruning_shears": {
+    "name": "Pruning Shears",
+    "glyph": ")",
+    "stack_max": 1,
+    "tags": [
+      "tool",
+      "blade",
+      "gardening",
+      "herbal",
       "legal"
     ],
     "legal_status": "legal",
@@ -3453,6 +3663,20 @@
     "legal_status": "legal",
     "effects": []
   },
+  "mortar_kit": {
+    "name": "Mortar Kit",
+    "glyph": "{",
+    "stack_max": 1,
+    "tags": [
+      "tool",
+      "herbal",
+      "crafting",
+      "survival",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
   "backpack": {
     "name": "Backpack",
     "glyph": "{",
@@ -3595,6 +3819,58 @@
         }
       }
     ]
+  },
+  "fresh_blossoms": {
+    "name": "Fresh Blossoms",
+    "glyph": "'",
+    "stack_max": 1,
+    "tags": [
+      "herbal_ingredient",
+      "plant_material",
+      "blossom",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "leaf_clippings": {
+    "name": "Leaf Clippings",
+    "glyph": ",",
+    "stack_max": 1,
+    "tags": [
+      "herbal_ingredient",
+      "plant_material",
+      "leaf",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "moss_scrapings": {
+    "name": "Moss Scrapings",
+    "glyph": ",",
+    "stack_max": 1,
+    "tags": [
+      "herbal_ingredient",
+      "plant_material",
+      "moss",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
+  },
+  "vine_cuttings": {
+    "name": "Vine Cuttings",
+    "glyph": ";",
+    "stack_max": 1,
+    "tags": [
+      "herbal_ingredient",
+      "plant_material",
+      "vine",
+      "legal"
+    ],
+    "legal_status": "legal",
+    "effects": []
   },
   "emergency_blanket": {
     "name": "Emergency Blanket",

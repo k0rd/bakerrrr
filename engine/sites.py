@@ -155,7 +155,7 @@ SITE_GAMEPLAY_PROFILES = {
     "herbalist_camp": {
         "public": True,
         "is_storefront": True,
-        "site_services": ("herbal_care",),
+        "site_services": ("herbal_care", "herbal_prepare", "herbal_recipe_sales"),
     },
     "dock_shack": {
         "public": True,

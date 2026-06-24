@@ -75,6 +75,18 @@ WORLD_PALETTE: tuple[WorldPaletteRow, ...] = (
     _row("building_roof_civic", (86, 184, 196), 153, "cyan", tags=("roof", "civic")),
     _row("building_roof_secure", (104, 132, 76), 71, "green", tags=("roof", "secure")),
     _row("building_roof_entertainment", (204, 78, 168), 176, "magenta", attrs=("bold",), tags=("roof", "entertainment")),
+    _row("flora_leaf", (90, 176, 94), 77, "green", attrs=("bold",), tags=("flora", "leaf")),
+    _row("flora_grass", (126, 188, 92), 113, "green", tags=("flora", "grass")),
+    _row("flora_moss", (82, 160, 108), 72, "green", attrs=("dim",), tags=("flora", "moss")),
+    _row("flora_vine", (76, 174, 116), 78, "green", attrs=("underline",), tags=("flora", "vine")),
+    _row("flora_reed", (156, 174, 92), 149, "green", tags=("flora", "reed")),
+    _row("flora_shrub", (102, 154, 86), 71, "green", attrs=("bold",), tags=("flora", "shrub")),
+    _row("flora_flower_pink", (238, 132, 184), 211, "magenta", attrs=("bold",), tags=("flora", "flower", "pink")),
+    _row("flora_flower_violet", (184, 132, 242), 141, "magenta", attrs=("bold",), tags=("flora", "flower", "violet")),
+    _row("flora_flower_gold", (238, 196, 82), 220, "yellow", attrs=("bold",), tags=("flora", "flower", "gold")),
+    _row("flora_flower_white", (238, 232, 214), 230, "white", attrs=("bold",), tags=("flora", "flower", "white")),
+    _row("flora_flower_blue", (116, 178, 238), 117, "cyan", attrs=("bold",), tags=("flora", "flower", "blue")),
+    _row("flora_flower_coral", (242, 128, 108), 210, "red", attrs=("bold",), tags=("flora", "flower", "coral")),
 )
 
 _ROWS_BY_KEY = {row.key: row for row in WORLD_PALETTE}

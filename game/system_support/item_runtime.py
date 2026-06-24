@@ -11,6 +11,7 @@ from game.components import (
     Vitality,
     WeaponLoadout,
 )
+from game.items import SCRATCH_TICKET_ITEM_ID, scratch_ticket_payout_from_metadata
 from game.weapons import WEAPON_CATALOG, weapon_by_id
 
 
@@ -280,6 +281,8 @@ def _apply_item_effects_to_entity(sim, eid, item_def, *, item_metadata=None):
                 delta = int(effect.get("delta", 0))
             except (TypeError, ValueError):
                 continue
+            if str(item_def.get("id", "") or "").strip().lower() == SCRATCH_TICKET_ITEM_ID:
+                delta = scratch_ticket_payout_from_metadata(metadata, default=delta)
             assets.credits += delta
             applied.append({
                 "type": "credits",

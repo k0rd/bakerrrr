@@ -669,7 +669,8 @@
       "public": true,
       "services": [
         "rest",
-        "campfire_cook"
+        "campfire_cook",
+        "herbal_compound"
       ],
       "light": {
         "enabled": true,

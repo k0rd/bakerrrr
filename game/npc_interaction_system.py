@@ -764,7 +764,7 @@ class NPCInteractionSystem(System):
             "near_summary": "Nearest quiet doctor I know is {distance_phrase} at {names_text}.",
         },
         "service_herbal": {
-            "services": ("herbal_care",),
+            "services": ("herbal_care", "herbal_prepare", "herbal_recipe_sales"),
             "service_label": "herbal care",
             "offer_label": "herbal care",
             "lead_kind": "service_herbal",

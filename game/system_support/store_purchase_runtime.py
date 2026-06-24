@@ -182,11 +182,11 @@ def _profile_for_archetype(archetype):
             "adjacent": {"food", "medical", "clothing", "meat", "packaged_meat"},
             "refuse_dangerous": True,
         })
-    elif archetype in {"pharmacy", "backroom_clinic", "herbalist_camp"}:
+    elif archetype in {"pharmacy", "backroom_clinic", "herbalist_camp", "herbalist_shop"}:
         profile.update({
             "summary": "medical supplies, remedies, and usable clinic stock",
-            "wanted": {"medical", "safety", "injectable", "drug", "consumable"},
-            "adjacent": {"food", "drink", "survival", "tool"},
+            "wanted": {"medical", "safety", "injectable", "drug", "consumable", "herbal_ingredient", "plant_material", "herbal_medicine"},
+            "adjacent": {"food", "drink", "survival", "tool", "gardening", "herbal"},
             "refuse_dangerous": True,
         })
     elif archetype in {"hardware_store", "tool_depot", "auto_garage", "service_station", "salvage_camp", "breaker_yard", "drydock_yard"}:

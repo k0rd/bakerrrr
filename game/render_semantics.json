@@ -27,6 +27,10 @@
       "layer": "terrain",
       "priority": 0
     },
+    "flora": {
+      "layer": "ground_overlay",
+      "priority": -20
+    },
     "features": {
       "layer": "ground_overlay",
       "priority": 0
@@ -200,6 +204,40 @@
     "'": {
       "floor_wilderness": "floor_wilderness",
       "default": "floor_wilderness"
+    }
+  },
+  "flora": {
+    ",": {
+      "flora_leaf": "flora_leaf",
+      "flora_grass": "flora_grass",
+      "flora_moss": "flora_moss",
+      "flora_reed": "flora_reed",
+      "flora_shrub": "flora_shrub",
+      "default": "flora_leaf"
+    },
+    "'": {
+      "flora_flower_pink": "flora_flower",
+      "flora_flower_violet": "flora_flower",
+      "flora_flower_gold": "flora_flower",
+      "flora_flower_white": "flora_flower",
+      "flora_flower_blue": "flora_flower",
+      "flora_flower_coral": "flora_flower",
+      "default": "flora_flower"
+    },
+    ";": {
+      "flora_vine": "flora_vine",
+      "flora_leaf": "flora_vine",
+      "default": "flora_vine"
+    },
+    "*": {
+      "flora_flower_pink": "flora_flower_cluster",
+      "flora_flower_violet": "flora_flower_cluster",
+      "flora_flower_gold": "flora_flower_cluster",
+      "flora_flower_white": "flora_flower_cluster",
+      "flora_flower_blue": "flora_flower_cluster",
+      "flora_flower_coral": "flora_flower_cluster",
+      "flora_shrub": "flora_shrub",
+      "default": "flora_flower_cluster"
     }
   },
   "features": {

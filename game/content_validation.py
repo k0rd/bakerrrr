@@ -7,6 +7,7 @@ from pathlib import Path
 
 from game.json_metadata import METADATA_KEY, SCHEMA_VERSION, split_object_document
 from game.public_content import PUBLIC_STATUS_MODIFIERS
+from game.world_palette import world_palette_keys
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -21,6 +22,8 @@ FIXTURES_PATH = GAME_DIR / "fixtures.json"
 VEHICLES_PATH = GAME_DIR / "vehicles.json"
 NPC_NAMES_PATH = GAME_DIR / "npc_names.json"
 RENDER_SEMANTICS_PATH = GAME_DIR / "render_semantics.json"
+FLORA_PATH = GAME_DIR / "flora.json"
+HERBAL_RECIPES_PATH = GAME_DIR / "herbal_recipes.json"
 
 ALLOWED_ITEM_EFFECTS = {"modify_need", "restore_hp", "status", "credits", "add_ammo"}
 ALLOWED_ITEM_NEEDS = {"energy", "safety", "social", "hunger", "thirst"}
@@ -30,6 +33,20 @@ ALLOWED_FIXTURE_KINDS = {"fixture", "asset"}
 ALLOWED_FIXTURE_COVER = {"none", "low", "full"}
 ALLOWED_FIXTURE_BUCKETS = {"path_side", "path_tile", "entry_side", "street_side", "edge", "open"}
 ALLOWED_LIGHT_PHASES = {"dawn", "day", "dusk", "night"}
+ALLOWED_FLORA_GROWTH_FORMS = {"flower", "grass", "reed", "moss", "lichen", "vine", "shrub", "fern"}
+ALLOWED_FLORA_RARITIES = {"common", "uncommon", "rare"}
+ALLOWED_FLORA_GLYPHS = {",", "'", ";", "*"}
+ALLOWED_HERBAL_CHEMISTRY_CLASSES = {
+    "mending",
+    "hydrating",
+    "cooling",
+    "calming",
+    "energizing",
+    "cleansing",
+    "numbing",
+    "binding",
+    "catalyst",
+}
 IDENTIFIER_RE = re.compile(r"^[a-z0-9_]+$")
 RESERVED_GLYPH_POLICIES = {
     "+": {
@@ -1024,6 +1041,136 @@ def _validate_fixtures(path, report):
                             report.error(source, spec_path + ["light", "phases"], f"unknown light phase {phase!r}")
 
 
+def _validate_positive_weight_map(report, source, path, value, *, field_name="weights"):
+    if not isinstance(value, dict):
+        report.error(source, path, f"{field_name} must be an object")
+        return
+    if not value:
+        report.error(source, path, f"{field_name} must contain at least one entry")
+        return
+    for key, weight in value.items():
+        _validate_non_empty_string(report, source, path + [key], key, field_name="weight key")
+        _validate_number(report, source, path + [key], weight, minimum=0.0, field_name="weight")
+
+
+def _validate_flora(path, report):
+    data, source = _load_object_document(path, report, "an object keyed by flora id")
+    if data is None:
+        return
+
+    palette_keys = set(world_palette_keys())
+    seen_ids = set()
+    for plant_id, row in data.items():
+        if str(plant_id).startswith("_"):
+            continue
+        plant_path = [plant_id]
+        if not _validate_identifier(report, source, plant_path, plant_id, field_name="flora id"):
+            continue
+        if plant_id in seen_ids:
+            report.error(source, plant_path, f"duplicate flora id {plant_id!r}")
+        seen_ids.add(plant_id)
+        if not _expect_type(report, source, plant_path, row, dict, "a flora object"):
+            continue
+
+        _validate_non_empty_string(report, source, plant_path + ["name"], row.get("name"), field_name="name")
+        growth_form = row.get("growth_form")
+        if _validate_non_empty_string(report, source, plant_path + ["growth_form"], growth_form, field_name="growth_form"):
+            if str(growth_form).strip().lower() not in ALLOWED_FLORA_GROWTH_FORMS:
+                report.error(source, plant_path + ["growth_form"], f"growth_form must be one of {sorted(ALLOWED_FLORA_GROWTH_FORMS)}")
+        glyph = row.get("glyph")
+        if _validate_non_empty_string(report, source, plant_path + ["glyph"], glyph, field_name="glyph"):
+            glyph_text = str(glyph)[:1]
+            if len(str(glyph)) > 1:
+                report.warn(source, plant_path + ["glyph"], "glyph will be truncated to the first character at runtime")
+            if glyph_text not in ALLOWED_FLORA_GLYPHS:
+                report.error(source, plant_path + ["glyph"], f"glyph must be one of {sorted(ALLOWED_FLORA_GLYPHS)}")
+            _validate_reserved_glyph_literal(report, source, plant_path + ["glyph"], glyph_text, owner_label="flora")
+        render_key = row.get("render_key")
+        if _validate_non_empty_string(report, source, plant_path + ["render_key"], render_key, field_name="render_key"):
+            if str(render_key).strip() not in palette_keys:
+                report.error(source, plant_path + ["render_key"], f"render_key {render_key!r} is not registered in world_palette")
+        colors = _validate_string_list(report, source, plant_path + ["colors"], row.get("colors"), field_name="colors", require_non_empty=True)
+        for color in colors:
+            if str(color).strip() not in palette_keys:
+                report.error(source, plant_path + ["colors"], f"color {color!r} is not registered in world_palette")
+        rarity = row.get("rarity")
+        if _validate_non_empty_string(report, source, plant_path + ["rarity"], rarity, field_name="rarity"):
+            if str(rarity).strip().lower() not in ALLOWED_FLORA_RARITIES:
+                report.error(source, plant_path + ["rarity"], f"rarity must be one of {sorted(ALLOWED_FLORA_RARITIES)}")
+
+        for map_name in ("area_weights", "terrain_weights", "district_weights"):
+            _validate_positive_weight_map(report, source, plant_path + [map_name], row.get(map_name), field_name=map_name)
+        _validate_string_list(report, source, plant_path + ["tags"], row.get("tags"), field_name="tags", require_non_empty=True)
+        if not isinstance(row.get("growth_traits"), dict):
+            report.error(source, plant_path + ["growth_traits"], "growth_traits must be an object")
+        if not isinstance(row.get("genetics"), dict):
+            report.error(source, plant_path + ["genetics"], "genetics must be an object")
+        if not isinstance(row.get("harvest_potential"), dict):
+            report.error(source, plant_path + ["harvest_potential"], "harvest_potential must be an object")
+        _validate_string_list(
+            report,
+            source,
+            plant_path + ["crossbreed_tags"],
+            row.get("crossbreed_tags"),
+            field_name="crossbreed_tags",
+            require_non_empty=True,
+        )
+        if not isinstance(row.get("spread_profile"), dict):
+            report.error(source, plant_path + ["spread_profile"], "spread_profile must be an object")
+
+    if len(seen_ids) < 36:
+        report.error(source, [], "flora catalog must contain at least 36 rows for V1 variety")
+
+
+def _validate_herbal_recipes(path, item_ids, report):
+    data, source = _load_object_document(path, report, "an object keyed by herbal recipe id")
+    if data is None:
+        return
+
+    seen_ids = set()
+    item_ids = set(item_ids or ())
+    for recipe_id, row in data.items():
+        if str(recipe_id).startswith("_"):
+            continue
+        recipe_path = [recipe_id]
+        if not _validate_identifier(report, source, recipe_path, recipe_id, field_name="herbal recipe id"):
+            continue
+        if recipe_id in seen_ids:
+            report.error(source, recipe_path, f"duplicate herbal recipe id {recipe_id!r}")
+        seen_ids.add(recipe_id)
+        if not _expect_type(report, source, recipe_path, row, dict, "an herbal recipe object"):
+            continue
+        _validate_non_empty_string(report, source, recipe_path + ["name"], row.get("name"), field_name="name")
+        output_item_id = row.get("output_item_id")
+        if _validate_non_empty_string(report, source, recipe_path + ["output_item_id"], output_item_id, field_name="output_item_id"):
+            if str(output_item_id).strip().lower() not in item_ids:
+                report.error(source, recipe_path + ["output_item_id"], f"output_item_id {output_item_id!r} is not in items.json")
+        component_count = row.get("component_count")
+        if _validate_int(report, source, recipe_path + ["component_count"], component_count, minimum=2, maximum=3, field_name="component_count"):
+            expected_count = int(component_count)
+        else:
+            expected_count = None
+        classes = _validate_string_list(
+            report,
+            source,
+            recipe_path + ["required_classes"],
+            row.get("required_classes"),
+            field_name="required_classes",
+            require_non_empty=True,
+        )
+        if expected_count is not None and len(classes) != expected_count:
+            report.error(source, recipe_path + ["required_classes"], "required_classes length must match component_count")
+        for class_id in classes:
+            if str(class_id).strip().lower() not in ALLOWED_HERBAL_CHEMISTRY_CLASSES:
+                report.error(source, recipe_path + ["required_classes"], f"unknown herbal chemistry class {class_id!r}")
+        _validate_int(report, source, recipe_path + ["service_fee"], row.get("service_fee"), minimum=0, field_name="service_fee")
+        _validate_int(report, source, recipe_path + ["recipe_price"], row.get("recipe_price"), minimum=1, field_name="recipe_price")
+        _validate_string_list(report, source, recipe_path + ["tags"], row.get("tags"), field_name="tags", require_non_empty=False)
+
+    if len(seen_ids) < 6:
+        report.error(source, [], "herbal recipe catalog must contain at least the six V1 recipes")
+
+
 def _validate_vehicles(path, report):
     data, source = _load_object_document(path, report, "a vehicle catalog object")
     if data is None:
@@ -1189,6 +1336,8 @@ def validate_repo_content():
         report,
     )
     _validate_fixtures(FIXTURES_PATH, report)
+    _validate_flora(FLORA_PATH, report)
+    _validate_herbal_recipes(HERBAL_RECIPES_PATH, item_ids, report)
     _validate_vehicles(VEHICLES_PATH, report)
     _validate_npc_names(NPC_NAMES_PATH, report)
     _validate_render_semantics(RENDER_SEMANTICS_PATH, report)

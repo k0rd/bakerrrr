@@ -45,6 +45,7 @@ class Simulation:
         self.chunk_property_records = {}
         self.chunk_ground_item_records = {}
         self.chunk_population_records = {}
+        self.chunk_flora_records = {}
         self.chunk_population_membership = {}
         self.chunk_saved_states = {}
         self.chunk_entity_index = {}
@@ -70,6 +71,7 @@ class Simulation:
         self.next_ground_item_order = 0
         self.next_ground_item_id = 1
         self.next_item_instance_id = 1
+        self.flora_patches = {}
         self.projectiles = {}
         self.next_projectile_id = 1
         self.stores = {}
@@ -151,6 +153,10 @@ class Simulation:
             self.entity_chunk_membership = {}
         if not isinstance(getattr(self, "entity_identity_records", None), dict):
             self.entity_identity_records = {}
+        if not isinstance(getattr(self, "flora_patches", None), dict):
+            self.flora_patches = {}
+        if not isinstance(getattr(self, "chunk_flora_records", None), dict):
+            self.chunk_flora_records = {}
         if not isinstance(getattr(self, "hunting_carcasses", None), dict):
             self.hunting_carcasses = {}
         if not hasattr(self, "next_hunting_carcass_id"):

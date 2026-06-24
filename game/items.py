@@ -10,6 +10,17 @@ ITEMS_PATH = Path(__file__).resolve().parent / "items.json"
 LOOT_TABLES_PATH = Path(__file__).resolve().parent / "loot_tables.json"
 CREDSTICK_ITEM_ID = "credstick_chip"
 DEFAULT_CREDSTICK_VALUE = 20
+SCRATCH_TICKET_ITEM_ID = "scratch_ticket"
+DEFAULT_SCRATCH_TICKET_PAYOUT_TABLE = (
+    (0, 560),
+    (2, 180),
+    (5, 130),
+    (10, 80),
+    (25, 35),
+    (75, 12),
+    (250, 2),
+    (1000, 1),
+)
 ITEM_QUALITY_TIERS = ("poor", "standard", "good", "excellent")
 ITEM_QUALITY_SCORE_BONUS = {
     "poor": -0.35,
@@ -159,6 +170,20 @@ def _normalize_identification_profile(item_id, tags, item, appearance_family):
             if str(field).strip()
         ),
     }
+
+
+def _normalize_scratch_payout_table(value):
+    raw_rows = value if isinstance(value, list) else ()
+    rows = []
+    for raw in raw_rows:
+        if not isinstance(raw, dict):
+            continue
+        credits = max(0, _int_or_default(raw.get("credits"), 0))
+        weight = max(0, _int_or_default(raw.get("weight"), 0))
+        if weight <= 0:
+            continue
+        rows.append((int(credits), int(weight)))
+    return tuple(rows) or DEFAULT_SCRATCH_TICKET_PAYOUT_TABLE
 
 
 def _float_or_default(value, default=0.0):
@@ -1171,6 +1196,8 @@ def _normalize_item_catalog_source(source):
             "throw_profile": _normalize_throw_profile(item.get("throw_profile")),
             "substance_profile": _normalize_substance_profile(item.get("substance_profile")),
             "lead_profile": _normalize_lead_profile(item.get("lead_profile")),
+            "scratch_payout_table": _normalize_scratch_payout_table(item.get("scratch_payout_table"))
+            if item_id == SCRATCH_TICKET_ITEM_ID else (),
             "condition_profile": _normalize_condition_profile(
                 item.get("condition_profile"),
                 tool_profiles=item.get("tool_profiles"),
@@ -1283,6 +1310,104 @@ def item_lead_profile(item_id, item_catalog=None):
     return _normalize_lead_profile(item_def.get("lead_profile"))
 
 
+def is_scratch_ticket_item(item_id):
+    return str(item_id or "").strip().lower() == SCRATCH_TICKET_ITEM_ID
+
+
+def _scratch_ticket_payout_table(item_catalog=None):
+    catalog = item_catalog or ITEM_CATALOG
+    item_def = catalog.get(SCRATCH_TICKET_ITEM_ID, {})
+    table = item_def.get("scratch_payout_table")
+    if isinstance(table, tuple) and table:
+        return table
+    return DEFAULT_SCRATCH_TICKET_PAYOUT_TABLE
+
+
+def _scratch_ticket_effect_default(item_catalog=None):
+    catalog = item_catalog or ITEM_CATALOG
+    item_def = catalog.get(SCRATCH_TICKET_ITEM_ID, {})
+    for effect in tuple(item_def.get("effects", ()) or ()):
+        if not isinstance(effect, dict) or str(effect.get("type", "")).strip().lower() != "credits":
+            continue
+        return max(0, _int_or_default(effect.get("delta"), 0))
+    return 0
+
+
+def scratch_ticket_payout_from_metadata(metadata=None, *, item_catalog=None, default=None):
+    metadata = metadata if isinstance(metadata, dict) else {}
+    payouts = metadata.get("scratch_payouts")
+    if isinstance(payouts, (list, tuple)) and payouts:
+        return max(0, _int_or_default(payouts[0], 0))
+    if "scratch_payout" in metadata:
+        return max(0, _int_or_default(metadata.get("scratch_payout"), 0))
+    if default is not None:
+        return max(0, _int_or_default(default, 0))
+    return _scratch_ticket_effect_default(item_catalog=item_catalog)
+
+
+def item_metadata_has_scratch_roll(item_id, metadata=None):
+    if not is_scratch_ticket_item(item_id):
+        return True
+    metadata = metadata if isinstance(metadata, dict) else {}
+    payouts = metadata.get("scratch_payouts")
+    if isinstance(payouts, (list, tuple)) and len(payouts) > 0:
+        return True
+    return "scratch_payout" in metadata
+
+
+def item_metadata_with_creation_seed(item_id, metadata=None, seed_token=None):
+    payload = dict(metadata or {})
+    if is_scratch_ticket_item(item_id) and not item_metadata_has_scratch_roll(item_id, payload):
+        seed = str(seed_token or "").strip()
+        if seed:
+            payload.setdefault("scratch_seed", seed)
+    return payload
+
+
+def _scratch_ticket_roll(seed, index, *, item_catalog=None):
+    seed_text = str(seed or "").strip()
+    if not seed_text:
+        return _scratch_ticket_effect_default(item_catalog=item_catalog)
+    table = _scratch_ticket_payout_table(item_catalog=item_catalog)
+    total = sum(max(0, int(weight)) for _credits, weight in table)
+    if total <= 0:
+        return _scratch_ticket_effect_default(item_catalog=item_catalog)
+    chooser = random.Random(f"scratch-ticket:{seed_text}:{int(index)}")
+    pick = chooser.randint(1, total)
+    cursor = 0
+    for credits, weight in table:
+        cursor += max(0, int(weight))
+        if pick <= cursor:
+            return max(0, int(credits))
+    return max(0, int(table[-1][0]))
+
+
+def _normalize_scratch_ticket_metadata(metadata=None, *, quantity=1, item_catalog=None):
+    quantity = max(1, _int_or_default(quantity, 1))
+    payload = dict(metadata or {})
+    payouts = []
+    raw_payouts = payload.get("scratch_payouts")
+    if isinstance(raw_payouts, (list, tuple)):
+        payouts.extend(max(0, _int_or_default(value, 0)) for value in raw_payouts)
+    elif "scratch_payout" in payload:
+        payouts.append(max(0, _int_or_default(payload.get("scratch_payout"), 0)))
+
+    seed = str(payload.get("scratch_seed", "") or "").strip()
+    if not payouts and not seed:
+        legacy = _scratch_ticket_effect_default(item_catalog=item_catalog)
+        payouts = [int(legacy) for _idx in range(quantity)]
+        payload["scratch_legacy_fixed"] = True
+
+    while len(payouts) < quantity:
+        payouts.append(_scratch_ticket_roll(seed, len(payouts), item_catalog=item_catalog))
+    payouts = [max(0, _int_or_default(value, 0)) for value in payouts[:quantity]]
+    payload["scratch_payouts"] = list(payouts)
+    payload["scratch_payout"] = int(payouts[0]) if payouts else 0
+    if seed:
+        payload["scratch_seed"] = seed
+    return payload
+
+
 def normalize_item_instance_metadata(item_id, metadata=None, item_catalog=None):
     catalog = item_catalog or ITEM_CATALOG
     merged = dict(metadata or {})
@@ -1300,6 +1425,8 @@ def normalize_item_instance_metadata(item_id, metadata=None, item_catalog=None):
         merged["item_durability"] = max(0, min(int(max_durability), int(durability)))
     if is_credstick_item(item_id) and "stored_credits" in merged:
         merged["stored_credits"] = max(0, _int_or_default(merged.get("stored_credits"), DEFAULT_CREDSTICK_VALUE))
+    if is_scratch_ticket_item(item_id):
+        merged = _normalize_scratch_ticket_metadata(merged, quantity=1, item_catalog=catalog)
     return merged
 
 
@@ -1313,7 +1440,12 @@ def credstick_total_credits(quantity=1, metadata=None):
 
 def prepare_item_stack_metadata(item_id, metadata=None, quantity=1, item_catalog=None):
     quantity = max(1, _int_or_default(quantity, 1))
-    prepared = normalize_item_instance_metadata(item_id, metadata=metadata, item_catalog=item_catalog)
+    catalog = item_catalog or ITEM_CATALOG
+    if is_scratch_ticket_item(item_id):
+        prepared = dict(metadata or {})
+        prepared = _normalize_scratch_ticket_metadata(prepared, quantity=quantity, item_catalog=catalog)
+    else:
+        prepared = normalize_item_instance_metadata(item_id, metadata=metadata, item_catalog=catalog)
     if is_credstick_item(item_id):
         prepared["stored_credits"] = int(credstick_total_credits(quantity=quantity, metadata=prepared))
     return prepared
@@ -1364,7 +1496,10 @@ def ground_credstick_total_for_location(sim, x, y, z=0, *, quantity=1, instance_
 
 def prepare_ground_item_stack_metadata(sim, item_id, x, y, z=0, *, quantity=1, instance_id=None, metadata=None, item_catalog=None):
     quantity = max(1, _int_or_default(quantity, 1))
-    prepared = normalize_item_instance_metadata(item_id, metadata=metadata, item_catalog=item_catalog or ITEM_CATALOG)
+    if is_scratch_ticket_item(item_id):
+        prepared = dict(metadata or {})
+    else:
+        prepared = normalize_item_instance_metadata(item_id, metadata=metadata, item_catalog=item_catalog or ITEM_CATALOG)
     if is_credstick_item(item_id):
         prepared["stored_credits"] = int(
             ground_credstick_total_for_location(
@@ -1377,6 +1512,12 @@ def prepare_ground_item_stack_metadata(sim, item_id, x, y, z=0, *, quantity=1, i
                 metadata=prepared,
             )
         )
+    if is_scratch_ticket_item(item_id) and not item_metadata_has_scratch_roll(item_id, prepared):
+        prepared = item_metadata_with_creation_seed(
+            item_id,
+            prepared,
+            f"{getattr(sim, 'seed', 0)}:ground:{instance_id or ''}:{int(x)}:{int(y)}:{int(z)}:{quantity}",
+        )
     return prepare_item_stack_metadata(item_id, metadata=prepared, quantity=quantity, item_catalog=item_catalog or ITEM_CATALOG)
 
 
@@ -1387,6 +1528,22 @@ def split_item_stack_metadata(item_id, metadata=None, stack_quantity=1, removed_
     remaining_quantity = max(0, stack_quantity - removed_quantity)
 
     if not is_credstick_item(item_id):
+        if is_scratch_ticket_item(item_id):
+            payouts = list(prepared.get("scratch_payouts", ()) or [])
+            while len(payouts) < stack_quantity:
+                payouts.append(_scratch_ticket_effect_default(item_catalog=item_catalog))
+            removed_payouts = payouts[:removed_quantity]
+            remaining_payouts = payouts[removed_quantity:]
+            removed_metadata = dict(prepared)
+            removed_metadata["scratch_payouts"] = list(removed_payouts)
+            removed_metadata["scratch_payout"] = int(removed_payouts[0]) if removed_payouts else 0
+            remaining_metadata = dict(prepared)
+            remaining_metadata["scratch_payouts"] = list(remaining_payouts)
+            remaining_metadata["scratch_payout"] = int(remaining_payouts[0]) if remaining_payouts else 0
+            if remaining_quantity <= 0:
+                remaining_metadata["scratch_payouts"] = []
+                remaining_metadata["scratch_payout"] = 0
+            return removed_metadata, remaining_metadata
         removed_metadata = normalize_item_instance_metadata(item_id, metadata=prepared, item_catalog=item_catalog)
         remaining_metadata = normalize_item_instance_metadata(item_id, metadata=prepared, item_catalog=item_catalog)
         return removed_metadata, remaining_metadata
@@ -1526,6 +1683,32 @@ def merge_item_stack_metadata(
     incoming_quantity = max(0, _int_or_default(incoming_quantity, 0))
     total_quantity = max(1, existing_quantity + incoming_quantity)
     if not is_credstick_item(item_id):
+        if is_scratch_ticket_item(item_id):
+            existing_prepared = prepare_item_stack_metadata(
+                item_id,
+                metadata=existing_metadata,
+                quantity=max(1, existing_quantity or 1),
+                item_catalog=item_catalog,
+            ) if existing_quantity > 0 else {}
+            incoming_prepared = prepare_item_stack_metadata(
+                item_id,
+                metadata=incoming_metadata,
+                quantity=max(1, incoming_quantity or 1),
+                item_catalog=item_catalog,
+            ) if incoming_quantity > 0 else {}
+            payouts = []
+            payouts.extend(list(existing_prepared.get("scratch_payouts", ()) or [])[:existing_quantity])
+            payouts.extend(list(incoming_prepared.get("scratch_payouts", ()) or [])[:incoming_quantity])
+            source = existing_metadata if existing_metadata is not None else incoming_metadata
+            merged = prepare_item_stack_metadata(item_id, metadata=source, quantity=total_quantity, item_catalog=item_catalog)
+            if len(payouts) >= total_quantity:
+                merged["scratch_payouts"] = list(payouts[:total_quantity])
+                merged["scratch_payout"] = int(merged["scratch_payouts"][0]) if merged["scratch_payouts"] else 0
+            return _merge_stack_dirty_metadata(
+                merged,
+                existing_metadata=existing_metadata,
+                incoming_metadata=incoming_metadata,
+            )
         source = existing_metadata if existing_metadata is not None else incoming_metadata
         merged = prepare_item_stack_metadata(item_id, metadata=source, quantity=total_quantity, item_catalog=item_catalog)
         return _merge_stack_dirty_metadata(

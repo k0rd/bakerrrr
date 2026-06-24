@@ -86,6 +86,7 @@ from game.items import (
     prepare_item_stack_metadata,
 )
 from game.hunting_runtime import hunting_carcasses_at
+from game.flora_runtime import flora_records_in_rect, flora_render_data
 from game.item_semantics import (
     appraise_item_for_actor,
     item_display_name_for_actor,
@@ -2449,6 +2450,40 @@ class RenderSystem(System):
                                 layer="terrain",
                                 priority=-850,
                             )
+
+            for flora in flora_records_in_rect(
+                self.sim,
+                camera_x,
+                camera_y,
+                camera_x + map_w - 1,
+                camera_y + map_h - 1,
+                z=active_z,
+            ):
+                wx = int(flora.get("x", -999999))
+                wy = int(flora.get("y", -999999))
+                wz = int(flora.get("z", 0))
+                if wz != active_z:
+                    continue
+                if self.sim.detail_for_xy(wx, wy) == "unloaded":
+                    continue
+                if not _is_visible(wx, wy, active_z):
+                    continue
+                screen_x = wx - camera_x
+                screen_y = wy - camera_y
+                if not (0 <= screen_x < map_w and 0 <= screen_y < map_h):
+                    continue
+                data = flora_render_data(flora)
+                appearance = self.sim.appearance.snapshot(
+                    data["glyph"],
+                    color=data["color"],
+                    semantic_id=data["semantic_id"],
+                    preferred_categories=("flora",),
+                    layer=data["layer"],
+                    priority=data["priority"],
+                    effects=data.get("effects", ()),
+                )
+                attrs = _ambient_attr(wx, wy, active_z)
+                self._draw_appearance(screen_x, screen_y, appearance, attrs=attrs)
 
             active_quest_target = active_final_operation_target_property_id(self.sim)
 

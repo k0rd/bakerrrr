@@ -50,7 +50,7 @@ from game.property_access import STOREFRONT_ARCHETYPE_HINTS, property_is_open, p
 from game.property_runtime import property_is_vehicle, vehicle_fuel_values
 from game.skills import seed_skill_profile
 from game.system_support.npc_behavior_runtime import behavior_profile_for_spawn
-from game.vehicle_motion import local_route_accessible_at, sync_vehicle_property_position, vehicle_top_speed
+from game.vehicle_motion import local_route_accessible_at, vehicle_top_speed
 from game.weapons import roll_weapon_instance
 
 
@@ -72,6 +72,7 @@ MEDICAL_ARCHETYPES = {
     "field_hospital",
     "tide_station",
     "herbalist_camp",
+    "herbalist_shop",
 }
 SECURITY_ARCHETYPES = {
     "checkpoint",
@@ -3257,99 +3258,14 @@ def _commute_vehicle_candidates(sim, property_records):
 
 
 def _seed_npc_commute_drivers(sim, chunk, property_records, rng, spawned):
-    cap = int(max(0, NPC_COMMUTE_DRIVER_CAP_PER_CHUNK))
-    if cap <= 0:
-        return []
-    drivers = _steady_commute_driver_candidates(sim, spawned)
-    vehicles = _commute_vehicle_candidates(sim, property_records)
-    if not drivers or not vehicles:
-        return []
+    """Deprecated compatibility shim.
 
-    rng.shuffle(drivers)
-    rng.shuffle(vehicles)
-    assigned = []
-    used_vehicle_ids = set()
-    positions = sim.ecs.get(Position)
-    ais = sim.ecs.get(AI)
-    vehicle_states = sim.ecs.get(VehicleState)
-    portfolios = sim.ecs.get(PropertyPortfolio)
-    wills = sim.ecs.get(NPCWill)
-    throttles = sim.ecs.get(MovementThrottle)
-
-    for driver_eid in drivers:
-        if len(assigned) >= cap:
-            break
-        pos = positions.get(driver_eid)
-        ai = ais.get(driver_eid)
-        if pos is None or ai is None:
-            continue
-        chosen = None
-        start = None
-        target = None
-        for vehicle_prop in vehicles:
-            vehicle_id = str(vehicle_prop.get("id", "") or "").strip()
-            if not vehicle_id or vehicle_id in used_vehicle_ids:
-                continue
-            route_start = _nearby_vehicle_route_start(sim, vehicle_prop, rng, driver_eid=driver_eid)
-            if route_start is None:
-                continue
-            route_target = _route_target_from_start(sim, chunk, route_start, vehicle_prop, rng)
-            if route_target is None:
-                continue
-            chosen = vehicle_prop
-            start = route_start
-            target = route_target
-            break
-        if chosen is None or start is None or target is None:
-            continue
-
-        vehicle_id = str(chosen.get("id", "") or "").strip()
-        used_vehicle_ids.add(vehicle_id)
-        old_x, old_y, old_z = int(pos.x), int(pos.y), int(pos.z)
-        start_x, start_y, start_z = int(start[0]), int(start[1]), int(start[2])
-        if (old_x, old_y, old_z) != (start_x, start_y, start_z):
-            sim.tilemap.move_entity(driver_eid, old_x, old_y, start_x, start_y, old_z, start_z)
-            pos.x, pos.y, pos.z = start_x, start_y, start_z
-
-        chosen["owner_eid"] = int(driver_eid)
-        chosen["owner_tag"] = "npc"
-        sim.property_registry_dirty = True
-        metadata = _property_metadata(chosen)
-        metadata["vehicle_owner_tag"] = "npc"
-        metadata["npc_commute_driver_eid"] = int(driver_eid)
-        metadata["npc_commute_vehicle"] = True
-        sync_vehicle_property_position(sim, chosen, start_x, start_y, start_z)
-
-        state = vehicle_states.get(driver_eid)
-        if state is None:
-            state = VehicleState()
-            sim.ecs.add(driver_eid, state)
-        state.set_active_vehicle(vehicle_id, tick=getattr(sim, "tick", 0))
-        state.set_in_vehicle(True, tick=getattr(sim, "tick", 0))
-        dx = 1 if int(target[0]) > start_x else -1 if int(target[0]) < start_x else 0
-        dy = 1 if int(target[1]) > start_y else -1 if int(target[1]) < start_y else 0
-        state.set_heading(dx, dy, tick=getattr(sim, "tick", 0))
-
-        portfolio = portfolios.get(driver_eid)
-        if portfolio is not None:
-            portfolio.owned_property_ids.add(vehicle_id)
-
-        ai.state = "patrolling"
-        ai.target = (int(target[0]), int(target[1]), int(target[2]))
-        ai.target_eid = None
-        will = wills.get(driver_eid)
-        if will is not None:
-            will.intent = "patrolling"
-            will.score = max(float(getattr(will, "score", 0.0) or 0.0), 24.0)
-            will.target = ai.target
-            will.target_eid = None
-            will.last_tick = int(getattr(sim, "tick", 0) or 0)
-        throttle = throttles.get(driver_eid)
-        if throttle is not None:
-            throttle.next_move_tick = min(int(getattr(throttle, "next_move_tick", 0) or 0), int(getattr(sim, "tick", 0) or 0))
-
-        assigned.append(driver_eid)
-    return assigned
+    NPCs now enter vehicles only through live commute pathfinding. Chunk
+    population should not spawn actors already seated in cars, because that can
+    make a vehicle look like a home, workplace, or hangout instead of transit.
+    """
+    del sim, chunk, property_records, rng, spawned
+    return []
 
 
 UNDERGROUND_TRANSIENT_ENCOUNTER_ROWS = (

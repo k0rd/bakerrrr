@@ -1061,6 +1061,89 @@ class PygameView:
             self.pygame.draw.circle(overlay, leaf, (px, py), r)
         self.surface.blit(overlay, (cell_x, cell_y))
 
+    def _draw_flora_overlay(self, x, y, color=None, attrs=0, *, kind="flower"):
+        frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.08)
+        cell_x = int(x) * self.cell_px
+        cell_y = int(y) * self.cell_px
+        overlay = self.pygame.Surface((self.cell_px, self.cell_px), self.pygame.SRCALPHA)
+        px = self.cell_px
+        stem = (70, 148, 86, 172)
+        soft = (
+            min(255, int(frame[0] * 1.12)),
+            min(255, int(frame[1] * 1.12)),
+            min(255, int(frame[2] * 1.12)),
+            192,
+        )
+        deep = (
+            max(0, int(frame[0] * 0.58)),
+            max(0, int(frame[1] * 0.64)),
+            max(0, int(frame[2] * 0.58)),
+            116,
+        )
+        kind = str(kind or "flower").strip().lower()
+        if kind in {"flower", "flower_cluster"}:
+            stem_w = max(1, px // 18)
+            centers = (
+                (px // 2, max(3, px // 3)),
+                (max(3, px // 3), max(4, px // 2)),
+                (px - max(4, px // 3), max(4, px // 2)),
+            ) if kind == "flower_cluster" else ((px // 2, max(3, px // 3)),)
+            self.pygame.draw.line(overlay, stem, (px // 2, px - 2), (px // 2, max(3, px // 3)), stem_w)
+            for cx, cy in centers:
+                r = max(2, px // 9)
+                petal_r = max(1, px // 16)
+                for dx, dy in ((0, -r), (r, 0), (0, r), (-r, 0)):
+                    self.pygame.draw.circle(overlay, (frame[0], frame[1], frame[2], 186), (cx + dx, cy + dy), petal_r)
+                self.pygame.draw.circle(overlay, soft, (cx, cy), max(1, px // 18))
+            if kind == "flower_cluster":
+                self.pygame.draw.line(overlay, stem, (px // 2, px - 2), (max(3, px // 3), max(4, px // 2)), stem_w)
+                self.pygame.draw.line(overlay, stem, (px // 2, px - 2), (px - max(4, px // 3), max(4, px // 2)), stem_w)
+        elif kind in {"moss", "lichen"}:
+            base_h = max(3, px // 4)
+            self.pygame.draw.ellipse(overlay, (frame[0], frame[1], frame[2], 100), (2, px - base_h - 1, px - 4, base_h + 1))
+            dots = (
+                (px // 4, px - max(4, px // 5), max(1, px // 15)),
+                (px // 2, px - max(5, px // 4), max(1, px // 13)),
+                (px - px // 4, px - max(4, px // 5), max(1, px // 16)),
+                (px // 3, px - max(7, px // 3), max(1, px // 18)),
+            )
+            for cx, cy, r in dots:
+                self.pygame.draw.circle(overlay, (frame[0], frame[1], frame[2], 158), (cx, cy), r)
+            self.pygame.draw.arc(overlay, (soft[0], soft[1], soft[2], 98), (3, px // 3, px - 6, px // 2), 2.8, 6.0, max(1, px // 22))
+        elif kind == "vine":
+            width = max(1, px // 18)
+            points = (
+                (max(2, px // 7), px - 2),
+                (px // 3, px - max(6, px // 3)),
+                (px - max(5, px // 3), px // 2),
+                (px - max(3, px // 6), max(3, px // 5)),
+            )
+            self.pygame.draw.lines(overlay, (frame[0], frame[1], frame[2], 180), False, points, width)
+            leaf_r = max(1, px // 15)
+            for cx, cy, side in ((px // 3, px - max(6, px // 3), -1), (px - max(5, px // 3), px // 2, 1)):
+                leaf_rect = self.pygame.Rect(cx + side * leaf_r, cy - leaf_r, leaf_r * 2, leaf_r + max(1, px // 18))
+                self.pygame.draw.ellipse(overlay, soft, leaf_rect)
+        elif kind in {"grass", "reed"}:
+            stalk_w = max(1, px // 18)
+            base_y = px - 2
+            specs = (
+                (px // 4, max(3, px // 3)),
+                (px // 2, max(2, px // 5)),
+                (px - px // 4, max(4, px // 3)),
+            )
+            for cx, top_y in specs:
+                lean = max(1, px // 12)
+                self.pygame.draw.line(overlay, (frame[0], frame[1], frame[2], 172), (cx, base_y), (cx + lean, top_y), stalk_w)
+                if kind == "reed":
+                    self.pygame.draw.ellipse(overlay, soft, (cx + lean - max(1, px // 20), top_y - max(2, px // 9), max(2, px // 10), max(4, px // 5)))
+        else:
+            mound = self.pygame.Rect(max(2, px // 7), px // 3, px - max(4, px // 4), px - max(4, px // 3))
+            self.pygame.draw.ellipse(overlay, (frame[0], frame[1], frame[2], 132), mound)
+            self.pygame.draw.arc(overlay, deep, mound.inflate(-2, -2), 3.35, 6.1, max(1, px // 18))
+            for cx, cy in ((px // 3, px // 2), (px // 2, px // 3), (px - px // 3, px // 2)):
+                self.pygame.draw.circle(overlay, soft, (cx, cy), max(1, px // 18))
+        self.surface.blit(overlay, (cell_x, cell_y))
+
     def _draw_rock_overlay(self, x, y, color=None, attrs=0):
         frame = self._styled_overlay_color(color, attrs=attrs, bold_scale=1.06)
         cell_x = int(x) * self.cell_px
@@ -4010,6 +4093,10 @@ class PygameView:
         if semantic_key == "terrain_block" or (glyph == "#" and color_key == "terrain_block"):
             self._draw_block_overlay(x, y, color=color, attrs=attrs)
             return "terrain_block"
+        if semantic_key.startswith("flora_") or color_key.startswith("flora_"):
+            flora_kind = semantic_key.removeprefix("flora_") if semantic_key.startswith("flora_") else color_key.removeprefix("flora_")
+            self._draw_flora_overlay(x, y, color=color, attrs=attrs, kind=flora_kind or "flower")
+            return semantic_key or color_key
         if semantic_key == "terrain_brush" or (glyph == "," and color_key == "terrain_brush"):
             self._draw_brush_overlay(x, y, color=color, attrs=attrs)
             return "terrain_brush"

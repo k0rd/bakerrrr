@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 
 from game.items import (
+    item_metadata_has_scratch_roll,
+    item_metadata_with_creation_seed,
     item_inventory_slot_cost,
     merge_item_stack_metadata,
     prepare_item_stack_metadata,
@@ -2946,6 +2948,16 @@ class Inventory:
             return False, None
 
         created_instance_id = None
+        reserved_instance_id = None
+        if not item_metadata_has_scratch_roll(item_id, metadata):
+            if instance_id:
+                scratch_seed = instance_id
+            elif instance_factory:
+                reserved_instance_id = instance_factory()
+                scratch_seed = reserved_instance_id
+            else:
+                scratch_seed = f"inventory:{item_id}:{len(self.items)}:{quantity}:{stack_max}"
+            metadata = item_metadata_with_creation_seed(item_id, metadata, scratch_seed)
         remaining_metadata = prepare_item_stack_metadata(item_id, metadata=metadata, quantity=quantity)
         remaining_quantity = int(quantity)
 
@@ -2999,6 +3011,8 @@ class Inventory:
                 return False, created_instance_id
             if instance_id and created_instance_id is None:
                 iid = instance_id
+            elif reserved_instance_id and created_instance_id is None:
+                iid = reserved_instance_id
             elif instance_factory:
                 iid = instance_factory()
             else:
