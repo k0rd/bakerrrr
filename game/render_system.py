@@ -1933,6 +1933,20 @@ class RenderSystem(System):
                 return 0
             return ambient_dim_attr
 
+        def _actor_ambient_attr(x, y, z):
+            if not ambient_dim_attr:
+                return 0
+            sample = _ambient_sample(x, y, z)
+            try:
+                ambient = float(sample.get("ambient", 1.0))
+            except (TypeError, ValueError):
+                ambient = 1.0
+            # Pygame/curses A_DIM is intentionally blunt. Keep moderate daylight
+            # interiors readable on actors while terrain still shows room shade.
+            if ambient >= 0.55:
+                return 0
+            return ambient_dim_attr
+
         if zoom_mode == "overworld":
             if player_pos:
                 player_cx, player_cy = self.sim.chunk_coords(player_pos.x, player_pos.y)
@@ -2635,7 +2649,7 @@ class RenderSystem(System):
                     appearance = _vehicle_appearance_with_heading(appearance, occupant_vehicle_state)
                 else:
                     appearance = _entity_render_style(self.sim, eid, player_eid=self.player_eid)
-                attrs = _ambient_attr(_pos.x, _pos.y, _pos.z)
+                attrs = _actor_ambient_attr(_pos.x, _pos.y, _pos.z)
                 if _entity_should_blink_in_combat(self.sim, eid, player_eid=self.player_eid):
                     appearance = _appearance_with_effect(appearance, "blink")
                 elif _entity_should_mark_ambient_combat(self.sim, eid, player_eid=self.player_eid):
