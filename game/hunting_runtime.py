@@ -242,7 +242,10 @@ def nearest_hunting_carcass(sim, x, y, z=0, *, radius=1, preferred_dir=None, exa
             continue
         if target is not None and (rx, ry, rz) != target:
             continue
-        dist = _manhattan(int(x), int(y), rx, ry)
+        if target is not None:
+            dist = max(abs(int(x) - rx), abs(int(y) - ry))
+        else:
+            dist = _manhattan(int(x), int(y), rx, ry)
         if dist > int(radius):
             continue
         candidates.append((dist, str(record.get("carcass_id", "")), record))

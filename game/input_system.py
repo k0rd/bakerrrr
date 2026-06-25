@@ -78,7 +78,20 @@ from game.character_sheet import (
     build_character_sheet_pages as _build_character_sheet_pages,
 )
 import game.report_debug_ui as _report_debug_ui
+from game.action_bindings import (
+    ACTION_MENU_KEY,
+    ACTION_SPECS_BY_ID,
+    action_available,
+    action_binding_label,
+    action_for_key,
+    key_physical_input,
+    menu_action_specs,
+    reset_action_binding,
+    sanitize_control_bindings,
+    set_action_binding,
+)
 from game.casino_ui_runtime import ensure_casino_ui_state
+from game.player_config import load_player_config, save_player_config
 from game.report_runtime import build_progress_report as _build_progress_report
 from game.release_runtime import debug_disabled_hint, debug_mode_enabled
 from game.run_objectives import reveal_run_objective
@@ -236,6 +249,9 @@ class InputSystem(System):
         self.player_eid = player_eid
         self.runs_while_paused = True
         self.catalog = ITEM_CATALOG
+        self.player_config_path = getattr(self.sim, "player_config_path", None)
+        self.player_config = load_player_config(config_path=self.player_config_path)
+        self.control_bindings = sanitize_control_bindings(self.player_config.get("control_bindings"))
 
         self.movement_keys = {
             KEY_UP: (0, -1),
@@ -406,6 +422,18 @@ class InputSystem(System):
             self.sim.local_drive_ui = {
                 "active": False,
                 "last_step_at": 0.0,
+            }
+        if not hasattr(self.sim, "action_menu_ui"):
+            self.sim.action_menu_ui = {
+                "open": False,
+                "selected_index": 0,
+                "scroll": 0,
+                "category": "all",
+                "mode": "action",
+                "pending_bind_action_id": "",
+                "last_anchor_dx": 0,
+                "last_anchor_dy": 1,
+                "feedback": "",
             }
 
         self.sim.events.subscribe("move_blocked", self.on_move_blocked)
@@ -678,6 +706,179 @@ class InputSystem(System):
             state.setdefault("active", False)
             state.setdefault("last_step_at", 0.0)
         return state
+
+    def _action_menu_state(self):
+        state = getattr(self.sim, "action_menu_ui", None)
+        if not isinstance(state, dict):
+            state = {}
+            self.sim.action_menu_ui = state
+        state.setdefault("open", False)
+        state.setdefault("selected_index", 0)
+        state.setdefault("scroll", 0)
+        state.setdefault("category", "all")
+        state.setdefault("mode", "action")
+        state.setdefault("pending_bind_action_id", "")
+        state.setdefault("last_anchor_dx", 0)
+        state.setdefault("last_anchor_dy", 1)
+        state.setdefault("feedback", "")
+        return state
+
+    def _reload_control_bindings(self):
+        self.player_config = load_player_config(config_path=self.player_config_path)
+        self.control_bindings = sanitize_control_bindings(self.player_config.get("control_bindings"))
+        return self.control_bindings
+
+    def _save_control_bindings(self, bindings):
+        bindings = sanitize_control_bindings(bindings)
+        self.control_bindings = bindings
+        config = load_player_config(config_path=self.player_config_path)
+        config["control_bindings"] = bindings
+        self.player_config = config
+        save_player_config(config, config_path=self.player_config_path)
+        return bindings
+
+    def _action_context(self, zoom_mode=None):
+        mode = str(zoom_mode if zoom_mode is not None else getattr(self.sim, "zoom_mode", "city")).strip().lower()
+        return "overworld" if mode == "overworld" else "local"
+
+    def _action_menu_rows(self, zoom_mode=None):
+        context = self._action_context(zoom_mode)
+        player_in_vehicle = self._player_in_vehicle()
+        aim_lock_active = bool(self._aim_lock_state().get("active"))
+        rows = []
+        for spec in menu_action_specs(context=context):
+            available, reason = action_available(
+                spec.id,
+                context=context,
+                player_in_vehicle=player_in_vehicle,
+                aim_lock_active=aim_lock_active,
+            )
+            rows.append({
+                "id": spec.id,
+                "label": spec.label,
+                "category": spec.category,
+                "binding": action_binding_label(self.control_bindings, spec.id),
+                "available": bool(available),
+                "reason": str(reason or ""),
+                "description": spec.description,
+                "rebindable": bool(spec.rebindable and not spec.protected),
+            })
+        return rows
+
+    def _normalize_action_menu_selection(self, zoom_mode=None):
+        state = self._action_menu_state()
+        rows = self._action_menu_rows(zoom_mode)
+        state["rows"] = rows
+        if not rows:
+            state["selected_index"] = 0
+            state["scroll"] = 0
+            return rows
+        state["selected_index"] = max(0, min(int(state.get("selected_index", 0) or 0), len(rows) - 1))
+        return rows
+
+    def _record_action_anchor_delta(self, dx, dy):
+        state = self._action_menu_state()
+        try:
+            dx = int(dx)
+            dy = int(dy)
+        except (TypeError, ValueError):
+            return
+        if dx == 0 and dy == 0:
+            return
+        state["last_anchor_dx"] = max(-1, min(1, dx))
+        state["last_anchor_dy"] = max(-1, min(1, dy))
+
+    def _open_action_menu(self, zoom_mode=None):
+        state = self._action_menu_state()
+        state["open"] = True
+        state["mode"] = "action"
+        state["pending_bind_action_id"] = ""
+        state["feedback"] = ""
+        self._normalize_action_menu_selection(zoom_mode)
+        return True
+
+    def _close_action_menu(self):
+        state = self._action_menu_state()
+        state["open"] = False
+        state["mode"] = "action"
+        state["pending_bind_action_id"] = ""
+        state["feedback"] = ""
+        return True
+
+    def _selected_action_menu_row(self, zoom_mode=None):
+        rows = self._normalize_action_menu_selection(zoom_mode)
+        if not rows:
+            return None
+        state = self._action_menu_state()
+        idx = int(state.get("selected_index", 0) or 0)
+        if 0 <= idx < len(rows):
+            return rows[idx]
+        return None
+
+    def _handle_action_menu_input(self, key, zoom_mode):
+        state = self._action_menu_state()
+        if not bool(state.get("open")):
+            return False
+        mode = str(state.get("mode", "action") or "action").strip().lower()
+        if mode == "bind":
+            if key in (27, ACTION_MENU_KEY):
+                state["mode"] = "action"
+                state["pending_bind_action_id"] = ""
+                state["feedback"] = "Binding canceled."
+                return True
+            action_id = str(state.get("pending_bind_action_id", "") or "").strip()
+            ok, message, bindings = set_action_binding(self.control_bindings, action_id, key_physical_input(key))
+            if ok:
+                self._save_control_bindings(bindings)
+            state["mode"] = "action"
+            state["pending_bind_action_id"] = ""
+            state["feedback"] = message
+            return True
+
+        if key in (27, ACTION_MENU_KEY, ord("q"), ord("Q")):
+            self._close_action_menu()
+            return True
+        if key == ord("?"):
+            self._help_state()["open"] = True
+            return True
+        rows = self._normalize_action_menu_selection(zoom_mode)
+        if key in (KEY_UP, ord("k"), ord("K")):
+            state["selected_index"] = max(0, int(state.get("selected_index", 0) or 0) - 1)
+            return True
+        if key in (KEY_DOWN, ord("j"), ord("J")):
+            state["selected_index"] = min(max(0, len(rows) - 1), int(state.get("selected_index", 0) or 0) + 1)
+            return True
+        if ord("1") <= key <= ord("9"):
+            state["selected_index"] = min(max(0, len(rows) - 1), key - ord("1"))
+            return True
+        row = self._selected_action_menu_row(zoom_mode)
+        if key in (ord("b"), ord("B")):
+            if not row:
+                return True
+            if not row.get("rebindable"):
+                state["feedback"] = "That action is protected."
+                return True
+            state["mode"] = "bind"
+            state["pending_bind_action_id"] = row.get("id", "")
+            state["feedback"] = f"Press a key for {row.get('label', 'action')}."
+            return True
+        if key in (ord("r"), ord("R")):
+            if row:
+                self._save_control_bindings(reset_action_binding(self.control_bindings, row.get("id")))
+                spec = ACTION_SPECS_BY_ID.get(str(row.get("id", "")))
+                state["feedback"] = f"{spec.label if spec else 'Action'} reset."
+            return True
+        if key in ENTER_KEYS or key in (ord("e"), ord("E"), ord(" ")):
+            if not row:
+                return True
+            if not row.get("available", True):
+                reason = str(row.get("reason", "") or "not available").strip()
+                state["feedback"] = f"{row.get('label', 'Action')}: {reason}."
+                return True
+            self._close_action_menu()
+            self._execute_action(row.get("id"), key=key, zoom_mode=zoom_mode)
+            return True
+        return True
 
     def _player_vehicle_state(self):
         return self.sim.ecs.get(VehicleState).get(self.player_eid)
@@ -3084,6 +3285,166 @@ class InputSystem(System):
     def _emit_turn_action(self, action, **data):
         self._emit_player_action(action, consume_turn=True, **data)
 
+    def _execute_action(self, action_id, *, key=None, zoom_mode=None):
+        action_id = str(action_id or "").strip()
+        zoom_mode = str(zoom_mode if zoom_mode is not None else getattr(self.sim, "zoom_mode", "city")).strip().lower() or "city"
+        if not action_id:
+            return False
+
+        if action_id == "help":
+            self._help_state()["open"] = True
+            return True
+        if action_id == "action_menu":
+            return self._open_action_menu(zoom_mode)
+        if action_id == "quit":
+            self.sim.running = False
+            self.sim.emit(Event("quit_requested", eid=self.player_eid))
+            return True
+
+        state = self._inventory_state()
+        trade_state = self._trade_state()
+        if action_id == "inventory" and not state.get("open") and not trade_state.get("open"):
+            self._open_player_inventory_ui()
+            return True
+        if action_id == "character" and not state.get("open") and not trade_state.get("open"):
+            self._refresh_character_ui(reset_scroll=True)
+            return True
+        if action_id == "operations" and not state.get("open") and not trade_state.get("open"):
+            self._refresh_report_ui(reset_scroll=True)
+            return True
+        if action_id == "notebooks" and not state.get("open") and not trade_state.get("open"):
+            self._refresh_known_locations_ui(reset_scroll=True)
+            return True
+        if action_id == "event_log" and not state.get("open") and not trade_state.get("open"):
+            self._refresh_log_ui(reset_scroll=True, focus_end=True)
+            return True
+        if action_id == "debug" and not state.get("open") and not trade_state.get("open"):
+            self._refresh_debug_ui(reset_scroll=True)
+            return True
+
+        if zoom_mode == "overworld":
+            if action_id == "map_enter_local":
+                self._emit_turn_action("zoom_city_enter")
+                return True
+            if action_id == "overworld_scan":
+                self._emit_turn_action("scan")
+                return True
+            if action_id == "marker_add":
+                self._emit_player_action("overworld_marker_add", consume_turn=False)
+                return True
+            if action_id == "marker_list":
+                self._emit_player_action("overworld_marker_list", consume_turn=False)
+                return True
+            if action_id == "marker_nearest":
+                self._emit_player_action("overworld_marker_nearest", consume_turn=False)
+                return True
+            if action_id == "drive_to_marker":
+                marker = self._preferred_overworld_marker()
+                if marker:
+                    self._start_overworld_drive_to_marker(marker)
+                else:
+                    _log_player_feedback(
+                        self.sim,
+                        "No destination marker. Use M or notebook G first.",
+                        kind="movement",
+                        dedupe_window=2,
+                        dedupe_key="autodrive:no_marker",
+                    )
+                return True
+            if action_id == "wait":
+                self._emit_turn_action("wait")
+                return True
+            return False
+
+        if action_id == "map" and not state.get("open") and not trade_state.get("open"):
+            self._emit_player_action("zoom_overworld", consume_turn=False)
+            return True
+        if action_id == "look":
+            self._activate_look_mode(zoom_mode=zoom_mode, purpose="inspect")
+            return True
+        if action_id == "free_aim":
+            if zoom_mode != "overworld":
+                self._activate_firearm_free_aim(zoom_mode)
+            return True
+        if action_id == "fire_locked":
+            if zoom_mode != "overworld" and self._aim_lock_state().get("active"):
+                self._emit_locked_fire()
+            return True
+        if action_id == "tactical_read":
+            self._emit_player_action("tactical_read", consume_turn=self._tactical_read_consumes_turn())
+            return True
+        if action_id == "map_enter_local":
+            if self._player_in_vehicle():
+                self._emit_turn_action("zoom_city_enter")
+            return True
+        if action_id == "vehicle_headlights":
+            self._toggle_vehicle_headlights()
+            return True
+        if action_id == "floor_up":
+            self._emit_turn_action("floor_change", dz=1)
+            return True
+        if action_id == "floor_down":
+            self._emit_turn_action("floor_change", dz=-1)
+            return True
+        if action_id == "wait":
+            self._emit_turn_action("wait")
+            return True
+        if action_id == "sneak":
+            self._emit_turn_action("toggle_sneak")
+            return True
+        if action_id == "lock":
+            self._emit_turn_action("toggle_door_lock")
+            return True
+        if action_id == "talk":
+            if not self._activate_talk_helper(zoom_mode):
+                self._emit_player_action("talk", consume_turn=False)
+            return True
+        if action_id == "service":
+            self._emit_player_action("service_interact", consume_turn=False)
+            return True
+        if action_id == "interact":
+            if not self._activate_adjacent_interact_helper(zoom_mode):
+                self._emit_turn_action("interact")
+            return True
+        if action_id == "side_entry":
+            self._emit_turn_action("side_entry")
+            return True
+        if action_id == "window_entry":
+            self._emit_turn_action("window_entry")
+            return True
+        if action_id == "forced_breach":
+            self._emit_turn_action("forced_breach")
+            return True
+        if action_id == "pickup":
+            self._emit_turn_action("pickup_item")
+            return True
+        if action_id == "drop":
+            self._emit_turn_action("drop_item")
+            return True
+        if action_id == "use_item":
+            self._emit_turn_action("use_item")
+            return True
+        if action_id == "purchase_property":
+            self._emit_turn_action("purchase_property")
+            return True
+        if action_id == "cover_hop":
+            self._emit_turn_action("cover_hop")
+            return True
+        if action_id == "cover":
+            self._emit_turn_action("toggle_cover")
+            return True
+        if action_id in {"aim_target_next", "aim_target_prev"}:
+            step = -1 if action_id == "aim_target_prev" else 1
+            if not _entity_uses_melee_aim(self.sim, self.player_eid) and zoom_mode != "overworld":
+                self._cycle_aim_target_lock(step=step)
+            else:
+                self._activate_look_mode(zoom_mode=zoom_mode, purpose="aim")
+            return True
+        if action_id == "cycle_weapon":
+            self._emit_turn_action("cycle_weapon")
+            return True
+        return False
+
     def _tactical_read_consumes_turn(self):
         overlay = _combat_overlay_state(self.sim)
         return bool(getattr(self.sim, "turn_based", False) or overlay.get("active"))
@@ -4144,6 +4505,7 @@ class InputSystem(System):
         report_state = self._report_state()
         log_state = self._log_state()
         debug_state = self._debug_state()
+        action_menu_state = self._action_menu_state()
         zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
         key = self._next_input_key(
             collapse_burst=self._should_collapse_input_burst(
@@ -4161,6 +4523,8 @@ class InputSystem(System):
         if key is None:
             key = self._held_aim_repeat_key(look_state)
         if key is None:
+            if action_menu_state.get("open"):
+                return
             if self._maybe_continue_auto_walk(
                 zoom_mode=zoom_mode,
                 look_state=look_state,
@@ -4233,6 +4597,10 @@ class InputSystem(System):
                 help_state["scroll"] = int(help_state.get("scroll", 0)) + 6
             return
 
+        if action_menu_state.get("open"):
+            self._handle_action_menu_input(key, zoom_mode)
+            return
+
         if key == ord("?") and not look_state.get("active"):
             help_state["open"] = True
             return
@@ -4269,34 +4637,6 @@ class InputSystem(System):
             self._clear_aim_lock()
             return
 
-        if key in (ord("i"), ord("I")) and not state["open"] and not trade_state.get("open"):
-            self._open_player_inventory_ui()
-            return
-
-        if key == ord("+") and not state["open"] and not trade_state.get("open"):
-            self._refresh_character_ui(reset_scroll=True)
-            return
-
-        if key in (ord("o"), ord("O")) and not state["open"] and not trade_state.get("open"):
-            self._refresh_report_ui(reset_scroll=True)
-            return
-
-        if key in (ord("y"), ord("Y")) and not state["open"] and not trade_state.get("open"):
-            self._refresh_known_locations_ui(reset_scroll=True)
-            return
-
-        if key == ord("X") and not state["open"] and not trade_state.get("open") and zoom_mode != "overworld":
-            self._emit_player_action("zoom_overworld", consume_turn=False)
-            return
-
-        if key == ord("L") and not state["open"] and not trade_state.get("open"):
-            self._refresh_log_ui(reset_scroll=True, focus_end=True)
-            return
-
-        if key == ord("D") and not state["open"] and not trade_state.get("open"):
-            self._refresh_debug_ui(reset_scroll=True)
-            return
-
         if state["open"]:
             if self._handle_inventory_input(key):
                 return
@@ -4309,86 +4649,33 @@ class InputSystem(System):
             if key not in (ord("q"), ord("Q")):
                 return
 
-        if key == ord("x") and zoom_mode != "overworld":
-            self._activate_look_mode(zoom_mode=zoom_mode, purpose="inspect")
-            return
-
-        if key == ord("\t") and zoom_mode != "overworld" and not _entity_uses_melee_aim(self.sim, self.player_eid):
-            self._activate_firearm_free_aim(zoom_mode)
-            return
-
         if key in ENTER_KEYS and zoom_mode != "overworld" and self._aim_lock_state().get("active"):
             self._emit_locked_fire()
-            return
-
-        if key == ord("T") and zoom_mode != "overworld":
-            self._emit_player_action("tactical_read", consume_turn=self._tactical_read_consumes_turn())
             return
 
         if zoom_mode == "overworld":
             if key in self.movement_keys:
                 dx, dy = self.movement_keys[key]
+                self._record_action_anchor_delta(dx, dy)
                 if self._overworld_view_only_for_player():
                     self._activate_overworld_browse_cursor(dx=dx, dy=dy, purpose="inspect")
                     return
                 self._emit_turn_action("overworld_travel", dx=dx, dy=dy)
                 return
 
-            if key == ord("t"):
-                self._emit_turn_action("zoom_city_enter")
+            action_id = action_for_key(self.control_bindings, key, context=self._action_context(zoom_mode))
+            if action_id and self._execute_action(action_id, key=key, zoom_mode=zoom_mode):
                 return
 
-            if key == ord("x"):
-                self._emit_turn_action("scan")
+            if key == ACTION_MENU_KEY:
+                self._open_action_menu(zoom_mode)
                 return
 
-            if key in (ord("m"), ord("M")):
-                self._emit_player_action("overworld_marker_add", consume_turn=False)
-                return
-
-            if key == ord("l"):
-                self._emit_player_action("overworld_marker_list", consume_turn=False)
-                return
-
-            if key in (ord("n"), ord("N")):
-                self._emit_player_action("overworld_marker_nearest", consume_turn=False)
-                return
-
-            if key in (ord("g"), ord("G")):
-                marker = self._preferred_overworld_marker()
-                if marker:
-                    self._start_overworld_drive_to_marker(marker)
-                else:
-                    _log_player_feedback(
-                        self.sim,
-                        "No destination marker. Use M or notebook G first.",
-                        kind="movement",
-                        dedupe_window=2,
-                        dedupe_key="autodrive:no_marker",
-                    )
-                return
-
-            if key in self.wait_keys:
-                self._emit_turn_action("wait")
-                return
-
-            if key == ord("Q"):
-                self.sim.running = False
-                self.sim.emit(Event("quit_requested", eid=self.player_eid))
-                return
-
-            return
-
-        if key == ord("t") and self._player_in_vehicle():
-            self._emit_turn_action("zoom_city_enter")
-            return
-
-        if key == ord("H") and self._player_in_vehicle() and zoom_mode != "overworld":
-            self._toggle_vehicle_headlights()
             return
 
         if key in self.movement_keys:
             dx, dy = self.movement_keys[key]
+            self._record_action_anchor_delta(dx, dy)
             action = "vehicle_move" if self._player_in_vehicle() else "move"
             consume_turn = True
             if action == "move" and bonus_move_available(self.sim, self.player_eid):
@@ -4399,87 +4686,10 @@ class InputSystem(System):
                 self._sync_local_drive_after_vehicle_command(brake_tapped=dy > 0)
             return
 
-        if key in (ord(">"), ord("]")):
-            self._emit_turn_action("floor_change", dz=1)
+        action_id = action_for_key(self.control_bindings, key, context=self._action_context(zoom_mode))
+        if action_id and self._execute_action(action_id, key=key, zoom_mode=zoom_mode):
             return
 
-        if key in (ord("<"), ord("[")):
-            self._emit_turn_action("floor_change", dz=-1)
+        if key == ACTION_MENU_KEY:
+            self._open_action_menu(zoom_mode)
             return
-
-        if key in self.wait_keys:
-            self._emit_turn_action("wait")
-            return
-
-        if key == ord("S"):
-            self._emit_turn_action("toggle_sneak")
-            return
-
-        if key == ord(";"):
-            self._emit_turn_action("toggle_door_lock")
-            return
-
-        if key == ord("/"):
-            if not self._activate_talk_helper(zoom_mode):
-                self._emit_player_action("talk", consume_turn=False)
-            return
-
-        if key == ord("."):
-            self._emit_player_action("service_interact", consume_turn=False)
-            return
-
-        if key == ord("'"):
-            if not self._activate_adjacent_interact_helper(zoom_mode):
-                self._emit_turn_action("interact")
-            return
-
-        if key == ord("J"):
-            self._emit_turn_action("side_entry")
-            return
-
-        if key == ord("W"):
-            self._emit_turn_action("window_entry")
-            return
-
-        if key == ord("K"):
-            self._emit_turn_action("forced_breach")
-            return
-
-        if key == ord(","):
-            self._emit_turn_action("pickup_item")
-            return
-
-        if key in (ord("r"), ord("R")):
-            self._emit_turn_action("drop_item")
-            return
-
-        if key in (ord("u"), ord("U")):
-            self._emit_turn_action("use_item")
-            return
-
-        if key in (ord("p"), ord("P")):
-            self._emit_turn_action("purchase_property")
-            return
-
-        if key == ord("v"):
-            self._emit_turn_action("cover_hop")
-            return
-
-        if key == ord("C"):
-            self._emit_turn_action("toggle_cover")
-            return
-
-        if key in (ord("f"), ord("F")):
-            if not _entity_uses_melee_aim(self.sim, self.player_eid) and zoom_mode != "overworld":
-                self._cycle_aim_target_lock(step=-1 if key == ord("F") else 1)
-            else:
-                self._activate_look_mode(zoom_mode=zoom_mode, purpose="aim")
-            return
-
-        if key == ord("V"):
-            self._emit_turn_action("cycle_weapon")
-            return
-
-        if key == ord("Q"):
-            self.sim.running = False
-            self.sim.emit(Event("quit_requested", eid=self.player_eid))

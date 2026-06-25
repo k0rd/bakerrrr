@@ -20,6 +20,7 @@ from game.organizations import (
 )
 from game.incident_runtime import incident_record
 from game.system_support.awareness_runtime import event_observation_accountability
+from game.vision_scene_runtime import event_is_vision_only
 
 
 LINK_KIND_WEIGHTS = {
@@ -1368,6 +1369,8 @@ class OrganizationPracticeEvolutionSystem(System):
         )
 
     def on_property_trespass(self, event):
+        if event_is_vision_only(event):
+            return
         if not self._accountable(event, offender_eid=event.data.get("offender_eid")):
             return
         prop = self._property_for_data(event.data)
@@ -1376,6 +1379,8 @@ class OrganizationPracticeEvolutionSystem(System):
         self._record_protective_signal(prop, focus_key="watch_coordination", activity_points=1.5, success_points=1.5)
 
     def on_property_tamper(self, event):
+        if event_is_vision_only(event):
+            return
         if not self._accountable(event, offender_eid=event.data.get("offender_eid")):
             return
         prop = self._property_for_data(event.data)
@@ -1385,6 +1390,8 @@ class OrganizationPracticeEvolutionSystem(System):
         self._record_protective_signal(prop, focus_key="equipment_readiness", activity_points=1.0, success_points=1.0)
 
     def on_item_stolen(self, event):
+        if event_is_vision_only(event):
+            return
         if not self._accountable(event, offender_eid=event.data.get("offender_eid")):
             return
         prop = self._property_for_data(event.data)
@@ -1394,6 +1401,8 @@ class OrganizationPracticeEvolutionSystem(System):
         self._record_protective_signal(prop, focus_key="reporting_discipline", activity_points=1.0, success_points=1.0)
 
     def on_action_offense(self, event):
+        if event_is_vision_only(event):
+            return
         context = _text(event.data.get("context")).lower()
         if context not in {"unarmed_assault", "melee_assault", "armed_assault", "explosive_discharge", "homicide"}:
             return
@@ -1407,8 +1416,12 @@ class OrganizationPracticeEvolutionSystem(System):
         self._record_protective_signal(prop, focus_key="reporting_discipline", activity_points=1.0, success_points=1.0)
 
     def on_incident_authority_reported(self, event):
+        if event_is_vision_only(event):
+            return
         incident = incident_record(self.sim, event.data.get("incident_id"))
         if not isinstance(incident, dict):
+            return
+        if event_is_vision_only(incident):
             return
         prop = self._property_for_data(incident)
         if not isinstance(prop, dict):

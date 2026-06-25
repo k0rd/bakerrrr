@@ -87,6 +87,8 @@ from game.items import (
 )
 from game.hunting_runtime import hunting_carcasses_at
 from game.flora_runtime import flora_records_in_rect, flora_render_data
+from game.vision_scene_runtime import vision_scene_render_state
+from game.ui_theme_runtime import draw_modal_frame, resolve_modal_theme, theme_token
 from game.item_semantics import (
     appraise_item_for_actor,
     item_display_name_for_actor,
@@ -1132,6 +1134,131 @@ class RenderSystem(System):
             tick = 0
         return tick, int(self._hud_render_frame)
 
+    def _modal_theme_enabled(self):
+        return getattr(self.view, "pygame", None) is not None
+
+    def _theme_color(self, theme, role, fallback=None):
+        if self._modal_theme_enabled():
+            return theme_token(theme, role, fallback or "default")
+        return fallback
+
+    def _draw_modal_frame(self, panel_x, panel_y, panel_w, panel_h, theme):
+        draw_modal_frame(
+            self.view,
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+            theme=theme,
+            use_theme=self._modal_theme_enabled(),
+        )
+
+    def _draw_action_menu(self, action_menu_ui, *, player_screen_x, player_screen_y, map_w, map_h, modal_theme):
+        if not isinstance(action_menu_ui, dict) or not bool(action_menu_ui.get("open")):
+            return
+        rows = list(action_menu_ui.get("rows", ()) or ())
+        selected_index = max(0, min(int(action_menu_ui.get("selected_index", 0) or 0), len(rows) - 1)) if rows else 0
+        visible_count = max(1, min(8, len(rows) if rows else 1, max(1, int(map_h) - 5)))
+        scroll = max(0, min(int(action_menu_ui.get("scroll", 0) or 0), max(0, len(rows) - visible_count)))
+        if selected_index < scroll:
+            scroll = selected_index
+        elif selected_index >= scroll + visible_count:
+            scroll = selected_index - visible_count + 1
+        action_menu_ui["scroll"] = scroll
+
+        panel_w = max(28, min(42, int(map_w) - 2))
+        panel_h = max(5, min(int(map_h), visible_count + 4))
+        if panel_w >= int(map_w):
+            panel_w = max(8, int(map_w))
+        if panel_h >= int(map_h):
+            panel_h = max(5, int(map_h))
+
+        try:
+            last_dx = int(action_menu_ui.get("last_anchor_dx", 0) or 0)
+            last_dy = int(action_menu_ui.get("last_anchor_dy", 1) or 1)
+        except (TypeError, ValueError):
+            last_dx, last_dy = 0, 1
+        anchor_dx = -max(-1, min(1, last_dx))
+        anchor_dy = -max(-1, min(1, last_dy))
+        if anchor_dx == 0 and anchor_dy == 0:
+            anchor_dy = -1
+
+        def _candidate_for(dx, dy):
+            if abs(dx) >= abs(dy) and dx:
+                x = int(player_screen_x) + (2 if dx > 0 else -panel_w - 2)
+                y = int(player_screen_y) - (panel_h // 2)
+            else:
+                x = int(player_screen_x) - (panel_w // 2)
+                y = int(player_screen_y) + (2 if dy > 0 else -panel_h - 2)
+            return x, y
+
+        def _clamp_panel(x, y):
+            max_x = max(0, int(map_w) - panel_w)
+            max_y = max(0, int(map_h) - panel_h)
+            return max(0, min(int(x), max_x)), max(0, min(int(y), max_y))
+
+        def _covers_player(x, y):
+            return x <= int(player_screen_x) < x + panel_w and y <= int(player_screen_y) < y + panel_h
+
+        candidates = [_candidate_for(anchor_dx, anchor_dy)]
+        candidates.extend([
+            _candidate_for(1, 0),
+            _candidate_for(-1, 0),
+            _candidate_for(0, -1),
+            _candidate_for(0, 1),
+        ])
+        panel_x, panel_y = _clamp_panel(*candidates[0])
+        for raw_x, raw_y in candidates:
+            cand_x, cand_y = _clamp_panel(raw_x, raw_y)
+            if not _covers_player(cand_x, cand_y):
+                panel_x, panel_y = cand_x, cand_y
+                break
+
+        def _clip(text, width):
+            text = str(text or "")
+            if width <= 0:
+                return ""
+            if len(text) <= width:
+                return text
+            if width <= 3:
+                return text[:width]
+            return text[: width - 3] + "..."
+
+        self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
+        body_w = max(1, panel_w - 4)
+        mode = str(action_menu_ui.get("mode", "action") or "action").strip().lower()
+        title = " Bind key " if mode == "bind" else " Actions "
+        self.view.draw_text(panel_x + 2, panel_y, _clip(title, body_w), color=self._theme_color(modal_theme, "title", "objective"))
+        list_y = panel_y + 1
+        visible_rows = rows[scroll: scroll + visible_count]
+        for idx, row in enumerate(visible_rows):
+            absolute = scroll + idx
+            marker = ">" if absolute == selected_index else " "
+            label = str(row.get("label", row.get("id", "action"))).strip() or "action"
+            binding = str(row.get("binding", "unbound") or "unbound").strip() or "unbound"
+            available = bool(row.get("available", True))
+            reason = str(row.get("reason", "") or "").strip()
+            suffix = f" ({reason})" if reason and not available else ""
+            line = f"{marker} [{binding}] {label}{suffix}"
+            color = "player" if absolute == selected_index else ("human_slate" if available else "human")
+            self.view.draw_text(panel_x + 1, list_y + idx, _clip(line, panel_w - 2), color=color)
+        if not rows:
+            self.view.draw_text(panel_x + 2, list_y, _clip("(no actions)", body_w), color="human")
+
+        feedback = str(action_menu_ui.get("feedback", "") or "").strip()
+        footer = feedback
+        if not footer:
+            if mode == "bind":
+                footer = "Press a key | Esc cancel"
+            else:
+                footer = "Enter run | B bind | R reset | Esc close"
+        self.view.draw_text(
+            panel_x + 2,
+            panel_y + panel_h - 2,
+            _clip(footer, body_w),
+            color=self._theme_color(modal_theme, "footer", "human_slate"),
+        )
+
     def _update_hud_flash_state(self, sections):
         tick, frame = self._hud_flash_clock()
         previous = self._hud_previous_section_lines if isinstance(self._hud_previous_section_lines, dict) else {}
@@ -1333,6 +1460,72 @@ class RenderSystem(System):
             priority=getattr(appearance, "priority", None),
         )
 
+    def _draw_vision_scene(self, scene, screen_w, screen_h):
+        scene = scene if isinstance(scene, dict) else {}
+        is_pygame = hasattr(self.view, "pygame")
+        if not is_pygame:
+            title = "Dreaming..."
+            hint = "The room goes blank until you wake."
+            center_y = max(0, int(screen_h) // 2 - 1)
+            self.view.draw_text(max(0, (int(screen_w) - len(title)) // 2), center_y, title, color="objective")
+            self.view.draw_text(max(0, (int(screen_w) - len(hint)) // 2), center_y + 2, hint, color="default")
+            return True
+
+        width = max(1, int(scene.get("width", 1) or 1))
+        height = max(1, int(scene.get("height", 1) or 1))
+        offset_x = max(0, (int(screen_w) - width) // 2)
+        offset_y = max(0, (int(screen_h) - height) // 2)
+        tile_styles = {
+            "floor": (".", "floor_downtown", "floor_downtown"),
+            "grass": ("'", "floor_wilderness", "floor_wilderness"),
+            "shadow": (".", "building_fill_dark", "building_fill_dark"),
+            "wall": ("#", "building_edge_gray_b", "building_edge_gray_b"),
+            "door": ("+", "feature_door", "feature_door"),
+            "window": ("=", "feature_window", "feature_window"),
+            "counter": ("=", "building_roof_storefront", "building_roof_storefront"),
+            "table": ("_", "building_fill_painted", "building_fill_painted"),
+        }
+        tiles = scene.get("tiles")
+        if not isinstance(tiles, list):
+            tiles = []
+        for y in range(height):
+            row = tiles[y] if y < len(tiles) and isinstance(tiles[y], list) else []
+            for x in range(width):
+                tile_kind = str(row[x] if x < len(row) else "floor").strip().lower() or "floor"
+                glyph, color, semantic_id = tile_styles.get(tile_kind, tile_styles["floor"])
+                self._draw(
+                    offset_x + x,
+                    offset_y + y,
+                    glyph,
+                    color=color,
+                    semantic_id=semantic_id,
+                    layer="terrain",
+                    priority=-900,
+                )
+
+        for actor in tuple(scene.get("actors", ()) or ()):
+            if not isinstance(actor, dict):
+                continue
+            try:
+                actor_x = int(actor.get("x", 0) or 0)
+                actor_y = int(actor.get("y", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if not (0 <= actor_x < width and 0 <= actor_y < height):
+                continue
+            self._draw(
+                offset_x + actor_x,
+                offset_y + actor_y,
+                str(actor.get("glyph", "@") or "@")[:1],
+                color=actor.get("color") or "human",
+                semantic_id=actor.get("semantic_id") or "npc_civilian",
+                effects=tuple(actor.get("effects", ()) or ()),
+                overlays=tuple(actor.get("overlays", ()) or ()),
+                layer="actor",
+                priority=30,
+            )
+        return True
+
     def _entity_color(self, eid, render, identity):
         if eid == self.player_eid:
             return "player"
@@ -1401,6 +1594,7 @@ class RenderSystem(System):
         ]
         for line in (
             "Move: arrows, WASD, HJKL, q/e/z/c diagonals, or numpad 1-9. Wait with space or 5.",
+            "Action palette: Tab opens a nearby action menu. Enter runs the selected action, B rebinds it, R resets it, and protected movement/back/help keys stay fixed.",
             "Observe: / talks, ' physically interacts, . uses the service on your tile, ; locks or unlocks a nearby door, x opens the look cursor, T takes a tactical read, and X opens the map.",
             "Vehicles: ' enters a vehicle. Local driving uses forward to accelerate, left/right to turn, back to brake or reverse from rest. H toggles headlights. X opens a view-only map; drive onto an entrance ramp for quick travel. Boats stay local. Press t to get out.",
             "Conversation: talking to nearby people opens a topic menu with follow-up branches, trade, and rumors.",
@@ -1410,7 +1604,7 @@ class RenderSystem(System):
             "Infrastructure: typed markers (l lamp, p pole, h hydrant, u stop, j/t utility, $ ATM, c claim terminal, r access panel).",
             "Local terrain: = road, : trail, , brush, ^ rock, ~ water, _ shore flats.",
             "Remote sites: relay/lookout/survey sites provide intel; camps and huts can offer shelter.",
-            f"Aim/Combat: {aim_open}; firearms use f/F target lock and Tab free-aim. {aim_confirm}, T tactical read, C cover, v cover hop, Shift+S sneak, V cycle weapon.",
+            f"Aim/Combat: {aim_open}; firearms use f/F target lock, with free aim available from Tab actions or any binding you assign. {aim_confirm}, T tactical read, C cover, v cover hop, Shift+S sneak, V cycle weapon.",
             "Items: I inventory, , picks up nearby items, U use/equip/stow/throw, R drop.",
             "Visual classes: vehicles use '&' symbol colors only; properties use letters; items are bright symbols; humans use colored @ symbols and wildlife uses taxonomy letters.",
             "Badges: ! marks threats or restricted places, + marks allies or public services, * marks contacts or owned places, and L marks locked places.",
@@ -1666,6 +1860,7 @@ class RenderSystem(System):
         vehicle_states = self.sim.ecs.get(VehicleState)
         player_pos = positions.get(self.player_eid)
         active_z = player_pos.z if player_pos else 0
+        modal_theme = resolve_modal_theme(self.sim, kind="modal")
         player_vehicle_state = vehicle_states.get(self.player_eid)
         active_vehicle_prop = None
         if player_vehicle_state and player_vehicle_state.active_vehicle_id:
@@ -1742,6 +1937,12 @@ class RenderSystem(System):
             "open": False,
             "scroll": 0,
         })
+        action_menu_ui = getattr(self.sim, "action_menu_ui", {
+            "open": False,
+            "rows": [],
+            "selected_index": 0,
+            "scroll": 0,
+        })
         character_ui = getattr(self.sim, "character_ui", {
             "open": False,
             "title": "Character Sheet",
@@ -1775,6 +1976,7 @@ class RenderSystem(System):
         hud_w = max(1, int(screen_w))
         hud_text_w = _view_text_wrap_width(self.view, hud_w)
         live_timeskip = getattr(self.sim, "live_timeskip", {})
+        vision_scene = vision_scene_render_state(self.sim)
 
         def _aim_lock_target_pos():
             if not isinstance(aim_lock_ui, dict) or not bool(aim_lock_ui.get("active")):
@@ -1792,6 +1994,9 @@ class RenderSystem(System):
             if not _entity_visible_to_player(self.sim, self.player_eid, target_eid):
                 return None, None
             return target_eid, target_pos
+        if vision_scene is not None:
+            self._draw_vision_scene(vision_scene, screen_w, screen_h)
+            return
         if isinstance(live_timeskip, dict) and bool(live_timeskip.get("active")):
             service = str(live_timeskip.get("service", "") or "").strip().lower()
             prop_name = str(live_timeskip.get("property_name", live_timeskip.get("property_id", "site")) or "site").strip() or "site"
@@ -3353,6 +3558,7 @@ class RenderSystem(System):
                 trade_ui,
                 casino_ui,
                 dialog_ui,
+                action_menu_ui,
                 help_ui,
                 character_ui,
                 report_ui,
@@ -3370,6 +3576,29 @@ class RenderSystem(System):
             zoom_mode=zoom_mode,
             panels_open=blocking_panel_open,
         )
+        if (
+            isinstance(action_menu_ui, dict)
+            and bool(action_menu_ui.get("open"))
+            and zoom_mode != "overworld"
+            and player_pos is not None
+        ):
+            self._draw_action_menu(
+                action_menu_ui,
+                player_screen_x=int(player_pos.x) - int(camera_x),
+                player_screen_y=int(player_pos.y) - int(camera_y),
+                map_w=map_w,
+                map_h=map_h,
+                modal_theme=modal_theme,
+            )
+        elif isinstance(action_menu_ui, dict) and bool(action_menu_ui.get("open")):
+            self._draw_action_menu(
+                action_menu_ui,
+                player_screen_x=max(0, map_w // 2),
+                player_screen_y=max(0, map_h // 2),
+                map_w=map_w,
+                map_h=map_h,
+                modal_theme=modal_theme,
+            )
 
         if inventory_ui.get("open"):
             panel_w = _modal_panel_width(screen_w, fraction=0.75, min_width=48)
@@ -3388,16 +3617,7 @@ class RenderSystem(System):
                     return text[:width]
                 return text[: width - 3] + "..."
 
-            # Border
-            if panel_w >= 2 and panel_h >= 2:
-                top = "+" + ("-" * (panel_w - 2)) + "+"
-                mid = "|" + (" " * (panel_w - 2)) + "|"
-                bot = "+" + ("-" * (panel_w - 2)) + "+"
-
-                self.view.draw_text(panel_x, panel_y, top)
-                for row in range(1, panel_h - 1):
-                    self.view.draw_text(panel_x, panel_y + row, mid)
-                self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
+            self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
 
             panel_kind = inventory_panel_kind
             panel_title = str(inventory_ui.get("title", "Inventory")).strip() or "Inventory"
@@ -3435,7 +3655,7 @@ class RenderSystem(System):
                 selected_index = 0
 
             header = f" {panel_title} "
-            self.view.draw_text(panel_x + 2, panel_y, _clip(header, body_w))
+            self.view.draw_text(panel_x + 2, panel_y, _clip(header, body_w), color=self._theme_color(modal_theme, "title"))
 
             if panel_kind == "container":
                 container_count = 0
@@ -3483,7 +3703,7 @@ class RenderSystem(System):
             else:
                 cap = inv.capacity if inv else 0
                 slot_line = f"Slots {inv.slot_count(entries=entries) if inv else 0}/{cap}"
-            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(slot_line, body_w))
+            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(slot_line, body_w), color=self._theme_color(modal_theme, "muted"))
 
             list_y = panel_y + 2
             list_h = max(1, panel_h - 6)
@@ -3622,7 +3842,7 @@ class RenderSystem(System):
             else:
                 hint = "U use/equip/stow  R drop  E inspect  O ops  Y notebooks  L log  D debug  I close"
             hint = release_control_text(hint, self.sim)
-            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, body_w))
+            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
         elif trade_ui.get("open"):
             panel_w = _modal_panel_width(screen_w, fraction=0.75, min_width=52)
             panel_x = max(0, (screen_w - panel_w) // 2)
@@ -3640,15 +3860,7 @@ class RenderSystem(System):
                     return text[:width]
                 return text[: width - 3] + "..."
 
-            if panel_w >= 2 and panel_h >= 2:
-                top = "+" + ("-" * (panel_w - 2)) + "+"
-                mid = "|" + (" " * (panel_w - 2)) + "|"
-                bot = "+" + ("-" * (panel_w - 2)) + "+"
-
-                self.view.draw_text(panel_x, panel_y, top)
-                for row in range(1, panel_h - 1):
-                    self.view.draw_text(panel_x, panel_y + row, mid)
-                self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
+            self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
 
             rows = list(trade_ui.get("rows", []))
             if rows:
@@ -3669,8 +3881,8 @@ class RenderSystem(System):
             store_line = store_name if not panel_bits else f"{store_name} [{' | '.join(panel_bits)}]"
 
             header = f" Trade {mode_label} "
-            self.view.draw_text(panel_x + 2, panel_y, _clip(header, body_w))
-            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(store_line, body_w))
+            self.view.draw_text(panel_x + 2, panel_y, _clip(header, body_w), color=self._theme_color(modal_theme, "title"))
+            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(store_line, body_w), color=self._theme_color(modal_theme, "muted"))
 
             list_y = panel_y + 2
             list_h = max(1, panel_h - 6)
@@ -3786,7 +3998,7 @@ class RenderSystem(System):
             )
             hint = "E trade  B buy  S sell  X inspect  O ops  Y notebooks  L log  D debug  M/Esc close"
             hint = release_control_text(hint, self.sim)
-            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, body_w))
+            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(hint, body_w), color=self._theme_color(modal_theme, "footer"))
         elif casino_ui.get("open"):
             panel_w = min(max(78, map_w - 4), map_w)
             panel_w = max(42, panel_w)
@@ -3897,15 +4109,7 @@ class RenderSystem(System):
                     return text[:width]
                 return text[: width - 3] + "..."
 
-            if panel_w >= 2 and panel_h >= 2:
-                top = "+" + ("-" * (panel_w - 2)) + "+"
-                mid = "|" + (" " * (panel_w - 2)) + "|"
-                bot = "+" + ("-" * (panel_w - 2)) + "+"
-
-                self.view.draw_text(panel_x, panel_y, top)
-                for row in range(1, panel_h - 1):
-                    self.view.draw_text(panel_x, panel_y + row, mid)
-                self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
+            self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
 
             subtitle = str(dialog_ui.get("subtitle", "")).strip()
             header_line = self._dialog_header_line(dialog_ui)
@@ -3919,7 +4123,7 @@ class RenderSystem(System):
             body_w = max(8, _view_text_wrap_width(self.view, panel_w - 4))
             inner_top = panel_y + 2
             if subtitle:
-                self.view.draw_text(panel_x + 2, inner_top, _clip(subtitle, body_w))
+                self.view.draw_text(panel_x + 2, inner_top, _clip(subtitle, body_w), color=self._theme_color(modal_theme, "muted"))
                 inner_top += 1
 
             footer_y = panel_y + panel_h - 2
@@ -3947,7 +4151,7 @@ class RenderSystem(System):
                     body_w,
                 )
 
-            self.view.draw_text(panel_x + 2, divider_y, _clip("-" * body_w, body_w))
+            self.view.draw_text(panel_x + 2, divider_y, _clip("-" * body_w, body_w), color=self._theme_color(modal_theme, "divider"))
 
             if raw_topics:
                 selected_index = int(dialog_ui.get("selected_index", 0))
@@ -4014,7 +4218,7 @@ class RenderSystem(System):
             if hint:
                 footer_bits.append(hint)
             footer = " | ".join(footer_bits) if footer_bits else ""
-            self.view.draw_text(panel_x + 2, footer_y, _clip(footer, body_w))
+            self.view.draw_text(panel_x + 2, footer_y, _clip(footer, body_w), color=self._theme_color(modal_theme, "footer"))
         elif character_ui.get("open"):
             panel_w = _modal_panel_width(map_w, fraction=0.75, min_width=48)
             panel_h = min(max(14, map_h - 1), map_h)
@@ -4022,15 +4226,7 @@ class RenderSystem(System):
             panel_x = max(0, (map_w - panel_w) // 2)
             panel_y = max(0, (map_h - panel_h) // 2)
 
-            if panel_w >= 2 and panel_h >= 2:
-                top = "+" + ("-" * (panel_w - 2)) + "+"
-                mid = "|" + (" " * (panel_w - 2)) + "|"
-                bot = "+" + ("-" * (panel_w - 2)) + "+"
-
-                self.view.draw_text(panel_x, panel_y, top)
-                for row in range(1, panel_h - 1):
-                    self.view.draw_text(panel_x, panel_y + row, mid)
-                self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
+            self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
 
             pages = list(character_ui.get("pages", ()) or [])
             if pages:
@@ -4126,6 +4322,8 @@ class RenderSystem(System):
                 known_person_list_line_fn=_known_person_list_line,
                 known_person_detail_lines_fn=_known_person_detail_lines,
                 sim=self.sim,
+                modal_theme=modal_theme,
+                draw_box_fn=lambda view, x, y, w, h: self._draw_modal_frame(x, y, w, h, modal_theme),
             )
         elif log_ui.get("open"):
             panel_w = _modal_panel_width(map_w, fraction=0.75, min_width=48)
@@ -4143,15 +4341,7 @@ class RenderSystem(System):
                     return text[:width]
                 return text[: width - 3] + "..."
 
-            if panel_w >= 2 and panel_h >= 2:
-                top = "+" + ("-" * (panel_w - 2)) + "+"
-                mid = "|" + (" " * (panel_w - 2)) + "|"
-                bot = "+" + ("-" * (panel_w - 2)) + "+"
-
-                self.view.draw_text(panel_x, panel_y, top)
-                for row in range(1, panel_h - 1):
-                    self.view.draw_text(panel_x, panel_y + row, mid)
-                self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
+            self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
             title = str(log_ui.get("title", "Event Log")).strip() or "Event Log"
             filter_label = _log_filter_label(log_ui.get("view_filter", "all"))
             hud_filter_label = _log_filter_label(log_ui.get("hud_filter", "priority"))
@@ -4161,7 +4351,7 @@ class RenderSystem(System):
             pending_count = len(self._hud_queue)
             title_text = f" {title}: {filter_label} ({entry_count}/{total_count}) | HUD {hud_filter_label} | queue {pending_count} "
             body_cell_w, body_w = _modal_body_widths(self.view, panel_w)
-            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(title_text, body_w))
+            self.view.draw_text(panel_x + 2, panel_y + 1, _clip(title_text, body_w), color=self._theme_color(modal_theme, "title"))
 
             body_h = max(1, panel_h - 4)
             display_lines = []
@@ -4194,7 +4384,7 @@ class RenderSystem(System):
             else:
                 footer = "T cycle filter | H set HUD filter | L close | O ops | Y notebooks | D debug | Up/Down scroll | ? help"
             footer = release_control_text(footer, self.sim)
-            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, body_w))
+            self.view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip(footer, body_w), color=self._theme_color(modal_theme, "footer"))
         elif debug_ui.get("open"):
             _report_debug_ui.draw_debug_modal(
                 self.view,
@@ -4207,6 +4397,8 @@ class RenderSystem(System):
                 clip_display_line_fn=_clip_display_line,
                 wrap_display_lines_fn=_wrap_display_lines,
                 line_text_fn=_line_text,
+                modal_theme=modal_theme,
+                draw_box_fn=lambda view, x, y, w, h: self._draw_modal_frame(x, y, w, h, modal_theme),
             )
 
         if help_ui.get("open"):
@@ -4227,15 +4419,7 @@ class RenderSystem(System):
             scroll = max(0, min(int(help_ui.get("scroll", 0)), max_scroll))
             help_ui["scroll"] = scroll
 
-            if panel_w >= 2 and panel_h >= 2:
-                top = "+" + ("-" * (panel_w - 2)) + "+"
-                mid = "|" + (" " * (panel_w - 2)) + "|"
-                bot = "+" + ("-" * (panel_w - 2)) + "+"
-
-                self.view.draw_text(panel_x, panel_y, top)
-                for row in range(1, panel_h - 1):
-                    self.view.draw_text(panel_x, panel_y + row, mid)
-                self.view.draw_text(panel_x, panel_y + panel_h - 1, bot)
+            self._draw_modal_frame(panel_x, panel_y, panel_w, panel_h, modal_theme)
 
             visible_lines = body_lines[scroll: scroll + body_h]
             for idx, line in enumerate(visible_lines):

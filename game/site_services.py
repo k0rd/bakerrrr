@@ -68,6 +68,7 @@ from game.system_support.opportunity_knowledge_runtime import (
 )
 from game.system_support.player_feedback import _log_player_feedback
 from game.vehicles import vehicle_metadata
+from game.vision_scene_runtime import advance_vision_scene, end_vision_scene, start_vision_scene
 
 
 def _merge_practice_bundle(bundle, *, extra_modifiers=None, extra_note=""):
@@ -278,6 +279,7 @@ class SiteServiceSystem(System):
         return state
 
     def _reset_live_timeskip_state(self):
+        end_vision_scene(self.sim, reason="live_timeskip_reset")
         state = self._live_timeskip_state()
         state.clear()
         state.update(_default_live_timeskip_state())
@@ -322,6 +324,7 @@ class SiteServiceSystem(System):
             state["wake_y"] = int(wake_y)
         if wake_z is not None:
             state["wake_z"] = int(wake_z)
+        end_vision_scene(self.sim, reason=reason_key)
         return True
 
     def _mark_live_timeskip_complete(self):
@@ -333,6 +336,7 @@ class SiteServiceSystem(System):
         state["interrupted"] = False
         state["interruption_reason"] = ""
         state["result_pending"] = True
+        end_vision_scene(self.sim, reason="live_timeskip_complete")
         return True
 
     def _lodging_recovery_pulses(self, *, total_ticks, hp_gain=0, energy_gain=0, safety_gain=0, social_gain=0):
@@ -477,6 +481,17 @@ class SiteServiceSystem(System):
             time_advanced_ticks=int(stay_ticks),
             live_timeskip=True,
         ))
+        if int(stay_ticks) >= self._ticks_per_hour() and str(service or "").strip().lower() in {"rest", "shelter"}:
+            start_vision_scene(
+                self.sim,
+                profile_kind="dream_rest",
+                service=str(service or "").strip().lower(),
+                property_id=prop.get("id"),
+                property_name=prop.get("name", prop.get("id", "site")),
+                started_tick=started_tick,
+                target_end_tick=started_tick + max(1, int(stay_ticks)),
+                player_eid=eid,
+            )
         return state
 
     def _live_timeskip_blocking_dialog_kind(self):
@@ -575,6 +590,7 @@ class SiteServiceSystem(System):
         total_ticks = max(0, int(state.get("total_ticks", 0) or 0))
         elapsed = max(0, min(total_ticks, int(getattr(self.sim, "tick", 0)) - started_tick))
         state["elapsed_ticks"] = max(int(state.get("elapsed_ticks", 0) or 0), elapsed)
+        advance_vision_scene(self.sim, current_tick=int(getattr(self.sim, "tick", 0)))
         if not bool(state.get("active")):
             return False
         dialog_kind = self._live_timeskip_blocking_dialog_kind()

@@ -86,12 +86,12 @@ SITE_GAMEPLAY_PROFILES = {
     },
     "relay_post": {
         "public": True,
-        "site_services": ("intel", "bus_transit", "shuttle_transit", "coach_transit"),
+        "site_services": ("intel", "bus_transit", "shuttle_transit", "coach_transit", "business_management"),
     },
     "roadhouse": {
         "public": True,
         "is_storefront": True,
-        "site_services": ("shuttle_transit", "coach_transit"),
+        "site_services": ("shuttle_transit", "coach_transit", "business_management"),
     },
     "outfitter": {
         "public": True,
@@ -104,7 +104,7 @@ SITE_GAMEPLAY_PROFILES = {
     "truck_stop": {
         "public": True,
         "is_storefront": True,
-        "site_services": ("shelter", "bus_transit", "shuttle_transit", "coach_transit"),
+        "site_services": ("shelter", "bus_transit", "shuttle_transit", "coach_transit", "business_management"),
     },
     "inspection_shed": {
         "public": True,
@@ -136,7 +136,7 @@ SITE_GAMEPLAY_PROFILES = {
     "ranger_hut": {
         "public": True,
         "is_storefront": True,
-        "site_services": ("shelter", "intel", "agency_jobs"),
+        "site_services": ("shelter", "intel", "agency_jobs", "business_management"),
     },
     "ruin_shelter": {
         "site_services": ("shelter",),

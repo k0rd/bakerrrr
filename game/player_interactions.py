@@ -124,6 +124,27 @@ class PlayerInteractionRuntime:
 
         return None
 
+    def _interact_target_direction(self, pos, target=None):
+        target_coords = self._interact_target_coords(pos, target=target)
+        if target_coords is None:
+            return None
+        target_x, target_y, target_z = target_coords
+        if int(target_z) != int(pos.z):
+            return None
+        dx = int(target_x) - int(pos.x)
+        dy = int(target_y) - int(pos.y)
+        if max(abs(dx), abs(dy)) != 1:
+            return None
+        if dx < 0:
+            dx = -1
+        elif dx > 0:
+            dx = 1
+        if dy < 0:
+            dy = -1
+        elif dy > 0:
+            dy = 1
+        return None if (dx, dy) == (0, 0) else (dx, dy)
+
     def nearest_downed_actor(self, eid, pos, *, preferred_dir=None, exact_direction=False, target=None):
         target_coords = self._interact_target_coords(
             pos,
@@ -1224,7 +1245,8 @@ class PlayerInteractionRuntime:
         )
 
     def handle_interact_action(self, eid, pos, *, force_direction=False, target=None):
-        preferred_dir = self.action_system._player_interact_direction(eid, pos)
+        target_dir = self._interact_target_direction(pos, target)
+        preferred_dir = target_dir or self.action_system._player_interact_direction(eid, pos)
         exact_direction = bool(force_direction and preferred_dir is not None)
 
         bounty_actor = self.nearest_bounty_restrainable_actor(

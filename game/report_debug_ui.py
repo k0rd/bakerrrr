@@ -691,13 +691,24 @@ def draw_report_modal(
     known_person_list_line_fn,
     known_person_detail_lines_fn,
     sim=None,
+    modal_theme=None,
+    draw_box_fn=None,
 ):
     panel_x, panel_y, panel_w, panel_h = _centered_scroll_panel_geometry(map_w, map_h)
-    _draw_box(view, panel_x, panel_y, panel_w, panel_h)
+    if callable(draw_box_fn):
+        draw_box_fn(view, panel_x, panel_y, panel_w, panel_h)
+    else:
+        _draw_box(view, panel_x, panel_y, panel_w, panel_h)
 
     title = str(report_ui.get("title", "Operations Report")).strip() or "Operations Report"
     body_cell_w, body_w = _modal_body_widths(view, panel_w)
-    view.draw_text(panel_x + 2, panel_y + 1, _clip_text(f" {title} ", body_w))
+    title_color = None
+    footer_color = None
+    if isinstance(modal_theme, dict) and getattr(view, "pygame", None) is not None:
+        from game.ui_theme_runtime import theme_token
+        title_color = theme_token(modal_theme, "title", "objective")
+        footer_color = theme_token(modal_theme, "footer", "human_slate")
+    view.draw_text(panel_x + 2, panel_y + 1, _clip_text(f" {title} ", body_w), color=title_color)
 
     body_h = max(1, panel_h - 4)
     report_kind = str(report_ui.get("kind", "progress")).strip().lower() or "progress"
@@ -877,7 +888,7 @@ def draw_report_modal(
         footer = f"{footer} | {action_tail}" if footer else f"{action_tail} | Up/Down scroll"
 
     footer = release_control_text(footer, sim)
-    view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip_text(footer, body_w))
+    view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip_text(footer, body_w), color=footer_color)
 
 
 def draw_debug_modal(
@@ -892,13 +903,24 @@ def draw_debug_modal(
     clip_display_line_fn,
     wrap_display_lines_fn,
     line_text_fn,
+    modal_theme=None,
+    draw_box_fn=None,
 ):
     panel_x, panel_y, panel_w, panel_h = _centered_scroll_panel_geometry(map_w, map_h)
-    _draw_box(view, panel_x, panel_y, panel_w, panel_h)
+    if callable(draw_box_fn):
+        draw_box_fn(view, panel_x, panel_y, panel_w, panel_h)
+    else:
+        _draw_box(view, panel_x, panel_y, panel_w, panel_h)
 
     title = str(debug_ui.get("title", "Debug Overlay")).strip() or "Debug Overlay"
     body_cell_w, body_w = _modal_body_widths(view, panel_w)
-    view.draw_text(panel_x + 2, panel_y + 1, _clip_text(f" {title} ", body_w))
+    title_color = None
+    footer_color = None
+    if isinstance(modal_theme, dict) and getattr(view, "pygame", None) is not None:
+        from game.ui_theme_runtime import theme_token
+        title_color = theme_token(modal_theme, "title", "objective")
+        footer_color = theme_token(modal_theme, "footer", "human_slate")
+    view.draw_text(panel_x + 2, panel_y + 1, _clip_text(f" {title} ", body_w), color=title_color)
 
     body_h = max(1, panel_h - 4)
     display_lines = debug_display_lines(
@@ -931,4 +953,4 @@ def draw_debug_modal(
         if footer
         else "D close | O ops | Y notebooks | L log | Up/Down scroll | ? help"
     )
-    view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip_text(footer, body_w))
+    view.draw_text(panel_x + 2, panel_y + panel_h - 2, _clip_text(footer, body_w), color=footer_color)

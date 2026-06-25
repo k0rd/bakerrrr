@@ -153,7 +153,13 @@ class PlayerTravelRuntime:
 
     def _vehicle_for_player_action(self, eid, pos, radius=1, *, preferred_dir=None, exact_direction=False):
         candidates = []
-        for prop in self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=radius):
+        scan_radius = int(radius)
+        if exact_direction and preferred_dir is not None:
+            scan_radius = max(
+                scan_radius,
+                abs(int(preferred_dir[0] or 0)) + abs(int(preferred_dir[1] or 0)),
+            )
+        for prop in self.sim.properties_in_radius(pos.x, pos.y, pos.z, r=scan_radius):
             if not _property_is_vehicle(prop):
                 continue
             profile = _vehicle_profile_from_property(prop)

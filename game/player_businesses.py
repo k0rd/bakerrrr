@@ -15,7 +15,7 @@ import random
 from engine.world import World
 from engine.events import Event
 from engine.systems import System
-from game.components import AI, NPCSocial, NPCRoutine, NPCWill, Occupation, OrganizationAffiliations, PlayerAssets, Position
+from game.components import AI, CreatureIdentity, NPCSocial, NPCRoutine, NPCWill, Occupation, OrganizationAffiliations, PlayerAssets, Position
 from game.dialogue_runtime import _queue_npc_initiated_dialogue
 from game.economy import chunk_economy_profile, pick_career_for_workplace, workplace_archetype_weight
 from game.organizations import (
@@ -167,6 +167,19 @@ BUSINESS_MARKUP_MODE_PROFILES = {
         "revenue_mult": 1.12,
         "note": "leans on high margin and thinner demand tolerance",
     },
+}
+BUSINESS_WAGE_LEVEL_ORDER = ("lean", "fair", "good", "premium")
+BUSINESS_WAGE_LEVEL_LABELS = {
+    "lean": "lean pay",
+    "fair": "fair pay",
+    "good": "good pay",
+    "premium": "premium pay",
+}
+BUSINESS_WAGE_LEVEL_MULTIPLIERS = {
+    "lean": 0.82,
+    "fair": 1.0,
+    "good": 1.18,
+    "premium": 1.42,
 }
 STOCK_IDENTITY_PROFILES = {
     "provisions": {
@@ -469,6 +482,29 @@ def _normalize_business_markup_mode(value):
     if clean not in BUSINESS_MARKUP_MODE_ORDER:
         return "standard"
     return clean
+
+
+def _normalize_business_wage_level(value):
+    clean = _text(value).lower().replace("-", "_").replace(" ", "_")
+    if clean in {"market", "standard", "competitive"}:
+        clean = "fair"
+    elif clean in {"high", "strong"}:
+        clean = "good"
+    elif clean in {"low", "under_market", "under"}:
+        clean = "lean"
+    if clean not in BUSINESS_WAGE_LEVEL_ORDER:
+        return "fair"
+    return clean
+
+
+def _business_wage_level_label(level):
+    clean = _normalize_business_wage_level(level)
+    return BUSINESS_WAGE_LEVEL_LABELS.get(clean, "fair pay")
+
+
+def _business_wage_level_multiplier(level):
+    clean = _normalize_business_wage_level(level)
+    return float(BUSINESS_WAGE_LEVEL_MULTIPLIERS.get(clean, 1.0) or 1.0)
 
 
 def _cycle_choice(current, order):
@@ -934,6 +970,23 @@ def player_business_state(prop, create=False):
             roles[str(clean_eid)] = role
     state["staff_roles"] = roles
 
+    raw_wage_levels = state.get("employee_wage_levels")
+    wage_levels = {}
+    if isinstance(raw_wage_levels, dict):
+        valid_staff_eids = set(roster) | {
+            _int_or(raw_eid, default=0)
+            for raw_eid in roles.keys()
+            if _int_or(raw_eid, default=0) > 0
+        }
+        for raw_eid, raw_level in raw_wage_levels.items():
+            clean_eid = _int_or(raw_eid, default=0)
+            if clean_eid <= 0 or (valid_staff_eids and clean_eid not in valid_staff_eids):
+                continue
+            clean_level = _normalize_business_wage_level(raw_level)
+            if clean_level != "fair":
+                wage_levels[str(clean_eid)] = clean_level
+    state["employee_wage_levels"] = wage_levels
+
     summary = state.get("last_summary")
     state["last_summary"] = dict(summary) if isinstance(summary, dict) else {}
     state["last_scene_nuisance_note"] = str(state.get("last_scene_nuisance_note", "") or "").strip()
@@ -1109,6 +1162,166 @@ def player_business_set_hours_mode(sim, prop, mode):
         "opening_window": opening,
         "hours_text": _hours_text(opening),
     }
+
+
+def player_business_employee_wage_level(prop, actor_eid):
+    state = player_business_state(prop, create=False)
+    if not state:
+        return "fair"
+    actor_eid = _int_or(actor_eid, default=0)
+    if actor_eid <= 0:
+        return "fair"
+    wage_levels = state.get("employee_wage_levels")
+    if not isinstance(wage_levels, dict):
+        return "fair"
+    return _normalize_business_wage_level(wage_levels.get(str(actor_eid)))
+
+
+def player_business_employee_wage_level_label(level):
+    return _business_wage_level_label(level)
+
+
+def player_business_next_employee_wage_level(prop, actor_eid):
+    return _cycle_choice(player_business_employee_wage_level(prop, actor_eid), BUSINESS_WAGE_LEVEL_ORDER)
+
+
+def player_business_set_employee_wage_level(prop, actor_eid, level, *, sim=None):
+    state = player_business_state(prop, create=True)
+    if state is None:
+        return None
+    actor_eid = _int_or(actor_eid, default=0)
+    if actor_eid <= 0:
+        return None
+    if actor_eid not in {
+        _int_or(raw_eid, default=0)
+        for raw_eid in tuple(state.get("staff_roster", ()) or ())
+        if _int_or(raw_eid, default=0) > 0
+    }:
+        return None
+    clean = _normalize_business_wage_level(level)
+    wage_levels = state.setdefault("employee_wage_levels", {})
+    if not isinstance(wage_levels, dict):
+        wage_levels = {}
+        state["employee_wage_levels"] = wage_levels
+    if clean == "fair":
+        wage_levels.pop(str(actor_eid), None)
+    else:
+        wage_levels[str(actor_eid)] = clean
+    _touch_player_business_runtime(prop, sim=sim)
+    return clean
+
+
+def player_business_effective_hourly_wage(sim, actor_eid, prop, *, role="", career="", staff_role=""):
+    actor_eid = _int_or(actor_eid, default=0)
+    staff_role = _normalized_role(staff_role)
+    ais = sim.ecs.get(AI) if sim is not None else {}
+    occupations = sim.ecs.get(Occupation) if sim is not None else {}
+    occupation = occupations.get(actor_eid) if occupations is not None else None
+    ai = ais.get(actor_eid) if ais is not None else None
+    role = _text(role) or _text(getattr(ai, "role", "")) or "worker"
+    career = _text(career) or _text(getattr(occupation, "career", ""))
+    competitive = int(max(0, npc_hourly_wage(
+        sim,
+        actor_eid,
+        role=role,
+        career=career,
+        workplace_prop=prop,
+        staff_role=staff_role,
+    )))
+    level = player_business_employee_wage_level(prop, actor_eid)
+    multiplier = _business_wage_level_multiplier(level)
+    effective = int(round(float(competitive) * float(multiplier)))
+    if competitive > 0:
+        effective = max(1, effective)
+    return {
+        "actor_eid": int(actor_eid),
+        "role": role,
+        "career": career,
+        "staff_role": staff_role,
+        "wage_level": level,
+        "wage_level_label": _business_wage_level_label(level),
+        "competitive_wage": int(competitive),
+        "effective_wage": int(max(0, effective)),
+    }
+
+
+def _player_business_employee_display_name(sim, actor_eid):
+    identities = sim.ecs.get(CreatureIdentity) if sim is not None else {}
+    identity = identities.get(actor_eid) if identities is not None else None
+    if identity is not None:
+        display = getattr(identity, "display_name", None)
+        if callable(display):
+            name = str(display()).strip()
+        else:
+            name = str(getattr(identity, "personal_name", "") or getattr(identity, "common_name", "") or "").strip()
+        if name:
+            return name
+    return f"Employee #{int(actor_eid)}"
+
+
+def player_business_employee_wage_rows(sim, prop):
+    state = player_business_state(prop, create=True)
+    if state is None:
+        return ()
+    _sync_staff_roster(sim, prop, state)
+    roles = dict(state.get("staff_roles", {})) if isinstance(state.get("staff_roles"), dict) else {}
+    occupations = sim.ecs.get(Occupation) if sim is not None else {}
+    rows = []
+    for raw_eid, raw_role in sorted(roles.items(), key=lambda item: _int_or(item[0], default=0)):
+        actor_eid = _int_or(raw_eid, default=0)
+        if actor_eid <= 0 or actor_eid == _int_or(getattr(sim, "player_eid", None), default=-1):
+            continue
+        staff_role = _normalized_role(raw_role)
+        occupation = occupations.get(actor_eid) if occupations is not None else None
+        career = _text(getattr(occupation, "career", ""))
+        wage = player_business_effective_hourly_wage(
+            sim,
+            actor_eid,
+            prop,
+            career=career,
+            staff_role=staff_role,
+        )
+        row = dict(wage)
+        row.update({
+            "name": _player_business_employee_display_name(sim, actor_eid),
+            "career": career or "worker",
+            "staff_role": staff_role,
+            "next_wage_level": player_business_next_employee_wage_level(prop, actor_eid),
+        })
+        rows.append(row)
+    return tuple(rows)
+
+
+def player_business_wage_pressure(prop, rows=None):
+    if rows is None:
+        state = player_business_state(prop, create=False)
+        if not state:
+            return {"kind": "fair", "label": "competitive pay", "reason": ""}
+        levels = [
+            _normalize_business_wage_level(level)
+            for level in dict(state.get("employee_wage_levels", {}) if isinstance(state.get("employee_wage_levels"), dict) else {}).values()
+        ]
+    else:
+        levels = [_normalize_business_wage_level((row or {}).get("wage_level")) for row in tuple(rows or ())]
+    if any(level == "lean" for level in levels):
+        return {
+            "kind": "lean",
+            "label": "under-market pay",
+            "reason": "Lean wages lower payroll now, but morale and churn can get touchier.",
+        }
+    if any(level == "premium" for level in levels):
+        return {
+            "kind": "premium",
+            "label": "premium payroll",
+            "reason": "Premium wages cost more each hour and help the crew read the place as worth staying with.",
+        }
+    if any(level == "good" for level in levels):
+        return {
+            "kind": "good",
+            "label": "above-market pay",
+            "reason": "Good wages lift staff mood without pushing payroll all the way to premium.",
+        }
+    return {"kind": "fair", "label": "competitive pay", "reason": ""}
 
 
 def _business_remodel_rarity_counts():
@@ -2197,6 +2410,17 @@ def _sync_staff_roster(sim, prop, state):
     )
     state["staff_roles"] = roles
     state["staff_roster"] = roster
+    wage_levels = state.get("employee_wage_levels")
+    if isinstance(wage_levels, dict):
+        roster_set = set(roster)
+        state["employee_wage_levels"] = {
+            str(_int_or(raw_eid, default=0)): _normalize_business_wage_level(level)
+            for raw_eid, level in wage_levels.items()
+            if _int_or(raw_eid, default=0) in roster_set
+            and _normalize_business_wage_level(level) != "fair"
+        }
+    else:
+        state["employee_wage_levels"] = {}
 
     manager_count = sum(1 for role in roles.values() if str(role).strip().lower() == "manager")
     staff_count = sum(1 for role in roles.values() if str(role).strip().lower() == "staff")
@@ -2248,6 +2472,8 @@ def player_business_summary(sim, prop):
 
     state["required_staff"] = _required_staff_for(prop)
     staffing = _sync_staff_roster(sim, prop, state)
+    wage_rows = player_business_employee_wage_rows(sim, prop)
+    wage_pressure = player_business_wage_pressure(prop, wage_rows)
     role_fit = player_business_staffing_fit(sim, prop)
     market = _business_health(sim, prop)
     reputation = _business_reputation_market_effect(sim, prop)
@@ -2326,6 +2552,9 @@ def player_business_summary(sim, prop):
         "staff_total": staff_total,
         "manager_count": int(staffing.get("manager_count", 0)),
         "staff_count": int(staffing.get("staff_count", 0)),
+        "wage_pressure_kind": str(wage_pressure.get("kind", "fair")).strip() or "fair",
+        "wage_pressure_label": str(wage_pressure.get("label", "competitive pay")).strip() or "competitive pay",
+        "wage_pressure_reason": str(wage_pressure.get("reason", "")).strip(),
         "role_fit": role_fit,
         "open_now": bool(open_now),
         "opening_window": opening,
@@ -3326,17 +3555,20 @@ class PlayerBusinessSystem(System):
             staff_role = _normalized_role(raw_role)
             occupation = occupations.get(actor_eid)
             ai = ais.get(actor_eid)
-            wage_due = npc_hourly_wage(
+            wage = player_business_effective_hourly_wage(
                 self.sim,
                 actor_eid,
+                prop,
                 role=_text(getattr(ai, "role", "")) or "worker",
                 career=_text(getattr(occupation, "career", "")),
-                workplace_prop=prop,
                 staff_role=staff_role,
             )
+            wage_due = int(wage.get("effective_wage", 0) or 0)
             rows.append({
                 "actor_eid": int(actor_eid),
                 "role": staff_role,
+                "wage_level": str(wage.get("wage_level", "fair")).strip() or "fair",
+                "competitive_wage": int(wage.get("competitive_wage", wage_due) or wage_due),
                 "wage_due": int(max(0, wage_due)),
             })
         return rows
@@ -3623,6 +3855,11 @@ __all__ = [
     "hire_actor_into_player_business",
     "player_business_open_roles",
     "player_business_account_balance",
+    "player_business_effective_hourly_wage",
+    "player_business_employee_wage_level",
+    "player_business_employee_wage_level_label",
+    "player_business_employee_wage_rows",
+    "player_business_next_employee_wage_level",
     "player_business_record_direct_sale",
     "player_business_customer_policy",
     "player_business_customer_policy_label",
@@ -3645,6 +3882,7 @@ __all__ = [
     "player_business_remodel_quote",
     "refresh_player_business_runtime",
     "player_business_set_customer_policy",
+    "player_business_set_employee_wage_level",
     "player_business_set_hours_mode",
     "player_business_set_markup_mode",
     "player_business_operating_quality",
@@ -3655,6 +3893,7 @@ __all__ = [
     "player_business_stock_identity",
     "player_business_summary",
     "player_business_work_practice_awards",
+    "player_business_wage_pressure",
     "player_owned_businesses_for_actor",
     "player_owned_business_for_actor",
     "property_supports_player_business",

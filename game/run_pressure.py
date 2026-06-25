@@ -10,6 +10,7 @@ from game.system_support.intrusion_runtime import (
     _is_window_aperture,
 )
 from game.system_support.offense_runtime import _offense_tier
+from game.vision_scene_runtime import event_is_vision_only
 
 
 MAX_ATTENTION = 100
@@ -500,6 +501,8 @@ class RunPressureSystem(System):
         return True
 
     def on_action_offense(self, event):
+        if event_is_vision_only(event):
+            return
         if event.data.get("offender_eid") != self.player_eid:
             return
         observation = self._event_accountability(event, offender_eid=self.player_eid)
@@ -510,6 +513,8 @@ class RunPressureSystem(System):
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_property_trespass(self, event):
+        if event_is_vision_only(event):
+            return
         if event.data.get("offender_eid") != self.player_eid:
             return
         observation = self._event_accountability(event, offender_eid=self.player_eid)
@@ -520,6 +525,8 @@ class RunPressureSystem(System):
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_property_tamper(self, event):
+        if event_is_vision_only(event):
+            return
         if event.data.get("offender_eid") != self.player_eid:
             return
         observation = self._event_accountability(event, offender_eid=self.player_eid)
@@ -530,8 +537,12 @@ class RunPressureSystem(System):
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_incident_authority_reported(self, event):
+        if event_is_vision_only(event):
+            return
         incident = incident_record(self.sim, event.data.get("incident_id"))
         if not isinstance(incident, dict):
+            return
+        if event_is_vision_only(incident):
             return
         if incident.get("primary_actor_eid") != self.player_eid:
             return
@@ -568,6 +579,8 @@ class RunPressureSystem(System):
             self._mark_incident_accounted(incident.get("id"))
 
     def on_npc_warn_property(self, event):
+        if event_is_vision_only(event):
+            return
         if event.data.get("offender_eid") != self.player_eid:
             return
         self._emit_pressure(
@@ -579,6 +592,8 @@ class RunPressureSystem(System):
         )
 
     def on_npc_defend_property(self, event):
+        if event_is_vision_only(event):
+            return
         if event.data.get("offender_eid") != self.player_eid:
             return
         self._emit_pressure(

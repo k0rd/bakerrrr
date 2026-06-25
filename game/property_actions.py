@@ -644,9 +644,9 @@ class PropertyActionRuntime:
         return None if direction == (0, 0) else direction
 
     def _force_interact_in_last_direction(self, eid, pos, *, target=None):
-        preferred_dir = self.action_system._player_interact_direction(eid, pos)
+        preferred_dir = self._target_direction(pos, target)
         if preferred_dir is None:
-            preferred_dir = self._target_direction(pos, target)
+            preferred_dir = self.action_system._player_interact_direction(eid, pos)
         if preferred_dir is None:
             return False
 
@@ -689,9 +689,9 @@ class PropertyActionRuntime:
         if force_direction and self._force_interact_in_last_direction(eid, pos, target=target):
             return
 
-        preferred_dir = self.action_system._player_interact_direction(eid, pos)
+        preferred_dir = self._target_direction(pos, target)
         if preferred_dir is None:
-            preferred_dir = self._target_direction(pos, target)
+            preferred_dir = self.action_system._player_interact_direction(eid, pos)
         prop = self.active_interact_property_near(pos)
         door_candidate = self._door_candidate_for_player(
             eid,

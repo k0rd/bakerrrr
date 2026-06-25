@@ -34,6 +34,7 @@ TOPIC_ORDER = (
     "service_repair",
     "service_contractor",
     "service_banking",
+    "service_business_desk",
     "service_insurance",
     "service_rest",
     "service_transit",
@@ -234,6 +235,7 @@ TOPIC_DEFS = {
             "service_repair",
             "service_contractor",
             "service_banking",
+            "service_business_desk",
             "service_insurance",
             "service_rest",
             "service_transit",
@@ -280,6 +282,11 @@ TOPIC_DEFS = {
     },
     "service_banking": {
         "label": "Any bank or broker nearby?",
+        "root": False,
+        "unlocks": (),
+    },
+    "service_business_desk": {
+        "label": "Any business desk nearby?",
         "root": False,
         "unlocks": (),
     },
@@ -471,6 +478,7 @@ TOPIC_DEFS = {
             "service_repair",
             "service_contractor",
             "service_banking",
+            "service_business_desk",
             "service_insurance",
             "service_rest",
             "service_transit",
@@ -1223,6 +1231,12 @@ PLAYER_TOPIC_BANKS = {
         "Who handles money around here?",
         "Any banking close by?",
         "If I need a broker, where do I start?",
+    ),
+    "service_business_desk": (
+        "Where can an owner manage a business around here?",
+        "Any business desk close by?",
+        "Who handles business policy around here?",
+        "If I need to check on a shop, where do I go?",
     ),
     "service_insurance": (
         "Any insurer or claims desk nearby?",
@@ -5056,6 +5070,8 @@ def topic_label(topic_id, context=None):
         return "Any contractor nearby?"
     if topic_id == "service_banking":
         return "Any bank or broker nearby?"
+    if topic_id == "service_business_desk":
+        return "Any business desk nearby?"
     if topic_id == "service_insurance":
         return "Any insurer or claims desk nearby?"
     if topic_id == "service_rest":

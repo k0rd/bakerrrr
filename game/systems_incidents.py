@@ -29,6 +29,7 @@ from game.system_support.actor_attention_runtime import record_area_warmth
 from game.system_support.item_provenance_runtime import CLAIM_PUBLIC_FREE, CLAIM_SCENE_SALVAGE, classify_item_claim, stamp_item_provenance
 from game.system_support.offense_runtime import OFFICIAL_REPORTABLE_OFFENSE_CONTEXTS, WILDLIFE_OFFENSE_CONTEXTS
 from game.system_support.social_knowledge_runtime import hydrate_incident_social_knowledge
+from game.vision_scene_runtime import event_is_vision_only
 
 
 CAMERA_OWNER_AI_ROLES = {"guard", "scout", "officer", "police", "deputy", "marshal", "security"}
@@ -847,6 +848,8 @@ class IncidentKnowledgeSystem(System):
             )
 
     def on_action_offense(self, event):
+        if event_is_vision_only(event):
+            return
         offense_score = int(event.data.get("offense_score", 0) or 0)
         context = str(event.data.get("context", "ordinary") or "").strip().lower() or "ordinary"
         action = str(event.data.get("action", "action") or "").strip().lower() or "action"
@@ -879,6 +882,8 @@ class IncidentKnowledgeSystem(System):
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
     def on_npc_killed(self, event):
+        if event_is_vision_only(event):
+            return
         if isinstance(event.data.get("animal_payload"), dict) and event.data.get("animal_payload"):
             return
         offender_eid = event.data.get("offender_eid", event.data.get("source_eid"))
@@ -919,6 +924,8 @@ class IncidentKnowledgeSystem(System):
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
     def on_street_deal_transaction(self, event):
+        if event_is_vision_only(event):
+            return
         buyer_eid = event.data.get("buyer_eid", event.data.get("eid"))
         seller_eid = event.data.get("seller_eid", event.data.get("npc_eid", event.data.get("contact_eid")))
         event.data.setdefault("offender_eid", buyer_eid)
@@ -956,6 +963,8 @@ class IncidentKnowledgeSystem(System):
             )
 
     def on_property_trespass(self, event):
+        if event_is_vision_only(event):
+            return
         severity = int(event.data.get("severity_score", 0) or 0)
         if severity <= 0:
             return
@@ -978,6 +987,8 @@ class IncidentKnowledgeSystem(System):
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
     def on_property_tamper(self, event):
+        if event_is_vision_only(event):
+            return
         severity = int(event.data.get("severity_score", 0) or 0)
         if severity <= 0:
             return
@@ -999,6 +1010,8 @@ class IncidentKnowledgeSystem(System):
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
     def on_item_stolen(self, event):
+        if event_is_vision_only(event):
+            return
         item_name = str(event.data.get("item_name", event.data.get("item_id", "item")) or "").strip() or "item"
         observation = self._event_accountability(event, strict=True)
         incident = self._create_incident(
@@ -1014,6 +1027,8 @@ class IncidentKnowledgeSystem(System):
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
     def on_camera_scrutiny(self, event):
+        if event_is_vision_only(event):
+            return
         offender_eid = event.data.get("eid")
         confidence = _clamp_unit(event.data.get("confidence"), default=0.0)
         prop = self._camera_property(event)
@@ -1037,6 +1052,8 @@ class IncidentKnowledgeSystem(System):
         )
 
     def on_camera_alerted(self, event):
+        if event_is_vision_only(event):
+            return
         severity = int(event.data.get("severity_score", 0) or 0)
         if severity <= 0:
             return
@@ -1070,6 +1087,8 @@ class IncidentKnowledgeSystem(System):
         )
 
     def on_fire_event(self, event):
+        if event_is_vision_only(event):
+            return
         x = event.data.get("x")
         y = event.data.get("y")
         if x is None or y is None:
@@ -1109,6 +1128,8 @@ class IncidentKnowledgeSystem(System):
         self._learn_self_and_witnesses(incident, event, source_kind="witnessed", witnesses=witnesses)
 
     def on_rumor_shared(self, event):
+        if event_is_vision_only(event):
+            return
         incident_id = event.data.get("incident_id")
         from_eid = event.data.get("from_eid")
         to_eid = event.data.get("to_eid")

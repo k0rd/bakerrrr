@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 
 from engine.persistence import SAVE_DIR
+from game.action_bindings import default_control_bindings, sanitize_control_bindings
 
 
-PLAYER_CONFIG_VERSION = 1
+PLAYER_CONFIG_VERSION = 2
 PLAYER_CONFIG_PATH = SAVE_DIR / "player_config.json"
 
 
@@ -15,6 +16,7 @@ def default_player_config():
         "version": PLAYER_CONFIG_VERSION,
         "tutorial_seen": False,
         "tutorial_completed": False,
+        "control_bindings": default_control_bindings(),
     }
 
 
@@ -32,6 +34,7 @@ def load_player_config(config_path=None):
     config["version"] = PLAYER_CONFIG_VERSION
     config["tutorial_seen"] = bool(config.get("tutorial_seen"))
     config["tutorial_completed"] = bool(config.get("tutorial_completed"))
+    config["control_bindings"] = sanitize_control_bindings(config.get("control_bindings"))
     return config
 
 
@@ -43,6 +46,7 @@ def save_player_config(config, config_path=None):
     clean["version"] = PLAYER_CONFIG_VERSION
     clean["tutorial_seen"] = bool(clean.get("tutorial_seen"))
     clean["tutorial_completed"] = bool(clean.get("tutorial_completed"))
+    clean["control_bindings"] = sanitize_control_bindings(clean.get("control_bindings"))
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(clean, indent=2, sort_keys=True), encoding="utf-8")

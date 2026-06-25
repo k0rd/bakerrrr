@@ -24,12 +24,15 @@ from game.public_content import (
     PUBLIC_ROOM_CURIOSITY_FLAVOR_FIELDS,
     PUBLIC_ROOM_CURIOSITY_ROOM_KINDS,
     PUBLIC_STATUS_MODIFIERS,
+    PUBLIC_UI_THEME_FIELDS,
+    PUBLIC_UI_THEME_ROLES,
     PUBLIC_WATER_LEVELS,
     PUBLIC_WORLD_PROFILE_FIELDS,
     public_area_types,
     public_building_archetype_ids,
     public_district_types,
 )
+from game.ui_theme_runtime import available_ui_theme_render_keys, copy_custom_ui_themes
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -38,7 +41,8 @@ CUSTOM_CONTENT_ROOT = REPO_ROOT / "config" / "custom_content"
 ITEM_DOMAIN = "items"
 WORLD_PROFILE_DOMAIN = "world_profiles"
 ROOM_CURIOSITY_FLAVOR_DOMAIN = "room_curiosity_flavors"
-CUSTOM_CONTENT_DOMAINS = (ITEM_DOMAIN, WORLD_PROFILE_DOMAIN, ROOM_CURIOSITY_FLAVOR_DOMAIN)
+UI_THEME_DOMAIN = "ui_themes"
+CUSTOM_CONTENT_DOMAINS = (ITEM_DOMAIN, WORLD_PROFILE_DOMAIN, ROOM_CURIOSITY_FLAVOR_DOMAIN, UI_THEME_DOMAIN)
 IDENTIFIER_RE = re.compile(r"^[a-z0-9_]+$")
 
 CUSTOM_ITEM_ALLOWED_FIELDS = {
@@ -82,6 +86,7 @@ class CustomContentResult:
     item_definitions: dict = field(default_factory=dict)
     world_profiles: dict = field(default_factory=dict)
     room_curiosity_flavors: dict = field(default_factory=dict)
+    ui_themes: dict = field(default_factory=dict)
     notices: list[dict] = field(default_factory=list)
     blocking: bool = False
 
@@ -682,6 +687,150 @@ def _validate_room_curiosity_flavor_domain(files, *, root=CUSTOM_CONTENT_ROOT):
     return flavors, file_records, issues
 
 
+def _validate_context_tags(issues, domain, source, path, value, *, root=CUSTOM_CONTENT_ROOT):
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        _issue(issues, "error", domain, source, path, "value must be a list of lowercase identifiers", root=root)
+        return []
+    result = []
+    for index, raw in enumerate(value):
+        token = _clean_identifier(raw)
+        if not token:
+            _issue(issues, "error", domain, source, f"{path}[{index}]", "value must be a lowercase identifier", root=root)
+            continue
+        result.append(token)
+    return list(dict.fromkeys(result))
+
+
+def _validate_ui_theme_tokens(issues, source, theme_id, tokens, *, root=CUSTOM_CONTENT_ROOT):
+    domain = UI_THEME_DOMAIN
+    path = f"$.{theme_id}.tokens"
+    if tokens is None:
+        return {}
+    if not isinstance(tokens, dict):
+        _issue(issues, "error", domain, source, path, "tokens must be an object", root=root)
+        return {}
+    valid_roles = set(PUBLIC_UI_THEME_ROLES)
+    valid_keys = set(available_ui_theme_render_keys())
+    result = {}
+    for raw_role, raw_key in tokens.items():
+        role = str(raw_role or "").strip().lower()
+        role_path = f"{path}.{role}" if IDENTIFIER_RE.match(role) else f"{path}[{json.dumps(str(raw_role))}]"
+        if role not in valid_roles:
+            _issue(issues, "error", domain, source, role_path, f"token role must be one of {list(PUBLIC_UI_THEME_ROLES)}", root=root)
+            continue
+        render_key = str(raw_key or "").strip().lower()
+        if render_key not in valid_keys:
+            _issue(issues, "error", domain, source, role_path, "token value must be an approved render color key", root=root)
+            continue
+        result[role] = render_key
+    return result
+
+
+def _validate_ui_theme(issues, source, theme_id, theme, *, root=CUSTOM_CONTENT_ROOT):
+    domain = UI_THEME_DOMAIN
+    if not isinstance(theme, dict):
+        _issue(issues, "error", domain, source, f"$.{theme_id}", "UI theme must be an object", root=root)
+        return None
+    for key in sorted(theme):
+        if str(key) not in PUBLIC_UI_THEME_FIELDS:
+            _issue(issues, "error", domain, source, f"$.{theme_id}.{key}", "unknown field for v1 UI themes", root=root)
+    label = str(theme.get("label", theme_id.replace("_", " ").title()) or "").strip()
+    if not label:
+        _issue(issues, "error", domain, source, f"$.{theme_id}.label", "label cannot be empty", root=root)
+        label = theme_id.replace("_", " ").title()
+    raw_weight = theme.get("selection_weight", 1.0)
+    if not _validate_number(issues, domain, source, f"$.{theme_id}.selection_weight", raw_weight, minimum=0.01, root=root):
+        raw_weight = 1.0
+    try:
+        selection_weight = float(raw_weight)
+    except (TypeError, ValueError):
+        selection_weight = 1.0
+    if selection_weight > 4.0:
+        _issue(issues, "error", domain, source, f"$.{theme_id}.selection_weight", "selection_weight must be <= 4.0", root=root)
+        selection_weight = 4.0
+    area_types = _validate_string_list(
+        issues,
+        domain,
+        source,
+        f"$.{theme_id}.area_types",
+        theme.get("area_types", []),
+        public_area_types(),
+        root=root,
+    )
+    district_types = _validate_string_list(
+        issues,
+        domain,
+        source,
+        f"$.{theme_id}.district_types",
+        theme.get("district_types", []),
+        public_district_types(),
+        root=root,
+    )
+    context_tags = _validate_context_tags(
+        issues,
+        domain,
+        source,
+        f"$.{theme_id}.context_tags",
+        theme.get("context_tags", []),
+        root=root,
+    )
+    tokens = _validate_ui_theme_tokens(issues, source, theme_id, theme.get("tokens", {}), root=root)
+    return {
+        "id": theme_id,
+        "label": label,
+        "selection_weight": float(selection_weight),
+        "area_types": area_types,
+        "district_types": district_types,
+        "context_tags": context_tags,
+        "tokens": tokens,
+    }
+
+
+def _validate_ui_theme_domain(files, *, root=CUSTOM_CONTENT_ROOT):
+    issues = []
+    themes = {}
+    file_records = []
+    seen = set()
+    for path in files:
+        raw = _read_json_object(path, issues, UI_THEME_DOMAIN, root=root)
+        if not isinstance(raw, dict):
+            continue
+        payload, meta = split_object_document(raw)
+        file_ids = []
+        if not isinstance(payload, dict):
+            _issue(issues, "error", UI_THEME_DOMAIN, path, "$", "UI theme payload must be an object", root=root)
+            continue
+        for raw_id, raw_theme in payload.items():
+            theme_id = _clean_identifier(raw_id)
+            theme_path = _json_path([raw_id])
+            if not theme_id:
+                _issue(issues, "error", UI_THEME_DOMAIN, path, theme_path, "theme id must be a lowercase identifier", root=root)
+                continue
+            if theme_id in seen:
+                _issue(issues, "error", UI_THEME_DOMAIN, path, theme_path, "theme id is duplicated by another UI theme file", root=root)
+                continue
+            seen.add(theme_id)
+            clean = _validate_ui_theme(issues, path, theme_id, raw_theme, root=root)
+            if clean is not None:
+                themes[theme_id] = clean
+                file_ids.append(theme_id)
+        try:
+            sha = _sha256_file(path)
+        except OSError:
+            sha = ""
+        file_records.append({
+            "path": _manifest_rel_path(path, root=root),
+            "schema_version": _schema_version_from_meta(meta),
+            "sha256": sha,
+            "loaded_ids": sorted(file_ids),
+        })
+    if issues:
+        return {}, [], issues
+    return themes, file_records, issues
+
+
 def _empty_manifest():
     return {
         "schema_version": int(CUSTOM_CONTENT_SCHEMA_VERSION),
@@ -689,6 +838,7 @@ def _empty_manifest():
             ITEM_DOMAIN: {"files": [], "loaded_ids": []},
             WORLD_PROFILE_DOMAIN: {"files": [], "loaded_ids": []},
             ROOM_CURIOSITY_FLAVOR_DOMAIN: {"files": [], "loaded_ids": []},
+            UI_THEME_DOMAIN: {"files": [], "loaded_ids": []},
         },
     }
 
@@ -727,6 +877,7 @@ def load_custom_content_for_new_run(*, root=CUSTOM_CONTENT_ROOT):
     item_definitions = {}
     world_profiles = {}
     room_curiosity_flavors = {}
+    ui_themes = {}
 
     item_files = discovered.get(ITEM_DOMAIN, [])
     if item_files:
@@ -770,11 +921,26 @@ def load_custom_content_for_new_run(*, root=CUSTOM_CONTENT_ROOT):
             room_curiosity_flavors = parsed_flavors
             manifest["domains"][ROOM_CURIOSITY_FLAVOR_DOMAIN] = _domain_manifest(file_records)
 
+    ui_theme_files = discovered.get(UI_THEME_DOMAIN, [])
+    if ui_theme_files:
+        parsed_themes, file_records, issues = _validate_ui_theme_domain(ui_theme_files, root=root)
+        if issues:
+            notices.append(_notice_from_issues(
+                "Custom UI themes were rejected",
+                issues,
+                severity="warning",
+                tail=("No custom UI-theme files were loaded for this run.",),
+            ))
+        else:
+            ui_themes = parsed_themes
+            manifest["domains"][UI_THEME_DOMAIN] = _domain_manifest(file_records)
+
     return CustomContentResult(
         manifest=manifest,
         item_definitions=item_definitions,
         world_profiles=world_profiles,
         room_curiosity_flavors=room_curiosity_flavors,
+        ui_themes=ui_themes,
         notices=notices,
         blocking=False,
     )
@@ -859,6 +1025,7 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
     item_definitions = {}
     world_profiles = {}
     room_curiosity_flavors = {}
+    ui_themes = {}
 
     if int(manifest.get("schema_version", 0) or 0) != CUSTOM_CONTENT_SCHEMA_VERSION:
         blocking_issues.append(CustomContentIssue(
@@ -874,6 +1041,8 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
     profile_files, issues = _validate_required_manifest_files(manifest, WORLD_PROFILE_DOMAIN, root=root)
     blocking_issues.extend(issues)
     room_curiosity_files, issues = _validate_required_manifest_files(manifest, ROOM_CURIOSITY_FLAVOR_DOMAIN, root=root)
+    blocking_issues.extend(issues)
+    ui_theme_files, issues = _validate_required_manifest_files(manifest, UI_THEME_DOMAIN, root=root)
     blocking_issues.extend(issues)
 
     if not blocking_issues and item_files:
@@ -897,6 +1066,13 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
         else:
             room_curiosity_flavors = parsed_flavors
 
+    if not blocking_issues and ui_theme_files:
+        parsed_themes, _file_records, issues = _validate_ui_theme_domain(ui_theme_files, root=root)
+        if issues:
+            blocking_issues.extend(issues)
+        else:
+            ui_themes = parsed_themes
+
     if blocking_issues:
         notices.append(_notice_from_issues(
             "Saved run cannot resume until custom content matches",
@@ -912,6 +1088,7 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
             item_definitions={},
             world_profiles={},
             room_curiosity_flavors={},
+            ui_themes={},
             notices=notices,
             blocking=True,
         )
@@ -925,6 +1102,7 @@ def validate_custom_content_for_resume(saved_manifest, *, root=CUSTOM_CONTENT_RO
         item_definitions=item_definitions,
         world_profiles=world_profiles,
         room_curiosity_flavors=room_curiosity_flavors,
+        ui_themes=ui_themes,
         notices=notices,
         blocking=False,
     )
@@ -940,6 +1118,7 @@ def apply_custom_content(result, sim=None):
         if world is not None and hasattr(world, "set_custom_world_profiles"):
             world.set_custom_world_profiles(result.world_profiles)
         sim.custom_room_curiosity_flavors = copy.deepcopy(result.room_curiosity_flavors)
+        sim.custom_ui_themes = copy_custom_ui_themes(result.ui_themes)
     return result
 
 

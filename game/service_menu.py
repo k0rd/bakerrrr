@@ -17,16 +17,20 @@ from game.player_businesses import (
     player_business_account_balance,
     player_business_customer_policy,
     player_business_customer_policy_label,
+    player_business_employee_wage_level_label,
+    player_business_employee_wage_rows,
     player_business_hours_mode,
     player_business_hours_mode_label,
     player_business_markup_mode,
     player_business_markup_mode_label,
+    player_business_next_employee_wage_level,
     player_business_next_customer_policy,
     player_business_next_hours_mode,
     player_business_next_markup_mode,
     player_business_remodel_options,
     player_business_remodel_quote,
     player_business_set_customer_policy,
+    player_business_set_employee_wage_level,
     player_business_set_hours_mode,
     player_business_set_markup_mode,
     player_business_status_snapshot,
@@ -2013,6 +2017,13 @@ class ServiceMenuSystem(System):
             mix_text = customer_mix or "mixed walk-ins"
             mood_text = staff_mood or "steady crew"
             lines.append(f"Customer mix: {mix_text} | Staff mood: {mood_text}.")
+        wage_pressure_label = str(snapshot.get("wage_pressure_label", "")).strip()
+        wage_pressure_reason = str(snapshot.get("wage_pressure_reason", "")).strip()
+        if wage_pressure_label:
+            wage_line = f"Wages: {wage_pressure_label}"
+            if wage_pressure_reason:
+                wage_line += f" | {wage_pressure_reason}"
+            lines.append(wage_line + ".")
         lines.append(f"Status: {'open' if open_now else 'closed'} | {note}.")
         owner_reason = str(snapshot.get("owner_signal_reason", "")).strip()
         if owner_reason:
@@ -2293,7 +2304,208 @@ class ServiceMenuSystem(System):
                     f"{player_business_markup_mode_label(next_markup_mode)}"
                 ),
             })
+            employee_count = len(tuple(player_business_employee_wage_rows(self.sim, business_prop)))
+            options.append({
+                "id": f"banking_business_employees:{business_id}",
+                "label": f"Business employees [{business_name}]: {employee_count} on roster",
+            })
         return options
+
+    def _owned_business_context_for_property(self, eid, prop):
+        if not isinstance(prop, dict):
+            return None
+        property_id = str(prop.get("id", "") or "").strip()
+        if not property_id:
+            return None
+        for context in self._business_banking_contexts(eid):
+            candidate = context.get("prop") if isinstance(context, dict) else None
+            if isinstance(candidate, dict) and str(candidate.get("id", "") or "").strip() == property_id:
+                return {
+                    "prop": prop,
+                    "summary": player_business_summary(self.sim, prop) or context.get("summary") or {},
+                }
+        return None
+
+    def _business_control_options(self, business_contexts, *, prefix="business_control", include_business_name=True):
+        options = []
+        for business_context in list(business_contexts or ()):
+            if not isinstance(business_context, dict):
+                continue
+            business_prop = business_context.get("prop")
+            summary = business_context.get("summary") or {}
+            business_id = str((business_prop or {}).get("id", "") if isinstance(business_prop, dict) else "").strip()
+            if not business_id:
+                continue
+            business_name = str(summary.get("business_name", (business_prop or {}).get("name", "Business"))).strip() or "Business"
+            bracket = f" [{business_name}]" if include_business_name else ""
+            current_policy = player_business_customer_policy(business_prop)
+            next_policy = player_business_next_customer_policy(business_prop)
+            current_hours_mode = player_business_hours_mode(business_prop)
+            next_hours_mode = player_business_next_hours_mode(business_prop)
+            current_markup_mode = player_business_markup_mode(business_prop)
+            next_markup_mode = player_business_next_markup_mode(business_prop)
+            employee_count = len(tuple(player_business_employee_wage_rows(self.sim, business_prop)))
+            options.extend((
+                {
+                    "id": f"{prefix}_status:{business_id}",
+                    "label": f"Business status{bracket}",
+                },
+                {
+                    "id": f"{prefix}_policy:{business_id}:{next_policy}",
+                    "label": (
+                        f"Policy{bracket}: "
+                        f"{player_business_customer_policy_label(current_policy)} -> "
+                        f"{player_business_customer_policy_label(next_policy)}"
+                    ),
+                },
+                {
+                    "id": f"{prefix}_hours:{business_id}:{next_hours_mode}",
+                    "label": (
+                        f"Hours{bracket}: "
+                        f"{player_business_hours_mode_label(current_hours_mode)} -> "
+                        f"{player_business_hours_mode_label(next_hours_mode)}"
+                    ),
+                },
+                {
+                    "id": f"{prefix}_markup:{business_id}:{next_markup_mode}",
+                    "label": (
+                        f"Markup{bracket}: "
+                        f"{player_business_markup_mode_label(current_markup_mode)} -> "
+                        f"{player_business_markup_mode_label(next_markup_mode)}"
+                    ),
+                },
+                {
+                    "id": f"{prefix}_employees:{business_id}",
+                    "label": f"Employees{bracket}: {employee_count} on roster",
+                },
+            ))
+        return options
+
+    def _business_employee_lines(self, business_prop):
+        rows = tuple(player_business_employee_wage_rows(self.sim, business_prop))
+        if not rows:
+            return ["No rostered employees are attached to this business right now."]
+        lines = []
+        for row in rows:
+            name = str(row.get("name", "Employee")).strip() or "Employee"
+            staff_role = str(row.get("staff_role", "staff")).strip().lower() or "staff"
+            career = str(row.get("career", "worker")).strip().replace("_", " ") or "worker"
+            level_label = str(row.get("wage_level_label", "")).strip() or player_business_employee_wage_level_label(row.get("wage_level"))
+            effective = int(row.get("effective_wage", 0) or 0)
+            competitive = int(row.get("competitive_wage", effective) or effective)
+            lines.append(
+                f"{name}: {staff_role} | {career} | {level_label} {_credit_amount_label(effective)}/hr (market {_credit_amount_label(competitive)}/hr)."
+            )
+        return lines
+
+    def _business_employee_wage_topics(self, business_prop, *, prefix, back_id):
+        topics = [{"id": back_id, "label": "Back"}]
+        business_id = str((business_prop or {}).get("id", "") or "").strip()
+        if not business_id:
+            return topics
+        for row in player_business_employee_wage_rows(self.sim, business_prop):
+            actor_eid = int(row.get("actor_eid", 0) or 0)
+            if actor_eid <= 0:
+                continue
+            next_level = player_business_next_employee_wage_level(business_prop, actor_eid)
+            next_label = player_business_employee_wage_level_label(next_level)
+            name = str(row.get("name", "Employee")).strip() or "Employee"
+            current_label = str(row.get("wage_level_label", "")).strip() or player_business_employee_wage_level_label(row.get("wage_level"))
+            effective = int(row.get("effective_wage", 0) or 0)
+            competitive = int(row.get("competitive_wage", effective) or effective)
+            topics.append({
+                "id": f"{prefix}_wage:{business_id}:{actor_eid}:{next_level}",
+                "label": (
+                    f"{name}: {current_label} {_credit_amount_label(effective)}/hr "
+                    f"(market {_credit_amount_label(competitive)}) -> {next_label}"
+                ),
+            })
+        return topics
+
+    def _open_business_employee_menu(self, provider_prop, business_prop, *, prefix="business_control", return_option_id="business_management"):
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        provider_id = (provider_prop or {}).get("id") if isinstance(provider_prop, dict) else None
+        business_name = str((business_prop or {}).get("metadata", {}).get("business_name", (business_prop or {}).get("name", "Business"))).strip() or "Business"
+        transcript = [f"Employee wages for {business_name}."]
+        transcript.extend(self._business_employee_lines(business_prop))
+        transcript.append("Fair pay is the competitive average. Lean saves payroll; premium costs more and helps staff mood.")
+        topics = self._business_employee_wage_topics(
+            business_prop,
+            prefix=prefix,
+            back_id=return_option_id,
+        )
+        state = self._dialog_ui_state()
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": provider_id,
+            "title": f"Employees: {business_name}",
+            "subtitle": "Wage levels",
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Choose an employee row to cycle wage level. Esc closes the desk.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": "business:employees",
+            "business_employee_back_id": return_option_id,
+            "business_employee_prefix": prefix,
+            "casino_session": None,
+        })
+
+    def _open_business_management_menu(self, prop):
+        self._clear_pending_service_result()
+        self._clear_casino_session()
+        prop_name = str((prop or {}).get("name", (prop or {}).get("id", "Business desk"))).strip() or "Business desk"
+        contexts = self._business_banking_contexts(self.player_eid)
+        if not contexts:
+            self._present_service_result(
+                f"Business Desk: {prop_name}",
+                ["No owned businesses are available for operational controls right now."],
+                property_id=(prop or {}).get("id") if isinstance(prop, dict) else None,
+            )
+            return
+        transcript = [
+            f"Choose an owned business operation at {prop_name}.",
+            "This desk handles policy, hours, markup, status, and employee wages. Account transfers stay at banking services.",
+        ]
+        for context in list(contexts[:3]):
+            summary = context.get("summary") or {}
+            business_name = str(summary.get("business_name", "Business")).strip() or "Business"
+            staff_total = int(summary.get("staff_total", 0) or 0)
+            required_staff = int(summary.get("required_staff", 1) or 1)
+            note = str(summary.get("note", "")).strip() or "steady"
+            wage_label = str(summary.get("wage_pressure_label", "")).strip() or "competitive pay"
+            transcript.append(f"{business_name}: staff {staff_total}/{required_staff} | {note} | {wage_label}.")
+        if len(contexts) > 3:
+            transcript.append(f"... and {len(contexts) - 3} more owned business{'es' if len(contexts) - 3 != 1 else ''}.")
+        topics = [{"id": "service_menu:root", "label": "Back"}]
+        topics.extend(self._business_control_options(contexts, prefix="business_control", include_business_name=True))
+        state = self._dialog_ui_state()
+        self.sim.set_time_paused(True, reason="dialog")
+        state.update({
+            "open": True,
+            "kind": "service_menu",
+            "npc_eid": None,
+            "property_id": (prop or {}).get("id") if isinstance(prop, dict) else None,
+            "title": f"Business Desk: {prop_name}",
+            "subtitle": "Operational controls",
+            "transcript": transcript,
+            "topics": topics,
+            "selected_index": 0,
+            "scroll": 0,
+            "hint": "Choose status, policy, hours, markup, or employees. Esc closes the desk.",
+            "new_topic_ids": [],
+            "close_pending": False,
+            "machine_action": None,
+            "service_menu_mode": "business:management",
+            "casino_session": None,
+        })
 
     def _open_repair_target_menu(self, contractor_prop):
         self._clear_pending_service_result()
@@ -2705,6 +2917,8 @@ class ServiceMenuSystem(System):
 
     def _service_menu_options(self, eid, prop, pos):
         dispatch_ok = self._player_can_call_justice_from_property(eid, prop, pos)
+        owner_business_context = self._owned_business_context_for_property(eid, prop)
+        owner_business_ok = isinstance(owner_business_context, dict)
         access = _evaluate_property_access(
             self.sim,
             eid,
@@ -2713,11 +2927,17 @@ class ServiceMenuSystem(System):
             y=pos.y,
             z=pos.z,
         )
-        if not access.can_use_services and not dispatch_ok:
+        if not access.can_use_services and not dispatch_ok and not owner_business_ok:
             return [], None
 
         options = []
         storefront_service = None
+        if owner_business_ok:
+            options.extend(self._business_control_options(
+                (owner_business_context,),
+                prefix="business_control",
+                include_business_name=False,
+            ))
         if access.can_use_services and _property_is_storefront(prop):
             storefront_service = _storefront_service_profile(self.sim, prop, actor_eid=eid)
             if storefront_service.get("available") and not self._machine_service_profile(prop):
@@ -3411,6 +3631,20 @@ class ServiceMenuSystem(System):
             return "Business hours", ["That business record is no longer available through this terminal."]
         if option_id.startswith("banking_business_markup:"):
             return "Business markup", ["That business record is no longer available through this terminal."]
+        if option_id.startswith("banking_business_employees:") or option_id.startswith("banking_business_wage:"):
+            return "Business employees", ["That employee wage record is no longer available through this terminal."]
+        if option_id == "business_management":
+            return "Business Desk", ["That business desk is no longer available here."]
+        if option_id.startswith("business_control_status:"):
+            return "Business status", ["That business record is no longer available through this desk."]
+        if option_id.startswith("business_control_policy:"):
+            return "Business policy", ["That business record is no longer available through this desk."]
+        if option_id.startswith("business_control_hours:"):
+            return "Business hours", ["That business record is no longer available through this desk."]
+        if option_id.startswith("business_control_markup:"):
+            return "Business markup", ["That business record is no longer available through this desk."]
+        if option_id.startswith("business_control_employees:") or option_id.startswith("business_control_wage:"):
+            return "Business employees", ["That employee wage record is no longer available through this desk."]
         if option_id == "redeem_meal_voucher":
             return "Meal Voucher", ["That meal voucher counter is no longer available here."]
         if option_id == "building_repair" or option_id.startswith("building_repair:target|"):
@@ -3423,6 +3657,123 @@ class ServiceMenuSystem(System):
             if option_id == service or option_id.startswith(f"{service}:"):
                 return _casino_game_title(service), ["That table is no longer open.", "Pick another seat or start a fresh round."]
         return "Service", ["That service listing is no longer available here."]
+
+    def _business_control_prefix_and_action(self, option_id):
+        option_id = str(option_id or "").strip().lower()
+        for prefix in ("business_control", "banking_business"):
+            for action in ("status", "policy", "hours", "markup", "employees", "wage"):
+                marker = f"{prefix}_{action}:"
+                if option_id.startswith(marker):
+                    return prefix, action, option_id[len(marker):]
+        return "", "", ""
+
+    def _business_control_employee_back_id(self, prefix, state):
+        prefix = str(prefix or "").strip().lower()
+        if prefix == "banking_business":
+            return "banking"
+        mode = str((state or {}).get("service_menu_mode", "") or "").strip().lower()
+        if mode == "business:employees":
+            return str((state or {}).get("business_employee_back_id", "") or "business_management").strip() or "business_management"
+        if mode == "business:management":
+            return "business_management"
+        return "service_menu:root"
+
+    def _handle_business_control_option(self, provider_prop, option_id, state):
+        prefix, action, payload = self._business_control_prefix_and_action(option_id)
+        if not prefix or not action:
+            return False
+        provider_id = (provider_prop or {}).get("id") if isinstance(provider_prop, dict) else None
+        parts = str(payload or "").split(":")
+        business_property_id = str(parts[0] if parts else "").strip()
+        if not business_property_id:
+            self._present_service_result("Business", ["That business option is invalid."], property_id=provider_id)
+            return True
+        business_prop = _resolve_property_record(self.sim, business_property_id)
+        if not isinstance(business_prop, dict):
+            title, lines = self._stale_service_option_lines(option_id)
+            self._present_service_result(title, lines, property_id=provider_id)
+            return True
+        business_name = str(business_prop.get("metadata", {}).get("business_name", business_prop.get("name", "Business"))).strip() or "Business"
+
+        if action == "status":
+            lines = self._business_status_lines({"prop": business_prop})
+            self._present_service_result(
+                f"Business status: {business_name}",
+                lines or ["No business status is available right now."],
+                property_id=provider_id,
+            )
+            return True
+
+        if action == "employees":
+            self._open_business_employee_menu(
+                provider_prop,
+                business_prop,
+                prefix=prefix,
+                return_option_id=self._business_control_employee_back_id(prefix, state),
+            )
+            return True
+
+        if action == "policy":
+            next_policy = str(parts[1] if len(parts) >= 2 else "").strip().lower()
+            if not next_policy:
+                self._present_service_result("Business policy", ["That business policy option is invalid."], property_id=provider_id)
+                return True
+            policy = player_business_set_customer_policy(business_prop, next_policy, sim=self.sim)
+            self._present_service_result(
+                f"Business policy: {business_name}",
+                self._business_policy_result_lines(business_prop, policy),
+                property_id=provider_id,
+            )
+            return True
+
+        if action == "hours":
+            next_mode = str(parts[1] if len(parts) >= 2 else "").strip().lower()
+            if not next_mode:
+                self._present_service_result("Business hours", ["That business hours option is invalid."], property_id=provider_id)
+                return True
+            result = player_business_set_hours_mode(self.sim, business_prop, next_mode)
+            self._present_service_result(
+                f"Business hours: {business_name}",
+                self._business_hours_result_lines(business_prop, result),
+                property_id=provider_id,
+            )
+            return True
+
+        if action == "markup":
+            next_mode = str(parts[1] if len(parts) >= 2 else "").strip().lower()
+            if not next_mode:
+                self._present_service_result("Business markup", ["That business markup option is invalid."], property_id=provider_id)
+                return True
+            mode = player_business_set_markup_mode(business_prop, next_mode, sim=self.sim)
+            self._present_service_result(
+                f"Business markup: {business_name}",
+                self._business_markup_result_lines(business_prop, mode),
+                property_id=provider_id,
+            )
+            return True
+
+        if action == "wage":
+            if len(parts) < 3:
+                self._present_service_result("Business wages", ["That wage option is invalid."], property_id=provider_id)
+                return True
+            actor_eid = _int_or_default(parts[1], 0)
+            next_level = str(parts[2] or "").strip().lower()
+            level = player_business_set_employee_wage_level(business_prop, actor_eid, next_level, sim=self.sim)
+            if not level:
+                self._present_service_result("Business wages", ["That employee is no longer on this business roster."], property_id=provider_id)
+                return True
+            self._open_business_employee_menu(
+                provider_prop,
+                business_prop,
+                prefix=prefix,
+                return_option_id=self._business_control_employee_back_id(prefix, state),
+            )
+            transcript = list(self.sim.dialog_ui.get("transcript", ()) or ())
+            transcript.append(f"{business_name} wage level updated to {player_business_employee_wage_level_label(level)}.")
+            self.sim.dialog_ui["transcript"] = transcript
+            return True
+
+        return False
 
     def _site_service_blocked_lines(self, event):
         service = str(event.data.get("service", "")).strip().lower()
@@ -4196,6 +4547,16 @@ class ServiceMenuSystem(System):
                 title, lines = self._bank_blocked_lines(Event("banking_action_blocked", eid=self.player_eid, reason="no_banking_service"))
                 self._present_service_result(title, lines)
             return
+        if option_id == "business_management":
+            if isinstance(prop, dict):
+                self._open_business_management_menu(prop)
+            else:
+                title, lines = self._stale_service_option_lines(option_id)
+                self._present_service_result(title, lines)
+            return
+        if self._business_control_prefix_and_action(option_id)[0]:
+            if self._handle_business_control_option(prop, option_id, state):
+                return
         if option_id == "justice_dispatch":
             if not isinstance(prop, dict):
                 title, lines = self._stale_service_option_lines(option_id)

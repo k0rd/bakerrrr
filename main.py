@@ -2959,7 +2959,7 @@ def _run_new_game(view, character_name, gender_identity, *, debug_mode=False, cu
     sim.log.add("Press O for the operations report and Y for known locations on foot or in-vehicle.")
     sim.log.add("Known locations lists places you have a real read on, with coords and confident facts.")
     sim.log.add("Press L to open the scrollable event log if messages roll past; inside it, T cycles filters and H sets the HUD log focus.")
-    sim.log.add("Controls: / talk, . service, ' interact, ; lock, , pickup, x look, X map, and ? help.")
+    sim.log.add("Controls: Tab actions, / talk, . service, ' interact, ; lock, , pickup, x look, X map, and ? help.")
     sim.log.add("Use ' for physical fixtures and doors, / for people, and . for same-space service surfaces like ATMs or counters.")
     sim.log.add("HUD modes show active states like SNEAK, COVER, AIM, LOOK, and TURN.")
     if bootstrap.opening_rumor_text:
@@ -3050,7 +3050,7 @@ def _run_tutorial_game(view, character_name, gender_identity, *, debug_mode=Fals
         )
         sim.log.add(f"Street kit: {kit_text}.")
     sim.log.add("Tutorial route: follow the HUD line, ask Mara what now, and recover the Training Retrieval Case.")
-    sim.log.add("Controls start simple: move, x look, ' interact, / talk, . service, , pickup, i inventory, O report, Y notebooks, X map, L log, + sheet, ? help.")
+    sim.log.add("Controls start simple: move, Tab actions, x look, ' interact, / talk, . service, , pickup, i inventory, O report, Y notebooks, X map, L log, + sheet, ? help.")
     sim.log.add(current_tutorial_hint(sim))
 
     return _run_loop(sim, view, character_name)

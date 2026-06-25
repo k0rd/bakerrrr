@@ -4596,6 +4596,7 @@ def _site_service_label(service):
     mapping = {
         "building_repair": "building repair",
         "appearance_style": "styling",
+        "business_management": "business desk",
         "business_remodel": "business refit",
         "butcher_prepare": "butcher prep",
         "campfire_cook": "campfire cooking",
@@ -4636,6 +4637,7 @@ def _service_menu_option_label(option_id):
         "justice_dispatch": "Call for an officer",
         "building_repair": "Repair a building",
         "appearance_style": "Change appearance",
+        "business_management": "Business desk",
         "business_remodel": "Change business type",
         "butcher_prepare": "Prepare meat",
         "campfire_cook": "Cook meat",

@@ -219,6 +219,7 @@ from game.justice_force_runtime import (
     force_payload,
     mitigated_force_severity,
 )
+from game.vision_scene_runtime import event_is_vision_only
 from game.organizations import local_protective_pressure_snapshot
 from game.skills import actor_skill
 from game.player_businesses import (
@@ -3699,6 +3700,8 @@ class CriminalJusticeSystem(System):
         return best
 
     def on_property_trespass(self, event):
+        if event_is_vision_only(event):
+            return
         offender_eid = event.data.get("offender_eid")
         if offender_eid is None:
             return
@@ -3722,6 +3725,8 @@ class CriminalJusticeSystem(System):
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_property_tamper(self, event):
+        if event_is_vision_only(event):
+            return
         offender_eid = event.data.get("offender_eid")
         if offender_eid is None:
             return
@@ -3753,6 +3758,8 @@ class CriminalJusticeSystem(System):
             )
 
     def on_item_stolen(self, event):
+        if event_is_vision_only(event):
+            return
         offender_eid = event.data.get("offender_eid")
         if offender_eid is None:
             return
@@ -3776,6 +3783,8 @@ class CriminalJusticeSystem(System):
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_action_offense(self, event):
+        if event_is_vision_only(event):
+            return
         offender_eid = event.data.get("offender_eid")
         if offender_eid is None:
             return
@@ -3819,6 +3828,8 @@ class CriminalJusticeSystem(System):
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_npc_killed(self, event):
+        if event_is_vision_only(event):
+            return
         if isinstance(event.data.get("animal_payload"), dict) and event.data.get("animal_payload"):
             return
         offender_eid = event.data.get("offender_eid", event.data.get("source_eid"))
@@ -3870,8 +3881,12 @@ class CriminalJusticeSystem(System):
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_incident_authority_reported(self, event):
+        if event_is_vision_only(event):
+            return
         incident = incident_record(self.sim, event.data.get("incident_id"))
         if not isinstance(incident, dict):
+            return
+        if event_is_vision_only(incident):
             return
         if bool(incident.get("justice_accounted")):
             return

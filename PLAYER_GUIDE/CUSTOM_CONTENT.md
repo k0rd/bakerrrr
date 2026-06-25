@@ -1,6 +1,6 @@
 # Custom Content
 
-Custom content is loaded once when a run starts. It can add consumable-style items and optional world-profile styles that bias new chunks. Existing built-in content stays in the game.
+Custom content is loaded once when a run starts. It can add consumable-style items, optional world-profile styles that bias new chunks, room curiosity flavor, and optional Pygame UI themes. Existing built-in content stays in the game.
 
 Copy JSON files into these live folders:
 
@@ -8,6 +8,7 @@ Copy JSON files into these live folders:
 config/custom_content/items/
 config/custom_content/world_profiles/
 config/custom_content/room_curiosity_flavors/
+config/custom_content/ui_themes/
 ```
 
 Copy-ready examples are included here:
@@ -15,6 +16,7 @@ Copy-ready examples are included here:
 ```bash
 PLAYER_GUIDE/examples/custom_content/items/morning_glory_seeds.json
 PLAYER_GUIDE/examples/custom_content/world_profiles/canal_slums.json
+PLAYER_GUIDE/examples/custom_content/ui_themes/coastal_glass.json
 ```
 
 ## Generated Rewards
@@ -36,6 +38,8 @@ saves/rewards/earned_rewards.json
 
 These files are not enabled automatically. To use a generated reward in a future run, copy the item JSON into `config/custom_content/items/` and the area profile JSON into `config/custom_content/world_profiles/` before starting a new run.
 
+UI themes validate through the same custom-content loader and may become generated rewards later, but the current reward exporter does not create theme files yet.
+
 The receipt and ledger prove that the files were earned from a BAKERRRR run. They are not required for ordinary custom-content loading, and editing a copy of a reward file just makes it normal player-authored custom content.
 
 Generated reward files are also good examples. You can inspect them to see the exact JSON shape the loader accepts.
@@ -45,7 +49,9 @@ Generated reward files are also good examples. You can inspect them to see the e
 - the project will keep this file up-to-date when the specification changes. the loading process is strict. 
 - Item files are checked as one domain. If any item file fails, no custom items load for that run.
 - World-profile files are checked as one domain. If any world-profile file fails, no custom world profiles load for that run.
-- A bad item file does not disable valid world-profile files, and a bad world-profile file does not disable valid item files.
+- Room-curiosity flavor files are checked as one domain.
+- UI-theme files are checked as one domain.
+- A bad file in one domain does not disable valid files from the other domains.
 - Problems are shown in game before play continues.
 - Saved runs remember the exact custom files they started with. The game stores file paths, schema versions, SHA-256 hashes, and loaded ids, not the JSON bodies.
 - When resuming a saved run, required custom files must still exist and match exactly. A missing file or hash mismatch blocks resume and leaves the save file in place.
@@ -152,6 +158,8 @@ Allowed building ids for `building_weights` and `service_building_weights`:
 
 `accessory_shop`, `apartment`, `arcade`, `armory`, `auto_garage`, `backroom_clinic`, `bank`, `bar`, `barbershop`, `barracks`, `biotech_clinic`, `bookshop`, `bottom_shop`, `bounty_office`, `brokerage`, `butcher_shop`, `casino`, `checkpoint`, `chop_shop`, `clothing_superstore`, `co_working_hub`, `cold_storage`, `command_center`, `contractor_office`, `corner_store`, `courier_office`, `courthouse`, `data_center`, `daycare`, `dress_shop`, `employment_agency`, `factory`, `field_hospital`, `flophouse`, `freight_depot`, `gallery`, `gaming_hall`, `hair_studio`, `hardware_store`, `headwear_shop`, `herbalist_shop`, `hotel`, `house`, `jail`, `jewelry_shop`, `junk_market`, `karaoke_box`, `lab`, `laundromat`, `machine_shop`, `makeup_counter`, `media_lab`, `metro_exchange`, `motor_pool`, `music_venue`, `nightclub`, `office`, `outerwear_shop`, `outfitter`, `pawn_shop`, `pharmacy`, `pool_hall`, `prison`, `recruitment_office`, `recycling_plant`, `restaurant`, `salon`, `server_hub`, `service_station`, `shoe_shop`, `soup_kitchen`, `street_kitchen`, `supply_bunker`, `surplus_store`, `tattoo_parlor`, `tavern`, `tenement`, `theater`, `thrift_store`, `tool_depot`, `top_shop`, `tower`, `warehouse`
 
+Some building ids are especially useful for service-facing custom profiles. For example, `bank`, `brokerage`, `office`, `employment_agency`, and `recruitment_office` can naturally support the in-game `business_management` Business desk service. Custom world profiles weight building types, not individual service ids, so use those building ids when you want more places where owned-business policy, hours, markup, and wage controls can appear.
+
 Water values mean:
 
 - `none`: no profile-added water.
@@ -196,3 +204,45 @@ Allowed `room_kinds` values:
 `archive`, `back_office`, `backstage`, `balcony`, `boardroom`, `clerk_office`, `evidence_lockup`, `executive_office`, `front_desk`, `green_room`, `guest_floor`, `guest_lounge`, `linen_closet`, `locker_wall`, `meeting_room`, `office`, `platform`, `quiet_room`, `records`, `records_office`, `records_room`, `screening_room`, `server_room`, `service_corridor`, `service_office`, `sound_booth`, `stock_room`, `storage`, `surveillance_room`, `ticketing`, `vip_lounge`
 
 `archetypes` uses the same allowed building ids listed above for world profiles.
+
+## UI Theme Files
+
+UI themes change the color roles used by the main Pygame modal frames. They do not change controls, fonts, layout, menu options, or gameplay. Curses and terminal-stable builds can ignore the richer theme geometry and keep their normal modal presentation.
+
+```json
+{
+  "_meta": {
+    "schema_version": 1
+  },
+  "coastal_glass": {
+    "label": "Coastal Glass",
+    "selection_weight": 2.0,
+    "area_types": ["coastal"],
+    "district_types": [],
+    "context_tags": ["shore", "water"],
+    "tokens": {
+      "surface": "floor_coastal",
+      "surface_alt": "terrain_water",
+      "border": "terrain_water",
+      "accent": "flora_flower_coral",
+      "title": "vehicle_glass",
+      "muted": "human_slate",
+      "footer": "human_denim"
+    }
+  }
+}
+```
+
+Allowed UI-theme fields:
+
+`label`, `selection_weight`, `area_types`, `district_types`, `context_tags`, `tokens`
+
+Allowed UI-theme token roles:
+
+`surface`, `surface_alt`, `border`, `accent`, `title`, `body`, `muted`, `divider`, `selection`, `warning`, `footer`
+
+Token values must be existing safe render color keys from the built-in appearance, world, and symbolic palettes, such as:
+
+`building_edge`, `floor_coastal`, `terrain_water`, `flora_flower_coral`, `vehicle_glass`, `human_slate`, `human_denim`, `player`, `objective`, `default`
+
+`area_types` and `district_types` use the same allowed values listed for world profiles. `context_tags` are simple lowercase tags such as `shore`, `water`, `forest`, `secure`, or `underground`.

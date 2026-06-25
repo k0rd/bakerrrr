@@ -4,6 +4,16 @@ Press `?` in game for the full help panel. Press `Esc` or `?` again to close it.
 
 The HUD footer is your quick reference. It changes when you are looking, talking, shopping, driving, reading the log, or using inventory.
 
+## Action Palette
+
+- `Tab` opens a small action menu near you.
+- `Enter` runs the selected action.
+- `B` rebinds the selected action to another key.
+- `R` resets the selected action to its default.
+- `Esc` closes the menu.
+
+Movement, back, help, and the action-menu key itself are protected. The rest is meant to be reshuffled while you play.
+
 ## Core Movement
 
 - Move with arrows, `WASD`, `HJKL`, `QEZC`, or numpad `1-9`.
@@ -48,7 +58,8 @@ These are player-facing tools. They are not just flavor; they are how the game r
 
 ## Combat And Caution
 
-- `F` opens aim mode.
+- `F` cycles target lock or opens melee aim.
+- Free aim is available from the `Tab` action palette and can be rebound.
 - `C` uses cover.
 - `v` hops cover.
 - `Shift+S` toggles sneak.

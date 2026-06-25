@@ -17,6 +17,7 @@ from game.organizations import (
 from game.property_runtime import property_covering as _property_covering
 from game.run_pressure import apply_pressure_delta
 from game.system_support.awareness_runtime import event_observation_accountability
+from game.vision_scene_runtime import event_is_vision_only
 
 
 MAX_HISTORY = 64
@@ -393,6 +394,8 @@ class OrganizationResponseSystem(System):
         return denial
 
     def on_property_trespass(self, event):
+        if event_is_vision_only(event):
+            return
         if event.data.get("offender_eid") != self.player_eid:
             return
         observation = self._event_accountability(event, offender_eid=self.player_eid)
@@ -412,6 +415,8 @@ class OrganizationResponseSystem(System):
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_property_tamper(self, event):
+        if event_is_vision_only(event):
+            return
         if event.data.get("offender_eid") != self.player_eid:
             return
         observation = self._event_accountability(event, offender_eid=self.player_eid)
@@ -431,6 +436,8 @@ class OrganizationResponseSystem(System):
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_item_stolen(self, event):
+        if event_is_vision_only(event):
+            return
         if event.data.get("offender_eid") != self.player_eid:
             return
         observation = self._event_accountability(event, offender_eid=self.player_eid)
@@ -450,6 +457,8 @@ class OrganizationResponseSystem(System):
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_action_offense(self, event):
+        if event_is_vision_only(event):
+            return
         if event.data.get("offender_eid") != self.player_eid:
             return
         context = _text(event.data.get("context")).lower()
@@ -475,8 +484,12 @@ class OrganizationResponseSystem(System):
             self._mark_incident_accounted(event.data.get("knowledge_incident_id"))
 
     def on_incident_authority_reported(self, event):
+        if event_is_vision_only(event):
+            return
         incident = incident_record(self.sim, event.data.get("incident_id"))
         if not isinstance(incident, dict):
+            return
+        if event_is_vision_only(incident):
             return
         if incident.get("primary_actor_eid") != self.player_eid:
             return

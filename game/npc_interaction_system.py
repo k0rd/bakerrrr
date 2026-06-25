@@ -471,6 +471,7 @@ class NPCInteractionSystem(System):
         "service_repair",
         "service_contractor",
         "service_banking",
+        "service_business_desk",
         "service_insurance",
         "service_rest",
         "service_transit",
@@ -635,6 +636,14 @@ class NPCInteractionSystem(System):
             "service_label": "bank or broker",
             "offer_label": "banking or brokerage",
             "lead_kind": "service_banking",
+        },
+        "service_business_desk": {
+            "services": ("business_management",),
+            "service_label": "business desk",
+            "offer_label": "business operations",
+            "lead_kind": "service_business_desk",
+            "local_summary": "In this chunk, {names_text} can handle business operations: owned-business policy and staff wages.",
+            "near_summary": "Nearest business desk I know is {distance_phrase} at {names_text}.",
         },
         "service_insurance": {
             "services": ("insurance",),

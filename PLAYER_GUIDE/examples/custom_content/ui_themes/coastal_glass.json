@@ -1,0 +1,26 @@
+{
+  "_meta": {
+    "schema_version": 1
+  },
+  "coastal_glass": {
+    "area_types": [
+      "coastal"
+    ],
+    "context_tags": [
+      "shore",
+      "water"
+    ],
+    "district_types": [],
+    "label": "Coastal Glass",
+    "selection_weight": 2.0,
+    "tokens": {
+      "accent": "flora_flower_coral",
+      "border": "terrain_water",
+      "footer": "human_denim",
+      "muted": "human_slate",
+      "surface": "floor_coastal",
+      "surface_alt": "terrain_water",
+      "title": "vehicle_glass"
+    }
+  }
+}

@@ -448,7 +448,10 @@ def nearest_harvestable_flora(sim, x, y, z=0, *, radius=1, preferred_dir=None, e
             continue
         if target is not None and (rx, ry, rz) != target:
             continue
-        distance = _manhattan(int(x), int(y), rx, ry)
+        if target is not None:
+            distance = max(abs(int(x) - rx), abs(int(y) - ry))
+        else:
+            distance = _manhattan(int(x), int(y), rx, ry)
         if distance > int(radius):
             continue
         try:

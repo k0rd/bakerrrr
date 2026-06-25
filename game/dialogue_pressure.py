@@ -67,6 +67,7 @@ TOPIC_FAMILIES = {
     "service_repair": "service_locator",
     "service_contractor": "service_locator",
     "service_banking": "service_locator",
+    "service_business_desk": "service_locator",
     "service_insurance": "service_locator",
     "service_rest": "service_locator",
     "service_transit": "service_locator",

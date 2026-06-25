@@ -4763,31 +4763,31 @@ class PygameView:
         cell_x = int(x) * self.cell_px
         cell_y = int(y) * self.cell_px
         width_px = max(1, len(text) * self.cell_px)
-        inset = max(1, self.cell_px // 10)
-        stroke_w = max(1, self.cell_px // 18)
+        inset = max(1, self.cell_px // 8)
+        stroke_w = 1
         overlay = self.pygame.Surface((width_px, self.cell_px), self.pygame.SRCALPHA)
 
         fill = (
             min(255, 10 + (frame[0] // 8)),
             min(255, 12 + (frame[1] // 8)),
             min(255, 16 + (frame[2] // 8)),
-            208,
+            112,
         )
         accent = (
             min(255, int(frame[0] * 1.08)),
             min(255, int(frame[1] * 1.08)),
             min(255, int(frame[2] * 1.08)),
-            228,
+            218,
         )
-        shadow = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 144)
+        shadow = (frame[0] // 2, frame[1] // 2, frame[2] // 2, 112)
         glow = (
             min(255, int(frame[0] * 1.15) + 10),
             min(255, int(frame[1] * 1.15) + 10),
             min(255, int(frame[2] * 1.15) + 10),
-            84,
+            42,
         )
         rect = self.pygame.Rect(0, 0, width_px, self.cell_px)
-        self.pygame.draw.rect(overlay, fill, rect, border_radius=max(1, self.cell_px // 10))
+        self.pygame.draw.rect(overlay, fill, rect)
 
         if kind in {"box_cap", "box_mid"}:
             left_x = inset
@@ -4805,7 +4805,7 @@ class PygameView:
                 glow,
                 (max(2, self.cell_px // 3), max(2, self.cell_px // 4)),
                 (width_px - max(3, self.cell_px // 3), max(2, self.cell_px // 4)),
-                max(1, stroke_w),
+                stroke_w,
             )
         elif kind == "divider":
             mid_y = self.cell_px // 2
@@ -4814,7 +4814,7 @@ class PygameView:
                 glow,
                 (max(1, self.cell_px // 4), mid_y),
                 (width_px - max(2, self.cell_px // 4), mid_y),
-                max(2, stroke_w + 1),
+                stroke_w,
             )
             self.pygame.draw.line(
                 overlay,

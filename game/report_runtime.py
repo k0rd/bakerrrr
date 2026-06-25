@@ -883,6 +883,7 @@ def _known_location_summary_bits(sim, prop, known):
         "service_repair": "repair lead",
         "service_contractor": "contractor lead",
         "service_banking": "banking lead",
+        "service_business_desk": "business-desk lead",
         "service_insurance": "insurance lead",
         "service_medical": "medical lead",
         "service_rest": "lodging lead",

@@ -67,6 +67,10 @@ def resolve_property_record(sim, property_id, *, include_saved=True):
         prop = props.get(clean_id)
         if isinstance(prop, dict):
             return prop
+    for records in tuple(getattr(sim, "chunk_property_records", {}).values()):
+        for row in tuple(records or ()):
+            if isinstance(row, dict) and str(row.get("id", "")).strip() == clean_id:
+                return row
     return None
 
 

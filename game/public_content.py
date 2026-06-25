@@ -75,6 +75,29 @@ PUBLIC_ROOM_CURIOSITY_FLAVOR_FIELDS = (
     "room_curiosity_signal",
 )
 
+PUBLIC_UI_THEME_FIELDS = (
+    "label",
+    "selection_weight",
+    "area_types",
+    "district_types",
+    "context_tags",
+    "tokens",
+)
+
+PUBLIC_UI_THEME_ROLES = (
+    "surface",
+    "surface_alt",
+    "border",
+    "accent",
+    "title",
+    "body",
+    "muted",
+    "divider",
+    "selection",
+    "warning",
+    "footer",
+)
+
 PUBLIC_ROOM_CURIOSITY_BASE_PROFILES = (
     "afterhours_pusher",
     "backroom_doctor",
