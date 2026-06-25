@@ -1,6 +1,7 @@
 # BAKERRRR
 
 binary packages for both windows and linux are avaiable in github actions or on https://laziadri.itch.io/bakerrrr
+<iframe width="560" height="315" src="https://www.youtube.com/embed/_-nwalnoCQw?si=OnCM7tLufU9DAnYc" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 <img width="1920" height="1068" alt="Screenshot_20260518_233736" src="https://github.com/user-attachments/assets/b30fb754-fac2-451d-a4ea-c10d37ef7554" />
 <img width="1541" height="876" alt="Screenshot_20260610_002447" src="https://github.com/user-attachments/assets/472fc0fa-7090-4711-91bc-ebfe41016d0a" />
 <img width="1541" height="969" alt="Screenshot_20260610_002814" src="https://github.com/user-attachments/assets/2701dc90-9414-4638-ab90-4b8b65f7af49" />
