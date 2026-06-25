@@ -10,6 +10,55 @@ from ui.input_keys import KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_UP
 ACTION_BINDINGS_VERSION = 1
 ACTION_MENU_KEY = ord("\t")
 PHYSICAL_INPUT_KINDS = frozenset({"key", "button", "axis", "hat"})
+CONTROLLER_DEADZONE = 0.35
+CONTROLLER_REPEAT_DELAY = 0.18
+CONTROLLER_REPEAT_INTERVAL = 0.09
+
+CONTROLLER_BUTTON_LABELS = {
+    "south": "Button South",
+    "east": "Button East",
+    "west": "Button West",
+    "north": "Button North",
+    "view": "View",
+    "select": "View",
+    "back": "View",
+    "guide": "Guide",
+    "start": "Start",
+    "menu": "Start",
+    "left_shoulder": "Left Shoulder",
+    "right_shoulder": "Right Shoulder",
+    "left_stick": "Left Stick",
+    "right_stick": "Right Stick",
+    "dpad_up": "D-pad Up",
+    "dpad_down": "D-pad Down",
+    "dpad_left": "D-pad Left",
+    "dpad_right": "D-pad Right",
+}
+CONTROLLER_AXIS_LABELS = {
+    "left_x": "Left Stick X",
+    "left_y": "Left Stick Y",
+    "right_x": "Right Stick X",
+    "right_y": "Right Stick Y",
+    "left_trigger": "Left Trigger",
+    "right_trigger": "Right Trigger",
+}
+PROTECTED_CONTROLLER_BUTTONS = frozenset({
+    "south",
+    "east",
+    "view",
+    "select",
+    "back",
+    "guide",
+    "start",
+    "menu",
+    "left_shoulder",
+    "dpad_up",
+    "dpad_down",
+    "dpad_left",
+    "dpad_right",
+})
+PROTECTED_CONTROLLER_AXES = frozenset({"left_x", "left_y", "left_stick"})
+PROTECTED_CONTROLLER_HATS = frozenset({"dpad", "hat0"})
 
 
 @dataclass(frozen=True)
@@ -134,11 +183,30 @@ def normalize_physical_input(raw):
         except (TypeError, ValueError):
             return None
     else:
-        for field in ("code", "axis", "hat", "value", "direction", "device_guid"):
+        for field in ("code", "axis", "hat", "value", "direction", "device_guid", "dx", "dy", "source"):
             if field in raw:
                 cleaned[field] = raw.get(field)
         if "code" not in cleaned and kind == "button":
             return None
+        if kind == "button":
+            cleaned["code"] = str(cleaned.get("code", "")).strip().lower() if not isinstance(cleaned.get("code"), int) else int(cleaned.get("code"))
+        elif kind == "axis":
+            cleaned["axis"] = str(cleaned.get("axis", "")).strip().lower() if not isinstance(cleaned.get("axis"), int) else int(cleaned.get("axis"))
+            if not str(cleaned.get("axis", "")).strip():
+                return None
+            direction = str(cleaned.get("direction", cleaned.get("value", "")) or "").strip().lower()
+            if direction:
+                cleaned["direction"] = direction
+                cleaned["value"] = direction
+        elif kind == "hat":
+            cleaned["hat"] = str(cleaned.get("hat", "hat0") or "hat0").strip().lower()
+            value = cleaned.get("value")
+            if isinstance(value, (list, tuple)) and len(value) >= 2:
+                cleaned["value"] = f"{int(value[0])},{int(value[1])}"
+            else:
+                cleaned["value"] = str(value or cleaned.get("direction", "") or "").strip().lower()
+            if "direction" in cleaned:
+                cleaned["direction"] = str(cleaned.get("direction", "") or "").strip().lower()
     return cleaned
 
 
@@ -156,6 +224,28 @@ def input_signature(raw):
     if kind == "hat":
         return f"hat:{physical.get('device_guid', '')}:{physical.get('hat')}:{physical.get('value', physical.get('direction', ''))}"
     return ""
+
+
+def is_protected_physical_input(raw):
+    physical = normalize_physical_input(raw)
+    if not physical:
+        return True
+    kind = str(physical.get("kind", "") or "").strip().lower()
+    if kind == "key":
+        return int(physical.get("code")) in PROTECTED_KEY_CODES
+    if kind == "button":
+        code = physical.get("code")
+        if isinstance(code, int):
+            return False
+        return str(code or "").strip().lower() in PROTECTED_CONTROLLER_BUTTONS
+    if kind == "axis":
+        axis = physical.get("axis")
+        if isinstance(axis, int):
+            return False
+        return str(axis or "").strip().lower() in PROTECTED_CONTROLLER_AXES
+    if kind == "hat":
+        return str(physical.get("hat", "") or "").strip().lower() in PROTECTED_CONTROLLER_HATS
+    return True
 
 
 def key_physical_input(key_code):
@@ -189,7 +279,7 @@ def sanitize_control_bindings(raw):
             signature = input_signature(physical)
             if not physical or not signature or signature in seen:
                 continue
-            if physical.get("kind") == "key" and int(physical.get("code")) in PROTECTED_KEY_CODES:
+            if is_protected_physical_input(physical):
                 continue
             seen.add(signature)
             rows.append(physical)
@@ -250,11 +340,21 @@ def physical_input_label(raw):
     if kind == "key":
         return key_label(physical.get("code"))
     if kind == "button":
-        return f"Button {physical.get('code')}"
+        code = physical.get("code")
+        if isinstance(code, str):
+            return CONTROLLER_BUTTON_LABELS.get(code, f"Button {code.replace('_', ' ').title()}")
+        return f"Button {code}"
     if kind == "axis":
-        return f"Axis {physical.get('axis')} {physical.get('value', physical.get('direction', ''))}".strip()
+        axis = physical.get("axis")
+        direction = str(physical.get("value", physical.get("direction", "")) or "").strip()
+        if isinstance(axis, str):
+            label = CONTROLLER_AXIS_LABELS.get(axis, f"Axis {axis.replace('_', ' ').title()}")
+        else:
+            label = f"Axis {axis}"
+        return f"{label} {direction}".strip()
     if kind == "hat":
-        return f"Hat {physical.get('hat')} {physical.get('value', physical.get('direction', ''))}".strip()
+        value = str(physical.get("value", physical.get("direction", "")) or "").strip()
+        return f"D-pad {value.replace('_', ' ').title()}".strip() if str(physical.get("hat")) == "dpad" else f"Hat {physical.get('hat')} {value}".strip()
     return "input"
 
 
@@ -265,8 +365,8 @@ def action_binding_label(bindings_state, action_id):
     return "/".join(physical_input_label(row) for row in inputs[:2])
 
 
-def action_for_key(bindings_state, key_code, *, context="local"):
-    physical = key_physical_input(key_code)
+def action_for_input(bindings_state, physical_input, *, context="local"):
+    physical = normalize_physical_input(physical_input)
     signature = input_signature(physical)
     if not signature:
         return None
@@ -295,6 +395,10 @@ def action_for_key(bindings_state, key_code, *, context="local"):
     return None
 
 
+def action_for_key(bindings_state, key_code, *, context="local"):
+    return action_for_input(bindings_state, key_physical_input(key_code), context=context)
+
+
 def set_action_binding(bindings_state, action_id, physical_input):
     action_id = str(action_id or "").strip()
     spec = ACTION_SPECS_BY_ID.get(action_id)
@@ -305,7 +409,7 @@ def set_action_binding(bindings_state, action_id, physical_input):
     physical = normalize_physical_input(physical_input)
     if not physical:
         return False, "That input cannot be bound.", sanitize_control_bindings(bindings_state)
-    if physical.get("kind") == "key" and int(physical.get("code")) in PROTECTED_KEY_CODES:
+    if is_protected_physical_input(physical):
         return False, f"{physical_input_label(physical)} is protected.", sanitize_control_bindings(bindings_state)
     signature = input_signature(physical)
     state = sanitize_control_bindings(bindings_state)

@@ -125,7 +125,7 @@ def _draw_modal(view, title, lines, *, scroll=0):
     return max_scroll
 
 
-def show_final_notice(view=None, *, title="Notice", lines=(), severity="info", stream="stdout", wait=True, print_notice=True):
+def show_final_notice(view=None, *, title="Notice", lines=(), severity="info", stream="stdout", wait=True, print_notice=True, idle_redraw_seconds=0.25):
     lines = _as_lines(lines)
     if print_notice:
         _print_notice(title, lines, stream=stream)
@@ -141,11 +141,20 @@ def show_final_notice(view=None, *, title="Notice", lines=(), severity="info", s
 
     get_key = getattr(view, "get_key")
     pump_window = getattr(view, "pump_window", None)
+    try:
+        idle_redraw_seconds = max(0.0, float(idle_redraw_seconds))
+    except (TypeError, ValueError):
+        idle_redraw_seconds = 0.25
+    next_idle_redraw = time.monotonic() + idle_redraw_seconds
     while True:
         if callable(pump_window):
             pump_window()
         key = get_key()
         if key is None:
+            now = time.monotonic()
+            if now >= next_idle_redraw:
+                max_scroll = _draw_modal(view, title, lines, scroll=scroll)
+                next_idle_redraw = now + idle_redraw_seconds
             time.sleep(0.02)
             continue
         if key in DISMISS_KEYS:
@@ -165,6 +174,7 @@ def show_final_notice(view=None, *, title="Notice", lines=(), severity="info", s
         else:
             continue
         max_scroll = _draw_modal(view, title, lines, scroll=scroll)
+        next_idle_redraw = time.monotonic() + idle_redraw_seconds
 
 
 def run_end_notice(run_end):

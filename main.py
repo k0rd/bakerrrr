@@ -106,7 +106,13 @@ from game.tutorial import (
     is_tutorial_run,
     tutorial_no_persistence,
 )
-from game.player_config import load_player_config, mark_tutorial_run_seen, tutorial_requested_from_options
+from game.player_config import (
+    last_character_name,
+    load_player_config,
+    mark_tutorial_run_seen,
+    remember_character_name,
+    tutorial_requested_from_options,
+)
 from game.release_runtime import (
     debug_mode_from_options,
     game_build_label,
@@ -406,18 +412,22 @@ def _install_usr1_stack_dump_handler():
 
 
 def _prompt_character_name_text():
+    default_name = last_character_name()
     while True:
         try:
-            raw = input("Character name: ")
+            prompt = f"Character name [{default_name}]: " if default_name else "Character name: "
+            raw = input(prompt)
         except EOFError:
             raw = ""
-        name = normalize_character_name(raw)
+        name = normalize_character_name(raw) or default_name
         if name:
+            remember_character_name(name)
             return name
         print("Please enter a valid character name.")
 
 
 def _prompt_character_name(stdscr):
+    default_name = last_character_name()
     while True:
         stdscr.erase()
         height, width = stdscr.getmaxyx()
@@ -426,7 +436,8 @@ def _prompt_character_name(stdscr):
         detail_y = min(height - 1, prompt_y + 2)
         input_y = min(height - 1, prompt_y + 4)
         max_text_width = max(0, width - prompt_x)
-        prompt_text = "Character name:"[:max_text_width]
+        prompt_label = f"Character name [{default_name}]:" if default_name else "Character name:"
+        prompt_text = prompt_label[:max_text_width]
         detail_text = "Existing save with this name resumes once, then is deleted on load."[:max_text_width]
 
         stdscr.addstr(prompt_y, prompt_x, prompt_text)
@@ -449,8 +460,9 @@ def _prompt_character_name(stdscr):
             except curses.error:
                 pass
 
-        name = normalize_character_name(raw)
+        name = normalize_character_name(raw) or default_name
         if name:
+            remember_character_name(name)
             stdscr.erase()
             stdscr.refresh()
             return name
@@ -3188,6 +3200,7 @@ def _run_pygame(tutorial=False, *, debug_mode=False):
         title="bakerrrr",
     )
     try:
+        default_character_name = last_character_name()
         character_name = view.prompt_text_input(
             "Character name:",
             detail=(
@@ -3199,6 +3212,7 @@ def _run_pygame(tutorial=False, *, debug_mode=False):
             title="bakerrrr - character",
             banner="BAKERRRR",
             subtitle="Street-level run setup",
+            initial_text=default_character_name,
             invalid_message="Please enter a valid character name.",
             normalizer=normalize_character_name,
             status_lines_callback=lambda raw: (
@@ -3224,6 +3238,7 @@ def _run_pygame(tutorial=False, *, debug_mode=False):
         )
         if not character_name:
             return None
+        remember_character_name(character_name)
         selected_identity = None
         if tutorial or not character_save_exists(character_name):
             selected_identity = _prompt_player_gender_identity_view(

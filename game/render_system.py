@@ -1248,10 +1248,11 @@ class RenderSystem(System):
         feedback = str(action_menu_ui.get("feedback", "") or "").strip()
         footer = feedback
         if not footer:
+            controller_recent = str(action_menu_ui.get("last_input_kind", "") or "").strip().lower() == "controller"
             if mode == "bind":
-                footer = "Press a key | Esc cancel"
+                footer = "Press input | Back cancel" if controller_recent else "Press a key | Esc cancel"
             else:
-                footer = "Enter run | B bind | R reset | Esc close"
+                footer = "South run | West bind | North reset | East close" if controller_recent else "Enter run | B bind | R reset | Esc close"
         self.view.draw_text(
             panel_x + 2,
             panel_y + panel_h - 2,

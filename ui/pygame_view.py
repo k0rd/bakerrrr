@@ -6,6 +6,7 @@ from collections import deque
 from pathlib import Path
 
 from game.appearance_palette import pygame_palette_entries
+from game.action_bindings import CONTROLLER_DEADZONE, CONTROLLER_REPEAT_DELAY, CONTROLLER_REPEAT_INTERVAL
 from game.semantic_catalog import DEFAULT_RENDER_SEMANTICS_PATH, get_runtime_semantic_catalog
 from game.symbolic_palette import pygame_symbolic_palette_entries
 from game.world_palette import pygame_world_palette_entries
@@ -65,6 +66,38 @@ _PYGAME_VEHICLE_HEADING_LABELS = {
     (-1, -1): "nw",
 }
 
+_SDL_CONTROLLER_BUTTONS = {
+    0: "south",
+    1: "east",
+    2: "west",
+    3: "north",
+    4: "view",
+    5: "guide",
+    6: "start",
+    7: "left_stick",
+    8: "right_stick",
+    9: "left_shoulder",
+    10: "right_shoulder",
+    11: "dpad_up",
+    12: "dpad_down",
+    13: "dpad_left",
+    14: "dpad_right",
+}
+_SDL_CONTROLLER_AXES = {
+    0: "left_x",
+    1: "left_y",
+    2: "right_x",
+    3: "right_y",
+    4: "left_trigger",
+    5: "right_trigger",
+}
+_CONTROLLER_DPAD_DELTAS = {
+    "dpad_up": (0, -1),
+    "dpad_down": (0, 1),
+    "dpad_left": (-1, 0),
+    "dpad_right": (1, 0),
+}
+
 
 def _resource_path(*parts):
     bundle_root = getattr(sys, "_MEIPASS", None)
@@ -110,6 +143,20 @@ class PygameView:
         marker_font_px = max(8, int(round(self.cell_px * 0.62)))
         self._marker_font = pygame.font.SysFont("DejaVu Sans Mono", marker_font_px, bold=True)
         self.key_queue = deque()
+        self.input_queue = deque()
+        self._controller_module = None
+        self._controller_devices = {}
+        self._controller_axis_state = {}
+        self._controller_axis_pressed = {}
+        self._controller_button_state = {}
+        self._raw_joysticks = {}
+        self._raw_axis_state = {}
+        self._raw_axis_pressed = {}
+        self._raw_hat_state = {}
+        self._last_controller_move_delta = (0, 0)
+        self._last_controller_move_at = 0.0
+        self._next_controller_repeat_at = 0.0
+        self._init_controller_input()
         self._close_requested = False
         self._animation_tick = 0
         self.uses_realtime_animation = True
@@ -124,6 +171,125 @@ class PygameView:
         self.palette.update(pygame_symbolic_palette_entries())
         self.palette.update(pygame_world_palette_entries())
         self.palette.update(pygame_palette_entries())
+
+    def _init_controller_input(self):
+        try:
+            self.pygame.joystick.init()
+        except Exception:
+            return False
+        controller_mod = None
+        try:
+            from pygame._sdl2 import controller as controller_mod  # type: ignore
+        except Exception:
+            controller_mod = None
+        self._controller_module = controller_mod
+        try:
+            if controller_mod is not None and hasattr(controller_mod, "init"):
+                controller_mod.init()
+        except Exception:
+            pass
+        try:
+            count = self.pygame.joystick.get_count()
+        except Exception:
+            count = 0
+        for index in range(max(0, int(count))):
+            self._open_controller_device(index)
+        return True
+
+    def _device_instance_id(self, device, fallback):
+        for attr in ("get_instance_id", "get_id"):
+            getter = getattr(device, attr, None)
+            if not callable(getter):
+                continue
+            try:
+                return int(getter())
+            except Exception:
+                continue
+        return int(fallback)
+
+    def _device_guid(self, device, fallback=""):
+        getter = getattr(device, "get_guid", None)
+        if callable(getter):
+            try:
+                value = str(getter() or "").strip()
+                if value:
+                    return value
+            except Exception:
+                pass
+        return str(fallback or "").strip()
+
+    def _open_controller_device(self, index):
+        controller_mod = getattr(self, "_controller_module", None)
+        if controller_mod is not None:
+            try:
+                is_controller = getattr(controller_mod, "is_controller", None)
+                if callable(is_controller) and is_controller(index):
+                    controller = controller_mod.Controller(index)
+                    init = getattr(controller, "init", None)
+                    if callable(init):
+                        init()
+                    instance_id = self._device_instance_id(controller, index)
+                    self._controller_devices[instance_id] = controller
+                    return True
+            except Exception:
+                pass
+
+        try:
+            joystick = self.pygame.joystick.Joystick(index)
+            init = getattr(joystick, "init", None)
+            if callable(init):
+                init()
+            instance_id = self._device_instance_id(joystick, index)
+            self._raw_joysticks[instance_id] = joystick
+            return True
+        except Exception:
+            return False
+
+    def _close_controller_device(self, instance_id):
+        try:
+            instance_id = int(instance_id)
+        except (TypeError, ValueError):
+            return False
+        device = self._controller_devices.pop(instance_id, None)
+        if device is None:
+            device = self._raw_joysticks.pop(instance_id, None)
+        self._controller_axis_state = {
+            key: value
+            for key, value in self._controller_axis_state.items()
+            if key[0] != instance_id
+        }
+        self._controller_axis_pressed = {
+            key: value
+            for key, value in self._controller_axis_pressed.items()
+            if key[0] != instance_id
+        }
+        self._controller_button_state = {
+            key: value
+            for key, value in self._controller_button_state.items()
+            if key[0] != instance_id
+        }
+        self._raw_axis_state = {
+            key: value
+            for key, value in self._raw_axis_state.items()
+            if key[0] != instance_id
+        }
+        self._raw_axis_pressed = {
+            key: value
+            for key, value in self._raw_axis_pressed.items()
+            if key[0] != instance_id
+        }
+        self._raw_hat_state = {
+            key: value
+            for key, value in self._raw_hat_state.items()
+            if key[0] != instance_id
+        }
+        quit_fn = getattr(device, "quit", None)
+        if callable(quit_fn):
+            try:
+                quit_fn()
+            except Exception:
+                pass
+        return True
 
     def _install_window_icon(self):
         icon_path = _resource_path("assets", "icons", "bakerrrr.png")
@@ -5080,28 +5246,342 @@ class PygameView:
                 return None
         return None
 
-    def get_key(self):
-        for event in self.pygame.event.get():
-            mapped = self._map_key(event)
-            if mapped is not None:
-                self.key_queue.append(mapped)
+    def _normalized_axis_value(self, value):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if abs(value) > 1.0:
+            value = value / (32767.0 if value > 0 else 32768.0)
+        return max(-1.0, min(1.0, value))
 
-        if not self.key_queue:
+    def _axis_direction(self, value):
+        value = self._normalized_axis_value(value)
+        if value >= 0.55:
+            return "positive"
+        if value <= -0.55:
+            return "negative"
+        return ""
+
+    def _controller_dpad_delta(self, instance_id):
+        dx = 0
+        dy = 0
+        for button, delta in _CONTROLLER_DPAD_DELTAS.items():
+            if not self._controller_button_state.get((int(instance_id), button)):
+                continue
+            dx += int(delta[0])
+            dy += int(delta[1])
+        return (max(-1, min(1, dx)), max(-1, min(1, dy)))
+
+    def _raw_hat_delta(self):
+        dx = 0
+        dy = 0
+        for value in self._raw_hat_state.values():
+            try:
+                hx = int(value[0])
+                hy = int(value[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            dx += hx
+            # Pygame hats use positive Y for up; the game grid uses negative Y.
+            dy -= hy
+        return (max(-1, min(1, dx)), max(-1, min(1, dy)))
+
+    def _axis_pair_delta(self, x_value, y_value):
+        x_value = self._normalized_axis_value(x_value)
+        y_value = self._normalized_axis_value(y_value)
+        dx = -1 if x_value <= -CONTROLLER_DEADZONE else 1 if x_value >= CONTROLLER_DEADZONE else 0
+        dy = -1 if y_value <= -CONTROLLER_DEADZONE else 1 if y_value >= CONTROLLER_DEADZONE else 0
+        return (dx, dy)
+
+    def _controller_diagonal_filter_active(self):
+        for instance_id in tuple(self._controller_devices.keys()):
+            if self._controller_button_state.get((int(instance_id), "left_shoulder")):
+                return True
+        return False
+
+    def _filter_controller_delta(self, delta):
+        try:
+            dx = max(-1, min(1, int(delta[0])))
+            dy = max(-1, min(1, int(delta[1])))
+        except (TypeError, ValueError, IndexError):
+            return (0, 0)
+        if self._controller_diagonal_filter_active() and not (dx and dy):
+            return (0, 0)
+        return (dx, dy)
+
+    def _controller_movement_delta(self):
+        for instance_id in tuple(self._controller_devices.keys()):
+            delta = self._filter_controller_delta(self._controller_dpad_delta(instance_id))
+            if delta != (0, 0):
+                return delta
+        raw_hat = self._filter_controller_delta(self._raw_hat_delta())
+        if raw_hat != (0, 0):
+            return raw_hat
+
+        for instance_id in tuple(self._controller_devices.keys()):
+            delta = self._filter_controller_delta(
+                self._axis_pair_delta(
+                    self._controller_axis_state.get((instance_id, "left_x"), 0.0),
+                    self._controller_axis_state.get((instance_id, "left_y"), 0.0),
+                )
+            )
+            if delta != (0, 0):
+                return delta
+        for instance_id in tuple(self._raw_joysticks.keys()):
+            delta = self._filter_controller_delta(
+                self._axis_pair_delta(
+                    self._raw_axis_state.get((instance_id, 0), 0.0),
+                    self._raw_axis_state.get((instance_id, 1), 0.0),
+                )
+            )
+            if delta != (0, 0):
+                return delta
+        return (0, 0)
+
+    def _movement_physical_input(self, delta, *, source="controller"):
+        try:
+            dx = max(-1, min(1, int(delta[0])))
+            dy = max(-1, min(1, int(delta[1])))
+        except (TypeError, ValueError, IndexError):
             return None
-        return self.key_queue.popleft()
+        if not (dx or dy):
+            return None
+        return {
+            "kind": "axis",
+            "axis": "left_stick",
+            "direction": f"{dx},{dy}",
+            "value": f"{dx},{dy}",
+            "dx": dx,
+            "dy": dy,
+            "source": source,
+        }
+
+    def _controller_repeat_input(self):
+        delta = self._controller_movement_delta()
+        now = time.monotonic()
+        if delta == (0, 0):
+            self._last_controller_move_delta = (0, 0)
+            self._last_controller_move_at = 0.0
+            self._next_controller_repeat_at = 0.0
+            return None
+        if delta != self._last_controller_move_delta:
+            self._last_controller_move_delta = delta
+            self._last_controller_move_at = now
+            self._next_controller_repeat_at = now + CONTROLLER_REPEAT_DELAY
+            return self._movement_physical_input(delta)
+        if now >= float(self._next_controller_repeat_at or 0.0):
+            self._next_controller_repeat_at = now + CONTROLLER_REPEAT_INTERVAL
+            return self._movement_physical_input(delta)
+        return None
+
+    def _axis_press_input(self, key, *, axis, value, device_guid="", source="controller"):
+        direction = self._axis_direction(value)
+        pressed = bool(direction)
+        was_pressed = bool(key in self._controller_axis_pressed or key in self._raw_axis_pressed)
+        pressed_store = self._raw_axis_pressed if source == "joystick" else self._controller_axis_pressed
+        if not pressed:
+            pressed_store.pop(key, None)
+            return None
+        if was_pressed:
+            return None
+        pressed_store[key] = direction
+        physical = {
+            "kind": "axis",
+            "axis": axis,
+            "value": direction,
+            "direction": direction,
+            "source": source,
+        }
+        if device_guid:
+            physical["device_guid"] = device_guid
+        return physical
+
+    def _map_controller_button_event(self, event, *, pressed):
+        instance_id = int(getattr(event, "which", 0) or 0)
+        code = _SDL_CONTROLLER_BUTTONS.get(int(getattr(event, "button", -1)), f"button_{getattr(event, 'button', 0)}")
+        self._controller_button_state[(instance_id, code)] = bool(pressed)
+        if code in _CONTROLLER_DPAD_DELTAS:
+            if pressed:
+                delta = self._filter_controller_delta(self._controller_dpad_delta(instance_id))
+                if delta == (0, 0):
+                    return None
+                return {
+                    "kind": "button",
+                    "code": code,
+                    "dx": int(delta[0]),
+                    "dy": int(delta[1]),
+                    "source": "controller",
+                }
+            return None
+        if not pressed:
+            return None
+        return {"kind": "button", "code": code, "source": "controller"}
+
+    def _map_raw_button_event(self, event, *, pressed):
+        if not pressed:
+            return None
+        instance_id = int(getattr(event, "instance_id", getattr(event, "which", 0)) or 0)
+        joystick = self._raw_joysticks.get(instance_id)
+        return {
+            "kind": "button",
+            "code": int(getattr(event, "button", 0) or 0),
+            "device_guid": self._device_guid(joystick, fallback=f"joy{instance_id}"),
+            "source": "joystick",
+        }
+
+    def _map_event_input(self, event):
+        mapped_key = self._map_key(event)
+        if mapped_key is not None:
+            return {"kind": "key", "code": int(mapped_key)}
+
+        pg = self.pygame
+        event_type = event.type
+        joy_added = getattr(pg, "JOYDEVICEADDED", None)
+        joy_removed = getattr(pg, "JOYDEVICEREMOVED", None)
+        controller_added = getattr(pg, "CONTROLLERDEVICEADDED", None)
+        controller_removed = getattr(pg, "CONTROLLERDEVICEREMOVED", None)
+        if event_type in {joy_added, controller_added}:
+            index = int(getattr(event, "device_index", getattr(event, "which", 0)) or 0)
+            self._open_controller_device(index)
+            return None
+        if event_type in {joy_removed, controller_removed}:
+            self._close_controller_device(getattr(event, "instance_id", getattr(event, "which", 0)))
+            return None
+
+        controller_button_down = getattr(pg, "CONTROLLERBUTTONDOWN", None)
+        controller_button_up = getattr(pg, "CONTROLLERBUTTONUP", None)
+        controller_axis_motion = getattr(pg, "CONTROLLERAXISMOTION", None)
+        if event_type == controller_button_down:
+            return self._map_controller_button_event(event, pressed=True)
+        if event_type == controller_button_up:
+            return self._map_controller_button_event(event, pressed=False)
+        if event_type == controller_axis_motion:
+            instance_id = int(getattr(event, "which", 0) or 0)
+            axis = _SDL_CONTROLLER_AXES.get(int(getattr(event, "axis", -1)), f"axis_{getattr(event, 'axis', 0)}")
+            value = self._normalized_axis_value(getattr(event, "value", 0.0))
+            self._controller_axis_state[(instance_id, axis)] = value
+            if axis in {"left_x", "left_y"}:
+                return None
+            return self._axis_press_input((instance_id, axis), axis=axis, value=value, source="controller")
+
+        joy_button_down = getattr(pg, "JOYBUTTONDOWN", None)
+        joy_button_up = getattr(pg, "JOYBUTTONUP", None)
+        joy_axis_motion = getattr(pg, "JOYAXISMOTION", None)
+        joy_hat_motion = getattr(pg, "JOYHATMOTION", None)
+        if event_type == joy_button_down:
+            return self._map_raw_button_event(event, pressed=True)
+        if event_type == joy_button_up:
+            return self._map_raw_button_event(event, pressed=False)
+        if event_type == joy_axis_motion:
+            instance_id = int(getattr(event, "instance_id", getattr(event, "which", 0)) or 0)
+            axis = int(getattr(event, "axis", 0) or 0)
+            value = self._normalized_axis_value(getattr(event, "value", 0.0))
+            self._raw_axis_state[(instance_id, axis)] = value
+            if axis in {0, 1}:
+                return None
+            joystick = self._raw_joysticks.get(instance_id)
+            return self._axis_press_input(
+                (instance_id, axis),
+                axis=axis,
+                value=value,
+                device_guid=self._device_guid(joystick, fallback=f"joy{instance_id}"),
+                source="joystick",
+            )
+        if event_type == joy_hat_motion:
+            instance_id = int(getattr(event, "instance_id", getattr(event, "which", 0)) or 0)
+            hat = int(getattr(event, "hat", 0) or 0)
+            value = tuple(getattr(event, "value", (0, 0)) or (0, 0))
+            self._raw_hat_state[(instance_id, hat)] = value
+            try:
+                dx = max(-1, min(1, int(value[0])))
+                dy = max(-1, min(1, -int(value[1])))
+            except (TypeError, ValueError, IndexError):
+                dx = dy = 0
+            if not (dx or dy):
+                return None
+            joystick = self._raw_joysticks.get(instance_id)
+            return {
+                "kind": "hat",
+                "hat": f"hat{hat}",
+                "value": f"{dx},{dy}",
+                "direction": f"{dx},{dy}",
+                "dx": dx,
+                "dy": dy,
+                "device_guid": self._device_guid(joystick, fallback=f"joy{instance_id}"),
+                "source": "joystick",
+            }
+        return None
+
+    def _pump_inputs(self, *, include_repeat=True):
+        for event in self.pygame.event.get():
+            mapped = self._map_event_input(event)
+            if mapped is not None:
+                self.input_queue.append(mapped)
+        if include_repeat and not self.input_queue:
+            repeated = self._controller_repeat_input()
+            if repeated is not None:
+                self.input_queue.append(repeated)
+
+    def get_input(self):
+        self._pump_inputs(include_repeat=True)
+        if not self.input_queue:
+            return None
+        return self.input_queue.popleft()
+
+    def drain_inputs(self):
+        self._pump_inputs(include_repeat=True)
+        if not self.input_queue:
+            return []
+        drained = list(self.input_queue)
+        self.input_queue.clear()
+        return drained
+
+    def _input_to_legacy_key(self, physical):
+        if not isinstance(physical, dict):
+            return None
+        if physical.get("kind") == "key":
+            try:
+                return int(physical.get("code"))
+            except (TypeError, ValueError):
+                return None
+        if physical.get("kind") == "button":
+            code = str(physical.get("code", "") or "").strip().lower()
+            if code == "south":
+                return 10
+            if code == "east":
+                return 27
+            if code in {"view", "select", "back"}:
+                return 9
+            if code == "west":
+                return ord("b")
+            if code == "north":
+                return ord("r")
+        try:
+            dx = int(physical.get("dx", 0) or 0)
+            dy = int(physical.get("dy", 0) or 0)
+        except (TypeError, ValueError, AttributeError):
+            return None
+        movement_keys = {
+            (-1, -1): ord("q"),
+            (0, -1): KEY_UP,
+            (1, -1): ord("e"),
+            (-1, 0): KEY_LEFT,
+            (1, 0): KEY_RIGHT,
+            (-1, 1): ord("z"),
+            (0, 1): KEY_DOWN,
+            (1, 1): ord("c"),
+        }
+        return movement_keys.get((max(-1, min(1, dx)), max(-1, min(1, dy))))
+
+    def get_key(self):
+        physical = self.get_input()
+        return self._input_to_legacy_key(physical)
 
     def drain_keys(self):
-        for event in self.pygame.event.get():
-            mapped = self._map_key(event)
-            if mapped is not None:
-                self.key_queue.append(mapped)
-
-        if not self.key_queue:
-            return []
-
-        drained = list(self.key_queue)
-        self.key_queue.clear()
-        return drained
+        inputs = self.drain_inputs()
+        keys = [self._input_to_legacy_key(row) for row in inputs]
+        return [key for key in keys if key is not None]
 
     def pump_window(self):
         self.pygame.event.pump()

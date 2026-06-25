@@ -83,9 +83,11 @@ from game.action_bindings import (
     ACTION_SPECS_BY_ID,
     action_available,
     action_binding_label,
+    action_for_input,
     action_for_key,
     key_physical_input,
     menu_action_specs,
+    normalize_physical_input,
     reset_action_binding,
     sanitize_control_bindings,
     set_action_binding,
@@ -721,7 +723,73 @@ class InputSystem(System):
         state.setdefault("last_anchor_dx", 0)
         state.setdefault("last_anchor_dy", 1)
         state.setdefault("feedback", "")
+        state.setdefault("last_input_kind", "key")
         return state
+
+    def _normalize_input_event(self, raw):
+        physical = normalize_physical_input(raw)
+        if physical:
+            return physical
+        if isinstance(raw, int):
+            return key_physical_input(raw)
+        return None
+
+    def _input_key_code(self, physical):
+        physical = self._normalize_input_event(physical)
+        if not physical:
+            return None
+        kind = str(physical.get("kind", "") or "").strip().lower()
+        if kind == "key":
+            try:
+                return int(physical.get("code"))
+            except (TypeError, ValueError):
+                return None
+        if kind == "button":
+            code = str(physical.get("code", "") or "").strip().lower()
+            if code == "south":
+                return 10
+            if code == "east":
+                return 27
+            if code in {"view", "select", "back"}:
+                return ACTION_MENU_KEY
+            if code == "west":
+                return ord("b") if self._action_menu_state().get("open") else None
+            if code == "north":
+                return ord("r") if self._action_menu_state().get("open") else None
+        try:
+            dx = int(physical.get("dx", 0) or 0)
+            dy = int(physical.get("dy", 0) or 0)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        dx = max(-1, min(1, dx))
+        dy = max(-1, min(1, dy))
+        if dx or dy:
+            return self._canonical_movement_key_for_delta.get((dx, dy))
+        return None
+
+    def _input_movement_delta(self, physical):
+        physical = self._normalize_input_event(physical)
+        if not physical:
+            return None
+        key = self._input_key_code(physical)
+        if key in self.movement_keys:
+            return self.movement_keys[key]
+        try:
+            dx = int(physical.get("dx", 0) or 0)
+            dy = int(physical.get("dy", 0) or 0)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if dx == 0 and dy == 0:
+            return None
+        return (max(-1, min(1, dx)), max(-1, min(1, dy)))
+
+    def _input_is_controller(self, physical):
+        physical = self._normalize_input_event(physical)
+        return bool(physical and str(physical.get("kind", "") or "").strip().lower() != "key")
+
+    def _record_recent_input_kind(self, physical):
+        state = self._action_menu_state()
+        state["last_input_kind"] = "controller" if self._input_is_controller(physical) else "key"
 
     def _reload_control_bindings(self):
         self.player_config = load_player_config(config_path=self.player_config_path)
@@ -815,10 +883,12 @@ class InputSystem(System):
             return rows[idx]
         return None
 
-    def _handle_action_menu_input(self, key, zoom_mode):
+    def _handle_action_menu_input(self, physical_input, zoom_mode):
         state = self._action_menu_state()
         if not bool(state.get("open")):
             return False
+        physical = self._normalize_input_event(physical_input)
+        key = self._input_key_code(physical)
         mode = str(state.get("mode", "action") or "action").strip().lower()
         if mode == "bind":
             if key in (27, ACTION_MENU_KEY):
@@ -827,7 +897,7 @@ class InputSystem(System):
                 state["feedback"] = "Binding canceled."
                 return True
             action_id = str(state.get("pending_bind_action_id", "") or "").strip()
-            ok, message, bindings = set_action_binding(self.control_bindings, action_id, key_physical_input(key))
+            ok, message, bindings = set_action_binding(self.control_bindings, action_id, physical)
             if ok:
                 self._save_control_bindings(bindings)
             state["mode"] = "action"
@@ -835,6 +905,8 @@ class InputSystem(System):
             state["feedback"] = message
             return True
 
+        if key is None:
+            return True
         if key in (27, ACTION_MENU_KEY, ord("q"), ord("Q")):
             self._close_action_menu()
             return True
@@ -860,7 +932,7 @@ class InputSystem(System):
                 return True
             state["mode"] = "bind"
             state["pending_bind_action_id"] = row.get("id", "")
-            state["feedback"] = f"Press a key for {row.get('label', 'action')}."
+            state["feedback"] = f"Press a key or button for {row.get('label', 'action')}."
             return True
         if key in (ord("r"), ord("R")):
             if row:
@@ -4432,15 +4504,30 @@ class InputSystem(System):
 
         return bool(getattr(self.sim, "turn_based", False))
 
-    def _next_input_key(self, *, collapse_burst=False):
+    def _next_input_event(self, *, collapse_burst=False):
         if collapse_burst:
+            drain_inputs = getattr(self.view, "drain_inputs", None)
+            if callable(drain_inputs):
+                inputs = [self._normalize_input_event(row) for row in drain_inputs()]
+                inputs = [row for row in inputs if row is not None]
+                if not inputs:
+                    return None
+                return inputs[-1]
             drain = getattr(self.view, "drain_keys", None)
             if callable(drain):
                 keys = [key for key in drain() if key is not None]
                 if not keys:
                     return None
-                return keys[-1]
-        return self.view.get_key()
+                return key_physical_input(keys[-1])
+        get_input = getattr(self.view, "get_input", None)
+        if callable(get_input):
+            return self._normalize_input_event(get_input())
+        key = self.view.get_key()
+        return key_physical_input(key) if key is not None else None
+
+    def _next_input_key(self, *, collapse_burst=False):
+        physical = self._next_input_event(collapse_burst=collapse_burst)
+        return self._input_key_code(physical)
 
     def on_move_blocked(self, event):
         if event.data.get("eid") != self.player_eid:
@@ -4507,7 +4594,7 @@ class InputSystem(System):
         debug_state = self._debug_state()
         action_menu_state = self._action_menu_state()
         zoom_mode = str(getattr(self.sim, "zoom_mode", "city")).lower()
-        key = self._next_input_key(
+        physical_input = self._next_input_event(
             collapse_burst=self._should_collapse_input_burst(
                 look_state=look_state,
                 help_state=help_state,
@@ -4520,9 +4607,11 @@ class InputSystem(System):
                 trade_state=trade_state,
             )
         )
-        if key is None:
+        key = self._input_key_code(physical_input)
+        if physical_input is None and key is None:
             key = self._held_aim_repeat_key(look_state)
-        if key is None:
+            physical_input = key_physical_input(key) if key is not None else None
+        if physical_input is None and key is None:
             if action_menu_state.get("open"):
                 return
             if self._maybe_continue_auto_walk(
@@ -4566,12 +4655,14 @@ class InputSystem(System):
                 return
             return
 
+        self._record_recent_input_kind(physical_input)
         if self._auto_walk_state().get("active"):
             self._stop_auto_walk(reason="interrupted", announce=True)
         if self._auto_drive_state().get("active"):
             self._stop_auto_drive(reason="interrupted", announce=True)
+        movement_delta = self._input_movement_delta(physical_input)
         local_vehicle_key = (
-            key in self.movement_keys
+            movement_delta is not None
             and zoom_mode != "overworld"
             and self._player_in_vehicle()
             and not self._local_drive_controls_blocked(zoom_mode=zoom_mode)
@@ -4598,7 +4689,7 @@ class InputSystem(System):
             return
 
         if action_menu_state.get("open"):
-            self._handle_action_menu_input(key, zoom_mode)
+            self._handle_action_menu_input(physical_input, zoom_mode)
             return
 
         if key == ord("?") and not look_state.get("active"):
@@ -4654,8 +4745,8 @@ class InputSystem(System):
             return
 
         if zoom_mode == "overworld":
-            if key in self.movement_keys:
-                dx, dy = self.movement_keys[key]
+            if movement_delta is not None:
+                dx, dy = movement_delta
                 self._record_action_anchor_delta(dx, dy)
                 if self._overworld_view_only_for_player():
                     self._activate_overworld_browse_cursor(dx=dx, dy=dy, purpose="inspect")
@@ -4663,7 +4754,7 @@ class InputSystem(System):
                 self._emit_turn_action("overworld_travel", dx=dx, dy=dy)
                 return
 
-            action_id = action_for_key(self.control_bindings, key, context=self._action_context(zoom_mode))
+            action_id = action_for_input(self.control_bindings, physical_input, context=self._action_context(zoom_mode))
             if action_id and self._execute_action(action_id, key=key, zoom_mode=zoom_mode):
                 return
 
@@ -4673,8 +4764,8 @@ class InputSystem(System):
 
             return
 
-        if key in self.movement_keys:
-            dx, dy = self.movement_keys[key]
+        if movement_delta is not None:
+            dx, dy = movement_delta
             self._record_action_anchor_delta(dx, dy)
             action = "vehicle_move" if self._player_in_vehicle() else "move"
             consume_turn = True
@@ -4686,7 +4777,7 @@ class InputSystem(System):
                 self._sync_local_drive_after_vehicle_command(brake_tapped=dy > 0)
             return
 
-        action_id = action_for_key(self.control_bindings, key, context=self._action_context(zoom_mode))
+        action_id = action_for_input(self.control_bindings, physical_input, context=self._action_context(zoom_mode))
         if action_id and self._execute_action(action_id, key=key, zoom_mode=zoom_mode):
             return
 

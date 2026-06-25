@@ -14,6 +14,8 @@ The HUD footer is your quick reference. It changes when you are looking, talking
 
 Movement, back, help, and the action-menu key itself are protected. The rest is meant to be reshuffled while you play.
 
+In Pygame, a controller can use the same palette. Left stick or d-pad moves, `Left Shoulder/LB/L1` held filters movement to diagonals only, `South/A/Cross` confirms, `East/B/Circle` backs out, `View/Select` opens the action palette, `West/X/Square` binds the selected action, and `North/Y/Triangle` resets it. Ordinary action buttons and triggers can be rebound from the palette; movement, diagonal-filter shoulder, confirm, back, menu, and start/pause-style inputs stay protected.
+
 ## Core Movement
 
 - Move with arrows, `WASD`, `HJKL`, `QEZC`, or numpad `1-9`.
