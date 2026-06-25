@@ -5488,8 +5488,16 @@ class PygameView:
                 self._controller_axis_state.get((int(instance_id), "right_y"), 0.0),
             )
         physical = self._right_stick_physical_input(delta, source=source)
-        if physical is not None:
-            self._prime_controller_look_repeat_delay(delta)
+        if physical is None:
+            self._last_controller_look_delta = (0, 0)
+            self._last_controller_look_at = 0.0
+            self._next_controller_look_repeat_at = 0.0
+            return None
+        if delta == self._last_controller_look_delta:
+            return None
+        self._last_controller_look_delta = delta
+        self._last_controller_look_at = time.monotonic()
+        self._next_controller_look_repeat_at = 0.0
         return physical
 
     def _controller_repeat_input(self):
@@ -5752,8 +5760,6 @@ class PygameView:
                 self.input_queue.append(mapped)
         if include_repeat and not self.input_queue:
             repeated = self._controller_repeat_input()
-            if repeated is None:
-                repeated = self._controller_look_repeat_input()
             if repeated is not None:
                 self.input_queue.append(repeated)
 
